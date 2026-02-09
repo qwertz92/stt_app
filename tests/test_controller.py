@@ -58,6 +58,12 @@ class FakeTextInserter:
             raise TextInsertionError("failed insert")
         return True
 
+    def insert_text_with_options(self, text, target_hwnd=None, paste_mode="auto"):
+        self.calls.append((text, target_hwnd, paste_mode))
+        if self.should_fail:
+            raise TextInsertionError("failed insert")
+        return True
+
 
 class FakeWindowFocusHelper:
     def __init__(self):
@@ -74,7 +80,7 @@ class FakeWindowFocusHelper:
 
 def test_controller_falls_back_to_safe_hotkey():
     app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
-    settings = AppSettings(hotkey=DEFAULT_HOTKEY)
+    settings = AppSettings(hotkey=DEFAULT_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManager()
     overlay = FakeOverlay()
@@ -102,7 +108,7 @@ def test_controller_falls_back_to_safe_hotkey():
 
 def test_controller_shows_error_when_all_hotkey_registration_fails():
     app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
-    settings = AppSettings(hotkey=DEFAULT_HOTKEY)
+    settings = AppSettings(hotkey=DEFAULT_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManagerAllFail()
     overlay = FakeOverlay()
@@ -129,7 +135,7 @@ def test_controller_shows_error_when_all_hotkey_registration_fails():
 
 def test_controller_restores_target_focus_before_insert():
     app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManager()
     overlay = FakeOverlay()
@@ -149,7 +155,7 @@ def test_controller_restores_target_focus_before_insert():
     controller._on_transcription_ready("hello world")
 
     assert focus_helper.restore_calls == [555]
-    assert inserter.calls == [("hello world", 555)]
+    assert inserter.calls == [("hello world", 555, settings.paste_mode)]
 
     controller.shutdown()
     _ = app
@@ -168,7 +174,7 @@ class FakeClipboard:
 
 def test_controller_copies_transcript_on_insert_error(monkeypatch):
     app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManager()
     overlay = FakeOverlay()
@@ -197,9 +203,36 @@ def test_controller_copies_transcript_on_insert_error(monkeypatch):
     _ = app
 
 
+def test_controller_keeps_transcript_in_clipboard_on_success(monkeypatch):
+    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=True,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    controller._target_window_handle = 123
+    controller._on_transcription_ready("persist me")
+
+    assert fake_clipboard.text() == "persist me"
+    assert controller._overlay.states[-1][0] == "Done"
+
+    controller.shutdown()
+    _ = app
+
+
 def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
     app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),

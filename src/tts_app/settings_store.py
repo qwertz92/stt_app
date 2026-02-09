@@ -9,9 +9,11 @@ from .app_paths import settings_path
 from .config import (
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
+    DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
+    DEFAULT_PASTE_MODE,
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_VAD_ENABLED,
     LEGACY_DEFAULT_HOTKEY,
@@ -21,6 +23,7 @@ from .config import (
     VALID_LANGUAGE_MODES,
     VALID_MODES,
     VALID_MODEL_SIZES,
+    VALID_PASTE_MODES,
 )
 from .hotkey import parse_hotkey
 
@@ -35,6 +38,8 @@ DEFAULTS = {
     "save_last_wav": DEFAULT_SAVE_LAST_WAV,
     "engine": DEFAULT_ENGINE,
     "mode": DEFAULT_MODE,
+    "paste_mode": DEFAULT_PASTE_MODE,
+    "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "has_openai_key": False,
     "has_azure_key": False,
     "has_deepgram_key": False,
@@ -51,6 +56,8 @@ class AppSettings:
     save_last_wav: bool = DEFAULT_SAVE_LAST_WAV
     engine: str = DEFAULT_ENGINE
     mode: str = DEFAULT_MODE
+    paste_mode: str = DEFAULT_PASTE_MODE
+    keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     has_openai_key: bool = False
     has_azure_key: bool = False
     has_deepgram_key: bool = False
@@ -72,6 +79,10 @@ class AppSettings:
         if mode not in VALID_MODES:
             mode = DEFAULT_MODE
 
+        paste_mode = str(merged.get("paste_mode", DEFAULT_PASTE_MODE)).lower()
+        if paste_mode not in VALID_PASTE_MODES:
+            paste_mode = DEFAULT_PASTE_MODE
+
         model_size = str(merged.get("model_size", DEFAULT_MODEL_SIZE)).lower()
         if model_size not in VALID_MODEL_SIZES:
             model_size = DEFAULT_MODEL_SIZE
@@ -88,6 +99,13 @@ class AppSettings:
             save_last_wav=bool(merged.get("save_last_wav", DEFAULT_SAVE_LAST_WAV)),
             engine=engine,
             mode=mode,
+            paste_mode=paste_mode,
+            keep_transcript_in_clipboard=bool(
+                merged.get(
+                    "keep_transcript_in_clipboard",
+                    DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
+                )
+            ),
             has_openai_key=bool(merged.get("has_openai_key", False)),
             has_azure_key=bool(merged.get("has_azure_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),

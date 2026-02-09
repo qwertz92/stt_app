@@ -6,7 +6,7 @@ APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "TTS Dictation App"
 APP_LOGGER_NAME = "tts_app"
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -22,11 +22,14 @@ DEFAULT_ENGINE = "local"
 DEFAULT_MODE = "batch"
 DEFAULT_VAD_ENABLED = True
 DEFAULT_SAVE_LAST_WAV = False
+DEFAULT_PASTE_MODE = "auto"
+DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = True
 
 VALID_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3")
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
 VALID_ENGINES = ("local", "openai", "azure", "deepgram")
 VALID_MODES = ("batch", "streaming")
+VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

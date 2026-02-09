@@ -59,11 +59,32 @@ class Win32ClipboardBackend:
         _send_ctrl_v_input()
 
     def send_paste(self, target_hwnd: int | None = None) -> str:
+        return self.send_paste_with_mode("auto", target_hwnd=target_hwnd)
+
+    def send_paste_with_mode(self, mode: str, target_hwnd: int | None = None) -> str:
+        normalized = (mode or "auto").strip().lower()
+        if normalized == "wm_paste":
+            if self._send_wm_paste(target_hwnd):
+                return "wm_paste"
+            raise TextInsertionError("WM_PASTE failed for target window.")
+
+        if normalized == "send_input":
+            self.send_ctrl_v()
+            return "send_input"
+
+        send_input_error: Exception | None = None
+        try:
+            self.send_ctrl_v()
+            return "send_input"
+        except Exception as exc:
+            send_input_error = exc
+
         if self._send_wm_paste(target_hwnd):
             return "wm_paste"
 
-        self.send_ctrl_v()
-        return "send_input"
+        raise TextInsertionError(
+            f"Auto paste failed: SendInput error: {send_input_error}; WM_PASTE failed."
+        )
 
     class _ClipboardContext:
         def __init__(self, backend: "Win32ClipboardBackend") -> None:
@@ -153,24 +174,42 @@ class TextInserter:
         self._sendinput_restore_delay_s = sendinput_restore_delay_s
 
     def insert_text(self, text: str, target_hwnd: int | None = None) -> bool:
+        return self.insert_text_with_options(
+            text=text,
+            target_hwnd=target_hwnd,
+            paste_mode="auto",
+        )
+
+    def insert_text_with_options(
+        self,
+        text: str,
+        target_hwnd: int | None = None,
+        paste_mode: str = "auto",
+    ) -> bool:
         if not text or not text.strip():
             return False
 
+        requested_mode = paste_mode
         previous_state = self._backend.capture_clipboard_state()
-        paste_mode = "send_input"
+        actual_mode = "send_input"
         paste_error: Exception | None = None
         restore_error: Exception | None = None
         try:
             self._backend.set_clipboard_text(text)
             self._sleep_fn(self._clipboard_settle_s)
 
-            if hasattr(self._backend, "send_paste"):
-                paste_mode = self._backend.send_paste(target_hwnd=target_hwnd)
+            if hasattr(self._backend, "send_paste_with_mode"):
+                actual_mode = self._backend.send_paste_with_mode(
+                    requested_mode,
+                    target_hwnd=target_hwnd,
+                )
+            elif hasattr(self._backend, "send_paste"):
+                actual_mode = self._backend.send_paste(target_hwnd=target_hwnd)
             else:
                 self._backend.send_ctrl_v()
-                paste_mode = "send_input"
+                actual_mode = "send_input"
 
-            if paste_mode == "send_input":
+            if actual_mode == "send_input":
                 # Give target app enough time to read clipboard before restore.
                 self._sleep_fn(self._sendinput_restore_delay_s)
         except Exception as exc:

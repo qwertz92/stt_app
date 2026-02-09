@@ -5,12 +5,15 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .config import (
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
+    DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
+    DEFAULT_PASTE_MODE,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
     VALID_MODES,
     VALID_MODEL_SIZES,
+    VALID_PASTE_MODES,
 )
 from .hotkey import parse_hotkey
 from .logger import AppLogger
@@ -64,6 +67,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
         self.save_wav_checkbox = QtWidgets.QCheckBox("Save last WAV for debugging")
+        self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
+            "Keep transcript in clipboard after transcription"
+        )
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -88,6 +94,15 @@ class SettingsDialog(QtWidgets.QDialog):
             streaming_item.setEnabled(False)
             streaming_item.setToolTip("Phase 2")
 
+        self.paste_mode_combo = QtWidgets.QComboBox()
+        paste_mode_labels = {
+            "auto": "Auto (SendInput -> WM_PASTE)",
+            "wm_paste": "WM_PASTE only",
+            "send_input": "SendInput only",
+        }
+        for value in VALID_PASTE_MODES:
+            self.paste_mode_combo.addItem(paste_mode_labels.get(value, value), value)
+
         self.openai_key_edit = QtWidgets.QLineEdit()
         self.azure_key_edit = QtWidgets.QLineEdit()
         self.deepgram_key_edit = QtWidgets.QLineEdit()
@@ -106,8 +121,10 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("Language", self.language_combo)
         form.addRow("Engine", self.engine_combo)
         form.addRow("Mode", self.mode_combo)
+        form.addRow("Paste Mode", self.paste_mode_combo)
         form.addRow("", self.vad_checkbox)
         form.addRow("", self.save_wav_checkbox)
+        form.addRow("", self.keep_clipboard_checkbox)
 
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys (Phase 2)")
         provider_layout = QtWidgets.QFormLayout(provider_box)
@@ -148,8 +165,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.language_combo, settings.language_mode)
         self.vad_checkbox.setChecked(settings.vad_enabled)
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
+        self.keep_clipboard_checkbox.setChecked(settings.keep_transcript_in_clipboard)
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
+        self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
 
         if settings.has_openai_key:
             self.openai_key_edit.setPlaceholderText("Stored (leave empty to keep)")
@@ -204,8 +223,10 @@ class SettingsDialog(QtWidgets.QDialog):
             language_mode=str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE),
             vad_enabled=self.vad_checkbox.isChecked(),
             save_last_wav=self.save_wav_checkbox.isChecked(),
+            keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
             engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
+            paste_mode=str(self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE),
             has_openai_key=has_openai_key,
             has_azure_key=has_azure_key,
             has_deepgram_key=has_deepgram_key,

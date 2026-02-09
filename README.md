@@ -68,6 +68,11 @@ uv run python -m pytest
 
 - In Settings, the hotkey is now captured with a key recorder field (`QKeySequenceEdit`).
 - Click the field and press your combination; no manual typing needed.
+- In Settings, `Paste Mode` can be chosen:
+  - `Auto (SendInput -> WM_PASTE)`
+  - `WM_PASTE only`
+  - `SendInput only`
+- `Keep transcript in clipboard after transcription` keeps recognized text available for manual paste/copy.
 
 ## Transcript copy
 

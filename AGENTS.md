@@ -58,7 +58,7 @@ Covered modules:
 - Local transcriber
 - AudioCapture
 - Controller fallback hotkey behavior
-- Current test count: 47 passing tests
+- Current test count: 49 passing tests
 
 ## Known limitations
 - Streaming transcription not implemented (Phase 2 placeholder).
@@ -88,3 +88,5 @@ Covered modules:
 - Overlay detail text is selectable and supports right-click copy; tray menu now has `Copy last transcript`.
 - Root cause for stale paste identified: immediate clipboard restore can race with asynchronous paste handling.
 - Text inserter now attempts synchronous `WM_PASTE` first and adds a short restore delay only on `SendInput` fallback.
+- Added setting `paste_mode` (`auto`, `wm_paste`, `send_input`) and wired it through controller/text inserter.
+- Added setting `keep_transcript_in_clipboard` to keep recognized text available for manual paste after each successful transcription.

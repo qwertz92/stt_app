@@ -1,11 +1,13 @@
 import json
 
 from tts_app.config import (
+    DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
+    DEFAULT_PASTE_MODE,
     LEGACY_DEFAULT_HOTKEY,
     PREVIOUS_DEFAULT_HOTKEY,
 )
@@ -26,6 +28,8 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.save_last_wav is False
     assert settings.engine == DEFAULT_ENGINE
     assert settings.mode == DEFAULT_MODE
+    assert settings.paste_mode == DEFAULT_PASTE_MODE
+    assert settings.keep_transcript_in_clipboard == DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     assert settings.has_openai_key is False
     assert settings.has_azure_key is False
     assert settings.has_deepgram_key is False
@@ -85,6 +89,7 @@ def test_invalid_enum_values_fall_back_to_defaults(tmp_path):
                 "engine": "unknown-provider",
                 "mode": "live",
                 "language_mode": "fr",
+                "paste_mode": "invalid",
             }
         ),
         encoding="utf-8",
@@ -96,6 +101,7 @@ def test_invalid_enum_values_fall_back_to_defaults(tmp_path):
     assert settings.engine == DEFAULT_ENGINE
     assert settings.mode == DEFAULT_MODE
     assert settings.language_mode == DEFAULT_LANGUAGE_MODE
+    assert settings.paste_mode == DEFAULT_PASTE_MODE
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):
@@ -142,3 +148,15 @@ def test_previous_default_hotkey_is_migrated_to_new_default(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.hotkey == DEFAULT_HOTKEY
+
+
+def test_keep_transcript_in_clipboard_flag_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"keep_transcript_in_clipboard": False}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.keep_transcript_in_clipboard is False

@@ -41,6 +41,7 @@ class PasteBackend(LegacyBackend):
         super().__init__(raise_on_paste=raise_on_paste, raise_on_restore=raise_on_restore)
         self.paste_mode = paste_mode
         self.last_target_hwnd = None
+        self.last_requested_mode = None
 
     def send_paste(self, target_hwnd=None):
         self.last_target_hwnd = target_hwnd
@@ -48,6 +49,10 @@ class PasteBackend(LegacyBackend):
         if self.raise_on_paste:
             raise RuntimeError("send failed")
         return self.paste_mode
+
+    def send_paste_with_mode(self, mode, target_hwnd=None):
+        self.last_requested_mode = mode
+        return self.send_paste(target_hwnd=target_hwnd)
 
 
 def test_text_inserter_saves_and_restores_clipboard():
@@ -112,11 +117,16 @@ def test_text_inserter_uses_wm_paste_without_restore_delay():
         sendinput_restore_delay_s=0.2,
     )
 
-    result = inserter.insert_text("hello", target_hwnd=123)
+    result = inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="wm_paste",
+    )
 
     assert result is True
     assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
     assert backend.last_target_hwnd == 123
+    assert backend.last_requested_mode == "wm_paste"
     assert sleep_calls == [0.05]
 
 
@@ -130,10 +140,15 @@ def test_text_inserter_waits_before_restore_after_sendinput_paste():
         sendinput_restore_delay_s=0.2,
     )
 
-    result = inserter.insert_text("hello", target_hwnd=123)
+    result = inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="send_input",
+    )
 
     assert result is True
     assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
+    assert backend.last_requested_mode == "send_input"
     assert sleep_calls == [0.05, 0.2]
 
 

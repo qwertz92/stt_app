@@ -213,9 +213,10 @@ class DictationController(QtCore.QObject):
         except Exception:
             self._logger.exception("Failed to restore target window focus")
         try:
-            self._text_inserter.insert_text(
+            self._text_inserter.insert_text_with_options(
                 text,
                 target_hwnd=self._target_window_handle,
+                paste_mode=self._settings.paste_mode,
             )
         except TextInsertionError as exc:
             QtGui.QGuiApplication.clipboard().setText(text)
@@ -227,6 +228,8 @@ class DictationController(QtCore.QObject):
             self._target_window_handle = None
             return
 
+        if self._settings.keep_transcript_in_clipboard:
+            QtGui.QGuiApplication.clipboard().setText(text)
         self._overlay.set_state("Done", text)
         self._target_window_handle = None
 
