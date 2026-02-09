@@ -1,0 +1,267 @@
+from __future__ import annotations
+
+from PySide6 import QtCore, QtGui, QtWidgets
+
+from .config import (
+    DEFAULT_ENGINE,
+    DEFAULT_HOTKEY,
+    DEFAULT_LANGUAGE_MODE,
+    DEFAULT_MODE,
+    VALID_ENGINES,
+    VALID_LANGUAGE_MODES,
+    VALID_MODES,
+    VALID_MODEL_SIZES,
+)
+from .hotkey import parse_hotkey
+from .logger import AppLogger
+from .secret_store import SecretStore
+from .settings_store import AppSettings, SettingsStore
+
+
+class SettingsDialog(QtWidgets.QDialog):
+    def __init__(
+        self,
+        settings_store: SettingsStore,
+        secret_store: SecretStore,
+        app_logger: AppLogger,
+        parent: QtWidgets.QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self._settings_store = settings_store
+        self._secret_store = secret_store
+        self._app_logger = app_logger
+        self._loaded_settings = self._settings_store.load()
+
+        self.setWindowTitle("Dictation Settings")
+        self.setModal(True)
+        self.resize(540, 560)
+
+        self._build_ui()
+        self._populate(self._loaded_settings)
+
+    def _build_ui(self) -> None:
+        self.hotkey_edit = QtWidgets.QKeySequenceEdit()
+        self.hotkey_edit.setMaximumSequenceLength(1)
+        if hasattr(self.hotkey_edit, "setClearButtonEnabled"):
+            self.hotkey_edit.setClearButtonEnabled(True)
+        hotkey_hint = QtWidgets.QLabel(
+            "Click the hotkey field and press the combination to record it."
+        )
+        hotkey_hint.setStyleSheet("color: #555;")
+
+        self.model_combo = QtWidgets.QComboBox()
+        for value in VALID_MODEL_SIZES:
+            self.model_combo.addItem(value, value)
+
+        self.language_combo = QtWidgets.QComboBox()
+        language_labels = {
+            "auto": "Auto",
+            "de": "German",
+            "en": "English",
+        }
+        for value in VALID_LANGUAGE_MODES:
+            self.language_combo.addItem(language_labels.get(value, value), value)
+
+        self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
+        self.save_wav_checkbox = QtWidgets.QCheckBox("Save last WAV for debugging")
+
+        self.engine_combo = QtWidgets.QComboBox()
+        engine_labels = {
+            "local": "Local (faster-whisper)",
+            "openai": "Remote (OpenAI)",
+            "azure": "Remote (Azure)",
+            "deepgram": "Remote (Deepgram)",
+        }
+        for value in VALID_ENGINES:
+            self.engine_combo.addItem(engine_labels.get(value, value), value)
+
+        self.mode_combo = QtWidgets.QComboBox()
+        mode_labels = {
+            "batch": "Batch",
+            "streaming": "Streaming",
+        }
+        for value in VALID_MODES:
+            self.mode_combo.addItem(mode_labels.get(value, value), value)
+        self.mode_combo.setToolTip("Streaming is planned for Phase 2.")
+        streaming_item = self.mode_combo.model().item(1)
+        if streaming_item is not None:
+            streaming_item.setEnabled(False)
+            streaming_item.setToolTip("Phase 2")
+
+        self.openai_key_edit = QtWidgets.QLineEdit()
+        self.azure_key_edit = QtWidgets.QLineEdit()
+        self.deepgram_key_edit = QtWidgets.QLineEdit()
+        for field in (
+            self.openai_key_edit,
+            self.azure_key_edit,
+            self.deepgram_key_edit,
+        ):
+            field.setEchoMode(QtWidgets.QLineEdit.Password)
+            field.setPlaceholderText("Stored in Windows Credential Manager")
+
+        form = QtWidgets.QFormLayout()
+        form.addRow("Hotkey", self.hotkey_edit)
+        form.addRow("", hotkey_hint)
+        form.addRow("Model Size", self.model_combo)
+        form.addRow("Language", self.language_combo)
+        form.addRow("Engine", self.engine_combo)
+        form.addRow("Mode", self.mode_combo)
+        form.addRow("", self.vad_checkbox)
+        form.addRow("", self.save_wav_checkbox)
+
+        provider_box = QtWidgets.QGroupBox("Remote Provider API Keys (Phase 2)")
+        provider_layout = QtWidgets.QFormLayout(provider_box)
+        provider_layout.addRow("OpenAI", self.openai_key_edit)
+        provider_layout.addRow("Azure", self.azure_key_edit)
+        provider_layout.addRow("Deepgram", self.deepgram_key_edit)
+        provider_note = QtWidgets.QLabel(
+            "Keys are saved in Windows Credential Manager via keyring."
+        )
+        provider_note.setStyleSheet("color: #555;")
+        provider_layout.addRow(provider_note)
+
+        self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
+        self.copy_diag_button.clicked.connect(self._copy_diagnostics)
+
+        save_button = QtWidgets.QPushButton("Save")
+        cancel_button = QtWidgets.QPushButton("Cancel")
+        save_button.clicked.connect(self._save)
+        cancel_button.clicked.connect(self.reject)
+
+        buttons = QtWidgets.QHBoxLayout()
+        buttons.addWidget(self.copy_diag_button)
+        buttons.addStretch(1)
+        buttons.addWidget(save_button)
+        buttons.addWidget(cancel_button)
+
+        root = QtWidgets.QVBoxLayout(self)
+        root.addLayout(form)
+        root.addWidget(provider_box)
+        root.addStretch(1)
+        root.addLayout(buttons)
+
+    def _populate(self, settings: AppSettings) -> None:
+        self.hotkey_edit.setKeySequence(
+            QtGui.QKeySequence(_app_hotkey_to_qt_hotkey_text(settings.hotkey))
+        )
+        self._select_combo_data(self.model_combo, settings.model_size)
+        self._select_combo_data(self.language_combo, settings.language_mode)
+        self.vad_checkbox.setChecked(settings.vad_enabled)
+        self.save_wav_checkbox.setChecked(settings.save_last_wav)
+        self._select_combo_data(self.engine_combo, settings.engine)
+        self._select_combo_data(self.mode_combo, settings.mode)
+
+        if settings.has_openai_key:
+            self.openai_key_edit.setPlaceholderText("Stored (leave empty to keep)")
+        if settings.has_azure_key:
+            self.azure_key_edit.setPlaceholderText("Stored (leave empty to keep)")
+        if settings.has_deepgram_key:
+            self.deepgram_key_edit.setPlaceholderText("Stored (leave empty to keep)")
+
+    def _select_combo_data(self, combo: QtWidgets.QComboBox, value: str) -> None:
+        index = combo.findData(value)
+        combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _copy_diagnostics(self) -> None:
+        text = self._app_logger.diagnostics_text()
+        clipboard = QtGui.QGuiApplication.clipboard()
+        clipboard.setText(text)
+
+    def _save(self) -> None:
+        hotkey = _qt_hotkey_sequence_to_app_hotkey(self.hotkey_edit.keySequence())
+        hotkey = hotkey or DEFAULT_HOTKEY
+        try:
+            parse_hotkey(hotkey)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid hotkey",
+                f"The hotkey is invalid: {exc}",
+            )
+            return
+
+        has_openai_key = self._loaded_settings.has_openai_key
+        has_azure_key = self._loaded_settings.has_azure_key
+        has_deepgram_key = self._loaded_settings.has_deepgram_key
+
+        openai_value = self.openai_key_edit.text().strip()
+        azure_value = self.azure_key_edit.text().strip()
+        deepgram_value = self.deepgram_key_edit.text().strip()
+
+        if openai_value:
+            self._secret_store.set_api_key("openai", openai_value)
+            has_openai_key = True
+        if azure_value:
+            self._secret_store.set_api_key("azure", azure_value)
+            has_azure_key = True
+        if deepgram_value:
+            self._secret_store.set_api_key("deepgram", deepgram_value)
+            has_deepgram_key = True
+
+        settings = AppSettings(
+            hotkey=hotkey,
+            model_size=str(self.model_combo.currentData()),
+            language_mode=str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE),
+            vad_enabled=self.vad_checkbox.isChecked(),
+            save_last_wav=self.save_wav_checkbox.isChecked(),
+            engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
+            mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
+            has_openai_key=has_openai_key,
+            has_azure_key=has_azure_key,
+            has_deepgram_key=has_deepgram_key,
+        )
+
+        self._settings_store.save(settings)
+        self.accept()
+
+
+def _qt_hotkey_sequence_to_app_hotkey(sequence: QtGui.QKeySequence) -> str:
+    text = sequence.toString(QtGui.QKeySequence.PortableText)
+    return _qt_hotkey_text_to_app_hotkey(text)
+
+
+def _qt_hotkey_text_to_app_hotkey(text: str) -> str:
+    if not text:
+        return ""
+
+    first = text.split(",")[0].strip()
+    if not first:
+        return ""
+
+    token_map = {
+        "CTRL": "Ctrl",
+        "ALT": "Alt",
+        "SHIFT": "Shift",
+        "META": "Win",
+        "ESCAPE": "Esc",
+        "RETURN": "Enter",
+    }
+    tokens = [token.strip() for token in first.split("+") if token.strip()]
+    normalized: list[str] = []
+    for token in tokens:
+        upper = token.upper()
+        if upper in token_map:
+            normalized.append(token_map[upper])
+            continue
+        if len(token) == 1:
+            normalized.append(token.upper())
+            continue
+        normalized.append(token)
+
+    return "+".join(normalized)
+
+
+def _app_hotkey_to_qt_hotkey_text(text: str) -> str:
+    if not text:
+        return ""
+
+    token_map = {
+        "WIN": "Meta",
+        "ESC": "Escape",
+    }
+    tokens = [token.strip() for token in text.split("+") if token.strip()]
+    normalized: list[str] = []
+    for token in tokens:
+        upper = token.upper()
+        normalized.append(token_map.get(upper, token))
+    return "+".join(normalized)
