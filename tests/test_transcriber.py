@@ -15,6 +15,7 @@ class Segment:
 class FakeModel:
     def __init__(self):
         self.calls = []
+        self.next_text = "hello world"
 
     def transcribe(self, audio_source, language=None, vad_filter=True):
         self.calls.append(
@@ -24,7 +25,8 @@ class FakeModel:
                 "vad_filter": vad_filter,
             }
         )
-        return [Segment("hello"), Segment("world")], {"language": "en"}
+        words = self.next_text.split(" ")
+        return [Segment(word) for word in words], {"language": "en"}
 
 
 class ExplodingModel:
@@ -47,6 +49,10 @@ def _build_wav_bytes(sample_rate=16000):
         wav_file.setframerate(sample_rate)
         wav_file.writeframes(b"\x00\x00" * 160)
     return buffer.getvalue()
+
+
+def _build_pcm16_chunk(sample_count=320):
+    return b"\x01\x00" * sample_count
 
 
 def test_local_transcriber_transcribe_batch_from_bytes():
@@ -123,15 +129,62 @@ def test_local_transcriber_reuses_model_instance_between_calls():
     assert create_calls["count"] == 1
 
 
-def test_local_transcriber_streaming_methods_not_implemented():
+def test_local_transcriber_streaming_roundtrip_with_partial_callback():
     model = FakeModel()
     transcriber = LocalFasterWhisperTranscriber(
         model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
         model_factory=lambda *args, **kwargs: model,
     )
+    partials = []
 
-    with pytest.raises(NotImplementedError):
+    transcriber.start_stream(on_partial=partials.append)
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+    text = transcriber.stop_stream()
+
+    assert text == "hello world"
+    assert partials
+
+
+def test_local_transcriber_streaming_requires_active_session():
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+
+    with pytest.raises(TranscriptionError):
+        transcriber.push_audio_chunk(b"abc")
+
+    with pytest.raises(TranscriptionError):
+        transcriber.stop_stream()
+
+
+def test_local_transcriber_streaming_cannot_start_twice():
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    transcriber.start_stream()
+
+    with pytest.raises(TranscriptionError):
         transcriber.start_stream()
 
-    with pytest.raises(NotImplementedError):
-        transcriber.push_audio_chunk(b"abc")
+    transcriber.stop_stream()
+
+
+def test_local_transcriber_abort_stream_ends_session_without_error():
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=10.0,
+        stream_partial_min_audio_s=10.0,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    transcriber.start_stream()
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+
+    transcriber.abort_stream()
+
+    with pytest.raises(TranscriptionError):
+        transcriber.stop_stream()

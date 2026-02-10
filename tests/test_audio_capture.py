@@ -57,3 +57,19 @@ def test_auto_stop_callback_runs_once_when_vad_requests_stop():
 
     assert event.wait(timeout=1.0)
     assert call_count["count"] == 1
+
+
+def test_chunk_callback_receives_pcm16_bytes():
+    received = {"payload": b""}
+
+    def on_chunk(payload: bytes) -> None:
+        received["payload"] = payload
+
+    capture = AudioCapture(chunk_callback=on_chunk)
+    chunk = np.array([[0.5], [-0.5], [0.0]], dtype=np.float32)
+
+    capture._on_audio(chunk, 3, None, None)
+
+    payload = received["payload"]
+    assert isinstance(payload, bytes)
+    assert len(payload) == 6  # 3 samples * int16

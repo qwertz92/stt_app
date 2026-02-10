@@ -26,5 +26,8 @@ class ITranscriber(ABC):
     def stop_stream(self) -> str:
         raise NotImplementedError("Phase 2: streaming is not implemented.")
 
+    def abort_stream(self) -> None:
+        raise NotImplementedError("Phase 2: streaming is not implemented.")
+
 
 Transcriber = ITranscriber

@@ -84,15 +84,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.mode_combo = QtWidgets.QComboBox()
         mode_labels = {
             "batch": "Batch",
-            "streaming": "Streaming",
+            "streaming": "Streaming (Experimental)",
         }
         for value in VALID_MODES:
             self.mode_combo.addItem(mode_labels.get(value, value), value)
-        self.mode_combo.setToolTip("Streaming is planned for Phase 2.")
-        streaming_item = self.mode_combo.model().item(1)
-        if streaming_item is not None:
-            streaming_item.setEnabled(False)
-            streaming_item.setToolTip("Phase 2")
+        self.mode_combo.setToolTip(
+            "Streaming is experimental: live insertion while speaking, "
+            "auto-abort on focus change. Batch remains the recommended default."
+        )
 
         self.paste_mode_combo = QtWidgets.QComboBox()
         paste_mode_labels = {

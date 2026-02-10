@@ -1,6 +1,6 @@
 import logging
 
-from PySide6 import QtCore, QtGui
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from tts_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
 from tts_app.controller import DictationController
@@ -68,18 +68,80 @@ class FakeTextInserter:
 class FakeWindowFocusHelper:
     def __init__(self):
         self.captured = 987
+        self.current = 987
         self.restore_calls = []
 
     def capture_target_window(self):
         return self.captured
+
+    def get_foreground_window(self):
+        return self.current
 
     def restore_target_window(self, hwnd):
         self.restore_calls.append(hwnd)
         return True
 
 
+class ImmediateExecutor:
+    def submit(self, fn, *args, **kwargs):
+        fn(*args, **kwargs)
+        return None
+
+    def shutdown(self, wait=False, cancel_futures=False):
+        _ = wait
+        _ = cancel_futures
+
+
+class FakeStreamingTranscriber:
+    def __init__(self):
+        self.started = False
+        self.stopped = False
+        self.aborted = False
+        self.chunks = []
+        self.on_partial = None
+
+    def transcribe_batch(self, audio_source):
+        return "batch"
+
+    def start_stream(self, on_partial=None):
+        self.started = True
+        self.on_partial = on_partial
+
+    def push_audio_chunk(self, chunk: bytes):
+        self.chunks.append(chunk)
+        if self.on_partial is not None:
+            self.on_partial("stream")
+
+    def stop_stream(self):
+        self.stopped = True
+        return "stream final"
+
+    def abort_stream(self):
+        self.aborted = True
+
+
+class FakeCapture:
+    instances = []
+
+    def __init__(self, *args, **kwargs):
+        self.chunk_callback = kwargs.get("chunk_callback")
+        self.started = False
+        self.stopped = False
+        FakeCapture.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.stopped = True
+        return b"RIFF"
+
+    def save_wav(self, path, wav_bytes):
+        return None
+
+
 def test_controller_falls_back_to_safe_hotkey():
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=DEFAULT_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManager()
@@ -107,7 +169,7 @@ def test_controller_falls_back_to_safe_hotkey():
 
 
 def test_controller_shows_error_when_all_hotkey_registration_fails():
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=DEFAULT_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManagerAllFail()
@@ -134,7 +196,7 @@ def test_controller_shows_error_when_all_hotkey_registration_fails():
 
 
 def test_controller_restores_target_focus_before_insert():
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManager()
@@ -173,7 +235,7 @@ class FakeClipboard:
 
 
 def test_controller_copies_transcript_on_insert_error(monkeypatch):
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
     store = FakeSettingsStore(settings)
     hotkey_manager = FakeHotkeyManager()
@@ -204,7 +266,7 @@ def test_controller_copies_transcript_on_insert_error(monkeypatch):
 
 
 def test_controller_keeps_transcript_in_clipboard_on_success(monkeypatch):
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         keep_transcript_in_clipboard=True,
@@ -231,7 +293,7 @@ def test_controller_keeps_transcript_in_clipboard_on_success(monkeypatch):
 
 
 def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
-    app = QtCore.QCoreApplication.instance() or QtCore.QCoreApplication([])
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
@@ -249,6 +311,149 @@ def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
     controller._last_transcript = "latest text"
     assert controller.copy_last_transcript_to_clipboard() is True
     assert fake_clipboard.text() == "latest text"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        keep_transcript_in_clipboard=False,
+    )
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    transcriber = FakeStreamingTranscriber()
+    focus_helper = FakeWindowFocusHelper()
+    FakeCapture.instances = []
+
+    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s: transcriber)
+
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._executor = ImmediateExecutor()
+
+    controller.start_recording()
+    assert transcriber.started is True
+    assert FakeCapture.instances
+    capture = FakeCapture.instances[-1]
+    assert capture.started is True
+
+    capture.chunk_callback(b"\x00\x01")
+    controller.stop_recording()
+
+    assert transcriber.chunks == [b"\x00\x01"]
+    assert transcriber.stopped is True
+    assert inserter.calls == [
+        ("stream", focus_helper.captured, settings.paste_mode),
+        (" final", focus_helper.captured, settings.paste_mode),
+    ]
+    assert overlay.states[-1][0] == "Done"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        keep_transcript_in_clipboard=False,
+    )
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    focus_helper = FakeWindowFocusHelper()
+    FakeCapture.instances = []
+
+    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s: transcriber)
+
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._executor = ImmediateExecutor()
+
+    beep_calls = {"count": 0}
+    monkeypatch.setattr(controller, "_play_abort_beep", lambda: beep_calls.__setitem__("count", beep_calls["count"] + 1))
+
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+    focus_helper.current = 123456  # simulate user focus switch away from target
+    capture.chunk_callback(b"\x00\x01")
+
+    assert transcriber.aborted is True
+    assert transcriber.stopped is False
+    assert capture.stopped is True
+    assert controller._audio_capture is None
+    assert beep_calls["count"] == 1
+    assert overlay.states[-1][0] == "Error"
+    assert "focus changed" in overlay.states[-1][1].lower()
+
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_tail_uses_word_overlap_for_append():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    assert controller._stream_tail("hello world", "world again now") == "again now"
+    assert controller._stream_tail("alpha beta", "gamma delta") == ""
+
+    controller.shutdown()
+    _ = app
+
+
+def test_streaming_finalize_does_not_copy_revision_to_clipboard(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+    )
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    controller._active_session_mode = "streaming"
+    controller._stream_committed_text = "hello world"
+    controller._target_window_handle = 555
+    controller._on_transcription_ready("world plus")
+
+    assert fake_clipboard.text() == ""
+    assert inserter.calls[-1][0] == " plus"
+    assert overlay.states[-1][0] == "Done"
 
     controller.shutdown()
     _ = app

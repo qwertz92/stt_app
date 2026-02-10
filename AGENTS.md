@@ -6,7 +6,7 @@ Keep it updated whenever behavior, architecture, dependencies, or operational le
 
 ## Current scope
 - Phase 1 (MVP) implemented: local batch dictation on Windows 11.
-- Phase 2 skeleton implemented: provider selection, streaming placeholders, API key fields.
+- Phase 2 in progress: provider selection and API key fields are present; local streaming mode is now implemented as experimental.
 
 ## Runtime stack
 - Python 3.12
@@ -19,9 +19,10 @@ Keep it updated whenever behavior, architecture, dependencies, or operational le
 ## Core flow
 1. Global hotkey toggles recording.
 2. Overlay moves through states: `Idle -> Listening -> Processing -> Done/Error`.
-3. Recorded WAV bytes go to local transcriber.
-4. Transcribed text is inserted at caret via clipboard-safe paste.
-5. Clipboard text content is restored.
+3. In batch mode, recorded WAV bytes are transcribed once on stop.
+4. In streaming mode (local experimental), live chunks are pushed and partial text updates are shown and incrementally inserted during recording.
+5. Transcribed text is inserted at caret via clipboard-safe paste.
+6. Clipboard text content is restored.
 
 ## Central configuration
 All key global defaults are centralized in `src/tts_app/config.py`.
@@ -48,6 +49,9 @@ Important defaults:
 Run:
 - `uv run python -m pytest`
 - `uv run python scripts/smoke_test.py`
+- No-uv fallback commands:
+- `python -m pytest`
+- `python scripts/smoke_test.py`
 
 Covered modules:
 - SettingsStore
@@ -58,10 +62,16 @@ Covered modules:
 - Local transcriber
 - AudioCapture
 - Controller fallback hotkey behavior
-- Current test count: 49 passing tests
+- Streaming mode controller/transcriber behavior
+- Streaming auto-abort on focus change + beep notification
+- Benchmark script CSV output helpers
+- Current test count: 60 passing tests
 
 ## Known limitations
-- Streaming transcription not implemented (Phase 2 placeholder).
+- Streaming mode currently available for local provider only.
+- Streaming partial updates are generated from periodic full-buffer re-transcription and can use more CPU than batch mode.
+- Live insertion in streaming mode is append-oriented; when revisions diverge, only overlap-based tail append is attempted (no full overwrite of already inserted text).
+- Streaming auto-abort focus guard currently keys off foreground-window changes (not low-level caret tracking).
 - Remote providers not implemented (placeholder classes only).
 - Clipboard restore currently handles Unicode text content only.
 
@@ -90,3 +100,29 @@ Covered modules:
 - Text inserter now attempts synchronous `WM_PASTE` first and adds a short restore delay only on `SendInput` fallback.
 - Added setting `paste_mode` (`auto`, `wm_paste`, `send_input`) and wired it through controller/text inserter.
 - Added setting `keep_transcript_in_clipboard` to keep recognized text available for manual paste after each successful transcription.
+- In corporate environments, `uv.exe` can be blocked by Group Policy/AppLocker; native Python + pip setup is required as fallback.
+- Added `requirements-win.txt` and `requirements-dev-win.txt` for no-uv installation flow.
+- Added `pywin32` platform marker in `pyproject.toml`, so non-Windows environments (e.g. WSL Linux) can resolve dependencies without failing on Windows-only wheels.
+- WSL can help development tooling, but the full app runtime (hotkey/input insertion) must run on native Windows.
+### 2026-02-09
+- Added detailed enterprise deployment runbook at `docs/enterprise-deployment-guide.md` (no-uv setup, wheelhouse/offline flow, PyInstaller distribution notes).
+- For locked corporate environments, safest practice is pinning pip inside the project venv (e.g. `pip<26`) instead of updating globally.
+- Added local benchmarking script `scripts/benchmark_local.py` with per-model/device/compute-type timing, RTF output, and optional JSON report.
+- Added model and benchmarking documentation at `docs/local-models-and-benchmark.md` (wheels, model choices, Intel iGPU behavior, upstream benchmark links).
+- Implemented local streaming mode (experimental): controller now starts/stops transcriber streams, pushes audio chunks, and shows partial overlay text during recording.
+- Added audio chunk callback plumbing in `AudioCapture` and local transcriber stream buffering/finalization in `LocalFasterWhisperTranscriber`.
+- Added benchmark improvements: CSV export (`--csv-out`) and console comparison view for best latency/RTF.
+- Added sample benchmark audio generation script `scripts/generate_sample_audio.py` and committed `samples/benchmark_sample.wav`.
+- Added benchmark-model error-rate references from upstream sources (Whisper paper tables + faster-whisper benchmark WER snippet) in docs.
+- Added implementation note doc `docs/streaming-mode.md` describing architecture, tradeoffs, and default-mode recommendation.
+- Test stability learning: mixing `QCoreApplication` and widget tests can crash on Windows; use `QApplication` consistently for controller tests when widget dialogs are also tested.
+### 2026-02-10
+- Streaming mode now performs incremental live insertion at caret while speaking and only inserts remaining tail on finalize.
+- Streaming session now auto-aborts when target foreground window changes and triggers a short alert beep.
+- Added docs `docs/model-error-rate-reference.md` with curated published WER references for offered models and language examples.
+- Benchmark script now supports isolated per-case execution (`--isolated-case`, default on) for better Ctrl+C interruption behavior on Windows.
+- Added benchmark docs for parameter-by-parameter meaning and why model load/download dominates runtime.
+- Fixed streaming finalization logic to avoid "mismatch -> copy full transcript to clipboard" behavior; finalization now appends only detected tail.
+- Added fast stream abort path (`abort_stream`) so focus-change abort and beep are immediate and not blocked by expensive final re-transcription.
+- Improved streaming delta detection with word-overlap fallback, reducing cases where partial inserts were dropped due strict prefix mismatch.
+- Abort beep now tries explicit `winsound.Beep(900, 120)` first, then falls back to `MessageBeep`/Qt beep.

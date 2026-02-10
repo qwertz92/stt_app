@@ -9,6 +9,8 @@ from typing import Protocol
 class WindowFocusHelper(Protocol):
     def capture_target_window(self) -> int | None: ...
 
+    def get_foreground_window(self) -> int | None: ...
+
     def restore_target_window(self, hwnd: int | None) -> bool: ...
 
 
@@ -17,6 +19,9 @@ class Win32WindowFocusHelper:
         self._user32 = ctypes.windll.user32
 
     def capture_target_window(self) -> int | None:
+        return self.get_foreground_window()
+
+    def get_foreground_window(self) -> int | None:
         hwnd = int(self._user32.GetForegroundWindow() or 0)
         return hwnd or None
 

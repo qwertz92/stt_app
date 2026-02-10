@@ -5,6 +5,7 @@ import logging
 import threading
 import wave
 from pathlib import Path
+from typing import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -25,6 +26,7 @@ class AudioCapture:
         block_duration_ms: int = AUDIO_BLOCK_DURATION_MS,
         vad: EnergyVad | None = None,
         auto_stop_callback=None,
+        chunk_callback: Callable[[bytes], None] | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.sample_rate = sample_rate
@@ -32,6 +34,7 @@ class AudioCapture:
         self.block_size = int(sample_rate * block_duration_ms / 1000)
         self.vad = vad
         self.auto_stop_callback = auto_stop_callback
+        self.chunk_callback = chunk_callback
         self._logger = logger
 
         self._stream = None
@@ -100,6 +103,13 @@ class AudioCapture:
         with self._lock:
             self._chunks.append(np.copy(mono))
 
+        if self.chunk_callback is not None:
+            try:
+                self.chunk_callback(self._to_pcm16_bytes(mono))
+            except Exception:
+                if self._logger is not None:
+                    self._logger.exception("Streaming chunk callback failed")
+
         if self.vad is None:
             return
 
@@ -113,8 +123,7 @@ class AudioCapture:
             threading.Thread(target=self.auto_stop_callback, daemon=True).start()
 
     def _to_wav_bytes(self, audio: np.ndarray) -> bytes:
-        clipped = np.clip(audio, -1.0, 1.0)
-        pcm = (clipped * 32767.0).astype(np.int16)
+        pcm = self._to_pcm16_array(audio)
 
         buffer = io.BytesIO()
         with wave.open(buffer, "wb") as wav_file:
@@ -124,3 +133,10 @@ class AudioCapture:
             wav_file.writeframes(pcm.tobytes())
 
         return buffer.getvalue()
+
+    def _to_pcm16_array(self, audio: np.ndarray) -> np.ndarray:
+        clipped = np.clip(audio, -1.0, 1.0)
+        return (clipped * 32767.0).astype(np.int16)
+
+    def _to_pcm16_bytes(self, audio: np.ndarray) -> bytes:
+        return self._to_pcm16_array(audio).tobytes()

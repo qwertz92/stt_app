@@ -4,7 +4,7 @@ Windows 11 dictation desktop app MVP (Phase 1) with:
 - Global hotkey via `RegisterHotKey` (no low-level keyboard hooks)
 - Always-on-top overlay (`Idle`, `Listening`, `Processing`, `Done`, `Error`)
 - Microphone capture from default device
-- Batch transcription with local `faster-whisper`
+- Batch transcription with local `faster-whisper` (+ optional experimental local streaming)
 - Clipboard-safe text insertion (`save -> set -> WM_PASTE/Ctrl+V -> restore`)
 - Settings JSON under `%APPDATA%\tts_app\settings.json`
 - API secret storage via Windows Credential Manager (`keyring`)
@@ -13,11 +13,12 @@ Windows 11 dictation desktop app MVP (Phase 1) with:
 ## Phase coverage
 
 - Phase 1 implemented and wired.
-- Phase 2 skeleton included:
+- Phase 2 in progress:
   - Engine settings for `Local`, `OpenAI`, `Azure`, `Deepgram`
-  - Mode settings for `Batch` / `Streaming` (streaming disabled, tooltip marks Phase 2)
-  - Provider plugin interface with streaming stubs
+  - Mode settings for `Batch` / `Streaming` (streaming is available for local provider as experimental mode)
+  - Provider plugin interface with streaming methods
   - API key fields saved via `keyring`
+  - Remote providers remain placeholders
 
 ## Requirements
 
@@ -31,6 +32,40 @@ Windows 11 dictation desktop app MVP (Phase 1) with:
 uv python pin 3.12
 uv sync --group dev
 ```
+
+## Corporate Setup (No uv)
+
+If `uv.exe` is blocked by Group Policy/AppLocker, use plain Python + pip on Windows:
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements-dev-win.txt
+```
+
+Run app:
+
+```powershell
+python main.py
+```
+
+Run tests:
+
+```powershell
+python -m pytest
+```
+
+Notes for locked networks:
+- Prefer your internal artifact proxy/index (Artifactory/Nexus), not direct internet installers.
+- Avoid installer scripts like `irm ... | iex` if Zscaler blocks them.
+- If outbound package access is restricted, build an internal wheelhouse and install with `--no-index --find-links`.
+
+Detailed corporate deployment guide:
+- `docs/enterprise-deployment-guide.md`
+- `docs/local-models-and-benchmark.md`
+- `docs/streaming-mode.md`
+- `docs/model-error-rate-reference.md`
 
 ## Run app
 
@@ -58,6 +93,12 @@ Default hotkey: `Ctrl+Alt+Space` (with automatic fallback to `Ctrl+Win+LShift` i
 - `uv run python main.py`: runs local script file directly.
 - Both end up in the same app code, but after code changes `uv run tts-app` may require `uv sync --group dev` first to refresh the installed package.
 
+## WSL note
+
+- WSL is useful for git/tooling, but this app is Windows-native (global hotkey, Win32 input, clipboard, foreground window APIs).
+- Running the full app from Linux/WSL is not supported.
+- Best path for company laptop: run on native Windows Python environment.
+
 ## Run tests
 
 ```powershell
@@ -68,6 +109,10 @@ uv run python -m pytest
 
 - In Settings, the hotkey is now captured with a key recorder field (`QKeySequenceEdit`).
 - Click the field and press your combination; no manual typing needed.
+- `Mode` can be switched to:
+  - `Batch` (recommended default)
+  - `Streaming (Experimental)` (local provider only, live insertion while speaking)
+- In streaming mode, dictation auto-aborts with a short beep when target window focus changes.
 - In Settings, `Paste Mode` can be chosen:
   - `Auto (SendInput -> WM_PASTE)`
   - `WM_PASTE only`
@@ -93,6 +138,18 @@ Optional device/model checks:
 ```powershell
 uv run python scripts/smoke_test.py --check-mic --check-model
 ```
+
+Local model benchmark:
+
+```powershell
+uv run python scripts/benchmark_local.py --list-models --show-model-sizes
+uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav --models tiny,base,small --device cpu --compute-types int8 --runs 3 --warmup --csv-out .\benchmark\result.csv --json-out .\benchmark\result.json
+```
+
+Sample benchmark file in repo:
+- `samples/benchmark_sample.wav`
+- For parameter explanations, interruption behavior, and interpretation:
+- `docs/local-models-and-benchmark.md`
 
 ## Project structure
 
@@ -133,7 +190,7 @@ uv run python scripts/smoke_test.py --check-mic --check-model
 ## Limitations (current MVP)
 
 - Text insertion preserves text clipboard content only (not arbitrary binary formats).
-- Streaming transcription is not implemented (Phase 2 placeholder only).
+- Streaming mode currently uses local provider only and performs periodic full-buffer partial updates (higher CPU usage than batch).
 - Remote providers are placeholders (not implemented yet).
 
 ## Packaging note (PyInstaller)
