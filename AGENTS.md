@@ -126,3 +126,4 @@ Covered modules:
 - Added fast stream abort path (`abort_stream`) so focus-change abort and beep are immediate and not blocked by expensive final re-transcription.
 - Improved streaming delta detection with word-overlap fallback, reducing cases where partial inserts were dropped due strict prefix mismatch.
 - Abort beep now tries explicit `winsound.Beep(900, 120)` first, then falls back to `MessageBeep`/Qt beep.
+- Overlay now includes a dedicated `Copy` button so users can copy text without selection/context-menu steps.

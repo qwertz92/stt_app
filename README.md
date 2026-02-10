@@ -122,6 +122,7 @@ uv run python -m pytest
 ## Transcript copy
 
 - Overlay transcript text is selectable.
+- Overlay has a direct `Copy` button to copy the shown text instantly.
 - Right-click the transcript text in overlay and choose `Copy text`.
 - Tray menu also has `Copy last transcript`.
 

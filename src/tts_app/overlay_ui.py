@@ -30,6 +30,14 @@ class OverlayUI(QtWidgets.QWidget):
         state_font.setBold(True)
         self._state_label.setFont(state_font)
 
+        self._copy_button = QtWidgets.QPushButton("Copy")
+        self._copy_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._copy_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._copy_button.setFixedWidth(56)
+        self._copy_button.setFixedHeight(22)
+        self._copy_button.setToolTip("Copy overlay text")
+        self._copy_button.clicked.connect(self.copy_detail_text)
+
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
         self._detail_label.setAlignment(QtCore.Qt.AlignCenter)
         self._detail_label.setWordWrap(True)
@@ -47,7 +55,17 @@ class OverlayUI(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout(container)
         layout.setContentsMargins(14, 10, 14, 10)
         layout.setSpacing(4)
-        layout.addWidget(self._state_label)
+
+        header = QtWidgets.QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(6)
+        left_spacer = QtWidgets.QLabel("")
+        left_spacer.setFixedWidth(self._copy_button.width())
+        header.addWidget(left_spacer)
+        header.addWidget(self._state_label, 1)
+        header.addWidget(self._copy_button, 0, QtCore.Qt.AlignRight)
+
+        layout.addLayout(header)
         layout.addWidget(self._detail_label)
 
         root = QtWidgets.QVBoxLayout(self)
@@ -60,6 +78,7 @@ class OverlayUI(QtWidgets.QWidget):
     def set_state(self, state: str, detail: str = "") -> None:
         self._state_label.setText(state)
         self._detail_label.setText(detail)
+        self._copy_button.setEnabled(bool(detail.strip()))
 
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
 
@@ -72,6 +91,20 @@ class OverlayUI(QtWidgets.QWidget):
             }}
             QLabel {{
                 color: #ffffff;
+            }}
+            QPushButton {{
+                border: 1px solid rgba(255,255,255,0.35);
+                border-radius: 6px;
+                background-color: rgba(0,0,0,0.2);
+                color: #ffffff;
+                padding: 0 8px;
+            }}
+            QPushButton:hover {{
+                background-color: rgba(255,255,255,0.18);
+            }}
+            QPushButton:disabled {{
+                color: rgba(255,255,255,0.55);
+                border-color: rgba(255,255,255,0.2);
             }}
             """
         )
@@ -91,4 +124,10 @@ class OverlayUI(QtWidgets.QWidget):
         copy_action = menu.addAction("Copy text")
         selected = menu.exec(self._detail_label.mapToGlobal(pos))
         if selected == copy_action:
-            QtGui.QGuiApplication.clipboard().setText(self._detail_label.text())
+            self.copy_detail_text()
+
+    def copy_detail_text(self) -> None:
+        text = self._detail_label.text()
+        if not text:
+            return
+        QtGui.QGuiApplication.clipboard().setText(text)
