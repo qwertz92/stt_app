@@ -610,10 +610,11 @@ class DictationController(QtCore.QObject):
                 self._window_focus_helper.restore_target_window(self._target_window_handle)
             except Exception:
                 self._logger.exception("Failed to restore target window focus")
+        insert_hwnd = self._target_insert_window()
         try:
             self._text_inserter.insert_text_with_options(
                 text,
-                target_hwnd=self._target_window_handle,
+                target_hwnd=insert_hwnd,
                 paste_mode=self._settings.paste_mode,
             )
         except TextInsertionError as exc:
@@ -627,6 +628,16 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Text insertion failed")
             return False
         return True
+
+    def _target_insert_window(self) -> int | None:
+        signature = self._target_focus_signature
+        if signature is not None:
+            _foreground, focus_hwnd, caret_hwnd = signature
+            if caret_hwnd:
+                return caret_hwnd
+            if focus_hwnd:
+                return focus_hwnd
+        return self._target_window_handle
 
     def _stream_tail(self, committed: str, latest: str) -> str:
         committed_text = self._normalize_stream_text(committed)

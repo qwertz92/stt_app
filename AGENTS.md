@@ -65,13 +65,13 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 70 passing tests
+- Current test count: 71 passing tests
 
 ## Known limitations
 - Streaming mode currently available for local provider only.
 - Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
 - Live insertion in streaming mode is append-oriented and still cannot delete already inserted words when model revisions disagree.
-- Streaming auto-abort uses foreground + focused-control signature; it is still best-effort and not a low-level caret hook.
+- Streaming auto-abort uses foreground + focused-control + caret signature; it is still best-effort and not a low-level caret hook.
 - Remote providers not implemented (placeholder classes only).
 - Clipboard restore currently handles Unicode text content only.
 
@@ -137,3 +137,4 @@ Covered modules:
 - Overlay detail area now grows with transcript content up to `OVERLAY_MAX_HEIGHT` (4x base) and then becomes scrollable.
 - Added regression tests for focused-control abort, partial-stability delta computation, and finalize-tail fallback.
 - Added controller regression test for "continues inserting after partial revisions" to catch the prior stall-after-first-inserts behavior.
+- Inserter target handling improved: paste now prefers captured caret/focus handle instead of top-level window for better WM_PASTE fallback behavior.

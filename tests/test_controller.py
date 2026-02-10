@@ -368,8 +368,37 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
 
     assert transcriber.chunks == [b"\x00\x01"]
     assert transcriber.stopped is True
-    assert inserter.calls == [("stream final", focus_helper.captured, settings.paste_mode)]
+    assert inserter.calls == [("stream final", focus_helper.captured_caret, settings.paste_mode)]
     assert overlay.states[-1][0] == "Done"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_prefers_caret_handle_for_insertion_target():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
+    store = FakeSettingsStore(settings)
+    hotkey_manager = FakeHotkeyManager()
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=hotkey_manager,
+        overlay=overlay,
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+
+    controller._target_window_handle = 555
+    controller._target_focus_signature = (555, 556, 557)
+    controller._on_transcription_ready("hello world")
+
+    assert focus_helper.restore_calls == [555]
+    assert inserter.calls == [("hello world", 557, settings.paste_mode)]
 
     controller.shutdown()
     _ = app
