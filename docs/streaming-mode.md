@@ -27,14 +27,14 @@ Characteristics:
 Flow:
 1. Start stream session in transcriber.
 2. Audio callback pushes PCM chunks continuously.
-3. Transcriber periodically re-transcribes the buffered stream and emits partial text.
+3. Transcriber periodically re-transcribes only a trailing audio window and emits partial text.
 4. Controller inserts incremental text deltas at the current caret during streaming.
 5. On stop hotkey, stream is finalized and only the remaining tail (if any) is inserted.
 6. If target focus changes during streaming, session auto-aborts and plays a short alert beep.
 
 Implementation detail:
-- focus guard uses a focus signature `(foreground_window, focused_child_control)` captured at stream start.
-- a 50ms poll timer checks for focus/cursor drift even between audio chunk callbacks.
+- focus guard uses a focus signature `(foreground_window, focused_child_control, caret_window)` captured at stream start.
+- a 25ms poll timer checks for focus/cursor drift even between audio chunk callbacks.
 - abort beep is triggered immediately when abort is requested; teardown continues right after.
 
 Characteristics:
@@ -49,7 +49,7 @@ Characteristics:
 - `DictationController.start_recording()` branches by `settings.mode`.
 - For `streaming`, it calls `transcriber.start_stream(...)` and starts capture with a chunk callback.
 - Partial updates are emitted via `transcription_partial` Qt signal, shown in overlay, and incrementally inserted at caret.
-- Live insertion uses a partial-stability rule (common prefix of consecutive partials) before committing text; overlap fallback is used when partials diverge.
+- Live insertion uses a stable-prefix rule with a trailing-word guard before committing text; suffix/prefix overlap reconciliation is used when partials diverge.
 - Stop action triggers `transcriber.stop_stream()` in background worker and only inserts remaining text delta.
 - Focus-signature guard aborts streaming when target focus/cursor changes.
 - Abort path uses fast stream cancellation (no heavy final re-transcription) to keep abort beep low-latency.
@@ -88,7 +88,7 @@ Alternatives (future):
 
 Streaming does not necessarily mean lower final quality, but in this implementation:
 - partial text may be less stable (revisions happen),
-- if revisions differ from already live-inserted text, only append-only reconciliation is possible,
+- if revisions differ from already live-inserted text, only append-only reconciliation is possible (already inserted words are not deleted),
 - finalize tail uses last partial as fallback when final pass diverges from already committed live text,
 - CPU contention on slower machines can indirectly affect responsiveness,
 - final text quality is typically close to batch for the same model when enough context is captured.
@@ -113,6 +113,8 @@ Larger models in streaming mode increase partial update cost.
 Streaming behavior can be tuned via config:
 - `STREAMING_PARTIAL_INTERVAL_S`
 - `STREAMING_PARTIAL_MIN_AUDIO_S`
+- `STREAMING_PARTIAL_WINDOW_S`
+- `STREAMING_STABLE_WORD_GUARD`
 - `STREAMING_FOCUS_POLL_MS`
 - `STREAMING_ABORT_BEEP_HZ`
 - `STREAMING_ABORT_BEEP_DURATION_MS`

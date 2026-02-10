@@ -65,12 +65,12 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 65 passing tests
+- Current test count: 70 passing tests
 
 ## Known limitations
 - Streaming mode currently available for local provider only.
-- Streaming partial updates are generated from periodic full-buffer re-transcription and can use more CPU than batch mode.
-- Live insertion in streaming mode is append-oriented; when revisions diverge, only overlap-based tail append is attempted (no full overwrite of already inserted text).
+- Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
+- Live insertion in streaming mode is append-oriented and still cannot delete already inserted words when model revisions disagree.
 - Streaming auto-abort uses foreground + focused-control signature; it is still best-effort and not a low-level caret hook.
 - Remote providers not implemented (placeholder classes only).
 - Clipboard restore currently handles Unicode text content only.
@@ -127,9 +127,13 @@ Covered modules:
 - Improved streaming delta detection with word-overlap fallback, reducing cases where partial inserts were dropped due strict prefix mismatch.
 - Abort beep now tries explicit `winsound.Beep(900, 120)` first, then falls back to `MessageBeep`/Qt beep.
 - Overlay now includes a dedicated `Copy` button so users can copy text without selection/context-menu steps.
-- Streaming focus-abort detection now polls every 50ms and compares both foreground window and focused child control for faster cursor/focus-change abort.
+- Streaming focus-abort detection now polls every 25ms and compares foreground + focus + caret window signatures for faster cursor/focus-change abort.
 - Abort beep is triggered immediately on abort request (before transcriber teardown), reducing perceived notification latency.
-- Streaming live insertion now uses partial-stability confirmation (common-prefix between consecutive partials) with overlap fallback to reduce re-write mismatches.
-- Final streaming tail append now falls back to last partial text if the final full pass diverges, avoiding dropped trailing words.
-- Default streaming partial cadence tuned for lower latency: `STREAMING_PARTIAL_INTERVAL_S=0.55`, `STREAMING_PARTIAL_MIN_AUDIO_S=0.45`.
+- Streaming live insertion now uses stable-prefix commit with trailing-word guard and suffix/prefix overlap reconciliation to avoid "stops after first inserts" behavior.
+- Final streaming tail now scores candidates (`final`, `last_partial`) and prefers the one that best extends committed text, reducing bad corrections at finalize.
+- Streaming partial decoding now uses a trailing audio window (`STREAMING_PARTIAL_WINDOW_S`) so partial latency does not grow linearly with utterance length.
+- Default streaming cadence tuned for lower latency: `STREAMING_PARTIAL_INTERVAL_S=0.35`, `STREAMING_PARTIAL_MIN_AUDIO_S=0.25`.
+- Overlay copy UX improved: visible pressed/copy feedback, "Copied" state, and best-effort restoration of previously focused external window.
+- Overlay detail area now grows with transcript content up to `OVERLAY_MAX_HEIGHT` (4x base) and then becomes scrollable.
 - Added regression tests for focused-control abort, partial-stability delta computation, and finalize-tail fallback.
+- Added controller regression test for "continues inserting after partial revisions" to catch the prior stall-after-first-inserts behavior.

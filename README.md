@@ -123,8 +123,10 @@ uv run python -m pytest
 
 - Overlay transcript text is selectable.
 - Overlay has a direct `Copy` button to copy the shown text instantly.
+- Copy button gives visual feedback (`Copied`) and best-effort restores the previously focused external window.
 - Right-click the transcript text in overlay and choose `Copy text`.
 - Tray menu also has `Copy last transcript`.
+- Overlay transcript area auto-grows with content up to 4x base height, then enables vertical scrolling.
 
 ## Smoke test
 
@@ -191,7 +193,7 @@ Sample benchmark file in repo:
 ## Limitations (current MVP)
 
 - Text insertion preserves text clipboard content only (not arbitrary binary formats).
-- Streaming mode currently uses local provider only and performs periodic full-buffer partial updates (higher CPU usage than batch).
+- Streaming mode currently uses local provider only and performs periodic trailing-window partial updates (still higher CPU usage than batch).
 - Remote providers are placeholders (not implemented yet).
 
 ## Packaging note (PyInstaller)

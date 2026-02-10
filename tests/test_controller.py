@@ -69,21 +69,27 @@ class FakeWindowFocusHelper:
     def __init__(self):
         self.captured = 987
         self.captured_focus = 654
+        self.captured_caret = 321
         self.current = 987
         self.current_focus = 654
+        self.current_caret = 321
         self.restore_calls = []
 
     def capture_target_window(self):
         return self.captured
 
     def capture_target_signature(self):
-        return (self.captured, self.captured_focus or self.captured)
+        focus = self.captured_focus or self.captured
+        caret = self.captured_caret or focus
+        return (self.captured, focus, caret)
 
     def get_foreground_window(self):
         return self.current
 
     def get_focus_signature(self):
-        return (self.current, self.current_focus or self.current)
+        focus = self.current_focus or self.current
+        caret = self.current_caret or focus
+        return (self.current, focus, caret)
 
     def restore_target_window(self, hwnd):
         self.restore_calls.append(hwnd)
@@ -441,7 +447,8 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
 
     controller.start_recording()
     focus_helper.current = focus_helper.captured  # same top-level window
-    focus_helper.current_focus = 999999  # changed text control/caret owner
+    focus_helper.current_focus = focus_helper.captured_focus
+    focus_helper.current_caret = 999999  # changed caret owner
     controller._on_stream_focus_poll()
 
     assert transcriber.aborted is True
@@ -487,16 +494,47 @@ def test_stream_live_delta_waits_for_partial_stability():
     assert committed == ""
 
     delta, committed = controller._compute_stream_live_delta("", "hello world", "hello world now")
-    assert delta == "hello world"
-    assert committed == "hello world"
+    assert delta == "hello"
+    assert committed == "hello"
 
     delta, committed = controller._compute_stream_live_delta(
-        "hello world",
+        "hello",
         "hello world now",
         "hello world now again",
     )
-    assert delta == "now"
-    assert committed == "hello world now"
+    assert delta == "world"
+    assert committed == "hello world"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_live_delta_recovers_after_partial_revision():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    delta, committed = controller._compute_stream_live_delta(
+        "hello world",
+        "hello there foo bar",
+        "hello there foo bar baz",
+    )
+    assert delta == "there foo"
+    assert committed == "hello world there foo"
+
+    delta2, committed2 = controller._compute_stream_live_delta(
+        committed,
+        "hello there foo bar baz",
+        "hello there foo bar baz qux",
+    )
+    assert delta2 == "bar"
+    assert committed2.endswith("there foo bar")
 
     controller.shutdown()
     _ = app
@@ -517,6 +555,49 @@ def test_stream_finalize_tail_uses_last_partial_when_final_diverges():
     tail = controller._best_stream_finalize_tail("hello world", "hello word")
 
     assert tail == "plus"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_streaming_partial_insertions_continue_after_revisions():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        keep_transcript_in_clipboard=False,
+    )
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._streaming_recording = True
+    controller._audio_capture = object()
+    controller._target_window_handle = focus_helper.captured
+    controller._target_focus_signature = focus_helper.capture_target_signature()
+
+    partials = [
+        "hello world",
+        "hello world this",
+        "hello there this is",
+        "hello there this is working",
+        "hello there this is working now",
+    ]
+    for partial in partials:
+        controller._on_transcription_partial(partial)
+
+    inserted_texts = [call[0] for call in inserter.calls]
+    assert len(inserted_texts) >= 3
+    assert any("there this" in text for text in inserted_texts)
+    assert any("is" in text for text in inserted_texts)
+    assert overlay.states[-1][0] == "Listening"
 
     controller.shutdown()
     _ = app

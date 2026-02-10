@@ -21,6 +21,7 @@ from .config import (
     STREAMING_FOCUS_POLL_MS,
     STREAMING_LIVE_INSERT_ENABLED,
     STREAMING_OVERLAY_MAX_CHARS,
+    STREAMING_STABLE_WORD_GUARD,
     VAD_ENERGY_THRESHOLD,
     VAD_MAX_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
@@ -32,7 +33,7 @@ from .text_inserter import TextInserter, TextInsertionError
 from .transcriber import create_transcriber
 from .transcriber.base import TranscriptionError
 from .vad import EnergyVad
-from .window_focus import Win32WindowFocusHelper, WindowFocusHelper
+from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
 
 class DictationController(QtCore.QObject):
@@ -66,7 +67,7 @@ class DictationController(QtCore.QObject):
         self._hotkey_registration_ok = False
         self._hotkey_notice: str | None = None
         self._target_window_handle: int | None = None
-        self._target_focus_signature: tuple[int | None, int | None] | None = None
+        self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
         self._streaming_recording = False
         self._active_stream_transcriber = None
@@ -543,13 +544,19 @@ class DictationController(QtCore.QObject):
         if current_signature is None:
             return True
 
-        current_foreground, current_focus = current_signature
+        current_foreground, current_focus, current_caret = current_signature
         if target_signature is not None:
-            target_foreground, target_focus = target_signature
+            target_foreground, target_focus, target_caret = target_signature
             if (
                 target_focus is not None
                 and current_focus is not None
                 and current_focus != target_focus
+            ):
+                return False
+            if (
+                target_caret is not None
+                and current_caret is not None
+                and current_caret != target_caret
             ):
                 return False
             return target_foreground in {None, current_foreground}
@@ -566,7 +573,7 @@ class DictationController(QtCore.QObject):
                 return None
         return self._window_focus_helper.capture_target_window()
 
-    def _capture_target_signature(self) -> tuple[int | None, int | None] | None:
+    def _capture_target_signature(self) -> FocusSignature | None:
         getter = getattr(self._window_focus_helper, "capture_target_signature", None)
         if callable(getter):
             try:
@@ -575,9 +582,9 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to capture target focus signature")
                 return None
         window = self._target_window_handle
-        return (window, window) if window else None
+        return (window, window, window) if window else None
 
-    def _current_focus_signature(self) -> tuple[int | None, int | None] | None:
+    def _current_focus_signature(self) -> FocusSignature | None:
         getter = getattr(self._window_focus_helper, "get_focus_signature", None)
         if callable(getter):
             try:
@@ -586,7 +593,7 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to read focus signature")
                 return None
         foreground = self._current_foreground_window()
-        return (foreground, foreground) if foreground else None
+        return (foreground, foreground, foreground) if foreground else None
 
     def _insert_text_at_target(
         self,
@@ -680,6 +687,18 @@ class DictationController(QtCore.QObject):
                 return idx
         return size
 
+    def _suffix_prefix_overlap_len(self, left: list[str], right: list[str]) -> int:
+        if not left or not right:
+            return 0
+        max_size = min(len(left), len(right))
+        overlap = 0
+        for size in range(1, max_size + 1):
+            if [token.lower() for token in left[-size:]] == [
+                token.lower() for token in right[:size]
+            ]:
+                overlap = size
+        return overlap
+
     def _compute_stream_live_delta(
         self,
         committed: str,
@@ -696,25 +715,44 @@ class DictationController(QtCore.QObject):
             return "", self._normalize_stream_text(committed)
 
         stable_len = self._common_prefix_len(previous_words, current_words)
-        stable_words = current_words[:stable_len]
-        if stable_words[: len(committed_words)] == committed_words and len(stable_words) >= len(
-            committed_words
-        ):
-            delta_words = stable_words[len(committed_words) :]
-            delta = " ".join(delta_words).strip()
-            next_committed = " ".join(stable_words).strip()
-            return delta, self._normalize_stream_text(next_committed)
-
-        fallback_delta = self._stream_tail(committed, current_partial)
-        if not fallback_delta:
+        guard = max(0, int(STREAMING_STABLE_WORD_GUARD))
+        stable_commit_len = max(0, stable_len - guard)
+        if stable_commit_len <= 0:
             return "", self._normalize_stream_text(committed)
-        return fallback_delta, self._stream_join_text(committed, fallback_delta)
+
+        stable_commit_words = current_words[:stable_commit_len]
+        committed_prefix_len = self._common_prefix_len(committed_words, stable_commit_words)
+        stable_tail_words = stable_commit_words[committed_prefix_len:]
+        committed_tail_words = committed_words[committed_prefix_len:]
+        overlap_len = self._suffix_prefix_overlap_len(committed_tail_words, stable_tail_words)
+        delta_words = stable_tail_words[overlap_len:]
+        if not delta_words:
+            return "", self._normalize_stream_text(committed)
+        delta_text = " ".join(delta_words).strip()
+        return delta_text, self._stream_join_text(committed, delta_text)
 
     def _best_stream_finalize_tail(self, committed: str, final_text: str) -> str:
-        tail = self._stream_tail(committed, final_text)
-        if tail:
-            return tail
-        return self._stream_tail(committed, self._stream_last_partial_text)
+        committed_words = self._split_stream_words(committed)
+        best_tail = ""
+        best_score = -1
+        for candidate in (final_text, self._stream_last_partial_text):
+            candidate_words = self._split_stream_words(candidate)
+            if not candidate_words:
+                continue
+            prefix_len = self._common_prefix_len(committed_words, candidate_words)
+            candidate_tail = candidate_words[prefix_len:]
+            committed_tail = committed_words[prefix_len:]
+            overlap_len = self._suffix_prefix_overlap_len(committed_tail, candidate_tail)
+            delta_words = candidate_tail[overlap_len:]
+            if delta_words:
+                score = prefix_len + overlap_len
+                # Prefer candidates that genuinely extend already committed text.
+                if prefix_len < len(committed_words) and overlap_len == 0:
+                    score -= 1
+                if score > best_score:
+                    best_score = score
+                    best_tail = " ".join(delta_words).strip()
+        return best_tail
 
     def copy_last_transcript_to_clipboard(self) -> bool:
         if not self._last_transcript.strip():

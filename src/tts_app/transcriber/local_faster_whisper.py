@@ -15,6 +15,7 @@ from ..config import (
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
+    STREAMING_PARTIAL_WINDOW_S,
 )
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
@@ -38,6 +39,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         stream_sample_rate: int = AUDIO_SAMPLE_RATE,
         stream_partial_interval_s: float = STREAMING_PARTIAL_INTERVAL_S,
         stream_partial_min_audio_s: float = STREAMING_PARTIAL_MIN_AUDIO_S,
+        stream_partial_window_s: float = STREAMING_PARTIAL_WINDOW_S,
         model_factory=None,
     ) -> None:
         self.model_size = model_size
@@ -48,6 +50,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self.stream_sample_rate = max(1, int(stream_sample_rate))
         self.stream_partial_interval_s = max(0.0, float(stream_partial_interval_s))
         self.stream_partial_min_audio_s = max(0.0, float(stream_partial_min_audio_s))
+        self.stream_partial_window_s = max(0.0, float(stream_partial_window_s))
         self._model_factory = model_factory or _default_model_factory
         self._model = None
 
@@ -273,7 +276,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             return
 
         try:
-            text = self._transcribe_current_stream_buffer()
+            text = self._transcribe_current_stream_buffer(
+                max_window_seconds=self.stream_partial_window_s
+            )
         except Exception as exc:
             self._stream_error = exc
             return
@@ -291,11 +296,18 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             self._stream_last_partial_at = time.monotonic()
             self._stream_last_partial_size = len(self._stream_pcm_buffer)
 
-    def _transcribe_current_stream_buffer(self) -> str:
+    def _transcribe_current_stream_buffer(
+        self,
+        max_window_seconds: float | None = None,
+    ) -> str:
         with self._stream_lock:
             snapshot = bytes(self._stream_pcm_buffer)
         if not snapshot:
             return ""
+        if max_window_seconds is not None and max_window_seconds > 0:
+            max_bytes = int(max_window_seconds * self.stream_sample_rate * 2)
+            if max_bytes > 0 and len(snapshot) > max_bytes:
+                snapshot = snapshot[-max_bytes:]
         wav_bytes = self._pcm16_to_wav_bytes(snapshot)
         return self.transcribe_batch(wav_bytes)
 

@@ -188,3 +188,53 @@ def test_local_transcriber_abort_stream_ends_session_without_error():
 
     with pytest.raises(TranscriptionError):
         transcriber.stop_stream()
+
+
+def test_stream_partial_uses_configured_window(monkeypatch):
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_partial_window_s=2.5,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    calls = []
+
+    def fake_transcribe(max_window_seconds=None):
+        calls.append(max_window_seconds)
+        return "partial text"
+
+    monkeypatch.setattr(
+        transcriber,
+        "_transcribe_current_stream_buffer",
+        fake_transcribe,
+    )
+
+    transcriber.start_stream(on_partial=lambda _text: None)
+    transcriber.push_audio_chunk(_build_pcm16_chunk(1_600))
+    transcriber.stop_stream()
+
+    assert 2.5 in calls
+    assert None in calls
+
+
+def test_transcribe_current_stream_buffer_trims_to_window_size(monkeypatch):
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_sample_rate=16_000,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    transcriber._stream_pcm_buffer = bytearray(_build_pcm16_chunk(sample_count=16_000 * 6))
+    observed = {"seconds": 0.0}
+
+    def fake_batch(wav_bytes):
+        with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
+            observed["seconds"] = wav_file.getnframes() / float(wav_file.getframerate())
+        return "ok"
+
+    monkeypatch.setattr(transcriber, "transcribe_batch", fake_batch)
+
+    text = transcriber._transcribe_current_stream_buffer(max_window_seconds=2.0)
+
+    assert text == "ok"
+    assert observed["seconds"] == pytest.approx(2.0, rel=0.03)
