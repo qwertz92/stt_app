@@ -246,7 +246,9 @@ Each model requires these files: `config.json`, `model.bin`, `tokenizer.json`, `
 | `small` | ~484 MB | Multilingual | [Systran/faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small/tree/main) |
 | `medium` | ~1.43 GB | Multilingual | [Systran/faster-whisper-medium](https://huggingface.co/Systran/faster-whisper-medium/tree/main) |
 | `large-v3` | ~3.09 GB | Multilingual | [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3/tree/main) |
+| `large-v3-turbo` | ~809 MB | Multilingual | [mobiuslabsgmbh/faster-whisper-large-v3-turbo](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/tree/main) |
 | `distil-large-v3` | ~756 MB | **English only** | [Systran/faster-distil-whisper-large-v3](https://huggingface.co/Systran/faster-distil-whisper-large-v3/tree/main) |
+| `distil-large-v3.5` | ~756 MB | **English only** | [distil-whisper/distil-large-v3.5-ct2](https://huggingface.co/distil-whisper/distil-large-v3.5-ct2/tree/main) |
 
 You can also clone with `git`:
 ```bash
@@ -266,32 +268,89 @@ git clone https://huggingface.co/Systran/faster-whisper-small
 
 ### How model paths work internally
 
-`faster-whisper`'s `WhisperModel` resolves models as follows:
+`faster-whisper`'s `WhisperModel` resolves models in this order:
 
-1. If the model name is an **existing directory** path → uses it directly (must contain model files).
-2. Otherwise, maps short names (e.g. `"small"`) to HuggingFace repo IDs (e.g. `Systran/faster-whisper-small`) and downloads via `huggingface_hub.snapshot_download()`.
+1. **Existing directory path** (`os.path.isdir(name)` is True):
+   Uses it directly as the model. The directory must contain the model files: `config.json`, `model.bin`, `tokenizer.json`, and `vocabulary.txt` (or `vocabulary.json`). Example: `WhisperModel("C:/my-models/faster-whisper-small")`.
 
-The HuggingFace cache structure is **not** a simple flat folder. It uses:
+2. **HuggingFace repo ID** (contains `/`, e.g. `Systran/faster-whisper-small`):
+   Downloads from that specific HF repo via `huggingface_hub.snapshot_download()`.
+
+3. **Short name** (e.g. `"small"`, `"large-v3-turbo"`):
+   Maps to a HuggingFace repo ID via an internal `_MODELS` dictionary, then downloads like step 2.
+
+Our app uses short names by default (configurable in Settings → Model Size).
+
+### HuggingFace Cache: how it works
+
+The HuggingFace cache is the place where models are stored after download. Key facts:
+
+- **Per-user, in the user's home directory.** Not system-global.
+  - Windows: `%USERPROFILE%\.cache\huggingface\hub\`  (e.g. `C:\Users\YourName\.cache\huggingface\hub\`)
+  - Linux: `~/.cache/huggingface/hub/`
+- **Persistent.** Files survive app restarts, reboots, updates. They are **never** deleted automatically — not when the app closes, not on reboot, not on update.
+- **Shared across all Python programs** that use `huggingface_hub`. If you use `faster-whisper` in another project, it reuses the same cached models.
+- **Can be overridden** with the `Model Dir` setting or the `HF_HOME` / `HF_HUB_CACHE` environment variables.
+
+#### Cache directory structure
+
+The cache is **not** a flat folder. It uses HuggingFace's internal structure:
+
 ```
-<cache_dir>/models--Systran--faster-whisper-small/
-  refs/main                    (text file with commit hash)
-  snapshots/<commit_hash>/     (actual model files live here)
-  blobs/                       (SHA256-named raw file data)
+%USERPROFILE%\.cache\huggingface\hub\
+  models--Systran--faster-whisper-small\          ← one folder per model
+    refs\
+      main                                         ← text file: commit hash
+    snapshots\
+      abc123def456...\                             ← actual model files
+        config.json
+        model.bin
+        tokenizer.json
+        vocabulary.txt
+    blobs\
+      sha256-...\                                  ← raw content-addressed files
+  models--mobiuslabsgmbh--faster-whisper-large-v3-turbo\
+    ...same structure...
 ```
 
-This is why simply placing files in a folder does not work — you need either the download script or a copy of a working cache.
+**This is why you cannot just drop files into a folder.** The short name `"small"` is resolved to `Systran/faster-whisper-small`, which maps to the internal path `models--Systran--faster-whisper-small/snapshots/<hash>/`. The download script handles this automatically.
+
+#### Custom Model Dir
+
+When you set **Model Dir** in Settings (e.g. `D:\whisper-models`):
+- All model downloads go into that directory instead of the default HF cache.
+- The same internal structure is created there: `D:\whisper-models\models--Systran--faster-whisper-small\snapshots\<hash>\...`
+- The default cache is NOT touched.
+- Useful for: USB stick transfer, network share, keeping models separate from user profile.
+
+#### Where the download script puts files
+
+- **Without `--output-dir`:** Into the default HF cache (`%USERPROFILE%\.cache\huggingface\hub\`).
+- **With `--output-dir C:\whisper-models`:** Into `C:\whisper-models\` with the full HF structure.
+
+#### Best practice for offline transfer
+
+1. On a machine with internet: `python scripts/download_model.py --model small --output-dir C:\whisper-export`
+2. Copy `C:\whisper-export\` to target machine (USB, network share).
+3. On target machine: set **Model Dir** = `C:\whisper-export` and enable **Offline mode** in Settings.
+4. Done — the app resolves the model from that directory.
 
 ### Model recommendations
 
 | Use case | Recommended model |
 |----------|-------------------|
 | German + English, CPU-only | `small` (default) |
-| German + English, better quality | `medium` |
+| German + English, better quality | `medium` or `large-v3-turbo` |
 | Best quality, GPU available | `large-v3` |
-| English only, fast + accurate | `distil-large-v3` |
+| Fast multilingual, good quality | `large-v3-turbo` (~809 MB, pruned large-v3) |
+| English only, fast + accurate | `distil-large-v3.5` (latest, best distil) |
+| English only, fast (older) | `distil-large-v3` |
 | Quick testing | `tiny` |
 
-**Note:** `distil-large-v3` is ~6x faster than `large-v3` and within 1% WER on English, but it is **English-only** and will perform poorly for German or other languages.
+**Notes:**
+- `large-v3-turbo` is a pruned version of `large-v3` (4 decoder layers instead of 32). It is **multilingual** (99 languages) and much faster, with only a minor quality loss compared to `large-v3`.
+- `distil-large-v3.5` is the latest distilled model (trained on 98k hours vs 22k for v3). It is ~1.5x faster than `large-v3-turbo` but **English-only**. For English dictation, it is the best speed/quality tradeoff.
+- `distil-large-v3` and `distil-large-v3.5` are **English-only** and will perform poorly for German or other languages.
 
 ## Packaging note (PyInstaller)
 

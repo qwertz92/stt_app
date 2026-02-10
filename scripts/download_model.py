@@ -34,7 +34,9 @@ MODELS: dict[str, str] = {
     "small": "Systran/faster-whisper-small",
     "medium": "Systran/faster-whisper-medium",
     "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
     "distil-large-v3": "Systran/faster-distil-whisper-large-v3",
+    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
 }
 
 # Only these files are needed by CTranslate2 / faster-whisper.
@@ -113,7 +115,10 @@ def main() -> None:
     if args.list:
         print("Available models:")
         for name, repo_id in MODELS.items():
-            note = " (English only)" if "distil" in name else " (multilingual)"
+            if "distil" in name:
+                note = " (English only)"
+            else:
+                note = " (multilingual)"
             print(f"  {name:20s} -> {repo_id}{note}")
         return
 

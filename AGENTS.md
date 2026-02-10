@@ -67,7 +67,7 @@ Important defaults:
 - `DEFAULT_MODE = "batch"`
 - `DEFAULT_OFFLINE_MODE = False`
 - `DEFAULT_MODEL_DIR = ""` (empty = standard HF cache)
-- `VALID_MODEL_SIZES` includes `distil-large-v3` (English-only, ~756 MB)
+- `VALID_MODEL_SIZES` includes `distil-large-v3` (English-only, ~756 MB), `distil-large-v3.5` (English-only, ~756 MB, improved), `large-v3-turbo` (multilingual, ~809 MB, pruned large-v3)
 
 ## Hotkey notes
 - `RegisterHotKey` supports the configured hotkey syntax with one non-modifier key.
@@ -194,4 +194,12 @@ Covered modules:
 - Completely rewrote README offline section: script-based download (primary), manual download (alternative), detailed HF cache structure explanation, model path resolution docs, model recommendation table.
 - Key root cause of user's failed offline setup: the old README told users to place files in a flat folder, but `faster-whisper` passes short names through `huggingface_hub.snapshot_download()` which expects HF's internal `models--<org>--<name>/snapshots/<hash>/` structure. Flat folders are only used when the model name is a direct path (os.path.isdir check). The download script now creates the correct structure automatically.
 - WhisperModel constructor parameters: `model_size_or_path` (name or path), `download_root` (cache dir), `local_files_only` (no network).
+- Current test count: 75 tests (72 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+### 2026-02-11
+- Added `large-v3-turbo` to VALID_MODEL_SIZES — multilingual (~809 MB), pruned large-v3 (4 decoder layers instead of 32). Much faster than large-v3 with minor quality loss. Already in faster-whisper's `_MODELS` dict as `mobiuslabsgmbh/faster-whisper-large-v3-turbo`.
+- Added `distil-large-v3.5` to VALID_MODEL_SIZES — English-only (~756 MB), improved over distil-large-v3 (98k hours training data vs 22k). CTranslate2 version at `distil-whisper/distil-large-v3.5-ct2`. Already in faster-whisper's `_MODELS` dict.
+- Researched `nvidia/parakeet-tdt-0.6b-v3`: NOT compatible with faster-whisper. Uses FastConformer-TDT architecture (NeMo framework), not Whisper/CTranslate2. Would require a completely new provider implementation. 25 EU languages, 600M params, excellent WER (DE 5.04%, EN 4.85%) but different inference pipeline.
+- Researched AssemblyAI Universal-3 Pro: API-only ($0.21/hour), promptable speech model, 6 languages (EN, ES, DE, FR, PT, IT). Would need new remote provider implementation (assemblyai SDK). Not implemented — noted for Phase 2 provider work.
+- Added comprehensive HF cache documentation to README: per-user persistence, cache structure, custom Model Dir, download script behavior, offline transfer best practice.
+- faster-whisper `_MODELS` dict (utils.py) already contains: `"large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"`, `"turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"`, `"distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2"`.
 - Current test count: 75 tests (72 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
