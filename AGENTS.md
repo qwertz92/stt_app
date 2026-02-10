@@ -3,6 +3,7 @@
 ## Purpose
 This file is the running project memory for `tts_app`.
 Keep it updated whenever behavior, architecture, dependencies, or operational learnings change.
+Agents: prefer reading this file first before making changes. It contains critical context about known issues, intentional design decisions, and architecture constraints.
 
 ## Current scope
 - Phase 1 (MVP) implemented: local batch dictation on Windows 11.
@@ -13,16 +14,47 @@ Keep it updated whenever behavior, architecture, dependencies, or operational le
 - PySide6 UI/tray/overlay
 - Win32 RegisterHotKey + SendInput (no low-level keyboard hook)
 - sounddevice for mic capture
-- faster-whisper local provider
+- faster-whisper local provider (CTranslate2 Whisper models from HuggingFace Systran)
 - keyring for secret storage
+- Platform: Windows 11 only (Linux/WSL for dev tooling, not app runtime)
+
+## Architecture overview
+
+### Module responsibilities
+- `config.py` — all tunables/constants centralized here; never hardcode values elsewhere
+- `controller.py` — main orchestrator/state machine (~810 lines); connects hotkey, audio, transcriber, overlay, inserter
+- `audio_capture.py` — sounddevice mic recording + optional VAD auto-stop + streaming chunk callback
+- `transcriber/local_faster_whisper.py` — batch + streaming transcription via faster-whisper; temp-file based audio input
+- `transcriber/factory.py` — creates transcriber instance from settings
+- `text_inserter.py` — clipboard-safe paste: save clipboard → set text → paste → restore clipboard
+- `overlay_ui.py` — always-on-top frameless overlay with state colors, copy button, scrollable detail
+- `hotkey.py` — Win32 RegisterHotKey + Qt native event filter
+- `window_focus.py` — capture/compare/restore foreground window + focused control + caret window
+- `settings_store.py` — JSON settings with schema migration
+- `settings_dialog.py` — PySide6 settings UI
+- `secret_store.py` — keyring wrapper for API keys
+- `app_paths.py` — %APPDATA% path helpers
+- `logger.py` — rotating file logger
+
+### Key design decisions
+- **Temp files vs BytesIO for audio**: `transcribe_batch` writes WAV bytes to a temp file because `faster-whisper`'s `WhisperModel.transcribe()` accepts file paths (its most reliable input path). BytesIO could work via PyAV but temp files avoid edge cases and are proven stable. Keep as-is.
+- **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — both modules are self-contained and should not depend on each other.
+- **Controller size**: ~810 lines including streaming delta logic. Could be split but streaming state is tightly coupled with recording state. Refactoring risk outweighs benefit currently.
 
 ## Core flow
 1. Global hotkey toggles recording.
-2. Overlay moves through states: `Idle -> Listening -> Processing -> Done/Error`.
+2. Overlay moves through states: `Idle → Listening → Processing → Done/Error`.
 3. In batch mode, recorded WAV bytes are transcribed once on stop.
 4. In streaming mode (local experimental), live chunks are pushed and partial text updates are shown and incrementally inserted during recording.
 5. Transcribed text is inserted at caret via clipboard-safe paste.
 6. Clipboard text content is restored.
+
+## Text insertion (paste) behavior
+- **Auto mode** (default `paste_mode=auto`): tries `SendInput` (Ctrl+V) first, falls back to `WM_PASTE` if SendInput fails.
+- **WM_PASTE mode**: sends `WM_PASTE` message directly to the target window's focused control.
+- **SendInput mode**: synthesizes Ctrl+V keystrokes via Win32 `SendInput`.
+- After `SendInput`, a short delay (`SENDINPUT_RESTORE_DELAY_S=0.16s`) is applied before restoring the clipboard, to avoid race conditions where the target app reads the clipboard asynchronously.
+- Insertion target prefers: caret window > focused control > foreground window (captured at recording start).
 
 ## Central configuration
 All key global defaults are centralized in `src/tts_app/config.py`.
@@ -32,6 +64,7 @@ Important defaults:
 - `DEFAULT_MODEL_SIZE = "small"`
 - `DEFAULT_ENGINE = "local"`
 - `DEFAULT_MODE = "batch"`
+- `DEFAULT_OFFLINE_MODE = False`
 
 ## Hotkey notes
 - `RegisterHotKey` supports the configured hotkey syntax with one non-modifier key.
@@ -65,7 +98,7 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 71 passing tests
+- Current test count: 72 tests (69 pass on Linux; 3 are Windows-only)
 
 ## Known limitations
 - Streaming mode currently available for local provider only.
@@ -97,7 +130,7 @@ Covered modules:
 - On insertion failure, transcript is copied to clipboard automatically.
 - Overlay detail text is selectable and supports right-click copy; tray menu now has `Copy last transcript`.
 - Root cause for stale paste identified: immediate clipboard restore can race with asynchronous paste handling.
-- Text inserter now attempts synchronous `WM_PASTE` first and adds a short restore delay only on `SendInput` fallback.
+- Text inserter auto mode tries `SendInput` (Ctrl+V) first, falling back to `WM_PASTE` if it fails. A short restore delay is applied after `SendInput` to prevent stale clipboard paste races.
 - Added setting `paste_mode` (`auto`, `wm_paste`, `send_input`) and wired it through controller/text inserter.
 - Added setting `keep_transcript_in_clipboard` to keep recognized text available for manual paste after each successful transcription.
 - In corporate environments, `uv.exe` can be blocked by Group Policy/AppLocker; native Python + pip setup is required as fallback.
@@ -138,3 +171,16 @@ Covered modules:
 - Added regression tests for focused-control abort, partial-stability delta computation, and finalize-tail fallback.
 - Added controller regression test for "continues inserting after partial revisions" to catch the prior stall-after-first-inserts behavior.
 - Inserter target handling improved: paste now prefers captured caret/focus handle instead of top-level window for better WM_PASTE fallback behavior.
+- Root cause of corporate machine transcription failure: `huggingface_hub` cannot reach the Hub to download the model and no local cache snapshot exists. Improved error message with actionable offline/corporate setup instructions (copy `%USERPROFILE%\.cache\huggingface`, or set `HF_HUB_OFFLINE=1`).
+- Consolidated streaming state cleanup in `LocalFasterWhisperTranscriber` via `_reset_stream_fields()` helper, removing duplicated 11-line reset block from `stop_stream` and `abort_stream`.
+- Simplified `_play_abort_beep` to avoid redundant duplicate `winsound` import attempts.
+- Identified `GUITHREADINFO` struct duplication between `text_inserter.py` and `window_focus.py` (cosmetic; left as-is since both modules are intentionally self-contained).
+- Added `offline_mode` setting (`DEFAULT_OFFLINE_MODE = False`) with UI checkbox, wired through settings_store → factory → transcriber; sets `HF_HUB_OFFLINE=1` env var before model load.
+- Added comprehensive offline model download section to README.md with direct HuggingFace file download links for all supported models.
+- Fixed AGENTS.md: corrected paste-order documentation (auto mode uses SendInput first, not WM_PASTE first), added Architecture overview section, restructured for better agent consumption.
+- Fixed streaming abort race condition: worker thread now checks `_stream_abort_requested` inside the main loop under lock before processing each queue item, preventing orphaned workers from running stale transcriptions after abort.
+- Made streaming finalization guard safe: after abort, worker only writes `_stream_final_text` if the session is still active (not already reset by `abort_stream`/_reset_stream_fields`).
+- Removed Win32 focus-change check from `_on_stream_audio_chunk` (PortAudio callback thread); Win32 API calls from a real-time audio thread violate constraints. Focus-change abort is handled exclusively by `_focus_poll_timer` (Qt main thread, 25ms cadence).
+- Removed dead `_stream_tail` method from controller.py (replaced by `_best_stream_finalize_tail`); removed corresponding test.
+- Added test `test_offline_mode_sets_hf_hub_offline_env_var` verifying env var is set before model factory call.
+- Current test count: 72 tests (69 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).

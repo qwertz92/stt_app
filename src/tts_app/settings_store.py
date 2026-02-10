@@ -13,6 +13,7 @@ from .config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
+    DEFAULT_OFFLINE_MODE,
     DEFAULT_PASTE_MODE,
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_VAD_ENABLED,
@@ -40,6 +41,7 @@ DEFAULTS = {
     "mode": DEFAULT_MODE,
     "paste_mode": DEFAULT_PASTE_MODE,
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
+    "offline_mode": DEFAULT_OFFLINE_MODE,
     "has_openai_key": False,
     "has_azure_key": False,
     "has_deepgram_key": False,
@@ -58,6 +60,7 @@ class AppSettings:
     mode: str = DEFAULT_MODE
     paste_mode: str = DEFAULT_PASTE_MODE
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
+    offline_mode: bool = DEFAULT_OFFLINE_MODE
     has_openai_key: bool = False
     has_azure_key: bool = False
     has_deepgram_key: bool = False
@@ -106,6 +109,7 @@ class AppSettings:
                     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
                 )
             ),
+            offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),
             has_openai_key=bool(merged.get("has_openai_key", False)),
             has_azure_key=bool(merged.get("has_azure_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),

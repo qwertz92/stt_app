@@ -70,6 +70,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
             "Keep transcript in clipboard after transcription"
         )
+        self.offline_mode_checkbox = QtWidgets.QCheckBox(
+            "Offline mode (use cached models only, no internet)"
+        )
+        self.offline_mode_checkbox.setToolTip(
+            "When enabled, sets HF_HUB_OFFLINE=1 so faster-whisper never "
+            "attempts to download models. The model must already be cached "
+            "locally (see README for offline setup instructions)."
+        )
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -124,6 +132,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.vad_checkbox)
         form.addRow("", self.save_wav_checkbox)
         form.addRow("", self.keep_clipboard_checkbox)
+        form.addRow("", self.offline_mode_checkbox)
 
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys (Phase 2)")
         provider_layout = QtWidgets.QFormLayout(provider_box)
@@ -165,6 +174,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.vad_checkbox.setChecked(settings.vad_enabled)
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
         self.keep_clipboard_checkbox.setChecked(settings.keep_transcript_in_clipboard)
+        self.offline_mode_checkbox.setChecked(settings.offline_mode)
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
@@ -223,6 +233,7 @@ class SettingsDialog(QtWidgets.QDialog):
             vad_enabled=self.vad_checkbox.isChecked(),
             save_last_wav=self.save_wav_checkbox.isChecked(),
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
+            offline_mode=self.offline_mode_checkbox.isChecked(),
             engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
             paste_mode=str(self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE),

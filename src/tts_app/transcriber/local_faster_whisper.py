@@ -28,6 +28,13 @@ def _default_model_factory(*args, **kwargs):
     return WhisperModel(*args, **kwargs)
 
 
+def _apply_offline_mode() -> None:
+    """Set HF_HUB_OFFLINE=1 so huggingface_hub never attempts network access."""
+    import os
+
+    os.environ["HF_HUB_OFFLINE"] = "1"
+
+
 class LocalFasterWhisperTranscriber(ITranscriber):
     def __init__(
         self,
@@ -41,6 +48,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         stream_partial_min_audio_s: float = STREAMING_PARTIAL_MIN_AUDIO_S,
         stream_partial_window_s: float = STREAMING_PARTIAL_WINDOW_S,
         model_factory=None,
+        offline_mode: bool = False,
     ) -> None:
         self.model_size = model_size
         self.language_mode = language_mode
@@ -53,6 +61,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self.stream_partial_window_s = max(0.0, float(stream_partial_window_s))
         self._model_factory = model_factory or _default_model_factory
         self._model = None
+        self._offline_mode = offline_mode
 
         self._stream_lock = threading.Lock()
         self._stream_active = False
@@ -69,6 +78,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
     def _ensure_model(self):
         if self._model is None:
+            if self._offline_mode:
+                _apply_offline_mode()
             self._model = self._model_factory(
                 self.model_size,
                 device=self.device,
@@ -89,7 +100,20 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 f"Missing dependency '{missing}'. "
                 "Run `uv sync --group dev` and restart the app."
             )
-        return str(exc)
+        msg = str(exc)
+        # Detect HuggingFace Hub connectivity / offline-cache errors
+        # (common on corporate machines with restricted internet).
+        if "Hub" in msg and ("snapshot" in msg or "internet" in msg):
+            return (
+                "Whisper model is not cached locally and the HuggingFace Hub "
+                "is unreachable (common on corporate/restricted networks). "
+                "Fix: download the model on a machine with internet access "
+                "(run the app once), then copy the folder "
+                "%USERPROFILE%\\.cache\\huggingface to this machine. "
+                "Alternatively, set the environment variable HF_HUB_OFFLINE=1 "
+                "if the model is already cached."
+            )
+        return msg
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         temp_path: Path | None = None
@@ -177,18 +201,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         stream_thread.join()
 
         with self._stream_lock:
-            self._stream_active = False
-            self._stream_queue = None
-            self._stream_thread = None
-            self._stream_on_partial = None
             stream_error = self._stream_error
             text = self._stream_final_text
-            self._stream_error = None
-            self._stream_pcm_buffer = bytearray()
-            self._stream_latest_text = ""
-            self._stream_last_partial_size = 0
-            self._stream_last_partial_at = 0.0
-            self._stream_abort_requested = False
+            self._reset_stream_fields()
 
         if stream_error is not None:
             detail = self._format_transcription_error(
@@ -211,22 +226,28 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             stream_thread.join(timeout=STREAMING_ABORT_JOIN_TIMEOUT_S)
 
         with self._stream_lock:
-            self._stream_active = False
-            self._stream_queue = None
-            self._stream_thread = None
-            self._stream_on_partial = None
-            self._stream_error = None
-            self._stream_pcm_buffer = bytearray()
-            self._stream_final_text = ""
-            self._stream_latest_text = ""
-            self._stream_last_partial_size = 0
-            self._stream_last_partial_at = 0.0
-            self._stream_abort_requested = False
+            self._reset_stream_fields()
+
+    def _reset_stream_fields(self) -> None:
+        """Reset all streaming state. Must be called with ``_stream_lock`` held."""
+        self._stream_active = False
+        self._stream_on_partial = None
+        self._stream_queue = None
+        self._stream_thread = None
+        self._stream_pcm_buffer = bytearray()
+        self._stream_error = None
+        self._stream_final_text = ""
+        self._stream_latest_text = ""
+        self._stream_last_partial_size = 0
+        self._stream_last_partial_at = 0.0
+        self._stream_abort_requested = False
 
     def _stream_worker(self) -> None:
         while True:
             with self._stream_lock:
                 stream_queue = self._stream_queue
+                if self._stream_abort_requested:
+                    return
             if stream_queue is None:
                 return
 
@@ -240,18 +261,28 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
             self._maybe_emit_partial()
 
+        # Capture abort flag under lock before it can be reset by
+        # abort_stream / _reset_stream_fields on another thread.
         with self._stream_lock:
             aborted = self._stream_abort_requested
 
         if aborted:
             with self._stream_lock:
-                self._stream_final_text = self._stream_latest_text
+                # Fields may already be reset by abort_stream(); write
+                # only if the session is still ours to finalize.
+                if self._stream_final_text == "":
+                    self._stream_final_text = self._stream_latest_text
             return
 
         try:
-            self._stream_final_text = self._transcribe_current_stream_buffer()
+            final_text = self._transcribe_current_stream_buffer()
         except Exception as exc:
-            self._stream_error = exc
+            with self._stream_lock:
+                self._stream_error = exc
+            return
+
+        with self._stream_lock:
+            self._stream_final_text = final_text
 
     def _maybe_emit_partial(self) -> None:
         with self._stream_lock:

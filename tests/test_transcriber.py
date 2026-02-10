@@ -1,4 +1,5 @@
 import io
+import os
 import wave
 
 import pytest
@@ -238,3 +239,55 @@ def test_transcribe_current_stream_buffer_trims_to_window_size(monkeypatch):
 
     assert text == "ok"
     assert observed["seconds"] == pytest.approx(2.0, rel=0.03)
+
+
+class HubOfflineModel:
+    def transcribe(self, audio_source, language=None, vad_filter=True):
+        raise OSError(
+            "An error happened while trying to locate the files on the Hub "
+            "and we cannot find the appropriate snapshot folder for the "
+            "specified revision on the local disk. Please check your internet "
+            "connection and try again."
+        )
+
+
+def test_local_transcriber_hub_offline_message_is_actionable():
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=lambda *args, **kwargs: HubOfflineModel(),
+    )
+
+    with pytest.raises(TranscriptionError) as error:
+        transcriber.transcribe_batch(_build_wav_bytes())
+
+    message = str(error.value)
+    assert "not cached locally" in message
+    assert "HF_HUB_OFFLINE" in message
+    assert "restricted" in message.lower()
+
+
+def test_offline_mode_sets_hf_hub_offline_env_var():
+    """offline_mode=True must set HF_HUB_OFFLINE=1 before model loading."""
+    old = os.environ.pop("HF_HUB_OFFLINE", None)
+    try:
+        captured_env = {}
+
+        def capturing_factory(*args, **kwargs):
+            captured_env["HF_HUB_OFFLINE"] = os.environ.get("HF_HUB_OFFLINE")
+            return FakeModel()
+
+        transcriber = LocalFasterWhisperTranscriber(
+            model_size="small",
+            language_mode="auto",
+            model_factory=capturing_factory,
+            offline_mode=True,
+        )
+        transcriber.transcribe_batch(_build_wav_bytes())
+
+        assert captured_env.get("HF_HUB_OFFLINE") == "1"
+    finally:
+        if old is not None:
+            os.environ["HF_HUB_OFFLINE"] = old
+        else:
+            os.environ.pop("HF_HUB_OFFLINE", None)

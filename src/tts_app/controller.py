@@ -319,17 +319,16 @@ class DictationController(QtCore.QObject):
         self.transcription_partial.emit(text)
 
     def _on_stream_audio_chunk(self, chunk: bytes) -> None:
+        """Called from the PortAudio callback thread — must be lightweight.
+
+        Focus-change abort is handled by ``_focus_poll_timer`` on the Qt
+        main thread; we intentionally avoid Win32 API calls here because
+        the PortAudio real-time thread must not block on system calls.
+        """
         if self._audio_capture is None:
             return
         if self._stream_abort_requested:
             return
-        if self._streaming_recording and STREAMING_ABORT_ON_FOCUS_CHANGE:
-            if not self._is_stream_target_active():
-                self._request_stream_abort(
-                    "Streaming aborted: target window focus changed.",
-                    beep=STREAMING_BEEP_ON_ABORT,
-                )
-                return
 
         transcriber = self._active_stream_transcriber
         if transcriber is None:
@@ -349,6 +348,7 @@ class DictationController(QtCore.QObject):
             settings.model_size,
             settings.language_mode,
             settings.vad_enabled,
+            getattr(settings, "offline_mode", False),
         )
         if self._transcriber_cache is None or self._transcriber_cache_key != cache_key:
             self._transcriber_cache = create_transcriber(settings)
@@ -518,18 +518,21 @@ class DictationController(QtCore.QObject):
     def _play_abort_beep(self) -> None:
         try:
             import winsound  # type: ignore
+        except ImportError:
+            winsound = None
 
-            winsound.Beep(STREAMING_ABORT_BEEP_HZ, STREAMING_ABORT_BEEP_DURATION_MS)
-            return
-        except Exception:
-            pass
-        try:
-            import winsound  # type: ignore
+        if winsound is not None:
+            try:
+                winsound.Beep(STREAMING_ABORT_BEEP_HZ, STREAMING_ABORT_BEEP_DURATION_MS)
+                return
+            except Exception:
+                pass
+            try:
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                return
+            except Exception:
+                pass
 
-            winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
-            return
-        except Exception:
-            pass
         try:
             QtGui.QGuiApplication.beep()
         except Exception:
@@ -638,32 +641,6 @@ class DictationController(QtCore.QObject):
             if focus_hwnd:
                 return focus_hwnd
         return self._target_window_handle
-
-    def _stream_tail(self, committed: str, latest: str) -> str:
-        committed_text = self._normalize_stream_text(committed)
-        latest_text = self._normalize_stream_text(latest)
-        if not latest_text:
-            return ""
-        if not committed_text:
-            return latest_text
-        if latest_text.startswith(committed_text):
-            return latest_text[len(committed_text) :].strip()
-        committed_words = committed_text.split(" ")
-        latest_words = latest_text.split(" ")
-        max_overlap = min(len(committed_words), len(latest_words))
-        lower_committed = [word.lower() for word in committed_words]
-        lower_latest = [word.lower() for word in latest_words]
-
-        overlap = 0
-        for size in range(max_overlap, 0, -1):
-            if lower_committed[-size:] == lower_latest[:size]:
-                overlap = size
-                break
-
-        if overlap <= 0:
-            return ""
-        tail_words = latest_words[overlap:]
-        return " ".join(tail_words).strip()
 
     def _normalize_stream_text(self, text: str) -> str:
         tokens = str(text or "").strip().split()

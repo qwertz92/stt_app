@@ -24,6 +24,7 @@ DEFAULT_VAD_ENABLED = True
 DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_PASTE_MODE = "auto"
 DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = True
+DEFAULT_OFFLINE_MODE = False
 
 VALID_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3")
 VALID_LANGUAGE_MODES = ("auto", "de", "en")

@@ -171,6 +171,9 @@ Sample benchmark file in repo:
 
 ## Troubleshooting
 
+- **Model download fails / "cannot find snapshot" on corporate machine:**
+  - The app uses `faster-whisper` models from HuggingFace Hub. On restricted networks, the download fails.
+  - See the [Offline model setup](#offline-model-setup-restricted-networks) section below for instructions.
 - Hotkey registration fails:
   - The app auto-falls back to `Ctrl+Win+LShift`.
   - If both fail, choose another combo in Settings.
@@ -195,6 +198,59 @@ Sample benchmark file in repo:
 - Text insertion preserves text clipboard content only (not arbitrary binary formats).
 - Streaming mode currently uses local provider only and performs periodic trailing-window partial updates (still higher CPU usage than batch).
 - Remote providers are placeholders (not implemented yet).
+
+## Offline model setup (restricted networks)
+
+If the app cannot reach HuggingFace Hub (corporate firewall, air-gapped machine), you must provide models manually.
+
+### Step 1: Enable offline mode
+
+In Settings, check **"Offline mode (use cached models only, no internet)"**.
+This sets `HF_HUB_OFFLINE=1` internally so the app never attempts network access.
+
+Alternatively, set the environment variable manually before launching:
+```powershell
+$env:HF_HUB_OFFLINE = "1"
+```
+
+### Step 2: Download the model files
+
+Each model needs these files placed in a single folder: `config.json`, `model.bin`, `tokenizer.json`, `vocabulary.txt` (or `vocabulary.json` for large-v3).
+
+Download all files for your chosen model from the links below:
+
+| Model | Size | HuggingFace page | Direct downloads |
+|-------|------|-------------------|------------------|
+| `tiny` | ~75 MB | [Systran/faster-whisper-tiny](https://huggingface.co/Systran/faster-whisper-tiny) | [config.json](https://huggingface.co/Systran/faster-whisper-tiny/resolve/main/config.json) · [model.bin](https://huggingface.co/Systran/faster-whisper-tiny/resolve/main/model.bin) · [tokenizer.json](https://huggingface.co/Systran/faster-whisper-tiny/resolve/main/tokenizer.json) · [vocabulary.txt](https://huggingface.co/Systran/faster-whisper-tiny/resolve/main/vocabulary.txt) |
+| `base` | ~141 MB | [Systran/faster-whisper-base](https://huggingface.co/Systran/faster-whisper-base) | [config.json](https://huggingface.co/Systran/faster-whisper-base/resolve/main/config.json) · [model.bin](https://huggingface.co/Systran/faster-whisper-base/resolve/main/model.bin) · [tokenizer.json](https://huggingface.co/Systran/faster-whisper-base/resolve/main/tokenizer.json) · [vocabulary.txt](https://huggingface.co/Systran/faster-whisper-base/resolve/main/vocabulary.txt) |
+| `small` | ~484 MB | [Systran/faster-whisper-small](https://huggingface.co/Systran/faster-whisper-small) | [config.json](https://huggingface.co/Systran/faster-whisper-small/resolve/main/config.json) · [model.bin](https://huggingface.co/Systran/faster-whisper-small/resolve/main/model.bin) · [tokenizer.json](https://huggingface.co/Systran/faster-whisper-small/resolve/main/tokenizer.json) · [vocabulary.txt](https://huggingface.co/Systran/faster-whisper-small/resolve/main/vocabulary.txt) |
+| `medium` | ~1.43 GB | [Systran/faster-whisper-medium](https://huggingface.co/Systran/faster-whisper-medium) | [config.json](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/config.json) · [model.bin](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/model.bin) · [tokenizer.json](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/tokenizer.json) · [vocabulary.txt](https://huggingface.co/Systran/faster-whisper-medium/resolve/main/vocabulary.txt) |
+| `large-v3` | ~3.09 GB | [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3) | [config.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/config.json) · [model.bin](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/model.bin) · [tokenizer.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/tokenizer.json) · [vocabulary.json](https://huggingface.co/Systran/faster-whisper-large-v3/resolve/main/vocabulary.json) |
+
+All models are multilingual (99+ languages). The default is `small` — best balance of speed and accuracy for CPU-only machines.
+
+**Tip:** You can download using `git clone` on a machine with internet if individual downloads are difficult:
+```bash
+git clone https://huggingface.co/Systran/faster-whisper-small
+```
+
+### Step 3: Place files in the HuggingFace cache
+
+The `huggingface_hub` library caches models under:
+```
+%USERPROFILE%\.cache\huggingface\hub\models--Systran--faster-whisper-<model>\
+```
+
+**Easiest approach:** Run the app once on any machine with internet access (e.g. personal laptop). It will download and cache the model automatically. Then copy the entire folder to the target machine:
+```
+%USERPROFILE%\.cache\huggingface\
+```
+
+**Manual placement alternative:** You can also pass a local directory path directly as the model name to faster-whisper. To do this, download all files into a folder (e.g. `C:\models\faster-whisper-small\`) and set the model size in the app to the folder path. *(Note: the settings UI currently only supports the standard model names.)*
+
+### Model quality notes
+
+All offered models are the original OpenAI Whisper models converted to CTranslate2 format by Systran. They are multilingual and support 99+ languages including German and English. For multilingual dictation (especially German), `small` or `medium` are recommended — `tiny` and `base` have noticeably higher word error rates for non-English speech.
 
 ## Packaging note (PyInstaller)
 

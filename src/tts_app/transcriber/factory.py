@@ -13,6 +13,7 @@ def create_transcriber(settings: AppSettings) -> ITranscriber:
             model_size=settings.model_size,
             language_mode=settings.language_mode,
             vad_filter=settings.vad_enabled,
+            offline_mode=getattr(settings, "offline_mode", False),
         )
     if settings.engine == "openai":
         return OpenAITranscriber()

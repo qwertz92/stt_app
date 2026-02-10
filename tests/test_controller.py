@@ -489,24 +489,6 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     _ = app
 
 
-def test_stream_tail_uses_word_overlap_for_append():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    controller = DictationController(
-        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
-        hotkey_manager=FakeHotkeyManager(),
-        overlay=FakeOverlay(),
-        text_inserter=FakeTextInserter(),
-        logger=logging.getLogger("test.controller"),
-        window_focus_helper=FakeWindowFocusHelper(),
-    )
-
-    assert controller._stream_tail("hello world", "world again now") == "again now"
-    assert controller._stream_tail("alpha beta", "gamma delta") == ""
-
-    controller.shutdown()
-    _ = app
-
-
 def test_stream_live_delta_waits_for_partial_stability():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = DictationController(
