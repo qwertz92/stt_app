@@ -68,8 +68,7 @@ VALID_MODEL_SIZES = (
     "small",
     "medium",
     "large-v3",
-    "large-v3-turbo",   # Multilingual, ~809 MB, pruned large-v3 (4 decoder layers)
-    "distil-large-v3",  # English-only, ~756 MB, 6x faster than large-v3
+    "large-v3-turbo",  # Multilingual, ~809 MB, pruned large-v3 (4 decoder layers)
     "distil-large-v3.5",  # English-only, ~756 MB, improved v3 (98k h training data)
 )
 VALID_LANGUAGE_MODES = ("auto", "de", "en")

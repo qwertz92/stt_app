@@ -60,7 +60,6 @@ class SettingsDialog(QtWidgets.QDialog):
             "medium": "medium (~1.4 GB)",
             "large-v3": "large-v3 (~3 GB, multilingual)",
             "large-v3-turbo": "large-v3-turbo (~809 MB, multilingual, fast)",
-            "distil-large-v3": "distil-large-v3 (~756 MB, English only)",
             "distil-large-v3.5": "distil-large-v3.5 (~756 MB, English only, improved)",
         }
         for value in VALID_MODEL_SIZES:

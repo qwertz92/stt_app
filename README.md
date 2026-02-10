@@ -224,10 +224,11 @@ uv run python scripts/download_model.py --all
 uv run python scripts/download_model.py --list
 ```
 
-Without `uv`:
-```powershell
-python scripts/download_model.py --model small
-```
+> **Wichtig:** Der Befehl ist immer `uv run python scripts/download_model.py`, nicht `uv scripts/...` oder `python3 scripts/...` (außerhalb des venv).
+>
+> **Ohne uv** (z.B. in der aktivierten venv): `python scripts/download_model.py --model small`
+>
+> **Außerhalb einer venv** ohne uv funktioniert das Script nicht, weil `huggingface_hub` fehlt. Nutze entweder `uv run python ...` oder aktiviere zuerst die venv.
 
 Then transfer the files to the target machine:
 - **Default cache:** Copy the entire `%USERPROFILE%\.cache\huggingface\` folder to the same location on the target machine.
@@ -237,7 +238,7 @@ Then transfer the files to the target machine:
 
 If you cannot run the script, download models manually from HuggingFace.
 
-Each model requires these files: `config.json`, `model.bin`, `tokenizer.json`, `vocabulary.txt` (or `vocabulary.json` for large-v3/distil-large-v3).
+Each model requires these files: `config.json`, `model.bin`, `tokenizer.json`, `vocabulary.txt` (or `vocabulary.json` for large-v3).
 
 | Model | Size | Language | HuggingFace page |
 |-------|------|----------|------------------|
@@ -247,7 +248,6 @@ Each model requires these files: `config.json`, `model.bin`, `tokenizer.json`, `
 | `medium` | ~1.43 GB | Multilingual | [Systran/faster-whisper-medium](https://huggingface.co/Systran/faster-whisper-medium/tree/main) |
 | `large-v3` | ~3.09 GB | Multilingual | [Systran/faster-whisper-large-v3](https://huggingface.co/Systran/faster-whisper-large-v3/tree/main) |
 | `large-v3-turbo` | ~809 MB | Multilingual | [mobiuslabsgmbh/faster-whisper-large-v3-turbo](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/tree/main) |
-| `distil-large-v3` | ~756 MB | **English only** | [Systran/faster-distil-whisper-large-v3](https://huggingface.co/Systran/faster-distil-whisper-large-v3/tree/main) |
 | `distil-large-v3.5` | ~756 MB | **English only** | [distil-whisper/distil-large-v3.5-ct2](https://huggingface.co/distil-whisper/distil-large-v3.5-ct2/tree/main) |
 
 You can also clone with `git`:
@@ -266,20 +266,20 @@ git clone https://huggingface.co/Systran/faster-whisper-small
    $env:HF_HUB_OFFLINE = "1"
    ```
 
-### How model paths work internally
+### How model loading works
 
-`faster-whisper`'s `WhisperModel` resolves models in this order:
+Wenn du in den App-Einstellungen z.B. `small` als Modell wählst, passiert Folgendes:
 
-1. **Existing directory path** (`os.path.isdir(name)` is True):
-   Uses it directly as the model. The directory must contain the model files: `config.json`, `model.bin`, `tokenizer.json`, and `vocabulary.txt` (or `vocabulary.json`). Example: `WhisperModel("C:/my-models/faster-whisper-small")`.
+1. **Die App gibt den Kurznamen `"small"` an faster-whisper weiter.**
+2. **faster-whisper übersetzt diesen intern** in eine HuggingFace Repo-ID (z.B. `Systran/faster-whisper-small`).
+3. **faster-whisper lädt das Modell über HuggingFace Hub herunter** (beim ersten Mal) und speichert es im HuggingFace-Cache (siehe nächster Abschnitt).
+4. **Bei weiteren Starts** findet faster-whisper das Modell im Cache und lädt es direkt – kein Internet nötig.
 
-2. **HuggingFace repo ID** (contains `/`, e.g. `Systran/faster-whisper-small`):
-   Downloads from that specific HF repo via `huggingface_hub.snapshot_download()`.
+**Das ist der Normalfall.** Du musst nichts manuell kopieren oder Pfade angeben. Einfach Modellgröße wählen → App startet → Download passiert automatisch.
 
-3. **Short name** (e.g. `"small"`, `"large-v3-turbo"`):
-   Maps to a HuggingFace repo ID via an internal `_MODELS` dictionary, then downloads like step 2.
-
-Our app uses short names by default (configurable in Settings → Model Size).
+**Sonderfälle (nur für Offline-/Corporate-Setups):**
+- Wenn du "Model Dir" in den Einstellungen setzt (z.B. `D:\whisper-models`), werden Modelle dort statt im Standard-Cache gespeichert.
+- Wenn du "Offline mode" aktivierst, versucht die App keinen Download – das Modell muss bereits im Cache (oder Model Dir) vorhanden sein.
 
 ### HuggingFace Cache: how it works
 
@@ -344,13 +344,11 @@ When you set **Model Dir** in Settings (e.g. `D:\whisper-models`):
 | Best quality, GPU available | `large-v3` |
 | Fast multilingual, good quality | `large-v3-turbo` (~809 MB, pruned large-v3) |
 | English only, fast + accurate | `distil-large-v3.5` (latest, best distil) |
-| English only, fast (older) | `distil-large-v3` |
 | Quick testing | `tiny` |
 
 **Notes:**
 - `large-v3-turbo` is a pruned version of `large-v3` (4 decoder layers instead of 32). It is **multilingual** (99 languages) and much faster, with only a minor quality loss compared to `large-v3`.
-- `distil-large-v3.5` is the latest distilled model (trained on 98k hours vs 22k for v3). It is ~1.5x faster than `large-v3-turbo` but **English-only**. For English dictation, it is the best speed/quality tradeoff.
-- `distil-large-v3` and `distil-large-v3.5` are **English-only** and will perform poorly for German or other languages.
+- `distil-large-v3.5` is the latest distilled model (trained on 98k hours vs 22k for v3). It is ~1.5x faster than `large-v3-turbo` but **English-only**. For English dictation, it is the best speed/quality tradeoff. Not suitable for German or other languages.
 
 ## Packaging note (PyInstaller)
 
