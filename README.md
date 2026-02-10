@@ -112,7 +112,7 @@ uv run python -m pytest
 - `Mode` can be switched to:
   - `Batch` (recommended default)
   - `Streaming (Experimental)` (local provider only, live insertion while speaking)
-- In streaming mode, dictation auto-aborts with a short beep when target window focus changes.
+- In streaming mode, dictation auto-aborts with a short beep when foreground window or focused text control changes.
 - In Settings, `Paste Mode` can be chosen:
   - `Auto (SendInput -> WM_PASTE)`
   - `WM_PASTE only`

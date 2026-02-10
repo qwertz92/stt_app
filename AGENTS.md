@@ -65,13 +65,13 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 60 passing tests
+- Current test count: 65 passing tests
 
 ## Known limitations
 - Streaming mode currently available for local provider only.
 - Streaming partial updates are generated from periodic full-buffer re-transcription and can use more CPU than batch mode.
 - Live insertion in streaming mode is append-oriented; when revisions diverge, only overlap-based tail append is attempted (no full overwrite of already inserted text).
-- Streaming auto-abort focus guard currently keys off foreground-window changes (not low-level caret tracking).
+- Streaming auto-abort uses foreground + focused-control signature; it is still best-effort and not a low-level caret hook.
 - Remote providers not implemented (placeholder classes only).
 - Clipboard restore currently handles Unicode text content only.
 
@@ -127,3 +127,9 @@ Covered modules:
 - Improved streaming delta detection with word-overlap fallback, reducing cases where partial inserts were dropped due strict prefix mismatch.
 - Abort beep now tries explicit `winsound.Beep(900, 120)` first, then falls back to `MessageBeep`/Qt beep.
 - Overlay now includes a dedicated `Copy` button so users can copy text without selection/context-menu steps.
+- Streaming focus-abort detection now polls every 50ms and compares both foreground window and focused child control for faster cursor/focus-change abort.
+- Abort beep is triggered immediately on abort request (before transcriber teardown), reducing perceived notification latency.
+- Streaming live insertion now uses partial-stability confirmation (common-prefix between consecutive partials) with overlap fallback to reduce re-write mismatches.
+- Final streaming tail append now falls back to last partial text if the final full pass diverges, avoiding dropped trailing words.
+- Default streaming partial cadence tuned for lower latency: `STREAMING_PARTIAL_INTERVAL_S=0.55`, `STREAMING_PARTIAL_MIN_AUDIO_S=0.45`.
+- Added regression tests for focused-control abort, partial-stability delta computation, and finalize-tail fallback.

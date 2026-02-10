@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 import logging
+import threading
 from dataclasses import replace
 
 from PySide6 import QtCore, QtGui
@@ -14,7 +15,10 @@ from .config import (
     DEFAULT_ENGINE,
     FALLBACK_HOTKEY,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
+    STREAMING_ABORT_BEEP_DURATION_MS,
+    STREAMING_ABORT_BEEP_HZ,
     STREAMING_BEEP_ON_ABORT,
+    STREAMING_FOCUS_POLL_MS,
     STREAMING_LIVE_INSERT_ENABLED,
     STREAMING_OVERLAY_MAX_CHARS,
     VAD_ENERGY_THRESHOLD,
@@ -62,6 +66,7 @@ class DictationController(QtCore.QObject):
         self._hotkey_registration_ok = False
         self._hotkey_notice: str | None = None
         self._target_window_handle: int | None = None
+        self._target_focus_signature: tuple[int | None, int | None] | None = None
         self._last_transcript: str = ""
         self._streaming_recording = False
         self._active_stream_transcriber = None
@@ -69,7 +74,11 @@ class DictationController(QtCore.QObject):
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
         self._stream_committed_text = ""
+        self._stream_last_partial_text = ""
         self._active_session_mode = "batch"
+        self._focus_poll_timer = QtCore.QTimer(self)
+        self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
+        self._focus_poll_timer.timeout.connect(self._on_stream_focus_poll)
 
         self.transcription_ready.connect(self._on_transcription_ready)
         self.transcription_failed.connect(self._on_transcription_failed)
@@ -86,6 +95,7 @@ class DictationController(QtCore.QObject):
 
     def shutdown(self) -> None:
         self._hotkey_manager.unregister()
+        self._focus_poll_timer.stop()
         if self._audio_capture is not None:
             try:
                 self._audio_capture.stop()
@@ -99,10 +109,7 @@ class DictationController(QtCore.QObject):
                 pass
             self._active_stream_transcriber = None
             self._active_stream_settings = None
-        self._stream_abort_requested = False
-        self._stream_committed_text = ""
-        self._active_session_mode = "batch"
-        self._streaming_recording = False
+        self._reset_streaming_state()
         self._executor.shutdown(wait=False, cancel_futures=False)
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
@@ -142,6 +149,7 @@ class DictationController(QtCore.QObject):
             return
 
         self._target_window_handle = self._window_focus_helper.capture_target_window()
+        self._target_focus_signature = self._capture_target_signature()
         if self._settings.mode == "streaming":
             self._start_streaming_recording()
             return
@@ -158,6 +166,7 @@ class DictationController(QtCore.QObject):
 
         self._active_session_mode = "batch"
         self._streaming_recording = False
+        self._stream_last_partial_text = ""
         self._audio_capture = capture
         self._overlay.set_state("Listening", "Speak now. Press hotkey again to stop.")
 
@@ -193,10 +202,13 @@ class DictationController(QtCore.QObject):
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
         self._stream_committed_text = ""
+        self._stream_last_partial_text = ""
         self._active_session_mode = "streaming"
         self._active_stream_transcriber = transcriber
         self._active_stream_settings = settings_snapshot
         self._audio_capture = capture
+        if STREAMING_ABORT_ON_FOCUS_CHANGE:
+            self._focus_poll_timer.start()
         self._overlay.set_state(
             "Listening",
             "Streaming active. Speak now, press hotkey to finalize.",
@@ -236,6 +248,7 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to save debug wav")
 
         if self._streaming_recording:
+            self._focus_poll_timer.stop()
             if self._stream_abort_requested:
                 self._abort_streaming_session(
                     "Streaming aborted.",
@@ -257,6 +270,16 @@ class DictationController(QtCore.QObject):
 
     def _auto_stop_from_vad(self) -> None:
         QtCore.QTimer.singleShot(0, self.stop_recording)
+
+    def _reset_streaming_state(self) -> None:
+        self._focus_poll_timer.stop()
+        self._stream_abort_requested = False
+        self._stream_committed_text = ""
+        self._stream_last_partial_text = ""
+        self._active_session_mode = "batch"
+        self._streaming_recording = False
+        self._target_window_handle = None
+        self._target_focus_signature = None
 
     def _transcribe_worker(self, wav_bytes: bytes, settings: AppSettings) -> None:
         try:
@@ -286,6 +309,7 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Unexpected streaming finalization failure")
             self.transcription_failed.emit(f"Unexpected streaming error: {exc}")
         finally:
+            self._focus_poll_timer.stop()
             self._active_stream_transcriber = None
             self._active_stream_settings = None
             self._streaming_recording = False
@@ -295,6 +319,8 @@ class DictationController(QtCore.QObject):
 
     def _on_stream_audio_chunk(self, chunk: bytes) -> None:
         if self._audio_capture is None:
+            return
+        if self._stream_abort_requested:
             return
         if self._streaming_recording and STREAMING_ABORT_ON_FOCUS_CHANGE:
             if not self._is_stream_target_active():
@@ -331,6 +357,7 @@ class DictationController(QtCore.QObject):
     @QtCore.Slot(str)
     def _on_transcription_ready(self, text: str) -> None:
         session_mode = self._active_session_mode
+        self._focus_poll_timer.stop()
         self._streaming_recording = False
         self._active_stream_transcriber = None
         self._active_stream_settings = None
@@ -339,55 +366,45 @@ class DictationController(QtCore.QObject):
 
         if not text.strip():
             self._overlay.set_state("Done", "No speech detected.")
-            self._target_window_handle = None
-            self._stream_committed_text = ""
-            self._active_session_mode = "batch"
+            self._reset_streaming_state()
             return
 
         if session_mode == "streaming":
-            final_text = text.strip()
+            final_text = self._normalize_stream_text(text)
             committed = self._stream_committed_text
-            tail = self._stream_tail(committed, final_text)
+            tail = self._best_stream_finalize_tail(committed, final_text)
             if tail:
                 insertion = self._stream_insertion_text(committed, tail)
                 if not self._insert_text_at_target(insertion, restore_focus=True):
-                    self._target_window_handle = None
-                    self._stream_committed_text = ""
-                    self._active_session_mode = "batch"
+                    self._reset_streaming_state()
                     return
                 self._stream_committed_text = self._stream_join_text(committed, tail)
             self._overlay.set_state("Done", final_text)
         else:
             if not self._insert_text_at_target(text, restore_focus=True):
-                self._target_window_handle = None
-                self._stream_committed_text = ""
-                self._active_session_mode = "batch"
+                self._reset_streaming_state()
                 return
 
             self._overlay.set_state("Done", text)
 
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
-        self._target_window_handle = None
-        self._stream_committed_text = ""
-        self._active_session_mode = "batch"
+        self._reset_streaming_state()
 
     @QtCore.Slot(str)
     def _on_transcription_failed(self, error_text: str) -> None:
+        self._focus_poll_timer.stop()
         self._streaming_recording = False
         self._active_stream_transcriber = None
         self._active_stream_settings = None
-        self._stream_abort_requested = False
-        self._stream_committed_text = ""
-        self._active_session_mode = "batch"
-        self._target_window_handle = None
+        self._reset_streaming_state()
         self._overlay.set_state("Error", error_text)
 
     @QtCore.Slot(str)
     def _on_transcription_partial(self, partial_text: str) -> None:
         if not self._streaming_recording or self._audio_capture is None:
             return
-        text = (partial_text or "").strip()
+        text = self._normalize_stream_text(partial_text)
         if not text:
             return
         if STREAMING_ABORT_ON_FOCUS_CHANGE and not self._is_stream_target_active():
@@ -396,11 +413,19 @@ class DictationController(QtCore.QObject):
                 beep=STREAMING_BEEP_ON_ABORT,
             )
             return
+        previous_partial = self._stream_last_partial_text
+        self._stream_last_partial_text = text
         if STREAMING_LIVE_INSERT_ENABLED:
-            committed = self._stream_committed_text
-            delta = self._stream_tail(committed, text)
+            delta, next_committed = self._compute_stream_live_delta(
+                self._stream_committed_text,
+                previous_partial,
+                text,
+            )
             if delta:
-                insertion = self._stream_insertion_text(committed, delta)
+                insertion = self._stream_insertion_text(
+                    self._stream_committed_text,
+                    delta,
+                )
                 if not self._insert_text_at_target(
                     insertion,
                     restore_focus=False,
@@ -412,11 +437,24 @@ class DictationController(QtCore.QObject):
                         beep=STREAMING_BEEP_ON_ABORT,
                     )
                     return
-                self._stream_committed_text = self._stream_join_text(committed, delta)
+                self._stream_committed_text = next_committed
         if len(text) > STREAMING_OVERLAY_MAX_CHARS:
             text = text[-STREAMING_OVERLAY_MAX_CHARS :]
             text = f"...{text}".strip()
         self._overlay.set_state("Listening", f"Live: {text}")
+
+    @QtCore.Slot()
+    def _on_stream_focus_poll(self) -> None:
+        if not self._streaming_recording or self._stream_abort_requested:
+            return
+        if not STREAMING_ABORT_ON_FOCUS_CHANGE:
+            return
+        if self._is_stream_target_active():
+            return
+        self._request_stream_abort(
+            "Streaming aborted: target window focus changed.",
+            beep=STREAMING_BEEP_ON_ABORT,
+        )
 
     @QtCore.Slot(str, bool)
     def _on_stream_abort_requested(self, reason: str, beep: bool) -> None:
@@ -426,7 +464,18 @@ class DictationController(QtCore.QObject):
         if self._stream_abort_requested:
             return
         self._stream_abort_requested = True
-        self.stream_abort_requested.emit(reason, beep)
+        emit_beep = beep
+        if beep:
+            try:
+                threading.Thread(
+                    target=self._play_abort_beep,
+                    name="tts_app_abort_beep",
+                    daemon=True,
+                ).start()
+                emit_beep = False
+            except Exception:
+                emit_beep = beep
+        self.stream_abort_requested.emit(reason, emit_beep)
 
     def _abort_streaming_session(
         self,
@@ -435,6 +484,10 @@ class DictationController(QtCore.QObject):
         beep: bool,
         finalize_stream: bool,
     ) -> None:
+        if beep:
+            self._play_abort_beep()
+
+        self._focus_poll_timer.stop()
         capture = self._audio_capture
         self._audio_capture = None
         if capture is not None:
@@ -458,20 +511,14 @@ class DictationController(QtCore.QObject):
 
         self._streaming_recording = False
         self._active_stream_settings = None
-        self._target_window_handle = None
-        self._stream_committed_text = ""
-        self._active_session_mode = "batch"
-        self._stream_abort_requested = False
-
-        if beep:
-            self._play_abort_beep()
+        self._reset_streaming_state()
         self._overlay.set_state("Error", reason)
 
     def _play_abort_beep(self) -> None:
         try:
             import winsound  # type: ignore
 
-            winsound.Beep(900, 120)
+            winsound.Beep(STREAMING_ABORT_BEEP_HZ, STREAMING_ABORT_BEEP_DURATION_MS)
             return
         except Exception:
             pass
@@ -488,11 +535,26 @@ class DictationController(QtCore.QObject):
             pass
 
     def _is_stream_target_active(self) -> bool:
-        target = self._target_window_handle
-        if not target:
+        target_window = self._target_window_handle
+        target_signature = self._target_focus_signature
+        if not target_window and target_signature is None:
             return True
-        current = self._current_foreground_window()
-        return current in {None, target}
+        current_signature = self._current_focus_signature()
+        if current_signature is None:
+            return True
+
+        current_foreground, current_focus = current_signature
+        if target_signature is not None:
+            target_foreground, target_focus = target_signature
+            if (
+                target_focus is not None
+                and current_focus is not None
+                and current_focus != target_focus
+            ):
+                return False
+            return target_foreground in {None, current_foreground}
+
+        return current_foreground in {None, target_window}
 
     def _current_foreground_window(self) -> int | None:
         getter = getattr(self._window_focus_helper, "get_foreground_window", None)
@@ -503,6 +565,28 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to read foreground window")
                 return None
         return self._window_focus_helper.capture_target_window()
+
+    def _capture_target_signature(self) -> tuple[int | None, int | None] | None:
+        getter = getattr(self._window_focus_helper, "capture_target_signature", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                self._logger.exception("Failed to capture target focus signature")
+                return None
+        window = self._target_window_handle
+        return (window, window) if window else None
+
+    def _current_focus_signature(self) -> tuple[int | None, int | None] | None:
+        getter = getattr(self._window_focus_helper, "get_focus_signature", None)
+        if callable(getter):
+            try:
+                return getter()
+            except Exception:
+                self._logger.exception("Failed to read focus signature")
+                return None
+        foreground = self._current_foreground_window()
+        return (foreground, foreground) if foreground else None
 
     def _insert_text_at_target(
         self,
@@ -582,7 +666,55 @@ class DictationController(QtCore.QObject):
         insertion = self._stream_insertion_text(base, tail)
         combined = f"{base}{insertion}"
         return self._normalize_stream_text(combined)
-        return ""
+
+    def _split_stream_words(self, text: str) -> list[str]:
+        normalized = self._normalize_stream_text(text)
+        if not normalized:
+            return []
+        return normalized.split(" ")
+
+    def _common_prefix_len(self, left: list[str], right: list[str]) -> int:
+        size = min(len(left), len(right))
+        for idx in range(size):
+            if left[idx].lower() != right[idx].lower():
+                return idx
+        return size
+
+    def _compute_stream_live_delta(
+        self,
+        committed: str,
+        previous_partial: str,
+        current_partial: str,
+    ) -> tuple[str, str]:
+        committed_words = self._split_stream_words(committed)
+        previous_words = self._split_stream_words(previous_partial)
+        current_words = self._split_stream_words(current_partial)
+        if not current_words:
+            return "", self._normalize_stream_text(committed)
+        if not previous_words:
+            # First partial is unstable; wait for one confirmation window.
+            return "", self._normalize_stream_text(committed)
+
+        stable_len = self._common_prefix_len(previous_words, current_words)
+        stable_words = current_words[:stable_len]
+        if stable_words[: len(committed_words)] == committed_words and len(stable_words) >= len(
+            committed_words
+        ):
+            delta_words = stable_words[len(committed_words) :]
+            delta = " ".join(delta_words).strip()
+            next_committed = " ".join(stable_words).strip()
+            return delta, self._normalize_stream_text(next_committed)
+
+        fallback_delta = self._stream_tail(committed, current_partial)
+        if not fallback_delta:
+            return "", self._normalize_stream_text(committed)
+        return fallback_delta, self._stream_join_text(committed, fallback_delta)
+
+    def _best_stream_finalize_tail(self, committed: str, final_text: str) -> str:
+        tail = self._stream_tail(committed, final_text)
+        if tail:
+            return tail
+        return self._stream_tail(committed, self._stream_last_partial_text)
 
     def copy_last_transcript_to_clipboard(self) -> bool:
         if not self._last_transcript.strip():

@@ -12,6 +12,7 @@ from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODEL_SIZE,
+    STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
 )
@@ -204,7 +205,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if stream_queue is not None:
             stream_queue.put(_STREAM_SENTINEL)
         if stream_thread is not None:
-            stream_thread.join(timeout=1.5)
+            stream_thread.join(timeout=STREAMING_ABORT_JOIN_TIMEOUT_S)
 
         with self._stream_lock:
             self._stream_active = False
@@ -252,6 +253,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
     def _maybe_emit_partial(self) -> None:
         with self._stream_lock:
             callback = self._stream_on_partial
+            if self._stream_abort_requested:
+                return
             now = time.monotonic()
             elapsed = now - self._stream_last_partial_at
             min_audio_bytes = int(

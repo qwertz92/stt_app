@@ -68,14 +68,22 @@ class FakeTextInserter:
 class FakeWindowFocusHelper:
     def __init__(self):
         self.captured = 987
+        self.captured_focus = 654
         self.current = 987
+        self.current_focus = 654
         self.restore_calls = []
 
     def capture_target_window(self):
         return self.captured
 
+    def capture_target_signature(self):
+        return (self.captured, self.captured_focus or self.captured)
+
     def get_foreground_window(self):
         return self.current
+
+    def get_focus_signature(self):
+        return (self.current, self.current_focus or self.current)
 
     def restore_target_window(self, hwnd):
         self.restore_calls.append(hwnd)
@@ -354,10 +362,7 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
 
     assert transcriber.chunks == [b"\x00\x01"]
     assert transcriber.stopped is True
-    assert inserter.calls == [
-        ("stream", focus_helper.captured, settings.paste_mode),
-        (" final", focus_helper.captured, settings.paste_mode),
-    ]
+    assert inserter.calls == [("stream final", focus_helper.captured, settings.paste_mode)]
     assert overlay.states[-1][0] == "Done"
 
     controller.shutdown()
@@ -409,6 +414,45 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     _ = app
 
 
+def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        keep_transcript_in_clipboard=False,
+    )
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    focus_helper = FakeWindowFocusHelper()
+    FakeCapture.instances = []
+
+    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s: transcriber)
+
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._executor = ImmediateExecutor()
+
+    controller.start_recording()
+    focus_helper.current = focus_helper.captured  # same top-level window
+    focus_helper.current_focus = 999999  # changed text control/caret owner
+    controller._on_stream_focus_poll()
+
+    assert transcriber.aborted is True
+    assert controller._audio_capture is None
+    assert overlay.states[-1][0] == "Error"
+    assert "focus changed" in overlay.states[-1][1].lower()
+
+    controller.shutdown()
+    _ = app
+
+
 def test_stream_tail_uses_word_overlap_for_append():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = DictationController(
@@ -422,6 +466,57 @@ def test_stream_tail_uses_word_overlap_for_append():
 
     assert controller._stream_tail("hello world", "world again now") == "again now"
     assert controller._stream_tail("alpha beta", "gamma delta") == ""
+
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_live_delta_waits_for_partial_stability():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    delta, committed = controller._compute_stream_live_delta("", "", "hello world")
+    assert delta == ""
+    assert committed == ""
+
+    delta, committed = controller._compute_stream_live_delta("", "hello world", "hello world now")
+    assert delta == "hello world"
+    assert committed == "hello world"
+
+    delta, committed = controller._compute_stream_live_delta(
+        "hello world",
+        "hello world now",
+        "hello world now again",
+    )
+    assert delta == "now"
+    assert committed == "hello world now"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_finalize_tail_uses_last_partial_when_final_diverges():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._stream_last_partial_text = "hello world plus"
+
+    tail = controller._best_stream_finalize_tail("hello world", "hello word")
+
+    assert tail == "plus"
 
     controller.shutdown()
     _ = app
