@@ -160,3 +160,18 @@ def test_keep_transcript_in_clipboard_flag_roundtrip(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.keep_transcript_in_clipboard is False
+
+
+def test_model_dir_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"model_dir": "C:\\whisper-models"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.model_dir == "C:\\whisper-models"
+
+    persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert persisted["model_dir"] == "C:\\whisper-models"

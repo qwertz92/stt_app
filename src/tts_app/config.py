@@ -26,7 +26,50 @@ DEFAULT_PASTE_MODE = "auto"
 DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = True
 DEFAULT_OFFLINE_MODE = False
 
-VALID_MODEL_SIZES = ("tiny", "base", "small", "medium", "large-v3")
+# --- Model directory configuration ---
+# How faster-whisper resolves models (WhisperModel constructor):
+#
+#   1. If model_size_or_path is an EXISTING DIRECTORY on disk:
+#      -> Uses it directly as the model (must contain: config.json, model.bin,
+#         tokenizer.json, and vocabulary.txt or vocabulary.json).
+#
+#   2. Otherwise, maps the short name (e.g. "small") to a HuggingFace repo ID
+#      (e.g. "Systran/faster-whisper-small") and calls
+#      huggingface_hub.snapshot_download(repo_id, cache_dir=download_root).
+#      The default cache directory is:
+#        Windows: %USERPROFILE%\.cache\huggingface\hub\
+#        Linux:   ~/.cache/huggingface/hub/
+#      Inside that, models are stored in HF's internal structure:
+#        models--Systran--faster-whisper-small/
+#          refs/main          (text file with commit hash)
+#          snapshots/<hash>/  (actual model files)
+#          blobs/             (SHA256-named raw files)
+#
+# DEFAULT_MODEL_DIR controls the 'download_root' parameter of WhisperModel.
+# When empty (""), the standard HuggingFace cache is used.
+# When set to a path (e.g. "C:\whisper-models"), ALL models are cached there
+# in the same HF structure above — each model in its own subfolder.
+# This avoids duplicate model copies when running multiple instances.
+#
+# For fully offline / manual setup, point DEFAULT_MODEL_DIR to a folder
+# containing flat model subdirectories:
+#   C:\whisper-models\faster-whisper-small\
+#     config.json
+#     model.bin
+#     tokenizer.json
+#     vocabulary.txt
+# Then use the download script: python scripts/download_model.py --model small
+# It handles the correct directory structure automatically.
+DEFAULT_MODEL_DIR = ""
+
+VALID_MODEL_SIZES = (
+    "tiny",
+    "base",
+    "small",
+    "medium",
+    "large-v3",
+    "distil-large-v3",  # English-only, ~756 MB, 6x faster than large-v3
+)
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
 VALID_ENGINES = ("local", "openai", "azure", "deepgram")
 VALID_MODES = ("batch", "streaming")

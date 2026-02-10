@@ -53,8 +53,16 @@ class SettingsDialog(QtWidgets.QDialog):
         hotkey_hint.setStyleSheet("color: #555;")
 
         self.model_combo = QtWidgets.QComboBox()
+        model_labels = {
+            "tiny": "tiny (~75 MB)",
+            "base": "base (~141 MB)",
+            "small": "small (~484 MB)",
+            "medium": "medium (~1.4 GB)",
+            "large-v3": "large-v3 (~3 GB)",
+            "distil-large-v3": "distil-large-v3 (~756 MB, English only)",
+        }
         for value in VALID_MODEL_SIZES:
-            self.model_combo.addItem(value, value)
+            self.model_combo.addItem(model_labels.get(value, value), value)
 
         self.language_combo = QtWidgets.QComboBox()
         language_labels = {
@@ -74,10 +82,27 @@ class SettingsDialog(QtWidgets.QDialog):
             "Offline mode (use cached models only, no internet)"
         )
         self.offline_mode_checkbox.setToolTip(
-            "When enabled, sets HF_HUB_OFFLINE=1 so faster-whisper never "
+            "When enabled, sets local_files_only=True so faster-whisper never "
             "attempts to download models. The model must already be cached "
             "locally (see README for offline setup instructions)."
         )
+
+        self.model_dir_edit = QtWidgets.QLineEdit()
+        self.model_dir_edit.setPlaceholderText(
+            "Leave empty for default HuggingFace cache"
+        )
+        self.model_dir_edit.setToolTip(
+            "Custom directory for model storage (download_root).\n"
+            "When set, all models are cached here instead of the default \n"
+            "HuggingFace cache (~/.cache/huggingface/hub/).\n"
+            "Use the download script: python scripts/download_model.py"
+        )
+        self.model_dir_browse = QtWidgets.QPushButton("Browse...")
+        self.model_dir_browse.setFixedWidth(80)
+        self.model_dir_browse.clicked.connect(self._browse_model_dir)
+        model_dir_layout = QtWidgets.QHBoxLayout()
+        model_dir_layout.addWidget(self.model_dir_edit, 1)
+        model_dir_layout.addWidget(self.model_dir_browse)
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -133,6 +158,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.save_wav_checkbox)
         form.addRow("", self.keep_clipboard_checkbox)
         form.addRow("", self.offline_mode_checkbox)
+        form.addRow("Model Dir", model_dir_layout)
 
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys (Phase 2)")
         provider_layout = QtWidgets.QFormLayout(provider_box)
@@ -175,6 +201,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
         self.keep_clipboard_checkbox.setChecked(settings.keep_transcript_in_clipboard)
         self.offline_mode_checkbox.setChecked(settings.offline_mode)
+        self.model_dir_edit.setText(getattr(settings, "model_dir", "") or "")
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
@@ -189,6 +216,13 @@ class SettingsDialog(QtWidgets.QDialog):
     def _select_combo_data(self, combo: QtWidgets.QComboBox, value: str) -> None:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
+
+    def _browse_model_dir(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self, "Select model directory", self.model_dir_edit.text()
+        )
+        if path:
+            self.model_dir_edit.setText(path)
 
     def _copy_diagnostics(self) -> None:
         text = self._app_logger.diagnostics_text()
@@ -229,11 +263,14 @@ class SettingsDialog(QtWidgets.QDialog):
         settings = AppSettings(
             hotkey=hotkey,
             model_size=str(self.model_combo.currentData()),
-            language_mode=str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE),
+            language_mode=str(
+                self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+            ),
             vad_enabled=self.vad_checkbox.isChecked(),
             save_last_wav=self.save_wav_checkbox.isChecked(),
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
+            model_dir=self.model_dir_edit.text().strip(),
             engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
             paste_mode=str(self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE),

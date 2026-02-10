@@ -4,7 +4,11 @@ from ..config import DEFAULT_ENGINE
 from ..settings_store import AppSettings
 from .base import ITranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
-from .remote_placeholders import AzureTranscriber, DeepgramTranscriber, OpenAITranscriber
+from .remote_placeholders import (
+    AzureTranscriber,
+    DeepgramTranscriber,
+    OpenAITranscriber,
+)
 
 
 def create_transcriber(settings: AppSettings) -> ITranscriber:
@@ -14,6 +18,7 @@ def create_transcriber(settings: AppSettings) -> ITranscriber:
             language_mode=settings.language_mode,
             vad_filter=settings.vad_enabled,
             offline_mode=getattr(settings, "offline_mode", False),
+            model_dir=getattr(settings, "model_dir", ""),
         )
     if settings.engine == "openai":
         return OpenAITranscriber()

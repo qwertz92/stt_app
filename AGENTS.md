@@ -31,10 +31,11 @@ Agents: prefer reading this file first before making changes. It contains critic
 - `hotkey.py` — Win32 RegisterHotKey + Qt native event filter
 - `window_focus.py` — capture/compare/restore foreground window + focused control + caret window
 - `settings_store.py` — JSON settings with schema migration
-- `settings_dialog.py` — PySide6 settings UI
+- `settings_dialog.py` — PySide6 settings UI (includes model_dir browse, offline mode toggle)
 - `secret_store.py` — keyring wrapper for API keys
 - `app_paths.py` — %APPDATA% path helpers
 - `logger.py` — rotating file logger
+- `scripts/download_model.py` — automated model download for offline/corporate use
 
 ### Key design decisions
 - **Temp files vs BytesIO for audio**: `transcribe_batch` writes WAV bytes to a temp file because `faster-whisper`'s `WhisperModel.transcribe()` accepts file paths (its most reliable input path). BytesIO could work via PyAV but temp files avoid edge cases and are proven stable. Keep as-is.
@@ -65,6 +66,8 @@ Important defaults:
 - `DEFAULT_ENGINE = "local"`
 - `DEFAULT_MODE = "batch"`
 - `DEFAULT_OFFLINE_MODE = False`
+- `DEFAULT_MODEL_DIR = ""` (empty = standard HF cache)
+- `VALID_MODEL_SIZES` includes `distil-large-v3` (English-only, ~756 MB)
 
 ## Hotkey notes
 - `RegisterHotKey` supports the configured hotkey syntax with one non-modifier key.
@@ -98,7 +101,7 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 72 tests (69 pass on Linux; 3 are Windows-only)
+- Current test count: 75 tests (72 pass on Linux; 3 are Windows-only)
 
 ## Known limitations
 - Streaming mode currently available for local provider only.
@@ -184,3 +187,11 @@ Covered modules:
 - Removed dead `_stream_tail` method from controller.py (replaced by `_best_stream_finalize_tail`); removed corresponding test.
 - Added test `test_offline_mode_sets_hf_hub_offline_env_var` verifying env var is set before model factory call.
 - Current test count: 72 tests (69 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+- Replaced `HF_HUB_OFFLINE=1` env var hack with WhisperModel's native `local_files_only=True` parameter for offline mode.
+- Added `model_dir` setting (all layers: config → settings_store → dialog with Browse button → factory → transcriber) that sets `download_root` on WhisperModel, controlling where HF caches model snapshots.
+- Added `distil-large-v3` to `VALID_MODEL_SIZES` — English-only distilled model (~756 MB, 6x faster than large-v3). NOT suitable for German/multilingual dictation.
+- Created `scripts/download_model.py` — automated model download script using `huggingface_hub.snapshot_download()` with correct `cache_dir` and `allow_patterns`. Supports `--model`, `--output-dir`, `--all`, `--list`.
+- Completely rewrote README offline section: script-based download (primary), manual download (alternative), detailed HF cache structure explanation, model path resolution docs, model recommendation table.
+- Key root cause of user's failed offline setup: the old README told users to place files in a flat folder, but `faster-whisper` passes short names through `huggingface_hub.snapshot_download()` which expects HF's internal `models--<org>--<name>/snapshots/<hash>/` structure. Flat folders are only used when the model name is a direct path (os.path.isdir check). The download script now creates the correct structure automatically.
+- WhisperModel constructor parameters: `model_size_or_path` (name or path), `download_root` (cache dir), `local_files_only` (no network).
+- Current test count: 75 tests (72 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).

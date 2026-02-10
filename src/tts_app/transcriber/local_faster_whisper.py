@@ -28,13 +28,6 @@ def _default_model_factory(*args, **kwargs):
     return WhisperModel(*args, **kwargs)
 
 
-def _apply_offline_mode() -> None:
-    """Set HF_HUB_OFFLINE=1 so huggingface_hub never attempts network access."""
-    import os
-
-    os.environ["HF_HUB_OFFLINE"] = "1"
-
-
 class LocalFasterWhisperTranscriber(ITranscriber):
     def __init__(
         self,
@@ -49,6 +42,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         stream_partial_window_s: float = STREAMING_PARTIAL_WINDOW_S,
         model_factory=None,
         offline_mode: bool = False,
+        model_dir: str = "",
     ) -> None:
         self.model_size = model_size
         self.language_mode = language_mode
@@ -62,6 +56,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._model_factory = model_factory or _default_model_factory
         self._model = None
         self._offline_mode = offline_mode
+        self._model_dir = (model_dir or "").strip()
 
         self._stream_lock = threading.Lock()
         self._stream_active = False
@@ -78,13 +73,17 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
     def _ensure_model(self):
         if self._model is None:
+            kwargs: dict = {
+                "device": self.device,
+                "compute_type": self.compute_type,
+            }
+            # Use WhisperModel's native local_files_only instead of env var.
             if self._offline_mode:
-                _apply_offline_mode()
-            self._model = self._model_factory(
-                self.model_size,
-                device=self.device,
-                compute_type=self.compute_type,
-            )
+                kwargs["local_files_only"] = True
+            # download_root controls where HF caches model snapshots.
+            if self._model_dir:
+                kwargs["download_root"] = self._model_dir
+            self._model = self._model_factory(self.model_size, **kwargs)
         return self._model
 
     def _language_arg(self) -> str | None:
@@ -207,9 +206,13 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         if stream_error is not None:
             detail = self._format_transcription_error(
-                stream_error if isinstance(stream_error, Exception) else Exception(str(stream_error))
+                stream_error
+                if isinstance(stream_error, Exception)
+                else Exception(str(stream_error))
             )
-            raise TranscriptionError(f"Local streaming failed: {detail}") from stream_error
+            raise TranscriptionError(
+                f"Local streaming failed: {detail}"
+            ) from stream_error
         return text.strip()
 
     def abort_stream(self) -> None:

@@ -368,7 +368,9 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
 
     assert transcriber.chunks == [b"\x00\x01"]
     assert transcriber.stopped is True
-    assert inserter.calls == [("stream final", focus_helper.captured_caret, settings.paste_mode)]
+    assert inserter.calls == [
+        ("stream final", focus_helper.captured_caret, settings.paste_mode)
+    ]
     assert overlay.states[-1][0] == "Done"
 
     controller.shutdown()
@@ -430,7 +432,11 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     controller._executor = ImmediateExecutor()
 
     beep_calls = {"count": 0}
-    monkeypatch.setattr(controller, "_play_abort_beep", lambda: beep_calls.__setitem__("count", beep_calls["count"] + 1))
+    monkeypatch.setattr(
+        controller,
+        "_play_abort_beep",
+        lambda: beep_calls.__setitem__("count", beep_calls["count"] + 1),
+    )
 
     controller.start_recording()
     capture = FakeCapture.instances[-1]
@@ -504,7 +510,9 @@ def test_stream_live_delta_waits_for_partial_stability():
     assert delta == ""
     assert committed == ""
 
-    delta, committed = controller._compute_stream_live_delta("", "hello world", "hello world now")
+    delta, committed = controller._compute_stream_live_delta(
+        "", "hello world", "hello world now"
+    )
     assert delta == "hello"
     assert committed == "hello"
 

@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
+    DEFAULT_MODEL_DIR,
     DEFAULT_MODEL_SIZE,
     DEFAULT_OFFLINE_MODE,
     DEFAULT_PASTE_MODE,
@@ -42,6 +43,7 @@ DEFAULTS = {
     "paste_mode": DEFAULT_PASTE_MODE,
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "offline_mode": DEFAULT_OFFLINE_MODE,
+    "model_dir": DEFAULT_MODEL_DIR,
     "has_openai_key": False,
     "has_azure_key": False,
     "has_deepgram_key": False,
@@ -61,6 +63,7 @@ class AppSettings:
     paste_mode: str = DEFAULT_PASTE_MODE
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     offline_mode: bool = DEFAULT_OFFLINE_MODE
+    model_dir: str = DEFAULT_MODEL_DIR
     has_openai_key: bool = False
     has_azure_key: bool = False
     has_deepgram_key: bool = False
@@ -110,6 +113,7 @@ class AppSettings:
                 )
             ),
             offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),
+            model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
             has_openai_key=bool(merged.get("has_openai_key", False)),
             has_azure_key=bool(merged.get("has_azure_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),
@@ -184,11 +188,9 @@ class SettingsStore:
 
         # Migrate historical default hotkey to current default.
         # We only auto-change when old schema is detected and value matches the old default.
-        if (
-            old_schema < CURRENT_SCHEMA_VERSION
-            and str(migrated.get("hotkey", "")).strip()
-            in {LEGACY_DEFAULT_HOTKEY, PREVIOUS_DEFAULT_HOTKEY}
-        ):
+        if old_schema < CURRENT_SCHEMA_VERSION and str(
+            migrated.get("hotkey", "")
+        ).strip() in {LEGACY_DEFAULT_HOTKEY, PREVIOUS_DEFAULT_HOTKEY}:
             migrated["hotkey"] = DEFAULT_HOTKEY
 
         migrated["schema_version"] = CURRENT_SCHEMA_VERSION

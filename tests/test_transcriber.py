@@ -1,5 +1,4 @@
 import io
-import os
 import wave
 
 import pytest
@@ -225,7 +224,9 @@ def test_transcribe_current_stream_buffer_trims_to_window_size(monkeypatch):
         stream_sample_rate=16_000,
         model_factory=lambda *args, **kwargs: FakeModel(),
     )
-    transcriber._stream_pcm_buffer = bytearray(_build_pcm16_chunk(sample_count=16_000 * 6))
+    transcriber._stream_pcm_buffer = bytearray(
+        _build_pcm16_chunk(sample_count=16_000 * 6)
+    )
     observed = {"seconds": 0.0}
 
     def fake_batch(wav_bytes):
@@ -267,27 +268,58 @@ def test_local_transcriber_hub_offline_message_is_actionable():
     assert "restricted" in message.lower()
 
 
-def test_offline_mode_sets_hf_hub_offline_env_var():
-    """offline_mode=True must set HF_HUB_OFFLINE=1 before model loading."""
-    old = os.environ.pop("HF_HUB_OFFLINE", None)
-    try:
-        captured_env = {}
+def test_offline_mode_passes_local_files_only():
+    """offline_mode=True must pass local_files_only=True to WhisperModel."""
+    captured_kwargs = {}
 
-        def capturing_factory(*args, **kwargs):
-            captured_env["HF_HUB_OFFLINE"] = os.environ.get("HF_HUB_OFFLINE")
-            return FakeModel()
+    def capturing_factory(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return FakeModel()
 
-        transcriber = LocalFasterWhisperTranscriber(
-            model_size="small",
-            language_mode="auto",
-            model_factory=capturing_factory,
-            offline_mode=True,
-        )
-        transcriber.transcribe_batch(_build_wav_bytes())
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=capturing_factory,
+        offline_mode=True,
+    )
+    transcriber.transcribe_batch(_build_wav_bytes())
 
-        assert captured_env.get("HF_HUB_OFFLINE") == "1"
-    finally:
-        if old is not None:
-            os.environ["HF_HUB_OFFLINE"] = old
-        else:
-            os.environ.pop("HF_HUB_OFFLINE", None)
+    assert captured_kwargs.get("local_files_only") is True
+
+
+def test_model_dir_passes_download_root():
+    """model_dir must be forwarded as download_root to WhisperModel."""
+    captured_kwargs = {}
+
+    def capturing_factory(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return FakeModel()
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=capturing_factory,
+        model_dir="/tmp/my-models",
+    )
+    transcriber.transcribe_batch(_build_wav_bytes())
+
+    assert captured_kwargs.get("download_root") == "/tmp/my-models"
+
+
+def test_default_model_dir_omits_download_root():
+    """When model_dir is empty, download_root should not be passed."""
+    captured_kwargs = {}
+
+    def capturing_factory(*args, **kwargs):
+        captured_kwargs.update(kwargs)
+        return FakeModel()
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=capturing_factory,
+        model_dir="",
+    )
+    transcriber.transcribe_batch(_build_wav_bytes())
+
+    assert "download_root" not in captured_kwargs

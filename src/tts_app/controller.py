@@ -349,6 +349,7 @@ class DictationController(QtCore.QObject):
             settings.language_mode,
             settings.vad_enabled,
             getattr(settings, "offline_mode", False),
+            getattr(settings, "model_dir", ""),
         )
         if self._transcriber_cache is None or self._transcriber_cache_key != cache_key:
             self._transcriber_cache = create_transcriber(settings)
@@ -440,7 +441,7 @@ class DictationController(QtCore.QObject):
                     return
                 self._stream_committed_text = next_committed
         if len(text) > STREAMING_OVERLAY_MAX_CHARS:
-            text = text[-STREAMING_OVERLAY_MAX_CHARS :]
+            text = text[-STREAMING_OVERLAY_MAX_CHARS:]
             text = f"...{text}".strip()
         self._overlay.set_state("Listening", f"Live: {text}")
 
@@ -610,7 +611,9 @@ class DictationController(QtCore.QObject):
             return True
         if restore_focus:
             try:
-                self._window_focus_helper.restore_target_window(self._target_window_handle)
+                self._window_focus_helper.restore_target_window(
+                    self._target_window_handle
+                )
             except Exception:
                 self._logger.exception("Failed to restore target window focus")
         insert_hwnd = self._target_insert_window()
@@ -709,10 +712,14 @@ class DictationController(QtCore.QObject):
             return "", self._normalize_stream_text(committed)
 
         stable_commit_words = current_words[:stable_commit_len]
-        committed_prefix_len = self._common_prefix_len(committed_words, stable_commit_words)
+        committed_prefix_len = self._common_prefix_len(
+            committed_words, stable_commit_words
+        )
         stable_tail_words = stable_commit_words[committed_prefix_len:]
         committed_tail_words = committed_words[committed_prefix_len:]
-        overlap_len = self._suffix_prefix_overlap_len(committed_tail_words, stable_tail_words)
+        overlap_len = self._suffix_prefix_overlap_len(
+            committed_tail_words, stable_tail_words
+        )
         delta_words = stable_tail_words[overlap_len:]
         if not delta_words:
             return "", self._normalize_stream_text(committed)
@@ -730,7 +737,9 @@ class DictationController(QtCore.QObject):
             prefix_len = self._common_prefix_len(committed_words, candidate_words)
             candidate_tail = candidate_words[prefix_len:]
             committed_tail = committed_words[prefix_len:]
-            overlap_len = self._suffix_prefix_overlap_len(committed_tail, candidate_tail)
+            overlap_len = self._suffix_prefix_overlap_len(
+                committed_tail, candidate_tail
+            )
             delta_words = candidate_tail[overlap_len:]
             if delta_words:
                 score = prefix_len + overlap_len
@@ -758,9 +767,7 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to register preferred hotkey: %s", preferred)
 
         if preferred == FALLBACK_HOTKEY:
-            self._hotkey_notice = (
-                f"Hotkey registration failed ({preferred}). Choose a different hotkey in Settings."
-            )
+            self._hotkey_notice = f"Hotkey registration failed ({preferred}). Choose a different hotkey in Settings."
             return False
 
         try:
