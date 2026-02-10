@@ -1,6 +1,6 @@
 # STT-Dictation für Windows 11 – Requirements & Design Research (SRS + Pflichtenheft light)
-Version: 0.1 (Research-basierter Entwurf)  
-Datum: 2026-02-08  
+Version: 0.2 (Phase 1 complete, Phase 2 in progress)  
+Datum: 2026-02-11  
 Zielgruppe: Du selbst + ein Coding-Agent (z.B. Codex) für MVP-Implementierung und spätere Produktisierung
 
 ---
@@ -182,8 +182,16 @@ Das ist lösbar – aber die Engine-Wahl entscheidet, wie gut:
   - Continuous recognition mit intermediate results, language identification möglich, sehr gut integrierbar unter Windows; ebenfalls Basis von Windows Voice Typing.  
 - **Deepgram**  
   - WebSocket STT, optional multilingual code-switching (“language=multi”) – explizit für Sprachwechsel.  
-- **AssemblyAI**  
-  - Streaming STT via WebSocket mit partial/final transcripts.
+- **AssemblyAI** ★ Standard Remote Provider (Phase 2)  
+  - Batch: Audio-Upload via Python SDK (`assemblyai`), automatisches Polling  
+  - Modelle: Universal-3-Pro (Primär) + Universal-2 (Fallback)  
+  - 6 Sprachen: EN, ES, DE, FR, PT, IT; Language Detection automatisch  
+  - Streaming STT via WebSocket mit partial/final transcripts (Phase 2b geplant)  
+  - Preis: $0.21/Stunde Audio  
+- **NVIDIA Parakeet** (Phase 3 geplant)  
+  - `parakeet-tdt-0.6b-v3`: FastConformer-TDT Architektur (NeMo Framework)  
+  - NICHT Whisper/CTranslate2-kompatibel — benötigt eigenen Provider  
+  - 25 EU-Sprachen, 600M Parameter, WER: DE 5.04%, EN 4.85%
 - **Google Cloud Speech-to-Text**  
   - Streaming recognition (gRPC).
 
@@ -208,18 +216,47 @@ Warum das gut ist:
 - RegisterHotKey vermeidet keylogger-ähnliche Hooks
 - Clipboard-Paste ist der universellste Insert-Mechanismus für MVP
 
-### 5.2 “Phase 2”: Streaming
-Zwei Wege – du kannst beide parallel unterstützen:
+### 5.2 "Phase 2": Remote API Provider + Streaming
+**Implementierungsstatus:** In Arbeit
 
-**Streaming Remote (am einfachsten):**
-- OpenAI Realtime transcription (Audio append → deltas)
-- oder Azure/Deepgram/AssemblyAI WebSocket
+**Phase 2a: AssemblyAI als Standard-Remote-Provider (Batch)**
+AssemblyAI ist der erste implementierte Remote-Provider:
+- **SDK:** `assemblyai` Python-Paket (pip install assemblyai)
+- **Modell:** Universal-3-Pro + Universal-2 Fallback
+- **Spracherkennung:** Automatisch (`language_detection=True`), 6 Sprachen (EN, ES, DE, FR, PT, IT)
+- **Preis:** $0.21/Stunde Audio
+- **Flow:** Audio aufnehmen → WAV an AssemblyAI API senden → Transkript zurückbekommen → Text einfügen
+- **API-Key:** Gespeichert über Windows Credential Manager (`keyring`), Eingabe im Settings-Dialog
+- **Batch-only (Phase 2a):** Aufnahme → Upload → Transkription → Einfügen. Kein Streaming in Phase 2a.
 
-**Streaming Local:**
-- whisper.cpp streaming-Ansatz (sliding window + overlap)
-- oder eigene Chunking-Pipeline: VAD segmente (0.5–2s) + rolling context + stabilization
+**Phase 2b: Streaming Remote (geplant)**
+- AssemblyAI WebSocket-Streaming für Echtzeit-Teilergebnisse
+- Alternativ: OpenAI Realtime, Azure Speech, Deepgram WebSocket
+- Lokales Streaming (experimental) bereits implementiert in Phase 1
 
-### 5.3 “Phase 3”: Native Integration (echtes Input Method)
+**Phase 2c: Streaming Local (implementiert – experimental)**
+- Lokales Streaming über faster-whisper mit sliding-window + overlap
+- Inkrementelle Live-Einfügung am Cursor während der Aufnahme
+- Auto-Abort bei Fokuswechsel mit Beep-Benachrichtigung
+- Dokumentiert in `docs/streaming-mode.md`
+
+### 5.3 "Phase 3": Erweiterte Provider + Native Integration
+
+**Phase 3a: NVIDIA Parakeet / NeMo Provider**
+- **Modell:** `nvidia/parakeet-tdt-0.6b-v3` (FastConformer-TDT Architektur)
+- **NICHT kompatibel mit faster-whisper/CTranslate2** — benötigt komplett neuen Provider
+- **Framework:** NVIDIA NeMo (`nemo_toolkit['asr']`)
+- **Vorteile:** 25 EU-Sprachen, 600M Parameter, exzellente WER (DE 5.04%, EN 4.85%)
+- **Aufwand:** Neues Provider-Modul, NeMo-Dependency, eigene Inference-Pipeline
+- **Entscheidung offen:** NeMo hat deutlich größere Dependencies als faster-whisper
+
+**Phase 3b: Weitere Remote-Provider**
+- OpenAI (Realtime transcription sessions, WebSocket/WebRTC)
+- Azure Speech (Continuous recognition, intermediate results)
+- Deepgram (WebSocket STT, multilingual code-switching)
+- Google Cloud Speech-to-Text (gRPC Streaming)
+
+**Phase 3c: Native Integration (echtes Input Method)**
 Wenn du wirklich “wie Windows Input” willst:
 - TSF TIP/IME in C++/Rust (via windows-rs) oder C# COM interop
 - optional mit eigenem candidate/composition window

@@ -13,12 +13,13 @@ Windows 11 dictation desktop app MVP (Phase 1) with:
 ## Phase coverage
 
 - Phase 1 implemented and wired.
-- Phase 2 in progress:
-  - Engine settings for `Local`, `OpenAI`, `Azure`, `Deepgram`
+- Phase 2a implemented:
+  - **AssemblyAI** as first working remote provider (batch transcription)
+  - Engine settings for `Local`, `AssemblyAI`, `OpenAI`, `Azure`, `Deepgram`
   - Mode settings for `Batch` / `Streaming` (streaming is available for local provider as experimental mode)
   - Provider plugin interface with streaming methods
   - API key fields saved via `keyring`
-  - Remote providers remain placeholders
+  - OpenAI, Azure, Deepgram remote providers remain placeholders
 
 ## Requirements
 
@@ -197,7 +198,8 @@ Sample benchmark file in repo:
 
 - Text insertion preserves text clipboard content only (not arbitrary binary formats).
 - Streaming mode currently uses local provider only and performs periodic trailing-window partial updates (still higher CPU usage than batch).
-- Remote providers are placeholders (not implemented yet).
+- AssemblyAI provider supports batch mode only (streaming planned for Phase 2b).
+- OpenAI, Azure, Deepgram providers are placeholders (not implemented yet).
 
 ## Offline model setup (restricted networks)
 

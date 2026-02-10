@@ -345,7 +345,7 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     FakeCapture.instances = []
 
     monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s: transcriber)
+    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
 
     controller = DictationController(
         settings_store=store,
@@ -419,7 +419,7 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     FakeCapture.instances = []
 
     monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s: transcriber)
+    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
 
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
@@ -468,7 +468,7 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     FakeCapture.instances = []
 
     monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s: transcriber)
+    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
 
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),

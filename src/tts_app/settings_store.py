@@ -47,6 +47,7 @@ DEFAULTS = {
     "has_openai_key": False,
     "has_azure_key": False,
     "has_deepgram_key": False,
+    "has_assemblyai_key": False,
 }
 
 
@@ -67,6 +68,7 @@ class AppSettings:
     has_openai_key: bool = False
     has_azure_key: bool = False
     has_deepgram_key: bool = False
+    has_assemblyai_key: bool = False
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
@@ -117,6 +119,7 @@ class AppSettings:
             has_openai_key=bool(merged.get("has_openai_key", False)),
             has_azure_key=bool(merged.get("has_azure_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),
+            has_assemblyai_key=bool(merged.get("has_assemblyai_key", False)),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -163,6 +166,7 @@ class SettingsStore:
             "openai_api_key",
             "azure_api_key",
             "deepgram_api_key",
+            "assemblyai_api_key",
         ):
             payload.pop(secret_key, None)
 
@@ -182,6 +186,7 @@ class SettingsStore:
         migrated.pop("openai_api_key", None)
         migrated.pop("azure_api_key", None)
         migrated.pop("deepgram_api_key", None)
+        migrated.pop("assemblyai_api_key", None)
 
         for key, value in DEFAULTS.items():
             migrated.setdefault(key, value)

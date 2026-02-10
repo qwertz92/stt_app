@@ -108,6 +108,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
             "local": "Local (faster-whisper)",
+            "assemblyai": "Remote (AssemblyAI)",
             "openai": "Remote (OpenAI)",
             "azure": "Remote (Azure)",
             "deepgram": "Remote (Deepgram)",
@@ -139,10 +140,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.openai_key_edit = QtWidgets.QLineEdit()
         self.azure_key_edit = QtWidgets.QLineEdit()
         self.deepgram_key_edit = QtWidgets.QLineEdit()
+        self.assemblyai_key_edit = QtWidgets.QLineEdit()
         for field in (
             self.openai_key_edit,
             self.azure_key_edit,
             self.deepgram_key_edit,
+            self.assemblyai_key_edit,
         ):
             field.setEchoMode(QtWidgets.QLineEdit.Password)
             field.setPlaceholderText("Stored in Windows Credential Manager")
@@ -161,8 +164,9 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.offline_mode_checkbox)
         form.addRow("Model Dir", model_dir_layout)
 
-        provider_box = QtWidgets.QGroupBox("Remote Provider API Keys (Phase 2)")
+        provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
         provider_layout = QtWidgets.QFormLayout(provider_box)
+        provider_layout.addRow("AssemblyAI", self.assemblyai_key_edit)
         provider_layout.addRow("OpenAI", self.openai_key_edit)
         provider_layout.addRow("Azure", self.azure_key_edit)
         provider_layout.addRow("Deepgram", self.deepgram_key_edit)
@@ -213,6 +217,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.azure_key_edit.setPlaceholderText("Stored (leave empty to keep)")
         if settings.has_deepgram_key:
             self.deepgram_key_edit.setPlaceholderText("Stored (leave empty to keep)")
+        if settings.has_assemblyai_key:
+            self.assemblyai_key_edit.setPlaceholderText("Stored (leave empty to keep)")
 
     def _select_combo_data(self, combo: QtWidgets.QComboBox, value: str) -> None:
         index = combo.findData(value)
@@ -246,10 +252,12 @@ class SettingsDialog(QtWidgets.QDialog):
         has_openai_key = self._loaded_settings.has_openai_key
         has_azure_key = self._loaded_settings.has_azure_key
         has_deepgram_key = self._loaded_settings.has_deepgram_key
+        has_assemblyai_key = self._loaded_settings.has_assemblyai_key
 
         openai_value = self.openai_key_edit.text().strip()
         azure_value = self.azure_key_edit.text().strip()
         deepgram_value = self.deepgram_key_edit.text().strip()
+        assemblyai_value = self.assemblyai_key_edit.text().strip()
 
         if openai_value:
             self._secret_store.set_api_key("openai", openai_value)
@@ -260,6 +268,9 @@ class SettingsDialog(QtWidgets.QDialog):
         if deepgram_value:
             self._secret_store.set_api_key("deepgram", deepgram_value)
             has_deepgram_key = True
+        if assemblyai_value:
+            self._secret_store.set_api_key("assemblyai", assemblyai_value)
+            has_assemblyai_key = True
 
         settings = AppSettings(
             hotkey=hotkey,
@@ -278,6 +289,7 @@ class SettingsDialog(QtWidgets.QDialog):
             has_openai_key=has_openai_key,
             has_azure_key=has_azure_key,
             has_deepgram_key=has_deepgram_key,
+            has_assemblyai_key=has_assemblyai_key,
         )
 
         self._settings_store.save(settings)

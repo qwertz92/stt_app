@@ -7,7 +7,8 @@ Agents: prefer reading this file first before making changes. It contains critic
 
 ## Current scope
 - Phase 1 (MVP) implemented: local batch dictation on Windows 11.
-- Phase 2 in progress: provider selection and API key fields are present; local streaming mode is now implemented as experimental.
+- Phase 2a implemented: AssemblyAI as first working remote provider (batch transcription).
+- Phase 2 continuing: local streaming mode is implemented as experimental; AssemblyAI streaming (Phase 2b) and other remote providers planned.
 
 ## Runtime stack
 - Python 3.12
@@ -15,6 +16,7 @@ Agents: prefer reading this file first before making changes. It contains critic
 - Win32 RegisterHotKey + SendInput (no low-level keyboard hook)
 - sounddevice for mic capture
 - faster-whisper local provider (CTranslate2 Whisper models from HuggingFace Systran)
+- assemblyai SDK for AssemblyAI remote provider (Universal-3-Pro + Universal-2)
 - keyring for secret storage
 - Platform: Windows 11 only (Linux/WSL for dev tooling, not app runtime)
 
@@ -25,7 +27,8 @@ Agents: prefer reading this file first before making changes. It contains critic
 - `controller.py` — main orchestrator/state machine (~810 lines); connects hotkey, audio, transcriber, overlay, inserter
 - `audio_capture.py` — sounddevice mic recording + optional VAD auto-stop + streaming chunk callback
 - `transcriber/local_faster_whisper.py` — batch + streaming transcription via faster-whisper; temp-file based audio input
-- `transcriber/factory.py` — creates transcriber instance from settings
+- `transcriber/assemblyai_provider.py` — batch transcription via AssemblyAI REST API (SDK-based); Phase 2a
+- `transcriber/factory.py` — creates transcriber instance from settings; routes engine to provider
 - `text_inserter.py` — clipboard-safe paste: save clipboard → set text → paste → restore clipboard
 - `overlay_ui.py` — always-on-top frameless overlay with state colors, copy button, scrollable detail
 - `hotkey.py` — Win32 RegisterHotKey + Qt native event filter
@@ -67,7 +70,7 @@ Important defaults:
 - `DEFAULT_MODE = "batch"`
 - `DEFAULT_OFFLINE_MODE = False`
 - `DEFAULT_MODEL_DIR = ""` (empty = standard HF cache)
-- `VALID_MODEL_SIZES` includes `distil-large-v3` (English-only, ~756 MB), `distil-large-v3.5` (English-only, ~756 MB, improved), `large-v3-turbo` (multilingual, ~809 MB, pruned large-v3)
+- `VALID_MODEL_SIZES` includes `distil-large-v3.5` (English-only, ~756 MB, improved), `large-v3-turbo` (multilingual, ~809 MB, pruned large-v3)
 
 ## Hotkey notes
 - `RegisterHotKey` supports the configured hotkey syntax with one non-modifier key.
@@ -101,8 +104,7 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 75 tests (72 pass on Linux; 3 are Windows-only)
-
+- Current test count: 102 tests (99 pass on Linux; 3 are Windows-only)
 ## Known limitations
 - Streaming mode currently available for local provider only.
 - Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
@@ -203,3 +205,18 @@ Covered modules:
 - Added comprehensive HF cache documentation to README: per-user persistence, cache structure, custom Model Dir, download script behavior, offline transfer best practice.
 - faster-whisper `_MODELS` dict (utils.py) already contains: `"large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"`, `"turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo"`, `"distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2"`.
 - Current test count: 75 tests (72 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+- Removed `distil-large-v3` from VALID_MODEL_SIZES — superseded by `distil-large-v3.5` (strictly better: 98k vs 22k training hours).
+- Rewrote README "How model paths work" section for clarity (user found original 3-step explanation incomprehensible).
+- Fixed README download script commands: prominent `uv run python` syntax, explicit notes about `uv` vs plain python vs venv.
+- **Implemented AssemblyAI as first working remote provider (Phase 2a):**
+  - New module `transcriber/assemblyai_provider.py`: batch transcription via `assemblyai` SDK, Universal-3-Pro + Universal-2 models, auto language detection.
+  - Added `"assemblyai"` to `VALID_ENGINES` in config.py.
+  - Added `has_assemblyai_key` to `AppSettings` + `DEFAULTS` in settings_store.py.
+  - Added AssemblyAI API key field + engine label in settings_dialog.py.
+  - Updated factory.py to route `engine="assemblyai"` → `AssemblyAITranscriber`; factory now accepts optional `secret_store` parameter.
+  - Updated controller.py: removed "Remote providers planned for Phase 2" block; added `secret_store` parameter; streaming-only check for non-local providers.
+  - Updated main.py to pass `secret_store` to controller.
+  - Added `assemblyai>=0.37.0` to pyproject.toml dependencies.
+  - 27 new tests in `test_assemblyai_provider.py` (constructor, batch, errors, language config, streaming stubs, factory routing, settings).
+  - Updated spec sheet (stt-dictation-spec.md) with Phase 2a/2b/3 details including AssemblyAI and Parakeet/NeMo.
+- Current test count: 102 tests (99 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).

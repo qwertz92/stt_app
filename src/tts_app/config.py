@@ -72,7 +72,7 @@ VALID_MODEL_SIZES = (
     "distil-large-v3.5",  # English-only, ~756 MB, improved v3 (98k h training data)
 )
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
-VALID_ENGINES = ("local", "openai", "azure", "deepgram")
+VALID_ENGINES = ("local", "assemblyai", "openai", "azure", "deepgram")
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
 

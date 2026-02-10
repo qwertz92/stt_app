@@ -50,6 +50,7 @@ class DictationController(QtCore.QObject):
         text_inserter: TextInserter,
         logger: logging.Logger,
         window_focus_helper: WindowFocusHelper | None = None,
+        secret_store=None,
     ) -> None:
         super().__init__()
         self._settings_store = settings_store
@@ -58,6 +59,7 @@ class DictationController(QtCore.QObject):
         self._text_inserter = text_inserter
         self._logger = logger
         self._window_focus_helper = window_focus_helper or Win32WindowFocusHelper()
+        self._secret_store = secret_store
 
         self._settings: AppSettings = self._settings_store.load()
         self._audio_capture: AudioCapture | None = None
@@ -142,10 +144,12 @@ class DictationController(QtCore.QObject):
             self.stop_recording()
 
     def start_recording(self) -> None:
-        if self._settings.engine != DEFAULT_ENGINE:
+        # Streaming is only supported for local provider (for now).
+        if self._settings.engine != DEFAULT_ENGINE and self._settings.mode == "streaming":
             self._overlay.set_state(
                 "Error",
-                "Remote providers are planned for Phase 2.",
+                "Streaming is only available with the local provider. "
+                "Switch to batch mode for remote providers.",
             )
             return
 
@@ -352,7 +356,9 @@ class DictationController(QtCore.QObject):
             getattr(settings, "model_dir", ""),
         )
         if self._transcriber_cache is None or self._transcriber_cache_key != cache_key:
-            self._transcriber_cache = create_transcriber(settings)
+            self._transcriber_cache = create_transcriber(
+                settings, secret_store=self._secret_store
+            )
             self._transcriber_cache_key = cache_key
         return self._transcriber_cache
 

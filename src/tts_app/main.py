@@ -40,6 +40,7 @@ def run() -> int:
         overlay=overlay,
         text_inserter=text_inserter,
         logger=logger,
+        secret_store=secret_store,
     )
 
     event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)
