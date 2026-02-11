@@ -102,6 +102,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.model_dir_browse = QtWidgets.QPushButton("Browse...")
         self.model_dir_browse.setFixedWidth(80)
         self.model_dir_browse.clicked.connect(self._browse_model_dir)
+        self.model_dir_edit.textChanged.connect(
+            lambda _text: self._refresh_local_models_label()
+        )
         model_dir_layout = QtWidgets.QHBoxLayout()
         model_dir_layout.addWidget(self.model_dir_edit, 1)
         model_dir_layout.addWidget(self.model_dir_browse)

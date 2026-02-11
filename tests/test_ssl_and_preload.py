@@ -70,6 +70,13 @@ class TestFormatTranscriptionErrorSSL:
         msg = t._format_transcription_error(exc)
         assert msg == "out of memory"
 
+    def test_hub_error_message_is_case_insensitive(self):
+        model = MagicMock()
+        t = LocalFasterWhisperTranscriber(model_factory=lambda *a, **kw: model)
+        exc = RuntimeError("HUB Snapshot failed due to Internet restrictions")
+        msg = t._format_transcription_error(exc)
+        assert "HuggingFace Hub is unreachable" in msg
+
 
 # ---------------------------------------------------------------------------
 # find_cached_models

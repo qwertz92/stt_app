@@ -133,6 +133,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self.stream_partial_window_s = max(0.0, float(stream_partial_window_s))
         self._model_factory = model_factory or _default_model_factory
         self._model = None
+        self._model_lock = threading.Lock()
         self._offline_mode = offline_mode
         self._model_dir = (model_dir or "").strip()
 
@@ -150,19 +151,22 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_abort_requested = False
 
     def _ensure_model(self):
-        if self._model is None:
-            kwargs: dict = {
-                "device": self.device,
-                "compute_type": self.compute_type,
-            }
-            # Use WhisperModel's native local_files_only instead of env var.
-            if self._offline_mode:
-                kwargs["local_files_only"] = True
-            # download_root controls where HF caches model snapshots.
-            if self._model_dir:
-                kwargs["download_root"] = self._model_dir
-            self._model = self._model_factory(self.model_size, **kwargs)
-        return self._model
+        if self._model is not None:
+            return self._model
+        with self._model_lock:
+            if self._model is None:
+                kwargs: dict = {
+                    "device": self.device,
+                    "compute_type": self.compute_type,
+                }
+                # Use WhisperModel's native local_files_only instead of env var.
+                if self._offline_mode:
+                    kwargs["local_files_only"] = True
+                # download_root controls where HF caches model snapshots.
+                if self._model_dir:
+                    kwargs["download_root"] = self._model_dir
+                self._model = self._model_factory(self.model_size, **kwargs)
+            return self._model
 
     def preload_model(self) -> None:
         """Eagerly load/download the model.  Raises on failure."""
@@ -186,6 +190,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 "Run `uv sync --group dev` and restart the app."
             )
         msg = str(exc)
+        msg_lower = msg.lower()
 
         # Detect SSL / certificate errors (corporate proxy / Zscaler).
         if _is_ssl_error(exc):
@@ -199,7 +204,11 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         # Detect HuggingFace Hub connectivity / offline-cache errors
         # (common on corporate machines with restricted internet).
-        if "Hub" in msg and ("snapshot" in msg or "internet" in msg):
+        if "hub" in msg_lower and (
+            "snapshot" in msg_lower
+            or "internet" in msg_lower
+            or "localentrynotfounderror" in msg_lower
+        ):
             return (
                 "Whisper model is not cached locally and the HuggingFace Hub "
                 "is unreachable (common on corporate/restricted networks). "

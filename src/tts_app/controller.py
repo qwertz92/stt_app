@@ -66,6 +66,9 @@ class DictationController(QtCore.QObject):
         self._settings: AppSettings = self._settings_store.load()
         self._audio_capture: AudioCapture | None = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._preload_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        self._preload_future: concurrent.futures.Future | None = None
+        self._transcriber_cache_lock = threading.Lock()
         self._transcriber_cache_key = None
         self._transcriber_cache = None
         self._hotkey_registration_ok = False
@@ -99,7 +102,9 @@ class DictationController(QtCore.QObject):
         self.reload_settings(re_register_hotkey=True)
         if self._settings.engine == DEFAULT_ENGINE:
             self._overlay.set_state("Processing", "Loading model...")
-            self._executor.submit(self._preload_model_worker)
+            self._preload_future = self._preload_executor.submit(
+                self._preload_model_worker
+            )
         else:
             self.show_idle_status()
 
@@ -119,8 +124,16 @@ class DictationController(QtCore.QObject):
                 pass
             self._active_stream_transcriber = None
             self._active_stream_settings = None
+        preload_future = self._preload_future
+        self._preload_future = None
+        if preload_future is not None:
+            try:
+                preload_future.cancel()
+            except Exception:
+                pass
         self._reset_streaming_state()
         self._executor.shutdown(wait=False, cancel_futures=False)
+        self._preload_executor.shutdown(wait=False, cancel_futures=False)
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
         self._settings = self._settings_store.load()
@@ -338,12 +351,20 @@ class DictationController(QtCore.QObject):
         for fallback in preferred_fallback_order:
             try:
                 fallback_settings = replace(settings, model_size=fallback)
-                self._transcriber_cache = None
-                self._transcriber_cache_key = None
+                with self._transcriber_cache_lock:
+                    self._transcriber_cache = None
+                    self._transcriber_cache_key = None
                 transcriber = self._get_or_create_transcriber(fallback_settings)
                 if isinstance(transcriber, LocalFasterWhisperTranscriber):
                     transcriber.preload_model()
                 self._settings = fallback_settings
+                try:
+                    self._settings_store.save(fallback_settings)
+                except Exception:
+                    self._logger.exception(
+                        "Failed to persist fallback model setting: %s",
+                        fallback,
+                    )
                 self.model_preload_done.emit(
                     True,
                     f"Fallback: using '{fallback}' model "
@@ -445,12 +466,16 @@ class DictationController(QtCore.QObject):
             getattr(settings, "offline_mode", False),
             getattr(settings, "model_dir", ""),
         )
-        if self._transcriber_cache is None or self._transcriber_cache_key != cache_key:
-            self._transcriber_cache = create_transcriber(
-                settings, secret_store=self._secret_store
-            )
-            self._transcriber_cache_key = cache_key
-        return self._transcriber_cache
+        with self._transcriber_cache_lock:
+            if (
+                self._transcriber_cache is None
+                or self._transcriber_cache_key != cache_key
+            ):
+                self._transcriber_cache = create_transcriber(
+                    settings, secret_store=self._secret_store
+                )
+                self._transcriber_cache_key = cache_key
+            return self._transcriber_cache
 
     @QtCore.Slot(str)
     def _on_transcription_ready(self, text: str) -> None:

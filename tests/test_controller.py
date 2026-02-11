@@ -106,6 +106,18 @@ class ImmediateExecutor:
         _ = cancel_futures
 
 
+class FailSubmitExecutor:
+    def submit(self, fn, *args, **kwargs):
+        _ = fn
+        _ = args
+        _ = kwargs
+        raise AssertionError("submit() should not be called on this executor")
+
+    def shutdown(self, wait=False, cancel_futures=False):
+        _ = wait
+        _ = cancel_futures
+
+
 class FakeStreamingTranscriber:
     def __init__(self):
         self.started = False
@@ -679,6 +691,7 @@ def test_controller_initialize_triggers_preload_for_local_engine():
         window_focus_helper=FakeWindowFocusHelper(),
     )
     controller._executor = ImmediateExecutor()
+    controller._preload_executor = ImmediateExecutor()
 
     # Mock out the preload worker to verify it gets called.
     preload_called = []
@@ -709,6 +722,7 @@ def test_controller_initialize_skips_preload_for_remote_engine():
         logger=logging.getLogger("test.controller"),
         window_focus_helper=FakeWindowFocusHelper(),
     )
+    controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
     controller._preload_model_worker = lambda: preload_called.append(True)
@@ -717,6 +731,35 @@ def test_controller_initialize_skips_preload_for_remote_engine():
     assert len(preload_called) == 0
     # Should show idle (or error from hotkey) but not "Loading model..."
     assert any(s[0] in ("Idle", "Error") for s in overlay.states)
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_initialize_local_uses_preload_executor_only():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._executor = FailSubmitExecutor()
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+
+    def mock_preload():
+        preload_called.append(True)
+        controller.model_preload_done.emit(True, "Model loaded: small")
+
+    controller._preload_model_worker = mock_preload
+    controller.initialize()
+
+    assert preload_called == [True]
     controller.shutdown()
     _ = app
 
@@ -747,6 +790,63 @@ def test_controller_preload_fallback_on_failure():
 
     controller._on_model_preload_done(True, "Fallback: using 'tiny'")
     assert overlay.states[-1][0] == "Error"  # Fallback still shows warning
+
+    controller.shutdown()
+    _ = app
+
+
+def test_preload_worker_persists_fallback_model(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    store = FakeSettingsStore(settings)
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    class DummyLocalTranscriber:
+        def __init__(self, should_fail: bool) -> None:
+            self.should_fail = should_fail
+
+        def preload_model(self):
+            if self.should_fail:
+                raise RuntimeError("load failed")
+
+    mediums = DummyLocalTranscriber(should_fail=True)
+    tiny = DummyLocalTranscriber(should_fail=False)
+
+    monkeypatch.setattr(
+        "tts_app.transcriber.local_faster_whisper.LocalFasterWhisperTranscriber",
+        DummyLocalTranscriber,
+    )
+    monkeypatch.setattr(
+        "tts_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": ["tiny"],
+    )
+
+    def fake_get_or_create(s: AppSettings):
+        if s.model_size == "medium":
+            return mediums
+        if s.model_size == "tiny":
+            return tiny
+        raise AssertionError("unexpected model size")
+
+    controller._get_or_create_transcriber = fake_get_or_create  # type: ignore[method-assign]
+    emitted = []
+    controller.model_preload_done.connect(lambda ok, msg: emitted.append((ok, msg)))
+
+    controller._preload_model_worker()
+
+    assert emitted
+    assert emitted[-1][0] is True
+    assert "Fallback" in emitted[-1][1]
+    assert controller.settings.model_size == "tiny"
+    assert store.saved is not None
+    assert store.saved.model_size == "tiny"
 
     controller.shutdown()
     _ = app

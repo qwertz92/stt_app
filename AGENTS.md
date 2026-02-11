@@ -112,7 +112,7 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 128 tests (125 pass on Linux; 3 are Windows-only)
+- Current test count: 131 tests passing
 ## Known limitations
 - Streaming mode currently available for local provider only.
 - Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
@@ -286,3 +286,15 @@ Covered modules:
   - `download_model.py` now imports `MODEL_REPO_MAP` from `config.py` and `is_ssl_error` from `ssl_utils.py` via `sys.path` adjustment (script lives outside `src/`).
 - Model directory naming: HF-style (`models--Systran--faster-whisper-small/snapshots/<hash>/`) works automatically with short names. Flat dirs (`faster-whisper-small/`) only work when the full path is passed as `model_size_or_path`. The download script creates HF structure automatically.
 - Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+### 2026-02-11 (critical review pass)
+- Split background executors in `controller.py`: preload now runs on dedicated `_preload_executor`, while dictation/transcription remains on `_executor`. This removes queue-blocking where model preload could delay first real transcription task.
+- Added transcriber cache lock in controller (`_transcriber_cache_lock`) to avoid race conditions when preload and normal transcription request the transcriber concurrently.
+- Fallback model chosen during preload is now persisted to `settings.json` via `SettingsStore.save()`, so the app does not retry the failing model on every restart.
+- Made `_ensure_model()` in `LocalFasterWhisperTranscriber` thread-safe via `_model_lock`; prevents duplicate concurrent model construction.
+- Improved offline/corporate error classification: HuggingFace hub detection in `_format_transcription_error()` is now case-insensitive and recognizes `LocalEntryNotFoundError`.
+- Settings dialog local-model indicator now refreshes immediately when `model_dir` text changes.
+- Added regression tests:
+  - `test_preload_worker_persists_fallback_model`
+  - `test_controller_initialize_local_uses_preload_executor_only`
+  - `test_hub_error_message_is_case_insensitive`
+- Validation after review: `uv run python -m pytest` → `131 passed`; `uv run python scripts/smoke_test.py` passed.
