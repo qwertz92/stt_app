@@ -14,6 +14,7 @@ from .config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_ENGINE,
     FALLBACK_HOTKEY,
+    FALLBACK_MODEL,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
@@ -41,6 +42,7 @@ class DictationController(QtCore.QObject):
     transcription_failed = QtCore.Signal(str)
     transcription_partial = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
+    model_preload_done = QtCore.Signal(bool, str)  # (success, message)
 
     def __init__(
         self,
@@ -87,6 +89,7 @@ class DictationController(QtCore.QObject):
         self.transcription_failed.connect(self._on_transcription_failed)
         self.transcription_partial.connect(self._on_transcription_partial)
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
+        self.model_preload_done.connect(self._on_model_preload_done)
 
     @property
     def settings(self) -> AppSettings:
@@ -94,7 +97,11 @@ class DictationController(QtCore.QObject):
 
     def initialize(self) -> None:
         self.reload_settings(re_register_hotkey=True)
-        self.show_idle_status()
+        if self._settings.engine == DEFAULT_ENGINE:
+            self._overlay.set_state("Processing", "Loading model...")
+            self._executor.submit(self._preload_model_worker)
+        else:
+            self.show_idle_status()
 
     def shutdown(self) -> None:
         self._hotkey_manager.unregister()
@@ -145,7 +152,10 @@ class DictationController(QtCore.QObject):
 
     def start_recording(self) -> None:
         # Streaming is only supported for local provider (for now).
-        if self._settings.engine != DEFAULT_ENGINE and self._settings.mode == "streaming":
+        if (
+            self._settings.engine != DEFAULT_ENGINE
+            and self._settings.mode == "streaming"
+        ):
             self._overlay.set_state(
                 "Error",
                 "Streaming is only available with the local provider. "
@@ -285,6 +295,86 @@ class DictationController(QtCore.QObject):
         self._streaming_recording = False
         self._target_window_handle = None
         self._target_focus_signature = None
+
+    # -- Model preloading -----------------------------------------------------
+
+    def _preload_model_worker(self) -> None:
+        """Background worker: eagerly load the configured local model."""
+        from .transcriber.local_faster_whisper import (
+            LocalFasterWhisperTranscriber,
+            find_cached_models,
+        )
+
+        settings = self._settings
+        try:
+            transcriber = self._get_or_create_transcriber(settings)
+            if isinstance(transcriber, LocalFasterWhisperTranscriber):
+                transcriber.preload_model()
+            self.model_preload_done.emit(True, f"Model loaded: {settings.model_size}")
+            return
+        except Exception as exc:
+            self._logger.warning(
+                "Model preload failed for %s: %s", settings.model_size, exc
+            )
+
+        # Attempt fallback: check for any locally cached model.
+        model_dir = getattr(settings, "model_dir", "")
+        cached = find_cached_models(model_dir)
+
+        if not cached:
+            self.model_preload_done.emit(
+                False,
+                f"Model '{settings.model_size}' could not be loaded and no "
+                "local models found. See docs/offline-usage-guide.md",
+            )
+            return
+
+        # Try to load a fallback model (prefer configured, then tiny, then first available).
+        preferred_fallback_order = []
+        if FALLBACK_MODEL in cached:
+            preferred_fallback_order.append(FALLBACK_MODEL)
+        preferred_fallback_order.extend(m for m in cached if m != FALLBACK_MODEL)
+
+        for fallback in preferred_fallback_order:
+            try:
+                fallback_settings = replace(settings, model_size=fallback)
+                self._transcriber_cache = None
+                self._transcriber_cache_key = None
+                transcriber = self._get_or_create_transcriber(fallback_settings)
+                if isinstance(transcriber, LocalFasterWhisperTranscriber):
+                    transcriber.preload_model()
+                self._settings = fallback_settings
+                self.model_preload_done.emit(
+                    True,
+                    f"Fallback: using '{fallback}' model "
+                    f"('{settings.model_size}' unavailable). "
+                    f"Available local models: {', '.join(cached)}",
+                )
+                return
+            except Exception:
+                self._logger.warning("Fallback model %s also failed", fallback)
+                continue
+
+        self.model_preload_done.emit(
+            False,
+            f"Model '{settings.model_size}' unavailable. "
+            f"Found models ({', '.join(cached)}) but none could be loaded.",
+        )
+
+    @QtCore.Slot(bool, str)
+    def _on_model_preload_done(self, success: bool, message: str) -> None:
+        if success:
+            self._logger.info("Model preload: %s", message)
+            # Show the preload result briefly, then go to idle.
+            if "Fallback" in message:
+                self._overlay.set_state("Error", message)
+            else:
+                self.show_idle_status()
+        else:
+            self._logger.warning("Model preload failed: %s", message)
+            self._overlay.set_state("Error", message)
+
+    # -- Transcription workers ------------------------------------------------
 
     def _transcribe_worker(self, wav_bytes: bytes, settings: AppSettings) -> None:
         try:

@@ -345,7 +345,9 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     FakeCapture.instances = []
 
     monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
+    monkeypatch.setattr(
+        "tts_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
 
     controller = DictationController(
         settings_store=store,
@@ -419,7 +421,9 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     FakeCapture.instances = []
 
     monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
+    monkeypatch.setattr(
+        "tts_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
 
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
@@ -468,7 +472,9 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     FakeCapture.instances = []
 
     monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
+    monkeypatch.setattr(
+        "tts_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
 
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
@@ -649,6 +655,98 @@ def test_streaming_finalize_does_not_copy_revision_to_clipboard(monkeypatch):
     assert fake_clipboard.text() == ""
     assert inserter.calls[-1][0] == " plus"
     assert overlay.states[-1][0] == "Done"
+
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# Model preloading tests
+# ---------------------------------------------------------------------------
+
+
+def test_controller_initialize_triggers_preload_for_local_engine():
+    """When engine is local, initialize() should submit preload worker."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._executor = ImmediateExecutor()
+
+    # Mock out the preload worker to verify it gets called.
+    preload_called = []
+
+    def mock_preload():
+        preload_called.append(True)
+        # Emit success signal directly.
+        controller.model_preload_done.emit(True, "Model loaded: small")
+
+    controller._preload_model_worker = mock_preload
+    controller.initialize()
+
+    assert len(preload_called) == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_initialize_skips_preload_for_remote_engine():
+    """When engine is remote (e.g. assemblyai), no preload should happen."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="assemblyai", hotkey=FALLBACK_HOTKEY)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    preload_called = []
+    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller.initialize()
+
+    assert len(preload_called) == 0
+    # Should show idle (or error from hotkey) but not "Loading model..."
+    assert any(s[0] in ("Idle", "Error") for s in overlay.states)
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_preload_fallback_on_failure():
+    """Preload failure should trigger fallback to available cached model."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    # Test the on_model_preload_done handler directly.
+    controller._hotkey_registration_ok = (
+        True  # Simulate successful hotkey registration.
+    )
+    controller._on_model_preload_done(True, "Model loaded: small")
+    assert overlay.states[-1][0] != "Error"
+
+    controller._on_model_preload_done(False, "No models found")
+    assert overlay.states[-1][0] == "Error"
+
+    controller._on_model_preload_done(True, "Fallback: using 'tiny'")
+    assert overlay.states[-1][0] == "Error"  # Fallback still shows warning
 
     controller.shutdown()
     _ = app

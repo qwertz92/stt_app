@@ -118,7 +118,9 @@ def _create_tray_icon(
 
     def copy_last_transcript() -> None:
         if not controller.copy_last_transcript_to_clipboard():
-            controller._overlay.set_state("Error", "No transcript available to copy yet.")
+            controller._overlay.set_state(
+                "Error", "No transcript available to copy yet."
+            )
 
     settings_action.triggered.connect(open_settings_dialog)
     copy_last_action.triggered.connect(copy_last_transcript)

@@ -19,6 +19,7 @@ from .hotkey import parse_hotkey
 from .logger import AppLogger
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
+from .transcriber.local_faster_whisper import find_cached_models
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -176,6 +177,23 @@ class SettingsDialog(QtWidgets.QDialog):
         provider_note.setStyleSheet("color: #555;")
         provider_layout.addRow(provider_note)
 
+        self.test_conn_button = QtWidgets.QPushButton("Test Connection")
+        self.test_conn_button.setToolTip(
+            "Test the selected remote provider's API key and network connectivity."
+        )
+        self.test_conn_button.clicked.connect(self._test_connection)
+        self.test_conn_result = QtWidgets.QLabel("")
+        self.test_conn_result.setWordWrap(True)
+        provider_layout.addRow(self.test_conn_button, self.test_conn_result)
+
+        # Local models info
+        local_models_box = QtWidgets.QGroupBox("Local Models")
+        local_models_layout = QtWidgets.QVBoxLayout(local_models_box)
+        self.local_models_label = QtWidgets.QLabel("Scanning...")
+        self.local_models_label.setWordWrap(True)
+        local_models_layout.addWidget(self.local_models_label)
+        self._refresh_local_models_label()
+
         self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
         self.copy_diag_button.clicked.connect(self._copy_diagnostics)
 
@@ -193,8 +211,75 @@ class SettingsDialog(QtWidgets.QDialog):
         root = QtWidgets.QVBoxLayout(self)
         root.addLayout(form)
         root.addWidget(provider_box)
+        root.addWidget(local_models_box)
         root.addStretch(1)
         root.addLayout(buttons)
+
+    def _refresh_local_models_label(self) -> None:
+        """Scan for locally cached models and update the label."""
+        model_dir = self.model_dir_edit.text().strip()
+        try:
+            cached = find_cached_models(model_dir)
+        except Exception:
+            cached = []
+
+        if cached:
+            self.local_models_label.setText(f"Available locally: {', '.join(cached)}")
+            self.local_models_label.setStyleSheet("color: #1b5e20;")
+        else:
+            self.local_models_label.setText(
+                "No local models found. Models will be downloaded on first use.\n"
+                "See docs/offline-usage-guide.md if downloads are blocked."
+            )
+            self.local_models_label.setStyleSheet("color: #b71c1c;")
+
+    def _test_connection(self) -> None:
+        """Test connectivity for the selected remote provider."""
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+
+        if engine == DEFAULT_ENGINE:
+            self.test_conn_result.setText("Local provider — no connection test needed.")
+            self.test_conn_result.setStyleSheet("color: #555;")
+            return
+
+        self.test_conn_button.setEnabled(False)
+        self.test_conn_result.setText("Testing...")
+        self.test_conn_result.setStyleSheet("color: #555;")
+        QtWidgets.QApplication.processEvents()
+
+        try:
+            if engine == "assemblyai":
+                # Get the API key: prefer text field, fall back to stored key.
+                api_key = self.assemblyai_key_edit.text().strip()
+                if not api_key:
+                    api_key = self._secret_store.get_api_key("assemblyai") or ""
+                if not api_key:
+                    self.test_conn_result.setText(
+                        "No API key entered. Enter a key above first."
+                    )
+                    self.test_conn_result.setStyleSheet("color: #b71c1c;")
+                    return
+
+                from .transcriber.assemblyai_provider import AssemblyAITranscriber
+
+                t = AssemblyAITranscriber(api_key=api_key)
+                ok, msg = t.test_connection()
+                if ok:
+                    self.test_conn_result.setText(f"✓ {msg}")
+                    self.test_conn_result.setStyleSheet("color: #1b5e20;")
+                else:
+                    self.test_conn_result.setText(f"✗ {msg}")
+                    self.test_conn_result.setStyleSheet("color: #b71c1c;")
+            else:
+                self.test_conn_result.setText(
+                    f"Connection test not yet implemented for {engine}."
+                )
+                self.test_conn_result.setStyleSheet("color: #555;")
+        except Exception as exc:
+            self.test_conn_result.setText(f"Test failed: {exc}")
+            self.test_conn_result.setStyleSheet("color: #b71c1c;")
+        finally:
+            self.test_conn_button.setEnabled(True)
 
     def _populate(self, settings: AppSettings) -> None:
         self.hotkey_edit.setKeySequence(
@@ -206,7 +291,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
         self.keep_clipboard_checkbox.setChecked(settings.keep_transcript_in_clipboard)
         self.offline_mode_checkbox.setChecked(settings.offline_mode)
-        self.model_dir_edit.setText(getattr(settings, "model_dir", "") or "")
+        self.model_dir_edit.setText(settings.model_dir or "")
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
