@@ -21,8 +21,8 @@ def create_transcriber(
             model_size=settings.model_size,
             language_mode=settings.language_mode,
             vad_filter=settings.vad_enabled,
-            offline_mode=getattr(settings, "offline_mode", False),
-            model_dir=getattr(settings, "model_dir", ""),
+            offline_mode=settings.offline_mode,
+            model_dir=settings.model_dir,
         )
     if settings.engine == "assemblyai":
         api_key = ""
@@ -39,8 +39,11 @@ def create_transcriber(
     if settings.engine == "deepgram":
         return DeepgramTranscriber()
 
+    # Unknown engine — fall back to local provider.
     return LocalFasterWhisperTranscriber(
         model_size=settings.model_size,
         language_mode=settings.language_mode,
         vad_filter=settings.vad_enabled,
+        offline_mode=settings.offline_mode,
+        model_dir=settings.model_dir,
     )

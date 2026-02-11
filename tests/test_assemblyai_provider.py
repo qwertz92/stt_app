@@ -15,6 +15,7 @@ from tts_app.transcriber.base import TranscriptionError
 # Fake assemblyai module for injection
 # ---------------------------------------------------------------------------
 
+
 def _make_fake_aai(transcript_text: str = "hello world", error: str | None = None):
     """Build a fake ``assemblyai`` module with controllable behavior."""
     aai = types.ModuleType("assemblyai")
@@ -46,9 +47,7 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
         calls: list = []
 
         def transcribe(self, audio_file, config=None):
-            FakeTranscriber.calls.append(
-                {"audio_file": audio_file, "config": config}
-            )
+            FakeTranscriber.calls.append({"audio_file": audio_file, "config": config})
             return FakeTranscript()
 
     class FakeSettings:
@@ -71,6 +70,7 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
 # Tests: constructor validation
 # ---------------------------------------------------------------------------
 
+
 class TestAssemblyAITranscriberInit:
     def test_missing_api_key_raises(self):
         with pytest.raises(TranscriptionError, match="API key is missing"):
@@ -89,6 +89,7 @@ class TestAssemblyAITranscriberInit:
 # ---------------------------------------------------------------------------
 # Tests: batch transcription
 # ---------------------------------------------------------------------------
+
 
 class TestAssemblyAITranscribeBatch:
     def test_transcribe_file_path(self, tmp_path):
@@ -109,9 +110,7 @@ class TestAssemblyAITranscribeBatch:
     def test_transcribe_bytes_creates_temp_file(self):
         """Transcription with WAV bytes creates a temp file."""
         fake_aai = _make_fake_aai(transcript_text="hello world")
-        t = AssemblyAITranscriber(
-            api_key="test-key", aai_module=fake_aai
-        )
+        t = AssemblyAITranscriber(api_key="test-key", aai_module=fake_aai)
 
         result = t.transcribe_batch(b"RIFF fake wav data")
         assert result == "hello world"
@@ -122,9 +121,7 @@ class TestAssemblyAITranscribeBatch:
     def test_transcribe_empty_result(self):
         """Empty transcript text returns empty string."""
         fake_aai = _make_fake_aai(transcript_text="")
-        t = AssemblyAITranscriber(
-            api_key="test-key", aai_module=fake_aai
-        )
+        t = AssemblyAITranscriber(api_key="test-key", aai_module=fake_aai)
         result = t.transcribe_batch(b"RIFF fake")
         assert result == ""
 
@@ -141,8 +138,11 @@ class TestAssemblyAITranscribeBatch:
 
         class PatchedTranscriber:
             calls = []
+
             def transcribe(self, audio_file, config=None):
-                PatchedTranscriber.calls.append({"audio_file": audio_file, "config": config})
+                PatchedTranscriber.calls.append(
+                    {"audio_file": audio_file, "config": config}
+                )
                 return PatchedTranscript()
 
         fake_aai.Transcriber = PatchedTranscriber
@@ -161,6 +161,7 @@ class TestAssemblyAITranscribeBatch:
 # ---------------------------------------------------------------------------
 # Tests: error handling
 # ---------------------------------------------------------------------------
+
 
 class TestAssemblyAIErrorHandling:
     def test_api_error_raises_transcription_error(self):
@@ -201,6 +202,7 @@ class TestAssemblyAIErrorHandling:
 # Tests: API key configuration
 # ---------------------------------------------------------------------------
 
+
 class TestAssemblyAIConfiguration:
     def test_api_key_set_on_configure(self):
         """_configure() sets the API key on the aai settings object."""
@@ -213,6 +215,7 @@ class TestAssemblyAIConfiguration:
 # ---------------------------------------------------------------------------
 # Tests: language configuration
 # ---------------------------------------------------------------------------
+
 
 class TestAssemblyAILanguageConfig:
     def test_auto_language_enables_detection(self):
@@ -258,6 +261,7 @@ class TestAssemblyAILanguageConfig:
 # Tests: streaming stubs
 # ---------------------------------------------------------------------------
 
+
 class TestAssemblyAIStreamingStubs:
     def test_start_stream_not_implemented(self):
         fake_aai = _make_fake_aai()
@@ -287,6 +291,7 @@ class TestAssemblyAIStreamingStubs:
 # ---------------------------------------------------------------------------
 # Tests: factory routing
 # ---------------------------------------------------------------------------
+
 
 class TestFactoryAssemblyAI:
     def test_factory_creates_assemblyai_transcriber(self):
@@ -333,22 +338,27 @@ class TestFactoryAssemblyAI:
 # Tests: settings_store assemblyai key
 # ---------------------------------------------------------------------------
 
+
 class TestSettingsStoreAssemblyAI:
     def test_has_assemblyai_key_default_false(self):
         from tts_app.settings_store import AppSettings
+
         s = AppSettings()
         assert s.has_assemblyai_key is False
 
     def test_has_assemblyai_key_from_dict(self):
         from tts_app.settings_store import AppSettings
+
         s = AppSettings.from_dict({"has_assemblyai_key": True})
         assert s.has_assemblyai_key is True
 
     def test_assemblyai_in_valid_engines(self):
         from tts_app.config import VALID_ENGINES
+
         assert "assemblyai" in VALID_ENGINES
 
     def test_assemblyai_engine_validated(self):
         from tts_app.settings_store import AppSettings
+
         s = AppSettings.from_dict({"engine": "assemblyai"})
         assert s.engine == "assemblyai"

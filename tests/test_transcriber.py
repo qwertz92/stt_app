@@ -264,7 +264,7 @@ def test_local_transcriber_hub_offline_message_is_actionable():
 
     message = str(error.value)
     assert "not cached locally" in message
-    assert "HF_HUB_OFFLINE" in message
+    assert "Offline mode" in message
     assert "restricted" in message.lower()
 
 

@@ -17,6 +17,7 @@ LEGACY_DEFAULT_HOTKEY = "Ctrl+Win+LShift"
 PREVIOUS_DEFAULT_HOTKEY = "Ctrl+Shift+Alt+Space"
 
 DEFAULT_MODEL_SIZE = "small"
+FALLBACK_MODEL = "tiny"
 DEFAULT_LANGUAGE_MODE = "auto"
 DEFAULT_ENGINE = "local"
 DEFAULT_MODE = "batch"
@@ -71,6 +72,19 @@ VALID_MODEL_SIZES = (
     "large-v3-turbo",  # Multilingual, ~809 MB, pruned large-v3 (4 decoder layers)
     "distil-large-v3.5",  # English-only, ~756 MB, improved v3 (98k h training data)
 )
+
+# Short model name → HuggingFace repo ID.
+# Single source of truth used by local transcriber, download script, and settings.
+MODEL_REPO_MAP: dict[str, str] = {
+    "tiny": "Systran/faster-whisper-tiny",
+    "base": "Systran/faster-whisper-base",
+    "small": "Systran/faster-whisper-small",
+    "medium": "Systran/faster-whisper-medium",
+    "large-v3": "Systran/faster-whisper-large-v3",
+    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
+    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
+}
+
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
 VALID_ENGINES = ("local", "assemblyai", "openai", "azure", "deepgram")
 VALID_MODES = ("batch", "streaming")

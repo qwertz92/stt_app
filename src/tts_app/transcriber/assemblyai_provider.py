@@ -15,6 +15,7 @@ import wave
 from pathlib import Path
 
 from ..config import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
+from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
 
@@ -117,9 +118,7 @@ class AssemblyAITranscriber(ITranscriber):
         try:
             if isinstance(audio_source, bytes):
                 # Write WAV bytes to a temp file for the SDK.
-                with tempfile.NamedTemporaryFile(
-                    suffix=".wav", delete=False
-                ) as handle:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
                     handle.write(audio_source)
                     temp_path = Path(handle.name)
                 file_path = str(temp_path)
@@ -141,15 +140,59 @@ class AssemblyAITranscriber(ITranscriber):
         except TranscriptionError:
             raise
         except Exception as exc:
-            raise TranscriptionError(
-                f"AssemblyAI transcription failed: {exc}"
-            ) from exc
+            if _is_ssl_error(exc):
+                raise TranscriptionError(
+                    "AssemblyAI: SSL certificate verification failed "
+                    "(likely a corporate proxy such as Zscaler). "
+                    "Set REQUESTS_CA_BUNDLE to your corporate CA .pem, "
+                    "or switch to the local provider.\n"
+                    "See docs/offline-usage-guide.md for details."
+                ) from exc
+            raise TranscriptionError(f"AssemblyAI transcription failed: {exc}") from exc
         finally:
             if temp_path is not None:
                 try:
                     temp_path.unlink(missing_ok=True)
                 except OSError:
                     pass
+
+    # -- Connection test --------------------------------------------------------
+
+    def test_connection(self) -> tuple[bool, str]:
+        """Test API connectivity and key validity.
+
+        Returns ``(success, message)`` where *success* is ``True`` when the
+        key is accepted by the AssemblyAI API.
+        """
+        import urllib.error
+        import urllib.request
+
+        url = "https://api.assemblyai.com/v2/transcript?limit=1"
+        req = urllib.request.Request(url, method="GET")
+        req.add_header("Authorization", self._api_key)
+
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                if resp.status == 200:
+                    return True, "Connection OK — API key is valid."
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                return False, (
+                    "Authentication failed (HTTP 401). "
+                    "The API key is invalid or expired."
+                )
+            return False, f"API returned HTTP {exc.code}: {exc.reason}"
+        except Exception as exc:
+            if _is_ssl_error(exc):
+                return False, (
+                    "SSL certificate verification failed — likely a "
+                    "corporate proxy (Zscaler). Set REQUESTS_CA_BUNDLE "
+                    "to your corporate CA .pem file.\n"
+                    "See docs/offline-usage-guide.md for details."
+                )
+            return False, f"Connection failed: {exc}"
+
+        return False, "Unexpected response from AssemblyAI API."
 
     # -- Streaming stubs (Phase 2b) ------------------------------------------
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import os
 import queue
 import tempfile
 import threading
@@ -12,14 +13,91 @@ from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODEL_SIZE,
+    MODEL_REPO_MAP,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
     STREAMING_PARTIAL_WINDOW_S,
+    VALID_MODEL_SIZES,
 )
+from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
 _STREAM_SENTINEL = object()
+
+# --- HuggingFace repo mapping (imported from config) ---
+_MODEL_REPO_MAP = MODEL_REPO_MAP
+
+# Reverse map: folder-safe repo name → short model name.
+# e.g. "models--Systran--faster-whisper-small" → "small"
+_REPO_FOLDER_TO_SHORT: dict[str, str] = {}
+for _short, _repo in _MODEL_REPO_MAP.items():
+    _folder_name = f"models--{_repo.replace('/', '--')}"
+    _REPO_FOLDER_TO_SHORT[_folder_name] = _short
+
+
+def _default_hf_cache_dir() -> str:
+    """Return the default HuggingFace Hub cache directory."""
+    hf_home = os.environ.get("HF_HOME", "")
+    if hf_home:
+        return os.path.join(hf_home, "hub")
+    hf_cache = os.environ.get("HF_HUB_CACHE", "")
+    if hf_cache:
+        return hf_cache
+    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+
+
+def find_cached_models(model_dir: str = "") -> list[str]:
+    """Scan HF cache (and optional custom model_dir) for locally available models.
+
+    Returns a list of short model names (e.g. ``["tiny", "small"]``) that
+    have a valid snapshot directory with at least ``config.json`` and
+    ``model.bin``.
+    """
+    found: set[str] = set()
+
+    search_dirs: list[str] = []
+    if model_dir and model_dir.strip():
+        search_dirs.append(model_dir.strip())
+    search_dirs.append(_default_hf_cache_dir())
+
+    required_files = {"config.json", "model.bin"}
+
+    for base_dir in search_dirs:
+        base = Path(base_dir)
+        if not base.is_dir():
+            continue
+
+        # Check HF-style cache: models--<org>--<name>/snapshots/<hash>/
+        for entry in base.iterdir():
+            if not entry.is_dir():
+                continue
+            short_name = _REPO_FOLDER_TO_SHORT.get(entry.name)
+            if short_name is None:
+                continue
+            snapshots_dir = entry / "snapshots"
+            if not snapshots_dir.is_dir():
+                continue
+            for snapshot in snapshots_dir.iterdir():
+                if not snapshot.is_dir():
+                    continue
+                files = {f.name for f in snapshot.iterdir() if f.is_file()}
+                if required_files.issubset(files):
+                    found.add(short_name)
+                    break
+
+        # Check flat model directories (direct path usage).
+        for short_name, repo_id in _MODEL_REPO_MAP.items():
+            # e.g. <base_dir>/faster-whisper-small/
+            repo_basename = repo_id.rsplit("/", 1)[-1]
+            flat_dir = base / repo_basename
+            if flat_dir.is_dir():
+                files = {f.name for f in flat_dir.iterdir() if f.is_file()}
+                if required_files.issubset(files):
+                    found.add(short_name)
+
+    # Return in the canonical order from VALID_MODEL_SIZES.
+    return [m for m in VALID_MODEL_SIZES if m in found]
 
 
 def _default_model_factory(*args, **kwargs):
@@ -86,6 +164,14 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             self._model = self._model_factory(self.model_size, **kwargs)
         return self._model
 
+    def preload_model(self) -> None:
+        """Eagerly load/download the model.  Raises on failure."""
+        self._ensure_model()
+
+    @property
+    def is_model_loaded(self) -> bool:
+        return self._model is not None
+
     def _language_arg(self) -> str | None:
         mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
         if mode == DEFAULT_LANGUAGE_MODE:
@@ -100,6 +186,17 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 "Run `uv sync --group dev` and restart the app."
             )
         msg = str(exc)
+
+        # Detect SSL / certificate errors (corporate proxy / Zscaler).
+        if _is_ssl_error(exc):
+            return (
+                "SSL certificate verification failed (likely a corporate "
+                "proxy such as Zscaler). The model cannot be downloaded.\n"
+                "Fix: set REQUESTS_CA_BUNDLE to your corporate CA .pem, "
+                "or download the model on another machine and transfer it.\n"
+                "See docs/offline-usage-guide.md for details."
+            )
+
         # Detect HuggingFace Hub connectivity / offline-cache errors
         # (common on corporate machines with restricted internet).
         if "Hub" in msg and ("snapshot" in msg or "internet" in msg):
@@ -109,7 +206,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 "Fix: download the model on a machine with internet access "
                 "(run the app once), then copy the folder "
                 "%USERPROFILE%\\.cache\\huggingface to this machine. "
-                "Alternatively, set the environment variable HF_HUB_OFFLINE=1 "
+                "Alternatively, enable 'Offline mode' in Settings "
                 "if the model is already cached."
             )
         return msg

@@ -25,18 +25,17 @@ in the app settings, and optionally set "Model Dir" to the --output-dir path.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
-# Model short names -> HuggingFace repo IDs (same mapping as faster-whisper).
-MODELS: dict[str, str] = {
-    "tiny": "Systran/faster-whisper-tiny",
-    "base": "Systran/faster-whisper-base",
-    "small": "Systran/faster-whisper-small",
-    "medium": "Systran/faster-whisper-medium",
-    "large-v3": "Systran/faster-whisper-large-v3",
-    "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
-    "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
-}
+# Add src/ to path so we can import from the package.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from tts_app.config import MODEL_REPO_MAP  # noqa: E402
+from tts_app.ssl_utils import is_ssl_error as _is_ssl_error  # noqa: E402
+
+# Re-export under the name used throughout this script.
+MODELS = MODEL_REPO_MAP
 
 # Only these files are needed by CTranslate2 / faster-whisper.
 ALLOW_PATTERNS: list[str] = [
@@ -46,6 +45,48 @@ ALLOW_PATTERNS: list[str] = [
     "tokenizer.json",
     "vocabulary.*",
 ]
+
+
+def _print_ssl_help(model_name: str, output_dir: str | None) -> None:
+    """Print actionable guidance when SSL verification fails."""
+    repo_id = MODELS.get(model_name, f"Systran/faster-whisper-{model_name}")
+    print(
+        "\n"
+        "═══════════════════════════════════════════════════════════════\n"
+        "  SSL CERTIFICATE ERROR — likely a corporate proxy (Zscaler)\n"
+        "═══════════════════════════════════════════════════════════════\n"
+        "\n"
+        "Your network intercepts HTTPS connections, which breaks the\n"
+        "SSL certificate chain that Python / huggingface_hub expects.\n"
+        "\n"
+        "Workarounds (pick one):\n"
+        "\n"
+        "  1. SET YOUR CORPORATE CA BUNDLE (best fix):\n"
+        "     Ask your IT team for the corporate root CA certificate\n"
+        "     (.pem file), then set this environment variable before\n"
+        "     running the script:\n"
+        "\n"
+        "       $env:REQUESTS_CA_BUNDLE = 'C:\\path\\to\\corporate-ca.pem'\n"
+        "       $env:CURL_CA_BUNDLE     = 'C:\\path\\to\\corporate-ca.pem'\n"
+        "\n"
+        "  2. DOWNLOAD ON ANOTHER MACHINE:\n"
+        "     Run the script on a machine without SSL interception:\n"
+        f"       python scripts/download_model.py --model {model_name}"
+        f" --output-dir ./whisper-export\n"
+        "     Then copy the output folder to this machine.\n"
+        "\n"
+        "  3. GIT CLONE (may bypass proxy for git traffic):\n"
+        f"     git clone https://huggingface.co/{repo_id}\n"
+        "     Then set 'Model Dir' in the app to the cloned folder's parent.\n"
+        "\n"
+        "  4. MANUAL BROWSER DOWNLOAD:\n"
+        f"     Download files from https://huggingface.co/{repo_id}/tree/main\n"
+        "     See docs/offline-usage-guide.md for how to arrange the files.\n"
+        "\n"
+        "Full guide: docs/offline-usage-guide.md\n"
+        "═══════════════════════════════════════════════════════════════",
+        file=sys.stderr,
+    )
 
 
 def download_model(name: str, output_dir: str | None = None) -> str:
@@ -74,7 +115,16 @@ def download_model(name: str, output_dir: str | None = None) -> str:
     if output_dir:
         kwargs["cache_dir"] = output_dir
 
-    path = snapshot_download(repo_id, **kwargs)
+    try:
+        path = snapshot_download(repo_id, **kwargs)
+    except Exception as exc:
+        if _is_ssl_error(exc):
+            _print_ssl_help(name, output_dir)
+            sys.exit(2)
+        # Re-raise with context for other errors.
+        print(f"ERROR: Download failed: {exc}", file=sys.stderr)
+        sys.exit(1)
+
     print(f"  -> {path}")
     return path
 
