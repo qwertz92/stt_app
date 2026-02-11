@@ -5,6 +5,13 @@ This file is the running project memory for `tts_app`.
 Keep it updated whenever behavior, architecture, dependencies, or operational learnings change.
 Agents: prefer reading this file first before making changes. It contains critical context about known issues, intentional design decisions, and architecture constraints.
 
+## Quality principle
+Quality has the highest priority. Take as much time as needed — every bug is more expensive than finishing a bit later.
+- No duplicated logic: every function/constant should exist in exactly one place.
+- No dead code or unused imports.
+- Every change must pass all existing tests.
+- Document decisions in this file so future agents/developers understand why.
+
 ## Current scope
 - Phase 1 (MVP) implemented: local batch dictation on Windows 11.
 - Phase 2a implemented: AssemblyAI as first working remote provider (batch transcription).
@@ -23,12 +30,13 @@ Agents: prefer reading this file first before making changes. It contains critic
 ## Architecture overview
 
 ### Module responsibilities
-- `config.py` — all tunables/constants centralized here; never hardcode values elsewhere
-- `controller.py` — main orchestrator/state machine (~810 lines); connects hotkey, audio, transcriber, overlay, inserter
+- `config.py` — all tunables/constants centralized here; includes `MODEL_REPO_MAP` (single source of truth for model→repo mapping); never hardcode values elsewhere
+- `ssl_utils.py` — shared `is_ssl_error()` helper for SSL/Zscaler detection (used by local transcriber, AssemblyAI provider, download script)
+- `controller.py` — main orchestrator/state machine (~890 lines); connects hotkey, audio, transcriber, overlay, inserter; model preloading with fallback
 - `audio_capture.py` — sounddevice mic recording + optional VAD auto-stop + streaming chunk callback
-- `transcriber/local_faster_whisper.py` — batch + streaming transcription via faster-whisper; temp-file based audio input
-- `transcriber/assemblyai_provider.py` — batch transcription via AssemblyAI REST API (SDK-based); Phase 2a
-- `transcriber/factory.py` — creates transcriber instance from settings; routes engine to provider
+- `transcriber/local_faster_whisper.py` — batch + streaming transcription via faster-whisper; temp-file based audio input; find_cached_models; preload_model
+- `transcriber/assemblyai_provider.py` — batch transcription via AssemblyAI REST API (SDK-based); Phase 2a; test_connection
+- `transcriber/factory.py` — creates transcriber instance from settings; routes engine to provider; passes all settings (incl. offline_mode, model_dir) to both primary and fallback branches
 - `text_inserter.py` — clipboard-safe paste: save clipboard → set text → paste → restore clipboard
 - `overlay_ui.py` — always-on-top frameless overlay with state colors, copy button, scrollable detail
 - `hotkey.py` — Win32 RegisterHotKey + Qt native event filter
@@ -104,13 +112,14 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 102 tests (99 pass on Linux; 3 are Windows-only)
+- Current test count: 128 tests (125 pass on Linux; 3 are Windows-only)
 ## Known limitations
 - Streaming mode currently available for local provider only.
 - Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
 - Live insertion in streaming mode is append-oriented and still cannot delete already inserted words when model revisions disagree.
 - Streaming auto-abort uses foreground + focused-control + caret signature; it is still best-effort and not a low-level caret hook.
 - Remote providers not implemented (placeholder classes only).
+- AssemblyAI provider supports batch mode only (streaming planned for Phase 2b).
 - Clipboard restore currently handles Unicode text content only.
 
 ## Learning log
@@ -220,3 +229,60 @@ Covered modules:
   - 27 new tests in `test_assemblyai_provider.py` (constructor, batch, errors, language config, streaming stubs, factory routing, settings).
   - Updated spec sheet (stt-dictation-spec.md) with Phase 2a/2b/3 details including AssemblyAI and Parakeet/NeMo.
 - Current test count: 102 tests (99 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+### 2026-02-12
+- **SSL/Zscaler error detection added throughout the app:**
+  - New `_is_ssl_error()` helper in `local_faster_whisper.py` and `assemblyai_provider.py` — walks exception chain (`__cause__`) to detect SSL certificate verification failures.
+  - `download_model.py` now catches SSL errors from `snapshot_download()` and prints actionable Zscaler/corporate-proxy guidance (CA bundle, alternative download methods, docs link).
+  - `_format_transcription_error()` in local transcriber now detects SSL errors and suggests `docs/offline-usage-guide.md`.
+  - `AssemblyAITranscriber.transcribe_batch()` now detects SSL errors and raises with actionable message.
+  - Root cause: corporate proxies (Zscaler) intercept HTTPS and replace SSL certs; Python's SSL library rejects the proxy's cert → `[SSL: CERTIFICATE_VERIFY_FAILED]`.
+- **Comprehensive offline usage guide created: `docs/offline-usage-guide.md`**
+  - Three download methods: download script, git clone, manual browser download.
+  - SSL/Zscaler troubleshooting section with 4 fix methods (CA bundle, browser export, certifi injection, download on unrestricted machine).
+  - Model transfer instructions (USB, network share, HF cache copy).
+  - App configuration for offline use (settings UI, JSON, env var).
+- **`find_cached_models()` function added to `local_faster_whisper.py`:**
+  - Scans HF cache (default + custom model_dir) for locally available models.
+  - Checks both HF-style cache structure (`models--<org>--<name>/snapshots/<hash>/`) and flat directories (`faster-whisper-<model>/`).
+  - Returns list of model short names in canonical order from `VALID_MODEL_SIZES`.
+  - Exported via `transcriber/__init__.py`.
+- **Model preloading at startup:**
+  - `controller.initialize()` now triggers background model preload for local engine.
+  - Overlay shows "Loading model..." during preload.
+  - On success: shows idle status; on failure: attempts fallback to any cached model (prefers `tiny`).
+  - Fallback shows warning overlay with available model list.
+  - If no models found at all: shows error with docs reference.
+  - New `FALLBACK_MODEL = "tiny"` constant in `config.py`.
+  - `preload_model()` and `is_model_loaded` property added to `LocalFasterWhisperTranscriber`.
+- **AssemblyAI connection test:**
+  - `test_connection()` method on `AssemblyAITranscriber`: makes lightweight GET request to `/v2/transcript?limit=1` to validate API key and connectivity.
+  - Returns `(success, message)` tuple; detects auth failures (401), SSL errors, and general connection errors.
+- **Settings dialog improvements:**
+  - "Test Connection" button for remote providers — tests API key validity and network connectivity, detects SSL/Zscaler errors.
+  - "Local Models" info box showing currently cached models or guidance when none found.
+  - `find_cached_models()` used for model scanning.
+- **README fixes:**
+  - Translated German "How model loading works" section and download blockquote to English.
+  - Expanded "How model loading works" with: path resolution order (3-step), offline mode activation (UI + env var), Model Dir configuration (UI + JSON), special cases section.
+  - Added SSL/Zscaler troubleshooting entry to Troubleshooting section with link to offline guide.
+- **New test file `tests/test_ssl_and_preload.py` (23 tests):**
+  - `_is_ssl_error()` detection (direct, chained, negative cases).
+  - `_format_transcription_error()` SSL path.
+  - `find_cached_models()` (HF cache, custom dir, flat dirs, incomplete models, multiple models).
+  - `preload_model()` (success, failure, idempotency).
+  - AssemblyAI SSL detection in `transcribe_batch()`.
+  - `test_connection()` (success, auth failure, SSL error).
+- **3 new controller tests** for preload: local engine triggers preload, remote engine skips preload, preload done handler behavior.
+- Tiny model (~75 MB) not bundled in repo — too large for git; instead, preload logic auto-downloads on first start and falls back to any available cached model.
+- Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+### 2026-02-13
+- **Code quality review and deduplication:**
+  - Extracted `_is_ssl_error()` into shared `ssl_utils.py` module — was identically duplicated in `local_faster_whisper.py`, `assemblyai_provider.py`, and `download_model.py` (3 copies → 1).
+  - Moved `MODEL_REPO_MAP` to `config.py` as single source of truth — was duplicated as `_MODEL_REPO_MAP` in `local_faster_whisper.py` and `MODELS` in `download_model.py` (2 copies → 1).
+  - Fixed **bug** in `_print_ssl_help()` in `download_model.py`: hardcoded `Systran/faster-whisper-{model_name}` for ALL models, but `large-v3-turbo` is under `mobiuslabsgmbh/` and `distil-large-v3.5` is under `distil-whisper/`. Now uses actual repo ID from `MODEL_REPO_MAP`.
+  - Fixed `factory.py` fallback branch: was missing `offline_mode` and `model_dir` parameters, causing the fallback to ignore user's offline/model-dir settings.
+  - Removed unnecessary `getattr()` calls in `factory.py` and `settings_dialog.py` — `AppSettings` always has `offline_mode` and `model_dir` since schema v5+.
+  - Removed unused imports: `import re` in `local_faster_whisper.py`, `from urllib.request import Request, urlopen` in `assemblyai_provider.py`, `import ssl` in `assemblyai_provider.test_connection()`.
+  - `download_model.py` now imports `MODEL_REPO_MAP` from `config.py` and `is_ssl_error` from `ssl_utils.py` via `sys.path` adjustment (script lives outside `src/`).
+- Model directory naming: HF-style (`models--Systran--faster-whisper-small/snapshots/<hash>/`) works automatically with short names. Flat dirs (`faster-whisper-small/`) only work when the full path is passed as `model_size_or_path`. The download script creates HF structure automatically.
+- Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
