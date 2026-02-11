@@ -174,7 +174,11 @@ Sample benchmark file in repo:
 
 - **Model download fails / "cannot find snapshot" on corporate machine:**
   - The app uses `faster-whisper` models from HuggingFace Hub. On restricted networks, the download fails.
-  - See the [Offline model setup](#offline-model-setup-restricted-networks) section below for instructions.
+  - See the [Offline model setup](#offline-model-setup-restricted-networks) section below and the comprehensive [Offline usage guide](docs/offline-usage-guide.md).
+- **SSL: CERTIFICATE_VERIFY_FAILED (Zscaler / corporate proxy):**
+  - Corporate proxies like Zscaler intercept HTTPS connections, breaking SSL certificate validation.
+  - The download script and app now detect this error and print actionable instructions.
+  - See [docs/offline-usage-guide.md](docs/offline-usage-guide.md) for workarounds (certificate bundle, alternative download methods).
 - Hotkey registration fails:
   - The app auto-falls back to `Ctrl+Win+LShift`.
   - If both fail, choose another combo in Settings.
@@ -226,11 +230,13 @@ uv run python scripts/download_model.py --all
 uv run python scripts/download_model.py --list
 ```
 
-> **Wichtig:** Der Befehl ist immer `uv run python scripts/download_model.py`, nicht `uv scripts/...` oder `python3 scripts/...` (außerhalb des venv).
+> **Important:** The command is always `uv run python scripts/download_model.py`, not `uv scripts/...` or `python3 scripts/...` (outside a venv).
 >
-> **Ohne uv** (z.B. in der aktivierten venv): `python scripts/download_model.py --model small`
+> **Without uv** (e.g. inside an activated venv): `python scripts/download_model.py --model small`
 >
-> **Außerhalb einer venv** ohne uv funktioniert das Script nicht, weil `huggingface_hub` fehlt. Nutze entweder `uv run python ...` oder aktiviere zuerst die venv.
+> **Outside a venv** without uv the script will fail because `huggingface_hub` is missing. Use either `uv run python ...` or activate the venv first.
+>
+> **SSL / certificate errors** (e.g. Zscaler corporate proxy): see [docs/offline-usage-guide.md](docs/offline-usage-guide.md) for workarounds.
 
 Then transfer the files to the target machine:
 - **Default cache:** Copy the entire `%USERPROFILE%\.cache\huggingface\` folder to the same location on the target machine.
@@ -270,18 +276,39 @@ git clone https://huggingface.co/Systran/faster-whisper-small
 
 ### How model loading works
 
-Wenn du in den App-Einstellungen z.B. `small` als Modell wählst, passiert Folgendes:
+When you select e.g. `small` as model in the app settings, this is what happens:
 
-1. **Die App gibt den Kurznamen `"small"` an faster-whisper weiter.**
-2. **faster-whisper übersetzt diesen intern** in eine HuggingFace Repo-ID (z.B. `Systran/faster-whisper-small`).
-3. **faster-whisper lädt das Modell über HuggingFace Hub herunter** (beim ersten Mal) und speichert es im HuggingFace-Cache (siehe nächster Abschnitt).
-4. **Bei weiteren Starts** findet faster-whisper das Modell im Cache und lädt es direkt – kein Internet nötig.
+**Path resolution order** (checked top to bottom):
 
-**Das ist der Normalfall.** Du musst nichts manuell kopieren oder Pfade angeben. Einfach Modellgröße wählen → App startet → Download passiert automatisch.
+1. **Direct path** — if `model_size_or_path` is an **existing directory** on disk (e.g. `C:\models\faster-whisper-small\`), faster-whisper uses it directly. The folder must contain `config.json`, `model.bin`, `tokenizer.json`, and `vocabulary.txt` (or `vocabulary.json`).
 
-**Sonderfälle (nur für Offline-/Corporate-Setups):**
-- Wenn du "Model Dir" in den Einstellungen setzt (z.B. `D:\whisper-models`), werden Modelle dort statt im Standard-Cache gespeichert.
-- Wenn du "Offline mode" aktivierst, versucht die App keinen Download – das Modell muss bereits im Cache (oder Model Dir) vorhanden sein.
+2. **HuggingFace cache lookup** — otherwise faster-whisper translates the short name (e.g. `"small"`) to a HuggingFace repo ID (e.g. `Systran/faster-whisper-small`). It then looks in the HuggingFace cache (or the configured **Model Dir**) for an existing snapshot. If found → model loads from cache, no internet needed.
+
+3. **HuggingFace download** — if no cache hit, faster-whisper downloads the model from HuggingFace Hub and stores it in the cache. This only happens once per model.
+
+**This is the normal case.** You do not need to manually copy files or configure paths. Just select a model size → start the app → download happens automatically on first use.
+
+#### How to activate offline mode
+
+- **In the app:** Settings → check **Offline mode**. This sets `local_files_only=True` so faster-whisper never contacts the network. The model must already be cached.
+- **Via environment variable** (before launching the app):
+  ```powershell
+  $env:HF_HUB_OFFLINE = "1"
+  python main.py
+  ```
+
+#### How to configure Model Dir
+
+- **In the app:** Settings → **Model Dir** → enter or browse to a directory (e.g. `D:\whisper-models`).
+- **Before first start:** Edit `%APPDATA%\tts_app\settings.json` and set `"model_dir": "D:\\whisper-models"`.
+- When **Model Dir** is set, all models are cached there instead of the default HuggingFace cache. The same internal HF directory structure is created.
+- When **Model Dir** is empty (default), the standard HuggingFace cache is used (`%USERPROFILE%\.cache\huggingface\hub\` on Windows).
+
+#### Special cases (offline / corporate setups only)
+
+- If your network blocks HuggingFace Hub (SSL/Zscaler errors), download models on a machine with internet access first. See [Offline usage guide](docs/offline-usage-guide.md).
+- If the configured model is not available and download fails, the app will attempt to fall back to any locally cached model (preferring `tiny` as last resort).
+- On first start with no cached models, the app attempts to download the configured model and shows progress in the overlay.
 
 ### HuggingFace Cache: how it works
 
