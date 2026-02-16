@@ -1,25 +1,37 @@
-# tts_app
+# tts_app — Windows 11 Dictation App
 
-Windows 11 dictation desktop app MVP (Phase 1) with:
-- Global hotkey via `RegisterHotKey` (no low-level keyboard hooks)
-- Always-on-top overlay (`Idle`, `Listening`, `Processing`, `Done`, `Error`)
-- Microphone capture from default device
-- Batch transcription with local `faster-whisper` (+ optional experimental local streaming)
-- Clipboard-safe text insertion (`save -> set -> WM_PASTE/Ctrl+V -> restore`)
-- Settings JSON under `%APPDATA%\tts_app\settings.json`
-- API secret storage via Windows Credential Manager (`keyring`)
-- File logging under `%APPDATA%\tts_app\logs\dictation.log`
+Speech-to-text dictation for Windows 11. Press a hotkey, speak, and the transcribed text is inserted at the cursor — in any application.
+
+> **New here?** See the [Quick Start Guide](docs/quick-start.md) to get running in 5 minutes.
+
+## Features
+
+- **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
+- **Local transcription** — runs on your machine using `faster-whisper` (no internet required after model download)
+- **Cloud transcription** — AssemblyAI as remote provider (batch mode)
+- **Always-on-top overlay** — shows recording state (`Idle` → `Listening` → `Processing` → `Done`)
+- **Clipboard-safe paste** — saves clipboard, inserts text, restores clipboard
+- **Streaming mode** (experimental) — see partial results while speaking (local provider only)
+- **Settings UI** — model size, hotkey, paste mode, engine, API keys
+- **Offline capable** — download models once, use forever without internet
+- **Corporate-friendly** — works behind firewalls with offline model setup
+
+## Table of contents
+
+- [Quick Start Guide](docs/quick-start.md)
+- [Setup](#setup-uv)
+- [Usage](#run-app)
+- [Settings](#hotkey-assignment)
+- [Offline model setup](#offline-model-setup-restricted-networks) — download, import, and configure models without internet
+- [Model recommendations](#model-recommendations)
+- [Troubleshooting](#troubleshooting)
+- [Project structure](#project-structure)
 
 ## Phase coverage
 
-- Phase 1 implemented and wired.
-- Phase 2a implemented:
-  - **AssemblyAI** as first working remote provider (batch transcription)
-  - Engine settings for `Local`, `AssemblyAI`, `OpenAI`, `Azure`, `Deepgram`
-  - Mode settings for `Batch` / `Streaming` (streaming is available for local provider as experimental mode)
-  - Provider plugin interface with streaming methods
-  - API key fields saved via `keyring`
-  - OpenAI, Azure, Deepgram remote providers remain placeholders
+- **Phase 1** implemented: local batch dictation on Windows 11.
+- **Phase 2a** implemented: AssemblyAI as first working remote provider (batch transcription).
+- **Phase 2** continuing: local streaming (experimental), AssemblyAI streaming (Phase 2b), OpenAI/Azure/Deepgram providers (placeholders).
 
 ## Requirements
 
@@ -244,9 +256,22 @@ Then transfer the files to the target machine:
 
 ### Manual download (alternative)
 
-If you cannot run the script, download models manually from HuggingFace.
+If you cannot run the download script (e.g. Python is not installed on the machine with internet), download models manually from HuggingFace.
 
-Each model requires these files: `config.json`, `model.bin`, `tokenizer.json`, `vocabulary.txt` (or `vocabulary.json` for large-v3).
+#### Step 1: Download the files
+
+Go to the HuggingFace page for your desired model and download these files:
+
+| Required file | What it is |
+|--------------|------------|
+| `config.json` | Model configuration |
+| `model.bin` | Model weights (the large file) |
+| `tokenizer.json` | Tokenizer data |
+| `vocabulary.txt` | Vocabulary (some models use `vocabulary.json` instead) |
+
+Optional: `preprocessor_config.json` (audio preprocessing settings).
+
+#### Available models
 
 | Model | Size | Language | HuggingFace page |
 |-------|------|----------|------------------|
@@ -258,10 +283,37 @@ Each model requires these files: `config.json`, `model.bin`, `tokenizer.json`, `
 | `large-v3-turbo` | ~809 MB | Multilingual | [mobiuslabsgmbh/faster-whisper-large-v3-turbo](https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo/tree/main) |
 | `distil-large-v3.5` | ~756 MB | **English only** | [distil-whisper/distil-large-v3.5-ct2](https://huggingface.co/distil-whisper/distil-large-v3.5-ct2/tree/main) |
 
-You can also clone with `git`:
+On each HuggingFace page, click the **Files and versions** tab, then click the download icon next to each required file. Alternatively, clone the entire repository:
+
 ```bash
 git clone https://huggingface.co/Systran/faster-whisper-small
 ```
+
+#### Step 2: Import the files into the app
+
+The app expects models in a specific HuggingFace cache structure (not just a flat folder). Use the **import script** to set this up automatically:
+
+```powershell
+# Import a downloaded/cloned model folder:
+uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
+
+# If auto-detection does not recognize the model, specify it:
+uv run python scripts/import_model.py C:\Downloads\my-model-folder --model small
+
+# Import into a custom directory (e.g. USB stick):
+uv run python scripts/import_model.py C:\Downloads\faster-whisper-small --target-dir D:\whisper-models
+
+# Validate files without copying:
+uv run python scripts/import_model.py C:\Downloads\faster-whisper-small --validate-only
+```
+
+The script validates that all required files are present, detects the model name from the folder, and creates the correct HuggingFace cache structure automatically.
+
+> **Why can't I just drop files into a folder?** The app uses `faster-whisper`, which looks for models in HuggingFace's internal cache format: `models--Org--RepoName/snapshots/<hash>/`. A flat folder with model files won't be found. The import script (or the download script) creates this structure for you.
+
+#### Step 3: Configure the app
+
+Transfer the imported files to the target machine (if downloaded on a different machine), then configure the app — see the next section.
 
 ### App configuration for offline use
 
@@ -342,7 +394,7 @@ The cache is **not** a flat folder. It uses HuggingFace's internal structure:
     ...same structure...
 ```
 
-**This is why you cannot just drop files into a folder.** The short name `"small"` is resolved to `Systran/faster-whisper-small`, which maps to the internal path `models--Systran--faster-whisper-small/snapshots/<hash>/`. The download script handles this automatically.
+**This is why you cannot just drop files into a folder.** The short name `"small"` is resolved to `Systran/faster-whisper-small`, which maps to the internal path `models--Systran--faster-whisper-small/snapshots/<hash>/`. The download script and the import script both handle this automatically.
 
 #### Custom Model Dir
 
