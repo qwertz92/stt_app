@@ -11,3 +11,34 @@ wheels/
 
 # IDE
 .vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Test / coverage artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Logs (runtime-generated)
+*.log
+
+# Benchmark output
+benchmark/
+
+# PyInstaller
+*.manifest
+*.spec.bak
+
+# Model files (too large for git)
+*.bin
+*.pt
+*.onnx
