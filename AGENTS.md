@@ -116,7 +116,7 @@ Covered modules:
 - Streaming mode controller/transcriber behavior
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
-- Current test count: 131 tests passing
+- Current test count: 180 tests (177 pass on Linux; 3 are Windows-only)
 ## Known limitations
 - Streaming mode currently available for local provider only.
 - Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
@@ -303,7 +303,15 @@ Covered modules:
   - `--validate-only` for pre-flight checks, `--target-dir` for custom cache, `--model` override, `--list` for available models.
   - Uses `MODEL_REPO_MAP` from `config.py` as single source of truth.
 - **Git config:** Configured conditional include (`includeIf.gitdir:~/github/`) so repos under `~/github/` use `thomas.farfeleder@gmail.com`.
-- Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+- **Extended .gitignore:** Added coverage artifacts, IDE files, OS artifacts, benchmark output, model binaries.
+- **Test coverage overhaul (74% → 80%):**
+  - New test file `test_app_paths.py` (5 tests): all path functions, APPDATA env fallback. → app_paths.py 40% → 100%.
+  - New test file `test_logger.py` (7 tests): init, log_path, diagnostics, idempotency. → logger.py 39% → 97%.
+  - New test file `test_factory.py` (6 tests): all engine branches incl. unknown fallback. → factory.py 68% → 100%.
+  - New test file `test_base_transcriber.py` (7 tests): ITranscriber default methods, all placeholders. → base.py 76% → 95%, remote_placeholders.py 92% → 100%.
+  - New test file `test_controller_coverage.py` (25 tests): shutdown, start_recording edge cases, transcription_worker errors, streaming abort paths, focus poll, beep fallback, hotkey edge cases. → controller.py 70% → 83%.
+  - Extended `test_main_signals.py` (+2 tests): tray icon menu actions, toggle trigger. → main.py 30% → 55%.
+- Current test count: 180 tests (177 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
 ### 2026-02-11 (critical review pass)
 - Split background executors in `controller.py`: preload now runs on dedicated `_preload_executor`, while dictation/transcription remains on `_executor`. This removes queue-blocking where model preload could delay first real transcription task.
 - Added transcriber cache lock in controller (`_transcriber_cache_lock`) to avoid race conditions when preload and normal transcription request the transcriber concurrently.
