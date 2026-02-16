@@ -1,32 +1,32 @@
 # Enterprise Deployment Guide (Windows / Corporate)
 
-Dieser Guide beschreibt, wie `tts_app` in stark eingeschraenkten Unternehmensumgebungen lauffaehig gemacht wird (Zscaler, GPO/AppLocker, kein `uv.exe`, eingeschraenkter Internetzugriff).
+This guide describes how to deploy `tts_app` in heavily restricted corporate environments (Zscaler, GPO/AppLocker, no `uv.exe`, limited internet access).
 
-## Kurzfazit
+## Summary
 
-- Diese App muss auf **nativem Windows** laufen (nicht in Linux/WSL), weil sie Win32-APIs fuer Hotkey/Clipboard/Input nutzt.
-- `uv` ist optional. Wenn `uv.exe` geblockt ist, verwende normalen Python + pip-Workflow.
-- Fuer strikt abgeschottete Netze ist ein **Wheelhouse (Offline-Paketordner)** die robusteste Methode.
+- This app must run on **native Windows** (not Linux/WSL) because it uses Win32 APIs for hotkey/clipboard/input.
+- `uv` is optional. If `uv.exe` is blocked, use the standard Python + pip workflow.
+- For strictly air-gapped networks, a **wheelhouse (offline package folder)** is the most robust method.
 
-## Was ist ein Wheel?
+## What is a wheel?
 
-Ein Wheel ist ein vorgebautes Python-Paket im Format `.whl`.
+A wheel is a pre-built Python package in `.whl` format.
 
-- Vergleichbar mit einem fertigen Binärpaket.
-- Vorteil: keine lokale Kompilierung notwendig.
-- Installation ist schneller und stabiler als Source-Builds.
-- Besonders wichtig bei Paketen mit nativen Anteilen (z. B. `pywin32`, `numpy`, `ctranslate2`).
+- Comparable to a pre-compiled binary package.
+- Advantage: no local compilation required.
+- Installation is faster and more stable than source builds.
+- Especially important for packages with native components (e.g. `pywin32`, `numpy`, `ctranslate2`).
 
-Beispiel:
+Example:
 - `pywin32-308-cp312-cp312-win_amd64.whl`
   - `cp312`: Python 3.12
   - `win_amd64`: Windows x64
 
-## Option A: Standard Windows Setup ohne uv
+## Option A: Standard Windows setup without uv
 
-Voraussetzungen:
-- Python 3.12 installiert
-- Zugriff auf internen PyPI-Proxy/Artifactory
+Prerequisites:
+- Python 3.12 installed
+- Access to an internal PyPI proxy/Artifactory
 
 ```powershell
 python -m venv .venv
@@ -43,9 +43,9 @@ python -m pytest
 python scripts/smoke_test.py
 ```
 
-## Option B: Offline/Wheelhouse Setup (empfohlen fuer stark eingeschraenkte Netze)
+## Option B: Offline / wheelhouse setup (recommended for heavily restricted networks)
 
-### B1) Auf einem Build-Rechner mit Paketzugriff
+### B1) On a build machine with package access
 
 ```powershell
 python -m venv .venv
@@ -54,14 +54,14 @@ python -m pip install --upgrade pip
 python -m pip download -r requirements-dev-win.txt -d wheelhouse
 ```
 
-Ergebnis: Ordner `wheelhouse/` mit allen `.whl` (und ggf. sdists).
+Result: folder `wheelhouse/` containing all `.whl` files (and possibly sdists).
 
-### B2) Wheelhouse intern verteilen
+### B2) Distribute the wheelhouse internally
 
-- Als ZIP in internes Artefakt-Repo ablegen
-- Oder auf Fileshare bereitstellen
+- Upload as ZIP to your internal artifact repository.
+- Or place on a file share.
 
-### B3) Auf Zielrechner installieren (ohne Internet)
+### B3) Install on the target machine (no internet)
 
 ```powershell
 python -m venv .venv
@@ -70,9 +70,9 @@ python -m pip install --no-index --find-links .\wheelhouse -r requirements-dev-w
 python main.py
 ```
 
-## Option C: PyInstaller EXE (Deployment-freundlich)
+## Option C: PyInstaller EXE (deployment-friendly)
 
-Im Projekt ist `tts_app.spec` vorhanden.
+The project includes `tts_app.spec`.
 
 Build:
 
@@ -81,42 +81,40 @@ python -m pip install pyinstaller
 pyinstaller tts_app.spec
 ```
 
-Hinweise:
-- EXE sollte idealerweise signiert werden (Code Signing), sonst greifen manche Unternehmensrichtlinien/EDR.
-- EDR kann Input-Injection dennoch blockieren; dann braucht es Policy-Freigabe fuer die signierte Anwendung.
+Notes:
+- The EXE should ideally be code-signed, otherwise some corporate policies/EDR may block it.
+- EDR may still block input injection; this requires a policy exception for the signed application.
 
-## WSL: Hilft das?
+## WSL: Does it help?
 
-Kurz: fuer Laufzeit der App **nein**.
+Short answer: **no**, not for running the app.
 
-- WSL/Linux kann fuer Git/Editor/Build-Skripte hilfreich sein.
-- Die App selbst benoetigt Windows-spezifische APIs (`pywin32`, `RegisterHotKey`, `SendInput`, Foreground Window).
-- Daher: Start der App auf nativer Windows-Python-Umgebung.
+- WSL/Linux can be useful for git, editors, and build scripts.
+- The app itself requires Windows-specific APIs (`pywin32`, `RegisterHotKey`, `SendInput`, foreground window).
+- Therefore: always run the app in a native Windows Python environment.
 
-## Troubleshooting Checklist (Corporate)
+## Troubleshooting checklist (corporate)
 
-1. `uv.exe` durch GPO geblockt:
-- Ohne `uv` arbeiten (Option A/B).
+1. **`uv.exe` blocked by GPO:**
+   - Use the setup without `uv` (Option A/B).
 
-2. `irm ... | iex` durch Zscaler blockiert:
-- Keine Installer-Skripte aus dem Internet ausfuehren.
-- Interne Artefaktquelle oder Wheelhouse verwenden.
+2. **`irm ... | iex` blocked by Zscaler:**
+   - Do not run installer scripts from the internet.
+   - Use an internal artifact source or wheelhouse instead.
 
-3. `pywin32` auf WSL/Linux nicht installierbar:
-- Erwartetes Verhalten (Windows-only Paket).
-- App auf Windows laufen lassen.
+3. **`pywin32` cannot be installed on WSL/Linux:**
+   - Expected behavior (Windows-only package).
+   - Run the app on Windows.
 
-4. App transkribiert, fuegt aber nicht ein:
-- Paste-Mode in Settings wechseln (`auto`, `wm_paste`, `send_input`).
-- Bei Problemen laesst `keep_transcript_in_clipboard` den Text fuer manuelles Einfuegen im Clipboard.
+4. **App transcribes but does not insert text:**
+   - Switch paste mode in Settings (`auto`, `wm_paste`, `send_input`).
+   - If problems persist, `keep_transcript_in_clipboard` leaves the text in the clipboard for manual pasting.
 
-5. Zielanwendung ist elevated (Admin) oder geschuetzt:
-- App mit passenden Rechten starten oder IT-Freigabe fuer UI-Interaktion klaeren.
+5. **Target application is elevated (admin) or protected:**
+   - Run the dictation app with matching privileges, or request an IT policy exception for UI interaction.
 
-## Empfohlener Rollout in Firmenumgebung
+## Recommended rollout in corporate environments
 
-1. Internes Wheelhouse bauen und versionieren.
-2. Python 3.12 + venv + Offline-Install standardisieren.
-3. Smoke-Test als Pflichtschritt aufnehmen (`python scripts/smoke_test.py`).
-4. Optional: signierte PyInstaller-EXE fuer Endnutzer verteilen.
-5. Hotkey/Paste-Mode per Voreinstellung in `%APPDATA%\tts_app\settings.json` zentral vorgeben.
+1. Build and version an internal wheelhouse.
+2. Standardize on Python 3.12 + venv + offline install.
+3. Include the smoke test as a mandatory verification step (`python scripts/smoke_test.py`).

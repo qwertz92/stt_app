@@ -12,6 +12,9 @@ Quality has the highest priority. Take as much time as needed — every bug is m
 - Every change must pass all existing tests.
 - Document decisions in this file so future agents/developers understand why.
 
+## Language rule
+**All project content must be written in English.** This includes source code, comments, documentation (README, docs/*.md), commit messages, error messages, UI labels, and log output. The only exception is `stt-dictation-spec.md` which is a legacy bilingual design document. Never introduce German (or any other non-English) text into the project.
+
 ## Current scope
 - Phase 1 (MVP) implemented: local batch dictation on Windows 11.
 - Phase 2a implemented: AssemblyAI as first working remote provider (batch transcription).
@@ -47,6 +50,7 @@ Quality has the highest priority. Take as much time as needed — every bug is m
 - `app_paths.py` — %APPDATA% path helpers
 - `logger.py` — rotating file logger
 - `scripts/download_model.py` — automated model download for offline/corporate use
+- `scripts/import_model.py` — imports manually downloaded model files into correct HF cache structure
 
 ### Key design decisions
 - **Temp files vs BytesIO for audio**: `transcribe_batch` writes WAV bytes to a temp file because `faster-whisper`'s `WhisperModel.transcribe()` accepts file paths (its most reliable input path). BytesIO could work via PyAV but temp files avoid edge cases and are proven stable. Keep as-is.
@@ -285,6 +289,20 @@ Covered modules:
   - Removed unused imports: `import re` in `local_faster_whisper.py`, `from urllib.request import Request, urlopen` in `assemblyai_provider.py`, `import ssl` in `assemblyai_provider.test_connection()`.
   - `download_model.py` now imports `MODEL_REPO_MAP` from `config.py` and `is_ssl_error` from `ssl_utils.py` via `sys.path` adjustment (script lives outside `src/`).
 - Model directory naming: HF-style (`models--Systran--faster-whisper-small/snapshots/<hash>/`) works automatically with short names. Flat dirs (`faster-whisper-small/`) only work when the full path is passed as `model_size_or_path`. The download script creates HF structure automatically.
+- Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+### 2026-02-16
+- **Documentation overhaul:**
+  - Added "Language rule" to AGENTS.md — all content must be English (exception: stt-dictation-spec.md legacy bilingual).
+  - Translated `docs/enterprise-deployment-guide.md` from German to English.
+  - Rewrote README.md header: features list, table of contents, Quick Start link.
+  - Updated README manual download section: step-by-step instructions with import script references.
+  - Created `docs/quick-start.md` — 5-minute guide for first-time users.
+- **New script `scripts/import_model.py`:**
+  - Imports manually downloaded model files (git clone, browser download) into correct HF cache structure.
+  - Auto-detects model name from folder name, validates required files, creates `models--Org--Repo/snapshots/<hash>/` structure.
+  - `--validate-only` for pre-flight checks, `--target-dir` for custom cache, `--model` override, `--list` for available models.
+  - Uses `MODEL_REPO_MAP` from `config.py` as single source of truth.
+- **Git config:** Configured conditional include (`includeIf.gitdir:~/github/`) so repos under `~/github/` use `thomas.farfeleder@gmail.com`.
 - Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
 ### 2026-02-11 (critical review pass)
 - Split background executors in `controller.py`: preload now runs on dedicated `_preload_executor`, while dictation/transcription remains on `_executor`. This removes queue-blocking where model preload could delay first real transcription task.
