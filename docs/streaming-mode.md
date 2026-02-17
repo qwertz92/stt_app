@@ -103,8 +103,8 @@ Recommended:
 
 ## 7) Models in streaming mode
 
-Streaming mode uses the same local model choices as batch mode in current settings:
-- `tiny`, `base`, `small`, `medium`, `large-v3`
+Streaming mode uses the same local model choices as batch mode:
+- `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
 
 Larger models in streaming mode increase partial update cost.
 

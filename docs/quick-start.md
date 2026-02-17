@@ -49,10 +49,11 @@ That's it! The overlay shows the current state:
 
 | Overlay color | Meaning |
 |---------------|---------|
-| Gray | Idle — ready |
-| Red | Listening — recording your voice |
-| Yellow | Processing — transcribing |
-| Green | Done — text inserted |
+| Dark gray | Idle — ready |
+| Green | Listening — recording your voice |
+| Blue | Processing — transcribing |
+| Brown | Done — text inserted |
+| Red | Error — something went wrong |
 
 ## 4. First-time model download
 
@@ -84,6 +85,5 @@ Right-click the **system tray icon** → **Quit**.
 
 - **Better accuracy?** Try `large-v3-turbo` (multilingual, ~809 MB) or `distil-large-v3.5` (English-only, fastest).
 - **Cloud transcription?** Switch Engine to `AssemblyAI` in Settings and enter your API key.
-- **Corporate/offline setup?** See [Offline usage guide](offline-usage-guide.md) or [Enterprise deployment guide](enterprise-deployment-guide.md).
-- **Benchmarking models?** See [Local models and benchmark](local-models-and-benchmark.md).
+- **Corporate/offline setup?** See [Models & Offline Setup](models.md) or [Advanced Setup](advanced-setup.md).
 - **Full documentation:** See [README.md](../README.md).

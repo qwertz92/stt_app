@@ -1,7 +1,9 @@
 # STT-Dictation für Windows 11 – Requirements & Design Research (SRS + Pflichtenheft light)
-Version: 0.2 (Phase 1 complete, Phase 2 in progress)  
-Datum: 2026-02-11  
+Version: 0.3  
+Datum: 2026-02-16  
 Zielgruppe: Du selbst + ein Coding-Agent (z.B. Codex) für MVP-Implementierung und spätere Produktisierung
+
+> **Note:** This is a legacy bilingual design document. For current user-facing documentation, see [README.md](README.md) and [docs/](docs/).
 
 ---
 
@@ -205,8 +207,8 @@ Für den schnellsten funktionierenden Prototypen unter Windows 11:
 **Sprache/Framework:** Python 3.12+  
 **UI:** PySide6 (Qt) – overlay window, tray icon, settings dialog  
 **Hotkey:** Win32 RegisterHotKey via pywin32 (oder ctypes)  
-**Audio capture:** sounddevice (PortAudio) oder WASAPI binding  
-**VAD:** Silero VAD (ONNX Runtime) oder server-side VAD (wenn Remote)  
+**Audio capture:** sounddevice (PortAudio)  
+**VAD:** Energiebasierte VAD (`vad.py`)  
 **Local STT:** faster-whisper (CTranslate2)  
 **Insertion:** Clipboard-safe paste + SendInput
 
@@ -216,47 +218,50 @@ Warum das gut ist:
 - RegisterHotKey vermeidet keylogger-ähnliche Hooks
 - Clipboard-Paste ist der universellste Insert-Mechanismus für MVP
 
-### 5.2 "Phase 2": Remote API Provider + Streaming
-**Implementierungsstatus:** In Arbeit
+### 5.2 Remote Provider + Streaming
 
-**Phase 2a: AssemblyAI als Standard-Remote-Provider (Batch)**
-AssemblyAI ist der erste implementierte Remote-Provider:
-- **SDK:** `assemblyai` Python-Paket (pip install assemblyai)
+**Implementierungsstatus:**
+
+| Feature | Status |
+|---------|--------|
+| AssemblyAI Batch (SDK) | **Implementiert** — Upload → Transkription → Einfügen |
+| Lokales Streaming (faster-whisper) | **Implementiert** (experimentell) — sliding-window + overlap |
+| AssemblyAI Streaming (WebSocket) | Geplant |
+| OpenAI / Azure / Deepgram | Placeholder-Stubs vorhanden |
+
+**AssemblyAI Remote Provider (implementiert)**
+- **SDK:** `assemblyai` Python-Paket
 - **Modell:** Universal-3-Pro + Universal-2 Fallback
 - **Spracherkennung:** Automatisch (`language_detection=True`), 6 Sprachen (EN, ES, DE, FR, PT, IT)
 - **Preis:** $0.21/Stunde Audio
-- **Flow:** Audio aufnehmen → WAV an AssemblyAI API senden → Transkript zurückbekommen → Text einfügen
 - **API-Key:** Gespeichert über Windows Credential Manager (`keyring`), Eingabe im Settings-Dialog
-- **Batch-only (Phase 2a):** Aufnahme → Upload → Transkription → Einfügen. Kein Streaming in Phase 2a.
 
-**Phase 2b: Streaming Remote (geplant)**
-- AssemblyAI WebSocket-Streaming für Echtzeit-Teilergebnisse
-- Alternativ: OpenAI Realtime, Azure Speech, Deepgram WebSocket
-- Lokales Streaming (experimental) bereits implementiert in Phase 1
-
-**Phase 2c: Streaming Local (implementiert – experimental)**
+**Lokales Streaming (experimentell, implementiert)**
 - Lokales Streaming über faster-whisper mit sliding-window + overlap
 - Inkrementelle Live-Einfügung am Cursor während der Aufnahme
 - Auto-Abort bei Fokuswechsel mit Beep-Benachrichtigung
 - Dokumentiert in `docs/streaming-mode.md`
 
-### 5.3 "Phase 3": Erweiterte Provider + Native Integration
+### 5.3 Geplante Erweiterungen
 
-**Phase 3a: NVIDIA Parakeet / NeMo Provider**
-- **Modell:** `nvidia/parakeet-tdt-0.6b-v3` (FastConformer-TDT Architektur)
-- **NICHT kompatibel mit faster-whisper/CTranslate2** — benötigt komplett neuen Provider
-- **Framework:** NVIDIA NeMo (`nemo_toolkit['asr']`)
-- **Vorteile:** 25 EU-Sprachen, 600M Parameter, exzellente WER (DE 5.04%, EN 4.85%)
-- **Aufwand:** Neues Provider-Modul, NeMo-Dependency, eigene Inference-Pipeline
-- **Entscheidung offen:** NeMo hat deutlich größere Dependencies als faster-whisper
+**AssemblyAI Streaming**
+- WebSocket-Streaming für Echtzeit-Teilergebnisse
 
-**Phase 3b: Weitere Remote-Provider**
+**Weitere Remote-Provider**
 - OpenAI (Realtime transcription sessions, WebSocket/WebRTC)
 - Azure Speech (Continuous recognition, intermediate results)
 - Deepgram (WebSocket STT, multilingual code-switching)
 - Google Cloud Speech-to-Text (gRPC Streaming)
 
-**Phase 3c: Native Integration (echtes Input Method)**
+**NVIDIA Parakeet / NeMo (evaluiert — nicht empfohlen)**
+- **Modell:** `nvidia/parakeet-tdt-0.6b-v3` (FastConformer-TDT Architektur)
+- **Nicht CTranslate2-kompatibel** — bräuchte komplett neuen Provider + NeMo/PyTorch Dependencies
+- **Vorteile:** 25 EU-Sprachen, 600M Parameter, exzellente WER (DE 5.04%, EN 1.93%)
+- **Nachteile:** NVIDIA GPU Pflicht, massive Dependencies (~2-4 GB), Linux bevorzugt
+- **Entscheidung:** Nicht implementieren — Kosten/Nutzen-Verhältnis ungünstig für Desktop-App auf Firmen-Laptops
+- **Evaluation:** Siehe `docs/parakeet-evaluation.md`
+
+**Native Integration (Langfrist)**
 Wenn du wirklich “wie Windows Input” willst:
 - TSF TIP/IME in C++/Rust (via windows-rs) oder C# COM interop
 - optional mit eigenem candidate/composition window
@@ -283,11 +288,9 @@ Wenn du wirklich “wie Windows Input” willst:
   - `transcribe_file(audio) -> text`
   - optional `start_stream() / push_audio_chunk() / on_partial_result()`
 - **Providers**
-  - `LocalFasterWhisperProvider`
-  - `OpenAIRealtimeProvider`
-  - `AzureSpeechProvider`
-  - `DeepgramProvider`
-  - etc.
+  - `LocalFasterWhisperTranscriber` — implementiert (Batch + Streaming)
+  - `AssemblyAITranscriber` — implementiert (Batch)
+  - OpenAI, Azure, Deepgram — Placeholder-Stubs (`remote_placeholders.py`)
 - **TextInserter**
   - Strategy: clipboard-paste (default)
   - Alternative: UIA setvalue (best effort)
@@ -324,21 +327,25 @@ Hotkey → UI “Listening” → AudioCapture chunked → Transcriber streaming
 
 ---
 
-## 8) Bill of Materials (BOM) – MVP (Python)
+## 8) Bill of Materials (BOM) – aktuell
 ### Runtime
 - Python 3.12+
 - PySide6
-- pywin32 (oder ctypes + user32/kernel32)
+- ctypes + user32/kernel32 (Win32 API direkt, kein pywin32 nötig)
 - sounddevice (+ PortAudio)
 - numpy
 - faster-whisper (inkl. ctranslate2)
-- onnxruntime (für Silero VAD) + silero-vad model files
-- pyperclip (optional, Clipboard helpers) oder native Win32 clipboard via pywin32
+- assemblyai SDK (für AssemblyAI Remote Provider)
+- keyring (für API-Key-Speicherung via Windows Credential Manager)
+- requests (für HuggingFace Hub Downloads)
 
 ### Assets
-- Whisper model weights (z.B. `small` oder `medium`)
-- Silero VAD onnx model
+- Whisper model weights (z.B. `small`, `medium`, `large-v3-turbo`, `distil-large-v3.5`)
 - App icon/tray icon
+
+### Nicht verwendet (ursprünglich geplant)
+- ~~onnxruntime / Silero VAD~~: App nutzt energiebasierte VAD (`vad.py`), nicht Silero
+- ~~pyperclip~~: App nutzt native Win32 clipboard via ctypes
 
 ### Build/Packaging
 - PyInstaller oder Nuitka
@@ -381,9 +388,10 @@ Du kannst dem Agenten ungefähr so starten (hier bewusst als Textbaustein, nicht
 
 ---
 
-## 12) Offene Entscheidungen (bewusst offen, aber klar benannt)
-1. **Default Hotkey**: welche Kombination kollidiert am wenigsten in deiner Umgebung?
-2. **Local STT Default Modell**: small vs medium (Tradeoff Speed/Quality)
-3. **Streaming zuerst lokal oder remote?**
-4. **Insert-Strategie**: nur Paste (MVP) vs UIA best-effort fallback
+## 12) Getroffene Entscheidungen (ehemals offen)
+1. **Default Hotkey**: `Ctrl+Alt+Space` — Fallback `Ctrl+Win+LShift`. Key-Capture UI statt manuelle Texteingabe.
+2. **Local STT Default Modell**: `small` — bester Tradeoff aus Geschwindigkeit, Qualität und Downloadgröße (~484 MB).
+3. **Streaming zuerst lokal oder remote?** Lokal zuerst (experimentell implementiert). Remote-Streaming (AssemblyAI WebSocket) als nächster Schritt geplant.
+4. **Insert-Strategie**: Clipboard-safe Paste mit 3 Modi (Auto, SendInput, WM_PASTE). UIA/TSF nicht implementiert (Aufwand zu hoch für Nutzen).
+5. **Deployment**: PyInstaller `.spec` vorhanden; Wheelhouse-Offline-Install dokumentiert.
 5. **Deployment**: einfache exe vs installer + auto-update

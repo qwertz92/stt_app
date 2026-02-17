@@ -1,26 +1,40 @@
 # AGENTS.md
 
 ## Purpose
+
 This file is the running project memory for `tts_app`.
 Keep it updated whenever behavior, architecture, dependencies, or operational learnings change.
 Agents: prefer reading this file first before making changes. It contains critical context about known issues, intentional design decisions, and architecture constraints.
 
 ## Quality principle
+
 Quality has the highest priority. Take as much time as needed — every bug is more expensive than finishing a bit later.
+
 - No duplicated logic: every function/constant should exist in exactly one place.
 - No dead code or unused imports.
 - Every change must pass all existing tests.
 - Document decisions in this file so future agents/developers understand why.
 
 ## Language rule
+
 **All project content must be written in English.** This includes source code, comments, documentation (README, docs/*.md), commit messages, error messages, UI labels, and log output. The only exception is `stt-dictation-spec.md` which is a legacy bilingual design document. Never introduce German (or any other non-English) text into the project.
 
 ## Current scope
-- Phase 1 (MVP) implemented: local batch dictation on Windows 11.
-- Phase 2a implemented: AssemblyAI as first working remote provider (batch transcription).
-- Phase 2 continuing: local streaming mode is implemented as experimental; AssemblyAI streaming (Phase 2b) and other remote providers planned.
+
+### What's implemented
+- Local batch dictation on Windows 11 (faster-whisper / CTranslate2)
+- AssemblyAI as first working remote provider (batch transcription)
+- Local streaming mode (experimental)
+- Model preloading with fallback to cached models
+- Offline mode with download/import scripts
+
+### What's planned
+- AssemblyAI streaming (WebSocket)
+- Additional remote providers (OpenAI, Azure, Deepgram — placeholder stubs exist)
+- NVIDIA Parakeet evaluated but not recommended for implementation (see `docs/parakeet-evaluation.md`)
 
 ## Runtime stack
+
 - Python 3.12
 - PySide6 UI/tray/overlay
 - Win32 RegisterHotKey + SendInput (no low-level keyboard hook)
@@ -33,6 +47,7 @@ Quality has the highest priority. Take as much time as needed — every bug is m
 ## Architecture overview
 
 ### Module responsibilities
+
 - `config.py` — all tunables/constants centralized here; includes `MODEL_REPO_MAP` (single source of truth for model→repo mapping); never hardcode values elsewhere
 - `ssl_utils.py` — shared `is_ssl_error()` helper for SSL/Zscaler detection (used by local transcriber, AssemblyAI provider, download script)
 - `controller.py` — main orchestrator/state machine (~890 lines); connects hotkey, audio, transcriber, overlay, inserter; model preloading with fallback
@@ -53,11 +68,13 @@ Quality has the highest priority. Take as much time as needed — every bug is m
 - `scripts/import_model.py` — imports manually downloaded model files into correct HF cache structure
 
 ### Key design decisions
+
 - **Temp files vs BytesIO for audio**: `transcribe_batch` writes WAV bytes to a temp file because `faster-whisper`'s `WhisperModel.transcribe()` accepts file paths (its most reliable input path). BytesIO could work via PyAV but temp files avoid edge cases and are proven stable. Keep as-is.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — both modules are self-contained and should not depend on each other.
 - **Controller size**: ~810 lines including streaming delta logic. Could be split but streaming state is tightly coupled with recording state. Refactoring risk outweighs benefit currently.
 
 ## Core flow
+
 1. Global hotkey toggles recording.
 2. Overlay moves through states: `Idle → Listening → Processing → Done/Error`.
 3. In batch mode, recorded WAV bytes are transcribed once on stop.
@@ -66,6 +83,7 @@ Quality has the highest priority. Take as much time as needed — every bug is m
 6. Clipboard text content is restored.
 
 ## Text insertion (paste) behavior
+
 - **Auto mode** (default `paste_mode=auto`): tries `SendInput` (Ctrl+V) first, falls back to `WM_PASTE` if SendInput fails.
 - **WM_PASTE mode**: sends `WM_PASTE` message directly to the target window's focused control.
 - **SendInput mode**: synthesizes Ctrl+V keystrokes via Win32 `SendInput`.
@@ -73,8 +91,10 @@ Quality has the highest priority. Take as much time as needed — every bug is m
 - Insertion target prefers: caret window > focused control > foreground window (captured at recording start).
 
 ## Central configuration
+
 All key global defaults are centralized in `src/tts_app/config.py`.
 Important defaults:
+
 - `DEFAULT_HOTKEY = "Ctrl+Alt+Space"`
 - `FALLBACK_HOTKEY = "Ctrl+Win+LShift"`
 - `DEFAULT_MODEL_SIZE = "small"`
@@ -85,6 +105,7 @@ Important defaults:
 - `VALID_MODEL_SIZES` includes `distil-large-v3.5` (English-only, ~756 MB, improved), `large-v3-turbo` (multilingual, ~809 MB, pruned large-v3)
 
 ## Hotkey notes
+
 - `RegisterHotKey` supports the configured hotkey syntax with one non-modifier key.
 - `Ctrl+Alt+Space` is default.
 - Pure modifier-only combinations (e.g. Ctrl+Shift+Alt alone) are not supported by RegisterHotKey.
@@ -92,12 +113,15 @@ Important defaults:
 - Settings UI hotkey field now uses key capture (`QKeySequenceEdit`) instead of manual text input.
 
 ## Settings and secrets
+
 - Settings JSON: `%APPDATA%\tts_app\settings.json`
 - Secrets: Windows Credential Manager via `keyring`
 - JSON never stores provider API keys in plaintext
 
 ## Tests
+
 Run:
+
 - `uv run python -m pytest`
 - `uv run python scripts/smoke_test.py`
 - No-uv fallback commands:
@@ -105,6 +129,7 @@ Run:
 - `python scripts/smoke_test.py`
 
 Covered modules:
+
 - SettingsStore
 - SecretStore
 - HotkeyManager
@@ -117,7 +142,9 @@ Covered modules:
 - Streaming auto-abort on focus change + beep notification
 - Benchmark script CSV output helpers
 - Current test count: 180 tests (177 pass on Linux; 3 are Windows-only)
+
 ## Known limitations
+
 - Streaming mode currently available for local provider only.
 - Streaming partial updates use a trailing audio window for lower latency, but still cost more CPU than batch mode.
 - Live insertion in streaming mode is append-oriented and still cannot delete already inserted words when model revisions disagree.
@@ -127,7 +154,9 @@ Covered modules:
 - Clipboard restore currently handles Unicode text content only.
 
 ## Learning log
+
 ### 2026-02-08
+
 - `faster-whisper` model/runtime path can fail with `ModuleNotFoundError: requests` on some environments.
 - Fix: add pinned `requests` dependency and improve transcription error message with explicit `uv sync --group dev` guidance.
 - Win key combos can fail to register depending on reserved shortcuts. Runtime fallback to a safe hotkey significantly improves startup robustness.
@@ -155,7 +184,9 @@ Covered modules:
 - Added `requirements-win.txt` and `requirements-dev-win.txt` for no-uv installation flow.
 - Added `pywin32` platform marker in `pyproject.toml`, so non-Windows environments (e.g. WSL Linux) can resolve dependencies without failing on Windows-only wheels.
 - WSL can help development tooling, but the full app runtime (hotkey/input insertion) must run on native Windows.
+
 ### 2026-02-09
+
 - Added detailed enterprise deployment runbook at `docs/enterprise-deployment-guide.md` (no-uv setup, wheelhouse/offline flow, PyInstaller distribution notes).
 - For locked corporate environments, safest practice is pinning pip inside the project venv (e.g. `pip<26`) instead of updating globally.
 - Added local benchmarking script `scripts/benchmark_local.py` with per-model/device/compute-type timing, RTF output, and optional JSON report.
@@ -167,7 +198,9 @@ Covered modules:
 - Added benchmark-model error-rate references from upstream sources (Whisper paper tables + faster-whisper benchmark WER snippet) in docs.
 - Added implementation note doc `docs/streaming-mode.md` describing architecture, tradeoffs, and default-mode recommendation.
 - Test stability learning: mixing `QCoreApplication` and widget tests can crash on Windows; use `QApplication` consistently for controller tests when widget dialogs are also tested.
+
 ### 2026-02-10
+
 - Streaming mode now performs incremental live insertion at caret while speaking and only inserts remaining tail on finalize.
 - Streaming session now auto-aborts when target foreground window changes and triggers a short alert beep.
 - Added docs `docs/model-error-rate-reference.md` with curated published WER references for offered models and language examples.
@@ -210,7 +243,9 @@ Covered modules:
 - Key root cause of user's failed offline setup: the old README told users to place files in a flat folder, but `faster-whisper` passes short names through `huggingface_hub.snapshot_download()` which expects HF's internal `models--<org>--<name>/snapshots/<hash>/` structure. Flat folders are only used when the model name is a direct path (os.path.isdir check). The download script now creates the correct structure automatically.
 - WhisperModel constructor parameters: `model_size_or_path` (name or path), `download_root` (cache dir), `local_files_only` (no network).
 - Current test count: 75 tests (72 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+
 ### 2026-02-11
+
 - Added `large-v3-turbo` to VALID_MODEL_SIZES — multilingual (~809 MB), pruned large-v3 (4 decoder layers instead of 32). Much faster than large-v3 with minor quality loss. Already in faster-whisper's `_MODELS` dict as `mobiuslabsgmbh/faster-whisper-large-v3-turbo`.
 - Added `distil-large-v3.5` to VALID_MODEL_SIZES — English-only (~756 MB), improved over distil-large-v3 (98k hours training data vs 22k). CTranslate2 version at `distil-whisper/distil-large-v3.5-ct2`. Already in faster-whisper's `_MODELS` dict.
 - Researched `nvidia/parakeet-tdt-0.6b-v3`: NOT compatible with faster-whisper. Uses FastConformer-TDT architecture (NeMo framework), not Whisper/CTranslate2. Would require a completely new provider implementation. 25 EU languages, 600M params, excellent WER (DE 5.04%, EN 4.85%) but different inference pipeline.
@@ -233,7 +268,9 @@ Covered modules:
   - 27 new tests in `test_assemblyai_provider.py` (constructor, batch, errors, language config, streaming stubs, factory routing, settings).
   - Updated spec sheet (stt-dictation-spec.md) with Phase 2a/2b/3 details including AssemblyAI and Parakeet/NeMo.
 - Current test count: 102 tests (99 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+
 ### 2026-02-12
+
 - **SSL/Zscaler error detection added throughout the app:**
   - New `_is_ssl_error()` helper in `local_faster_whisper.py` and `assemblyai_provider.py` — walks exception chain (`__cause__`) to detect SSL certificate verification failures.
   - `download_model.py` now catches SSL errors from `snapshot_download()` and prints actionable Zscaler/corporate-proxy guidance (CA bundle, alternative download methods, docs link).
@@ -279,7 +316,9 @@ Covered modules:
 - **3 new controller tests** for preload: local engine triggers preload, remote engine skips preload, preload done handler behavior.
 - Tiny model (~75 MB) not bundled in repo — too large for git; instead, preload logic auto-downloads on first start and falls back to any available cached model.
 - Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+
 ### 2026-02-13
+
 - **Code quality review and deduplication:**
   - Extracted `_is_ssl_error()` into shared `ssl_utils.py` module — was identically duplicated in `local_faster_whisper.py`, `assemblyai_provider.py`, and `download_model.py` (3 copies → 1).
   - Moved `MODEL_REPO_MAP` to `config.py` as single source of truth — was duplicated as `_MODEL_REPO_MAP` in `local_faster_whisper.py` and `MODELS` in `download_model.py` (2 copies → 1).
@@ -290,7 +329,9 @@ Covered modules:
   - `download_model.py` now imports `MODEL_REPO_MAP` from `config.py` and `is_ssl_error` from `ssl_utils.py` via `sys.path` adjustment (script lives outside `src/`).
 - Model directory naming: HF-style (`models--Systran--faster-whisper-small/snapshots/<hash>/`) works automatically with short names. Flat dirs (`faster-whisper-small/`) only work when the full path is passed as `model_size_or_path`. The download script creates HF structure automatically.
 - Current test count: 128 tests (125 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+
 ### 2026-02-16
+
 - **Documentation overhaul:**
   - Added "Language rule" to AGENTS.md — all content must be English (exception: stt-dictation-spec.md legacy bilingual).
   - Translated `docs/enterprise-deployment-guide.md` from German to English.
@@ -312,7 +353,9 @@ Covered modules:
   - New test file `test_controller_coverage.py` (25 tests): shutdown, start_recording edge cases, transcription_worker errors, streaming abort paths, focus poll, beep fallback, hotkey edge cases. → controller.py 70% → 83%.
   - Extended `test_main_signals.py` (+2 tests): tray icon menu actions, toggle trigger. → main.py 30% → 55%.
 - Current test count: 180 tests (177 pass on Linux; 3 are Windows-only: 2 windll/ctypes, 1 INPUT struct size).
+
 ### 2026-02-11 (critical review pass)
+
 - Split background executors in `controller.py`: preload now runs on dedicated `_preload_executor`, while dictation/transcription remains on `_executor`. This removes queue-blocking where model preload could delay first real transcription task.
 - Added transcriber cache lock in controller (`_transcriber_cache_lock`) to avoid race conditions when preload and normal transcription request the transcriber concurrently.
 - Fallback model chosen during preload is now persisted to `settings.json` via `SettingsStore.save()`, so the app does not retry the failing model on every restart.
