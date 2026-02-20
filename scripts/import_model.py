@@ -44,6 +44,11 @@ VOCABULARY_FILES = {"vocabulary.txt", "vocabulary.json"}
 # Additional optional files that should be copied if present.
 OPTIONAL_FILES = {"preprocessor_config.json"}
 
+# Git LFS pointer files are small text files starting with this header.
+_LFS_POINTER_HEADER = "version https://git-lfs.github.com/spec/v1"
+# Minimum expected size for model.bin (real model weights are at least ~30 MB).
+_MODEL_BIN_MIN_BYTES = 10_000_000  # 10 MB
+
 # Build reverse map: common folder name patterns → short model name
 _FOLDER_HINTS: dict[str, str] = {}
 for _short, _repo in MODEL_REPO_MAP.items():
@@ -69,16 +74,37 @@ def detect_model_name(source_dir: Path) -> str | None:
     return None
 
 
+def is_lfs_pointer(file_path: Path) -> bool:
+    """Check if a file is a Git LFS pointer instead of actual content.
+
+    Git LFS pointer files are small text files (~130 bytes) that start with
+    'version https://git-lfs.github.com/spec/v1'. When `git clone` is run
+    without `git-lfs` installed, large files are replaced with these pointers.
+    """
+    try:
+        size = file_path.stat().st_size
+        # LFS pointers are always small text files (typically < 200 bytes)
+        if size > 1024:
+            return False
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+        return content.strip().startswith(_LFS_POINTER_HEADER)
+    except (OSError, UnicodeDecodeError):
+        return False
+
+
 def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
     """Validate that a directory contains all required model files.
 
     Returns (is_valid, found_files, missing_files).
+    Checks for Git LFS pointer files and suspiciously small model.bin.
     """
     found: list[str] = []
     missing: list[str] = []
+    warnings: list[str] = []
 
     for required in REQUIRED_FILES:
-        if (source_dir / required).is_file():
+        fpath = source_dir / required
+        if fpath.is_file():
             found.append(required)
         else:
             missing.append(required)
@@ -94,6 +120,37 @@ def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
     for optional in OPTIONAL_FILES:
         if (source_dir / optional).is_file():
             found.append(optional)
+
+    # Check for Git LFS pointers (common when git-lfs is not installed)
+    model_bin = source_dir / "model.bin"
+    if model_bin.is_file():
+        if is_lfs_pointer(model_bin):
+            warnings.append(
+                "ERROR: model.bin is a Git LFS pointer (not actual model weights).\n"
+                "  This happens when you 'git clone' without git-lfs installed.\n"
+                "  Fix: install git-lfs, then run 'git lfs pull' in the cloned repo.\n"
+                "  Or download the model using the download script instead:\n"
+                "    python scripts/download_model.py --model <name>"
+            )
+            missing.append("model.bin (Git LFS pointer — not real weights)")
+            # Remove model.bin from found since it's not usable
+            found = [f for f in found if f != "model.bin"]
+        elif model_bin.stat().st_size < _MODEL_BIN_MIN_BYTES:
+            size_kb = model_bin.stat().st_size / 1024
+            warnings.append(
+                f"ERROR: model.bin is suspiciously small ({size_kb:.1f} KB).\n"
+                f"  Real model weights are at least tens of MB.\n"
+                f"  This may be a Git LFS pointer or corrupted download.\n"
+                f"  Fix: install git-lfs, then run 'git lfs pull' in the cloned repo.\n"
+                f"  Or download the model using the download script instead:\n"
+                f"    python scripts/download_model.py --model <name>"
+            )
+            missing.append("model.bin (too small — likely incomplete download)")
+            found = [f for f in found if f != "model.bin"]
+
+    # Print warnings immediately so the user sees them
+    for warning in warnings:
+        print(f"\n{warning}", file=sys.stderr)
 
     is_valid = len(missing) == 0
     return is_valid, found, missing

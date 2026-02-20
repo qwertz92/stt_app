@@ -33,6 +33,7 @@ def test_benchmark_csv_writer_creates_run_and_summary_rows(tmp_path):
         model="small",
         device="cpu",
         compute_type="int8",
+        download_seconds=0.0,
         load_seconds=0.5,
         runs=[run],
     )
@@ -52,6 +53,7 @@ def test_successful_cases_filters_errors():
         model="small",
         device="cpu",
         compute_type="int8",
+        download_seconds=0.0,
         load_seconds=0.5,
         runs=[
             module.BenchmarkRun(
@@ -70,6 +72,7 @@ def test_successful_cases_filters_errors():
         model="medium",
         device="cpu",
         compute_type="int8",
+        download_seconds=0.0,
         load_seconds=0.6,
         runs=[],
         error="failed",

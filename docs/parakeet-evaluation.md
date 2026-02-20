@@ -18,6 +18,7 @@ Parakeet is NVIDIA's family of speech recognition models built on the [FastConfo
 | [parakeet-tdt-0.6b-v3](https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3) | 25 European languages (incl. German) | 600M | ~1.2 GB |
 
 Key features:
+
 - Automatic punctuation and capitalization
 - Word-level and segment-level timestamps
 - Long audio support (up to 24 min with full attention, 3h with local attention)
@@ -71,6 +72,7 @@ Most target users of this app run on corporate laptops with Intel or AMD integra
 ### The dependency problem
 
 `nemo_toolkit[asr]` pulls in PyTorch (~800 MB wheel) plus numerous scientific computing packages. This would:
+
 - 3-5x the total installation size
 - Increase install time significantly
 - Complicate corporate/offline deployment
@@ -88,6 +90,7 @@ If NVIDIA GPU usage becomes a priority (e.g. power users, server deployment), Pa
 4. **Config changes**: Add `"nemo"` to `VALID_ENGINES`, Parakeet models to a separate model map.
 
 Usage would be:
+
 ```python
 import nemo.collections.asr as nemo_asr
 model = nemo_asr.models.ASRModel.from_pretrained("nvidia/parakeet-tdt-0.6b-v3")
@@ -110,6 +113,7 @@ Streaming is possible via NeMo's [chunked inference script](https://github.com/N
 | Cost/benefit ratio | Unfavorable for current scope |
 
 **Keep this evaluation on file.** Revisit if:
+
 - The app expands to server/cloud deployment (where GPUs are common)
 - NeMo adds a lightweight CPU inference path
 - ONNX export of Parakeet models becomes mature and well-supported
