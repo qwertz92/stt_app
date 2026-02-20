@@ -1,16 +1,18 @@
-"""AssemblyAI remote transcription provider (Phase 2).
+"""AssemblyAI remote transcription provider.
 
 Batch transcription via the AssemblyAI Python SDK.
+Real-time streaming via AssemblyAI's WebSocket API (RealtimeTranscriber).
 Requires: pip install assemblyai
 API key stored via keyring (settings_dialog / secret_store).
 
-The provider uses Universal-3-Pro + Universal-2 speech models with
+The batch provider uses Universal-3-Pro + Universal-2 speech models with
 automatic language detection enabled.
 """
 
 from __future__ import annotations
 
 import tempfile
+import threading
 import wave
 from pathlib import Path
 
@@ -194,19 +196,122 @@ class AssemblyAITranscriber(ITranscriber):
 
         return False, "Unexpected response from AssemblyAI API."
 
-    # -- Streaming stubs (Phase 2b) ------------------------------------------
+    # -- Streaming via RealtimeTranscriber --------------------------------------
 
     def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
-        raise NotImplementedError(
-            "AssemblyAI streaming is planned for Phase 2b and not yet implemented. "
-            "Use batch mode with AssemblyAI, or use local provider for streaming."
-        )
+        """Start a real-time streaming session via AssemblyAI WebSocket API.
+
+        The ``on_partial`` callback receives the accumulated transcript text
+        (all finalized sentences + current partial) each time an update
+        arrives from the server.
+        """
+        self._configure()
+        aai = self._get_aai()
+
+        self._stream_lock = threading.Lock()
+        self._stream_on_partial = on_partial
+        self._stream_finals: list[str] = []
+        self._stream_current_partial: str = ""
+        self._stream_error: Exception | None = None
+
+        try:
+            rt = aai.RealtimeTranscriber(
+                sample_rate=AUDIO_SAMPLE_RATE,
+                on_data=self._on_rt_data,
+                on_error=self._on_rt_error,
+            )
+            rt.connect()
+        except Exception as exc:
+            if _is_ssl_error(exc):
+                raise TranscriptionError(
+                    "AssemblyAI streaming: SSL certificate verification failed "
+                    "(likely a corporate proxy such as Zscaler)."
+                ) from exc
+            raise TranscriptionError(
+                f"AssemblyAI streaming: failed to connect: {exc}"
+            ) from exc
+
+        self._rt_transcriber = rt
 
     def push_audio_chunk(self, chunk: bytes) -> None:
-        raise NotImplementedError("AssemblyAI streaming is not yet implemented.")
+        """Send a raw PCM16 audio chunk to the real-time session."""
+        rt = getattr(self, "_rt_transcriber", None)
+        if rt is None:
+            return
+        try:
+            rt.stream(chunk)
+        except Exception as exc:
+            raise TranscriptionError(
+                f"AssemblyAI streaming: failed to send audio: {exc}"
+            ) from exc
 
     def stop_stream(self) -> str:
-        raise NotImplementedError("AssemblyAI streaming is not yet implemented.")
+        """Finalize the streaming session and return accumulated text."""
+        rt = getattr(self, "_rt_transcriber", None)
+        self._rt_transcriber = None
+        if rt is not None:
+            try:
+                rt.close()
+            except Exception:
+                pass
+
+        with self._stream_lock:
+            parts = list(self._stream_finals)
+            if self._stream_current_partial:
+                parts.append(self._stream_current_partial)
+            self._stream_finals = []
+            self._stream_current_partial = ""
+            error = self._stream_error
+
+        text = " ".join(p for p in parts if p).strip()
+
+        if error and not text:
+            raise TranscriptionError(
+                f"AssemblyAI streaming failed: {error}"
+            )
+
+        return text
 
     def abort_stream(self) -> None:
-        raise NotImplementedError("AssemblyAI streaming is not yet implemented.")
+        """Abort the streaming session immediately, discarding all text."""
+        rt = getattr(self, "_rt_transcriber", None)
+        self._rt_transcriber = None
+        if rt is not None:
+            try:
+                rt.close()
+            except Exception:
+                pass
+
+        with self._stream_lock:
+            self._stream_finals = []
+            self._stream_current_partial = ""
+
+    # -- Real-time callbacks (called from WebSocket thread) -------------------
+
+    def _on_rt_data(self, transcript) -> None:
+        """Handle incoming transcript data from the WebSocket."""
+        aai = self._get_aai()
+        text = getattr(transcript, "text", "") or ""
+
+        with self._stream_lock:
+            if isinstance(transcript, aai.RealtimeFinalTranscript):
+                if text:
+                    self._stream_finals.append(text)
+                self._stream_current_partial = ""
+            else:
+                self._stream_current_partial = text
+
+            # Build full accumulated text for the callback.
+            parts = list(self._stream_finals)
+            if self._stream_current_partial:
+                parts.append(self._stream_current_partial)
+            combined = " ".join(p for p in parts if p).strip()
+
+        callback = self._stream_on_partial
+        if callback and combined:
+            callback(combined)
+
+    def _on_rt_error(self, error) -> None:
+        """Handle errors from the WebSocket."""
+        with self._stream_lock:
+            self._stream_error = error

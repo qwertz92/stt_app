@@ -227,7 +227,7 @@ def test_shutdown_cancels_preload_future():
 
 
 def test_start_recording_rejects_streaming_for_remote_engine():
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="assemblyai", mode="streaming")
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="groq", mode="streaming")
     overlay = FakeOverlay()
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
@@ -235,7 +235,7 @@ def test_start_recording_rejects_streaming_for_remote_engine():
     )
     controller.start_recording()
     assert overlay.states[-1][0] == "Error"
-    assert "Streaming" in overlay.states[-1][1]
+    assert "Streaming" in overlay.states[-1][1] or "streaming" in overlay.states[-1][1]
     controller.shutdown()
     _ = app
 

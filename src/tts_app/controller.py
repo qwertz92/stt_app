@@ -19,6 +19,7 @@ from .config import (
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
     STREAMING_BEEP_ON_ABORT,
+    STREAMING_ENGINES,
     STREAMING_FOCUS_POLL_MS,
     STREAMING_LIVE_INSERT_ENABLED,
     STREAMING_OVERLAY_MAX_CHARS,
@@ -164,15 +165,15 @@ class DictationController(QtCore.QObject):
             self.stop_recording()
 
     def start_recording(self) -> None:
-        # Streaming is only supported for local provider (for now).
+        # Check if the selected engine supports streaming mode.
         if (
-            self._settings.engine != DEFAULT_ENGINE
+            self._settings.engine not in STREAMING_ENGINES
             and self._settings.mode == "streaming"
         ):
             self._overlay.set_state(
                 "Error",
-                "Streaming is only available with the local provider. "
-                "Switch to batch mode for remote providers.",
+                "Streaming is not available for the selected provider. "
+                "Switch to batch mode, or use local/AssemblyAI for streaming.",
             )
             return
 

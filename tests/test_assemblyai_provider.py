@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 import types
 from unittest.mock import MagicMock, patch
 
@@ -54,14 +55,55 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
         api_key = ""
         base_url = ""
 
+    # Real-time streaming types
+    class FakeRealtimeFinalTranscript:
+        """Represents a finalized transcript segment."""
+
+        def __init__(self, text=""):
+            self.text = text
+
+    class FakeRealtimePartialTranscript:
+        """Represents an in-progress partial transcript."""
+
+        def __init__(self, text=""):
+            self.text = text
+
+    class FakeRealtimeTranscriber:
+        """Fake RealtimeTranscriber for testing streaming."""
+
+        instances: list = []
+
+        def __init__(self, *, sample_rate=16000, on_data=None, on_error=None):
+            self.sample_rate = sample_rate
+            self.on_data = on_data
+            self.on_error = on_error
+            self.connected = False
+            self.closed = False
+            self.streamed_chunks: list[bytes] = []
+            FakeRealtimeTranscriber.instances.append(self)
+
+        def connect(self):
+            self.connected = True
+
+        def stream(self, chunk: bytes):
+            self.streamed_chunks.append(chunk)
+
+        def close(self):
+            self.closed = True
+            self.connected = False
+
     aai.TranscriptStatus = FakeTranscriptStatus
     aai.SpeechModel = FakeSpeechModel
     aai.TranscriptionConfig = FakeTranscriptionConfig
     aai.Transcriber = FakeTranscriber
     aai.settings = FakeSettings()
+    aai.RealtimeFinalTranscript = FakeRealtimeFinalTranscript
+    aai.RealtimePartialTranscript = FakeRealtimePartialTranscript
+    aai.RealtimeTranscriber = FakeRealtimeTranscriber
 
     # Reset call tracking
     FakeTranscriber.calls = []
+    FakeRealtimeTranscriber.instances = []
 
     return aai
 
@@ -258,34 +300,199 @@ class TestAssemblyAILanguageConfig:
 
 
 # ---------------------------------------------------------------------------
-# Tests: streaming stubs
+# Tests: real-time streaming
 # ---------------------------------------------------------------------------
 
 
-class TestAssemblyAIStreamingStubs:
-    def test_start_stream_not_implemented(self):
+class TestAssemblyAIStreaming:
+    def test_start_stream_connects(self):
+        """start_stream creates a RealtimeTranscriber and connects."""
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
-        with pytest.raises(NotImplementedError, match="Phase 2b"):
-            t.start_stream()
+        t.start_stream(on_partial=lambda text: None)
+        assert len(fake_aai.RealtimeTranscriber.instances) == 1
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        assert rt.connected is True
+        assert rt.sample_rate == 16000
+        t.abort_stream()
 
-    def test_push_audio_chunk_not_implemented(self):
+    def test_push_audio_chunk_forwards_data(self):
+        """push_audio_chunk sends data to the real-time transcriber."""
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
-        with pytest.raises(NotImplementedError):
-            t.push_audio_chunk(b"data")
+        t.start_stream()
+        t.push_audio_chunk(b"\x01\x00" * 160)
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        assert len(rt.streamed_chunks) == 1
+        assert rt.streamed_chunks[0] == b"\x01\x00" * 160
+        t.abort_stream()
 
-    def test_stop_stream_not_implemented(self):
+    def test_stop_stream_returns_accumulated_text(self):
+        """stop_stream returns all finalized text joined."""
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
-        with pytest.raises(NotImplementedError):
+        t.start_stream()
+
+        # Simulate final transcripts arriving via on_data callback.
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello world."))
+        rt.on_data(fake_aai.RealtimeFinalTranscript("How are you?"))
+
+        result = t.stop_stream()
+        assert result == "Hello world. How are you?"
+
+    def test_stop_stream_includes_current_partial(self):
+        """stop_stream includes the last partial if no final followed."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream()
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello."))
+        # Simulate a partial transcript (not yet finalized).
+        rt.on_data(fake_aai.RealtimePartialTranscript("How are"))
+
+        result = t.stop_stream()
+        assert result == "Hello. How are"
+
+    def test_partial_replaced_by_next_partial(self):
+        """Each partial transcript replaces the previous one."""
+        fake_aai = _make_fake_aai()
+        partials = []
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream(on_partial=lambda text: partials.append(text))
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimePartialTranscript("Hel"))
+        rt.on_data(fake_aai.RealtimePartialTranscript("Hello wor"))
+        rt.on_data(fake_aai.RealtimePartialTranscript("Hello world"))
+
+        # Each partial replaces the previous, so callback gets growing text.
+        assert len(partials) == 3
+        assert partials[-1] == "Hello world"
+
+        result = t.stop_stream()
+        # Only the last partial is included (no finals sent).
+        assert result == "Hello world"
+
+    def test_final_clears_partial(self):
+        """A FinalTranscript clears the current partial."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream()
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimePartialTranscript("Hello world"))
+        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello world."))
+
+        result = t.stop_stream()
+        # Should NOT duplicate: "Hello world." only once.
+        assert result == "Hello world."
+
+    def test_abort_stream_discards_text(self):
+        """abort_stream closes the connection and discards all text."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream()
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimeFinalTranscript("Some text"))
+        t.abort_stream()
+
+        assert rt.closed is True
+        # After abort, stop_stream should return empty.
+        # (In practice, abort replaces stop_stream — but the state is cleared.)
+        assert t._stream_finals == []
+        assert t._stream_current_partial == ""
+
+    def test_on_partial_callback_receives_combined_text(self):
+        """on_partial callback receives finals + current partial combined."""
+        fake_aai = _make_fake_aai()
+        received = []
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream(on_partial=lambda text: received.append(text))
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimeFinalTranscript("First sentence."))
+        rt.on_data(fake_aai.RealtimePartialTranscript("Second"))
+
+        assert len(received) == 2
+        assert received[0] == "First sentence."
+        assert received[1] == "First sentence. Second"
+        t.abort_stream()
+
+    def test_stop_stream_closes_connection(self):
+        """stop_stream closes the WebSocket connection."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream()
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        t.stop_stream()
+        assert rt.closed is True
+
+    def test_push_chunk_without_start_is_noop(self):
+        """push_audio_chunk before start_stream is a no-op."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        # Should not raise.
+        t.push_audio_chunk(b"\x00\x00" * 160)
+
+    def test_on_error_stores_error(self):
+        """on_error callback stores the error for later reporting."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream()
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_error(RuntimeError("WebSocket disconnected"))
+
+        # If no text was received, stop_stream should raise with the error.
+        with pytest.raises(TranscriptionError, match="WebSocket disconnected"):
             t.stop_stream()
 
-    def test_abort_stream_not_implemented(self):
+    def test_on_error_with_text_returns_text(self):
+        """If text was received before an error, stop_stream returns it."""
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
-        with pytest.raises(NotImplementedError):
-            t.abort_stream()
+        t.start_stream()
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello."))
+        rt.on_error(RuntimeError("late error"))
+
+        # Text was collected before the error → return it.
+        result = t.stop_stream()
+        assert result == "Hello."
+
+    def test_empty_final_transcript_ignored(self):
+        """Empty FinalTranscript text is not appended to finals."""
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream()
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_data(fake_aai.RealtimeFinalTranscript(""))
+        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello."))
+
+        result = t.stop_stream()
+        assert result == "Hello."
+
+    def test_connect_failure_raises_transcription_error(self):
+        """Connection failure raises TranscriptionError."""
+        fake_aai = _make_fake_aai()
+
+        class FailingRT:
+            def __init__(self, **kwargs):
+                pass
+
+            def connect(self):
+                raise ConnectionError("WebSocket refused")
+
+        fake_aai.RealtimeTranscriber = FailingRT
+
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        with pytest.raises(TranscriptionError, match="failed to connect"):
+            t.start_stream()
 
 
 # ---------------------------------------------------------------------------
