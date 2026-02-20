@@ -100,6 +100,10 @@ uv run python scripts/download_model.py --list
 <summary>Without uv (inside an activated venv)</summary>
 
 ```powershell
+# Create and activate a venv
+...\tts_app> python -m venv .venv
+...\tts_app> .\.venv\Scripts\Activate.ps1 
+# Download the model (small in this case)
 python scripts/download_model.py --model small
 ```
 
@@ -109,7 +113,39 @@ python scripts/download_model.py --model small
 
 If git traffic is allowed through your proxy:
 
+> **Important:** You must have [Git LFS](https://git-lfs.com/) installed **before** cloning.
+> Without it, `git clone` downloads only tiny LFS pointer files (~130 bytes) instead of the actual
+> model weights. The app will fail with `Unsupported model binary version` errors.
+>
+> **`git lfs install` is NOT a built-in Git command** — you must install the
+> `git-lfs` package first via your system package manager:
+>
+> **Ubuntu / Debian:**
+> ```bash
+> sudo apt install git-lfs
+> git lfs install      # one-time per-user hook setup
+> ```
+>
+> **Windows (winget):**
+> ```powershell
+> winget install GitHub.GitLFS
+> git lfs install      # one-time per-user hook setup
+> ```
+>
+> **Windows (manual):** Download from https://git-lfs.com/ and run the installer,
+> then run `git lfs install` in a terminal.
+>
+> **macOS (Homebrew):**
+> ```bash
+> brew install git-lfs
+> git lfs install
+> ```
+>
+> If you already cloned without git-lfs, run `git lfs pull` inside the cloned folder to fetch
+> the actual model files.
+
 ```bash
+git lfs install           # one-time setup (skip if already done)
 git clone https://huggingface.co/Systran/faster-whisper-small
 ```
 
@@ -123,6 +159,7 @@ uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
 <summary>All model repositories</summary>
 
 ```bash
+git lfs install           # one-time setup (skip if already done)
 git clone https://huggingface.co/Systran/faster-whisper-tiny
 git clone https://huggingface.co/Systran/faster-whisper-base
 git clone https://huggingface.co/Systran/faster-whisper-small
@@ -152,6 +189,9 @@ Place the files in a folder (e.g. `C:\Downloads\faster-whisper-small\`) and run 
 
 ```powershell
 uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
+# or if uv doesn't work
+.\.venv\Scripts\Activate.ps1 
+python.exe .\scripts\import_model.py C:\Downloads\faster-whisper-small
 ```
 
 ### Transfer to target machine
