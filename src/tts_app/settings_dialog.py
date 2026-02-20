@@ -11,6 +11,7 @@ from .config import (
     DEFAULT_MODE,
     DEFAULT_PASTE_MODE,
     GROQ_MODELS,
+    STREAMING_ENGINES,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
     VALID_MODES,
@@ -377,12 +378,42 @@ class SettingsDialog(QtWidgets.QDialog):
                 "background-color: #e3f2fd; color: #0d47a1;"
             )
 
+    def _update_mode_availability(self) -> None:
+        """Enable/disable streaming option based on the selected engine."""
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        supports_streaming = engine in STREAMING_ENGINES
+        streaming_idx = self.mode_combo.findData("streaming")
+
+        if streaming_idx < 0:
+            return
+
+        # Disable the streaming item in the combo model (greys it out).
+        model = self.mode_combo.model()
+        item = model.item(streaming_idx)
+        if item is not None:
+            if supports_streaming:
+                item.setEnabled(True)
+                item.setToolTip("")
+            else:
+                item.setEnabled(False)
+                item.setToolTip(
+                    f"Streaming is not supported by the {engine} provider. "
+                    "Use local or AssemblyAI for streaming."
+                )
+
+        # If streaming is selected but not supported, switch to batch.
+        if not supports_streaming and self.mode_combo.currentData() == "streaming":
+            batch_idx = self.mode_combo.findData("batch")
+            if batch_idx >= 0:
+                self.mode_combo.setCurrentIndex(batch_idx)
+
     # ------------------------------------------------------------------
     # Slots
     # ------------------------------------------------------------------
 
     def _on_engine_changed(self, _index: int = 0) -> None:
         self._update_engine_indicator()
+        self._update_mode_availability()
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
@@ -486,6 +517,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.mode_combo, settings.mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(self.groq_model_combo, settings.groq_model)
+        self._update_mode_availability()
 
         if settings.has_openai_key:
             self.openai_key_edit.setPlaceholderText(
