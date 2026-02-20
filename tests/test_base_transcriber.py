@@ -7,7 +7,6 @@ import pytest
 from tts_app.transcriber.base import ITranscriber, TranscriptionError
 from tts_app.transcriber.remote_placeholders import (
     AzureTranscriber,
-    DeepgramTranscriber,
     OpenAITranscriber,
 )
 
@@ -55,7 +54,4 @@ def test_azure_placeholder_raises():
         t.transcribe_batch(b"")
 
 
-def test_deepgram_placeholder_raises():
-    t = DeepgramTranscriber()
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        t.transcribe_batch(b"")
+

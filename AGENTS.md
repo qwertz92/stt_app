@@ -25,7 +25,7 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 - Win32 RegisterHotKey + SendInput (Windows 11 only; Linux/WSL for dev tooling)
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
-- Remote providers: AssemblyAI (SDK), Groq (SDK)
+- Remote providers: AssemblyAI (SDK), Groq (SDK), Deepgram (REST API)
 - keyring for secret storage
 
 ## Architecture
@@ -40,8 +40,7 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 | \`audio_capture.py\` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | \`transcriber/local_faster_whisper.py\` | Batch + streaming via faster-whisper; \`find_cached_models\`; \`preload_model\` |
 | `transcriber/assemblyai_provider.py` | Batch + streaming transcription via AssemblyAI SDK; `test_connection` |
-| \`transcriber/groq_provider.py\` | Batch transcription via Groq SDK (whisper-large-v3, whisper-large-v3-turbo); \`test_connection\` |
-| \`transcriber/factory.py\` | Creates transcriber from settings; routes engine to provider |
+| \`transcriber/groq_provider.py\` | Batch transcription via Groq SDK (whisper-large-v3, whisper-large-v3-turbo); \`test_connection\` || `transcriber/deepgram_provider.py` | Batch transcription via Deepgram REST API (nova-3); `test_connection`; no SDK needed || \`transcriber/factory.py\` | Creates transcriber from settings; routes engine to provider |
 | \`text_inserter.py\` | Clipboard-safe paste: save > set > paste > restore |
 | \`overlay_ui.py\` | Always-on-top frameless overlay with state colors, copy button |
 | \`hotkey.py\` | Win32 RegisterHotKey + Qt native event filter |
@@ -50,8 +49,7 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 | \`settings_dialog.py\` | PySide6 settings UI with Local/Remote tabs |
 | \`secret_store.py\` | keyring wrapper for API keys |
 | \`scripts/download_model.py\` | Automated model download for offline/corporate use |
-| \`scripts/import_model.py\` | Import manually downloaded models; validates for Git LFS pointers |
-
+| \`scripts/import_model.py\` | Import manually downloaded models; validates for Git LFS pointers || `scripts/sync_to_windows.sh` | Bash/rsync script to sync repo from WSL to Windows-native directory |
 ### Key design decisions
 
 - **Temp files for audio**: \`transcribe_batch\` writes WAV to temp file because \`WhisperModel.transcribe()\` is most reliable with file paths.
@@ -92,12 +90,12 @@ All defaults in \`src/tts_app/config.py\`. Key values:
 
 Run: \`uv run python -m pytest\` or \`python -m pytest\`
 
-Current: ~240 tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
+Current: ~284 tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
 
 ## Known limitations
 
 - Streaming: local + AssemblyAI only, append-oriented (no word deletions), best-effort focus-change abort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
-- Groq: batch mode only (streaming not supported by Groq API).
-- OpenAI/Azure/Deepgram: placeholder stubs only.
+- Groq/Deepgram: batch mode only (streaming not supported).
+- OpenAI/Azure: placeholder stubs only.

@@ -18,7 +18,3 @@ class OpenAITranscriber(_Phase2Transcriber):
 
 class AzureTranscriber(_Phase2Transcriber):
     provider_name = "Azure"
-
-
-class DeepgramTranscriber(_Phase2Transcriber):
-    provider_name = "Deepgram"

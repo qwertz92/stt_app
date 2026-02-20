@@ -473,6 +473,22 @@ class SettingsDialog(QtWidgets.QDialog):
                 t = GroqTranscriber(api_key=api_key)
                 ok, msg = t.test_connection()
 
+            elif engine == "deepgram":
+                api_key = self.deepgram_key_edit.text().strip()
+                if not api_key:
+                    api_key = self._secret_store.get_api_key("deepgram") or ""
+                if not api_key:
+                    self.test_conn_result.setText(
+                        "No API key entered. Enter a key above first."
+                    )
+                    self.test_conn_result.setStyleSheet("color: #b71c1c;")
+                    return
+
+                from .transcriber.deepgram_provider import DeepgramTranscriber
+
+                t = DeepgramTranscriber(api_key=api_key)
+                ok, msg = t.test_connection()
+
             else:
                 self.test_conn_result.setText(
                     f"Connection test not yet implemented for {engine}."
