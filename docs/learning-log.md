@@ -120,3 +120,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Git LFS documentation improved:** Installation instructions for Ubuntu and Windows, manual download alternatives.
 - **Benchmark download confirmation:** User is now asked before downloading uncached models.
 - **Settings dialog overhaul:** Tabs for Local/Remote, save confirmation status bar, provider activation/testing dialog.
+
+## 2026-02-21
+
+- **AssemblyAI streaming implemented:** Real-time transcription via `aai.RealtimeTranscriber` (WebSocket).
+  - `start_stream` connects to AssemblyAI's real-time API and registers data/error callbacks.
+  - `push_audio_chunk` forwards raw PCM16 audio to the WebSocket.
+  - `stop_stream` closes connection and returns accumulated final + partial text.
+  - `abort_stream` closes connection immediately and discards all text.
+  - Accumulated text: all `FinalTranscript` segments + current `PartialTranscript`, combined for on_partial callback.
+- **`STREAMING_ENGINES` constant added to `config.py`:** `("local", "assemblyai")` — engines that support streaming mode.
+- Controller streaming guard updated: was `engine != DEFAULT_ENGINE` → now `engine not in STREAMING_ENGINES`.
+- **Code review finding:** Groq integration pattern (config → settings → factory → provider → UI) is the correct abstraction level. Each provider touches ~5 predictable locations — a registry/base pattern would add complexity without reducing touchpoints. Not recommended to refactor.
+- 15 new streaming tests in `test_assemblyai_provider.py` (replaced 4 stub tests).
+- Total tests: ~240 (Linux: all pass except 3 Windows-only ctypes/windll tests).

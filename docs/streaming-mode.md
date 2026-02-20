@@ -5,19 +5,22 @@ This document explains how streaming mode is implemented in this project, how it
 ## 1) Current implementation status
 
 - `Batch` mode: stable default.
-- `Streaming` mode: implemented for local provider (`faster-whisper`) as experimental.
-- Remote provider streaming remains placeholder (not implemented yet).
+- `Streaming` mode: implemented for local provider (`faster-whisper`) and AssemblyAI (`RealtimeTranscriber`).
+- Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
+- Groq does not offer a streaming/real-time transcription API.
 
 ## 2) Batch vs Streaming: behavioral difference
 
 ### Batch mode
 
 Flow:
+
 1. Record full utterance until stop hotkey (or VAD auto-stop).
 2. Run one transcription pass on the final WAV.
 3. Insert final text once.
 
 Characteristics:
+
 - lower CPU load during recording,
 - usually highest consistency for a final sentence,
 - higher perceived latency (you get text at the end).
@@ -25,6 +28,7 @@ Characteristics:
 ### Streaming mode (current local implementation)
 
 Flow:
+
 1. Start stream session in transcriber.
 2. Audio callback pushes PCM chunks continuously.
 3. Transcriber periodically re-transcribes only a trailing audio window and emits partial text.
@@ -33,11 +37,13 @@ Flow:
 6. If target focus changes during streaming, session auto-aborts and plays a short alert beep.
 
 Implementation detail:
+
 - focus guard uses a focus signature `(foreground_window, focused_child_control, caret_window)` captured at stream start.
 - a 25ms poll timer checks for focus/cursor drift even between audio chunk callbacks.
 - abort beep is triggered immediately when abort is requested; teardown continues right after.
 
 Characteristics:
+
 - live partial feedback and live insertion during dictation,
 - higher CPU usage than batch (periodic re-transcription),
 - partial text can be revised as more context arrives.
@@ -71,22 +77,35 @@ Characteristics:
   - periodic partial re-transcription,
   - final transcription on stop.
 
+### AssemblyAI transcriber
+
+- `AssemblyAITranscriber` implements streaming via `aai.RealtimeTranscriber` (WebSocket).
+- `start_stream()` creates a WebSocket connection with `on_data` and `on_error` callbacks.
+- `push_audio_chunk()` forwards raw PCM16 to the WebSocket via `rt.stream()`.
+- `on_data` callback receives `RealtimeFinalTranscript` (finalized sentence) and `RealtimePartialTranscript` (in-progress).
+- Accumulated text = all finalized segments + current partial, combined for the `on_partial` callback.
+- `stop_stream()` closes the WebSocket and returns the full accumulated text.
+- `abort_stream()` closes the WebSocket and discards all text.
+
 ## 4) Why this design (and alternatives)
 
 Implemented design is pragmatic for MVP:
+
 - minimal external dependencies,
 - reuses existing local `faster-whisper` pipeline,
 - keeps module boundaries testable.
 
 Alternatives (future):
+
 1. Sliding-window streaming decoder with token-level stitching.
-2. Provider-native streaming APIs (OpenAI/Azure/Deepgram).
+2. Provider-native streaming APIs (Deepgram, Azure).
 3. VAD-segmented incremental commit strategy.
 4. Hybrid: low-latency partial model + high-accuracy final model.
 
 ## 5) Quality impact
 
 Streaming does not necessarily mean lower final quality, but in this implementation:
+
 - partial text may be less stable (revisions happen),
 - if revisions differ from already live-inserted text, only append-only reconciliation is possible (already inserted words are not deleted),
 - finalize tail uses last partial as fallback when final pass diverges from already committed live text,
@@ -98,19 +117,24 @@ Streaming does not necessarily mean lower final quality, but in this implementat
 Keep `Batch` as default unless live feedback is required.
 
 Recommended:
+
 - `Batch` for reliability and lower CPU.
 - `Streaming` for interactive dictation UX where partial text visibility matters.
 
 ## 7) Models in streaming mode
 
-Streaming mode uses the same local model choices as batch mode:
+Local streaming uses the same model choices as batch mode:
+
 - `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
 
-Larger models in streaming mode increase partial update cost.
+Larger models in local streaming increase partial update cost.
+
+AssemblyAI streaming uses AssemblyAI's real-time speech recognition engine (no model selection needed).
 
 ## 8) Tuning points
 
 Streaming behavior can be tuned via config:
+
 - `STREAMING_PARTIAL_INTERVAL_S`
 - `STREAMING_PARTIAL_MIN_AUDIO_S`
 - `STREAMING_PARTIAL_WINDOW_S`

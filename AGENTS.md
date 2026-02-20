@@ -39,7 +39,7 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 | \`controller.py\` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter; model preload with fallback |
 | \`audio_capture.py\` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | \`transcriber/local_faster_whisper.py\` | Batch + streaming via faster-whisper; \`find_cached_models\`; \`preload_model\` |
-| \`transcriber/assemblyai_provider.py\` | Batch transcription via AssemblyAI SDK; \`test_connection\` |
+| `transcriber/assemblyai_provider.py` | Batch + streaming transcription via AssemblyAI SDK; `test_connection` |
 | \`transcriber/groq_provider.py\` | Batch transcription via Groq SDK (whisper-large-v3, whisper-large-v3-turbo); \`test_connection\` |
 | \`transcriber/factory.py\` | Creates transcriber from settings; routes engine to provider |
 | \`text_inserter.py\` | Clipboard-safe paste: save > set > paste > restore |
@@ -63,7 +63,7 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 1. Global hotkey toggles recording.
 2. Overlay: \`Idle > Listening > Processing > Done/Error\`.
 3. Batch: recorded WAV transcribed on stop.
-4. Streaming (local, experimental): live chunks with partial text and incremental insertion.
+4. Streaming (local + AssemblyAI): live chunks with partial text and incremental insertion.
 5. Text inserted at caret via clipboard-safe paste; clipboard restored.
 
 ## Text insertion
@@ -79,8 +79,7 @@ All defaults in \`src/tts_app/config.py\`. Key values:
 
 - \`DEFAULT_HOTKEY = "Ctrl+Alt+Space"\`, \`FALLBACK_HOTKEY = "Ctrl+Win+LShift"\`
 - \`DEFAULT_MODEL_SIZE = "small"\`, \`DEFAULT_ENGINE = "local"\`
-- \`VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")\`
-- \`VALID_MODEL_SIZES\`: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3.5
+- \`VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")\`- `STREAMING_ENGINES = ("local", "assemblyai")` — engines that support streaming mode- \`VALID_MODEL_SIZES\`: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3.5
 - \`GROQ_MODELS\`: whisper-large-v3, whisper-large-v3-turbo
 
 ## Settings and secrets
@@ -93,12 +92,12 @@ All defaults in \`src/tts_app/config.py\`. Key values:
 
 Run: \`uv run python -m pytest\` or \`python -m pytest\`
 
-Current: ~210+ tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
+Current: ~240 tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
 
 ## Known limitations
 
-- Streaming: local provider only, append-oriented (no word deletions), best-effort focus-change abort.
+- Streaming: local + AssemblyAI only, append-oriented (no word deletions), best-effort focus-change abort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
-- AssemblyAI/Groq: batch mode only (streaming not yet implemented).
+- Groq: batch mode only (streaming not supported by Groq API).
 - OpenAI/Azure/Deepgram: placeholder stubs only.
