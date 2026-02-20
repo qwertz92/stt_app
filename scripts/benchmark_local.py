@@ -126,6 +126,7 @@ class BenchmarkCase:
     model: str
     device: str
     compute_type: str
+    download_seconds: float
     load_seconds: float
     runs: list[BenchmarkRun]
     error: str | None = None
@@ -155,6 +156,7 @@ def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
         model=str(data.get("model", "")),
         device=str(data.get("device", "")),
         compute_type=str(data.get("compute_type", "")),
+        download_seconds=_safe_float(data.get("download_seconds"), default=0.0),
         load_seconds=_safe_float(data.get("load_seconds"), default=math.nan),
         runs=runs,
         error=data.get("error"),
@@ -279,6 +281,98 @@ def _print_model_table(show_sizes: bool) -> None:
         print(f"{model:<24} {repo:<40} {size_human:<18}")
 
 
+def _ensure_models_available(
+    model_names: list[str],
+) -> dict[str, float]:
+    """Pre-download all models not yet in the HuggingFace cache.
+
+    Returns a dict mapping model_name → download_seconds (0.0 if cached).
+    Download progress bars are shown by huggingface_hub automatically.
+    If uncached models are found, the user is prompted before downloading.
+    """
+    from huggingface_hub import snapshot_download
+
+    download_times: dict[str, float] = {}
+
+    # Phase 1: classify models as cached or uncached.
+    cached: list[str] = []
+    uncached: list[str] = []
+    for model_name in model_names:
+        repo_id = _MODELS.get(model_name)
+        if not repo_id:
+            download_times[model_name] = 0.0
+            continue
+        try:
+            snapshot_download(repo_id, local_files_only=True)
+            cached.append(model_name)
+            download_times[model_name] = 0.0
+        except Exception:
+            uncached.append(model_name)
+
+    if cached:
+        print(f"  Cached models: {', '.join(cached)}")
+    if not uncached:
+        print("  All requested models are cached.")
+        return download_times
+
+    # Phase 2: show uncached models with estimated sizes and ask user.
+    print("")
+    print("  The following models need to be downloaded:")
+    print("")
+    _APPROX_SIZES: dict[str, str] = {
+        "tiny": "~75 MB",
+        "base": "~141 MB",
+        "small": "~484 MB",
+        "medium": "~1.4 GB",
+        "large-v3": "~3.1 GB",
+        "large-v3-turbo": "~809 MB",
+        "distil-large-v3.5": "~756 MB",
+    }
+    for model_name in uncached:
+        size_hint = _APPROX_SIZES.get(model_name, "unknown size")
+        print(f"    • {model_name}  ({size_hint})")
+    print("")
+
+    try:
+        answer = input(
+            "  Download these models now? [y]es / [s]kip (benchmark cached only) / [a]bort: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        answer = "a"
+
+    if answer in ("a", "abort"):
+        print("  Aborted by user.")
+        sys.exit(0)
+
+    if answer in ("s", "skip"):
+        print("  Skipping downloads — benchmarking cached models only.")
+        for model_name in uncached:
+            download_times.pop(model_name, None)
+        return download_times
+
+    # Phase 3: download uncached models.
+    for i, model_name in enumerate(uncached, 1):
+        repo_id = _MODELS.get(model_name)
+        if not repo_id:
+            download_times[model_name] = 0.0
+            continue
+
+        label = f"  [{i}/{len(uncached)}] {model_name}"
+        print(f"{label} — downloading ({repo_id})...")
+        dl_start = time.perf_counter()
+        try:
+            snapshot_download(repo_id)
+            elapsed = time.perf_counter() - dl_start
+            print(f"  Downloaded in {_format_seconds(elapsed)}")
+            download_times[model_name] = elapsed
+        except Exception as exc:
+            elapsed = time.perf_counter() - dl_start
+            print(f"  Download failed ({_format_seconds(elapsed)}): {exc}")
+            download_times[model_name] = elapsed
+
+    return download_times
+
+
 def _run_case(
     *,
     audio_path: Path,
@@ -291,8 +385,13 @@ def _run_case(
     vad_filter: bool,
     warmup: bool,
     threads: int,
-    verbose: bool = False,
+    download_seconds: float = 0.0,
 ) -> BenchmarkCase:
+    # Step 1: Load model (download already handled by _ensure_models_available)
+    total_steps = runs + (1 if warmup else 0)
+    step = 0
+
+    print(f"  Loading model...", flush=True)
     model_start = time.perf_counter()
     model = WhisperModel(
         model_name,
@@ -301,25 +400,34 @@ def _run_case(
         cpu_threads=threads if threads > 0 else 0,
     )
     load_seconds = time.perf_counter() - model_start
+    print(f"  Model loaded ({_format_seconds(load_seconds)})")
 
+    # Optional warmup
     if warmup:
-        if verbose:
-            print("  warmup: running one dry transcription...")
+        step += 1
+        print(
+            f"  [{step}/{total_steps}] Warmup transcription...",
+            flush=True,
+        )
         warm_segments, _ = model.transcribe(
             str(audio_path),
             language=language,
             beam_size=beam_size,
             vad_filter=vad_filter,
         )
-        # Force execution of generator.
         list(warm_segments)
+        print(f"  [{step}/{total_steps}] Warmup done")
 
     duration_hint = _audio_duration_seconds(audio_path) or math.nan
 
+    # Step 2: Measured transcription runs
     all_runs: list[BenchmarkRun] = []
     for run_index in range(1, runs + 1):
-        if verbose:
-            print(f"  run {run_index}/{runs}...")
+        step += 1
+        print(
+            f"  [{step}/{total_steps}] Transcribing run {run_index}/{runs}...",
+            flush=True,
+        )
         started = time.perf_counter()
         segments, info = model.transcribe(
             str(audio_path),
@@ -343,6 +451,10 @@ def _run_case(
             default=duration_hint,
         )
         rtf = elapsed / duration_seconds if duration_seconds > 0 else math.nan
+        print(
+            f"  [{step}/{total_steps}] Run {run_index} done "
+            f"({_format_seconds(elapsed)}, RTF={_format_number(rtf)})"
+        )
 
         all_runs.append(
             BenchmarkRun(
@@ -363,6 +475,7 @@ def _run_case(
         model=model_name,
         device=device,
         compute_type=compute_type,
+        download_seconds=download_seconds,
         load_seconds=load_seconds,
         runs=all_runs,
     )
@@ -408,6 +521,7 @@ def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
             model=str(params.get("model_name", "")),
             device=str(params.get("device", "")),
             compute_type=str(params.get("compute_type", "")),
+            download_seconds=_safe_float(params.get("download_seconds"), default=0.0),
             load_seconds=math.nan,
             runs=[],
             error="Invalid worker result payload.",
@@ -422,6 +536,7 @@ def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
         model=str(params.get("model_name", "")),
         device=str(params.get("device", "")),
         compute_type=str(params.get("compute_type", "")),
+        download_seconds=_safe_float(params.get("download_seconds"), default=0.0),
         load_seconds=math.nan,
         runs=[],
         error=error_text,
@@ -433,7 +548,7 @@ def _print_results(cases: list[BenchmarkCase]) -> None:
     print("Benchmark summary:")
     print("")
     header = (
-        f"{'Model':<14} {'Device':<8} {'Compute':<10} {'Load':<9} "
+        f"{'Model':<14} {'Device':<8} {'Compute':<10} {'Download':<10} {'Load':<9} "
         f"{'Avg':<9} {'StdDev':<9} {'RTF':<8} {'Lang':<8} {'Status':<10}"
     )
     print(header)
@@ -444,8 +559,10 @@ def _print_results(cases: list[BenchmarkCase]) -> None:
         if case.runs:
             language = case.runs[0].detected_language or "-"
         status = "ok" if case.error is None else "error"
+        dl_str = _format_seconds(case.download_seconds) if case.download_seconds > 0 else "-"
         print(
             f"{case.model:<14} {case.device:<8} {case.compute_type:<10} "
+            f"{dl_str:<10} "
             f"{_format_seconds(case.load_seconds):<9} "
             f"{_format_seconds(case.avg_seconds):<9} "
             f"{_format_seconds(case.stdev_seconds):<9} "
@@ -457,6 +574,8 @@ def _print_results(cases: list[BenchmarkCase]) -> None:
 
     print("")
     print("RTF reference: < 1.0 means faster than real-time.")
+    print("Download: time spent downloading (- = already cached, not counted).")
+    print("Load: time to initialize the model in memory (pure load, no download).")
 
 
 def _successful_cases(cases: list[BenchmarkCase]) -> list[BenchmarkCase]:
@@ -510,6 +629,7 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
                 "transcript_words",
                 "detected_language",
                 "language_probability",
+                "download_seconds",
                 "load_seconds",
                 "avg_seconds",
                 "stdev_seconds",
@@ -537,6 +657,7 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
                         "transcript_words": run.transcript_words,
                         "detected_language": run.detected_language,
                         "language_probability": run.language_probability,
+                        "download_seconds": case.download_seconds,
                         "load_seconds": case.load_seconds,
                         "avg_seconds": case.avg_seconds,
                         "stdev_seconds": case.stdev_seconds,
@@ -564,6 +685,7 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
                     "language_probability": (
                         case.runs[0].language_probability if case.runs else ""
                     ),
+                    "download_seconds": case.download_seconds,
                     "load_seconds": case.load_seconds,
                     "avg_seconds": case.avg_seconds,
                     "stdev_seconds": case.stdev_seconds,
@@ -616,19 +738,31 @@ def main() -> int:
     print(f"warmup: {args.warmup}")
     print(f"threads: {args.threads if args.threads > 0 else 'default'}")
     print(f"isolated_case: {args.isolated_case}")
-    print("hint: first runs can be slow due to model download/load, not audio length.")
+
+    # Pre-download phase: ensure all models are available before timing.
+    print("")
+    print("Ensuring models are available...")
+    download_times = _ensure_models_available(model_names)
+    # User may have chosen to skip uncached models.
+    model_names = [m for m in model_names if m in download_times]
+    if not model_names:
+        print("No models available for benchmarking.")
+        return 0
+    print("")
 
     cases: list[BenchmarkCase] = []
     failures = 0
     interrupted = False
+    total_cases = len(model_names) * len(compute_types)
+    case_index = 0
 
     try:
         for model_name in model_names:
             for compute_type in compute_types:
-                print("")
+                case_index += 1
                 print(
-                    f"Running case: model={model_name}, device={args.device}, "
-                    f"compute_type={compute_type}"
+                    f"[Case {case_index}/{total_cases}] model={model_name}, "
+                    f"device={args.device}, compute_type={compute_type}"
                 )
                 params = {
                     "audio_path": audio_path,
@@ -641,7 +775,7 @@ def main() -> int:
                     "vad_filter": args.vad_filter,
                     "warmup": args.warmup,
                     "threads": args.threads,
-                    "verbose": not args.isolated_case,
+                    "download_seconds": download_times.get(model_name, 0.0),
                 }
                 if args.isolated_case:
                     case = _run_case_isolated(params)
@@ -653,6 +787,7 @@ def main() -> int:
                             model=model_name,
                             device=args.device,
                             compute_type=compute_type,
+                            download_seconds=download_times.get(model_name, 0.0),
                             load_seconds=math.nan,
                             runs=[],
                             error=str(exc),
