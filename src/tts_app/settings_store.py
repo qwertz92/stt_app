@@ -8,6 +8,7 @@ from typing import Any
 from .app_paths import settings_path
 from .config import (
     DEFAULT_ENGINE,
+    DEFAULT_GROQ_MODEL,
     DEFAULT_HOTKEY,
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
@@ -18,6 +19,7 @@ from .config import (
     DEFAULT_PASTE_MODE,
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_VAD_ENABLED,
+    GROQ_MODELS,
     LEGACY_DEFAULT_HOTKEY,
     PREVIOUS_DEFAULT_HOTKEY,
     SCHEMA_VERSION,
@@ -48,6 +50,8 @@ DEFAULTS = {
     "has_azure_key": False,
     "has_deepgram_key": False,
     "has_assemblyai_key": False,
+    "has_groq_key": False,
+    "groq_model": DEFAULT_GROQ_MODEL,
 }
 
 
@@ -69,6 +73,8 @@ class AppSettings:
     has_azure_key: bool = False
     has_deepgram_key: bool = False
     has_assemblyai_key: bool = False
+    has_groq_key: bool = False
+    groq_model: str = DEFAULT_GROQ_MODEL
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
@@ -98,6 +104,10 @@ class AppSettings:
         hotkey = str(merged.get("hotkey", DEFAULT_HOTKEY))
         hotkey = _normalize_hotkey(hotkey)
 
+        groq_model = str(merged.get("groq_model", DEFAULT_GROQ_MODEL))
+        if groq_model not in GROQ_MODELS:
+            groq_model = DEFAULT_GROQ_MODEL
+
         return cls(
             schema_version=CURRENT_SCHEMA_VERSION,
             hotkey=hotkey,
@@ -120,6 +130,8 @@ class AppSettings:
             has_azure_key=bool(merged.get("has_azure_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),
             has_assemblyai_key=bool(merged.get("has_assemblyai_key", False)),
+            has_groq_key=bool(merged.get("has_groq_key", False)),
+            groq_model=groq_model,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -167,6 +179,7 @@ class SettingsStore:
             "azure_api_key",
             "deepgram_api_key",
             "assemblyai_api_key",
+            "groq_api_key",
         ):
             payload.pop(secret_key, None)
 
@@ -187,6 +200,7 @@ class SettingsStore:
         migrated.pop("azure_api_key", None)
         migrated.pop("deepgram_api_key", None)
         migrated.pop("assemblyai_api_key", None)
+        migrated.pop("groq_api_key", None)
 
         for key, value in DEFAULTS.items():
             migrated.setdefault(key, value)

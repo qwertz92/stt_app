@@ -4,6 +4,7 @@ from ..config import DEFAULT_ENGINE
 from ..settings_store import AppSettings
 from .base import ITranscriber
 from .assemblyai_provider import AssemblyAITranscriber
+from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
 from .remote_placeholders import (
     AzureTranscriber,
@@ -31,6 +32,15 @@ def create_transcriber(
         return AssemblyAITranscriber(
             api_key=api_key,
             language_mode=settings.language_mode,
+        )
+    if settings.engine == "groq":
+        api_key = ""
+        if secret_store is not None:
+            api_key = secret_store.get_api_key("groq") or ""
+        return GroqTranscriber(
+            api_key=api_key,
+            language_mode=settings.language_mode,
+            model=settings.groq_model,
         )
     if settings.engine == "openai":
         return OpenAITranscriber()

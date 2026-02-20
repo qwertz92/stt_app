@@ -6,7 +6,7 @@ APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "TTS Dictation App"
 APP_LOGGER_NAME = "tts_app"
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -86,9 +86,12 @@ MODEL_REPO_MAP: dict[str, str] = {
 }
 
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
-VALID_ENGINES = ("local", "assemblyai", "openai", "azure", "deepgram")
+VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
+
+GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
+DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1
