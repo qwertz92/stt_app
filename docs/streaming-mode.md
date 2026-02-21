@@ -5,7 +5,7 @@ This document explains how streaming mode is implemented in this project, how it
 ## 1) Current implementation status
 
 - `Batch` mode: stable default.
-- `Streaming` mode: implemented for local provider (`faster-whisper`), AssemblyAI (`RealtimeTranscriber`), OpenAI (chunked partial re-transcription), and Deepgram (WebSocket API).
+- `Streaming` mode: implemented for local provider (`faster-whisper`), AssemblyAI (`RealtimeTranscriber`), and Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - Groq does not offer a streaming/real-time transcription API.
 
@@ -87,33 +87,12 @@ Characteristics:
 - `stop_stream()` closes the WebSocket and returns the full accumulated text.
 - `abort_stream()` closes the WebSocket and discards all text.
 
-### OpenAI transcriber
-
-- `OpenAITranscriber` supports batch transcription via `/v1/audio/transcriptions`.
-- Streaming mode uses the app's chunked streaming contract: incoming PCM16 chunks are buffered, converted to a short WAV window, and periodically re-transcribed for partial updates.
-- This is network-intensive compared to provider-native real-time APIs, but integrates cleanly with the existing controller streaming pipeline.
-
 ### Deepgram transcriber
 
 - `DeepgramTranscriber` supports streaming via Deepgram's WebSocket `listen` endpoint.
 - Audio chunks are sent as binary `linear16`; incoming partial/final messages are merged into one accumulated transcript for callback delivery.
 
-## 4) Why this design (and alternatives)
-
-Implemented design is pragmatic for MVP:
-
-- minimal external dependencies,
-- reuses existing local `faster-whisper` pipeline,
-- keeps module boundaries testable.
-
-Alternatives (future):
-
-1. Sliding-window streaming decoder with token-level stitching.
-2. Provider-native streaming APIs for all remaining engines (e.g. Azure).
-3. VAD-segmented incremental commit strategy.
-4. Hybrid: low-latency partial model + high-accuracy final model.
-
-## 5) Quality impact
+## 4) Quality impact
 
 Streaming does not necessarily mean lower final quality, but in this implementation:
 
@@ -123,7 +102,7 @@ Streaming does not necessarily mean lower final quality, but in this implementat
 - CPU contention on slower machines can indirectly affect responsiveness,
 - final text quality is typically close to batch for the same model when enough context is captured.
 
-## 6) Recommended default
+## 5) Recommended default
 
 Keep `Batch` as default unless live feedback is required.
 
@@ -132,7 +111,7 @@ Recommended:
 - `Batch` for reliability and lower CPU.
 - `Streaming` for interactive dictation UX where partial text visibility matters.
 
-## 7) Models in streaming mode
+## 6) Models in streaming mode
 
 Local streaming uses the same model choices as batch mode:
 
@@ -142,7 +121,7 @@ Larger models in local streaming increase partial update cost.
 
 AssemblyAI streaming uses AssemblyAI's real-time speech recognition engine (no model selection needed).
 
-## 8) Tuning points
+## 7) Tuning points
 
 Streaming behavior can be tuned via config:
 

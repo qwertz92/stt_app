@@ -94,7 +94,6 @@ Right-click the **system tray icon** → **Quit**.
 | [Models & Offline Setup](docs/models.md) | All users | Model choices, download, offline/corporate setup |
 | [Advanced Setup](docs/advanced-setup.md) | IT / DevOps | Corporate deployment, wheelhouse, PyInstaller, SSL/proxy, benchmarking |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
-| [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | NVIDIA Parakeet ASR evaluation and integration assessment |
 
 ## Troubleshooting
 
@@ -121,19 +120,9 @@ uv run python -m pytest
 | AssemblyAI cloud transcription (batch) | Stable |
 | AssemblyAI streaming | Experimental |
 | OpenAI cloud transcription (batch) | Stable |
-| OpenAI streaming (chunked partial re-transcription) | Experimental |
 | Groq cloud transcription (batch) | Stable |
 | Deepgram cloud transcription (batch) | Stable |
 | Deepgram streaming | Experimental |
-| Azure provider | Planned (not available in current UI) |
-| NVIDIA Parakeet (NeMo) | [Evaluated](docs/parakeet-evaluation.md) — not implemented |
-
-## Roadmap
-
-- Azure provider implementation
-- Provider-native streaming support parity and stabilization
-- NVIDIA Parakeet as optional local engine (requires GPU)
-- PyInstaller single-EXE distribution
 
 ## License
 

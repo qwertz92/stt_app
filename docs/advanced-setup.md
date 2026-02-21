@@ -266,7 +266,7 @@ A short delay after SendInput prevents race conditions where the target app read
 
 ### Settings storage
 
-- Settings: `%APPDATA%\tts_app\settings.json` (JSON with automatic schema migration)
+- Settings: `%APPDATA%\tts_app\settings.json` (JSON with validation and normalization)
 - Secrets (API keys): Windows Credential Manager via `keyring`
 - Logs: `%APPDATA%\tts_app\logs\dictation.log` (rotating, max 1 MB)
 
@@ -281,7 +281,7 @@ src/tts_app/
   hotkey.py           — Win32 hotkey registration
   text_inserter.py    — clipboard-safe paste
   window_focus.py     — foreground window tracking
-  settings_store.py   — JSON settings + migration
+  settings_store.py   — JSON settings validation and persistence
   settings_dialog.py  — Settings UI
   secret_store.py     — keyring wrapper for API keys
   logger.py           — rotating file logger
@@ -291,7 +291,7 @@ src/tts_app/
     factory.py        — engine selection
     local_faster_whisper.py — local transcription (faster-whisper / CTranslate2)
     assemblyai_provider.py  — AssemblyAI cloud transcription (batch + streaming)
-    openai_provider.py      — OpenAI cloud transcription (batch + chunked streaming)
+    openai_provider.py      — OpenAI cloud transcription (batch)
     groq_provider.py        — Groq cloud transcription (batch)
     deepgram_provider.py    — Deepgram cloud transcription (batch + streaming)
 ```

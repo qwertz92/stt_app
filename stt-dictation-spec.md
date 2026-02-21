@@ -265,7 +265,7 @@ Warum das gut ist:
 | AssemblyAI Batch (SDK) | **Implementiert** — Upload → Transkription → Einfügen |
 | Lokales Streaming (faster-whisper) | **Implementiert** (experimentell) — sliding-window + overlap |
 | AssemblyAI Streaming (WebSocket) | **Implementiert** |
-| OpenAI Batch + Streaming (chunked) | **Implementiert** |
+| OpenAI Batch | **Implementiert** |
 | Deepgram Batch + Streaming (WebSocket) | **Implementiert** |
 | Azure | Geplant |
 
@@ -284,32 +284,25 @@ Warum das gut ist:
 - Auto-Abort bei Fokuswechsel mit Beep-Benachrichtigung
 - Dokumentiert in `docs/streaming-mode.md`
 
-**OpenAI + Deepgram Streaming (implementiert)**
+**Deepgram Streaming (implementiert)**
 
-- OpenAI: Streaming über chunked partial re-transcription via `/v1/audio/transcriptions`
 - Deepgram: Provider-native WebSocket-Streaming (`/v1/listen`) mit partial/final merge
+- OpenAI wird aktuell nur im Batch-Modus verwendet.
 
 ### 5.3 Geplante Erweiterungen
 
-**AssemblyAI Streaming**
-
-- WebSocket-Streaming für Echtzeit-Teilergebnisse
-
 **Weitere Remote-Provider**
 
-- OpenAI (Realtime transcription sessions, WebSocket/WebRTC)
 - Azure Speech (Continuous recognition, intermediate results)
-- Deepgram (WebSocket STT, multilingual code-switching)
 - Google Cloud Speech-to-Text (gRPC Streaming)
 
-**NVIDIA Parakeet / NeMo (evaluiert — nicht empfohlen)**
+**NVIDIA Parakeet / NeMo (optional, experimentell)**
 
 - **Modell:** `nvidia/parakeet-tdt-0.6b-v3` (FastConformer-TDT Architektur)
 - **Nicht CTranslate2-kompatibel** — bräuchte komplett neuen Provider + NeMo/PyTorch Dependencies
 - **Vorteile:** 25 EU-Sprachen, 600M Parameter, exzellente WER (DE 5.04%, EN 1.93%)
 - **Nachteile:** NVIDIA GPU Pflicht, massive Dependencies (~2-4 GB), Linux bevorzugt
-- **Entscheidung:** Nicht implementieren — Kosten/Nutzen-Verhältnis ungünstig für Desktop-App auf Firmen-Laptops
-- **Evaluation:** Siehe `docs/parakeet-evaluation.md`
+- **Implementierungsstatus:** Nicht implementiert (bewusste Entscheidung gegen Integration im aktuellen Projektstand).
 
 **Native Integration (Langfrist)**
 Wenn du wirklich “wie Windows Input” willst:
@@ -341,15 +334,15 @@ Wenn du wirklich “wie Windows Input” willst:
   - optional `start_stream() / push_audio_chunk() / on_partial_result()`
 - **Providers**
   - `LocalFasterWhisperTranscriber` — implementiert (Batch + Streaming)
-  - `AssemblyAITranscriber` — implementiert (Batch)
-  - `OpenAITranscriber` — implementiert (Batch + Streaming)
+  - `AssemblyAITranscriber` — implementiert (Batch + Streaming)
+  - `OpenAITranscriber` — implementiert (Batch)
   - `DeepgramTranscriber` — implementiert (Batch + Streaming)
   - Azure — geplant
 - **TextInserter**
   - Strategy: clipboard-paste (default)
   - Alternative: UIA setvalue (best effort)
 - **SettingsStore**
-  - JSON in %APPDATA% + migration
+  - JSON in %APPDATA% + Validierung/Normalisierung
 - **Logger**
   - structured log + diag export
 

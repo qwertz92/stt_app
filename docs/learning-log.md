@@ -71,7 +71,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 - Added `large-v3-turbo` and `distil-large-v3.5` to VALID_MODEL_SIZES.
 - Removed `distil-large-v3` — superseded by `distil-large-v3.5` (strictly better).
-- Researched `nvidia/parakeet-tdt-0.6b-v3`: NOT compatible with faster-whisper (FastConformer-TDT, NeMo framework). See `docs/parakeet-evaluation.md`.
+- Researched `nvidia/parakeet-tdt-0.6b-v3`: NOT compatible with faster-whisper (FastConformer-TDT, NeMo framework).
 - **Implemented AssemblyAI as first working remote provider:**
   - New module `transcriber/assemblyai_provider.py`: batch transcription via `assemblyai` SDK.
   - Factory routing, settings store, settings dialog updates, 27 new tests.
@@ -142,3 +142,8 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Re-enabled OpenAI in runtime config/UI/settings (`VALID_ENGINES`, OpenAI API key storage, OpenAI model selection).
 - Implemented Deepgram provider-native streaming via WebSocket (`wss://api.deepgram.com/v1/listen`) with partial/final transcript merging.
 - Expanded provider test coverage (`test_openai_provider.py`, deepgram streaming tests, settings-store OpenAI model migration/validation tests).
+- Removed NeMo/Parakeet provider and optional dependencies after final product decision against NVIDIA-only runtime paths.
+- Simplified settings persistence: removed legacy migration code and old compatibility rewrites; settings now use direct validation + normalization.
+- Removed OpenAI chunked pseudo-streaming; OpenAI is now batch-only while streaming remains local, AssemblyAI, and Deepgram.
+- Improved controller transcriber cache invalidation on settings reload and expanded cache key to include provider model selections.
+- Synced project docs to current runtime behavior (no roadmap-only features in user-facing docs).
