@@ -122,7 +122,7 @@ uv run python -m pytest
 | AssemblyAI streaming | Experimental |
 | Groq cloud transcription (batch) | Stable |
 | Deepgram cloud transcription (batch) | Stable |
-| OpenAI / Azure providers | Placeholder stubs (not implemented) |
+| OpenAI / Azure providers | Planned (not available in current UI) |
 | NVIDIA Parakeet (NeMo) | [Evaluated](docs/parakeet-evaluation.md) — not implemented |
 
 ## Roadmap

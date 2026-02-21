@@ -86,7 +86,8 @@ MODEL_REPO_MAP: dict[str, str] = {
 }
 
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
-VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")
+# Only providers with implemented runtime paths should be user-selectable.
+VALID_ENGINES = ("local", "assemblyai", "groq", "deepgram")
 STREAMING_ENGINES = ("local", "assemblyai")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")

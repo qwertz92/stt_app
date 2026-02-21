@@ -293,5 +293,4 @@ src/tts_app/
     assemblyai_provider.py  — AssemblyAI cloud transcription (batch + streaming)
     groq_provider.py        — Groq cloud transcription (batch)
     deepgram_provider.py    — Deepgram cloud transcription (batch)
-    remote_placeholders.py  — stubs for OpenAI/Azure providers
 ```

@@ -80,7 +80,7 @@ All defaults in \`src/tts_app/config.py\`. Key values:
 
 - \`DEFAULT_HOTKEY = "Ctrl+Alt+Space"\`, \`FALLBACK_HOTKEY = "Ctrl+Win+LShift"\`
 - \`DEFAULT_MODEL_SIZE = "small"\`, \`DEFAULT_ENGINE = "local"\`
-- \`VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")\`
+- \`VALID_ENGINES = ("local", "assemblyai", "groq", "deepgram")\`
 - \`STREAMING_ENGINES = ("local", "assemblyai")\` — engines that support streaming mode
 - \`VALID_MODEL_SIZES\`: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3.5
 - \`GROQ_MODELS\`: whisper-large-v3, whisper-large-v3-turbo
@@ -103,4 +103,4 @@ Current: ~284 tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - Groq/Deepgram: batch mode only (streaming not supported).
-- OpenAI/Azure: placeholder stubs only.
+- OpenAI/Azure: not currently available in the UI (planned roadmap items).

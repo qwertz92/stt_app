@@ -5,10 +5,6 @@ from __future__ import annotations
 from tts_app.settings_store import AppSettings
 from tts_app.transcriber.factory import create_transcriber
 from tts_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
-from tts_app.transcriber.remote_placeholders import (
-    AzureTranscriber,
-    OpenAITranscriber,
-)
 from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from tts_app.transcriber.deepgram_provider import DeepgramTranscriber
 
@@ -30,16 +26,16 @@ def test_factory_assemblyai_returns_assemblyai_transcriber():
     assert isinstance(t, AssemblyAITranscriber)
 
 
-def test_factory_openai_returns_placeholder():
+def test_factory_openai_falls_back_to_local():
     settings = AppSettings(engine="openai")
     t = create_transcriber(settings)
-    assert isinstance(t, OpenAITranscriber)
+    assert isinstance(t, LocalFasterWhisperTranscriber)
 
 
-def test_factory_azure_returns_placeholder():
+def test_factory_azure_falls_back_to_local():
     settings = AppSettings(engine="azure")
     t = create_transcriber(settings)
-    assert isinstance(t, AzureTranscriber)
+    assert isinstance(t, LocalFasterWhisperTranscriber)
 
 
 def test_factory_deepgram_returns_deepgram_transcriber():

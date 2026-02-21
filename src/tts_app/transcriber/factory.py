@@ -7,10 +7,6 @@ from .assemblyai_provider import AssemblyAITranscriber
 from .deepgram_provider import DeepgramTranscriber
 from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
-from .remote_placeholders import (
-    AzureTranscriber,
-    OpenAITranscriber,
-)
 
 
 def create_transcriber(
@@ -42,10 +38,6 @@ def create_transcriber(
             language_mode=settings.language_mode,
             model=settings.groq_model,
         )
-    if settings.engine == "openai":
-        return OpenAITranscriber()
-    if settings.engine == "azure":
-        return AzureTranscriber()
     if settings.engine == "deepgram":
         api_key = ""
         if secret_store is not None:

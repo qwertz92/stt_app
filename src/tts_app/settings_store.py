@@ -46,8 +46,6 @@ DEFAULTS = {
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "offline_mode": DEFAULT_OFFLINE_MODE,
     "model_dir": DEFAULT_MODEL_DIR,
-    "has_openai_key": False,
-    "has_azure_key": False,
     "has_deepgram_key": False,
     "has_assemblyai_key": False,
     "has_groq_key": False,
@@ -69,8 +67,6 @@ class AppSettings:
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     offline_mode: bool = DEFAULT_OFFLINE_MODE
     model_dir: str = DEFAULT_MODEL_DIR
-    has_openai_key: bool = False
-    has_azure_key: bool = False
     has_deepgram_key: bool = False
     has_assemblyai_key: bool = False
     has_groq_key: bool = False
@@ -126,8 +122,6 @@ class AppSettings:
             ),
             offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),
             model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
-            has_openai_key=bool(merged.get("has_openai_key", False)),
-            has_azure_key=bool(merged.get("has_azure_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),
             has_assemblyai_key=bool(merged.get("has_assemblyai_key", False)),
             has_groq_key=bool(merged.get("has_groq_key", False)),
@@ -201,6 +195,8 @@ class SettingsStore:
         migrated.pop("deepgram_api_key", None)
         migrated.pop("assemblyai_api_key", None)
         migrated.pop("groq_api_key", None)
+        migrated.pop("has_openai_key", None)
+        migrated.pop("has_azure_key", None)
 
         for key, value in DEFAULTS.items():
             migrated.setdefault(key, value)

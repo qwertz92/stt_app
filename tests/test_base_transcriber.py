@@ -1,14 +1,10 @@
-"""Tests for transcriber base interface and remote placeholders."""
+"""Tests for transcriber base interface defaults."""
 
 from __future__ import annotations
 
 import pytest
 
-from tts_app.transcriber.base import ITranscriber, TranscriptionError
-from tts_app.transcriber.remote_placeholders import (
-    AzureTranscriber,
-    OpenAITranscriber,
-)
+from tts_app.transcriber.base import ITranscriber
 
 
 class MinimalTranscriber(ITranscriber):
@@ -40,18 +36,6 @@ def test_default_abort_stream_raises():
     t = MinimalTranscriber()
     with pytest.raises(NotImplementedError):
         t.abort_stream()
-
-
-def test_openai_placeholder_raises():
-    t = OpenAITranscriber()
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        t.transcribe_batch(b"")
-
-
-def test_azure_placeholder_raises():
-    t = AzureTranscriber()
-    with pytest.raises(NotImplementedError, match="Phase 2"):
-        t.transcribe_batch(b"")
 
 
 

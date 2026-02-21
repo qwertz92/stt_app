@@ -30,8 +30,6 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.mode == DEFAULT_MODE
     assert settings.paste_mode == DEFAULT_PASTE_MODE
     assert settings.keep_transcript_in_clipboard == DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
-    assert settings.has_openai_key is False
-    assert settings.has_azure_key is False
     assert settings.has_deepgram_key is False
     assert settings_path.exists()
 
@@ -102,6 +100,18 @@ def test_invalid_enum_values_fall_back_to_defaults(tmp_path):
     assert settings.mode == DEFAULT_MODE
     assert settings.language_mode == DEFAULT_LANGUAGE_MODE
     assert settings.paste_mode == DEFAULT_PASTE_MODE
+
+
+def test_legacy_unimplemented_engines_fall_back_to_local(tmp_path):
+    settings_path = tmp_path / "settings.json"
+
+    for legacy_engine in ("openai", "azure"):
+        settings_path.write_text(
+            json.dumps({"engine": legacy_engine}),
+            encoding="utf-8",
+        )
+        settings = SettingsStore(settings_path).load()
+        assert settings.engine == DEFAULT_ENGINE
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):

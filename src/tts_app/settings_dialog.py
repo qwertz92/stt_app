@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import threading
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
@@ -27,6 +29,8 @@ from .transcriber.local_faster_whisper import find_cached_models
 
 
 class SettingsDialog(QtWidgets.QDialog):
+    connection_test_finished = QtCore.Signal(int, bool, str)
+
     def __init__(
         self,
         settings_store: SettingsStore,
@@ -39,11 +43,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self._secret_store = secret_store
         self._app_logger = app_logger
         self._loaded_settings = self._settings_store.load()
+        self._connection_test_id = 0
+        self._active_connection_test_thread: threading.Thread | None = None
 
         self.setWindowTitle("Dictation Settings")
         self.setModal(True)
         self.resize(580, 620)
 
+        self.connection_test_finished.connect(self._on_connection_test_finished)
         self._build_ui()
         self._populate(self._loaded_settings)
 
@@ -122,8 +129,6 @@ class SettingsDialog(QtWidgets.QDialog):
             "local": "Local (faster-whisper)",
             "assemblyai": "Remote (AssemblyAI)",
             "groq": "Remote (Groq)",
-            "openai": "Remote (OpenAI)",
-            "azure": "Remote (Azure)",
             "deepgram": "Remote (Deepgram)",
         }
         for value in VALID_ENGINES:
@@ -252,14 +257,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.assemblyai_key_edit = QtWidgets.QLineEdit()
         self.groq_key_edit = QtWidgets.QLineEdit()
-        self.openai_key_edit = QtWidgets.QLineEdit()
-        self.azure_key_edit = QtWidgets.QLineEdit()
         self.deepgram_key_edit = QtWidgets.QLineEdit()
         for field in (
             self.assemblyai_key_edit,
             self.groq_key_edit,
-            self.openai_key_edit,
-            self.azure_key_edit,
             self.deepgram_key_edit,
         ):
             field.setEchoMode(QtWidgets.QLineEdit.Password)
@@ -267,8 +268,6 @@ class SettingsDialog(QtWidgets.QDialog):
 
         provider_layout.addRow("AssemblyAI", self.assemblyai_key_edit)
         provider_layout.addRow("Groq", self.groq_key_edit)
-        provider_layout.addRow("OpenAI", self.openai_key_edit)
-        provider_layout.addRow("Azure", self.azure_key_edit)
         provider_layout.addRow("Deepgram", self.deepgram_key_edit)
         provider_note = QtWidgets.QLabel(
             "Keys are saved in Windows Credential Manager via keyring."
@@ -426,88 +425,105 @@ class SettingsDialog(QtWidgets.QDialog):
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
 
         if engine == DEFAULT_ENGINE:
-            self.test_conn_result.setText(
-                "Local provider \u2014 no connection test needed."
+            self._set_test_connection_feedback(
+                "Local provider \u2014 no connection test needed.",
+                "#555",
             )
-            self.test_conn_result.setStyleSheet("color: #555;")
             return
 
+        tester, error_text = self._build_connection_tester(engine)
+        if tester is None:
+            if error_text:
+                self._set_test_connection_feedback(error_text, "#b71c1c")
+            else:
+                self._set_test_connection_feedback(
+                    f"Connection test not yet implemented for {engine}.",
+                    "#555",
+                )
+            return
+
+        self._connection_test_id += 1
+        test_id = self._connection_test_id
         self.test_conn_button.setEnabled(False)
-        self.test_conn_result.setText("Testing...")
-        self.test_conn_result.setStyleSheet("color: #555;")
-        QtWidgets.QApplication.processEvents()
+        self._set_test_connection_feedback("Testing...", "#555")
+        worker = threading.Thread(
+            target=self._run_connection_test_worker,
+            args=(test_id, tester),
+            name="tts_app_settings_connection_test",
+            daemon=True,
+        )
+        self._active_connection_test_thread = worker
+        worker.start()
 
+    def _build_connection_tester(self, engine: str):
+        if engine == "assemblyai":
+            api_key = self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+
+            from .transcriber.assemblyai_provider import AssemblyAITranscriber
+
+            transcriber = AssemblyAITranscriber(api_key=api_key)
+            return transcriber.test_connection, None
+
+        if engine == "groq":
+            api_key = self._resolve_api_key("groq", self.groq_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+
+            from .transcriber.groq_provider import GroqTranscriber
+
+            transcriber = GroqTranscriber(api_key=api_key)
+            return transcriber.test_connection, None
+
+        if engine == "deepgram":
+            api_key = self._resolve_api_key("deepgram", self.deepgram_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+
+            from .transcriber.deepgram_provider import DeepgramTranscriber
+
+            transcriber = DeepgramTranscriber(api_key=api_key)
+            return transcriber.test_connection, None
+
+        return None, None
+
+    def _resolve_api_key(self, provider: str, key_field: QtWidgets.QLineEdit) -> str:
+        api_key = key_field.text().strip()
+        if api_key:
+            return api_key
+        return self._secret_store.get_api_key(provider) or ""
+
+    def _run_connection_test_worker(self, test_id: int, tester) -> None:
         try:
-            if engine == "assemblyai":
-                api_key = self.assemblyai_key_edit.text().strip()
-                if not api_key:
-                    api_key = (
-                        self._secret_store.get_api_key("assemblyai") or ""
-                    )
-                if not api_key:
-                    self.test_conn_result.setText(
-                        "No API key entered. Enter a key above first."
-                    )
-                    self.test_conn_result.setStyleSheet("color: #b71c1c;")
-                    return
-
-                from .transcriber.assemblyai_provider import (
-                    AssemblyAITranscriber,
-                )
-
-                t = AssemblyAITranscriber(api_key=api_key)
-                ok, msg = t.test_connection()
-
-            elif engine == "groq":
-                api_key = self.groq_key_edit.text().strip()
-                if not api_key:
-                    api_key = self._secret_store.get_api_key("groq") or ""
-                if not api_key:
-                    self.test_conn_result.setText(
-                        "No API key entered. Enter a key above first."
-                    )
-                    self.test_conn_result.setStyleSheet("color: #b71c1c;")
-                    return
-
-                from .transcriber.groq_provider import GroqTranscriber
-
-                t = GroqTranscriber(api_key=api_key)
-                ok, msg = t.test_connection()
-
-            elif engine == "deepgram":
-                api_key = self.deepgram_key_edit.text().strip()
-                if not api_key:
-                    api_key = self._secret_store.get_api_key("deepgram") or ""
-                if not api_key:
-                    self.test_conn_result.setText(
-                        "No API key entered. Enter a key above first."
-                    )
-                    self.test_conn_result.setStyleSheet("color: #b71c1c;")
-                    return
-
-                from .transcriber.deepgram_provider import DeepgramTranscriber
-
-                t = DeepgramTranscriber(api_key=api_key)
-                ok, msg = t.test_connection()
-
-            else:
-                self.test_conn_result.setText(
-                    f"Connection test not yet implemented for {engine}."
-                )
-                self.test_conn_result.setStyleSheet("color: #555;")
-                return
-
-            if ok:
-                self.test_conn_result.setText(f"\u2713 {msg}")
-                self.test_conn_result.setStyleSheet("color: #1b5e20;")
-            else:
-                self.test_conn_result.setText(f"\u2717 {msg}")
-                self.test_conn_result.setStyleSheet("color: #b71c1c;")
+            ok, msg = tester()
         except Exception as exc:
-            self.test_conn_result.setText(f"Test failed: {exc}")
-            self.test_conn_result.setStyleSheet("color: #b71c1c;")
-        finally:
-            self.test_conn_button.setEnabled(True)
+            ok, msg = False, f"Test failed: {exc}"
+        self.connection_test_finished.emit(test_id, bool(ok), str(msg))
+
+    @QtCore.Slot(int, bool, str)
+    def _on_connection_test_finished(self, test_id: int, ok: bool, msg: str) -> None:
+        if test_id != self._connection_test_id:
+            return
+        self.test_conn_button.setEnabled(True)
+        self._active_connection_test_thread = None
+        if ok:
+            self._set_test_connection_feedback(f"\u2713 {msg}", "#1b5e20")
+        else:
+            self._set_test_connection_feedback(f"\u2717 {msg}", "#b71c1c")
+
+    def _set_test_connection_feedback(self, text: str, color: str) -> None:
+        self.test_conn_result.setText(text)
+        self.test_conn_result.setStyleSheet(f"color: {color};")
 
     # ------------------------------------------------------------------
     # Populate / select helpers
@@ -536,14 +552,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.groq_model_combo, settings.groq_model)
         self._update_mode_availability()
 
-        if settings.has_openai_key:
-            self.openai_key_edit.setPlaceholderText(
-                "Stored (leave empty to keep)"
-            )
-        if settings.has_azure_key:
-            self.azure_key_edit.setPlaceholderText(
-                "Stored (leave empty to keep)"
-            )
         if settings.has_deepgram_key:
             self.deepgram_key_edit.setPlaceholderText(
                 "Stored (leave empty to keep)"
@@ -596,24 +604,14 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             return
 
-        has_openai_key = self._loaded_settings.has_openai_key
-        has_azure_key = self._loaded_settings.has_azure_key
         has_deepgram_key = self._loaded_settings.has_deepgram_key
         has_assemblyai_key = self._loaded_settings.has_assemblyai_key
         has_groq_key = self._loaded_settings.has_groq_key
 
-        openai_value = self.openai_key_edit.text().strip()
-        azure_value = self.azure_key_edit.text().strip()
         deepgram_value = self.deepgram_key_edit.text().strip()
         assemblyai_value = self.assemblyai_key_edit.text().strip()
         groq_value = self.groq_key_edit.text().strip()
 
-        if openai_value:
-            self._secret_store.set_api_key("openai", openai_value)
-            has_openai_key = True
-        if azure_value:
-            self._secret_store.set_api_key("azure", azure_value)
-            has_azure_key = True
         if deepgram_value:
             self._secret_store.set_api_key("deepgram", deepgram_value)
             has_deepgram_key = True
@@ -644,8 +642,6 @@ class SettingsDialog(QtWidgets.QDialog):
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
-            has_openai_key=has_openai_key,
-            has_azure_key=has_azure_key,
             has_deepgram_key=has_deepgram_key,
             has_assemblyai_key=has_assemblyai_key,
             has_groq_key=has_groq_key,
