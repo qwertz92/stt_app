@@ -54,6 +54,7 @@ class AppLogger:
                 maxBytes=LOG_MAX_BYTES,
                 backupCount=LOG_BACKUP_COUNT,
                 encoding="utf-8",
+                delay=True,
             )
             formatter = logging.Formatter(
                 "%(asctime)s [%(levelname)s] %(name)s: %(message)s"

@@ -13,6 +13,7 @@ from .config import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
     DEFAULT_ENGINE,
+    DOC_MODELS_PATH,
     FALLBACK_HOTKEY,
     FALLBACK_MODEL,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
@@ -339,7 +340,7 @@ class DictationController(QtCore.QObject):
             self.model_preload_done.emit(
                 False,
                 f"Model '{settings.model_size}' could not be loaded and no "
-                "local models found. See docs/offline-usage-guide.md",
+                f"local models found. See {DOC_MODELS_PATH}",
             )
             return
 

@@ -8,7 +8,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
-- **Cloud option** — use AssemblyAI for cloud-based transcription when you prefer accuracy over privacy
+- **Cloud options** — use AssemblyAI, Groq, or Deepgram when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
 - **Streaming** (experimental) — see partial results while you speak
@@ -117,15 +117,18 @@ uv run python -m pytest
 | Feature | Status |
 |---------|--------|
 | Local batch transcription (faster-whisper) | Stable |
-| AssemblyAI cloud transcription (batch) | Stable |
 | Local streaming mode | Experimental |
-| AssemblyAI streaming | Planned |
-| NVIDIA Parakeet (NeMo) | [Evaluated](docs/parakeet-evaluation.md) — not yet implemented |
+| AssemblyAI cloud transcription (batch) | Stable |
+| AssemblyAI streaming | Experimental |
+| Groq cloud transcription (batch) | Stable |
+| Deepgram cloud transcription (batch) | Stable |
+| OpenAI / Azure providers | Placeholder stubs (not implemented) |
+| NVIDIA Parakeet (NeMo) | [Evaluated](docs/parakeet-evaluation.md) — not implemented |
 
 ## Roadmap
 
-- AssemblyAI streaming transcription
-- Additional cloud providers (OpenAI, Azure, Deepgram)
+- OpenAI and Azure provider implementation
+- Streaming support for additional remote providers
 - NVIDIA Parakeet as optional local engine (requires GPU)
 - PyInstaller single-EXE distribution
 

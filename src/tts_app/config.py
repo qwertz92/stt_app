@@ -133,6 +133,8 @@ LOG_FILE_NAME = "dictation.log"
 LOG_MAX_BYTES = 1_000_000
 LOG_BACKUP_COUNT = 3
 DIAGNOSTICS_MAX_LINES = 300
+DOC_MODELS_PATH = "docs/models.md"
+DOC_SSL_PROXY_PATH = "docs/advanced-setup.md#ssl--proxy-issues"
 
 KEYRING_SERVICE_NAME = "tts-app"
 

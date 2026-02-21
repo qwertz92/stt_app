@@ -10,14 +10,12 @@ No additional Python package required — uses stdlib urllib.
 from __future__ import annotations
 
 import json
-import tempfile
 import urllib.error
 import urllib.parse
 import urllib.request
-import wave
 from pathlib import Path
 
-from ..config import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
+from ..config import DOC_SSL_PROXY_PATH
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
@@ -59,7 +57,6 @@ class DeepgramTranscriber(ITranscriber):
 
         Accepts WAV bytes, a file path, or a Path object.
         """
-        temp_path: Path | None = None
         try:
             if isinstance(audio_source, bytes):
                 audio_data = audio_source
@@ -119,7 +116,8 @@ class DeepgramTranscriber(ITranscriber):
                     "Deepgram: SSL certificate verification failed "
                     "(likely a corporate proxy such as Zscaler). "
                     "Set SSL_CERT_FILE or REQUESTS_CA_BUNDLE to your "
-                    "corporate CA .pem, or switch to the local provider."
+                    "corporate CA .pem, or switch to the local provider. "
+                    f"See {DOC_SSL_PROXY_PATH} for details."
                 ) from exc
             raise TranscriptionError(
                 f"Deepgram transcription failed: {exc}"
@@ -167,7 +165,8 @@ class DeepgramTranscriber(ITranscriber):
                 return False, (
                     "SSL certificate verification failed — likely a "
                     "corporate proxy (Zscaler). Set SSL_CERT_FILE or "
-                    "REQUESTS_CA_BUNDLE to your corporate CA .pem file."
+                    "REQUESTS_CA_BUNDLE to your corporate CA .pem file. "
+                    f"See {DOC_SSL_PROXY_PATH} for details."
                 )
             return False, f"Connection failed: {exc}"
 

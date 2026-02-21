@@ -31,7 +31,7 @@ import sys
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from tts_app.config import MODEL_REPO_MAP  # noqa: E402
+from tts_app.config import DOC_MODELS_PATH, DOC_SSL_PROXY_PATH, MODEL_REPO_MAP  # noqa: E402
 from tts_app.ssl_utils import is_ssl_error as _is_ssl_error  # noqa: E402
 
 # Re-export under the name used throughout this script.
@@ -47,7 +47,7 @@ ALLOW_PATTERNS: list[str] = [
 ]
 
 
-def _print_ssl_help(model_name: str, output_dir: str | None) -> None:
+def _print_ssl_help(model_name: str) -> None:
     """Print actionable guidance when SSL verification fails."""
     repo_id = MODELS.get(model_name, f"Systran/faster-whisper-{model_name}")
     print(
@@ -81,9 +81,10 @@ def _print_ssl_help(model_name: str, output_dir: str | None) -> None:
         "\n"
         "  4. MANUAL BROWSER DOWNLOAD:\n"
         f"     Download files from https://huggingface.co/{repo_id}/tree/main\n"
-        "     See docs/offline-usage-guide.md for how to arrange the files.\n"
+        f"     See {DOC_MODELS_PATH} for how to arrange the files.\n"
         "\n"
-        "Full guide: docs/offline-usage-guide.md\n"
+        f"SSL troubleshooting: {DOC_SSL_PROXY_PATH}\n"
+        f"Offline model guide: {DOC_MODELS_PATH}\n"
         "═══════════════════════════════════════════════════════════════",
         file=sys.stderr,
     )
@@ -119,7 +120,7 @@ def download_model(name: str, output_dir: str | None = None) -> str:
         path = snapshot_download(repo_id, **kwargs)
     except Exception as exc:
         if _is_ssl_error(exc):
-            _print_ssl_help(name, output_dir)
+            _print_ssl_help(name)
             sys.exit(2)
         # Re-raise with context for other errors.
         print(f"ERROR: Download failed: {exc}", file=sys.stderr)

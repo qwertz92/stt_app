@@ -40,7 +40,9 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 | \`audio_capture.py\` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | \`transcriber/local_faster_whisper.py\` | Batch + streaming via faster-whisper; \`find_cached_models\`; \`preload_model\` |
 | `transcriber/assemblyai_provider.py` | Batch + streaming transcription via AssemblyAI SDK; `test_connection` |
-| \`transcriber/groq_provider.py\` | Batch transcription via Groq SDK (whisper-large-v3, whisper-large-v3-turbo); \`test_connection\` || `transcriber/deepgram_provider.py` | Batch transcription via Deepgram REST API (nova-3); `test_connection`; no SDK needed || \`transcriber/factory.py\` | Creates transcriber from settings; routes engine to provider |
+| `transcriber/groq_provider.py` | Batch transcription via Groq SDK (whisper-large-v3, whisper-large-v3-turbo); `test_connection` |
+| `transcriber/deepgram_provider.py` | Batch transcription via Deepgram REST API (nova-3); `test_connection`; no SDK needed |
+| \`transcriber/factory.py\` | Creates transcriber from settings; routes engine to provider |
 | \`text_inserter.py\` | Clipboard-safe paste: save > set > paste > restore |
 | \`overlay_ui.py\` | Always-on-top frameless overlay with state colors, copy button |
 | \`hotkey.py\` | Win32 RegisterHotKey + Qt native event filter |
@@ -49,7 +51,8 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 | \`settings_dialog.py\` | PySide6 settings UI with Local/Remote tabs |
 | \`secret_store.py\` | keyring wrapper for API keys |
 | \`scripts/download_model.py\` | Automated model download for offline/corporate use |
-| \`scripts/import_model.py\` | Import manually downloaded models; validates for Git LFS pointers || `scripts/sync_to_windows.sh` | Bash/rsync script to sync repo from WSL to Windows-native directory |
+| \`scripts/import_model.py\` | Import manually downloaded models; validates for Git LFS pointers |
+| `scripts/sync_to_windows.sh` | Bash/rsync script to sync repo from WSL to Windows-native directory |
 ### Key design decisions
 
 - **Temp files for audio**: \`transcribe_batch\` writes WAV to temp file because \`WhisperModel.transcribe()\` is most reliable with file paths.
@@ -77,7 +80,9 @@ All defaults in \`src/tts_app/config.py\`. Key values:
 
 - \`DEFAULT_HOTKEY = "Ctrl+Alt+Space"\`, \`FALLBACK_HOTKEY = "Ctrl+Win+LShift"\`
 - \`DEFAULT_MODEL_SIZE = "small"\`, \`DEFAULT_ENGINE = "local"\`
-- \`VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")\`- `STREAMING_ENGINES = ("local", "assemblyai")` — engines that support streaming mode- \`VALID_MODEL_SIZES\`: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3.5
+- \`VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "azure", "deepgram")\`
+- \`STREAMING_ENGINES = ("local", "assemblyai")\` — engines that support streaming mode
+- \`VALID_MODEL_SIZES\`: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3.5
 - \`GROQ_MODELS\`: whisper-large-v3, whisper-large-v3-turbo
 
 ## Settings and secrets

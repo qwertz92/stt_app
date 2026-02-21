@@ -13,10 +13,9 @@ from __future__ import annotations
 
 import tempfile
 import threading
-import wave
 from pathlib import Path
 
-from ..config import AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
+from ..config import AUDIO_SAMPLE_RATE, DOC_SSL_PROXY_PATH
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
@@ -148,7 +147,7 @@ class AssemblyAITranscriber(ITranscriber):
                     "(likely a corporate proxy such as Zscaler). "
                     "Set REQUESTS_CA_BUNDLE to your corporate CA .pem, "
                     "or switch to the local provider.\n"
-                    "See docs/offline-usage-guide.md for details."
+                    f"See {DOC_SSL_PROXY_PATH} for details."
                 ) from exc
             raise TranscriptionError(f"AssemblyAI transcription failed: {exc}") from exc
         finally:
@@ -190,7 +189,7 @@ class AssemblyAITranscriber(ITranscriber):
                     "SSL certificate verification failed — likely a "
                     "corporate proxy (Zscaler). Set REQUESTS_CA_BUNDLE "
                     "to your corporate CA .pem file.\n"
-                    "See docs/offline-usage-guide.md for details."
+                    f"See {DOC_SSL_PROXY_PATH} for details."
                 )
             return False, f"Connection failed: {exc}"
 

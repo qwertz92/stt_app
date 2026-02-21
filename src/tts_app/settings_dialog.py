@@ -10,6 +10,7 @@ from .config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_PASTE_MODE,
+    DOC_MODELS_PATH,
     GROQ_MODELS,
     STREAMING_ENGINES,
     VALID_ENGINES,
@@ -353,7 +354,7 @@ class SettingsDialog(QtWidgets.QDialog):
         else:
             self.local_models_label.setText(
                 "No local models found. Models will be downloaded on first use.\n"
-                "See docs/offline-usage-guide.md if downloads are blocked."
+                f"See {DOC_MODELS_PATH} if downloads are blocked."
             )
             self.local_models_label.setStyleSheet("color: #b71c1c;")
 

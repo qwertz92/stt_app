@@ -61,7 +61,7 @@ On the first dictation, the app downloads the `small` Whisper model (~484 MB). T
 
 After the first download, the model is cached locally and loads in seconds.
 
-> **Corporate network?** If the download fails, see the [Offline model setup](../README.md#offline-model-setup-restricted-networks) section in the README or the [Offline usage guide](offline-usage-guide.md).
+> **Corporate network?** If the download fails, see [Models & Offline Setup](models.md) and [SSL / proxy troubleshooting](advanced-setup.md#ssl--proxy-issues).
 
 ## 5. Settings
 

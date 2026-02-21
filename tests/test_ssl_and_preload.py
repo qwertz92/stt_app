@@ -61,7 +61,7 @@ class TestFormatTranscriptionErrorSSL:
         exc.__cause__ = cause
         msg = t._format_transcription_error(exc)
         assert "SSL" in msg
-        assert "offline-usage-guide" in msg
+        assert "advanced-setup" in msg
 
     def test_non_ssl_error_unchanged(self):
         model = MagicMock()

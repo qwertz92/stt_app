@@ -290,6 +290,8 @@ src/tts_app/
     base.py           — transcriber interface
     factory.py        — engine selection
     local_faster_whisper.py — local transcription (faster-whisper / CTranslate2)
-    assemblyai_provider.py  — AssemblyAI cloud transcription
-    remote_placeholders.py  — stubs for planned providers
+    assemblyai_provider.py  — AssemblyAI cloud transcription (batch + streaming)
+    groq_provider.py        — Groq cloud transcription (batch)
+    deepgram_provider.py    — Deepgram cloud transcription (batch)
+    remote_placeholders.py  — stubs for OpenAI/Azure providers
 ```

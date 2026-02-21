@@ -13,6 +13,8 @@ from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODEL_SIZE,
+    DOC_MODELS_PATH,
+    DOC_SSL_PROXY_PATH,
     MODEL_REPO_MAP,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
@@ -199,7 +201,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 "proxy such as Zscaler). The model cannot be downloaded.\n"
                 "Fix: set REQUESTS_CA_BUNDLE to your corporate CA .pem, "
                 "or download the model on another machine and transfer it.\n"
-                "See docs/offline-usage-guide.md for details."
+                f"See {DOC_SSL_PROXY_PATH} for details."
             )
 
         # Detect HuggingFace Hub connectivity / offline-cache errors
@@ -217,6 +219,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 "%USERPROFILE%\\.cache\\huggingface to this machine. "
                 "Alternatively, enable 'Offline mode' in Settings "
                 "if the model is already cached."
+                f" See {DOC_MODELS_PATH}."
             )
         return msg
 
