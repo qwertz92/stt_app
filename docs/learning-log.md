@@ -134,3 +134,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Code review finding:** Groq integration pattern (config → settings → factory → provider → UI) is the correct abstraction level. Each provider touches ~5 predictable locations — a registry/base pattern would add complexity without reducing touchpoints. Not recommended to refactor.
 - 15 new streaming tests in `test_assemblyai_provider.py` (replaced 4 stub tests).
 - Total tests: ~240 (Linux: all pass except 3 Windows-only ctypes/windll tests).
+- Removed unimplemented OpenAI/Azure runtime placeholders and hid them from settings UI; `VALID_ENGINES` now includes only implemented engines (`local`, `assemblyai`, `groq`, `deepgram`).
+- Settings dialog connection tests now run asynchronously in a background thread to keep UI responsive during network checks.
+- Added settings migration cleanup for legacy `has_openai_key` / `has_azure_key` flags and legacy unimplemented engine values.
+- Added focused settings-dialog tests for async connection behavior and stale-result handling.
