@@ -21,9 +21,7 @@ from .config import (
     DEFAULT_VAD_ENABLED,
     GROQ_MODELS,
     DEFAULT_OPENAI_MODEL,
-    LEGACY_DEFAULT_HOTKEY,
     OPENAI_MODELS,
-    PREVIOUS_DEFAULT_HOTKEY,
     SCHEMA_VERSION,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
@@ -168,10 +166,8 @@ class SettingsStore:
         except (OSError, json.JSONDecodeError):
             raw = {}
 
-        migrated = self._migrate(raw)
-        settings = AppSettings.from_dict(migrated)
-
-        if raw != migrated or migrated != settings.to_dict():
+        settings = AppSettings.from_dict(raw)
+        if raw != settings.to_dict():
             self.save(settings)
 
         return settings
@@ -181,7 +177,6 @@ class SettingsStore:
 
         for secret_key in (
             "openai_api_key",
-            "azure_api_key",
             "deepgram_api_key",
             "assemblyai_api_key",
             "groq_api_key",
@@ -192,34 +187,6 @@ class SettingsStore:
             json.dumps(payload, indent=2, ensure_ascii=True),
             encoding="utf-8",
         )
-
-    def _migrate(self, raw: dict[str, Any]) -> dict[str, Any]:
-        migrated: dict[str, Any] = dict(raw)
-        old_schema = int(raw.get("schema_version", 0) or 0)
-
-        if "language" in migrated and "language_mode" not in migrated:
-            migrated["language_mode"] = migrated["language"]
-
-        migrated.pop("language", None)
-        migrated.pop("openai_api_key", None)
-        migrated.pop("azure_api_key", None)
-        migrated.pop("deepgram_api_key", None)
-        migrated.pop("assemblyai_api_key", None)
-        migrated.pop("groq_api_key", None)
-        migrated.pop("has_azure_key", None)
-
-        for key, value in DEFAULTS.items():
-            migrated.setdefault(key, value)
-
-        # Migrate historical default hotkey to current default.
-        # We only auto-change when old schema is detected and value matches the old default.
-        if old_schema < CURRENT_SCHEMA_VERSION and str(
-            migrated.get("hotkey", "")
-        ).strip() in {LEGACY_DEFAULT_HOTKEY, PREVIOUS_DEFAULT_HOTKEY}:
-            migrated["hotkey"] = DEFAULT_HOTKEY
-
-        migrated["schema_version"] = CURRENT_SCHEMA_VERSION
-        return migrated
 
 
 def _normalize_hotkey(value: str) -> str:

@@ -13,8 +13,6 @@ SCHEMA_VERSION = 8
 DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 FALLBACK_HOTKEY = "Ctrl+Win+LShift"
 DEFAULT_HOTKEY_ID = 1
-LEGACY_DEFAULT_HOTKEY = "Ctrl+Win+LShift"
-PREVIOUS_DEFAULT_HOTKEY = "Ctrl+Shift+Alt+Space"
 
 DEFAULT_MODEL_SIZE = "small"
 FALLBACK_MODEL = "tiny"
@@ -88,7 +86,7 @@ MODEL_REPO_MAP: dict[str, str] = {
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "deepgram")
-STREAMING_ENGINES = ("local", "assemblyai", "openai", "deepgram")  # engines that support streaming mode
+STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
 

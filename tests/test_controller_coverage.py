@@ -364,7 +364,16 @@ def test_transcribe_worker_emits_not_implemented_error():
             raise NotImplementedError("OpenAI provider not implemented yet")
 
     controller._transcriber_cache = PlaceholderTranscriber()
-    controller._transcriber_cache_key = ("openai", "small", "auto", True, False, "")
+    controller._transcriber_cache_key = (
+        "openai",
+        "small",
+        "auto",
+        True,
+        False,
+        "",
+        "whisper-large-v3-turbo",
+        "gpt-4o-mini-transcribe",
+    )
 
     settings_snapshot = AppSettings(engine="openai", hotkey=FALLBACK_HOTKEY)
     controller._transcribe_worker(b"audio", settings_snapshot)
@@ -385,7 +394,16 @@ def test_transcribe_worker_emits_unexpected_error():
             raise RuntimeError("something went wrong")
 
     controller._transcriber_cache = BrokenTranscriber()
-    controller._transcriber_cache_key = ("local", "small", "auto", True, False, "")
+    controller._transcriber_cache_key = (
+        "local",
+        "small",
+        "auto",
+        True,
+        False,
+        "",
+        "whisper-large-v3-turbo",
+        "gpt-4o-mini-transcribe",
+    )
 
     settings_snapshot = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
     controller._transcribe_worker(b"audio", settings_snapshot)

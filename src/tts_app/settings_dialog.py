@@ -387,7 +387,8 @@ class SettingsDialog(QtWidgets.QDialog):
         """Update the always-visible engine indicator bar."""
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         if engine == "local":
-            self.engine_indicator.setText("Engine: LOCAL (faster-whisper)")
+            label = "Engine: LOCAL (faster-whisper)"
+            self.engine_indicator.setText(label)
             self.engine_indicator.setStyleSheet(
                 "font-weight: bold; padding: 4px; border-radius: 4px; "
                 "background-color: #e8f5e9; color: #1b5e20;"
@@ -420,7 +421,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 item.setEnabled(False)
                 item.setToolTip(
                     f"Streaming is not supported by the {engine} provider. "
-                    "Use local or AssemblyAI for streaming."
+                    "Use local, AssemblyAI, or Deepgram for streaming."
                 )
 
         # If streaming is selected but not supported, switch to batch.

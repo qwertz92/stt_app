@@ -139,6 +139,7 @@ class DictationController(QtCore.QObject):
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
         self._settings = self._settings_store.load()
+        self._reset_transcriber_cache()
         if re_register_hotkey:
             self._hotkey_registration_ok = self._register_hotkey_with_fallback()
         else:
@@ -174,7 +175,7 @@ class DictationController(QtCore.QObject):
             self._overlay.set_state(
                 "Error",
                 "Streaming is not available for the selected provider. "
-                "Switch to batch mode, or use local/AssemblyAI for streaming.",
+                "Switch to batch mode, or use local/AssemblyAI/Deepgram for streaming.",
             )
             return
 
@@ -311,6 +312,11 @@ class DictationController(QtCore.QObject):
         self._target_window_handle = None
         self._target_focus_signature = None
 
+    def _reset_transcriber_cache(self) -> None:
+        with self._transcriber_cache_lock:
+            self._transcriber_cache = None
+            self._transcriber_cache_key = None
+
     # -- Model preloading -----------------------------------------------------
 
     def _preload_model_worker(self) -> None:
@@ -353,9 +359,7 @@ class DictationController(QtCore.QObject):
         for fallback in preferred_fallback_order:
             try:
                 fallback_settings = replace(settings, model_size=fallback)
-                with self._transcriber_cache_lock:
-                    self._transcriber_cache = None
-                    self._transcriber_cache_key = None
+                self._reset_transcriber_cache()
                 transcriber = self._get_or_create_transcriber(fallback_settings)
                 if isinstance(transcriber, LocalFasterWhisperTranscriber):
                     transcriber.preload_model()
@@ -467,6 +471,8 @@ class DictationController(QtCore.QObject):
             settings.vad_enabled,
             getattr(settings, "offline_mode", False),
             getattr(settings, "model_dir", ""),
+            getattr(settings, "groq_model", ""),
+            getattr(settings, "openai_model", ""),
         )
         with self._transcriber_cache_lock:
             if (

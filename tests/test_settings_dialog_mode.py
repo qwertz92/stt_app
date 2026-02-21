@@ -86,8 +86,8 @@ def test_streaming_enabled_for_assemblyai():
     _ = app
 
 
-def test_streaming_enabled_for_openai():
-    """Streaming mode item is enabled for OpenAI engine."""
+def test_streaming_disabled_for_openai():
+    """Streaming mode item is disabled for OpenAI engine."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings(engine="openai", mode="batch"))
     dialog = SettingsDialog(
@@ -100,7 +100,7 @@ def test_streaming_enabled_for_openai():
     assert streaming_idx >= 0
     item = dialog.mode_combo.model().item(streaming_idx)
     assert item is not None
-    assert item.isEnabled() is True
+    assert item.isEnabled() is False
     _ = app
 
 

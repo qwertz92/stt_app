@@ -124,38 +124,16 @@ class TestOpenAIConnectionTest:
 
 
 class TestOpenAIStreaming:
-    def test_push_without_stream_raises(self):
+    def test_streaming_start_is_not_supported(self):
         t = OpenAITranscriber(api_key="k")
-        with pytest.raises(TranscriptionError, match="not active"):
-            t.push_audio_chunk(b"chunk")
-
-    def test_streaming_lifecycle(self):
-        t = OpenAITranscriber(
-            api_key="k",
-            stream_partial_interval_s=0.0,
-            stream_partial_min_audio_s=0.0,
-            stream_partial_window_s=1.0,
-        )
-
-        results: list[str] = []
-        outputs = iter(["hello", "hello world"])
-
-        def fake_transcribe(_audio):
-            return next(outputs, "hello world")
-
-        t.transcribe_batch = fake_transcribe  # type: ignore[method-assign]
-
-        t.start_stream(on_partial=results.append)
-        t.push_audio_chunk(b"\x00\x01" * 4000)
-        final = t.stop_stream()
-
-        assert final
-        assert "hello world" in final
-
-    def test_start_stream_twice_raises(self):
-        t = OpenAITranscriber(api_key="k")
-        t.transcribe_batch = lambda _audio: ""  # type: ignore[method-assign]
-        t.start_stream()
-        with pytest.raises(TranscriptionError, match="already active"):
+        with pytest.raises(NotImplementedError, match="disabled"):
             t.start_stream()
-        t.abort_stream()
+
+    def test_streaming_methods_are_not_supported(self):
+        t = OpenAITranscriber(api_key="k")
+        with pytest.raises(NotImplementedError, match="disabled"):
+            t.push_audio_chunk(b"chunk")
+        with pytest.raises(NotImplementedError, match="disabled"):
+            t.stop_stream()
+        with pytest.raises(NotImplementedError, match="disabled"):
+            t.abort_stream()
