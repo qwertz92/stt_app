@@ -291,6 +291,7 @@ src/tts_app/
     factory.py        — engine selection
     local_faster_whisper.py — local transcription (faster-whisper / CTranslate2)
     assemblyai_provider.py  — AssemblyAI cloud transcription (batch + streaming)
+    openai_provider.py      — OpenAI cloud transcription (batch + chunked streaming)
     groq_provider.py        — Groq cloud transcription (batch)
-    deepgram_provider.py    — Deepgram cloud transcription (batch)
+    deepgram_provider.py    — Deepgram cloud transcription (batch + streaming)
 ```

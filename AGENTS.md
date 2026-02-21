@@ -25,7 +25,7 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 - Win32 RegisterHotKey + SendInput (Windows 11 only; Linux/WSL for dev tooling)
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
-- Remote providers: AssemblyAI (SDK), Groq (SDK), Deepgram (REST API)
+- Remote providers: AssemblyAI (SDK), OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket)
 - keyring for secret storage
 
 ## Architecture
@@ -40,8 +40,9 @@ Exception: \`stt-dictation-spec.md\` (legacy bilingual).
 | \`audio_capture.py\` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | \`transcriber/local_faster_whisper.py\` | Batch + streaming via faster-whisper; \`find_cached_models\`; \`preload_model\` |
 | `transcriber/assemblyai_provider.py` | Batch + streaming transcription via AssemblyAI SDK; `test_connection` |
+| `transcriber/openai_provider.py` | Batch + streaming transcription via OpenAI API; `test_connection` |
 | `transcriber/groq_provider.py` | Batch transcription via Groq SDK (whisper-large-v3, whisper-large-v3-turbo); `test_connection` |
-| `transcriber/deepgram_provider.py` | Batch transcription via Deepgram REST API (nova-3); `test_connection`; no SDK needed |
+| `transcriber/deepgram_provider.py` | Batch via Deepgram REST + streaming via Deepgram WebSocket; `test_connection` |
 | \`transcriber/factory.py\` | Creates transcriber from settings; routes engine to provider |
 | \`text_inserter.py\` | Clipboard-safe paste: save > set > paste > restore |
 | \`overlay_ui.py\` | Always-on-top frameless overlay with state colors, copy button |
@@ -80,10 +81,11 @@ All defaults in \`src/tts_app/config.py\`. Key values:
 
 - \`DEFAULT_HOTKEY = "Ctrl+Alt+Space"\`, \`FALLBACK_HOTKEY = "Ctrl+Win+LShift"\`
 - \`DEFAULT_MODEL_SIZE = "small"\`, \`DEFAULT_ENGINE = "local"\`
-- \`VALID_ENGINES = ("local", "assemblyai", "groq", "deepgram")\`
-- \`STREAMING_ENGINES = ("local", "assemblyai")\` — engines that support streaming mode
+- \`VALID_ENGINES = ("local", "assemblyai", "openai", "groq", "deepgram")\`
+- \`STREAMING_ENGINES = ("local", "assemblyai", "openai", "deepgram")\` — engines that support streaming mode
 - \`VALID_MODEL_SIZES\`: tiny, base, small, medium, large-v3, large-v3-turbo, distil-large-v3.5
 - \`GROQ_MODELS\`: whisper-large-v3, whisper-large-v3-turbo
+- \`OPENAI_MODELS\`: gpt-4o-mini-transcribe, gpt-4o-transcribe, whisper-1
 
 ## Settings and secrets
 
@@ -99,8 +101,8 @@ Current: ~284 tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
 
 ## Known limitations
 
-- Streaming: local + AssemblyAI only, append-oriented (no word deletions), best-effort focus-change abort.
+- Streaming: local + AssemblyAI + OpenAI + Deepgram, append-oriented (no word deletions), best-effort focus-change abort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
-- Groq/Deepgram: batch mode only (streaming not supported).
-- OpenAI/Azure: not currently available in the UI (planned roadmap items).
+- Groq: batch mode only (streaming not supported).
+- Azure: not currently available in the UI (planned roadmap item).

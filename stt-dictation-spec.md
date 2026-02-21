@@ -264,8 +264,10 @@ Warum das gut ist:
 |---------|--------|
 | AssemblyAI Batch (SDK) | **Implementiert** — Upload → Transkription → Einfügen |
 | Lokales Streaming (faster-whisper) | **Implementiert** (experimentell) — sliding-window + overlap |
-| AssemblyAI Streaming (WebSocket) | Geplant |
-| OpenAI / Azure / Deepgram | Placeholder-Stubs vorhanden |
+| AssemblyAI Streaming (WebSocket) | **Implementiert** |
+| OpenAI Batch + Streaming (chunked) | **Implementiert** |
+| Deepgram Batch + Streaming (WebSocket) | **Implementiert** |
+| Azure | Geplant |
 
 **AssemblyAI Remote Provider (implementiert)**
 
@@ -281,6 +283,11 @@ Warum das gut ist:
 - Inkrementelle Live-Einfügung am Cursor während der Aufnahme
 - Auto-Abort bei Fokuswechsel mit Beep-Benachrichtigung
 - Dokumentiert in `docs/streaming-mode.md`
+
+**OpenAI + Deepgram Streaming (implementiert)**
+
+- OpenAI: Streaming über chunked partial re-transcription via `/v1/audio/transcriptions`
+- Deepgram: Provider-native WebSocket-Streaming (`/v1/listen`) mit partial/final merge
 
 ### 5.3 Geplante Erweiterungen
 
@@ -335,7 +342,9 @@ Wenn du wirklich “wie Windows Input” willst:
 - **Providers**
   - `LocalFasterWhisperTranscriber` — implementiert (Batch + Streaming)
   - `AssemblyAITranscriber` — implementiert (Batch)
-  - OpenAI, Azure, Deepgram — Placeholder-Stubs (`remote_placeholders.py`)
+  - `OpenAITranscriber` — implementiert (Batch + Streaming)
+  - `DeepgramTranscriber` — implementiert (Batch + Streaming)
+  - Azure — geplant
 - **TextInserter**
   - Strategy: clipboard-paste (default)
   - Alternative: UIA setvalue (best effort)
@@ -451,7 +460,7 @@ Du kannst dem Agenten ungefähr so starten (hier bewusst als Textbaustein, nicht
 
 1. **Default Hotkey**: `Ctrl+Alt+Space` — Fallback `Ctrl+Win+LShift`. Key-Capture UI statt manuelle Texteingabe.
 2. **Local STT Default Modell**: `small` — bester Tradeoff aus Geschwindigkeit, Qualität und Downloadgröße (~484 MB).
-3. **Streaming zuerst lokal oder remote?** Lokal zuerst (experimentell implementiert). Remote-Streaming (AssemblyAI WebSocket) als nächster Schritt geplant.
+3. **Streaming zuerst lokal oder remote?** Lokal zuerst; anschließend Remote-Streaming für AssemblyAI, OpenAI und Deepgram implementiert.
 4. **Insert-Strategie**: Clipboard-safe Paste mit 3 Modi (Auto, SendInput, WM_PASTE). UIA/TSF nicht implementiert (Aufwand zu hoch für Nutzen).
 5. **Deployment**: PyInstaller `.spec` vorhanden; Wheelhouse-Offline-Install dokumentiert.
 6. **Deployment**: einfache exe vs installer + auto-update

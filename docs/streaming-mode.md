@@ -5,7 +5,7 @@ This document explains how streaming mode is implemented in this project, how it
 ## 1) Current implementation status
 
 - `Batch` mode: stable default.
-- `Streaming` mode: implemented for local provider (`faster-whisper`) and AssemblyAI (`RealtimeTranscriber`).
+- `Streaming` mode: implemented for local provider (`faster-whisper`), AssemblyAI (`RealtimeTranscriber`), OpenAI (chunked partial re-transcription), and Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - Groq does not offer a streaming/real-time transcription API.
 
@@ -87,6 +87,17 @@ Characteristics:
 - `stop_stream()` closes the WebSocket and returns the full accumulated text.
 - `abort_stream()` closes the WebSocket and discards all text.
 
+### OpenAI transcriber
+
+- `OpenAITranscriber` supports batch transcription via `/v1/audio/transcriptions`.
+- Streaming mode uses the app's chunked streaming contract: incoming PCM16 chunks are buffered, converted to a short WAV window, and periodically re-transcribed for partial updates.
+- This is network-intensive compared to provider-native real-time APIs, but integrates cleanly with the existing controller streaming pipeline.
+
+### Deepgram transcriber
+
+- `DeepgramTranscriber` supports streaming via Deepgram's WebSocket `listen` endpoint.
+- Audio chunks are sent as binary `linear16`; incoming partial/final messages are merged into one accumulated transcript for callback delivery.
+
 ## 4) Why this design (and alternatives)
 
 Implemented design is pragmatic for MVP:
@@ -98,7 +109,7 @@ Implemented design is pragmatic for MVP:
 Alternatives (future):
 
 1. Sliding-window streaming decoder with token-level stitching.
-2. Provider-native streaming APIs (Deepgram, Azure).
+2. Provider-native streaming APIs for all remaining engines (e.g. Azure).
 3. VAD-segmented incremental commit strategy.
 4. Hybrid: low-latency partial model + high-accuracy final model.
 
