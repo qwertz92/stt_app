@@ -147,3 +147,6 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Removed OpenAI chunked pseudo-streaming; OpenAI is now batch-only while streaming remains local, AssemblyAI, and Deepgram.
 - Improved controller transcriber cache invalidation on settings reload and expanded cache key to include provider model selections.
 - Synced project docs to current runtime behavior (no roadmap-only features in user-facing docs).
+- Restored `docs/parakeet-evaluation.md` as an explicit architecture decision record (kept out of runtime scope but retained for future context).
+- Added `docs/provider-costs.md` with cross-provider pricing comparison and billing caveats.
+- Added `ruff` to dev requirements for non-`uv` environments (`requirements-dev-win.txt`) to keep lint tooling available everywhere.

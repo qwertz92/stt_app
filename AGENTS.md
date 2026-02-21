@@ -105,3 +105,4 @@ Current: ~300 tests (Linux: all pass except 3 Windows-only ctypes/windll tests).
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - OpenAI and Groq: batch mode only (streaming not supported).
+- NVIDIA Parakeet is intentionally not implemented; see `docs/parakeet-evaluation.md` for rationale.
