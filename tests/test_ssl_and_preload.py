@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -260,7 +259,6 @@ class TestAssemblyAITestConnection:
     def test_successful_connection(self):
         from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
         from unittest.mock import MagicMock
-        import urllib.error
 
         t = AssemblyAITranscriber(api_key="test-key")
 

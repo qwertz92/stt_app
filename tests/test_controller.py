@@ -1,6 +1,6 @@
 import logging
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtGui, QtWidgets
 
 from tts_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
 from tts_app.controller import DictationController

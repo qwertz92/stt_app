@@ -1,4 +1,3 @@
-import logging
 import signal
 
 from PySide6 import QtWidgets

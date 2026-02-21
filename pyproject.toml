@@ -23,6 +23,7 @@ tts-app = "tts_app.main:run"
 dev = [
     "pytest==8.3.4",
     "pytest-mock==3.14.0",
+    "ruff>=0.15.1",
 ]
 
 [build-system]

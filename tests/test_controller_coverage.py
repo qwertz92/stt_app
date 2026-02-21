@@ -6,9 +6,9 @@ from __future__ import annotations
 import logging
 from unittest.mock import MagicMock
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtWidgets
 
-from tts_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
+from tts_app.config import FALLBACK_HOTKEY
 from tts_app.controller import DictationController
 from tts_app.settings_store import AppSettings
 from tts_app.text_inserter import TextInsertionError
@@ -262,7 +262,6 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
 
     def fail_transcriber(_s, **kw):
         t = FakeStreamingTranscriber()
-        original_start = t.start_stream
 
         def broken_start(on_partial=None):
             raise TranscriptionError("model not loaded")

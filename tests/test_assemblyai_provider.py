@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import threading
 import types
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -171,7 +170,6 @@ class TestAssemblyAITranscribeBatch:
         """None transcript text returns empty string."""
         fake_aai = _make_fake_aai(transcript_text="")
         # Override to return None
-        original_init = fake_aai.Transcriber.transcribe
 
         class PatchedTranscript:
             status = fake_aai.TranscriptStatus.completed
