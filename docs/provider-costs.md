@@ -1,83 +1,117 @@
-# Provider Cost Overview
+# Provider Cost and Quality Overview
 
-This document compares transcription costs for providers currently available in `tts_app`.
+This document compares pricing, free-tier availability, and quality signals for providers currently available in `tts_app`.
 
 - Last verified: **2026-02-21**
-- Billing and model prices can change at any time. Always confirm on vendor pricing pages before production rollout.
+- Prices and limits can change at any time. Confirm on official pricing pages before production use.
 
 ---
 
-## 1) Quick comparison (models used by this app)
+## 1) Price comparison (models used by this app)
 
 | Engine | App mode(s) | Model(s) in app | Public price | Normalized cost |
 |--------|-------------|-----------------|--------------|-----------------|
-| Local (`faster-whisper`) | Batch + Streaming | `tiny`..`distil-large-v3.5` | No API fee | $0 variable API cost (hardware/power only) |
-| AssemblyAI | Batch | Universal-3 Pro (primary), Universal-2 fallback | `Universal-3 Pro`: $0.21/hour, `Universal-2`: $0.27/hour | $0.21-$0.27/hour |
+| Local (`faster-whisper`) | Batch + Streaming | `tiny`..`distil-large-v3.5` | No API fee | $0 API cost (hardware/power only) |
+| AssemblyAI | Batch | Universal-3 Pro (primary), Universal-2 fallback | U3 Pro: $0.21/hour, U2: $0.15/hour | $0.15-$0.21/hour |
 | AssemblyAI | Streaming | Universal Streaming | $0.15/hour | $0.15/hour |
 | OpenAI | Batch | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | Mini: est. $0.003/min, 4o: est. $0.006/min, Whisper: $0.006/min | $0.18/hour, $0.36/hour, $0.36/hour |
-| Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.04/hour | $0.111/hour, $0.04/hour |
-| Deepgram | Batch | `nova-3` | Monolingual: $0.0043/min, Multilingual: $0.0052/min | $0.258/hour, $0.312/hour |
-| Deepgram | Streaming | `nova-3` | Monolingual: $0.0077/min, Multilingual: $0.0092/min | $0.462/hour, $0.552/hour |
+| Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour | $0.111/hour, $0.040/hour |
+| Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min | $0.258/hour, $0.312/hour |
+| Deepgram | Streaming | `nova-3` | Mono: $0.0077/min, Multi: $0.0092/min | $0.462/hour, $0.552/hour |
 
 Notes:
 
-- OpenAI `gpt-4o*` transcription is token-priced; the per-minute values above are OpenAI's own estimates.
-- Deepgram pricing depends on monolingual vs multilingual usage.
-- In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate in usage reports whether your traffic is billed as multilingual.
+- OpenAI `gpt-4o*` transcription is token-priced; minute values above are OpenAI estimates.
+- In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate whether your account bills this as multilingual.
 
 ---
 
-## 2) Billing behavior that can surprise teams
+## 2) Free tier and free credits
+
+| Engine | Free tier status | Current free allocation (public) |
+|--------|------------------|-----------------------------------|
+| Local (`faster-whisper`) | Yes | Unlimited local usage after model download |
+| AssemblyAI | Yes | Up to 185 hours pre-recorded or 333 hours streaming on trial |
+| OpenAI | Limited / account-dependent | No standing free quota documented for transcription; `gpt-4o(-mini)-transcribe` are marked as not supported on free tier |
+| Groq | Yes | Free plan with no card; speech model rate limits (for `whisper-large-v3` and `-turbo`) include 20 RPM, 2,000 requests/day, 7,200 audio-seconds/hour, 28,800 audio-seconds/day |
+| Deepgram | Yes | $200 free credit, no credit card required |
+
+OpenAI caveat:
+
+- OpenAI prepaid billing still references possible promotional/free credits on some accounts, but there is no fixed public "always-on" free STT quota.
+
+---
+
+## 3) Quality comparison (published signals)
+
+No single apples-to-apples benchmark is maintained by all providers under identical settings. The table below shows the strongest public signals currently available.
+
+| Provider | Models used in this app | Public quality signal | Interpretation |
+|----------|--------------------------|------------------------|----------------|
+| AssemblyAI | Universal-3 Pro / Universal-2 | AssemblyAI benchmark page reports U3 mean WER: **5.9 (EN)** / **8.7 (multilingual)** | Strong published accuracy, but vendor-run benchmark |
+| OpenAI | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | OpenAI reports `gpt-4o-transcribe` has lower WER than Whisper v2/v3 across FLEURS and competitive multilingual performance | Strong qualitative claim; OpenAI does not publish one global WER number per model on pricing page |
+| Groq | `whisper-large-v3`, `whisper-large-v3-turbo` | Groq speech docs list WER: **10.3%** (v3) and **12%** (v3-turbo) | Useful baseline; values come from Groq model table |
+| Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup | Good signal for Nova-3; vendor-run benchmark |
+
+---
+
+## 4) Public benchmark links
+
+These are useful if this document is not updated for a while:
+
+1. Voice Writer STT leaderboard (cross-provider snapshot, includes OpenAI/AssemblyAI/Deepgram):  
+   <https://voicewriter.io/speech-to-text-api-leaderboard/>
+2. AssemblyAI benchmark hub (frequently updated vendor benchmark, many models/providers):  
+   <https://www.assemblyai.com/benchmarks>
+3. Deepgram Nova-3 benchmark notes and methodology context:  
+   <https://developers.deepgram.com/changelog/speech-to-text-api-nova-3>
+4. OpenAI audio model announcement and quality claims:  
+   <https://openai.com/index/introducing-our-next-generation-audio-models/>
+
+Recommendation:
+
+- Use public benchmarks for shortlisting.
+- Run a private bake-off on your own audio (your language mix, microphones, speaking style, and domain jargon matter more than leaderboard averages).
+
+---
+
+## 5) Billing behaviors that can surprise teams
 
 ### AssemblyAI
 
 - Pricing is metered per second.
-- Multi-channel audio is billed per second **per channel**.
+- Multi-channel audio is billed per second per channel.
 
 ### Groq
 
-- Minimum billed length is **10 seconds** per request.
-- Very short clips can cost more than expected if you call the API frequently.
+- Minimum billed length is 10 seconds per request.
+- Very short clips can cost more than expected when called frequently.
 
 ### OpenAI
 
-- `gpt-4o-transcribe` and `gpt-4o-mini-transcribe` are token-based.
-- Effective per-minute cost can vary with audio characteristics and tokenization behavior.
+- Token-based pricing on `gpt-4o*` means effective per-minute cost can vary by transcript/token density.
+- Paid usage requires prepaid credits (minimum top-up applies).
 
 ### Deepgram
 
-- Pricing differs between streaming and pre-recorded paths.
+- Different rates for streaming vs pre-recorded.
 - Multi-channel audio can multiply billed duration.
 
 ---
 
-## 3) Example monthly cost (for rough planning)
-
-Assuming 50 hours of audio/month:
-
-| Provider / Model | Estimated monthly cost |
-|------------------|------------------------|
-| Groq `whisper-large-v3-turbo` | $2.00 |
-| Groq `whisper-large-v3` | $5.55 |
-| AssemblyAI Streaming | $7.50 |
-| OpenAI `gpt-4o-mini-transcribe` | $9.00 |
-| AssemblyAI Universal-3 Pro | $10.50 |
-| Deepgram Nova-3 Batch (mono) | $12.90 |
-| Deepgram Nova-3 Batch (multi) | $15.60 |
-| AssemblyAI Universal-2 | $13.50 |
-| OpenAI `gpt-4o-transcribe` | $18.00 |
-| OpenAI `whisper-1` | $18.00 |
-| Deepgram Nova-3 Streaming (mono) | $23.10 |
-| Deepgram Nova-3 Streaming (multi) | $27.60 |
-
-This is intentionally simplified and excludes taxes, rounding behavior, free-tier credits, and enterprise discounts.
-
----
-
-## 4) Sources
+## 6) Sources
 
 - AssemblyAI pricing: <https://www.assemblyai.com/pricing>
+- AssemblyAI benchmarks: <https://www.assemblyai.com/benchmarks>
 - OpenAI pricing: <https://platform.openai.com/docs/pricing>
+- OpenAI audio models announcement: <https://openai.com/index/introducing-our-next-generation-audio-models/>
+- OpenAI model pages:  
+  <https://platform.openai.com/docs/models/gpt-4o-transcribe>  
+  <https://platform.openai.com/docs/models/gpt-4o-mini-transcribe>
+- OpenAI prepaid billing help: <https://help.openai.com/en/articles/8264644-how-can-i-set-up-prepaid-billing>
 - Groq speech-to-text docs: <https://console.groq.com/docs/speech-to-text>
+- Groq rate limits: <https://console.groq.com/docs/rate-limits>
 - Groq pricing: <https://console.groq.com/docs/pricing>
 - Deepgram pricing: <https://deepgram.com/pricing>
+- Deepgram Nova-3 changelog: <https://developers.deepgram.com/changelog/speech-to-text-api-nova-3>
+- Voice Writer STT leaderboard: <https://voicewriter.io/speech-to-text-api-leaderboard/>
