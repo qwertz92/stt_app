@@ -11,9 +11,11 @@ from .config import (
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
+    DEFAULT_OPENAI_MODEL,
     DEFAULT_PASTE_MODE,
     DOC_MODELS_PATH,
     GROQ_MODELS,
+    OPENAI_MODELS,
     STREAMING_ENGINES,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
@@ -129,6 +131,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "local": "Local (faster-whisper)",
             "assemblyai": "Remote (AssemblyAI)",
             "groq": "Remote (Groq)",
+            "openai": "Remote (OpenAI)",
             "deepgram": "Remote (Deepgram)",
         }
         for value in VALID_ENGINES:
@@ -251,16 +254,34 @@ class SettingsDialog(QtWidgets.QDialog):
         groq_form.addRow("Groq Model", self.groq_model_combo)
         layout.addWidget(groq_box)
 
+        # OpenAI model selector
+        openai_box = QtWidgets.QGroupBox("OpenAI Settings")
+        openai_form = QtWidgets.QFormLayout(openai_box)
+        self.openai_model_combo = QtWidgets.QComboBox()
+        openai_model_labels = {
+            "gpt-4o-mini-transcribe": "gpt-4o-mini-transcribe (fast, low cost)",
+            "gpt-4o-transcribe": "gpt-4o-transcribe (higher quality)",
+            "whisper-1": "whisper-1 (legacy whisper model)",
+        }
+        for value in OPENAI_MODELS:
+            self.openai_model_combo.addItem(
+                openai_model_labels.get(value, value), value
+            )
+        openai_form.addRow("OpenAI Model", self.openai_model_combo)
+        layout.addWidget(openai_box)
+
         # API keys
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
         provider_layout = QtWidgets.QFormLayout(provider_box)
 
         self.assemblyai_key_edit = QtWidgets.QLineEdit()
         self.groq_key_edit = QtWidgets.QLineEdit()
+        self.openai_key_edit = QtWidgets.QLineEdit()
         self.deepgram_key_edit = QtWidgets.QLineEdit()
         for field in (
             self.assemblyai_key_edit,
             self.groq_key_edit,
+            self.openai_key_edit,
             self.deepgram_key_edit,
         ):
             field.setEchoMode(QtWidgets.QLineEdit.Password)
@@ -268,6 +289,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         provider_layout.addRow("AssemblyAI", self.assemblyai_key_edit)
         provider_layout.addRow("Groq", self.groq_key_edit)
+        provider_layout.addRow("OpenAI", self.openai_key_edit)
         provider_layout.addRow("Deepgram", self.deepgram_key_edit)
         provider_note = QtWidgets.QLabel(
             "Keys are saved in Windows Credential Manager via keyring."
@@ -482,6 +504,24 @@ class SettingsDialog(QtWidgets.QDialog):
             transcriber = GroqTranscriber(api_key=api_key)
             return transcriber.test_connection, None
 
+        if engine == "openai":
+            api_key = self._resolve_api_key("openai", self.openai_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+
+            from .transcriber.openai_provider import OpenAITranscriber
+
+            transcriber = OpenAITranscriber(
+                api_key=api_key,
+                model=str(
+                    self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
+                ),
+            )
+            return transcriber.test_connection, None
+
         if engine == "deepgram":
             api_key = self._resolve_api_key("deepgram", self.deepgram_key_edit)
             if not api_key:
@@ -550,8 +590,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.mode_combo, settings.mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(self.groq_model_combo, settings.groq_model)
+        self._select_combo_data(self.openai_model_combo, settings.openai_model)
         self._update_mode_availability()
 
+        if settings.has_openai_key:
+            self.openai_key_edit.setPlaceholderText(
+                "Stored (leave empty to keep)"
+            )
         if settings.has_deepgram_key:
             self.deepgram_key_edit.setPlaceholderText(
                 "Stored (leave empty to keep)"
@@ -604,14 +649,19 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             return
 
+        has_openai_key = self._loaded_settings.has_openai_key
         has_deepgram_key = self._loaded_settings.has_deepgram_key
         has_assemblyai_key = self._loaded_settings.has_assemblyai_key
         has_groq_key = self._loaded_settings.has_groq_key
 
+        openai_value = self.openai_key_edit.text().strip()
         deepgram_value = self.deepgram_key_edit.text().strip()
         assemblyai_value = self.assemblyai_key_edit.text().strip()
         groq_value = self.groq_key_edit.text().strip()
 
+        if openai_value:
+            self._secret_store.set_api_key("openai", openai_value)
+            has_openai_key = True
         if deepgram_value:
             self._secret_store.set_api_key("deepgram", deepgram_value)
             has_deepgram_key = True
@@ -642,11 +692,15 @@ class SettingsDialog(QtWidgets.QDialog):
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
+            has_openai_key=has_openai_key,
             has_deepgram_key=has_deepgram_key,
             has_assemblyai_key=has_assemblyai_key,
             has_groq_key=has_groq_key,
             groq_model=str(
                 self.groq_model_combo.currentData() or DEFAULT_GROQ_MODEL
+            ),
+            openai_model=str(
+                self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
             ),
         )
 

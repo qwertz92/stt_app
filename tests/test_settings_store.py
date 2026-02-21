@@ -3,6 +3,7 @@ import json
 from tts_app.config import (
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_ENGINE,
+    DEFAULT_OPENAI_MODEL,
     DEFAULT_HOTKEY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
@@ -30,7 +31,9 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.mode == DEFAULT_MODE
     assert settings.paste_mode == DEFAULT_PASTE_MODE
     assert settings.keep_transcript_in_clipboard == DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
+    assert settings.has_openai_key is False
     assert settings.has_deepgram_key is False
+    assert settings.openai_model == DEFAULT_OPENAI_MODEL
     assert settings_path.exists()
 
     raw = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -105,13 +108,43 @@ def test_invalid_enum_values_fall_back_to_defaults(tmp_path):
 def test_legacy_unimplemented_engines_fall_back_to_local(tmp_path):
     settings_path = tmp_path / "settings.json"
 
-    for legacy_engine in ("openai", "azure"):
+    for legacy_engine in ("azure",):
         settings_path.write_text(
             json.dumps({"engine": legacy_engine}),
             encoding="utf-8",
         )
         settings = SettingsStore(settings_path).load()
         assert settings.engine == DEFAULT_ENGINE
+
+
+def test_openai_engine_is_valid(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"engine": "openai"}),
+        encoding="utf-8",
+    )
+    settings = SettingsStore(settings_path).load()
+    assert settings.engine == "openai"
+
+
+def test_openai_model_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"openai_model": "gpt-4o-transcribe"}),
+        encoding="utf-8",
+    )
+    settings = SettingsStore(settings_path).load()
+    assert settings.openai_model == "gpt-4o-transcribe"
+
+
+def test_openai_model_invalid_falls_back_to_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"openai_model": "bad-model"}),
+        encoding="utf-8",
+    )
+    settings = SettingsStore(settings_path).load()
+    assert settings.openai_model == DEFAULT_OPENAI_MODEL
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):

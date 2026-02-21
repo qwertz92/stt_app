@@ -20,7 +20,9 @@ from .config import (
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_VAD_ENABLED,
     GROQ_MODELS,
+    DEFAULT_OPENAI_MODEL,
     LEGACY_DEFAULT_HOTKEY,
+    OPENAI_MODELS,
     PREVIOUS_DEFAULT_HOTKEY,
     SCHEMA_VERSION,
     VALID_ENGINES,
@@ -46,10 +48,12 @@ DEFAULTS = {
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "offline_mode": DEFAULT_OFFLINE_MODE,
     "model_dir": DEFAULT_MODEL_DIR,
+    "has_openai_key": False,
     "has_deepgram_key": False,
     "has_assemblyai_key": False,
     "has_groq_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
+    "openai_model": DEFAULT_OPENAI_MODEL,
 }
 
 
@@ -67,10 +71,12 @@ class AppSettings:
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     offline_mode: bool = DEFAULT_OFFLINE_MODE
     model_dir: str = DEFAULT_MODEL_DIR
+    has_openai_key: bool = False
     has_deepgram_key: bool = False
     has_assemblyai_key: bool = False
     has_groq_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
+    openai_model: str = DEFAULT_OPENAI_MODEL
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
@@ -103,6 +109,9 @@ class AppSettings:
         groq_model = str(merged.get("groq_model", DEFAULT_GROQ_MODEL))
         if groq_model not in GROQ_MODELS:
             groq_model = DEFAULT_GROQ_MODEL
+        openai_model = str(merged.get("openai_model", DEFAULT_OPENAI_MODEL))
+        if openai_model not in OPENAI_MODELS:
+            openai_model = DEFAULT_OPENAI_MODEL
 
         return cls(
             schema_version=CURRENT_SCHEMA_VERSION,
@@ -122,10 +131,12 @@ class AppSettings:
             ),
             offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),
             model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
+            has_openai_key=bool(merged.get("has_openai_key", False)),
             has_deepgram_key=bool(merged.get("has_deepgram_key", False)),
             has_assemblyai_key=bool(merged.get("has_assemblyai_key", False)),
             has_groq_key=bool(merged.get("has_groq_key", False)),
             groq_model=groq_model,
+            openai_model=openai_model,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -195,7 +206,6 @@ class SettingsStore:
         migrated.pop("deepgram_api_key", None)
         migrated.pop("assemblyai_api_key", None)
         migrated.pop("groq_api_key", None)
-        migrated.pop("has_openai_key", None)
         migrated.pop("has_azure_key", None)
 
         for key, value in DEFAULTS.items():

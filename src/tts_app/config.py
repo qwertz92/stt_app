@@ -87,13 +87,20 @@ MODEL_REPO_MAP: dict[str, str] = {
 
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
 # Only providers with implemented runtime paths should be user-selectable.
-VALID_ENGINES = ("local", "assemblyai", "groq", "deepgram")
-STREAMING_ENGINES = ("local", "assemblyai")  # engines that support streaming mode
+VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "deepgram")
+STREAMING_ENGINES = ("local", "assemblyai", "openai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
 
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
+
+OPENAI_MODELS = (
+    "gpt-4o-mini-transcribe",
+    "gpt-4o-transcribe",
+    "whisper-1",
+)
+DEFAULT_OPENAI_MODEL = "gpt-4o-mini-transcribe"
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

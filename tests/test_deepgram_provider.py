@@ -382,30 +382,100 @@ class TestDeepgramConnectionTest:
 
 
 # ---------------------------------------------------------------------------
-# Tests: streaming stubs
+# Tests: streaming
 # ---------------------------------------------------------------------------
 
 
-class TestDeepgramStreamingStubs:
-    def test_start_stream_not_implemented(self):
-        t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(NotImplementedError, match="not yet implemented"):
-            t.start_stream()
+class _FakeABNF:
+    OPCODE_BINARY = 2
 
-    def test_push_audio_chunk_not_implemented(self):
+
+class _FakeWebSocketApp:
+    instances = []
+
+    def __init__(self, url, header, on_open, on_message, on_error, on_close):
+        self.url = url
+        self.header = header
+        self.on_open = on_open
+        self.on_message = on_message
+        self.on_error = on_error
+        self.on_close = on_close
+        self.send_calls = []
+        self.closed = False
+        _FakeWebSocketApp.instances.append(self)
+
+    def run_forever(self):
+        self.on_open(self)
+
+    def send(self, payload, opcode=None):
+        self.send_calls.append((payload, opcode))
+
+    def close(self):
+        self.closed = True
+        self.on_close(self, 1000, "closed")
+
+
+class _FakeWebSocketModule:
+    ABNF = _FakeABNF
+    WebSocketApp = _FakeWebSocketApp
+
+
+class TestDeepgramStreaming:
+    def test_push_without_start_raises(self):
         t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(NotImplementedError):
+        with pytest.raises(TranscriptionError, match="not active"):
             t.push_audio_chunk(b"data")
 
-    def test_stop_stream_not_implemented(self):
+    def test_streaming_lifecycle(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
         t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(NotImplementedError):
-            t.stop_stream()
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        partials = []
 
-    def test_abort_stream_not_implemented(self):
+        t.start_stream(on_partial=partials.append)
+        ws = _FakeWebSocketApp.instances[-1]
+        assert ws is not None
+
+        t.push_audio_chunk(b"abcd")
+        assert ws.send_calls[-1][0] == b"abcd"
+        assert ws.send_calls[-1][1] == _FakeABNF.OPCODE_BINARY
+
+        t._handle_stream_message(
+            json.dumps(
+                {
+                    "channel": {"alternatives": [{"transcript": "hello"}]},
+                    "is_final": False,
+                }
+            )
+        )
+        t._handle_stream_message(
+            json.dumps(
+                {
+                    "channel": {"alternatives": [{"transcript": "hello world"}]},
+                    "is_final": True,
+                }
+            )
+        )
+
+        final = t.stop_stream()
+        assert final == "hello world"
+        assert any("hello" in p for p in partials)
+        assert ws.closed is True
+
+    def test_start_stream_twice_raises(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
         t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(NotImplementedError):
-            t.abort_stream()
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        t.start_stream()
+        with pytest.raises(TranscriptionError, match="already active"):
+            t.start_stream()
+        t.abort_stream()
+
+    def test_stop_without_active_session_raises(self):
+        t = DeepgramTranscriber(api_key="key")
+        with pytest.raises(TranscriptionError, match="not active"):
+            t.stop_stream()
 
 
 # ---------------------------------------------------------------------------

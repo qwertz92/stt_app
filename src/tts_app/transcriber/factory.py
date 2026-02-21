@@ -7,6 +7,7 @@ from .assemblyai_provider import AssemblyAITranscriber
 from .deepgram_provider import DeepgramTranscriber
 from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
+from .openai_provider import OpenAITranscriber
 
 
 def create_transcriber(
@@ -37,6 +38,15 @@ def create_transcriber(
             api_key=api_key,
             language_mode=settings.language_mode,
             model=settings.groq_model,
+        )
+    if settings.engine == "openai":
+        api_key = ""
+        if secret_store is not None:
+            api_key = secret_store.get_api_key("openai") or ""
+        return OpenAITranscriber(
+            api_key=api_key,
+            language_mode=settings.language_mode,
+            model=settings.openai_model,
         )
     if settings.engine == "deepgram":
         api_key = ""

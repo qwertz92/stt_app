@@ -86,6 +86,42 @@ def test_streaming_enabled_for_assemblyai():
     _ = app
 
 
+def test_streaming_enabled_for_openai():
+    """Streaming mode item is enabled for OpenAI engine."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="openai", mode="batch"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    streaming_idx = dialog.mode_combo.findData("streaming")
+    assert streaming_idx >= 0
+    item = dialog.mode_combo.model().item(streaming_idx)
+    assert item is not None
+    assert item.isEnabled() is True
+    _ = app
+
+
+def test_streaming_enabled_for_deepgram():
+    """Streaming mode item is enabled for Deepgram engine."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="deepgram", mode="batch"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    streaming_idx = dialog.mode_combo.findData("streaming")
+    assert streaming_idx >= 0
+    item = dialog.mode_combo.model().item(streaming_idx)
+    assert item is not None
+    assert item.isEnabled() is True
+    _ = app
+
+
 def test_switching_to_non_streaming_engine_resets_mode_to_batch():
     """Changing to a non-streaming engine auto-switches mode from streaming to batch."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

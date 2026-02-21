@@ -7,6 +7,7 @@ from tts_app.transcriber.factory import create_transcriber
 from tts_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from tts_app.transcriber.deepgram_provider import DeepgramTranscriber
+from tts_app.transcriber.openai_provider import OpenAITranscriber
 
 
 def test_factory_local_returns_local_transcriber():
@@ -26,10 +27,14 @@ def test_factory_assemblyai_returns_assemblyai_transcriber():
     assert isinstance(t, AssemblyAITranscriber)
 
 
-def test_factory_openai_falls_back_to_local():
+def test_factory_openai_returns_openai_transcriber():
     settings = AppSettings(engine="openai")
-    t = create_transcriber(settings)
-    assert isinstance(t, LocalFasterWhisperTranscriber)
+    class FakeSecretStore:
+        def get_api_key(self, name):
+            return "openai-test-key"
+
+    t = create_transcriber(settings, secret_store=FakeSecretStore())
+    assert isinstance(t, OpenAITranscriber)
 
 
 def test_factory_azure_falls_back_to_local():

@@ -62,7 +62,7 @@ def _make_dialog(settings: AppSettings, secret_values: dict[str, str] | None = N
 
 def test_engine_combo_hides_unimplemented_providers():
     dialog, app, _secret_store = _make_dialog(AppSettings())
-    assert dialog.engine_combo.findData("openai") == -1
+    assert dialog.engine_combo.findData("openai") >= 0
     assert dialog.engine_combo.findData("azure") == -1
     _ = app
 
@@ -114,6 +114,49 @@ def test_test_connection_runs_in_background_worker(monkeypatch):
     _ = app
 
 
+def test_openai_connection_runs_in_background_worker(monkeypatch):
+    import tts_app.transcriber.openai_provider as openai_provider_module
+
+    class _FakeOpenAITranscriber:
+        def __init__(
+            self,
+            api_key: str,
+            language_mode: str = "auto",
+            model: str = "gpt-4o-mini-transcribe",
+        ) -> None:
+            self._api_key = api_key
+            self._language_mode = language_mode
+            self._model = model
+
+        def test_connection(self) -> tuple[bool, str]:
+            return True, "Connection OK — API key is valid."
+
+    monkeypatch.setattr(
+        settings_dialog_module.threading,
+        "Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        openai_provider_module,
+        "OpenAITranscriber",
+        _FakeOpenAITranscriber,
+    )
+
+    dialog, app, _secret_store = _make_dialog(AppSettings(engine="openai"))
+    engine_index = dialog.engine_combo.findData("openai")
+    dialog.engine_combo.setCurrentIndex(engine_index)
+    dialog.openai_key_edit.setText("oa-key")
+    model_index = dialog.openai_model_combo.findData("gpt-4o-transcribe")
+    dialog.openai_model_combo.setCurrentIndex(model_index)
+
+    dialog._test_connection()
+
+    assert dialog.test_conn_button.isEnabled() is True
+    assert dialog.test_conn_result.text().startswith("\u2713")
+    assert "Connection OK" in dialog.test_conn_result.text()
+    _ = app
+
+
 def test_stale_connection_result_is_ignored():
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="deepgram"))
     dialog._connection_test_id = 2
@@ -129,11 +172,17 @@ def test_save_persists_only_supported_remote_keys():
     dialog, app, secret_store = _make_dialog(AppSettings())
     dialog.assemblyai_key_edit.setText("aai-key")
     dialog.groq_key_edit.setText("groq-key")
+    dialog.openai_key_edit.setText("openai-key")
     dialog.deepgram_key_edit.setText("dg-key")
 
     dialog._save()
 
     providers = [provider for provider, _value in secret_store.set_calls]
-    assert providers == ["deepgram", "assemblyai", "groq"]
-    assert all(provider not in {"openai", "azure"} for provider in providers)
+    assert providers == ["openai", "deepgram", "assemblyai", "groq"]
+    assert "azure" not in providers
+    assert dialog._loaded_settings.openai_model in {
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
+        "whisper-1",
+    }
     _ = app

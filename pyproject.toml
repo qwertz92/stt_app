@@ -13,6 +13,7 @@ dependencies = [
     "keyring==25.7.0",
     "pywin32==308; platform_system == 'Windows'",
     "assemblyai>=0.37.0",
+    "websocket-client>=1.8.0",
 ]
 
 [project.scripts]
