@@ -9,7 +9,6 @@ dependencies = [
     "sounddevice==0.5.5",
     "numpy==2.4.2",
     "faster-whisper==1.2.1",
-    "requests==2.32.5",
     "keyring==25.7.0",
     "pywin32==308; platform_system == 'Windows'",
     "assemblyai>=0.37.0",
@@ -22,6 +21,7 @@ tts-app = "tts_app.main:run"
 [project.optional-dependencies]
 dev = [
     "pytest==8.3.4",
+    "pytest-cov>=7.0.0",
     "pytest-mock==3.14.0",
     "ruff>=0.15.1",
 ]

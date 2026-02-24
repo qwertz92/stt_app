@@ -54,7 +54,7 @@ Right-click the **system tray icon** → **Settings**.
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | Model size | Larger = more accurate, slower | `small` |
-| Engine | Local (on device) or AssemblyAI (cloud) | Local |
+| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram | Local |
 | Mode | Batch (after stop) or Streaming (live, experimental) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
 | Paste mode | How text is inserted (Auto, WM_PASTE, SendInput) | Auto |

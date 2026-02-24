@@ -73,13 +73,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self._build_local_tab()
         self._build_remote_tab()
 
-        # --- Status bar for save confirmation ---
-        self.save_status = QtWidgets.QLabel("")
-        self.save_status.setAlignment(QtCore.Qt.AlignCenter)
-        self._save_timer = QtCore.QTimer(self)
-        self._save_timer.setSingleShot(True)
-        self._save_timer.timeout.connect(lambda: self.save_status.setText(""))
-
         # --- Bottom buttons ---
         self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
         self.copy_diag_button.clicked.connect(self._copy_diagnostics)
@@ -98,7 +91,6 @@ class SettingsDialog(QtWidgets.QDialog):
         root = QtWidgets.QVBoxLayout(self)
         root.addWidget(self.engine_indicator)
         root.addWidget(self.tabs)
-        root.addWidget(self.save_status)
         root.addLayout(buttons)
 
     # --- General tab ---
@@ -706,13 +698,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._settings_store.save(settings)
         self._loaded_settings = settings
-
-        # Show confirmation feedback instead of closing the dialog.
-        self.save_status.setText("\u2713 Settings saved")
-        self.save_status.setStyleSheet(
-            "color: #1b5e20; font-weight: bold; padding: 2px;"
-        )
-        self._save_timer.start(3000)
+        self.accept()
 
 
 # ======================================================================

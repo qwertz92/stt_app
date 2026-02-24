@@ -4,6 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
+import pytest
+
 
 def _load_benchmark_module():
     root = Path(__file__).resolve().parents[1]
@@ -80,3 +82,72 @@ def test_successful_cases_filters_errors():
 
     successful = module._successful_cases([ok_case, bad_case])
     assert successful == [ok_case]
+
+
+# --- BenchmarkCase download_seconds tests ---
+
+
+class TestBenchmarkDownloadSeconds:
+    def test_benchmark_case_has_download_seconds(self):
+        module = _load_benchmark_module()
+        case = module.BenchmarkCase(
+            model="tiny",
+            device="cpu",
+            compute_type="int8",
+            download_seconds=3.14,
+            load_seconds=1.0,
+            runs=[],
+        )
+        assert case.download_seconds == pytest.approx(3.14)
+
+    def test_case_from_dict_parses_download_seconds(self):
+        module = _load_benchmark_module()
+        data = {
+            "model": "small",
+            "device": "cpu",
+            "compute_type": "int8",
+            "download_seconds": 5.5,
+            "load_seconds": 2.0,
+            "runs": [],
+        }
+        case = module._case_from_dict(data)
+        assert case.download_seconds == pytest.approx(5.5)
+
+    def test_case_from_dict_defaults_download_to_zero(self):
+        module = _load_benchmark_module()
+        data = {
+            "model": "small",
+            "device": "cpu",
+            "compute_type": "int8",
+            "load_seconds": 2.0,
+            "runs": [],
+        }
+        case = module._case_from_dict(data)
+        assert case.download_seconds == pytest.approx(0.0)
+
+    def test_csv_includes_download_seconds_column(self, tmp_path):
+        module = _load_benchmark_module()
+        run = module.BenchmarkRun(
+            run_index=1,
+            seconds=1.0,
+            audio_duration_seconds=2.0,
+            real_time_factor=0.5,
+            transcript_chars=10,
+            transcript_words=2,
+            detected_language="en",
+            language_probability=0.9,
+        )
+        case = module.BenchmarkCase(
+            model="tiny",
+            device="cpu",
+            compute_type="int8",
+            download_seconds=4.2,
+            load_seconds=0.5,
+            runs=[run],
+        )
+        out_path = tmp_path / "bench.csv"
+        module._write_csv(out_path, [case])
+
+        text = out_path.read_text(encoding="utf-8")
+        assert "download_seconds" in text
+        assert "4.2" in text

@@ -3,7 +3,7 @@ from __future__ import annotations
 # Global configuration values. Keep defaults and tunables centralized here.
 
 APP_NAME = "tts_app"
-APP_DISPLAY_NAME = "TTS Dictation App"
+APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "tts_app"
 
 SCHEMA_VERSION = 8

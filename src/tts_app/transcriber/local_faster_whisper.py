@@ -423,7 +423,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 max_window_seconds=self.stream_partial_window_s
             )
         except Exception as exc:
-            self._stream_error = exc
+            with self._stream_lock:
+                self._stream_error = exc
             return
 
         with self._stream_lock:

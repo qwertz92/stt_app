@@ -66,8 +66,11 @@ def detect_model_name(source_dir: Path) -> str | None:
     if folder_name in _FOLDER_HINTS:
         return _FOLDER_HINTS[folder_name]
 
-    # Partial match: folder contains a known model name
-    for hint, short_name in _FOLDER_HINTS.items():
+    # Partial match: folder contains a known model name.
+    # Sort hints longest-first so "large-v3-turbo" matches before "large-v3".
+    for hint, short_name in sorted(
+        _FOLDER_HINTS.items(), key=lambda item: len(item[0]), reverse=True
+    ):
         if hint in folder_name:
             return short_name
 

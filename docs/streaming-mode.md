@@ -7,7 +7,7 @@ This document explains how streaming mode is implemented in this project, how it
 - `Batch` mode: stable default.
 - `Streaming` mode: implemented for local provider (`faster-whisper`), AssemblyAI (`RealtimeTranscriber`), and Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
-- Groq does not offer a streaming/real-time transcription API.
+- OpenAI and Groq do not offer streaming/real-time transcription APIs.
 
 ## 2) Batch vs Streaming: behavioral difference
 
