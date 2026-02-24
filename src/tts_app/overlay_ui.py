@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import ctypes
-
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
@@ -32,7 +30,6 @@ class OverlayUI(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
 
-        self._last_external_foreground_hwnd: int | None = None
         self._copy_feedback_timer = QtCore.QTimer(self)
         self._copy_feedback_timer.setSingleShot(True)
         self._copy_feedback_timer.setInterval(850)
@@ -50,7 +47,6 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_button.setFixedWidth(64)
         self._copy_button.setFixedHeight(24)
         self._copy_button.setToolTip("Copy overlay text")
-        self._copy_button.pressed.connect(self._remember_external_foreground_window)
         self._copy_button.clicked.connect(self.copy_detail_text)
 
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
@@ -213,19 +209,6 @@ class OverlayUI(QtWidgets.QWidget):
         if self.height() != desired_window_height:
             self.resize(self.width(), desired_window_height)
 
-    def _remember_external_foreground_window(self) -> None:
-        hwnd = self._get_foreground_window()
-        own = int(self.winId() or 0)
-        if hwnd and hwnd != own:
-            self._last_external_foreground_hwnd = hwnd
-
-    def _restore_external_foreground_window(self) -> None:
-        hwnd = self._last_external_foreground_hwnd
-        self._last_external_foreground_hwnd = None
-        if not hwnd:
-            return
-        self._set_foreground_window(hwnd)
-
     def _set_copy_button_feedback(self, copied: bool) -> None:
         self._copy_button.setProperty("copied", copied)
         self._copy_button.setText("Copied" if copied else "Copy")
@@ -240,26 +223,9 @@ class OverlayUI(QtWidgets.QWidget):
         text = self._detail_label.text()
         if not text:
             return
-        QtGui.QGuiApplication.clipboard().setText(text)
-        self._set_copy_button_feedback(True)
-        self._copy_feedback_timer.start()
-        QtCore.QTimer.singleShot(0, self._restore_external_foreground_window)
-
-    def _get_foreground_window(self) -> int | None:
         try:
-            user32 = ctypes.windll.user32
-            hwnd = int(user32.GetForegroundWindow() or 0)
-            return hwnd or None
-        except Exception:
-            return None
-
-    def _set_foreground_window(self, hwnd: int) -> None:
-        try:
-            user32 = ctypes.windll.user32
-            target = int(hwnd)
-            if not bool(user32.IsWindow(target)):
-                return
-            user32.ShowWindow(target, 5)  # SW_SHOW
-            user32.SetForegroundWindow(target)
+            QtGui.QGuiApplication.clipboard().setText(text)
         except Exception:
             return
+        self._set_copy_button_feedback(True)
+        self._copy_feedback_timer.start()

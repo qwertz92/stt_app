@@ -96,51 +96,93 @@ SSL: CERTIFICATE_VERIFY_FAILED
 certificate verify failed: unable to get local issuer certificate
 ```
 
-This happens when a corporate proxy (Zscaler, BlueCoat, Forcepoint) intercepts HTTPS and replaces the SSL certificate. Python does not trust the proxy's certificate.
+This happens when a corporate proxy (Zscaler, BlueCoat, Forcepoint) intercepts HTTPS and replaces the SSL certificate with its own. Python does not trust the proxy's certificate.
 
-The app and download script detect this error and print actionable instructions.
+**Affected features:**
+- Model download from HuggingFace Hub
+- All remote transcription providers (AssemblyAI, OpenAI, Groq, Deepgram)
+- Connection tests in the Settings dialog
 
-### Fix 1: Corporate CA bundle (recommended)
+The app detects SSL errors and shows actionable instructions. The fix below applies to all HTTPS connections (model downloads AND remote providers).
 
-Ask IT for the corporate root CA certificate (`.pem` or `.crt` file). Then set environment variables:
+### Fix 1: Combined CA bundle (recommended)
 
+You need a PEM file that contains **both** the standard root CAs and your corporate proxy CA. This ensures all HTTPS connections work — not just those to your proxy, but to all servers.
+
+**Step 1 — Get the corporate root CA certificate**
+
+Ask IT for the corporate root CA certificate. Common file types:
+- `.pem` — ready to use (PEM format, starts with `-----BEGIN CERTIFICATE-----`)
+- `.crt` — usually PEM format, check the first line
+- `.cer` — may be PEM or DER (binary). If it starts with `-----BEGIN`, it's PEM.
+
+If you have a `.cer` file in DER (binary) format, convert it to PEM first:
 ```powershell
-$env:REQUESTS_CA_BUNDLE = "C:\path\to\corporate-ca-bundle.pem"
-$env:SSL_CERT_FILE      = "C:\path\to\corporate-ca-bundle.pem"
-python scripts/download_model.py --model small
+certutil -encode corporate-ca.cer corporate-ca.pem
 ```
 
-To make permanent:
+**Step 2 — Create a combined CA bundle**
+
 ```powershell
-[System.Environment]::SetEnvironmentVariable("REQUESTS_CA_BUNDLE", "C:\path\to\corporate-ca-bundle.pem", "User")
-[System.Environment]::SetEnvironmentVariable("SSL_CERT_FILE", "C:\path\to\corporate-ca-bundle.pem", "User")
+# Find certifi's built-in CA bundle:
+python -c "import certifi; print(certifi.where())"
+# Output example: C:\Users\you\.venv\Lib\site-packages\certifi\cacert.pem
+
+# Create a combined bundle (copy default CAs + append your corporate CA):
+Copy-Item (python -c "import certifi; print(certifi.where())") .\combined-ca-bundle.pem
+Get-Content "C:\path\to\corporate-ca.pem" | Add-Content .\combined-ca-bundle.pem
 ```
+
+**Step 3 — Set environment variables**
+
+For the current session:
+```powershell
+$env:REQUESTS_CA_BUNDLE = "C:\path\to\combined-ca-bundle.pem"
+$env:SSL_CERT_FILE      = "C:\path\to\combined-ca-bundle.pem"
+python main.py
+```
+
+To make permanent (survives restarts):
+```powershell
+$bundlePath = (Resolve-Path ".\combined-ca-bundle.pem").Path
+[System.Environment]::SetEnvironmentVariable("REQUESTS_CA_BUNDLE", $bundlePath, "User")
+[System.Environment]::SetEnvironmentVariable("SSL_CERT_FILE", $bundlePath, "User")
+```
+
+After setting permanent variables, restart your terminal. All Python HTTPS connections will use the combined bundle automatically.
 
 ### Fix 2: Export CA from browser
 
-1. Open `https://huggingface.co` in Chrome/Edge.
-2. Click lock icon → "Connection is secure" → "Certificate".
-3. Go to **Certification Path** → select the **root** certificate.
-4. Click "View Certificate" → "Details" → "Copy to File..." → Base-64 encoded X.509 (.CER).
-5. Set `REQUESTS_CA_BUNDLE` to the exported file path.
+If you don't have the certificate file from IT:
 
-### Fix 3: Inject CA into certifi
+1. Open any HTTPS site (e.g. `https://huggingface.co`) in Chrome/Edge.
+2. Click the lock icon → "Connection is secure" → "Certificate".
+3. Go to **Certification Path** → select the **root** certificate (top of the chain, typically named after your proxy, e.g. "Zscaler Root CA").
+4. Click "View Certificate" → "Details" → "Copy to File..." → choose **Base-64 encoded X.509 (.CER)**.
+5. Then follow Fix 1 starting from Step 2.
+
+### Fix 3: Inject CA into certifi directly
+
+This modifies certifi's built-in bundle. Simpler but less portable — the change is lost when certifi is upgraded.
 
 ```powershell
 # Find certifi's CA bundle:
 python -c "import certifi; print(certifi.where())"
 
 # Append corporate CA (make a backup first!):
+Copy-Item (python -c "import certifi; print(certifi.where())") certifi-backup.pem
 Get-Content "C:\path\to\corporate-ca.pem" | Add-Content (python -c "import certifi; print(certifi.where())")
 ```
 
-### Fix 4: Download elsewhere
+### Fix 4: Use local engine only
 
-Download models on an unrestricted machine and transfer files. See [Models & Offline Setup](models.md#offline-download).
+If SSL issues only affect remote providers and you've already downloaded the model, switch to the local engine in Settings and enable **Offline mode**. Local transcription does not need any network access after the initial model download.
 
-### Remote providers (AssemblyAI etc.)
-
-The same SSL issue affects cloud providers. The CA bundle fix applies to all HTTPS connections. Alternatively, use the local engine which only needs internet for the initial model download.
+To download models on a machine without proxy issues:
+```powershell
+python scripts/download_model.py --model small
+```
+Then transfer the files. See [Models & Offline Setup](models.md#offline-download).
 
 ---
 

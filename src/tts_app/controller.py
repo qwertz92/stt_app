@@ -146,6 +146,21 @@ class DictationController(QtCore.QObject):
             self._hotkey_registration_ok = True
             self._hotkey_notice = None
 
+    def on_settings_changed(self) -> None:
+        """Reload settings after user applies changes in the settings dialog.
+
+        Re-registers the hotkey.  When the engine is local, triggers a
+        background model preload so the first transcription is instant.
+        """
+        self.reload_settings(re_register_hotkey=True)
+        if self._settings.engine == DEFAULT_ENGINE:
+            self._overlay.set_state("Processing", "Loading model...")
+            self._preload_future = self._preload_executor.submit(
+                self._preload_model_worker
+            )
+        else:
+            self.show_idle_status()
+
     def show_idle_status(self) -> None:
         if not self._hotkey_registration_ok:
             self._overlay.set_state(

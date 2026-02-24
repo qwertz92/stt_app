@@ -110,8 +110,7 @@ def _create_tray_icon(
             app_logger=app_logger,
         )
         if dialog.exec() == QtWidgets.QDialog.Accepted:
-            controller.reload_settings(re_register_hotkey=True)
-            controller.show_idle_status()
+            controller.on_settings_changed()
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())

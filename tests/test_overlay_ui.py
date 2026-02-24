@@ -31,6 +31,53 @@ def test_overlay_copy_button_copies_detail_text(monkeypatch):
     assert overlay._copy_button.text() == "Copy"
 
 
+def test_overlay_copy_button_stays_functional_after_repeated_clicks(monkeypatch):
+    """Ensure the copy button remains clickable after multiple uses."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    overlay = OverlayUI()
+    overlay.set_state("Done", "first text")
+
+    overlay._copy_button.click()
+    assert fake_clipboard.text() == "first text"
+    assert overlay._copy_button.isEnabled()
+
+    # Wait for feedback reset
+    QtTest.QTest.qWait(900)
+    assert overlay._copy_button.text() == "Copy"
+
+    # Update text and click again
+    overlay.set_state("Done", "second text")
+    overlay._copy_button.click()
+    assert fake_clipboard.text() == "second text"
+    assert overlay._copy_button.text() == "Copied"
+    assert overlay._copy_button.isEnabled()
+
+
+def test_overlay_copy_button_survives_clipboard_error(monkeypatch):
+    """If clipboard.setText() raises, the button must not freeze."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class FailingClipboard:
+        def setText(self, text: str):
+            raise RuntimeError("clipboard locked")
+
+        def text(self) -> str:
+            return ""
+
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", FailingClipboard)
+
+    overlay = OverlayUI()
+    overlay.set_state("Done", "some text")
+    overlay._copy_button.click()
+
+    # Button should stay enabled and show "Copy" (not "Copied")
+    assert overlay._copy_button.isEnabled()
+    assert overlay._copy_button.text() == "Copy"
+
+
 def test_overlay_copy_button_disabled_when_detail_empty():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

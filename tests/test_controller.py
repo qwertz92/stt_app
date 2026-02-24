@@ -708,3 +708,68 @@ def test_preload_worker_persists_fallback_model(monkeypatch):
 
     controller.shutdown()
     _ = app
+
+
+# ---------------------------------------------------------------------------
+# on_settings_changed tests
+# ---------------------------------------------------------------------------
+
+
+def test_on_settings_changed_preloads_for_local_engine():
+    """on_settings_changed() should trigger preload when switching to local."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+
+    def mock_preload():
+        preload_called.append(True)
+        controller.model_preload_done.emit(True, "Model loaded: small")
+
+    controller._preload_model_worker = mock_preload
+    controller.on_settings_changed()
+
+    assert len(preload_called) == 1
+    # Should have set "Processing" before preloading
+    assert any(s[0] == "Processing" for s in overlay.states)
+    controller.shutdown()
+    _ = app
+
+
+def test_on_settings_changed_skips_preload_for_remote_engine():
+    """on_settings_changed() should show idle for remote engines."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="groq", hotkey=FALLBACK_HOTKEY)
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller.on_settings_changed()
+
+    assert len(preload_called) == 0
+    # Should show idle (or error from hotkey fallback) — NOT "Processing"
+    last_state = overlay.states[-1][0]
+    assert last_state in ("Idle", "Error")
+    controller.shutdown()
+    _ = app
