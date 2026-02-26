@@ -108,6 +108,18 @@ This happens when a corporate proxy (Zscaler, BlueCoat, Forcepoint) intercepts H
 
 The app detects SSL errors and shows actionable instructions. The fix below applies to all HTTPS connections (model downloads AND remote providers).
 
+> **Important:** You must set **both** `SSL_CERT_FILE` **and** `REQUESTS_CA_BUNDLE` to the same combined bundle file. Different libraries read different variables:
+>
+> | Provider     | HTTP library   | Reads env var              |
+> |-------------|----------------|----------------------------|
+> | Groq        | `httpx`        | `SSL_CERT_FILE`*           |
+> | OpenAI      | `urllib`        | `SSL_CERT_FILE`            |
+> | Deepgram    | `urllib`        | `SSL_CERT_FILE`            |
+> | AssemblyAI  | `requests`     | `REQUESTS_CA_BUNDLE`       |
+> | HuggingFace | `requests`     | `REQUESTS_CA_BUNDLE`       |
+>
+> \* The app passes the bundle explicitly to `httpx` after reading `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE`.
+
 ### Fix 1: Combined CA bundle (recommended)
 
 You need a PEM file that contains **both** the standard root CAs and your corporate proxy CA. This ensures all HTTPS connections work — not just those to your proxy, but to all servers.

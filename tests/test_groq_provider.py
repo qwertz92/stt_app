@@ -467,3 +467,62 @@ class TestSettingsStoreGroq:
 
         assert "whisper-large-v3" in GROQ_MODELS
         assert "whisper-large-v3-turbo" in GROQ_MODELS
+
+
+# ---------------------------------------------------------------------------
+# Groq SSL CA bundle passthrough
+# ---------------------------------------------------------------------------
+
+
+class TestGroqSSLBundle:
+    def test_build_client_passes_httpx_verify_when_ssl_context_available(
+        self, monkeypatch
+    ):
+        """When create_ssl_context() returns a context, _build_client should
+        pass an httpx.Client with verify=<SSLContext> to the Groq constructor."""
+        import ssl
+
+        fake_ctx = ssl.create_default_context()
+        monkeypatch.setattr(
+            "tts_app.transcriber.groq_provider.create_ssl_context",
+            lambda: fake_ctx,
+        )
+
+        captured_kwargs: list[dict] = []
+
+        class SpyGroqClient:
+            def __init__(self, **kwargs):
+                captured_kwargs.append(kwargs)
+
+        t = GroqTranscriber(
+            api_key="test-key",
+            groq_client_class=SpyGroqClient,
+        )
+        t._groq_class = SpyGroqClient
+        t._build_client()
+
+        assert len(captured_kwargs) == 1
+        assert "http_client" in captured_kwargs[0]
+
+    def test_build_client_uses_default_when_no_bundle(self, monkeypatch):
+        """Without a CA bundle, _build_client should NOT pass http_client."""
+        monkeypatch.setattr(
+            "tts_app.transcriber.groq_provider.create_ssl_context",
+            lambda: None,
+        )
+
+        captured_kwargs: list[dict] = []
+
+        class SpyGroqClient:
+            def __init__(self, **kwargs):
+                captured_kwargs.append(kwargs)
+
+        t = GroqTranscriber(
+            api_key="test-key",
+            groq_client_class=SpyGroqClient,
+        )
+        t._groq_class = SpyGroqClient
+        t._build_client()
+
+        assert len(captured_kwargs) == 1
+        assert "http_client" not in captured_kwargs[0]

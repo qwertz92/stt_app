@@ -17,7 +17,7 @@ from ..config import (
     OPENAI_MODELS,
     VALID_LANGUAGE_MODES,
 )
-from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
 OPENAI_API_BASE = "https://api.openai.com/v1"
@@ -126,7 +126,10 @@ class OpenAITranscriber(ITranscriber):
             req.add_header("Authorization", self._auth_header())
             req.add_header("Content-Type", content_type)
 
-            with urllib.request.urlopen(req, timeout=self._request_timeout_s) as resp:
+            ssl_ctx = create_ssl_context()
+            with urllib.request.urlopen(
+                req, timeout=self._request_timeout_s, context=ssl_ctx
+            ) as resp:
                 payload = resp.read()
 
             try:
@@ -168,7 +171,8 @@ class OpenAITranscriber(ITranscriber):
         )
         req.add_header("Authorization", self._auth_header())
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            ssl_ctx = create_ssl_context()
+            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:

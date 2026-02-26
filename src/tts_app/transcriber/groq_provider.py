@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from ..config import DEFAULT_GROQ_MODEL, DOC_SSL_PROXY_PATH
-from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
 
@@ -71,8 +71,23 @@ class GroqTranscriber(ITranscriber):
         return self._groq_class
 
     def _build_client(self):
-        """Create a Groq client instance."""
+        """Create a Groq client instance.
+
+        When a custom CA bundle is detected (via ``SSL_CERT_FILE`` or
+        ``REQUESTS_CA_BUNDLE``), an ``httpx.Client(verify=<SSLContext>)``
+        is passed so that corporate proxy / Zscaler certificates are
+        trusted regardless of which env var the user has set.
+        """
         cls = self._get_groq_class()
+        ssl_ctx = create_ssl_context()
+        if ssl_ctx is not None:
+            try:
+                import httpx  # noqa: F811 - runtime import
+
+                http_client = httpx.Client(verify=ssl_ctx)
+                return cls(api_key=self._api_key, http_client=http_client)
+            except Exception:
+                pass  # fall through to default client
         return cls(api_key=self._api_key)
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:

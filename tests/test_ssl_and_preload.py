@@ -1,13 +1,16 @@
-"""Tests for SSL error detection, find_cached_models, model preloading, and API validation."""
+"""Tests for SSL error detection, CA bundle resolution, find_cached_models,
+model preloading, and API validation."""
 
 from __future__ import annotations
 
+import os
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
 
+from tts_app.ssl_utils import create_ssl_context, resolve_ca_bundle
 from tts_app.transcriber.base import TranscriptionError
 from tts_app.transcriber.local_faster_whisper import (
     LocalFasterWhisperTranscriber,
@@ -47,6 +50,80 @@ class TestIsSSLError:
     def test_sslcertverificationerror_class_name(self):
         exc = Exception("SSLCertVerificationError: something failed")
         assert _is_ssl_error(exc) is True
+
+
+# ---------------------------------------------------------------------------
+# CA bundle resolution
+# ---------------------------------------------------------------------------
+
+
+class TestResolveCABundle:
+    def test_returns_none_when_no_env_vars(self, monkeypatch):
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        assert resolve_ca_bundle() is None
+
+    def test_returns_ssl_cert_file_when_set(self, tmp_path, monkeypatch):
+        bundle = tmp_path / "ca-bundle.pem"
+        bundle.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        assert resolve_ca_bundle() == str(bundle)
+
+    def test_returns_requests_ca_bundle_when_set(self, tmp_path, monkeypatch):
+        bundle = tmp_path / "ca-bundle.pem"
+        bundle.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
+        assert resolve_ca_bundle() == str(bundle)
+
+    def test_ssl_cert_file_takes_precedence(self, tmp_path, monkeypatch):
+        bundle1 = tmp_path / "ssl-cert.pem"
+        bundle2 = tmp_path / "requests-bundle.pem"
+        bundle1.write_text("cert1")
+        bundle2.write_text("cert2")
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle1))
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle2))
+        assert resolve_ca_bundle() == str(bundle1)
+
+    def test_ignores_nonexistent_path(self, monkeypatch):
+        monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/path/ca.pem")
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        assert resolve_ca_bundle() is None
+
+    def test_ignores_empty_value(self, monkeypatch):
+        monkeypatch.setenv("SSL_CERT_FILE", "")
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        assert resolve_ca_bundle() is None
+
+
+class TestCreateSSLContext:
+    def test_returns_none_when_no_bundle(self, monkeypatch):
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        assert create_ssl_context() is None
+
+    def test_returns_ssl_context_when_bundle_exists(self, tmp_path, monkeypatch):
+        # Use a real PEM file (system cert) if available, otherwise skip
+        import ssl
+        bundle = tmp_path / "ca-bundle.pem"
+        # Create a minimal valid PEM by using the default context's certs
+        ctx = ssl.create_default_context()
+        certs = ctx.get_ca_certs(binary_form=True)
+        if not certs:
+            pytest.skip("No system CA certs available for test")
+        # Write one cert as PEM
+        import base64
+        pem = (
+            "-----BEGIN CERTIFICATE-----\n"
+            + base64.encodebytes(certs[0]).decode()
+            + "-----END CERTIFICATE-----\n"
+        )
+        bundle.write_text(pem)
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        result = create_ssl_context()
+        assert result is not None
+        assert isinstance(result, ssl.SSLContext)
 
 
 class TestFormatTranscriptionErrorSSL:
