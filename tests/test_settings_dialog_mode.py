@@ -1,4 +1,4 @@
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from tts_app.settings_dialog import SettingsDialog
 from tts_app.settings_store import AppSettings
@@ -142,4 +142,63 @@ def test_switching_to_non_streaming_engine_resets_mode_to_batch():
 
     # Mode should have auto-switched to batch.
     assert dialog.mode_combo.currentData() == "batch"
+    _ = app
+
+
+# ------------------------------------------------------------------
+# Save behaviour: dialog stays open, emits settings_changed signal
+# ------------------------------------------------------------------
+
+
+def test_save_emits_settings_changed_signal():
+    """_save() emits settings_changed and does NOT close the dialog."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    received: list[bool] = []
+    dialog.settings_changed.connect(lambda: received.append(True))
+
+    dialog._save()
+
+    assert store.saved is not None
+    assert len(received) == 1, "settings_changed signal should fire once"
+    # Dialog must still be visible (not closed via accept)
+    assert dialog.result() != QtWidgets.QDialog.Accepted
+    _ = app
+
+
+def test_save_shows_status_feedback():
+    """_save() shows a status message in the save-status label."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog._save_status_label.text() == ""
+    dialog._save()
+    assert "saved" in dialog._save_status_label.text().lower()
+    _ = app
+
+
+def test_settings_dialog_has_tab_stylesheet():
+    """Tab widget should have distinct styling for selected/hover tabs."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    stylesheet = dialog.tabs.styleSheet()
+    assert "QTabBar::tab:selected" in stylesheet
+    assert "QTabBar::tab:hover" in stylesheet
     _ = app

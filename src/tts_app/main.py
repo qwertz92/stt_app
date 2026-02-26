@@ -109,8 +109,8 @@ def _create_tray_icon(
             secret_store=secret_store,
             app_logger=app_logger,
         )
-        if dialog.exec() == QtWidgets.QDialog.Accepted:
-            controller.on_settings_changed()
+        dialog.settings_changed.connect(controller.on_settings_changed)
+        dialog.exec()
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())
@@ -125,6 +125,11 @@ def _create_tray_icon(
     copy_last_action.triggered.connect(copy_last_transcript)
     copy_diag_action.triggered.connect(copy_diagnostics)
 
+    def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
+            open_settings_dialog()
+
+    tray_icon.activated.connect(on_tray_activated)
     tray_icon.setContextMenu(menu)
     return tray_icon
 

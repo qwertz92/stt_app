@@ -99,3 +99,14 @@ def test_overlay_grows_for_long_text_but_caps_at_max_height():
     assert overlay.height() > short_height
     assert overlay.height() <= OVERLAY_MAX_HEIGHT
     assert overlay._detail_scroll.verticalScrollBar().maximum() > 0
+
+
+def test_overlay_has_native_event_override():
+    """OverlayUI should override nativeEvent for single-click copy on Windows."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    # Verify the method exists and is callable on the subclass
+    assert hasattr(overlay, "nativeEvent")
+    # nativeEvent should be overridden, not just inherited
+    assert type(overlay).nativeEvent is not QtWidgets.QWidget.nativeEvent

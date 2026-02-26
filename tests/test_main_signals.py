@@ -1,6 +1,6 @@
 import signal
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from tts_app.main import _install_signal_handlers, _create_tray_icon
 
@@ -35,6 +35,7 @@ class FakeController:
         self.toggle_calls = 0
         self._overlay = type("obj", (object,), {"set_state": lambda *a: None})()
         self._last_transcript = ""
+        self.settings_changed_calls = 0
 
     def toggle_recording(self):
         self.toggle_calls += 1
@@ -47,6 +48,9 @@ class FakeController:
 
     def copy_last_transcript_to_clipboard(self):
         return bool(self._last_transcript)
+
+    def on_settings_changed(self):
+        self.settings_changed_calls += 1
 
     def shutdown(self):
         pass
@@ -103,3 +107,19 @@ def test_tray_toggle_action_calls_controller():
     toggle_action = [a for a in menu.actions() if a.text() == "Toggle Dictation"][0]
     toggle_action.trigger()
     assert controller.toggle_calls == 1
+
+
+def test_tray_double_click_connected():
+    """Double-clicking the tray icon should be connected to open settings."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = FakeController()
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+    )
+    # The activated signal should have at least one receiver connected.
+    sig = QtCore.SIGNAL("activated(QSystemTrayIcon::ActivationReason)")
+    assert tray.receivers(sig) > 0

@@ -163,3 +163,8 @@ def test_model_dir_roundtrip(tmp_path):
 
     persisted = json.loads(settings_path.read_text(encoding="utf-8"))
     assert persisted["model_dir"] == "C:\\whisper-models"
+
+
+def test_keep_transcript_in_clipboard_defaults_to_false():
+    """Clipboard should NOT keep transcript by default (opt-in, not opt-out)."""
+    assert DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD is False

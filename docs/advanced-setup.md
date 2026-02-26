@@ -40,6 +40,7 @@ This downloads all packages (including compiled binaries like `pywin32`, `ctrans
 #### Step 2: Transfer
 
 Copy these to the target machine:
+
 - The `wheelhouse/` folder
 - The project source code
 - `requirements-dev-win.txt`
@@ -81,6 +82,7 @@ pyinstaller tts_app.spec
 ```
 
 Notes:
+
 - The resulting EXE should be code-signed for corporate environments (unsigned binaries may be blocked by EDR/antivirus).
 - Some EDR solutions may block `SendInput` (used for text insertion). This requires a policy exception for the signed application.
 - The spec does not bundle model files — the user still needs to download models separately.
@@ -99,6 +101,7 @@ certificate verify failed: unable to get local issuer certificate
 This happens when a corporate proxy (Zscaler, BlueCoat, Forcepoint) intercepts HTTPS and replaces the SSL certificate with its own. Python does not trust the proxy's certificate.
 
 **Affected features:**
+
 - Model download from HuggingFace Hub
 - All remote transcription providers (AssemblyAI, OpenAI, Groq, Deepgram)
 - Connection tests in the Settings dialog
@@ -112,11 +115,13 @@ You need a PEM file that contains **both** the standard root CAs and your corpor
 **Step 1 — Get the corporate root CA certificate**
 
 Ask IT for the corporate root CA certificate. Common file types:
+
 - `.pem` — ready to use (PEM format, starts with `-----BEGIN CERTIFICATE-----`)
 - `.crt` — usually PEM format, check the first line
 - `.cer` — may be PEM or DER (binary). If it starts with `-----BEGIN`, it's PEM.
 
 If you have a `.cer` file in DER (binary) format, convert it to PEM first:
+
 ```powershell
 certutil -encode corporate-ca.cer corporate-ca.pem
 ```
@@ -136,6 +141,7 @@ Get-Content "C:\path\to\corporate-ca.pem" | Add-Content .\combined-ca-bundle.pem
 **Step 3 — Set environment variables**
 
 For the current session:
+
 ```powershell
 $env:REQUESTS_CA_BUNDLE = "C:\path\to\combined-ca-bundle.pem"
 $env:SSL_CERT_FILE      = "C:\path\to\combined-ca-bundle.pem"
@@ -143,6 +149,7 @@ python main.py
 ```
 
 To make permanent (survives restarts):
+
 ```powershell
 $bundlePath = (Resolve-Path ".\combined-ca-bundle.pem").Path
 [System.Environment]::SetEnvironmentVariable("REQUESTS_CA_BUNDLE", $bundlePath, "User")
@@ -179,9 +186,11 @@ Get-Content "C:\path\to\corporate-ca.pem" | Add-Content (python -c "import certi
 If SSL issues only affect remote providers and you've already downloaded the model, switch to the local engine in Settings and enable **Offline mode**. Local transcription does not need any network access after the initial model download.
 
 To download models on a machine without proxy issues:
+
 ```powershell
 python scripts/download_model.py --model small
 ```
+
 Then transfer the files. See [Models & Offline Setup](models.md#offline-download).
 
 ---
@@ -189,6 +198,7 @@ Then transfer the files. See [Models & Offline Setup](models.md#offline-download
 ## WSL / Linux
 
 WSL is useful for development tools (git, editors, linters), but the app itself requires Windows-specific APIs:
+
 - `RegisterHotKey` (global hotkey)
 - `SendInput` / `WM_PASTE` (text insertion)
 - Win32 clipboard and foreground window APIs
@@ -259,6 +269,7 @@ Benchmark time is dominated by model loading, not audio length. Larger models ta
 The repo includes `samples/benchmark_sample.wav` (synthetic tones for pipeline validation). For realistic quality testing, use real speech recordings.
 
 Regenerate the sample:
+
 ```powershell
 uv run python scripts/generate_sample_audio.py
 ```
@@ -293,6 +304,7 @@ The app inserts transcribed text at the cursor using clipboard-based paste:
 4. Restores original clipboard content.
 
 **Paste mode** (configurable in Settings):
+
 - **Auto** (default): Tries `SendInput` (simulates Ctrl+V) first, falls back to `WM_PASTE` if that fails.
 - **SendInput only**: Always simulates Ctrl+V keystrokes.
 - **WM_PASTE only**: Sends WM_PASTE message directly to the target window.

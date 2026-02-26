@@ -31,6 +31,7 @@ from .transcriber.local_faster_whisper import find_cached_models
 
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
+    settings_changed = QtCore.Signal()
 
     def __init__(
         self,
@@ -69,6 +70,30 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # --- Tab widget ---
         self.tabs = QtWidgets.QTabWidget()
+        self.tabs.setStyleSheet(
+            """
+            QTabBar::tab {
+                padding: 6px 18px;
+                margin-right: 2px;
+                border: 1px solid #bbb;
+                border-bottom: none;
+                border-top-left-radius: 4px;
+                border-top-right-radius: 4px;
+                background: #e8e8e8;
+            }
+            QTabBar::tab:selected {
+                background: #ffffff;
+                border-bottom: 2px solid #1a73e8;
+                font-weight: bold;
+            }
+            QTabBar::tab:hover:!selected {
+                background: #d6e4f0;
+            }
+            QTabBar::tab:selected:hover {
+                background: #ffffff;
+            }
+            """
+        )
         self._build_general_tab()
         self._build_local_tab()
         self._build_remote_tab()
@@ -78,15 +103,25 @@ class SettingsDialog(QtWidgets.QDialog):
         self.copy_diag_button.clicked.connect(self._copy_diagnostics)
 
         save_button = QtWidgets.QPushButton("Save")
-        cancel_button = QtWidgets.QPushButton("Cancel")
+        close_button = QtWidgets.QPushButton("Close")
         save_button.clicked.connect(self._save)
-        cancel_button.clicked.connect(self.reject)
+        close_button.clicked.connect(self.reject)
+
+        self._save_status_label = QtWidgets.QLabel()
+        self._save_status_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
+        self._save_status_timer = QtCore.QTimer(self)
+        self._save_status_timer.setSingleShot(True)
+        self._save_status_timer.setInterval(3000)
+        self._save_status_timer.timeout.connect(
+            lambda: self._save_status_label.setText("")
+        )
 
         buttons = QtWidgets.QHBoxLayout()
         buttons.addWidget(self.copy_diag_button)
         buttons.addStretch(1)
+        buttons.addWidget(self._save_status_label)
         buttons.addWidget(save_button)
-        buttons.addWidget(cancel_button)
+        buttons.addWidget(close_button)
 
         root = QtWidgets.QVBoxLayout(self)
         root.addWidget(self.engine_indicator)
@@ -698,7 +733,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._settings_store.save(settings)
         self._loaded_settings = settings
-        self.accept()
+        self._save_status_label.setText("\u2713 Settings saved")
+        self._save_status_timer.start()
+        self.settings_changed.emit()
 
 
 # ======================================================================

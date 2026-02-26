@@ -75,7 +75,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 Run: `uv run python -m pytest` or `python -m pytest`
 
-Current: 310 tests. Linux: all pass except 1 Windows-only ctypes struct-size test.
+Current: 316 tests. Linux: all pass except 1 Windows-only ctypes struct-size test.
 
 ## Known limitations
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
@@ -160,6 +162,29 @@ class OverlayUI(QtWidgets.QWidget):
         x = geometry.right() - self.width() - OVERLAY_MARGIN_X
         y = geometry.top() + OVERLAY_MARGIN_Y
         self.move(x, y)
+
+    def nativeEvent(self, event_type, message):
+        """Prevent window activation on mouse click (Windows).
+
+        On Windows, ``WindowDoesNotAcceptFocus`` does not reliably prevent
+        the OS from activating the window on the first click.  By
+        intercepting ``WM_MOUSEACTIVATE`` and returning ``MA_NOACTIVATE``
+        we ensure the copy button responds on the very first click without
+        stealing focus from the target application.
+        """
+        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
+            try:
+                import ctypes
+                import ctypes.wintypes
+
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+                _WM_MOUSEACTIVATE = 0x0021
+                _MA_NOACTIVATE = 3
+                if msg.message == _WM_MOUSEACTIVATE:
+                    return True, _MA_NOACTIVATE
+            except Exception:
+                pass
+        return super().nativeEvent(event_type, message)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
