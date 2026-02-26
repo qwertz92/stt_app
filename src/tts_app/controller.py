@@ -182,6 +182,14 @@ class DictationController(QtCore.QObject):
             self.stop_recording()
 
     def start_recording(self) -> None:
+        # Block recording while model preload is still running.
+        preload = self._preload_future
+        if preload is not None and not preload.done():
+            self._overlay.set_state(
+                "Error", "Model is still loading. Please wait a moment."
+            )
+            return
+
         # Check if the selected engine supports streaming mode.
         if (
             self._settings.engine not in STREAMING_ENGINES

@@ -103,14 +103,23 @@ def _create_tray_icon(
     quit_action = menu.addAction("Quit")
     quit_action.triggered.connect(app.quit)
 
+    _active_settings_dialog: SettingsDialog | None = None
+
     def open_settings_dialog() -> None:
+        nonlocal _active_settings_dialog
+        if _active_settings_dialog is not None:
+            _active_settings_dialog.raise_()
+            _active_settings_dialog.activateWindow()
+            return
         dialog = SettingsDialog(
             settings_store=settings_store,
             secret_store=secret_store,
             app_logger=app_logger,
         )
         dialog.settings_changed.connect(controller.on_settings_changed)
+        _active_settings_dialog = dialog
         dialog.exec()
+        _active_settings_dialog = None
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())

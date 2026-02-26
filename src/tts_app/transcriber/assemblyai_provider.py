@@ -79,10 +79,7 @@ class AssemblyAITranscriber(ITranscriber):
         aai = self._get_aai()
 
         kwargs: dict = {
-            "speech_models": [
-                aai.SpeechModel.universal_3_pro,
-                aai.SpeechModel.universal_2,
-            ],
+            "speech_model": aai.SpeechModel.best,
         }
 
         if self._language_mode == "auto":

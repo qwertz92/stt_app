@@ -308,8 +308,7 @@ class TestAssemblyAISSLDetection:
         aai.settings = MagicMock()
 
         class FakeSpeechModel:
-            universal_3_pro = "u3p"
-            universal_2 = "u2"
+            best = "best"
 
         class FakeConfig:
             def __init__(self, **kw):

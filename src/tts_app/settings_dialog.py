@@ -49,7 +49,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._active_connection_test_thread: threading.Thread | None = None
 
         self.setWindowTitle("Dictation Settings")
-        self.setModal(True)
+        self.setModal(False)
+        self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, False)
         self.resize(580, 620)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)

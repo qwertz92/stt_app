@@ -189,3 +189,11 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Deepgram provider:** Same as OpenAI — all `urlopen()` calls pass `context=create_ssl_context()`.
 - **AssemblyAI provider:** Already worked because the `assemblyai` SDK uses `requests` internally, which reads `REQUESTS_CA_BUNDLE`.
 - 10 new tests: `TestResolveCABundle` (6 tests), `TestCreateSSLContext` (2 tests), `TestGroqSSLBundle` (2 tests). Total: 326.
+
+### Session 4 — Windows testing fixes
+
+- **AssemblyAI SpeechModel fix:** SDK 0.50.0 does not have `SpeechModel.universal_3_pro` or `SpeechModel.universal_2`. Changed `_build_config()` to use `speech_model=aai.SpeechModel.best` (singular key, single value). This auto-selects the best available model.
+- **Groq dependency fix:** `groq` package was missing from `requirements-win.txt`, causing `[Errno 2] No such file or directory` when Groq SDK wasn't installed. Added `groq>=0.9.0`. Also tightened `except Exception: pass` to `except ImportError: pass` in `_build_client()` to avoid swallowing real errors.
+- **Settings dialog non-modal:** Changed `setModal(True)` to `setModal(False)` so the overlay Copy button and text selection remain interactive while the Settings dialog is open. Added `_active_settings_dialog` tracking in `main.py` to prevent duplicate dialogs.
+- **Preload guard in `start_recording()`:** If `_preload_future` is still running when hotkey is pressed, show "Model is still loading. Please wait a moment." error and return early instead of attempting transcription with no model loaded.
+- Test count unchanged at 326 (fixed FakeSpeechModel in `test_assemblyai_provider.py` and `test_ssl_and_preload.py` to match new `best` model).

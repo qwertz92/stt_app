@@ -86,8 +86,8 @@ class GroqTranscriber(ITranscriber):
 
                 http_client = httpx.Client(verify=ssl_ctx)
                 return cls(api_key=self._api_key, http_client=http_client)
-            except Exception:
-                pass  # fall through to default client
+            except ImportError:
+                pass  # httpx not installed; fall through to default client
         return cls(api_key=self._api_key)
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:

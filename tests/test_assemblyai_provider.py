@@ -25,8 +25,7 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
         completed = "completed"
 
     class FakeSpeechModel:
-        universal_3_pro = "universal-3-pro"
-        universal_2 = "universal-2"
+        best = "best"
 
     class FakeTranscriptionConfig:
         def __init__(self, **kwargs):
