@@ -13,10 +13,16 @@ from .overlay_ui import OverlayUI
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
 from .settings_store import SettingsStore
+from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 
 
 def run() -> int:
+    # SSL: trust OS certificate store (handles corporate proxies like Zscaler)
+    # and synchronize env vars so all HTTP libraries use the same CA bundle.
+    inject_system_trust_store()
+    sync_ca_bundle_env_vars()
+
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setQuitOnLastWindowClosed(False)
@@ -117,9 +123,15 @@ def _create_tray_icon(
             app_logger=app_logger,
         )
         dialog.settings_changed.connect(controller.on_settings_changed)
+        dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+
+        def _on_dialog_finished():
+            nonlocal _active_settings_dialog
+            _active_settings_dialog = None
+
+        dialog.finished.connect(_on_dialog_finished)
         _active_settings_dialog = dialog
-        dialog.exec()
-        _active_settings_dialog = None
+        dialog.show()
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())

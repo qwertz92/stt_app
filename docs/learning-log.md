@@ -197,3 +197,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Settings dialog non-modal:** Changed `setModal(True)` to `setModal(False)` so the overlay Copy button and text selection remain interactive while the Settings dialog is open. Added `_active_settings_dialog` tracking in `main.py` to prevent duplicate dialogs.
 - **Preload guard in `start_recording()`:** If `_preload_future` is still running when hotkey is pressed, show "Model is still loading. Please wait a moment." error and return early instead of attempting transcription with no model loaded.
 - Test count unchanged at 326 (fixed FakeSpeechModel in `test_assemblyai_provider.py` and `test_ssl_and_preload.py` to match new `best` model).
+
+### Session 4b — SSL truststore, overlay activation, dialog lifecycle
+
+- **`truststore` integration:** Added `truststore>=0.9.1` dependency. `inject_system_trust_store()` calls `truststore.inject_into_ssl()` at startup, making Python use the OS certificate store. On Windows, this automatically trusts corporate proxy CAs (Zscaler, BlueCoat) without any manual env-var setup, because IT installs the proxy CA into the Windows cert store.
+- **`sync_ca_bundle_env_vars()`:** If the user has set only `SSL_CERT_FILE` or only `REQUESTS_CA_BUNDLE`, the other is now auto-populated. Different HTTP libraries read different vars (`requests` reads `REQUESTS_CA_BUNDLE`, `httpx`/`urllib` read `SSL_CERT_FILE`). Syncing ensures one setting covers all providers.
+- **Copy-button two-click fix:** Added `showEvent` override + `_apply_noactivate_style()` that sets `WS_EX_NOACTIVATE` directly via Win32 `SetWindowLongW`. Qt's `WindowDoesNotAcceptFocus` flag is not always honoured by Windows. Direct `WS_EX_NOACTIVATE` is more reliable. Re-applied on every show because Qt may reset extended styles.
+- **Settings dialog no longer blocks event loop:** Changed `dialog.exec()` → `dialog.show()` + `WA_DeleteOnClose` + `finished` signal cleanup. `exec()` created a nested event loop that could starve the main loop, causing overlay unresponsiveness. `show()` keeps everything in the single main event loop.
+- **Clipboard setting:** `DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD` is `False` since Session 3, but existing `settings.json` files keep the old `True` value. User must toggle it off in Settings → General tab. No migration added (intentional — users who set it to `True` deliberately should keep their choice).
+- 9 new tests: `TestInjectSystemTrustStore` (3), `TestSyncCABundleEnvVars` (5), `test_overlay_has_show_event_override` (1). Total: 335.

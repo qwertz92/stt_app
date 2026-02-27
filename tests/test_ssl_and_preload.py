@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tts_app.ssl_utils import create_ssl_context, resolve_ca_bundle
+from tts_app.ssl_utils import (
+    create_ssl_context,
+    inject_system_trust_store,
+    resolve_ca_bundle,
+    sync_ca_bundle_env_vars,
+)
 from tts_app.transcriber.base import TranscriptionError
 from tts_app.transcriber.local_faster_whisper import (
     LocalFasterWhisperTranscriber,
@@ -124,6 +129,73 @@ class TestCreateSSLContext:
         result = create_ssl_context()
         assert result is not None
         assert isinstance(result, ssl.SSLContext)
+
+
+class TestInjectSystemTrustStore:
+    def test_returns_false_when_truststore_not_installed(self):
+        import importlib
+
+        with patch.dict("sys.modules", {"truststore": None}):
+            # Force import failure by clearing cached module
+            result = inject_system_trust_store()
+            assert result is False
+
+    def test_returns_false_on_exception(self):
+        fake_mod = types.ModuleType("truststore")
+        fake_mod.inject_into_ssl = MagicMock(side_effect=RuntimeError("boom"))
+        with patch.dict("sys.modules", {"truststore": fake_mod}):
+            result = inject_system_trust_store()
+            assert result is False
+
+    def test_returns_true_on_success(self):
+        fake_mod = types.ModuleType("truststore")
+        fake_mod.inject_into_ssl = MagicMock()
+        with patch.dict("sys.modules", {"truststore": fake_mod}):
+            result = inject_system_trust_store()
+            assert result is True
+            fake_mod.inject_into_ssl.assert_called_once()
+
+
+class TestSyncCABundleEnvVars:
+    def test_no_env_vars_set(self, monkeypatch):
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        sync_ca_bundle_env_vars()
+        assert os.environ.get("SSL_CERT_FILE", "") == ""
+        assert os.environ.get("REQUESTS_CA_BUNDLE", "") == ""
+
+    def test_copies_ssl_cert_file_to_requests_ca_bundle(self, tmp_path, monkeypatch):
+        bundle = tmp_path / "ca.pem"
+        bundle.write_text("cert")
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        sync_ca_bundle_env_vars()
+        assert os.environ["REQUESTS_CA_BUNDLE"] == str(bundle)
+
+    def test_copies_requests_ca_bundle_to_ssl_cert_file(self, tmp_path, monkeypatch):
+        bundle = tmp_path / "ca.pem"
+        bundle.write_text("cert")
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
+        sync_ca_bundle_env_vars()
+        assert os.environ["SSL_CERT_FILE"] == str(bundle)
+
+    def test_does_not_overwrite_existing(self, tmp_path, monkeypatch):
+        b1 = tmp_path / "a.pem"
+        b2 = tmp_path / "b.pem"
+        b1.write_text("cert1")
+        b2.write_text("cert2")
+        monkeypatch.setenv("SSL_CERT_FILE", str(b1))
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(b2))
+        sync_ca_bundle_env_vars()
+        assert os.environ["SSL_CERT_FILE"] == str(b1)
+        assert os.environ["REQUESTS_CA_BUNDLE"] == str(b2)
+
+    def test_ignores_nonexistent_file(self, monkeypatch):
+        monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/ca.pem")
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        sync_ca_bundle_env_vars()
+        assert os.environ.get("REQUESTS_CA_BUNDLE", "") == ""
 
 
 class TestFormatTranscriptionErrorSSL:

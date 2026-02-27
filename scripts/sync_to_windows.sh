@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Sync the tts_app project to a Windows-native directory.
+# Sync the stt_app project to a Windows-native directory.
 #
-# Copies the tts_app repository to a Windows-native directory so the app
+# Copies the stt_app repository to a Windows-native directory so the app
 # can be run natively on Windows (e.g. when developing under WSL).
 #
 # The source directory is automatically resolved from the script's location
-# (the repo root). The target defaults to $USERPROFILE/programs/tts_app.
+# (the repo root). The target defaults to $USERPROFILE/programs/stt_app.
 #
 # This is necessary because:
 #   - The app uses Win32 APIs (hotkeys, SendInput, clipboard) that only
@@ -38,7 +38,7 @@ resolve_win_target() {
             drive_letter="$(echo "$drive_letter" | tr '[:upper:]' '[:lower:]')"
             local rest="${win_profile#*:}"
             rest="${rest//\\//}"
-            echo "/mnt/${drive_letter}${rest}/programs/tts_app"
+            echo "/mnt/${drive_letter}${rest}/programs/stt_app"
             return 0
         fi
     fi
@@ -57,8 +57,8 @@ for arg in "$@"; do
         --help|-h)
             echo "Usage: $(basename "$0") [--dry-run|-n] [TARGET_DIR]"
             echo ""
-            echo "Sync tts_app repo to a Windows-native directory."
-            echo "Default target: \$USERPROFILE/programs/tts_app"
+            echo "Sync stt_app repo to a Windows-native directory."
+            echo "Default target: \$USERPROFILE/programs/stt_app"
             exit 0
             ;;
         *)
@@ -71,7 +71,7 @@ done
 if [[ -z "$TARGET_DIR" ]]; then
     TARGET_DIR="$(resolve_win_target)" || {
         echo "ERROR: Could not determine Windows USERPROFILE."
-        echo "Run inside WSL, or pass target dir: $0 /mnt/c/Users/you/programs/tts_app"
+        echo "Run inside WSL, or pass target dir: $0 /mnt/c/Users/you/programs/stt_app"
         exit 1
     }
 fi
@@ -110,7 +110,7 @@ fi
 
 # --- Sync ---
 echo ""
-echo "=== tts_app WSL -> Windows Sync ==="
+echo "=== stt_app WSL -> Windows Sync ==="
 echo ""
 echo "  Source:  $SOURCE_DIR"
 echo "  Target:  $TARGET_DIR"
@@ -142,7 +142,7 @@ echo ""
 echo "  Next steps on Windows:"
 echo "    cd $(echo "$TARGET_DIR" | sed 's|/mnt/\(.\)|\U\1:|; s|/|\\|g')"
 echo "    pip install -e . --no-deps   # if first time or deps changed"
-echo "    python -m tts_app            # run the app"
+echo "    python -m stt_app            # run the app"
 echo ""
 echo "  To import a model on Windows:"
 echo "    python scripts\\import_model.py <path-to-model-folder>"

@@ -108,7 +108,24 @@ This happens when a corporate proxy (Zscaler, BlueCoat, Forcepoint) intercepts H
 
 The app detects SSL errors and shows actionable instructions. The fix below applies to all HTTPS connections (model downloads AND remote providers).
 
-> **Important:** You must set **both** `SSL_CERT_FILE` **and** `REQUESTS_CA_BUNDLE` to the same combined bundle file. Different libraries read different variables:
+### Automatic fix (truststore)
+
+The app includes the `truststore` package, which makes Python use the **operating system's certificate store** automatically. On Windows, this means every CA that Windows trusts is also trusted by Python — including corporate proxy CAs that your IT department installed.
+
+**This works out of the box.** If you still see SSL errors after installing the latest version, it means:
+
+1. The proxy CA is **not** in the Windows certificate store, or
+2. `truststore` could not be installed (e.g. blocked network).
+
+In either case, try the manual fixes below.
+
+> **Note:** The app also automatically synchronizes `SSL_CERT_FILE` and `REQUESTS_CA_BUNDLE` environment variables. If you only set one, the other is populated automatically.
+
+### Fix 1: Combined CA bundle
+
+If the automatic fix doesn't work, create a combined CA bundle manually.
+
+> **Important:** You must set **both** `SSL_CERT_FILE` **and** `REQUESTS_CA_BUNDLE` to the same combined bundle file (or set only one — the app synchronizes them). Different libraries read different variables:
 >
 > | Provider     | HTTP library   | Reads env var              |
 > |-------------|----------------|----------------------------|
@@ -119,8 +136,6 @@ The app detects SSL errors and shows actionable instructions. The fix below appl
 > | HuggingFace | `requests`     | `REQUESTS_CA_BUNDLE`       |
 >
 > \* The app passes the bundle explicitly to `httpx` after reading `SSL_CERT_FILE` / `REQUESTS_CA_BUNDLE`.
-
-### Fix 1: Combined CA bundle (recommended)
 
 You need a PEM file that contains **both** the standard root CAs and your corporate proxy CA. This ensures all HTTPS connections work — not just those to your proxy, but to all servers.
 
@@ -204,6 +219,16 @@ python scripts/download_model.py --model small
 ```
 
 Then transfer the files. See [Models & Offline Setup](models.md#offline-download).
+
+### Fix 5: Install truststore manually
+
+If `truststore` was not included in your wheelhouse, install it manually:
+
+```powershell
+python -m pip install truststore
+```
+
+This is the same package the app uses internally. Once installed, restart the app and SSL should work automatically.
 
 ---
 

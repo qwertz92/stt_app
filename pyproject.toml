@@ -12,6 +12,8 @@ dependencies = [
     "keyring==25.7.0",
     "pywin32==308; platform_system == 'Windows'",
     "assemblyai>=0.37.0",
+    "groq>=0.9.0",
+    "truststore>=0.9.1",
     "websocket-client>=1.8.0",
 ]
 

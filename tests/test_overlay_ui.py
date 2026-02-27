@@ -110,3 +110,15 @@ def test_overlay_has_native_event_override():
     assert hasattr(overlay, "nativeEvent")
     # nativeEvent should be overridden, not just inherited
     assert type(overlay).nativeEvent is not QtWidgets.QWidget.nativeEvent
+
+
+def test_overlay_has_show_event_override():
+    """OverlayUI should override showEvent to set WS_EX_NOACTIVATE on Windows."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    # Verify the method exists and is overridden
+    assert hasattr(overlay, "showEvent")
+    assert type(overlay).showEvent is not QtWidgets.QWidget.showEvent
+    assert hasattr(overlay, "_apply_noactivate_style")
+    assert callable(overlay._apply_noactivate_style)

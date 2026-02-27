@@ -12,6 +12,51 @@ import ssl
 from pathlib import Path
 
 
+def inject_system_trust_store() -> bool:
+    """Inject OS certificate store into Python's ssl module.
+
+    Uses the ``truststore`` package to make Python trust every certificate
+    that the operating system trusts (e.g. the Windows Certificate Store).
+    This automatically handles corporate proxy CAs (Zscaler, BlueCoat,
+    Forcepoint, …) without any manual env-var configuration, because IT
+    typically installs the proxy CA into the OS trust store.
+
+    Call this **once**, early in startup, before any HTTPS connection.
+
+    Returns ``True`` if injection succeeded, ``False`` otherwise (e.g. when
+    ``truststore`` is not installed).
+    """
+    try:
+        import truststore  # type: ignore
+
+        truststore.inject_into_ssl()
+        return True
+    except Exception:
+        return False
+
+
+def sync_ca_bundle_env_vars() -> None:
+    """Ensure both ``SSL_CERT_FILE`` and ``REQUESTS_CA_BUNDLE`` are set.
+
+    Different HTTP libraries read different environment variables:
+
+    * ``requests`` (AssemblyAI, HuggingFace) → ``REQUESTS_CA_BUNDLE``
+    * ``httpx`` (Groq) → ``SSL_CERT_FILE`` (or explicit verify)
+    * ``urllib`` (OpenAI, Deepgram) → ``SSL_CERT_FILE``
+
+    If the user has set only *one* of them, copy its value to the other
+    so that all libraries benefit.  Does nothing if neither is set or if
+    both are already pointing to existing files.
+    """
+    ssl_cert = os.environ.get("SSL_CERT_FILE", "").strip()
+    requests_bundle = os.environ.get("REQUESTS_CA_BUNDLE", "").strip()
+
+    if ssl_cert and Path(ssl_cert).is_file() and not requests_bundle:
+        os.environ["REQUESTS_CA_BUNDLE"] = ssl_cert
+    elif requests_bundle and Path(requests_bundle).is_file() and not ssl_cert:
+        os.environ["SSL_CERT_FILE"] = requests_bundle
+
+
 def resolve_ca_bundle() -> str | None:
     """Find a custom CA bundle path from environment variables.
 

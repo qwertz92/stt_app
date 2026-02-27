@@ -186,6 +186,33 @@ class OverlayUI(QtWidgets.QWidget):
                 pass
         return super().nativeEvent(event_type, message)
 
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        """Apply ``WS_EX_NOACTIVATE`` each time the window is shown.
+
+        Qt's ``WindowDoesNotAcceptFocus`` flag is not always honoured on
+        Windows.  Setting ``WS_EX_NOACTIVATE`` directly via the Win32 API
+        is more reliable.  We re-apply it on every show because Qt may
+        reset extended window styles when updating stylesheets or flags.
+        """
+        super().showEvent(event)
+        if sys.platform == "win32":
+            self._apply_noactivate_style()
+
+    def _apply_noactivate_style(self) -> None:
+        """Set ``WS_EX_NOACTIVATE`` on the native window handle."""
+        try:
+            import ctypes
+
+            hwnd = int(self.winId())
+            _GWL_EXSTYLE = -20
+            _WS_EX_NOACTIVATE = 0x08000000
+            style = ctypes.windll.user32.GetWindowLongW(hwnd, _GWL_EXSTYLE)
+            ctypes.windll.user32.SetWindowLongW(
+                hwnd, _GWL_EXSTYLE, style | _WS_EX_NOACTIVATE
+            )
+        except Exception:
+            pass
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._update_detail_height()
