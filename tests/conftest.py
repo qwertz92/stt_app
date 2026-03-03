@@ -10,7 +10,7 @@ import logging
 
 from PySide6 import QtWidgets
 
-from tts_app.config import FALLBACK_HOTKEY
+from tts_app.config import DEFAULT_CANCEL_HOTKEY, FALLBACK_HOTKEY
 from tts_app.controller import DictationController
 from tts_app.settings_store import AppSettings
 from tts_app.text_inserter import TextInsertionError
@@ -34,7 +34,7 @@ class FakeHotkeyManager:
 
     def register(self, hotkey):
         self.calls.append(hotkey)
-        if hotkey != FALLBACK_HOTKEY:
+        if hotkey not in {FALLBACK_HOTKEY, DEFAULT_CANCEL_HOTKEY}:
             raise ValueError("blocked")
 
     def unregister(self):
@@ -45,6 +45,10 @@ class FakeHotkeyManagerAllFail(FakeHotkeyManager):
     def register(self, hotkey):
         self.calls.append(hotkey)
         raise ValueError("blocked")
+
+
+class FakeCancelHotkeyManager(FakeHotkeyManager):
+    pass
 
 
 class FakeOverlay:
@@ -194,6 +198,7 @@ def make_controller(**kwargs):
             AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
         ),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeCancelHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),

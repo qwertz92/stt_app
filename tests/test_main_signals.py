@@ -52,6 +52,12 @@ class FakeController:
     def on_settings_changed(self):
         self.settings_changed_calls += 1
 
+    def retry_last_transcription(self):
+        return True
+
+    def cancel_current_action(self):
+        return None
+
     def shutdown(self):
         pass
 
@@ -80,14 +86,19 @@ def test_create_tray_icon_has_expected_menu_actions():
     tray = _create_tray_icon(
         app=app,
         controller=controller,
+        overlay=type("obj", (object,), {"move_to_corner": lambda *a: None})(),
         settings_store=FakeSettingsStore(),
         secret_store=FakeSecretStore(),
         app_logger=FakeAppLogger(),
+        open_history_dialog=lambda: None,
     )
     menu = tray.contextMenu()
     action_labels = [a.text() for a in menu.actions() if not a.isSeparator()]
     assert "Toggle Dictation" in action_labels
     assert "Settings" in action_labels
+    assert "History" in action_labels
+    assert "Retry last transcription" in action_labels
+    assert "Cancel current action" in action_labels
     assert "Copy last transcript" in action_labels
     assert "Copy diagnostics" in action_labels
     assert "Quit" in action_labels
@@ -99,9 +110,11 @@ def test_tray_toggle_action_calls_controller():
     tray = _create_tray_icon(
         app=app,
         controller=controller,
+        overlay=type("obj", (object,), {"move_to_corner": lambda *a: None})(),
         settings_store=FakeSettingsStore(),
         secret_store=FakeSecretStore(),
         app_logger=FakeAppLogger(),
+        open_history_dialog=lambda: None,
     )
     menu = tray.contextMenu()
     toggle_action = [a for a in menu.actions() if a.text() == "Toggle Dictation"][0]
@@ -116,9 +129,11 @@ def test_tray_double_click_connected():
     tray = _create_tray_icon(
         app=app,
         controller=controller,
+        overlay=type("obj", (object,), {"move_to_corner": lambda *a: None})(),
         settings_store=FakeSettingsStore(),
         secret_store=FakeSecretStore(),
         app_logger=FakeAppLogger(),
+        open_history_dialog=lambda: None,
     )
     # The activated signal should have at least one receiver connected.
     sig = QtCore.SIGNAL("activated(QSystemTrayIcon::ActivationReason)")

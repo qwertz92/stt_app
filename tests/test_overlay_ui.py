@@ -1,4 +1,4 @@
-from PySide6 import QtGui, QtTest, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from tts_app.config import OVERLAY_HEIGHT, OVERLAY_MAX_HEIGHT
 from tts_app.overlay_ui import OverlayUI
@@ -122,3 +122,61 @@ def test_overlay_has_show_event_override():
     assert type(overlay).showEvent is not QtWidgets.QWidget.showEvent
     assert hasattr(overlay, "_apply_noactivate_style")
     assert callable(overlay._apply_noactivate_style)
+
+
+def test_overlay_control_buttons_follow_state():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_state("Idle", "ready")
+    assert overlay._retry_button.isEnabled() is False
+    assert overlay._cancel_button.isEnabled() is False
+
+    overlay.set_state("Error", "failed")
+    assert overlay._retry_button.isEnabled() is True
+    assert overlay._cancel_button.isEnabled() is False
+
+    overlay.set_state("Listening", "active")
+    assert overlay._retry_button.isEnabled() is False
+    assert overlay._cancel_button.isEnabled() is True
+
+
+def test_overlay_control_signals_are_emitted():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    got = {"history": 0, "retry": 0, "cancel": 0}
+    overlay.history_requested.connect(lambda: got.__setitem__("history", got["history"] + 1))
+    overlay.retry_requested.connect(lambda: got.__setitem__("retry", got["retry"] + 1))
+    overlay.cancel_requested.connect(lambda: got.__setitem__("cancel", got["cancel"] + 1))
+
+    overlay.set_state("Error", "failed")
+    overlay._history_button.click()
+    overlay._retry_button.click()
+    overlay.set_state("Listening", "active")
+    overlay._cancel_button.click()
+
+    assert got == {"history": 1, "retry": 1, "cancel": 1}
+
+
+def test_overlay_shrinks_after_long_transcription():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_state("Done", "word " * 900)
+    large_height = overlay.height()
+    assert large_height <= OVERLAY_MAX_HEIGHT
+
+    overlay.set_state("Listening", "Speak now.")
+    assert overlay.height() < large_height
+    assert overlay.height() >= OVERLAY_HEIGHT
+
+
+def test_overlay_reset_position_moves_back_to_initial():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_initial_position(QtCore.QPoint(120, 80))
+    overlay.move(340, 260)
+
+    overlay.reset_position()
+
+    assert overlay.pos() == QtCore.QPoint(120, 80)

@@ -20,6 +20,9 @@ from tts_app.transcriber.base import TranscriptionError
 from tts_app.transcriber.local_faster_whisper import (
     LocalFasterWhisperTranscriber,
     _is_ssl_error,
+    cached_model_paths,
+    delete_cached_model,
+    estimate_cached_model_bytes,
     find_cached_models,
 )
 
@@ -322,6 +325,85 @@ class TestFindCachedModels:
             result = find_cached_models(str(custom_dir))
         assert "tiny" in result
         assert "small" in result
+
+
+class TestEstimateCachedModelBytes:
+    def _make_hf_cache(self, root: Path, repo_id: str) -> Path:
+        folder_name = f"models--{repo_id.replace('/', '--')}"
+        snapshot_dir = root / folder_name / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "config.json").write_text("{}")
+        (snapshot_dir / "model.bin").write_bytes(b"\x00" * 10)
+        return snapshot_dir
+
+    def test_returns_zero_for_unknown_model(self, tmp_path):
+        with patch(
+            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            assert estimate_cached_model_bytes("unknown") == 0
+
+    def test_estimates_hf_cache_size(self, tmp_path):
+        self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
+        with patch(
+            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            size = estimate_cached_model_bytes("small")
+        assert size >= 10
+
+    def test_uses_larger_of_duplicate_locations(self, tmp_path):
+        hf_dir = tmp_path / "hf_cache"
+        hf_dir.mkdir()
+        custom_dir = tmp_path / "custom"
+        custom_dir.mkdir()
+        self._make_hf_cache(hf_dir, "Systran/faster-whisper-small")
+        self._make_hf_cache(custom_dir, "Systran/faster-whisper-small")
+        # Make custom location larger.
+        big_blob = (
+            custom_dir
+            / "models--Systran--faster-whisper-small"
+            / "blobs"
+            / "big.bin"
+        )
+        big_blob.parent.mkdir(parents=True, exist_ok=True)
+        big_blob.write_bytes(b"\x00" * 100)
+
+        with patch(
+            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(hf_dir),
+        ):
+            size = estimate_cached_model_bytes("small", str(custom_dir))
+        assert size >= 100
+
+
+class TestDeleteCachedModel:
+    def _make_hf_cache(self, root: Path, repo_id: str) -> Path:
+        folder_name = f"models--{repo_id.replace('/', '--')}"
+        snapshot_dir = root / folder_name / "snapshots" / "abc123"
+        snapshot_dir.mkdir(parents=True)
+        (snapshot_dir / "config.json").write_text("{}")
+        (snapshot_dir / "model.bin").write_bytes(b"\x00")
+        return root / folder_name
+
+    def test_cached_model_paths_returns_existing_dirs(self, tmp_path):
+        model_root = self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
+        with patch(
+            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            paths = cached_model_paths("small")
+        assert model_root in paths
+
+    def test_delete_cached_model_removes_directories(self, tmp_path):
+        model_root = self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
+        with patch(
+            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            removed = delete_cached_model("small")
+        assert removed >= 1
+        assert model_root.exists() is False
 
 
 # ---------------------------------------------------------------------------

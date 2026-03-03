@@ -82,6 +82,97 @@ def test_start_recording_rejects_streaming_for_remote_engine():
     _ = app
 
 
+class _RunningFuture:
+    def done(self):
+        return False
+
+
+def test_start_recording_uses_cached_fallback_while_preloading(monkeypatch):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="batch",
+        model_size="large-v3-turbo",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller._preload_future = _RunningFuture()
+    fallback_settings = AppSettings(
+        hotkey=settings.hotkey,
+        engine=settings.engine,
+        mode=settings.mode,
+        model_size="small",
+    )
+    controller._resolve_preload_fallback_settings = (  # type: ignore[method-assign]
+        lambda: fallback_settings
+    )
+    controller._preload_progress_detail = (  # type: ignore[method-assign]
+        lambda include_fallback_hint=False: "Downloading 'large-v3-turbo' 20%"
+    )
+
+    controller.start_recording()
+
+    assert controller._audio_capture is not None
+    assert controller._active_batch_settings is not None
+    assert controller._active_batch_settings.model_size == "small"
+    assert overlay.states[-1][0] == "Listening"
+    assert "fallback 'small'" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_start_recording_preload_without_fallback_shows_error():
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="batch",
+        model_size="large-v3-turbo",
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller._preload_future = _RunningFuture()
+    controller._resolve_preload_fallback_settings = lambda: None  # type: ignore[method-assign]
+    controller._preload_progress_detail = (  # type: ignore[method-assign]
+        lambda include_fallback_hint=False: "Downloading 'large-v3-turbo' 20%"
+    )
+
+    controller.start_recording()
+
+    assert overlay.states[-1][0] == "Error"
+    assert "No cached fallback model available yet" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_start_recording_remote_not_blocked_by_stale_local_preload(monkeypatch):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="groq",
+        mode="batch",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller._preload_future = _RunningFuture()
+
+    controller.start_recording()
+
+    assert controller._audio_capture is not None
+    assert overlay.states[-1][0] == "Listening"
+    controller.shutdown()
+    _ = app
+
+
 def test_start_batch_recording_audio_capture_error(monkeypatch):
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
     overlay = FakeOverlay()
@@ -426,6 +517,7 @@ def test_register_hotkey_fails_when_preferred_equals_fallback():
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=AlwaysFailHotkey(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
     )
     result = controller._register_hotkey_with_fallback()
@@ -473,6 +565,173 @@ def test_on_transcription_failed_shows_error():
     controller._on_transcription_failed("Something went wrong")
     assert overlay.states[-1][0] == "Error"
     assert "Something went wrong" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# Retry / cancel actions
+# ---------------------------------------------------------------------------
+
+
+def test_retry_last_transcription_returns_false_without_failed_audio():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+
+    ok = controller.retry_last_transcription()
+
+    assert ok is False
+    assert overlay.states[-1][0] == "Error"
+    assert "No failed transcription" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_last_transcription_resubmits_failed_audio():
+    controller, app = _make_controller()
+    captured = []
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._last_failed_wav_bytes = b"wav-bytes"
+    controller._last_failed_settings = settings
+    controller._executor = ImmediateExecutor()
+
+    def fake_worker(wav_bytes, snapshot):
+        captured.append((wav_bytes, snapshot.model_size))
+
+    controller._transcribe_worker = fake_worker  # type: ignore[method-assign]
+
+    ok = controller.retry_last_transcription()
+
+    assert ok is True
+    assert captured == [(b"wav-bytes", "small")]
+    controller.shutdown()
+    _ = app
+
+
+def test_cancel_current_action_stops_active_batch_recording():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    capture = FakeCapture()
+    controller._audio_capture = capture
+    controller._streaming_recording = False
+
+    controller.cancel_current_action()
+
+    assert capture.stopped is True
+    assert controller._audio_capture is None
+    assert overlay.states[-1][0] == "Done"
+    assert "canceled" in overlay.states[-1][1].lower()
+    controller.shutdown()
+    _ = app
+
+
+def test_cancel_current_action_marks_inflight_transcription_as_canceled():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._active_session_mode = "streaming"
+    controller._streaming_recording = True
+
+    controller.cancel_current_action()
+    controller._on_transcription_failed("transcriber failed")
+
+    assert controller._transcription_cancel_requested is False
+    assert controller._active_session_mode == "batch"
+    assert controller._streaming_recording is False
+    assert overlay.states[-1][0] == "Done"
+    assert "canceled" in overlay.states[-1][1].lower()
+    controller.shutdown()
+    _ = app
+
+
+def test_cancel_current_action_cancels_running_preload():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._preload_future = _RunningFuture()
+    terminated = []
+    controller._terminate_preload_download_process = (  # type: ignore[method-assign]
+        lambda: terminated.append(True)
+    )
+
+    controller.cancel_current_action()
+
+    assert controller._preload_cancel_requested is True
+    assert terminated == [True]
+    assert overlay.states[-1][0] == "Processing"
+    assert "Canceling model download" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_download_model_for_preload_skips_when_cached(monkeypatch):
+    controller, app = _make_controller()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    monkeypatch.setattr(
+        "tts_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": ["small"],
+    )
+
+    started = []
+    monkeypatch.setattr(
+        "tts_app.controller.subprocess.Popen",
+        lambda *args, **kwargs: started.append(True),
+    )
+
+    controller._download_model_for_preload(settings)
+
+    assert started == []
+    controller.shutdown()
+    _ = app
+
+
+def test_download_model_for_preload_can_be_canceled():
+    controller, app = _make_controller()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._preload_cancel_requested = True
+
+    try:
+        controller._download_model_for_preload(settings)
+        raised = False
+    except RuntimeError as exc:
+        raised = "canceled" in str(exc).lower()
+
+    assert raised is True
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# Cancel hotkey registration
+# ---------------------------------------------------------------------------
+
+
+def test_register_cancel_hotkey_success():
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, cancel_hotkey="Ctrl+Alt+F12")
+    manager = FakeHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        cancel_hotkey_manager=manager,
+    )
+
+    ok = controller._register_cancel_hotkey()
+
+    assert ok is True
+    assert manager.calls[-1] == "Ctrl+Alt+F12"
+    controller.shutdown()
+    _ = app
+
+
+def test_register_cancel_hotkey_failure_sets_notice():
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, cancel_hotkey="Ctrl+Shift+X")
+    manager = FakeHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        cancel_hotkey_manager=manager,
+    )
+
+    ok = controller._register_cancel_hotkey()
+
+    assert ok is False
+    assert "Cancel hotkey registration failed" in (controller._cancel_hotkey_notice or "")
     controller.shutdown()
     _ = app
 

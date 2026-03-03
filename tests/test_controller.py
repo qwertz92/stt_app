@@ -32,6 +32,7 @@ def test_controller_falls_back_to_safe_hotkey():
     controller = DictationController(
         settings_store=store,
         hotkey_manager=hotkey_manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -61,6 +62,7 @@ def test_controller_shows_error_when_all_hotkey_registration_fails():
     controller = DictationController(
         settings_store=store,
         hotkey_manager=hotkey_manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -91,6 +93,7 @@ def test_controller_restores_target_focus_before_insert():
     controller = DictationController(
         settings_store=store,
         hotkey_manager=hotkey_manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=inserter,
         logger=logging.getLogger("test.controller"),
@@ -130,6 +133,7 @@ def test_controller_copies_transcript_on_insert_error(monkeypatch):
     controller = DictationController(
         settings_store=store,
         hotkey_manager=hotkey_manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=inserter,
         logger=logging.getLogger("test.controller"),
@@ -158,6 +162,7 @@ def test_controller_keeps_transcript_in_clipboard_on_success(monkeypatch):
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -182,6 +187,7 @@ def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -222,6 +228,7 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     controller = DictationController(
         settings_store=store,
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=inserter,
         logger=logging.getLogger("test.controller"),
@@ -261,6 +268,7 @@ def test_controller_prefers_caret_handle_for_insertion_target():
     controller = DictationController(
         settings_store=store,
         hotkey_manager=hotkey_manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=inserter,
         logger=logging.getLogger("test.controller"),
@@ -298,6 +306,7 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -349,6 +358,7 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -376,6 +386,7 @@ def test_stream_live_delta_waits_for_partial_stability():
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -409,6 +420,7 @@ def test_stream_live_delta_recovers_after_partial_revision():
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -440,6 +452,7 @@ def test_stream_finalize_tail_uses_last_partial_when_final_diverges():
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -468,6 +481,7 @@ def test_streaming_partial_insertions_continue_after_revisions():
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=inserter,
         logger=logging.getLogger("test.controller"),
@@ -509,6 +523,7 @@ def test_streaming_finalize_does_not_copy_revision_to_clipboard(monkeypatch):
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=inserter,
         logger=logging.getLogger("test.controller"),
@@ -543,6 +558,7 @@ def test_controller_initialize_triggers_preload_for_local_engine():
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -575,6 +591,7 @@ def test_controller_initialize_skips_preload_for_remote_engine():
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -600,6 +617,7 @@ def test_controller_initialize_local_uses_preload_executor_only():
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -630,6 +648,7 @@ def test_controller_preload_fallback_on_failure():
     controller = DictationController(
         settings_store=FakeSettingsStore(settings),
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -660,6 +679,7 @@ def test_preload_worker_persists_fallback_model(monkeypatch):
     controller = DictationController(
         settings_store=store,
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=FakeOverlay(),
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -710,6 +730,46 @@ def test_preload_worker_persists_fallback_model(monkeypatch):
     _ = app
 
 
+def test_select_cached_fallback_model_prefers_closest_smaller():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    result = controller._select_cached_fallback_model(
+        "large-v3-turbo", ["tiny", "small", "medium", "large-v3"]
+    )
+
+    assert result == "medium"
+    controller.shutdown()
+    _ = app
+
+
+def test_select_cached_fallback_model_uses_best_available_when_no_smaller():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    result = controller._select_cached_fallback_model("tiny", ["base", "small"])
+
+    assert result == "small"
+    controller.shutdown()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # on_settings_changed tests
 # ---------------------------------------------------------------------------
@@ -724,6 +784,7 @@ def test_on_settings_changed_preloads_for_local_engine():
     controller = DictationController(
         settings_store=store,
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),
@@ -756,6 +817,7 @@ def test_on_settings_changed_skips_preload_for_remote_engine():
     controller = DictationController(
         settings_store=store,
         hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
         overlay=overlay,
         text_inserter=FakeTextInserter(),
         logger=logging.getLogger("test.controller"),

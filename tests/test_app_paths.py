@@ -46,3 +46,21 @@ def test_debug_audio_path_returns_wav(monkeypatch, tmp_path):
 
     result = debug_audio_path()
     assert result.name == "last_recording.wav"
+
+
+def test_recordings_dir_is_created(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from tts_app.app_paths import recordings_dir
+
+    result = recordings_dir()
+    assert result.name == "recordings"
+    assert result.is_dir()
+
+
+def test_transcript_history_path_points_to_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from tts_app.app_paths import transcript_history_path
+
+    result = transcript_history_path()
+    assert result.name == "transcript_history.json"
+    assert str(tmp_path) in str(result)

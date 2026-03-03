@@ -1,5 +1,6 @@
 from tts_app.settings_dialog import (
     _app_hotkey_to_qt_hotkey_text,
+    _hotkeys_conflict,
     _qt_hotkey_text_to_app_hotkey,
 )
 
@@ -22,3 +23,13 @@ def test_app_hotkey_to_qt_hotkey_text_maps_win_to_meta():
 def test_empty_hotkey_conversion():
     assert _qt_hotkey_text_to_app_hotkey("") == ""
     assert _app_hotkey_to_qt_hotkey_text("") == ""
+
+
+def test_hotkeys_conflict_when_identical_or_subset():
+    assert _hotkeys_conflict("Ctrl+Alt+Space", "Ctrl+Alt+Space") is True
+    assert _hotkeys_conflict("Ctrl+Alt+Space", "Ctrl+Alt+Shift+Space") is True
+    assert _hotkeys_conflict("Ctrl+Alt+Shift+Space", "Ctrl+Alt+Space") is True
+
+
+def test_hotkeys_no_conflict_when_distinct():
+    assert _hotkeys_conflict("Ctrl+Alt+Space", "Ctrl+Shift+F12") is False
