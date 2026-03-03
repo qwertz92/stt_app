@@ -47,7 +47,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
 | `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\tts_app\settings.json`) |
-| `secret_store.py` | keyring wrapper for API keys (never stored in JSON); error-tolerant reads |
+| `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |
 | `app_paths.py` | Centralized app data/config path helpers |
@@ -81,7 +81,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 Run: `uv run python -m pytest` or `python -m pytest`
 
-Current: 381 tests (380 + 1 Windows-only ctypes struct-size test expected to fail on Linux).
+Current: 386 tests (385 + 1 Windows-only ctypes struct-size test expected to fail on Linux).
 
 ## Known limitations
 

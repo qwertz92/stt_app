@@ -288,3 +288,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Eliminated duplicate `find_cached_models()` scan:** `_refresh_local_model_views()` now scans once and passes the result to both `_refresh_local_models_label()` and `_refresh_cached_models_list()`.
 - **Test fixes:** Corrected `test_select_cached_fallback_model_prefers_closest_smaller` expectation (large-v3-turbo is 809 MB, smaller than medium at 1400 MB). Fixed `test_groq_language_note_explains_auto_and_hints` to use `isVisibleTo(dialog)` instead of `isVisible()` (which checks parent-chain visibility on unshown dialogs).
 - 381 tests (380 + 1 known Windows-only). All passing on Linux.
+
+## 2026-03-03 — Session 6: ENOENT hardening + key-storage fallback + History UX
+
+- **Remote ENOENT hardening:** AssemblyAI and Groq providers now create temporary WAV files in app-controlled `%APPDATA%\tts_app\temp` instead of relying on system TEMP/TMP defaults. This avoids failures on locked-down corporate machines with broken/missing temp env paths.
+- **Clearer missing-file diagnostics:** Added explicit `FileNotFoundError` handling in remote providers and controller worker path so users get actionable messages instead of opaque `Unexpected transcription error`.
+- **API key storage fallback option:** Added settings flag `allow_insecure_key_storage` (schema v11). When enabled, `KeyringSecretStore` falls back to plain-text local storage (`insecure_api_keys.json`) if keyring is unavailable.
+- **Immediate key storage feedback:** Settings save now validates that key writes succeeded and shows clear status/warning in the Remote tab.
+- **Recording persistence hardening:** On transcription failure, if `save_last_wav` is enabled, the failed WAV payload is written again to `last_recording.wav` as a safety net.
+- **UI stability improvement:** Language note row now uses fixed height to avoid small layout jumps when switching engine/model/mode constraints.
+- **History import workflow upgrade:** Import now uses a two-step flow (select file first, then explicit start with confirmation), plus a quick action to reuse the last recorded file.

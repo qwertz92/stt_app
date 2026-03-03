@@ -76,6 +76,10 @@ Common settings to adjust:
 | **Mode** | `Batch` (transcribe after stop) or `Streaming` (live, experimental) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |
 | **Paste mode** | How text is inserted into the target app | Auto |
+| **VAD auto-stop** | Energy-based auto stop after speech + silence | Off |
+| **Start tone** | Beep/chime before recording starts | Off |
+
+Tip: In **Settings → History**, you can now select an audio file first (or choose the last recording) and start transcription explicitly after confirmation.
 
 ## 6. Stop the app
 

@@ -177,6 +177,12 @@ class DictationController(QtCore.QObject):
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
         self._settings = self._settings_store.load()
+        setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
+        if callable(setter):
+            try:
+                setter(bool(getattr(self._settings, "allow_insecure_key_storage", False)))
+            except Exception:
+                self._logger.exception("Failed to apply insecure key fallback setting")
         self._overlay.set_opacity_percent(self._settings.overlay_opacity_percent)
         self._reset_transcriber_cache()
         if re_register_hotkey:
@@ -857,6 +863,15 @@ class DictationController(QtCore.QObject):
             self._last_failed_wav_bytes = bytes(wav_bytes)
             self._last_failed_settings = replace(settings)
             self.transcription_failed.emit(str(exc))
+        except FileNotFoundError as exc:
+            self._last_failed_wav_bytes = bytes(wav_bytes)
+            self._last_failed_settings = replace(settings)
+            self._logger.exception("Transcription failed due to missing file path")
+            self.transcription_failed.emit(
+                "Transcription failed: missing file path. "
+                "Check input path and TEMP/TMP folder configuration. "
+                f"({exc})"
+            )
         except Exception as exc:
             self._last_failed_wav_bytes = bytes(wav_bytes)
             self._last_failed_settings = replace(settings)
@@ -1008,6 +1023,11 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._last_transcribe_settings = None
         self._reset_streaming_state()
+        if self._settings.save_last_wav and self._last_failed_wav_bytes:
+            try:
+                debug_audio_path().write_bytes(self._last_failed_wav_bytes)
+            except Exception:
+                self._logger.exception("Failed to persist failed recording WAV")
         self._overlay.set_state(
             "Error",
             f"{error_text} Use Retry to run the same audio again.",

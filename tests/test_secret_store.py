@@ -17,6 +17,24 @@ class FakeKeyringBackend:
         del self._store[(service_name, username)]
 
 
+class FailingKeyringBackend:
+    def set_password(self, service_name, username, password):
+        _ = service_name
+        _ = username
+        _ = password
+        raise FileNotFoundError("backend unavailable")
+
+    def get_password(self, service_name, username):
+        _ = service_name
+        _ = username
+        raise FileNotFoundError("backend unavailable")
+
+    def delete_password(self, service_name, username):
+        _ = service_name
+        _ = username
+        raise FileNotFoundError("backend unavailable")
+
+
 def test_keyring_secret_store_set_get_delete():
     backend = FakeKeyringBackend()
     store = KeyringSecretStore(keyring_backend=backend, service_name="tts-app-test")
@@ -34,3 +52,33 @@ def test_keyring_secret_store_missing_delete_is_safe():
 
     store.delete_api_key("azure")
     assert store.get_api_key("azure") is None
+
+
+def test_insecure_fallback_disabled_raises_on_set(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    store = KeyringSecretStore(
+        keyring_backend=FailingKeyringBackend(),
+        service_name="tts-app-test",
+    )
+
+    try:
+        store.set_api_key("openai", "sk-test")
+        assert False, "set_api_key should raise when fallback is disabled"
+    except FileNotFoundError:
+        pass
+
+
+def test_insecure_fallback_stores_and_reads_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    store = KeyringSecretStore(
+        keyring_backend=FailingKeyringBackend(),
+        service_name="tts-app-test",
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    store.set_api_key("groq", "gsk_test")
+    assert store.get_api_key("groq") == "gsk_test"
+    assert store.has_api_key("groq") is True
+
+    store.delete_api_key("groq")
+    assert store.get_api_key("groq") is None

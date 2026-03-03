@@ -15,6 +15,7 @@ import tempfile
 import threading
 from pathlib import Path
 
+from ..app_paths import temp_audio_dir
 from ..config import AUDIO_SAMPLE_RATE, DOC_SSL_PROXY_PATH
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
@@ -116,7 +117,11 @@ class AssemblyAITranscriber(ITranscriber):
         try:
             if isinstance(audio_source, bytes):
                 # Write WAV bytes to a temp file for the SDK.
-                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
+                with tempfile.NamedTemporaryFile(
+                    suffix=".wav",
+                    delete=False,
+                    dir=str(temp_audio_dir()),
+                ) as handle:
                     handle.write(audio_source)
                     temp_path = Path(handle.name)
                 file_path = str(temp_path)
@@ -137,6 +142,12 @@ class AssemblyAITranscriber(ITranscriber):
 
         except TranscriptionError:
             raise
+        except FileNotFoundError as exc:
+            raise TranscriptionError(
+                "AssemblyAI transcription failed: missing file path. "
+                "This can happen when the input file does not exist or when "
+                "TEMP/TMP points to a non-existent folder."
+            ) from exc
         except Exception as exc:
             if _is_ssl_error(exc):
                 raise TranscriptionError(

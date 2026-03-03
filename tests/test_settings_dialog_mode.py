@@ -1,5 +1,6 @@
 from PySide6 import QtCore, QtWidgets
 
+from tts_app.app_paths import debug_audio_path
 from tts_app.settings_dialog import SettingsDialog
 from tts_app.settings_store import AppSettings
 
@@ -377,4 +378,26 @@ def test_history_size_allows_unlimited_zero_and_persists():
 
     assert store.saved is not None
     assert store.saved.history_max_items == 0
+    _ = app
+
+
+def test_select_last_recording_sets_selected_file(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    path = debug_audio_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"RIFF")
+
+    dialog._select_last_recording_file()
+
+    assert str(path) in dialog.import_selected_file_label.text()
+    assert dialog.import_start_button.isEnabled() is True
     _ = app

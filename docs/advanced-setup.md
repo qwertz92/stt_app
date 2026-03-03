@@ -232,6 +232,64 @@ This is the same package the app uses internally. Once installed, restart the ap
 
 ---
 
+## ENOENT / "No such file or directory" errors
+
+### Symptom
+
+```
+Unexpected transcription error: [Errno 2] No such file or directory
+AssemblyAI transcription failed: [Errno 2] No such file or directory
+```
+
+This is **not always an SSL issue**. In corporate environments, this often means one of these paths is invalid:
+
+1. The selected input audio file does not exist anymore.
+2. `TEMP` / `TMP` points to a folder that does not exist or is blocked.
+3. Keyring/Credential Manager backend is unavailable when reading API keys.
+
+### What the app does now
+
+- Remote providers write temporary WAV files into the app-owned folder under `%APPDATA%\tts_app\temp`.
+- Missing-file errors now produce provider-specific diagnostics (instead of generic unexpected failures).
+- API key storage supports optional insecure fallback when keyring is blocked.
+
+### Fix checklist (Windows)
+
+```powershell
+echo $env:TEMP
+echo $env:TMP
+Test-Path $env:TEMP
+Test-Path $env:TMP
+```
+
+If any path is invalid, set a valid temp folder:
+
+```powershell
+$temp = "$env:USERPROFILE\AppData\Local\Temp"
+[System.Environment]::SetEnvironmentVariable("TEMP", $temp, "User")
+[System.Environment]::SetEnvironmentVariable("TMP",  $temp, "User")
+```
+
+Restart terminal and app after changes.
+
+---
+
+## API key storage fallback (when keyring is blocked)
+
+By default, keys are stored via keyring (Windows Credential Manager).
+
+If your environment blocks keyring writes/reads:
+
+1. Open **Settings → Remote**.
+2. Enable **Allow insecure local API key fallback (plain text)**.
+3. Save again.
+
+⚠️ Security tradeoff: keys are stored unencrypted in `%APPDATA%\tts_app\insecure_api_keys.json`.
+
+Recommended policy: use this only when Credential Manager is unavailable, and rotate keys periodically.
+
+---
+
 ## WSL / Linux
 
 WSL is useful for development tools (git, editors, linters), but the app itself requires Windows-specific APIs:

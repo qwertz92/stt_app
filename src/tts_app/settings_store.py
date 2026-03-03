@@ -7,6 +7,7 @@ from typing import Any
 
 from .app_paths import settings_path
 from .config import (
+    DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_ENGINE,
     DEFAULT_GROQ_MODEL,
@@ -68,6 +69,7 @@ DEFAULTS = {
     "mode": DEFAULT_MODE,
     "paste_mode": DEFAULT_PASTE_MODE,
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
+    "allow_insecure_key_storage": DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     "offline_mode": DEFAULT_OFFLINE_MODE,
     "start_beep_enabled": DEFAULT_START_BEEP_ENABLED,
     "start_beep_tone": DEFAULT_START_BEEP_TONE,
@@ -101,6 +103,7 @@ class AppSettings:
     mode: str = DEFAULT_MODE
     paste_mode: str = DEFAULT_PASTE_MODE
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
+    allow_insecure_key_storage: bool = DEFAULT_ALLOW_INSECURE_KEY_STORAGE
     offline_mode: bool = DEFAULT_OFFLINE_MODE
     start_beep_enabled: bool = DEFAULT_START_BEEP_ENABLED
     start_beep_tone: str = DEFAULT_START_BEEP_TONE
@@ -224,6 +227,12 @@ class AppSettings:
                 merged.get(
                     "keep_transcript_in_clipboard",
                     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
+                )
+            ),
+            allow_insecure_key_storage=bool(
+                merged.get(
+                    "allow_insecure_key_storage",
+                    DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
                 )
             ),
             offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),

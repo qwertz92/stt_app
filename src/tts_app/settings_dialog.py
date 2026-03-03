@@ -195,6 +195,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.language_note_label.setWordWrap(True)
         self.language_note_label.setStyleSheet("color: #555;")
         self.language_note_label.setVisible(True)
+        self.language_note_label.setMinimumHeight(34)
+        self.language_note_label.setMaximumHeight(34)
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -471,17 +473,34 @@ class SettingsDialog(QtWidgets.QDialog):
             self.deepgram_key_edit,
         ):
             field.setEchoMode(QtWidgets.QLineEdit.Password)
-            field.setPlaceholderText("Stored in Windows Credential Manager")
+            field.setPlaceholderText("Stored via keyring (Credential Manager)")
 
         provider_layout.addRow("AssemblyAI", self.assemblyai_key_edit)
         provider_layout.addRow("Groq", self.groq_key_edit)
         provider_layout.addRow("OpenAI", self.openai_key_edit)
         provider_layout.addRow("Deepgram", self.deepgram_key_edit)
         provider_note = QtWidgets.QLabel(
-            "Keys are saved in Windows Credential Manager via keyring."
+            "Keys are saved via keyring (Windows Credential Manager preferred)."
         )
         provider_note.setStyleSheet("color: #555;")
         provider_layout.addRow(provider_note)
+
+        self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
+            "Allow insecure local API key fallback (plain text)"
+        )
+        self.insecure_key_storage_checkbox.setToolTip(
+            "Use only if Credential Manager/keyring is blocked. "
+            "Keys are then stored unencrypted in the app-data folder."
+        )
+        self.insecure_key_storage_checkbox.toggled.connect(
+            lambda _checked: self._apply_secret_store_options()
+        )
+        provider_layout.addRow("", self.insecure_key_storage_checkbox)
+
+        self.key_storage_status_label = QtWidgets.QLabel("")
+        self.key_storage_status_label.setWordWrap(True)
+        self.key_storage_status_label.setStyleSheet("color: #555;")
+        provider_layout.addRow(self.key_storage_status_label)
 
         # Test connection
         self.test_conn_button = QtWidgets.QPushButton("Test Connection")
@@ -537,11 +556,25 @@ class SettingsDialog(QtWidgets.QDialog):
         import_layout.addWidget(import_hint)
 
         import_buttons = QtWidgets.QHBoxLayout()
-        self.import_file_button = QtWidgets.QPushButton("Choose file and transcribe")
-        self.import_file_button.clicked.connect(self._import_and_transcribe_file)
+        self.import_file_button = QtWidgets.QPushButton("Choose file...")
+        self.import_file_button.clicked.connect(self._choose_import_file)
+        self.import_last_recording_button = QtWidgets.QPushButton("Use last recording")
+        self.import_last_recording_button.clicked.connect(
+            self._select_last_recording_file
+        )
+        self.import_start_button = QtWidgets.QPushButton("Start transcription")
+        self.import_start_button.setEnabled(False)
+        self.import_start_button.clicked.connect(self._confirm_and_transcribe_selected_file)
         import_buttons.addWidget(self.import_file_button)
+        import_buttons.addWidget(self.import_last_recording_button)
+        import_buttons.addWidget(self.import_start_button)
         import_buttons.addStretch(1)
         import_layout.addLayout(import_buttons)
+
+        self.import_selected_file_label = QtWidgets.QLabel("No file selected.")
+        self.import_selected_file_label.setWordWrap(True)
+        self.import_selected_file_label.setStyleSheet("color: #555;")
+        import_layout.addWidget(self.import_selected_file_label)
 
         self.import_result_label = QtWidgets.QLabel("")
         self.import_result_label.setWordWrap(True)
@@ -550,6 +583,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_result_text = QtWidgets.QPlainTextEdit()
         self.import_result_text.setReadOnly(True)
         import_layout.addWidget(self.import_result_text)
+
+        self._selected_import_file_path = ""
 
         layout.addWidget(import_box, 2)
         self.tabs.addTab(tab, "History")
@@ -1010,6 +1045,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.keep_clipboard_checkbox.setChecked(
             settings.keep_transcript_in_clipboard
         )
+        self.insecure_key_storage_checkbox.setChecked(
+            bool(getattr(settings, "allow_insecure_key_storage", False))
+        )
         self.offline_mode_checkbox.setChecked(settings.offline_mode)
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
@@ -1038,6 +1076,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._update_engine_indicator()
         self._refresh_history_list()
+        self._apply_secret_store_options()
 
     def _select_combo_data(
         self, combo: QtWidgets.QComboBox, value: str
@@ -1115,7 +1154,19 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_copy_button.setText("Copy selected")
         self.history_copy_button.setStyleSheet("")
 
-    def _import_and_transcribe_file(self) -> None:
+    def _set_selected_import_file(self, path: str) -> None:
+        selected = str(path or "").strip()
+        self._selected_import_file_path = selected
+        if selected:
+            self.import_selected_file_label.setText(f"Selected: {selected}")
+            self.import_selected_file_label.setStyleSheet("color: #1b5e20;")
+            self.import_start_button.setEnabled(True)
+        else:
+            self.import_selected_file_label.setText("No file selected.")
+            self.import_selected_file_label.setStyleSheet("color: #555;")
+            self.import_start_button.setEnabled(False)
+
+    def _choose_import_file(self) -> None:
         path, _filter = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Select audio file",
@@ -1124,10 +1175,43 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         if not path:
             return
+        self._set_selected_import_file(path)
+
+    def _select_last_recording_file(self) -> None:
+        path = debug_audio_path()
+        if not path.is_file():
+            self.import_result_label.setText(
+                f"Last recording not found: {path}"
+            )
+            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            self.import_result_text.clear()
+            return
+        self._set_selected_import_file(str(path))
+
+    def _confirm_and_transcribe_selected_file(self) -> None:
+        path = self._selected_import_file_path
+        if not path:
+            self.import_result_label.setText("Select a file first.")
+            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Start transcription",
+            f"Transcribe selected file?\n\n{path}",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.Yes,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        self._start_import_transcription(path)
+
+    def _start_import_transcription(self, path: str) -> None:
         self.import_result_label.setText("Transcribing...")
         self.import_result_label.setStyleSheet("color: #555;")
         self.import_result_text.clear()
         self.import_file_button.setEnabled(False)
+        self.import_last_recording_button.setEnabled(False)
+        self.import_start_button.setEnabled(False)
 
         # Build settings on the GUI thread — widgets must not be accessed
         # from background threads.
@@ -1163,6 +1247,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _finish_import_transcription(self, ok: bool, text: str) -> None:
         self.import_file_button.setEnabled(True)
+        self.import_last_recording_button.setEnabled(True)
+        self.import_start_button.setEnabled(bool(self._selected_import_file_path))
         if ok:
             self.import_result_label.setText("Transcription finished.")
             self.import_result_label.setStyleSheet("color: #1b5e20;")
@@ -1177,6 +1263,25 @@ class SettingsDialog(QtWidgets.QDialog):
         text = self._app_logger.diagnostics_text()
         clipboard = QtGui.QGuiApplication.clipboard()
         clipboard.setText(text)
+
+    def _apply_secret_store_options(self) -> None:
+        enabled = self.insecure_key_storage_checkbox.isChecked()
+        setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
+        if callable(setter):
+            try:
+                setter(enabled)
+            except Exception:
+                pass
+        if enabled:
+            self.key_storage_status_label.setStyleSheet("color: #b26a00;")
+            self.key_storage_status_label.setText(
+                "Warning: insecure key fallback is enabled (plain-text local file)."
+            )
+        elif not self.key_storage_status_label.text().strip():
+            self.key_storage_status_label.setStyleSheet("color: #555;")
+            self.key_storage_status_label.setText(
+                "Credential Manager only (recommended)."
+            )
 
     def _build_current_settings(self) -> AppSettings:
         """Construct an ``AppSettings`` from current widget state.
@@ -1205,6 +1310,7 @@ class SettingsDialog(QtWidgets.QDialog):
             history_max_items=int(self.history_max_spin.value()),
             overlay_opacity_percent=latest_overlay_opacity,
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
+            allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
             start_beep_tone=str(
@@ -1302,6 +1408,9 @@ class SettingsDialog(QtWidgets.QDialog):
         has_assemblyai_key = self._loaded_settings.has_assemblyai_key
         has_groq_key = self._loaded_settings.has_groq_key
 
+        self._apply_secret_store_options()
+        key_storage_errors: list[str] = []
+
         openai_value = self.openai_key_edit.text().strip()
         deepgram_value = self.deepgram_key_edit.text().strip()
         assemblyai_value = self.assemblyai_key_edit.text().strip()
@@ -1310,27 +1419,39 @@ class SettingsDialog(QtWidgets.QDialog):
         if openai_value:
             try:
                 self._secret_store.set_api_key("openai", openai_value)
-                has_openai_key = True
-            except Exception:
-                pass
+                has_openai_key = bool(self._resolve_api_key("openai", self.openai_key_edit))
+            except Exception as exc:
+                key_storage_errors.append(f"OpenAI: {exc}")
         if deepgram_value:
             try:
                 self._secret_store.set_api_key("deepgram", deepgram_value)
-                has_deepgram_key = True
-            except Exception:
-                pass
+                has_deepgram_key = bool(self._resolve_api_key("deepgram", self.deepgram_key_edit))
+            except Exception as exc:
+                key_storage_errors.append(f"Deepgram: {exc}")
         if assemblyai_value:
             try:
                 self._secret_store.set_api_key("assemblyai", assemblyai_value)
-                has_assemblyai_key = True
-            except Exception:
-                pass
+                has_assemblyai_key = bool(self._resolve_api_key("assemblyai", self.assemblyai_key_edit))
+            except Exception as exc:
+                key_storage_errors.append(f"AssemblyAI: {exc}")
         if groq_value:
             try:
                 self._secret_store.set_api_key("groq", groq_value)
-                has_groq_key = True
-            except Exception:
-                pass
+                has_groq_key = bool(self._resolve_api_key("groq", self.groq_key_edit))
+            except Exception as exc:
+                key_storage_errors.append(f"Groq: {exc}")
+
+        if key_storage_errors:
+            self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
+            self.key_storage_status_label.setText(
+                "Could not store some API keys in Credential Manager. "
+                "Enable insecure fallback storage or retry. "
+                + " | ".join(key_storage_errors)
+            )
+        else:
+            self.key_storage_status_label.setStyleSheet("color: #1b5e20;")
+            if any((openai_value, deepgram_value, assemblyai_value, groq_value)):
+                self.key_storage_status_label.setText("API key storage check: OK")
 
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent
@@ -1353,6 +1474,7 @@ class SettingsDialog(QtWidgets.QDialog):
             keep_transcript_in_clipboard=(
                 self.keep_clipboard_checkbox.isChecked()
             ),
+            allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
             start_beep_tone=str(
