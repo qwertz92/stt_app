@@ -198,6 +198,14 @@ class TestSyncCABundleEnvVars:
         monkeypatch.setenv("SSL_CERT_FILE", "/nonexistent/ca.pem")
         monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
         sync_ca_bundle_env_vars()
+        assert os.environ.get("SSL_CERT_FILE", "") == ""
+        assert os.environ.get("REQUESTS_CA_BUNDLE", "") == ""
+
+    def test_removes_invalid_requests_ca_bundle(self, monkeypatch):
+        monkeypatch.delenv("SSL_CERT_FILE", raising=False)
+        monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/nonexistent/ca.pem")
+        sync_ca_bundle_env_vars()
+        assert os.environ.get("SSL_CERT_FILE", "") == ""
         assert os.environ.get("REQUESTS_CA_BUNDLE", "") == ""
 
 

@@ -51,6 +51,15 @@ def sync_ca_bundle_env_vars() -> None:
     ssl_cert = os.environ.get("SSL_CERT_FILE", "").strip()
     requests_bundle = os.environ.get("REQUESTS_CA_BUNDLE", "").strip()
 
+    # Remove stale/invalid paths so libraries (especially httpx) do not
+    # crash with FileNotFoundError while creating SSL contexts.
+    if ssl_cert and not Path(ssl_cert).is_file():
+        os.environ.pop("SSL_CERT_FILE", None)
+        ssl_cert = ""
+    if requests_bundle and not Path(requests_bundle).is_file():
+        os.environ.pop("REQUESTS_CA_BUNDLE", None)
+        requests_bundle = ""
+
     if ssl_cert and Path(ssl_cert).is_file() and not requests_bundle:
         os.environ["REQUESTS_CA_BUNDLE"] = ssl_cert
     elif requests_bundle and Path(requests_bundle).is_file() and not ssl_cert:
