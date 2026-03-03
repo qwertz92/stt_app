@@ -1,32 +1,55 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
+from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .app_paths import debug_audio_path, recordings_dir
 from .config import (
+    DEFAULT_CANCEL_HOTKEY,
     DEFAULT_ENGINE,
     DEFAULT_GROQ_MODEL,
+    DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
+    DEFAULT_RECORDINGS_MAX_COUNT,
+    DEFAULT_START_BEEP_TONE,
+    DEFAULT_VAD_ENERGY_THRESHOLD,
     DOC_MODELS_PATH,
+    ENGINE_LANGUAGE_MODES,
     GROQ_MODELS,
+    LANGUAGE_MODE_LABELS,
+    LOCAL_ENGLISH_ONLY_MODELS,
     OPENAI_MODELS,
     STREAMING_ENGINES,
+    VAD_ENERGY_THRESHOLD_MAX,
+    VAD_ENERGY_THRESHOLD_MIN,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
     VALID_MODES,
     VALID_MODEL_SIZES,
+    VALID_OVERLAY_CORNERS,
     VALID_PASTE_MODES,
+    VALID_START_BEEP_TONES,
 )
 from .hotkey import parse_hotkey
 from .logger import AppLogger
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
-from .transcriber.local_faster_whisper import find_cached_models
+from .transcript_history import TranscriptHistoryStore
+from .transcriber.local_faster_whisper import (
+    delete_cached_model,
+    find_cached_models,
+)
+
+if TYPE_CHECKING:
+    from .controller import DictationController
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -38,12 +61,15 @@ class SettingsDialog(QtWidgets.QDialog):
         settings_store: SettingsStore,
         secret_store: SecretStore,
         app_logger: AppLogger,
+        controller: DictationController | None = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._settings_store = settings_store
         self._secret_store = secret_store
         self._app_logger = app_logger
+        self._controller = controller
+        self._history_store = TranscriptHistoryStore()
         self._loaded_settings = self._settings_store.load()
         self._connection_test_id = 0
         self._active_connection_test_thread: threading.Thread | None = None
@@ -98,6 +124,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._build_general_tab()
         self._build_local_tab()
         self._build_remote_tab()
+        self._build_history_tab()
 
         # --- Bottom buttons ---
         self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
@@ -139,19 +166,24 @@ class SettingsDialog(QtWidgets.QDialog):
         self.hotkey_edit.setMaximumSequenceLength(1)
         if hasattr(self.hotkey_edit, "setClearButtonEnabled"):
             self.hotkey_edit.setClearButtonEnabled(True)
+        self.cancel_hotkey_edit = QtWidgets.QKeySequenceEdit()
+        self.cancel_hotkey_edit.setMaximumSequenceLength(1)
+        if hasattr(self.cancel_hotkey_edit, "setClearButtonEnabled"):
+            self.cancel_hotkey_edit.setClearButtonEnabled(True)
         hotkey_hint = QtWidgets.QLabel(
             "Click the hotkey field and press the combination to record it."
         )
         hotkey_hint.setStyleSheet("color: #555;")
+        cancel_hotkey_hint = QtWidgets.QLabel(
+            "Cancel hotkey stops current recording/transcription (must differ from main hotkey)."
+        )
+        cancel_hotkey_hint.setStyleSheet("color: #555;")
 
         self.language_combo = QtWidgets.QComboBox()
-        language_labels = {
-            "auto": "Auto",
-            "de": "German",
-            "en": "English",
-        }
-        for value in VALID_LANGUAGE_MODES:
-            self.language_combo.addItem(language_labels.get(value, value), value)
+        self.language_note_label = QtWidgets.QLabel("")
+        self.language_note_label.setWordWrap(True)
+        self.language_note_label.setStyleSheet("color: #555;")
+        self.language_note_label.setVisible(False)
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -176,6 +208,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Streaming is experimental: live insertion while speaking, "
             "auto-abort on focus change. Batch remains the recommended default."
         )
+        self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
 
         self.paste_mode_combo = QtWidgets.QComboBox()
         paste_mode_labels = {
@@ -189,19 +222,103 @@ class SettingsDialog(QtWidgets.QDialog):
             )
 
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
+        self.vad_threshold_spin = QtWidgets.QDoubleSpinBox()
+        self.vad_threshold_spin.setDecimals(3)
+        self.vad_threshold_spin.setSingleStep(0.002)
+        self.vad_threshold_spin.setRange(
+            VAD_ENERGY_THRESHOLD_MIN,
+            VAD_ENERGY_THRESHOLD_MAX,
+        )
+        self.vad_threshold_spin.setValue(DEFAULT_VAD_ENERGY_THRESHOLD)
+        self.vad_threshold_spin.setToolTip(
+            "Lower value = more sensitive for quiet speech/whispering."
+        )
+
+        self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
+        self.start_beep_tone_combo = QtWidgets.QComboBox()
+        tone_labels = {
+            "soft": "Soft beep",
+            "high": "High beep",
+            "chime": "Two-tone chime",
+            "system": "System notification",
+        }
+        for value in VALID_START_BEEP_TONES:
+            self.start_beep_tone_combo.addItem(tone_labels.get(value, value), value)
+
         self.save_wav_checkbox = QtWidgets.QCheckBox("Save last WAV for debugging")
+        self.save_wav_path_label = QtWidgets.QLabel(
+            f"Saved to: {debug_audio_path()} (overwritten on each recording)"
+        )
+        self.save_wav_path_label.setWordWrap(True)
+        self.save_wav_path_label.setStyleSheet("color: #555;")
+
+        self.save_all_recordings_checkbox = QtWidgets.QCheckBox(
+            "Archive every recording to folder"
+        )
+        self.recordings_dir_edit = QtWidgets.QLineEdit()
+        self.recordings_dir_edit.setPlaceholderText(
+            f"Leave empty for default ({recordings_dir()})"
+        )
+        self.recordings_dir_browse = QtWidgets.QPushButton("Browse...")
+        self.recordings_dir_browse.setFixedWidth(80)
+        self.recordings_dir_browse.clicked.connect(self._browse_recordings_dir)
+        self.recordings_open_button = QtWidgets.QPushButton("Open Folder")
+        self.recordings_open_button.clicked.connect(self._open_recordings_dir)
+        recordings_dir_layout = QtWidgets.QHBoxLayout()
+        recordings_dir_layout.addWidget(self.recordings_dir_edit, 1)
+        recordings_dir_layout.addWidget(self.recordings_dir_browse)
+        recordings_dir_layout.addWidget(self.recordings_open_button)
+        self.recordings_max_spin = QtWidgets.QSpinBox()
+        self.recordings_max_spin.setRange(1, 500)
+        self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
+        self.recordings_max_spin.setToolTip(
+            "Keep only the newest N archived recordings."
+        )
+
+        self.history_max_spin = QtWidgets.QSpinBox()
+        self.history_max_spin.setRange(1, 100)
+        self.history_max_spin.setValue(DEFAULT_HISTORY_MAX_ITEMS)
+        self.history_max_spin.setToolTip(
+            "Maximum transcript history items shown in UI."
+        )
+        self.history_max_spin.valueChanged.connect(
+            lambda _value: self._refresh_history_list()
+        )
+
+        self.overlay_corner_combo = QtWidgets.QComboBox()
+        corner_labels = {
+            "top-right": "Top Right",
+            "top-left": "Top Left",
+            "bottom-right": "Bottom Right",
+            "bottom-left": "Bottom Left",
+        }
+        for value in VALID_OVERLAY_CORNERS:
+            self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
+
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
             "Keep transcript in clipboard after transcription"
         )
 
         form.addRow("Hotkey", self.hotkey_edit)
         form.addRow("", hotkey_hint)
+        form.addRow("Cancel Hotkey", self.cancel_hotkey_edit)
+        form.addRow("", cancel_hotkey_hint)
         form.addRow("Engine", self.engine_combo)
         form.addRow("Language", self.language_combo)
+        form.addRow("", self.language_note_label)
         form.addRow("Mode", self.mode_combo)
         form.addRow("Paste Mode", self.paste_mode_combo)
         form.addRow("", self.vad_checkbox)
+        form.addRow("VAD Threshold", self.vad_threshold_spin)
+        form.addRow("", self.start_beep_checkbox)
+        form.addRow("Start Tone", self.start_beep_tone_combo)
+        form.addRow("Overlay Corner", self.overlay_corner_combo)
         form.addRow("", self.save_wav_checkbox)
+        form.addRow("", self.save_wav_path_label)
+        form.addRow("", self.save_all_recordings_checkbox)
+        form.addRow("Recordings Folder", recordings_dir_layout)
+        form.addRow("Keep Recordings", self.recordings_max_spin)
+        form.addRow("History Size", self.history_max_spin)
         form.addRow("", self.keep_clipboard_checkbox)
 
         self.tabs.addTab(tab, "General")
@@ -215,6 +332,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout()
 
         self.model_combo = QtWidgets.QComboBox()
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         form.addRow("Model Size", self.model_combo)
 
         self.model_dir_edit = QtWidgets.QLineEdit()
@@ -254,7 +372,36 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_models_label = QtWidgets.QLabel("Scanning...")
         self.local_models_label.setWordWrap(True)
         local_models_layout.addWidget(self.local_models_label)
+
+        self.cached_models_list = QtWidgets.QListWidget()
+        self.cached_models_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+        self.cached_models_list.itemSelectionChanged.connect(
+            self._on_cached_model_selection_changed
+        )
+        local_models_layout.addWidget(self.cached_models_list)
+
+        manage_buttons = QtWidgets.QHBoxLayout()
+        self.refresh_local_models_button = QtWidgets.QPushButton("Refresh")
+        self.refresh_local_models_button.clicked.connect(
+            self._refresh_local_model_views
+        )
+        self.delete_cached_model_button = QtWidgets.QPushButton("Delete Selected")
+        self.delete_cached_model_button.setEnabled(False)
+        self.delete_cached_model_button.clicked.connect(
+            self._delete_selected_cached_model
+        )
+        manage_buttons.addWidget(self.refresh_local_models_button)
+        manage_buttons.addStretch(1)
+        manage_buttons.addWidget(self.delete_cached_model_button)
+        local_models_layout.addLayout(manage_buttons)
+
+        self.local_models_action_label = QtWidgets.QLabel("")
+        self.local_models_action_label.setWordWrap(True)
+        local_models_layout.addWidget(self.local_models_action_label)
         self._refresh_local_models_label()
+        self._refresh_cached_models_list()
 
         layout.addWidget(local_models_box)
         layout.addStretch(1)
@@ -338,6 +485,63 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addStretch(1)
         self.tabs.addTab(tab, "Remote")
 
+    # --- History tab ---
+
+    def _build_history_tab(self) -> None:
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+
+        history_box = QtWidgets.QGroupBox("Transcript History")
+        history_layout = QtWidgets.QVBoxLayout(history_box)
+
+        self.history_list = QtWidgets.QListWidget()
+        self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
+        history_layout.addWidget(self.history_list)
+
+        self.history_detail = QtWidgets.QPlainTextEdit()
+        self.history_detail.setReadOnly(True)
+        history_layout.addWidget(self.history_detail)
+
+        history_buttons = QtWidgets.QHBoxLayout()
+        self.history_refresh_button = QtWidgets.QPushButton("Refresh")
+        self.history_refresh_button.clicked.connect(self._refresh_history_list)
+        self.history_copy_button = QtWidgets.QPushButton("Copy selected")
+        self.history_copy_button.clicked.connect(self._copy_selected_history)
+        self.history_copy_button.setEnabled(False)
+        history_buttons.addWidget(self.history_refresh_button)
+        history_buttons.addStretch(1)
+        history_buttons.addWidget(self.history_copy_button)
+        history_layout.addLayout(history_buttons)
+        layout.addWidget(history_box, 2)
+
+        import_box = QtWidgets.QGroupBox("Import Audio File")
+        import_layout = QtWidgets.QVBoxLayout(import_box)
+        import_hint = QtWidgets.QLabel(
+            "Transcribe an existing audio file using current settings "
+            "(useful after failures or for external recordings)."
+        )
+        import_hint.setWordWrap(True)
+        import_hint.setStyleSheet("color: #555;")
+        import_layout.addWidget(import_hint)
+
+        import_buttons = QtWidgets.QHBoxLayout()
+        self.import_file_button = QtWidgets.QPushButton("Choose file and transcribe")
+        self.import_file_button.clicked.connect(self._import_and_transcribe_file)
+        import_buttons.addWidget(self.import_file_button)
+        import_buttons.addStretch(1)
+        import_layout.addLayout(import_buttons)
+
+        self.import_result_label = QtWidgets.QLabel("")
+        self.import_result_label.setWordWrap(True)
+        import_layout.addWidget(self.import_result_label)
+
+        self.import_result_text = QtWidgets.QPlainTextEdit()
+        self.import_result_text.setReadOnly(True)
+        import_layout.addWidget(self.import_result_text)
+
+        layout.addWidget(import_box, 2)
+        self.tabs.addTab(tab, "History")
+
     # ------------------------------------------------------------------
     # Model combo helpers
     # ------------------------------------------------------------------
@@ -406,6 +610,154 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             self.local_models_label.setStyleSheet("color: #b71c1c;")
 
+    def _refresh_cached_models_list(self) -> None:
+        model_dir = self.model_dir_edit.text().strip()
+        try:
+            cached = find_cached_models(model_dir)
+        except Exception:
+            cached = []
+        self.cached_models_list.clear()
+        for model_name in cached:
+            item = QtWidgets.QListWidgetItem(model_name)
+            item.setData(QtCore.Qt.UserRole, model_name)
+            self.cached_models_list.addItem(item)
+        self.delete_cached_model_button.setEnabled(False)
+
+    def _refresh_local_model_views(self) -> None:
+        self._refresh_local_models_label()
+        self._refresh_cached_models_list()
+        self._refresh_model_combo()
+        self._update_language_availability()
+
+    def _on_cached_model_selection_changed(self) -> None:
+        self.delete_cached_model_button.setEnabled(
+            bool(self.cached_models_list.selectedItems())
+        )
+
+    def _delete_selected_cached_model(self) -> None:
+        selected_items = self.cached_models_list.selectedItems()
+        if not selected_items:
+            self.delete_cached_model_button.setEnabled(False)
+            return
+        model_name = str(selected_items[0].data(QtCore.Qt.UserRole) or "").strip()
+        if not model_name:
+            self.delete_cached_model_button.setEnabled(False)
+            return
+
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete local model",
+            (
+                f"Delete local cache for model '{model_name}'?\n\n"
+                "This removes downloaded files from disk."
+            ),
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+
+        try:
+            removed = delete_cached_model(
+                model_name,
+                self.model_dir_edit.text().strip(),
+            )
+        except Exception as exc:
+            self.local_models_action_label.setStyleSheet("color: #b71c1c;")
+            self.local_models_action_label.setText(
+                f"Failed to delete '{model_name}': {exc}"
+            )
+            return
+
+        if removed <= 0:
+            self.local_models_action_label.setStyleSheet("color: #555;")
+            self.local_models_action_label.setText(
+                f"No cache directories found for '{model_name}'."
+            )
+        else:
+            self.local_models_action_label.setStyleSheet("color: #1b5e20;")
+            self.local_models_action_label.setText(
+                f"Deleted '{model_name}' ({removed} folder(s) removed)."
+            )
+        self._refresh_local_model_views()
+
+    # ------------------------------------------------------------------
+    # Engine-dependent option availability
+    # ------------------------------------------------------------------
+
+    def _language_modes_for_current_selection(self) -> tuple[str, ...]:
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        mode = str(self.mode_combo.currentData() or DEFAULT_MODE)
+        model = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+
+        if engine == "assemblyai" and mode == "streaming":
+            # AssemblyAI realtime streaming path does language detection automatically.
+            return ("auto",)
+
+        if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
+            return ("auto", "en")
+
+        return ENGINE_LANGUAGE_MODES.get(engine, VALID_LANGUAGE_MODES)
+
+    def _language_constraint_note(self) -> str:
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        mode = str(self.mode_combo.currentData() or DEFAULT_MODE)
+        model = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+
+        if engine == "assemblyai" and mode == "streaming":
+            return (
+                "AssemblyAI streaming always uses automatic language detection "
+                "(language is fixed to Auto)."
+            )
+
+        if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
+            return (
+                "distil-large-v3.5 is an English-only model "
+                "(German is disabled for this model)."
+            )
+
+        if engine == "groq":
+            return (
+                "Groq Whisper models are multilingual. 'Auto' lets the model detect "
+                "language; selecting German/English sends a language hint."
+            )
+
+        return ""
+
+    def _update_language_availability(self, preferred_mode: str | None = None) -> None:
+        supported_modes = self._language_modes_for_current_selection()
+        selected_mode = preferred_mode or str(
+            self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+        )
+
+        self.language_combo.blockSignals(True)
+        self.language_combo.clear()
+        for value in supported_modes:
+            self.language_combo.addItem(LANGUAGE_MODE_LABELS.get(value, value), value)
+
+        target_mode = (
+            selected_mode if selected_mode in supported_modes else supported_modes[0]
+        )
+        self._select_combo_data(self.language_combo, target_mode)
+        self.language_combo.blockSignals(False)
+
+        note = self._language_constraint_note()
+        self.language_note_label.setText(note)
+        self.language_note_label.setVisible(bool(note))
+        self.language_combo.setEnabled(len(supported_modes) > 1)
+        self.language_combo.setToolTip(
+            note
+            or "Choose the recognition language for the selected engine."
+        )
+
     # ------------------------------------------------------------------
     # Engine indicator
     # ------------------------------------------------------------------
@@ -464,11 +816,17 @@ class SettingsDialog(QtWidgets.QDialog):
     def _on_engine_changed(self, _index: int = 0) -> None:
         self._update_engine_indicator()
         self._update_mode_availability()
+        self._update_language_availability()
+
+    def _on_mode_changed(self, _index: int = 0) -> None:
+        self._update_language_availability()
+
+    def _on_model_changed(self, _index: int = 0) -> None:
+        self._update_language_availability()
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
-        self._refresh_local_models_label()
-        self._refresh_model_combo()
+        self._refresh_local_model_views()
 
     def _test_connection(self) -> None:
         """Test connectivity for the selected remote provider."""
@@ -603,23 +961,36 @@ class SettingsDialog(QtWidgets.QDialog):
                 _app_hotkey_to_qt_hotkey_text(settings.hotkey)
             )
         )
+        self.cancel_hotkey_edit.setKeySequence(
+            QtGui.QKeySequence(
+                _app_hotkey_to_qt_hotkey_text(settings.cancel_hotkey)
+            )
+        )
         # Model Dir must be set before refreshing the model combo so it can
         # scan the correct directory for cached models.
         self.model_dir_edit.setText(settings.model_dir or "")
         self._refresh_model_combo(selected=settings.model_size)
-        self._select_combo_data(self.language_combo, settings.language_mode)
         self.vad_checkbox.setChecked(settings.vad_enabled)
+        self.vad_threshold_spin.setValue(float(settings.vad_energy_threshold))
+        self.start_beep_checkbox.setChecked(settings.start_beep_enabled)
+        self._select_combo_data(self.start_beep_tone_combo, settings.start_beep_tone)
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
+        self.save_all_recordings_checkbox.setChecked(settings.save_all_recordings)
+        self.recordings_dir_edit.setText(settings.recordings_dir or "")
+        self.recordings_max_spin.setValue(int(settings.recordings_max_count))
+        self.history_max_spin.setValue(int(settings.history_max_items))
+        self._select_combo_data(self.overlay_corner_combo, settings.overlay_corner)
         self.keep_clipboard_checkbox.setChecked(
             settings.keep_transcript_in_clipboard
         )
         self.offline_mode_checkbox.setChecked(settings.offline_mode)
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
+        self._update_mode_availability()
+        self._update_language_availability(preferred_mode=settings.language_mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(self.groq_model_combo, settings.groq_model)
         self._select_combo_data(self.openai_model_combo, settings.openai_model)
-        self._update_mode_availability()
 
         if settings.has_openai_key:
             self.openai_key_edit.setPlaceholderText(
@@ -639,6 +1010,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
 
         self._update_engine_indicator()
+        self._refresh_history_list()
 
     def _select_combo_data(
         self, combo: QtWidgets.QComboBox, value: str
@@ -652,6 +1024,153 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         if path:
             self.model_dir_edit.setText(path)
+
+    def _browse_recordings_dir(self) -> None:
+        path = QtWidgets.QFileDialog.getExistingDirectory(
+            self,
+            "Select recordings directory",
+            self.recordings_dir_edit.text() or str(recordings_dir()),
+        )
+        if path:
+            self.recordings_dir_edit.setText(path)
+
+    def _open_recordings_dir(self) -> None:
+        target = self._effective_recordings_dir()
+        Path(target).mkdir(parents=True, exist_ok=True)
+        QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
+
+    def _effective_recordings_dir(self) -> str:
+        text = self.recordings_dir_edit.text().strip()
+        if text:
+            return text
+        return str(recordings_dir())
+
+    def _refresh_history_list(self) -> None:
+        self.history_list.clear()
+        self.history_detail.clear()
+        self.history_copy_button.setEnabled(False)
+        entries = self._history_store.recent_entries(self.history_max_spin.value())
+        for entry in entries:
+            text = entry.text.strip().replace("\n", " ")
+            preview = text[:70] + ("..." if len(text) > 70 else "")
+            label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
+            item = QtWidgets.QListWidgetItem(label)
+            item.setData(QtCore.Qt.UserRole, entry.text)
+            self.history_list.addItem(item)
+
+    def _on_history_item_selected(self) -> None:
+        items = self.history_list.selectedItems()
+        if not items:
+            self.history_copy_button.setEnabled(False)
+            self.history_detail.clear()
+            return
+        text = str(items[0].data(QtCore.Qt.UserRole) or "")
+        self.history_copy_button.setEnabled(bool(text))
+        self.history_detail.setPlainText(text)
+
+    def _copy_selected_history(self) -> None:
+        items = self.history_list.selectedItems()
+        if not items:
+            return
+        text = str(items[0].data(QtCore.Qt.UserRole) or "")
+        if not text:
+            return
+        QtGui.QGuiApplication.clipboard().setText(text)
+
+    def _import_and_transcribe_file(self) -> None:
+        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select audio file",
+            "",
+            "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.webm);;All files (*)",
+        )
+        if not path:
+            return
+        self.import_result_label.setText("Transcribing...")
+        self.import_result_label.setStyleSheet("color: #555;")
+        self.import_result_text.clear()
+        self.import_file_button.setEnabled(False)
+
+        def _run() -> None:
+            try:
+                ok, text = self._transcribe_import_file(path)
+            except Exception as exc:
+                ok, text = False, str(exc)
+            QtCore.QTimer.singleShot(
+                0,
+                lambda: self._finish_import_transcription(bool(ok), str(text)),
+            )
+
+        threading.Thread(
+            target=_run,
+            name="tts_app_import_file_transcription",
+            daemon=True,
+        ).start()
+
+    def _transcribe_import_file(self, path: str) -> tuple[bool, str]:
+        from .transcriber import create_transcriber
+
+        settings = AppSettings(
+            hotkey=self._loaded_settings.hotkey,
+            cancel_hotkey=self._loaded_settings.cancel_hotkey,
+            model_size=str(
+                self.model_combo.currentData()
+                or self._loaded_settings.model_size
+            ),
+            language_mode=str(
+                self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+            ),
+            vad_enabled=self.vad_checkbox.isChecked(),
+            vad_energy_threshold=float(self.vad_threshold_spin.value()),
+            save_last_wav=self.save_wav_checkbox.isChecked(),
+            save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
+            recordings_dir=self._effective_recordings_dir(),
+            recordings_max_count=int(self.recordings_max_spin.value()),
+            history_max_items=int(self.history_max_spin.value()),
+            keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
+            offline_mode=self.offline_mode_checkbox.isChecked(),
+            start_beep_enabled=self.start_beep_checkbox.isChecked(),
+            start_beep_tone=str(
+                self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE
+            ),
+            overlay_corner=str(
+                self.overlay_corner_combo.currentData() or DEFAULT_OVERLAY_CORNER
+            ),
+            model_dir=self.model_dir_edit.text().strip(),
+            engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
+            mode="batch",
+            paste_mode=str(
+                self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
+            ),
+            has_openai_key=self._loaded_settings.has_openai_key,
+            has_deepgram_key=self._loaded_settings.has_deepgram_key,
+            has_assemblyai_key=self._loaded_settings.has_assemblyai_key,
+            has_groq_key=self._loaded_settings.has_groq_key,
+            groq_model=str(
+                self.groq_model_combo.currentData() or DEFAULT_GROQ_MODEL
+            ),
+            openai_model=str(
+                self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
+            ),
+        )
+        if self._controller is not None:
+            return self._controller.transcribe_audio_file(path)
+
+        transcriber = create_transcriber(settings, secret_store=self._secret_store)
+        text = transcriber.transcribe_batch(path)
+        return True, str(text or "").strip()
+
+    def _finish_import_transcription(self, ok: bool, text: str) -> None:
+        self.import_file_button.setEnabled(True)
+        if ok:
+            self.import_result_label.setText("Transcription finished.")
+            self.import_result_label.setStyleSheet("color: #1b5e20;")
+            self.import_result_text.setPlainText(text)
+            self._refresh_history_list()
+            return
+        self.import_result_label.setText(f"Failed: {text}")
+        self.import_result_label.setStyleSheet("color: #b71c1c;")
+        self.import_result_text.clear()
 
     def _copy_diagnostics(self) -> None:
         text = self._app_logger.diagnostics_text()
@@ -667,6 +1186,10 @@ class SettingsDialog(QtWidgets.QDialog):
             self.hotkey_edit.keySequence()
         )
         hotkey = hotkey or DEFAULT_HOTKEY
+        cancel_hotkey = _qt_hotkey_sequence_to_app_hotkey(
+            self.cancel_hotkey_edit.keySequence()
+        )
+        cancel_hotkey = cancel_hotkey or DEFAULT_CANCEL_HOTKEY
         try:
             parse_hotkey(hotkey)
         except ValueError as exc:
@@ -674,6 +1197,23 @@ class SettingsDialog(QtWidgets.QDialog):
                 self,
                 "Invalid hotkey",
                 f"The hotkey is invalid: {exc}",
+            )
+            return
+        try:
+            parse_hotkey(cancel_hotkey)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Invalid cancel hotkey",
+                f"The cancel hotkey is invalid: {exc}",
+            )
+            return
+        if _hotkeys_conflict(hotkey, cancel_hotkey):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Hotkey conflict",
+                "Cancel hotkey must not be identical to, subset of, or superset "
+                "of the main recording hotkey.",
             )
             return
 
@@ -702,16 +1242,29 @@ class SettingsDialog(QtWidgets.QDialog):
 
         settings = AppSettings(
             hotkey=hotkey,
+            cancel_hotkey=cancel_hotkey,
             model_size=str(self.model_combo.currentData()),
             language_mode=str(
                 self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
             ),
             vad_enabled=self.vad_checkbox.isChecked(),
+            vad_energy_threshold=float(self.vad_threshold_spin.value()),
             save_last_wav=self.save_wav_checkbox.isChecked(),
+            save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
+            recordings_dir=self._effective_recordings_dir(),
+            recordings_max_count=int(self.recordings_max_spin.value()),
+            history_max_items=int(self.history_max_spin.value()),
             keep_transcript_in_clipboard=(
                 self.keep_clipboard_checkbox.isChecked()
             ),
             offline_mode=self.offline_mode_checkbox.isChecked(),
+            start_beep_enabled=self.start_beep_checkbox.isChecked(),
+            start_beep_tone=str(
+                self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE
+            ),
+            overlay_corner=str(
+                self.overlay_corner_combo.currentData() or DEFAULT_OVERLAY_CORNER
+            ),
             model_dir=self.model_dir_edit.text().strip(),
             engine=str(
                 self.engine_combo.currentData() or DEFAULT_ENGINE
@@ -796,3 +1349,21 @@ def _app_hotkey_to_qt_hotkey_text(text: str) -> str:
         upper = token.upper()
         normalized.append(token_map.get(upper, token))
     return "+".join(normalized)
+
+
+def _hotkeys_conflict(first: str, second: str) -> bool:
+    left = _hotkey_token_set(first)
+    right = _hotkey_token_set(second)
+    if not left or not right:
+        return False
+    if left == right:
+        return True
+    return left.issubset(right) or right.issubset(left)
+
+
+def _hotkey_token_set(value: str) -> set[str]:
+    return {
+        token.strip().upper()
+        for token in str(value or "").split("+")
+        if token.strip()
+    }

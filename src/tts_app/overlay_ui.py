@@ -17,6 +17,10 @@ from .config import (
 
 
 class OverlayUI(QtWidgets.QWidget):
+    history_requested = QtCore.Signal()
+    retry_requested = QtCore.Signal()
+    cancel_requested = QtCore.Signal()
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Dictation")
@@ -36,12 +40,28 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_feedback_timer.setSingleShot(True)
         self._copy_feedback_timer.setInterval(850)
         self._copy_feedback_timer.timeout.connect(self._reset_copy_button_feedback)
+        self._drag_active = False
+        self._drag_offset = QtCore.QPoint(0, 0)
+        self._initial_position: QtCore.QPoint | None = None
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
+        self._state_label.setWordWrap(False)
+        self._state_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
         state_font = QtGui.QFont()
         state_font.setBold(True)
         self._state_label.setFont(state_font)
+
+        self._history_button = QtWidgets.QPushButton("History")
+        self._history_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._history_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._history_button.setFixedWidth(68)
+        self._history_button.setFixedHeight(24)
+        self._history_button.setToolTip("Show recent transcriptions")
+        self._history_button.clicked.connect(self.history_requested.emit)
 
         self._copy_button = QtWidgets.QPushButton("Copy")
         self._copy_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -51,9 +71,28 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_button.setToolTip("Copy overlay text")
         self._copy_button.clicked.connect(self.copy_detail_text)
 
+        self._retry_button = QtWidgets.QPushButton("Retry")
+        self._retry_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._retry_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._retry_button.setFixedHeight(22)
+        self._retry_button.clicked.connect(self.retry_requested.emit)
+
+        self._cancel_button = QtWidgets.QPushButton("Cancel")
+        self._cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._cancel_button.setFixedHeight(22)
+        self._cancel_button.clicked.connect(self.cancel_requested.emit)
+
+        self._reset_pos_button = QtWidgets.QPushButton("Reset Pos")
+        self._reset_pos_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._reset_pos_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._reset_pos_button.setFixedHeight(22)
+        self._reset_pos_button.clicked.connect(self.reset_position)
+
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
         self._detail_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         self._detail_label.setWordWrap(True)
+        self._detail_label.setTextFormat(QtCore.Qt.PlainText)
         self._detail_label.setTextInteractionFlags(
             QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
         )
@@ -85,13 +124,20 @@ class OverlayUI(QtWidgets.QWidget):
         header = QtWidgets.QHBoxLayout(self._header_widget)
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(6)
-        left_spacer = QtWidgets.QLabel("")
-        left_spacer.setFixedWidth(self._copy_button.width())
-        header.addWidget(left_spacer)
+        header.addWidget(self._history_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
         header.addWidget(self._copy_button, 0, QtCore.Qt.AlignRight)
 
+        self._controls_widget = QtWidgets.QWidget()
+        controls = QtWidgets.QHBoxLayout(self._controls_widget)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        controls.addWidget(self._retry_button)
+        controls.addWidget(self._cancel_button)
+        controls.addWidget(self._reset_pos_button)
+
         self._layout.addWidget(self._header_widget)
+        self._layout.addWidget(self._controls_widget)
         self._layout.addWidget(self._detail_scroll)
 
         root = QtWidgets.QVBoxLayout(self)
@@ -105,6 +151,9 @@ class OverlayUI(QtWidgets.QWidget):
         self._state_label.setText(state)
         self._detail_label.setText(detail)
         self._copy_button.setEnabled(bool(detail.strip()))
+        self._retry_button.setEnabled(state == "Error")
+        self._cancel_button.setEnabled(state in {"Listening", "Processing"})
+        self._reset_pos_button.setEnabled(True)
         self._reset_copy_button_feedback()
         self._update_detail_height()
         self._detail_scroll.verticalScrollBar().setValue(
@@ -153,15 +202,30 @@ class OverlayUI(QtWidgets.QWidget):
             """
         )
 
-    def move_to_corner(self) -> None:
+    def move_to_corner(self, corner: str = "top-right") -> None:
         screen = QtGui.QGuiApplication.primaryScreen()
         if screen is None:
             return
 
         geometry = screen.availableGeometry()
-        x = geometry.right() - self.width() - OVERLAY_MARGIN_X
-        y = geometry.top() + OVERLAY_MARGIN_Y
+        normalized = str(corner or "top-right").strip().lower()
+        if normalized.endswith("left"):
+            x = geometry.left() + OVERLAY_MARGIN_X
+        else:
+            x = geometry.right() - self.width() - OVERLAY_MARGIN_X
+        if normalized.startswith("bottom"):
+            y = geometry.bottom() - self.height() - OVERLAY_MARGIN_Y
+        else:
+            y = geometry.top() + OVERLAY_MARGIN_Y
         self.move(x, y)
+        self._initial_position = QtCore.QPoint(x, y)
+
+    def set_initial_position(self, point: QtCore.QPoint) -> None:
+        self._initial_position = QtCore.QPoint(point)
+
+    def reset_position(self) -> None:
+        if self._initial_position is not None:
+            self.move(self._initial_position)
 
     def nativeEvent(self, event_type, message):
         """Prevent window activation on mouse click (Windows).
@@ -217,6 +281,33 @@ class OverlayUI(QtWidgets.QWidget):
         super().resizeEvent(event)
         self._update_detail_height()
 
+    def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() != QtCore.Qt.LeftButton:
+            super().mousePressEvent(event)
+            return
+        child = self.childAt(event.position().toPoint())
+        if isinstance(child, QtWidgets.QAbstractButton):
+            super().mousePressEvent(event)
+            return
+        self._drag_active = True
+        self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        event.accept()
+
+    def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
+        if not self._drag_active:
+            super().mouseMoveEvent(event)
+            return
+        target = event.globalPosition().toPoint() - self._drag_offset
+        self.move(target)
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
+        if event.button() == QtCore.Qt.LeftButton and self._drag_active:
+            self._drag_active = False
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def _show_detail_context_menu(self, pos) -> None:
         menu = QtWidgets.QMenu(self)
         copy_action = menu.addAction("Copy text")
@@ -227,19 +318,28 @@ class OverlayUI(QtWidgets.QWidget):
     def _update_detail_height(self) -> None:
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
-        available_width = max(
-            80,
-            self.width() - margins.left() - margins.right() - 4,
-        )
+        available_width = max(80, self._detail_scroll.viewport().width() - 2)
+        if available_width <= 82:
+            available_width = max(
+                80,
+                self.width() - margins.left() - margins.right() - 4,
+            )
         self._detail_label.setFixedWidth(available_width)
         self._detail_label.adjustSize()
 
         content_height = self._detail_label.sizeHint().height()
         header_height = self._header_widget.sizeHint().height()
+        controls_height = self._controls_widget.sizeHint().height()
         max_detail_height = max(
             OVERLAY_DETAIL_MIN_HEIGHT,
             OVERLAY_MAX_HEIGHT
-            - (margins.top() + margins.bottom() + header_height + spacing),
+            - (
+                margins.top()
+                + margins.bottom()
+                + header_height
+                + controls_height
+                + (spacing * 2)
+            ),
         )
         desired_detail_height = max(
             OVERLAY_DETAIL_MIN_HEIGHT,
@@ -251,7 +351,8 @@ class OverlayUI(QtWidgets.QWidget):
             margins.top()
             + margins.bottom()
             + header_height
-            + spacing
+            + controls_height
+            + (spacing * 2)
             + desired_detail_height
         )
         desired_window_height = max(

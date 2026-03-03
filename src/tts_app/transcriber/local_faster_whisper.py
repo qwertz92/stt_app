@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import os
 import queue
+import shutil
 import tempfile
 import threading
 import time
@@ -47,6 +48,87 @@ def _default_hf_cache_dir() -> str:
     if hf_cache:
         return hf_cache
     return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+
+
+def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
+    """Return possible cache directories for a model.
+
+    Includes both HuggingFace-style cache folders and flat model folders.
+    """
+    repo_id = _MODEL_REPO_MAP.get(model_name)
+    if repo_id is None:
+        return []
+
+    search_dirs: list[str] = []
+    if model_dir and model_dir.strip():
+        search_dirs.append(model_dir.strip())
+    search_dirs.append(_default_hf_cache_dir())
+
+    folder_name = f"models--{repo_id.replace('/', '--')}"
+    repo_basename = repo_id.rsplit("/", 1)[-1]
+
+    seen: set[Path] = set()
+    dirs: list[Path] = []
+    for base_dir in search_dirs:
+        base = Path(base_dir)
+        hf_style = base / folder_name
+        flat = base / repo_basename
+        for path in (hf_style, flat):
+            if path in seen:
+                continue
+            seen.add(path)
+            dirs.append(path)
+    return dirs
+
+
+def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
+    """Estimate the current on-disk bytes for a model cache directory.
+
+    When multiple cache roots are present, returns the largest observed size
+    to avoid double-counting duplicate copies of the same model.
+    """
+    max_bytes = 0
+    for root in _model_cache_dirs(model_name, model_dir):
+        if not root.is_dir():
+            continue
+        total = 0
+        try:
+            for path in root.rglob("*"):
+                if not path.is_file():
+                    continue
+                try:
+                    total += path.stat().st_size
+                except OSError:
+                    continue
+        except OSError:
+            continue
+        if total > max_bytes:
+            max_bytes = total
+    return max_bytes
+
+
+def cached_model_paths(model_name: str, model_dir: str = "") -> list[Path]:
+    """Return existing local directories that contain the model cache."""
+    existing: list[Path] = []
+    for candidate in _model_cache_dirs(model_name, model_dir):
+        if candidate.exists():
+            existing.append(candidate)
+    return existing
+
+
+def delete_cached_model(model_name: str, model_dir: str = "") -> int:
+    """Delete local cache directories for a model.
+
+    Returns the number of removed directories.
+    """
+    removed = 0
+    for root in cached_model_paths(model_name, model_dir):
+        try:
+            shutil.rmtree(root)
+            removed += 1
+        except FileNotFoundError:
+            continue
+    return removed
 
 
 def find_cached_models(model_dir: str = "") -> list[str]:

@@ -6,24 +6,32 @@ APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "tts_app"
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
 DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 FALLBACK_HOTKEY = "Ctrl+Win+LShift"
 DEFAULT_HOTKEY_ID = 1
+DEFAULT_CANCEL_HOTKEY = "Ctrl+Alt+F12"
+DEFAULT_CANCEL_HOTKEY_ID = 2
 
 DEFAULT_MODEL_SIZE = "small"
-FALLBACK_MODEL = "tiny"
 DEFAULT_LANGUAGE_MODE = "auto"
 DEFAULT_ENGINE = "local"
 DEFAULT_MODE = "batch"
 DEFAULT_VAD_ENABLED = True
 DEFAULT_SAVE_LAST_WAV = False
+DEFAULT_SAVE_ALL_RECORDINGS = False
+DEFAULT_RECORDINGS_DIR = ""
+DEFAULT_RECORDINGS_MAX_COUNT = 10
+DEFAULT_HISTORY_MAX_ITEMS = 10
 DEFAULT_PASTE_MODE = "auto"
 DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = False
 DEFAULT_OFFLINE_MODE = False
+DEFAULT_START_BEEP_ENABLED = True
+DEFAULT_START_BEEP_TONE = "soft"
+VALID_START_BEEP_TONES = ("soft", "high", "chime", "system")
 
 # --- Model directory configuration ---
 # How faster-whisper resolves models (WhisperModel constructor):
@@ -83,9 +91,34 @@ MODEL_REPO_MAP: dict[str, str] = {
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
 }
 
+# Approximate model sizes for UI progress estimation.
+# Values are decimal megabytes (MB), not MiB.
+MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
+    "tiny": 75,
+    "base": 141,
+    "small": 484,
+    "medium": 1_400,
+    "large-v3": 3_000,
+    "large-v3-turbo": 809,
+    "distil-large-v3.5": 756,
+}
+
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
+LANGUAGE_MODE_LABELS: dict[str, str] = {
+    "auto": "Auto",
+    "de": "German",
+    "en": "English",
+}
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "deepgram")
+ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
+    "local": VALID_LANGUAGE_MODES,
+    "assemblyai": VALID_LANGUAGE_MODES,
+    "groq": VALID_LANGUAGE_MODES,
+    "openai": VALID_LANGUAGE_MODES,
+    "deepgram": VALID_LANGUAGE_MODES,
+}
+LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
 STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
@@ -117,6 +150,9 @@ STREAMING_ABORT_BEEP_DURATION_MS = 120
 STREAMING_ABORT_JOIN_TIMEOUT_S = 0.2
 
 VAD_ENERGY_THRESHOLD = 0.02
+DEFAULT_VAD_ENERGY_THRESHOLD = VAD_ENERGY_THRESHOLD
+VAD_ENERGY_THRESHOLD_MIN = 0.003
+VAD_ENERGY_THRESHOLD_MAX = 0.1
 VAD_MIN_SPEECH_MS = 120
 VAD_MAX_SILENCE_MS = 700
 
@@ -127,6 +163,13 @@ OVERLAY_MARGIN_X = 24
 OVERLAY_MARGIN_Y = 24
 OVERLAY_DETAIL_MIN_HEIGHT = 42
 OVERLAY_INITIAL_DETAIL = "Press hotkey to start dictation"
+VALID_OVERLAY_CORNERS = (
+    "top-right",
+    "top-left",
+    "bottom-right",
+    "bottom-left",
+)
+DEFAULT_OVERLAY_CORNER = "top-right"
 OVERLAY_STATE_COLORS = {
     "Idle": "#2f3a4a",
     "Listening": "#1b5e20",
