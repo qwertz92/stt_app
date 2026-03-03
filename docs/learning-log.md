@@ -206,3 +206,45 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Settings dialog no longer blocks event loop:** Changed `dialog.exec()` → `dialog.show()` + `WA_DeleteOnClose` + `finished` signal cleanup. `exec()` created a nested event loop that could starve the main loop, causing overlay unresponsiveness. `show()` keeps everything in the single main event loop.
 - **Clipboard setting:** `DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD` is `False` since Session 3, but existing `settings.json` files keep the old `True` value. User must toggle it off in Settings → General tab. No migration added (intentional — users who set it to `True` deliberately should keep their choice).
 - 9 new tests: `TestInjectSystemTrustStore` (3), `TestSyncCABundleEnvVars` (5), `test_overlay_has_show_event_override` (1). Total: 335.
+
+## 2026-03-02
+
+- **Settings dialog clarity: debug WAV location shown inline.** Added a persistent hint below `Save last WAV for debugging` that displays the exact file path (`%APPDATA%\\tts_app\\last_recording.wav`) and that it is overwritten on each recording.
+- **Engine-aware language control in settings UI.**
+  - Added centralized language metadata constants in `config.py` (`LANGUAGE_MODE_LABELS`, `ENGINE_LANGUAGE_MODES`, `LOCAL_ENGLISH_ONLY_MODELS`).
+  - Language combo is now rebuilt dynamically based on selected engine/mode/model.
+  - AssemblyAI + streaming: language is locked to `Auto` (provider handles realtime language detection).
+  - Local + `distil-large-v3.5`: language options reduced to `Auto` + `English` (German disabled because model is English-only).
+  - Added explanatory note text in the UI when language choices are constrained.
+- Added focused settings-dialog tests for dynamic language availability and visible debug WAV path hint.
+- **Local model preload UX upgrade (non-blocking fallback + progress):**
+  - Local startup/settings preload now tracks download progress and renders a textual progress bar with MB/s in the overlay while the selected model downloads.
+  - Hotkey recording is no longer hard-blocked during local model download if another cached model exists.
+  - During preload, batch recording automatically uses the closest smaller cached fallback model for that recording only.
+  - After the selected model finishes loading, the app keeps the selected model and uses it automatically for subsequent recordings.
+  - Added tests for fallback selection logic, preload-time fallback start behavior, and model-cache byte estimation.
+- **Recording archive and discoverability improvements:**
+  - Added `Archive every recording to folder` setting with configurable retention count (`Keep Recordings`).
+  - Added recordings directory picker plus `Open Folder` action directly in settings.
+  - Added dedicated app path helpers for recordings and transcript history files.
+- **Transcription history and recovery UX:**
+  - Added persistent transcript history store (`transcript_history.json`) with configurable max size.
+  - Added overlay `History` button and tray `History` action with a dedicated `HistoryDialog`.
+  - Added `Retry` support for failed transcriptions (`Retry` overlay button + tray action), reusing the same failed audio payload.
+  - Added settings `History` tab with transcript list/details and direct file-import transcription workflow.
+- **Cancellation and control improvements:**
+  - Added separate cancel hotkey setting (`DEFAULT_CANCEL_HOTKEY`), independent registration, conflict validation against main hotkey (equal/subset/superset blocked).
+  - Added overlay `Cancel` button and tray `Cancel current action` action.
+  - Recording cancel now stops active capture immediately; in-flight transcription cancel is best-effort (result suppressed when it returns).
+- **Overlay behavior and ergonomics:**
+  - Overlay is now draggable by mouse.
+  - Added `Reset Pos` button and startup corner selection (`top-right`, `top-left`, `bottom-right`, `bottom-left`).
+  - Overlay control strip expanded with `History`, `Retry`, `Cancel`, and position reset.
+  - Improved detail rendering robustness (`PlainText` detail + viewport-based width calculation) to avoid visual overlap on long download/progress messages.
+- **Whisper quiet-speech tuning:**
+  - Added configurable VAD energy threshold in settings (`VAD Threshold`) to make local whispering/quiet speech detection adjustable.
+  - Lower threshold increases sensitivity; values are clamped in settings schema validation.
+- **Local model lifecycle controls:**
+  - Added Local-tab model management list with delete action for already-downloaded models (`Delete Selected`).
+  - Added cache deletion helpers in local transcriber module (`cached_model_paths`, `delete_cached_model`).
+  - Added preload download cancellation path: pressing cancel while local model preload/download is active requests cancellation and terminates the helper download process.
