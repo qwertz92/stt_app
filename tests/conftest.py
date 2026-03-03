@@ -62,6 +62,9 @@ class FakeOverlay:
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))
 
+    def ensure_compact_size(self):
+        return None
+
 
 class FakeTextInserter:
     def __init__(self, should_fail=False):

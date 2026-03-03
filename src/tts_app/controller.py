@@ -243,6 +243,7 @@ class DictationController(QtCore.QObject):
             self.stop_recording()
 
     def start_recording(self) -> None:
+        self._overlay.ensure_compact_size()
         preload = self._preload_future
         preload_running = preload is not None and not preload.done()
 

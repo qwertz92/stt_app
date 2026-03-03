@@ -214,6 +214,27 @@ class OverlayUI(QtWidgets.QWidget):
             QScrollArea > QWidget > QWidget {{
                 background: transparent;
             }}
+            QScrollBar:vertical {{
+                width: 14px;
+                background: transparent;
+                margin: 2px 0 2px 0;
+            }}
+            QScrollBar::handle:vertical {{
+                min-height: 24px;
+                border-radius: 6px;
+                background: rgba(255,255,255,0.45);
+                border: 1px solid rgba(255,255,255,0.3);
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: rgba(255,255,255,0.62);
+            }}
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+                height: 0px;
+            }}
+            QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+                background: rgba(0,0,0,0.12);
+                border-radius: 6px;
+            }}
             QSlider::groove:horizontal {{
                 height: 6px;
                 border-radius: 3px;
@@ -408,21 +429,41 @@ class OverlayUI(QtWidgets.QWidget):
             )
         self._detail_scroll.setFixedHeight(desired_detail_height)
 
-        desired_window_height = (
-            margins.top()
-            + margins.bottom()
-            + header_height
-            + controls_height
-            + footer_height
-            + (spacing * 3)
-            + desired_detail_height
-        )
+        if self._compact_mode:
+            desired_window_height = self._compact_window_height()
+        else:
+            desired_window_height = (
+                margins.top()
+                + margins.bottom()
+                + header_height
+                + controls_height
+                + footer_height
+                + (spacing * 3)
+                + desired_detail_height
+            )
         desired_window_height = max(
             OVERLAY_HEIGHT,
             min(OVERLAY_MAX_HEIGHT, desired_window_height),
         )
         if self.height() != desired_window_height:
             self.resize(self.width(), desired_window_height)
+
+    def _compact_window_height(self) -> int:
+        margins = self._layout.contentsMargins()
+        spacing = self._layout.spacing()
+        return (
+            margins.top()
+            + margins.bottom()
+            + self._header_widget.sizeHint().height()
+            + self._controls_widget.sizeHint().height()
+            + self._footer_widget.sizeHint().height()
+            + (spacing * 3)
+            + OVERLAY_DETAIL_MIN_HEIGHT
+        )
+
+    def ensure_compact_size(self) -> None:
+        self._compact_mode = True
+        self._update_detail_height()
 
     def _on_opacity_slider_changed(self, value: int) -> None:
         self.set_opacity_percent(value, emit_signal=True)
