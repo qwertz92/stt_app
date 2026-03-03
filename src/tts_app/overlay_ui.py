@@ -183,10 +183,13 @@ class OverlayUI(QtWidgets.QWidget):
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
 
-    def set_state(self, state: str, detail: str = "") -> None:
+    def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
         self._state_label.setText(state)
         self._detail_label.setText(detail)
-        self._compact_mode = state in {"Idle", "Listening", "Processing"}
+        if compact is None:
+            self._compact_mode = state in {"Idle", "Listening", "Processing"}
+        else:
+            self._compact_mode = compact
         self._copy_button.setEnabled(bool(detail.strip()))
         self._retry_button.setEnabled(state == "Error")
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})

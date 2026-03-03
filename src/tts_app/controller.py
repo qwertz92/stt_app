@@ -307,6 +307,15 @@ class DictationController(QtCore.QObject):
         fallback_notice: str = "",
     ) -> None:
         capture = self._build_audio_capture()
+        self._active_batch_settings = settings_snapshot
+        self._active_session_mode = "batch"
+        self._streaming_recording = False
+        self._stream_last_partial_text = ""
+
+        # Play beep BEFORE starting capture so the microphone does not
+        # pick up the beep sound (winsound.Beep is synchronous/blocking).
+        self._play_start_beep()
+
         try:
             capture.start()
         except AudioCaptureError as exc:
@@ -315,12 +324,7 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Audio capture failed to start")
             return
 
-        self._active_batch_settings = settings_snapshot
-        self._active_session_mode = "batch"
-        self._streaming_recording = False
-        self._stream_last_partial_text = ""
         self._audio_capture = capture
-        self._play_start_beep()
         self._overlay.set_state(
             "Listening",
             " ".join(
@@ -350,6 +354,11 @@ class DictationController(QtCore.QObject):
             return
 
         capture = self._build_audio_capture(chunk_callback=self._on_stream_audio_chunk)
+
+        # Play beep BEFORE starting capture so the microphone does not
+        # pick up the beep sound (winsound.Beep is synchronous/blocking).
+        self._play_start_beep()
+
         try:
             capture.start()
         except AudioCaptureError as exc:
@@ -371,7 +380,6 @@ class DictationController(QtCore.QObject):
         self._active_stream_transcriber = transcriber
         self._active_stream_settings = settings_snapshot
         self._audio_capture = capture
-        self._play_start_beep()
         if STREAMING_ABORT_ON_FOCUS_CHANGE:
             self._focus_poll_timer.start()
         self._overlay.set_state(
@@ -698,7 +706,7 @@ class DictationController(QtCore.QObject):
             detail = self._preload_progress_detail()
         except Exception:
             detail = "Loading model..."
-        self._overlay.set_state("Processing", detail)
+        self._overlay.set_state("Processing", detail, compact=False)
 
     def _preload_model_worker(self) -> None:
         """Background worker: eagerly load the configured local model."""
@@ -708,11 +716,16 @@ class DictationController(QtCore.QObject):
         )
 
         settings = self._settings
+        download_failed = False
         try:
             self._download_model_for_preload(settings)
         except RuntimeError as exc:
-            self.model_preload_done.emit(False, str(exc))
-            return
+            if self._preload_cancel_requested:
+                self.model_preload_done.emit(False, str(exc))
+                return
+            # Download failed but cached models may still be usable.
+            self._logger.warning("Model download failed: %s", exc)
+            download_failed = True
 
         try:
             transcriber = self._get_or_create_transcriber(settings)
@@ -816,6 +829,21 @@ class DictationController(QtCore.QObject):
     def _transcribe_worker(self, wav_bytes: bytes, settings: AppSettings) -> None:
         try:
             transcriber = self._get_or_create_transcriber(settings)
+        except TranscriptionError as exc:
+            self._last_failed_wav_bytes = bytes(wav_bytes)
+            self._last_failed_settings = replace(settings)
+            self.transcription_failed.emit(str(exc))
+            return
+        except Exception as exc:
+            self._last_failed_wav_bytes = bytes(wav_bytes)
+            self._last_failed_settings = replace(settings)
+            self._logger.exception("Failed to create transcriber")
+            self.transcription_failed.emit(
+                f"Transcriber initialization failed: {exc}"
+            )
+            return
+
+        try:
             text = transcriber.transcribe_batch(wav_bytes)
             if not self._transcription_cancel_requested:
                 self._last_failed_wav_bytes = b""

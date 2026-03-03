@@ -241,7 +241,7 @@ def test_groq_language_note_explains_auto_and_hints():
     )
 
     assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
-    assert dialog.language_note_label.isVisible() is True
+    assert dialog.language_note_label.isVisibleTo(dialog) is True
     assert "language hint" in dialog.language_note_label.text()
     _ = app
 

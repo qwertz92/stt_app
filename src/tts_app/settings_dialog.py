@@ -598,13 +598,14 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.model_combo.blockSignals(False)
 
-    def _refresh_local_models_label(self) -> None:
+    def _refresh_local_models_label(self, cached: list[str] | None = None) -> None:
         """Scan for locally cached models and update the label."""
-        model_dir = self.model_dir_edit.text().strip()
-        try:
-            cached = find_cached_models(model_dir)
-        except Exception:
-            cached = []
+        if cached is None:
+            model_dir = self.model_dir_edit.text().strip()
+            try:
+                cached = find_cached_models(model_dir)
+            except Exception:
+                cached = []
 
         if cached:
             self.local_models_label.setText(
@@ -618,12 +619,13 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             self.local_models_label.setStyleSheet("color: #b71c1c;")
 
-    def _refresh_cached_models_list(self) -> None:
-        model_dir = self.model_dir_edit.text().strip()
-        try:
-            cached = find_cached_models(model_dir)
-        except Exception:
-            cached = []
+    def _refresh_cached_models_list(self, cached: list[str] | None = None) -> None:
+        if cached is None:
+            model_dir = self.model_dir_edit.text().strip()
+            try:
+                cached = find_cached_models(model_dir)
+            except Exception:
+                cached = []
         self.cached_models_list.clear()
         for model_name in cached:
             item = QtWidgets.QListWidgetItem(model_name)
@@ -632,8 +634,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self.delete_cached_model_button.setEnabled(False)
 
     def _refresh_local_model_views(self) -> None:
-        self._refresh_local_models_label()
-        self._refresh_cached_models_list()
+        model_dir = self.model_dir_edit.text().strip()
+        try:
+            cached = find_cached_models(model_dir)
+        except Exception:
+            cached = []
+        self._refresh_local_models_label(cached)
+        self._refresh_cached_models_list(cached)
         self._refresh_model_combo()
         self._update_language_availability()
 
@@ -1110,9 +1117,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_result_text.clear()
         self.import_file_button.setEnabled(False)
 
+        # Build settings on the GUI thread — widgets must not be accessed
+        # from background threads.
+        settings = self._build_current_settings()
+
         def _run() -> None:
             try:
-                ok, text = self._transcribe_import_file(path)
+                ok, text = self._transcribe_import_file(path, settings)
             except Exception as exc:
                 ok, text = False, str(exc)
             QtCore.QTimer.singleShot(
@@ -1126,13 +1137,44 @@ class SettingsDialog(QtWidgets.QDialog):
             daemon=True,
         ).start()
 
-    def _transcribe_import_file(self, path: str) -> tuple[bool, str]:
+    def _transcribe_import_file(
+        self, path: str, settings: AppSettings
+    ) -> tuple[bool, str]:
         from .transcriber import create_transcriber
 
+        if self._controller is not None:
+            return self._controller.transcribe_audio_file(path)
+
+        transcriber = create_transcriber(settings, secret_store=self._secret_store)
+        text = transcriber.transcribe_batch(path)
+        return True, str(text or "").strip()
+
+    def _finish_import_transcription(self, ok: bool, text: str) -> None:
+        self.import_file_button.setEnabled(True)
+        if ok:
+            self.import_result_label.setText("Transcription finished.")
+            self.import_result_label.setStyleSheet("color: #1b5e20;")
+            self.import_result_text.setPlainText(text)
+            self._refresh_history_list()
+            return
+        self.import_result_label.setText(f"Failed: {text}")
+        self.import_result_label.setStyleSheet("color: #b71c1c;")
+        self.import_result_text.clear()
+
+    def _copy_diagnostics(self) -> None:
+        text = self._app_logger.diagnostics_text()
+        clipboard = QtGui.QGuiApplication.clipboard()
+        clipboard.setText(text)
+
+    def _build_current_settings(self) -> AppSettings:
+        """Construct an ``AppSettings`` from current widget state.
+
+        Must be called on the GUI thread.
+        """
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent
         )
-        settings = AppSettings(
+        return AppSettings(
             hotkey=self._loaded_settings.hotkey,
             cancel_hotkey=self._loaded_settings.cancel_hotkey,
             model_size=str(
@@ -1161,7 +1203,7 @@ class SettingsDialog(QtWidgets.QDialog):
             ),
             model_dir=self.model_dir_edit.text().strip(),
             engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
-            mode="batch",
+            mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
@@ -1176,29 +1218,6 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
             ),
         )
-        if self._controller is not None:
-            return self._controller.transcribe_audio_file(path)
-
-        transcriber = create_transcriber(settings, secret_store=self._secret_store)
-        text = transcriber.transcribe_batch(path)
-        return True, str(text or "").strip()
-
-    def _finish_import_transcription(self, ok: bool, text: str) -> None:
-        self.import_file_button.setEnabled(True)
-        if ok:
-            self.import_result_label.setText("Transcription finished.")
-            self.import_result_label.setStyleSheet("color: #1b5e20;")
-            self.import_result_text.setPlainText(text)
-            self._refresh_history_list()
-            return
-        self.import_result_label.setText(f"Failed: {text}")
-        self.import_result_label.setStyleSheet("color: #b71c1c;")
-        self.import_result_text.clear()
-
-    def _copy_diagnostics(self) -> None:
-        text = self._app_logger.diagnostics_text()
-        clipboard = QtGui.QGuiApplication.clipboard()
-        clipboard.setText(text)
 
     # ------------------------------------------------------------------
     # Save
@@ -1277,17 +1296,29 @@ class SettingsDialog(QtWidgets.QDialog):
         groq_value = self.groq_key_edit.text().strip()
 
         if openai_value:
-            self._secret_store.set_api_key("openai", openai_value)
-            has_openai_key = True
+            try:
+                self._secret_store.set_api_key("openai", openai_value)
+                has_openai_key = True
+            except Exception:
+                pass
         if deepgram_value:
-            self._secret_store.set_api_key("deepgram", deepgram_value)
-            has_deepgram_key = True
+            try:
+                self._secret_store.set_api_key("deepgram", deepgram_value)
+                has_deepgram_key = True
+            except Exception:
+                pass
         if assemblyai_value:
-            self._secret_store.set_api_key("assemblyai", assemblyai_value)
-            has_assemblyai_key = True
+            try:
+                self._secret_store.set_api_key("assemblyai", assemblyai_value)
+                has_assemblyai_key = True
+            except Exception:
+                pass
         if groq_value:
-            self._secret_store.set_api_key("groq", groq_value)
-            has_groq_key = True
+            try:
+                self._secret_store.set_api_key("groq", groq_value)
+                has_groq_key = True
+            except Exception:
+                pass
 
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent

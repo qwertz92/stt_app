@@ -35,7 +35,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | Module | Purpose |
 |--------|---------|
 | `config.py` | All tunables/constants; `MODEL_REPO_MAP` (single source of truth) |
-| `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter |
+| `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
@@ -44,10 +44,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/deepgram_provider.py` | Batch via REST + streaming via WebSocket |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore |
-| `overlay_ui.py` | Always-on-top frameless overlay with state colors |
-| `settings_dialog.py` | PySide6 settings UI with Local/Remote tabs |
+| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
+| `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\tts_app\settings.json`) |
-| `secret_store.py` | keyring wrapper for API keys (never stored in JSON) |
+| `secret_store.py` | keyring wrapper for API keys (never stored in JSON); error-tolerant reads |
+| `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
+| `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |
+| `app_paths.py` | Centralized app data/config path helpers |
+| `vad.py` | Energy-based voice activity detection with configurable threshold |
+| `window_focus.py` | Win32 foreground/focus/caret window tracking for text insertion |
+| `hotkey.py` | Global hotkey registration via Win32 RegisterHotKey |
 | `scripts/import_model.py` | Import manually downloaded models; validates for Git LFS pointers |
 | `scripts/download_model.py` | Automated model download for offline/corporate use |
 
@@ -75,7 +81,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 Run: `uv run python -m pytest` or `python -m pytest`
 
-Current: 335 tests (334 + 1 Windows-only ctypes struct-size test expected to fail on Linux).
+Current: 381 tests (380 + 1 Windows-only ctypes struct-size test expected to fail on Linux).
 
 ## Known limitations
 

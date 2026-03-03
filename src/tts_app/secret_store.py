@@ -33,7 +33,12 @@ class KeyringSecretStore:
         self._keyring.set_password(self._service_name, provider, api_key)
 
     def get_api_key(self, provider: str) -> str | None:
-        value = self._keyring.get_password(self._service_name, provider)
+        try:
+            value = self._keyring.get_password(self._service_name, provider)
+        except Exception:
+            # keyring backends can fail with FileNotFoundError, OSError,
+            # or backend-specific errors on misconfigured systems.
+            return None
         if value is None:
             return None
         return str(value)

@@ -746,7 +746,9 @@ def test_select_cached_fallback_model_prefers_closest_smaller():
         "large-v3-turbo", ["tiny", "small", "medium", "large-v3"]
     )
 
-    assert result == "medium"
+    # large-v3-turbo is 809 MB, so "small" (484 MB) is the closest smaller.
+    # "medium" (1400 MB) is actually bigger than the turbo variant.
+    assert result == "small"
     controller.shutdown()
     _ = app
 
