@@ -31,6 +31,16 @@ def _combo_data(combo: QtWidgets.QComboBox) -> list[str]:
     return [str(combo.itemData(i)) for i in range(combo.count())]
 
 
+def _combo_item_enabled(combo: QtWidgets.QComboBox, value: str) -> bool:
+    idx = combo.findData(value)
+    if idx < 0:
+        return False
+    item = combo.model().item(idx)
+    if item is None:
+        return False
+    return bool(item.isEnabled())
+
+
 def test_streaming_mode_is_selectable_and_persisted():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings(mode="batch"))
@@ -160,9 +170,12 @@ def test_assemblyai_streaming_locks_language_to_auto():
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto"]
+    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
     assert dialog.language_combo.currentData() == "auto"
     assert dialog.language_combo.isEnabled() is False
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    assert _combo_item_enabled(dialog.language_combo, "de") is False
+    assert _combo_item_enabled(dialog.language_combo, "en") is False
     assert "fixed to Auto" in dialog.language_note_label.text()
     _ = app
 
@@ -183,9 +196,12 @@ def test_local_distil_model_limits_language_to_auto_and_english():
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto", "en"]
+    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
     assert dialog.language_combo.currentData() == "auto"
     assert dialog.language_combo.isEnabled() is True
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    assert _combo_item_enabled(dialog.language_combo, "de") is False
+    assert _combo_item_enabled(dialog.language_combo, "en") is True
     assert "English-only model" in dialog.language_note_label.text()
     _ = app
 
@@ -203,13 +219,19 @@ def test_switching_assemblyai_mode_updates_language_options():
 
     streaming_idx = dialog.mode_combo.findData("streaming")
     dialog.mode_combo.setCurrentIndex(streaming_idx)
-    assert _combo_data(dialog.language_combo) == ["auto"]
+    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
     assert dialog.language_combo.isEnabled() is False
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    assert _combo_item_enabled(dialog.language_combo, "de") is False
+    assert _combo_item_enabled(dialog.language_combo, "en") is False
 
     batch_idx = dialog.mode_combo.findData("batch")
     dialog.mode_combo.setCurrentIndex(batch_idx)
     assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
     assert dialog.language_combo.isEnabled() is True
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    assert _combo_item_enabled(dialog.language_combo, "de") is True
+    assert _combo_item_enabled(dialog.language_combo, "en") is True
     _ = app
 
 

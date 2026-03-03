@@ -31,14 +31,14 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.cancel_hotkey == DEFAULT_CANCEL_HOTKEY
     assert settings.model_size == DEFAULT_MODEL_SIZE
     assert settings.language_mode == DEFAULT_LANGUAGE_MODE
-    assert settings.vad_enabled is True
+    assert settings.vad_enabled is False
     assert settings.vad_energy_threshold == DEFAULT_VAD_ENERGY_THRESHOLD
     assert settings.save_last_wav is False
     assert settings.save_all_recordings is False
     assert settings.recordings_max_count == DEFAULT_RECORDINGS_MAX_COUNT
     assert settings.history_max_items == DEFAULT_HISTORY_MAX_ITEMS
     assert settings.overlay_opacity_percent == DEFAULT_OVERLAY_OPACITY_PERCENT
-    assert settings.start_beep_enabled is True
+    assert settings.start_beep_enabled is False
     assert settings.start_beep_tone == DEFAULT_START_BEEP_TONE
     assert settings.overlay_corner == DEFAULT_OVERLAY_CORNER
     assert settings.engine == DEFAULT_ENGINE

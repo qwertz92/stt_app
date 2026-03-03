@@ -187,10 +187,14 @@ class SettingsDialog(QtWidgets.QDialog):
         cancel_hotkey_hint.setStyleSheet("color: #555;")
 
         self.language_combo = QtWidgets.QComboBox()
+        for value in VALID_LANGUAGE_MODES:
+            self.language_combo.addItem(
+                LANGUAGE_MODE_LABELS.get(value, value), value
+            )
         self.language_note_label = QtWidgets.QLabel("")
         self.language_note_label.setWordWrap(True)
         self.language_note_label.setStyleSheet("color: #555;")
-        self.language_note_label.setVisible(False)
+        self.language_note_label.setVisible(True)
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -304,7 +308,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
 
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
-            "Keep transcript in clipboard after transcription"
+            "Keep transcript in clipboard after insertion"
         )
 
         form.addRow("Hotkey", self.hotkey_edit)
@@ -754,9 +758,18 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
         self.language_combo.blockSignals(True)
-        self.language_combo.clear()
-        for value in supported_modes:
-            self.language_combo.addItem(LANGUAGE_MODE_LABELS.get(value, value), value)
+        combo_model = self.language_combo.model()
+        for idx in range(self.language_combo.count()):
+            value = str(self.language_combo.itemData(idx) or "")
+            item = combo_model.item(idx)
+            if item is None:
+                continue
+            is_supported = value in supported_modes
+            item.setEnabled(is_supported)
+            if is_supported:
+                item.setToolTip("")
+            else:
+                item.setToolTip("Not available for the current engine/mode/model.")
 
         target_mode = (
             selected_mode if selected_mode in supported_modes else supported_modes[0]
@@ -765,8 +778,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.language_combo.blockSignals(False)
 
         note = self._language_constraint_note()
-        self.language_note_label.setText(note)
-        self.language_note_label.setVisible(bool(note))
+        self.language_note_label.setText(note or " ")
         self.language_combo.setEnabled(len(supported_modes) > 1)
         self.language_combo.setToolTip(
             note
