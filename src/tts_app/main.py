@@ -38,6 +38,7 @@ def run() -> int:
     startup_settings = settings_store.load()
 
     overlay = OverlayUI()
+    overlay.set_opacity_percent(startup_settings.overlay_opacity_percent)
     overlay.move_to_corner(startup_settings.overlay_corner)
     overlay.show()
 
@@ -75,7 +76,8 @@ def run() -> int:
             return
         dialog = HistoryDialog(
             history_store=history_store,
-            max_items=controller.settings.history_max_items,
+            settings_store=settings_store,
+            on_history_limit_changed=controller.set_history_max_items,
         )
         dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
 
@@ -90,6 +92,7 @@ def run() -> int:
     overlay.history_requested.connect(open_history_dialog)
     overlay.retry_requested.connect(controller.retry_last_transcription)
     overlay.cancel_requested.connect(controller.cancel_current_action)
+    overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
 
     try:
         controller.initialize()

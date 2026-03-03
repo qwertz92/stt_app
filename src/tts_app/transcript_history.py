@@ -56,14 +56,93 @@ class TranscriptHistoryStore:
         return self._path
 
     def load(self) -> list[TranscriptHistoryEntry]:
-        if not self._path.exists():
-            return []
+        return self._load_from_path(self._path)
+
+    def count(self) -> int:
+        return len(self.load())
+
+    def save(self, entries: list[TranscriptHistoryEntry]) -> None:
+        payload = [asdict(item) for item in entries]
+        self._path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True),
+            encoding="utf-8",
+        )
+
+    def add_entry(self, entry: TranscriptHistoryEntry, max_items: int) -> None:
+        self.append_entries([entry], max_items=max_items)
+
+    def append_entries(
+        self,
+        entries: list[TranscriptHistoryEntry],
+        *,
+        max_items: int,
+    ) -> int:
+        incoming = [item for item in entries if item.text.strip()]
+        if not incoming:
+            return 0
+        current = self.load()
+        merged = self._trim_entries(current + incoming, max_items=max_items)
+        self.save(merged)
+        return len(incoming)
+
+    def apply_max_items(self, max_items: int) -> int:
+        entries = self.load()
+        trimmed = self._trim_entries(entries, max_items=max_items)
+        removed = len(entries) - len(trimmed)
+        if removed > 0:
+            self.save(trimmed)
+        return removed
+
+    def clear(self) -> int:
+        removed = self.count()
+        if removed:
+            self.save([])
+        return removed
+
+    def recent_entries(self, limit: int = 10) -> list[TranscriptHistoryEntry]:
+        entries = self.load()
+        keep = _normalize_limit(limit)
+        selected = entries if keep == 0 else entries[-keep:]
+        return list(reversed(selected))
+
+    def export_to_file(self, path: Path) -> int:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        entries = self.load()
+        payload = [asdict(item) for item in entries]
+        path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=True),
+            encoding="utf-8",
+        )
+        return len(entries)
+
+    def import_from_file(self, path: Path) -> list[TranscriptHistoryEntry]:
         try:
-            payload = json.loads(self._path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
-            return []
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except OSError as exc:
+            raise ValueError(f"Failed to read import file: {exc}") from exc
+        except json.JSONDecodeError as exc:
+            raise ValueError("Selected file is not valid JSON.") from exc
+        return self._entries_from_payload(payload)
+
+    def _trim_entries(
+        self,
+        entries: list[TranscriptHistoryEntry],
+        *,
+        max_items: int,
+    ) -> list[TranscriptHistoryEntry]:
+        keep = _normalize_limit(max_items)
+        if keep == 0:
+            return entries
+        if len(entries) <= keep:
+            return entries
+        return entries[-keep:]
+
+    @staticmethod
+    def _entries_from_payload(payload: Any) -> list[TranscriptHistoryEntry]:
+        if isinstance(payload, dict):
+            payload = payload.get("entries", None)
         if not isinstance(payload, list):
-            return []
+            raise ValueError("Expected a JSON array of transcript entries.")
 
         entries: list[TranscriptHistoryEntry] = []
         for item in payload:
@@ -74,22 +153,25 @@ class TranscriptHistoryStore:
                 entries.append(entry)
         return entries
 
-    def save(self, entries: list[TranscriptHistoryEntry]) -> None:
-        payload = [asdict(item) for item in entries]
-        self._path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True),
-            encoding="utf-8",
-        )
+    @classmethod
+    def _load_from_path(cls, path: Path) -> list[TranscriptHistoryEntry]:
+        if not path.exists():
+            return []
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return []
+        try:
+            return cls._entries_from_payload(payload)
+        except ValueError:
+            return []
 
-    def add_entry(self, entry: TranscriptHistoryEntry, max_items: int) -> None:
-        entries = self.load()
-        entries.append(entry)
-        keep = max(1, int(max_items or 1))
-        if len(entries) > keep:
-            entries = entries[-keep:]
-        self.save(entries)
 
-    def recent_entries(self, limit: int = 10) -> list[TranscriptHistoryEntry]:
-        entries = self.load()
-        keep = max(1, int(limit or 1))
-        return list(reversed(entries[-keep:]))
+def _normalize_limit(value: int) -> int:
+    try:
+        keep = int(value)
+    except (TypeError, ValueError):
+        return 1
+    if keep < 0:
+        return 0
+    return keep

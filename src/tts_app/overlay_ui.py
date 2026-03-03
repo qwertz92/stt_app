@@ -5,10 +5,13 @@ import sys
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
+    DEFAULT_OVERLAY_OPACITY_PERCENT,
     OVERLAY_DETAIL_MIN_HEIGHT,
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
     OVERLAY_MARGIN_X,
+    OVERLAY_OPACITY_MAX_PERCENT,
+    OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_MARGIN_Y,
     OVERLAY_MAX_HEIGHT,
     OVERLAY_STATE_COLORS,
@@ -20,6 +23,7 @@ class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
     retry_requested = QtCore.Signal()
     cancel_requested = QtCore.Signal()
+    opacity_changed = QtCore.Signal(int)
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,6 +47,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._drag_active = False
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
+        self._compact_mode = False
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -113,6 +118,35 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
         self._detail_scroll.setWidget(self._detail_label)
 
+        self._footer_widget = QtWidgets.QWidget()
+        footer = QtWidgets.QHBoxLayout(self._footer_widget)
+        footer.setContentsMargins(0, 0, 0, 0)
+        footer.setSpacing(8)
+        self._opacity_caption = QtWidgets.QLabel("Opacity")
+        self._opacity_caption.setSizePolicy(
+            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Fixed,
+        )
+        self._opacity_value_label = QtWidgets.QLabel("")
+        self._opacity_value_label.setMinimumWidth(40)
+        self._opacity_value_label.setAlignment(
+            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
+        )
+        self._opacity_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self._opacity_slider.setRange(
+            OVERLAY_OPACITY_MIN_PERCENT,
+            OVERLAY_OPACITY_MAX_PERCENT,
+        )
+        self._opacity_slider.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._opacity_slider.setSingleStep(1)
+        self._opacity_slider.setPageStep(5)
+        self._opacity_slider.setTickInterval(5)
+        self._opacity_slider.setTickPosition(QtWidgets.QSlider.NoTicks)
+        self._opacity_slider.valueChanged.connect(self._on_opacity_slider_changed)
+        footer.addWidget(self._opacity_caption)
+        footer.addWidget(self._opacity_slider, 1)
+        footer.addWidget(self._opacity_value_label)
+
         container = QtWidgets.QFrame()
         container.setObjectName("overlayContainer")
 
@@ -139,6 +173,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._layout.addWidget(self._header_widget)
         self._layout.addWidget(self._controls_widget)
         self._layout.addWidget(self._detail_scroll)
+        self._layout.addWidget(self._footer_widget)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -146,10 +181,12 @@ class OverlayUI(QtWidgets.QWidget):
 
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
+        self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
 
     def set_state(self, state: str, detail: str = "") -> None:
         self._state_label.setText(state)
         self._detail_label.setText(detail)
+        self._compact_mode = state in {"Idle", "Listening", "Processing"}
         self._copy_button.setEnabled(bool(detail.strip()))
         self._retry_button.setEnabled(state == "Error")
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})
@@ -176,6 +213,25 @@ class OverlayUI(QtWidgets.QWidget):
             }}
             QScrollArea > QWidget > QWidget {{
                 background: transparent;
+            }}
+            QSlider::groove:horizontal {{
+                height: 6px;
+                border-radius: 3px;
+                background: rgba(255,255,255,0.28);
+            }}
+            QSlider::sub-page:horizontal {{
+                background: rgba(255,255,255,0.7);
+                border-radius: 3px;
+            }}
+            QSlider::handle:horizontal {{
+                width: 12px;
+                margin: -4px 0;
+                border-radius: 6px;
+                border: 1px solid rgba(255,255,255,0.75);
+                background: rgba(0,0,0,0.45);
+            }}
+            QSlider::handle:horizontal:hover {{
+                background: rgba(255,255,255,0.35);
             }}
             QPushButton {{
                 border: 1px solid rgba(255,255,255,0.35);
@@ -330,6 +386,7 @@ class OverlayUI(QtWidgets.QWidget):
         content_height = self._detail_label.sizeHint().height()
         header_height = self._header_widget.sizeHint().height()
         controls_height = self._controls_widget.sizeHint().height()
+        footer_height = self._footer_widget.sizeHint().height()
         max_detail_height = max(
             OVERLAY_DETAIL_MIN_HEIGHT,
             OVERLAY_MAX_HEIGHT
@@ -338,13 +395,17 @@ class OverlayUI(QtWidgets.QWidget):
                 + margins.bottom()
                 + header_height
                 + controls_height
-                + (spacing * 2)
+                + footer_height
+                + (spacing * 3)
             ),
         )
-        desired_detail_height = max(
-            OVERLAY_DETAIL_MIN_HEIGHT,
-            min(max_detail_height, content_height + 6),
-        )
+        if self._compact_mode:
+            desired_detail_height = OVERLAY_DETAIL_MIN_HEIGHT
+        else:
+            desired_detail_height = max(
+                OVERLAY_DETAIL_MIN_HEIGHT,
+                min(max_detail_height, content_height + 6),
+            )
         self._detail_scroll.setFixedHeight(desired_detail_height)
 
         desired_window_height = (
@@ -352,7 +413,8 @@ class OverlayUI(QtWidgets.QWidget):
             + margins.bottom()
             + header_height
             + controls_height
-            + (spacing * 2)
+            + footer_height
+            + (spacing * 3)
             + desired_detail_height
         )
         desired_window_height = max(
@@ -361,6 +423,24 @@ class OverlayUI(QtWidgets.QWidget):
         )
         if self.height() != desired_window_height:
             self.resize(self.width(), desired_window_height)
+
+    def _on_opacity_slider_changed(self, value: int) -> None:
+        self.set_opacity_percent(value, emit_signal=True)
+
+    def set_opacity_percent(self, value: int, *, emit_signal: bool = False) -> None:
+        clamped = max(
+            OVERLAY_OPACITY_MIN_PERCENT,
+            min(OVERLAY_OPACITY_MAX_PERCENT, int(value)),
+        )
+        slider_value = int(self._opacity_slider.value())
+        if slider_value != clamped:
+            blocker = QtCore.QSignalBlocker(self._opacity_slider)
+            self._opacity_slider.setValue(clamped)
+            del blocker
+        self._opacity_value_label.setText(f"{clamped}%")
+        self.setWindowOpacity(clamped / 100.0)
+        if emit_signal:
+            self.opacity_changed.emit(clamped)
 
     def _set_copy_button_feedback(self, copied: bool) -> None:
         self._copy_button.setProperty("copied", copied)

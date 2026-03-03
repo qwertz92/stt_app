@@ -248,3 +248,30 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Added Local-tab model management list with delete action for already-downloaded models (`Delete Selected`).
   - Added cache deletion helpers in local transcriber module (`cached_model_paths`, `delete_cached_model`).
   - Added preload download cancellation path: pressing cancel while local model preload/download is active requests cancellation and terminates the helper download process.
+
+## 2026-03-03
+
+- **Overlay transparency control added directly in overlay UI:**
+  - Added bottom `Opacity` slider in `OverlayUI` with immediate effect (`setWindowOpacity`).
+  - Value is clamped to `25..100%` to prevent accidental invisible overlay states.
+  - Opacity setting persists via `AppSettings.overlay_opacity_percent` and updates live through controller (`set_overlay_opacity_percent`).
+- **History defaults and limits updated:**
+  - Increased default history size from `10` to `20`.
+  - Added `0 = unlimited` support across config, settings schema, history store, and settings UI spinbox.
+- **History dialog upgraded for management workflows:**
+  - Added in-dialog history limit control (with persistence).
+  - Added confirmation prompt before shrinking limit when it would delete stored entries.
+  - Added `Export...`, `Import...`, and `Clear history` actions.
+  - Added import overflow decision: import only free slots or import all and switch to unlimited history.
+  - Added visual feedback on `Copy selected` action.
+- **Settings history save safety improved:**
+  - On save, reducing history limit now asks for confirmation before deletion and trims only when the limit actually changed.
+  - History copy button in settings tab now shows explicit copied feedback.
+- **Transcript history storage API expanded:**
+  - Added `count`, `append_entries`, `apply_max_items`, `clear`, `export_to_file`, and `import_from_file` helpers.
+  - Centralized trimming logic so all call sites enforce the same retention behavior.
+- **Overlay size behavior hardened for active states:**
+  - Listening/processing/idle use compact detail mode to reduce stale large overlay height during new dictation cycles.
+  - Fallback preload listening message was shortened to avoid oversized overlay growth.
+- Added/updated tests for history dialog, history store retention/import-export, overlay opacity behavior, unlimited history settings persistence, and settings schema updates.
+- Verification note: full `pytest` run was blocked in the current environment due unavailable dependencies/network; syntax verification completed via `python -m compileall src tests`.

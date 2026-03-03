@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_MODEL_DIR,
     DEFAULT_MODEL_SIZE,
     DEFAULT_OFFLINE_MODE,
+    DEFAULT_OVERLAY_OPACITY_PERCENT,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_DIR,
@@ -29,7 +30,10 @@ from .config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DEFAULT_VAD_ENABLED,
     GROQ_MODELS,
+    HISTORY_MAX_ITEMS_MAX,
     DEFAULT_OPENAI_MODEL,
+    OVERLAY_OPACITY_MAX_PERCENT,
+    OVERLAY_OPACITY_MIN_PERCENT,
     OPENAI_MODELS,
     SCHEMA_VERSION,
     VALID_OVERLAY_CORNERS,
@@ -59,6 +63,7 @@ DEFAULTS = {
     "recordings_dir": DEFAULT_RECORDINGS_DIR,
     "recordings_max_count": DEFAULT_RECORDINGS_MAX_COUNT,
     "history_max_items": DEFAULT_HISTORY_MAX_ITEMS,
+    "overlay_opacity_percent": DEFAULT_OVERLAY_OPACITY_PERCENT,
     "engine": DEFAULT_ENGINE,
     "mode": DEFAULT_MODE,
     "paste_mode": DEFAULT_PASTE_MODE,
@@ -91,6 +96,7 @@ class AppSettings:
     recordings_dir: str = DEFAULT_RECORDINGS_DIR
     recordings_max_count: int = DEFAULT_RECORDINGS_MAX_COUNT
     history_max_items: int = DEFAULT_HISTORY_MAX_ITEMS
+    overlay_opacity_percent: int = DEFAULT_OVERLAY_OPACITY_PERCENT
     engine: str = DEFAULT_ENGINE
     mode: str = DEFAULT_MODE
     paste_mode: str = DEFAULT_PASTE_MODE
@@ -168,7 +174,20 @@ class AppSettings:
             )
         except (TypeError, ValueError):
             history_max_items = DEFAULT_HISTORY_MAX_ITEMS
-        history_max_items = max(1, min(100, history_max_items))
+        history_max_items = max(0, min(HISTORY_MAX_ITEMS_MAX, history_max_items))
+        try:
+            overlay_opacity_percent = int(
+                merged.get(
+                    "overlay_opacity_percent",
+                    DEFAULT_OVERLAY_OPACITY_PERCENT,
+                )
+            )
+        except (TypeError, ValueError):
+            overlay_opacity_percent = DEFAULT_OVERLAY_OPACITY_PERCENT
+        overlay_opacity_percent = max(
+            OVERLAY_OPACITY_MIN_PERCENT,
+            min(OVERLAY_OPACITY_MAX_PERCENT, overlay_opacity_percent),
+        )
         try:
             vad_energy_threshold = float(
                 merged.get("vad_energy_threshold", DEFAULT_VAD_ENERGY_THRESHOLD)
@@ -197,6 +216,7 @@ class AppSettings:
             ).strip(),
             recordings_max_count=recordings_max_count,
             history_max_items=history_max_items,
+            overlay_opacity_percent=overlay_opacity_percent,
             engine=engine,
             mode=mode,
             paste_mode=paste_mode,

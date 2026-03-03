@@ -10,6 +10,7 @@ from tts_app.config import (
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_OVERLAY_OPACITY_PERCENT,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_MAX_COUNT,
@@ -36,6 +37,7 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.save_all_recordings is False
     assert settings.recordings_max_count == DEFAULT_RECORDINGS_MAX_COUNT
     assert settings.history_max_items == DEFAULT_HISTORY_MAX_ITEMS
+    assert settings.overlay_opacity_percent == DEFAULT_OVERLAY_OPACITY_PERCENT
     assert settings.start_beep_enabled is True
     assert settings.start_beep_tone == DEFAULT_START_BEEP_TONE
     assert settings.overlay_corner == DEFAULT_OVERLAY_CORNER
@@ -211,6 +213,7 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
             {
                 "recordings_max_count": "not-an-int",
                 "history_max_items": -50,
+                "overlay_opacity_percent": 0,
                 "vad_energy_threshold": 999,
             }
         ),
@@ -220,7 +223,8 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.recordings_max_count == DEFAULT_RECORDINGS_MAX_COUNT
-    assert settings.history_max_items == 1
+    assert settings.history_max_items == 0
+    assert settings.overlay_opacity_percent == 25
     assert settings.vad_energy_threshold <= 0.1
 
 

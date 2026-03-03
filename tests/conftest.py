@@ -54,9 +54,13 @@ class FakeCancelHotkeyManager(FakeHotkeyManager):
 class FakeOverlay:
     def __init__(self):
         self.states = []
+        self.opacity_values = []
 
     def set_state(self, state, detail=""):
         self.states.append((state, detail))
+
+    def set_opacity_percent(self, value: int):
+        self.opacity_values.append(int(value))
 
 
 class FakeTextInserter:

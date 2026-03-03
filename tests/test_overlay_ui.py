@@ -180,3 +180,17 @@ def test_overlay_reset_position_moves_back_to_initial():
     overlay.reset_position()
 
     assert overlay.pos() == QtCore.QPoint(120, 80)
+
+
+def test_overlay_opacity_slider_emits_clamped_values():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[int] = []
+    overlay.opacity_changed.connect(emitted.append)
+
+    overlay.set_opacity_percent(5, emit_signal=False)
+    assert round(overlay.windowOpacity() * 100) == 25
+
+    overlay._opacity_slider.setValue(80)
+    assert emitted[-1] == 80
+    assert round(overlay.windowOpacity() * 100) == 80

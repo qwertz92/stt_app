@@ -339,3 +339,20 @@ def test_settings_dialog_has_tab_stylesheet():
     assert "QTabBar::tab:selected" in stylesheet
     assert "QTabBar::tab:hover" in stylesheet
     _ = app
+
+
+def test_history_size_allows_unlimited_zero_and_persists():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    dialog.history_max_spin.setValue(0)
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.history_max_items == 0
+    _ = app

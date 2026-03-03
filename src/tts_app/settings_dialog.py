@@ -24,6 +24,7 @@ from .config import (
     DOC_MODELS_PATH,
     ENGINE_LANGUAGE_MODES,
     GROQ_MODELS,
+    HISTORY_MAX_ITEMS_MAX,
     LANGUAGE_MODE_LABELS,
     LOCAL_ENGLISH_ONLY_MODELS,
     OPENAI_MODELS,
@@ -73,6 +74,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._loaded_settings = self._settings_store.load()
         self._connection_test_id = 0
         self._active_connection_test_thread: threading.Thread | None = None
+        self._history_copy_feedback_timer = QtCore.QTimer(self)
+        self._history_copy_feedback_timer.setSingleShot(True)
+        self._history_copy_feedback_timer.setInterval(900)
+        self._history_copy_feedback_timer.timeout.connect(
+            self._reset_history_copy_feedback
+        )
 
         self.setWindowTitle("Dictation Settings")
         self.setModal(False)
@@ -276,10 +283,11 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
         self.history_max_spin = QtWidgets.QSpinBox()
-        self.history_max_spin.setRange(1, 100)
+        self.history_max_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
+        self.history_max_spin.setSpecialValueText("Unlimited (0)")
         self.history_max_spin.setValue(DEFAULT_HISTORY_MAX_ITEMS)
         self.history_max_spin.setToolTip(
-            "Maximum transcript history items shown in UI."
+            "Maximum transcript history items stored (0 = unlimited)."
         )
         self.history_max_spin.valueChanged.connect(
             lambda _value: self._refresh_history_list()
@@ -1063,10 +1071,12 @@ class SettingsDialog(QtWidgets.QDialog):
         if not items:
             self.history_copy_button.setEnabled(False)
             self.history_detail.clear()
+            self._reset_history_copy_feedback()
             return
         text = str(items[0].data(QtCore.Qt.UserRole) or "")
         self.history_copy_button.setEnabled(bool(text))
         self.history_detail.setPlainText(text)
+        self._reset_history_copy_feedback()
 
     def _copy_selected_history(self) -> None:
         items = self.history_list.selectedItems()
@@ -1076,6 +1086,15 @@ class SettingsDialog(QtWidgets.QDialog):
         if not text:
             return
         QtGui.QGuiApplication.clipboard().setText(text)
+        self.history_copy_button.setText("Copied")
+        self.history_copy_button.setStyleSheet(
+            "background-color: #dff5e0; border: 1px solid #89c88f;"
+        )
+        self._history_copy_feedback_timer.start()
+
+    def _reset_history_copy_feedback(self) -> None:
+        self.history_copy_button.setText("Copy selected")
+        self.history_copy_button.setStyleSheet("")
 
     def _import_and_transcribe_file(self) -> None:
         path, _filter = QtWidgets.QFileDialog.getOpenFileName(
@@ -1110,6 +1129,9 @@ class SettingsDialog(QtWidgets.QDialog):
     def _transcribe_import_file(self, path: str) -> tuple[bool, str]:
         from .transcriber import create_transcriber
 
+        latest_overlay_opacity = int(
+            self._settings_store.load().overlay_opacity_percent
+        )
         settings = AppSettings(
             hotkey=self._loaded_settings.hotkey,
             cancel_hotkey=self._loaded_settings.cancel_hotkey,
@@ -1127,6 +1149,7 @@ class SettingsDialog(QtWidgets.QDialog):
             recordings_dir=self._effective_recordings_dir(),
             recordings_max_count=int(self.recordings_max_spin.value()),
             history_max_items=int(self.history_max_spin.value()),
+            overlay_opacity_percent=latest_overlay_opacity,
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
@@ -1217,6 +1240,32 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             return
 
+        requested_history_limit = int(self.history_max_spin.value())
+        current_history_count = self._history_store.count()
+        history_limit_changed = (
+            requested_history_limit != int(self._loaded_settings.history_max_items)
+        )
+        if (
+            history_limit_changed
+            and
+            requested_history_limit > 0
+            and current_history_count > requested_history_limit
+        ):
+            to_delete = current_history_count - requested_history_limit
+            answer = QtWidgets.QMessageBox.question(
+                self,
+                "Reduce history size",
+                (
+                    f"Reducing the history limit to {requested_history_limit} will "
+                    f"delete {to_delete} oldest entr{'y' if to_delete == 1 else 'ies'}.\n\n"
+                    "Do you want to continue?"
+                ),
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No,
+            )
+            if answer != QtWidgets.QMessageBox.Yes:
+                return
+
         has_openai_key = self._loaded_settings.has_openai_key
         has_deepgram_key = self._loaded_settings.has_deepgram_key
         has_assemblyai_key = self._loaded_settings.has_assemblyai_key
@@ -1240,6 +1289,9 @@ class SettingsDialog(QtWidgets.QDialog):
             self._secret_store.set_api_key("groq", groq_value)
             has_groq_key = True
 
+        latest_overlay_opacity = int(
+            self._settings_store.load().overlay_opacity_percent
+        )
         settings = AppSettings(
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
@@ -1253,7 +1305,8 @@ class SettingsDialog(QtWidgets.QDialog):
             save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
             recordings_dir=self._effective_recordings_dir(),
             recordings_max_count=int(self.recordings_max_spin.value()),
-            history_max_items=int(self.history_max_spin.value()),
+            history_max_items=requested_history_limit,
+            overlay_opacity_percent=latest_overlay_opacity,
             keep_transcript_in_clipboard=(
                 self.keep_clipboard_checkbox.isChecked()
             ),
@@ -1285,6 +1338,8 @@ class SettingsDialog(QtWidgets.QDialog):
             ),
         )
 
+        if history_limit_changed and requested_history_limit > 0:
+            self._history_store.apply_max_items(requested_history_limit)
         self._settings_store.save(settings)
         self._loaded_settings = settings
         self._save_status_label.setText("\u2713 Settings saved")

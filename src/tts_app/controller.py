@@ -33,6 +33,8 @@ from .config import (
     STREAMING_LIVE_INSERT_ENABLED,
     STREAMING_OVERLAY_MAX_CHARS,
     STREAMING_STABLE_WORD_GUARD,
+    OVERLAY_OPACITY_MAX_PERCENT,
+    OVERLAY_OPACITY_MIN_PERCENT,
     VALID_MODEL_SIZES,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_START_BEEP_TONES,
@@ -175,6 +177,7 @@ class DictationController(QtCore.QObject):
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
         self._settings = self._settings_store.load()
+        self._overlay.set_opacity_percent(self._settings.overlay_opacity_percent)
         self._reset_transcriber_cache()
         if re_register_hotkey:
             self._hotkey_registration_ok = self._register_hotkey_with_fallback()
@@ -269,17 +272,9 @@ class DictationController(QtCore.QObject):
                 return
 
             batch_settings = fallback_settings
-            try:
-                progress_hint = self._preload_progress_detail(
-                    include_fallback_hint=False
-                )
-            except Exception:
-                progress_hint = (
-                    f"Downloading '{self._settings.model_size}' in background."
-                )
             fallback_notice = (
-                f"{progress_hint} Using fallback '{fallback_settings.model_size}' "
-                "for this recording. "
+                f"Using fallback '{fallback_settings.model_size}' "
+                f"while '{self._settings.model_size}' loads."
             )
         # Check if the selected engine supports streaming mode.
         if (
@@ -326,7 +321,14 @@ class DictationController(QtCore.QObject):
         self._play_start_beep()
         self._overlay.set_state(
             "Listening",
-            f"{fallback_notice}Speak now. Press hotkey again to stop.".strip(),
+            " ".join(
+                part
+                for part in (
+                    fallback_notice.strip(),
+                    "Speak now. Press hotkey again to stop.",
+                )
+                if part
+            ),
         )
 
     def _start_streaming_recording(self) -> None:
@@ -1349,7 +1351,11 @@ class DictationController(QtCore.QObject):
         return True
 
     def recent_transcriptions(self, limit: int | None = None):
-        max_items = int(limit or self._settings.history_max_items)
+        max_items = (
+            int(self._settings.history_max_items)
+            if limit is None
+            else int(limit)
+        )
         return self._history_store.recent_entries(max_items)
 
     def transcribe_audio_file(self, file_path: str) -> tuple[bool, str]:
@@ -1411,6 +1417,25 @@ class DictationController(QtCore.QObject):
         # Cancel in-progress transcription result delivery (best-effort).
         self._transcription_cancel_requested = True
         self._overlay.set_state("Done", "Transcription canceled.")
+
+    def set_overlay_opacity_percent(self, value: int) -> None:
+        clamped = max(
+            OVERLAY_OPACITY_MIN_PERCENT,
+            min(OVERLAY_OPACITY_MAX_PERCENT, int(value)),
+        )
+        if int(self._settings.overlay_opacity_percent) == clamped:
+            return
+        self._settings = replace(self._settings, overlay_opacity_percent=clamped)
+        try:
+            self._settings_store.save(self._settings)
+        except Exception:
+            self._logger.exception("Failed to persist overlay opacity")
+
+    def set_history_max_items(self, value: int) -> None:
+        normalized = max(0, int(value))
+        if int(self._settings.history_max_items) == normalized:
+            return
+        self._settings = replace(self._settings, history_max_items=normalized)
 
     def _cancel_model_preload_if_running(self) -> bool:
         preload = self._preload_future
