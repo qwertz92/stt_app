@@ -55,6 +55,7 @@ if TYPE_CHECKING:
 
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
+    import_transcription_finished = QtCore.Signal(bool, str)
     settings_changed = QtCore.Signal()
 
     def __init__(
@@ -87,6 +88,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.resize(580, 620)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
+        self.import_transcription_finished.connect(self._finish_import_transcription)
         self._build_ui()
         self._populate(self._loaded_settings)
 
@@ -474,6 +476,9 @@ class SettingsDialog(QtWidgets.QDialog):
         ):
             field.setEchoMode(QtWidgets.QLineEdit.Password)
             field.setPlaceholderText("Stored via keyring (Credential Manager)")
+            field.textChanged.connect(
+                lambda _text: self._update_import_engine_note()
+            )
 
         provider_layout.addRow("AssemblyAI", self.assemblyai_key_edit)
         provider_layout.addRow("Groq", self.groq_key_edit)
@@ -548,12 +553,35 @@ class SettingsDialog(QtWidgets.QDialog):
         import_box = QtWidgets.QGroupBox("Import Audio File")
         import_layout = QtWidgets.QVBoxLayout(import_box)
         import_hint = QtWidgets.QLabel(
-            "Transcribe an existing audio file using current settings "
-            "(useful after failures or for external recordings)."
+            "Transcribe an existing audio file and select the transcription service "
+            "directly here (useful after failures or for external recordings)."
         )
         import_hint.setWordWrap(True)
         import_hint.setStyleSheet("color: #555;")
         import_layout.addWidget(import_hint)
+
+        self.import_engine_combo = QtWidgets.QComboBox()
+        import_engine_labels = {
+            "local": "Local (faster-whisper)",
+            "assemblyai": "Remote (AssemblyAI)",
+            "groq": "Remote (Groq)",
+            "openai": "Remote (OpenAI)",
+            "deepgram": "Remote (Deepgram)",
+        }
+        for value in VALID_ENGINES:
+            self.import_engine_combo.addItem(
+                import_engine_labels.get(value, value),
+                value,
+            )
+        self.import_engine_note = QtWidgets.QLabel("")
+        self.import_engine_note.setWordWrap(True)
+        self.import_engine_note.setStyleSheet("color: #555;")
+        self.import_engine_combo.currentIndexChanged.connect(
+            self._update_import_engine_note
+        )
+        import_layout.addWidget(QtWidgets.QLabel("Import Service"))
+        import_layout.addWidget(self.import_engine_combo)
+        import_layout.addWidget(self.import_engine_note)
 
         import_buttons = QtWidgets.QHBoxLayout()
         self.import_file_button = QtWidgets.QPushButton("Choose file...")
@@ -890,6 +918,42 @@ class SettingsDialog(QtWidgets.QDialog):
         """React to model directory changes — update cached model info."""
         self._refresh_local_model_views()
 
+    def _import_engine_has_api_key(self, engine: str) -> bool:
+        engine_name = str(engine or "").strip().lower()
+        if engine_name == DEFAULT_ENGINE:
+            return True
+        field_map = {
+            "assemblyai": self.assemblyai_key_edit,
+            "groq": self.groq_key_edit,
+            "openai": self.openai_key_edit,
+            "deepgram": self.deepgram_key_edit,
+        }
+        key_field = field_map.get(engine_name)
+        if key_field is None:
+            return False
+        return bool(self._resolve_api_key(engine_name, key_field))
+
+    def _update_import_engine_note(self) -> None:
+        if not hasattr(self, "import_engine_combo"):
+            return
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        if engine == DEFAULT_ENGINE:
+            self.import_engine_note.setStyleSheet("color: #555;")
+            self.import_engine_note.setText(
+                "Local import transcription uses the currently selected local model."
+            )
+            return
+        if self._import_engine_has_api_key(engine):
+            self.import_engine_note.setStyleSheet("color: #555;")
+            self.import_engine_note.setText(
+                f"Import transcription will use the {engine} service."
+            )
+            return
+        self.import_engine_note.setStyleSheet("color: #b71c1c;")
+        self.import_engine_note.setText(
+            f"No API key configured for {engine}. Set it in the Remote tab."
+        )
+
     def _test_connection(self) -> None:
         """Test connectivity for the selected remote provider."""
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
@@ -1056,6 +1120,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(self.groq_model_combo, settings.groq_model)
         self._select_combo_data(self.openai_model_combo, settings.openai_model)
+        if hasattr(self, "import_engine_combo"):
+            self._select_combo_data(self.import_engine_combo, settings.engine)
+            self._update_import_engine_note()
 
         if settings.has_openai_key:
             self.openai_key_edit.setPlaceholderText(
@@ -1212,20 +1279,31 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_file_button.setEnabled(False)
         self.import_last_recording_button.setEnabled(False)
         self.import_start_button.setEnabled(False)
+        self.import_engine_combo.setEnabled(False)
 
         # Build settings on the GUI thread — widgets must not be accessed
         # from background threads.
-        settings = self._build_current_settings()
+        import_engine = str(
+            self.import_engine_combo.currentData() or DEFAULT_ENGINE
+        )
+        if not self._import_engine_has_api_key(import_engine):
+            self.import_result_label.setText(
+                f"Failed: no API key configured for {import_engine}."
+            )
+            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            self.import_file_button.setEnabled(True)
+            self.import_last_recording_button.setEnabled(True)
+            self.import_start_button.setEnabled(bool(self._selected_import_file_path))
+            self.import_engine_combo.setEnabled(True)
+            return
+        settings = self._build_current_settings(engine_override=import_engine)
 
         def _run() -> None:
             try:
                 ok, text = self._transcribe_import_file(path, settings)
             except Exception as exc:
                 ok, text = False, str(exc)
-            QtCore.QTimer.singleShot(
-                0,
-                lambda: self._finish_import_transcription(bool(ok), str(text)),
-            )
+            self.import_transcription_finished.emit(bool(ok), str(text))
 
         threading.Thread(
             target=_run,
@@ -1239,7 +1317,10 @@ class SettingsDialog(QtWidgets.QDialog):
         from .transcriber import create_transcriber
 
         if self._controller is not None:
-            return self._controller.transcribe_audio_file(path)
+            return self._controller.transcribe_audio_file(
+                path,
+                settings_override=settings,
+            )
 
         transcriber = create_transcriber(settings, secret_store=self._secret_store)
         text = transcriber.transcribe_batch(path)
@@ -1249,6 +1330,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_file_button.setEnabled(True)
         self.import_last_recording_button.setEnabled(True)
         self.import_start_button.setEnabled(bool(self._selected_import_file_path))
+        self.import_engine_combo.setEnabled(True)
         if ok:
             self.import_result_label.setText("Transcription finished.")
             self.import_result_label.setStyleSheet("color: #1b5e20;")
@@ -1283,7 +1365,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 "Credential Manager only (recommended)."
             )
 
-    def _build_current_settings(self) -> AppSettings:
+    def _build_current_settings(
+        self,
+        *,
+        engine_override: str | None = None,
+    ) -> AppSettings:
         """Construct an ``AppSettings`` from current widget state.
 
         Must be called on the GUI thread.
@@ -1320,7 +1406,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.overlay_corner_combo.currentData() or DEFAULT_OVERLAY_CORNER
             ),
             model_dir=self.model_dir_edit.text().strip(),
-            engine=str(self.engine_combo.currentData() or DEFAULT_ENGINE),
+            engine=str(
+                engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
+            ),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE

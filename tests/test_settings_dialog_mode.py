@@ -381,6 +381,36 @@ def test_history_size_allows_unlimited_zero_and_persists():
     _ = app
 
 
+def test_history_import_engine_selection_applies_without_switching_main_engine():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _Controller:
+        def __init__(self):
+            self.received_engine = None
+
+        def transcribe_audio_file(self, _path: str, settings_override=None):
+            self.received_engine = getattr(settings_override, "engine", None)
+            return True, "ok"
+
+    controller = _Controller()
+    store = _FakeSettingsStore(AppSettings(engine="local"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=controller,
+    )
+
+    openai_idx = dialog.import_engine_combo.findData("openai")
+    dialog.import_engine_combo.setCurrentIndex(openai_idx)
+    settings = dialog._build_current_settings(engine_override="openai")
+    dialog._transcribe_import_file("dummy.wav", settings)
+
+    assert controller.received_engine == "openai"
+    assert dialog.engine_combo.currentData() == "local"
+    _ = app
+
+
 def test_select_last_recording_sets_selected_file(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setenv("APPDATA", str(tmp_path))

@@ -47,6 +47,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._drag_active = False
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
+        self._initial_corner: str | None = None
         self._compact_mode = False
 
         self._state_label = QtWidgets.QLabel("Idle")
@@ -299,13 +300,31 @@ class OverlayUI(QtWidgets.QWidget):
             y = geometry.top() + OVERLAY_MARGIN_Y
         self.move(x, y)
         self._initial_position = QtCore.QPoint(x, y)
+        self._initial_corner = normalized
 
     def set_initial_position(self, point: QtCore.QPoint) -> None:
         self._initial_position = QtCore.QPoint(point)
+        self._initial_corner = None
 
     def reset_position(self) -> None:
-        if self._initial_position is not None:
-            self.move(self._initial_position)
+        self.ensure_compact_size()
+        if self._initial_corner:
+            self.move_to_corner(self._initial_corner)
+            return
+        if self._initial_position is None:
+            return
+        target = QtCore.QPoint(self._initial_position)
+        screen = QtGui.QGuiApplication.screenAt(target)
+        if screen is None:
+            screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is not None:
+            geometry = screen.availableGeometry()
+            max_x = geometry.right() - self.width()
+            max_y = geometry.bottom() - self.height()
+            clamped_x = max(geometry.left(), min(target.x(), max_x))
+            clamped_y = max(geometry.top(), min(target.y(), max_y))
+            target = QtCore.QPoint(clamped_x, clamped_y)
+        self.move(target)
 
     def nativeEvent(self, event_type, message):
         """Prevent window activation on mouse click (Windows).
@@ -466,6 +485,13 @@ class OverlayUI(QtWidgets.QWidget):
 
     def ensure_compact_size(self) -> None:
         self._compact_mode = True
+        target_height = max(
+            OVERLAY_HEIGHT,
+            min(OVERLAY_MAX_HEIGHT, self._compact_window_height()),
+        )
+        if self.width() != OVERLAY_WIDTH or self.height() != target_height:
+            self.resize(OVERLAY_WIDTH, target_height)
+        self._detail_scroll.setFixedHeight(OVERLAY_DETAIL_MIN_HEIGHT)
         self._update_detail_height()
 
     def _on_opacity_slider_changed(self, value: int) -> None:

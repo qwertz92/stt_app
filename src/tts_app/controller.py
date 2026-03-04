@@ -1408,7 +1408,11 @@ class DictationController(QtCore.QObject):
         )
         return self._history_store.recent_entries(max_items)
 
-    def transcribe_audio_file(self, file_path: str) -> tuple[bool, str]:
+    def transcribe_audio_file(
+        self,
+        file_path: str,
+        settings_override: AppSettings | None = None,
+    ) -> tuple[bool, str]:
         """Transcribe a file directly without live recording."""
         path = str(file_path or "").strip()
         if not path:
@@ -1416,7 +1420,8 @@ class DictationController(QtCore.QObject):
         if not os.path.isfile(path):
             return False, "Selected file does not exist."
         try:
-            settings = replace(self._settings, mode="batch")
+            base_settings = settings_override or self._settings
+            settings = replace(base_settings, mode="batch")
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
             text = transcriber.transcribe_batch(path).strip()
             if text:
