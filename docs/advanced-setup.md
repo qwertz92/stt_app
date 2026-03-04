@@ -74,11 +74,11 @@ python -m pip install --index-url https://your-artifactory.corp/pypi/simple -r r
 
 ## Packaging as EXE (PyInstaller)
 
-The project includes a starter spec file `tts_app.spec`.
+The project includes a starter spec file `stt_app.spec`.
 
 ```powershell
 python -m pip install pyinstaller
-pyinstaller tts_app.spec
+pyinstaller stt_app.spec
 ```
 
 Notes:
@@ -249,7 +249,7 @@ This is **not always an SSL issue**. In corporate environments, this often means
 
 ### What the app does now
 
-- Remote providers write temporary WAV files into the app-owned folder under `%APPDATA%\tts_app\temp`.
+- Remote providers write temporary WAV files into the app-owned folder under `%APPDATA%\stt_app\temp`.
 - Missing-file errors now produce provider-specific diagnostics (instead of generic unexpected failures).
 - API key storage supports optional insecure fallback when keyring is blocked.
 
@@ -284,7 +284,7 @@ If your environment blocks keyring writes/reads:
 2. Enable **Allow insecure local API key fallback (plain text)**.
 3. Save again.
 
-⚠️ Security tradeoff: keys are stored unencrypted in `%APPDATA%\tts_app\insecure_api_keys.json`.
+⚠️ Security tradeoff: keys are stored unencrypted in `%APPDATA%\stt_app\insecure_api_keys.json`.
 
 Recommended policy: use this only when Credential Manager is unavailable, and rotate keys periodically.
 
@@ -415,14 +415,14 @@ A short delay after SendInput prevents race conditions where the target app read
 
 ### Settings storage
 
-- Settings: `%APPDATA%\tts_app\settings.json` (JSON with validation and normalization)
+- Settings: `%APPDATA%\stt_app\settings.json` (JSON with validation and normalization)
 - Secrets (API keys): Windows Credential Manager via `keyring`
-- Logs: `%APPDATA%\tts_app\logs\dictation.log` (rotating, max 1 MB)
+- Logs: `%APPDATA%\stt_app\logs\dictation.log` (rotating, max 1 MB)
 
 ### Project structure
 
 ```
-src/tts_app/
+src/stt_app/
   config.py           — centralized configuration constants
   controller.py       — main orchestrator / state machine
   audio_capture.py    — microphone recording + VAD auto-stop

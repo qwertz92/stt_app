@@ -1,6 +1,6 @@
 import pytest
 
-from tts_app.hotkey import (
+from stt_app.hotkey import (
     MOD_ALT,
     MOD_CONTROL,
     MOD_NOREPEAT,

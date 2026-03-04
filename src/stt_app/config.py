@@ -2,9 +2,10 @@ from __future__ import annotations
 
 # Global configuration values. Keep defaults and tunables centralized here.
 
-APP_NAME = "tts_app"
+APP_NAME = "stt_app"
+LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
-APP_LOGGER_NAME = "tts_app"
+APP_LOGGER_NAME = "stt_app"
 
 SCHEMA_VERSION = 11
 
@@ -190,7 +191,8 @@ DIAGNOSTICS_MAX_LINES = 300
 DOC_MODELS_PATH = "docs/models.md"
 DOC_SSL_PROXY_PATH = "docs/advanced-setup.md#ssl--proxy-issues"
 
-KEYRING_SERVICE_NAME = "tts-app"
+KEYRING_SERVICE_NAME = "stt-app"
+LEGACY_KEYRING_SERVICE_NAMES = ("tts-app",)
 
 SENDINPUT_RETRY_ATTEMPTS = 3
 SENDINPUT_RETRY_SLEEP_S = 0.02

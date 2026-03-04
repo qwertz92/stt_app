@@ -35,7 +35,7 @@ from pathlib import Path
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from tts_app.config import MODEL_REPO_MAP  # noqa: E402
+from stt_app.config import MODEL_REPO_MAP  # noqa: E402
 
 # Files required by CTranslate2 / faster-whisper.
 REQUIRED_FILES = {"config.json", "model.bin", "tokenizer.json"}

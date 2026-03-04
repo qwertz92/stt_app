@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from tts_app.transcriber.base import ITranscriber
+from stt_app.transcriber.base import ITranscriber
 
 
 class MinimalTranscriber(ITranscriber):

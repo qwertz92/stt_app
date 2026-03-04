@@ -1,4 +1,4 @@
-from tts_app.secret_store import KeyringSecretStore
+from stt_app.secret_store import KeyringSecretStore
 
 
 class FakeKeyringBackend:
@@ -37,7 +37,7 @@ class FailingKeyringBackend:
 
 def test_keyring_secret_store_set_get_delete():
     backend = FakeKeyringBackend()
-    store = KeyringSecretStore(keyring_backend=backend, service_name="tts-app-test")
+    store = KeyringSecretStore(keyring_backend=backend, service_name="stt-app-test")
 
     store.set_api_key("openai", "sk-test")
     assert store.get_api_key("openai") == "sk-test"
@@ -48,17 +48,31 @@ def test_keyring_secret_store_set_get_delete():
 
 def test_keyring_secret_store_missing_delete_is_safe():
     backend = FakeKeyringBackend()
-    store = KeyringSecretStore(keyring_backend=backend, service_name="tts-app-test")
+    store = KeyringSecretStore(keyring_backend=backend, service_name="stt-app-test")
 
     store.delete_api_key("azure")
     assert store.get_api_key("azure") is None
+
+
+def test_keyring_secret_store_reads_legacy_service_and_migrates():
+    backend = FakeKeyringBackend()
+    backend.set_password("tts-app-test", "openai", "legacy-key")
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=("tts-app-test",),
+    )
+
+    assert store.get_api_key("openai") == "legacy-key"
+    assert backend.get_password("stt-app-test", "openai") == "legacy-key"
+    assert backend.get_password("tts-app-test", "openai") is None
 
 
 def test_insecure_fallback_disabled_raises_on_set(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     store = KeyringSecretStore(
         keyring_backend=FailingKeyringBackend(),
-        service_name="tts-app-test",
+        service_name="stt-app-test",
     )
 
     try:
@@ -72,7 +86,7 @@ def test_insecure_fallback_stores_and_reads_key(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     store = KeyringSecretStore(
         keyring_backend=FailingKeyringBackend(),
-        service_name="tts-app-test",
+        service_name="stt-app-test",
     )
     store.set_insecure_fallback_enabled(True)
 

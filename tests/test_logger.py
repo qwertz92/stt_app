@@ -6,8 +6,8 @@ import logging
 
 import pytest
 
-from tts_app.config import APP_LOGGER_NAME
-from tts_app.logger import AppLogger
+from stt_app.config import APP_LOGGER_NAME
+from stt_app.logger import AppLogger
 
 
 @pytest.fixture(autouse=True)

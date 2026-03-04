@@ -8,8 +8,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tts_app.transcriber.base import TranscriptionError
-from tts_app.transcriber.openai_provider import (
+from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.openai_provider import (
     OPENAI_API_BASE,
     OpenAITranscriber,
 )
@@ -45,7 +45,7 @@ class TestOpenAIProviderInit:
 
 
 class TestOpenAIBatchTranscription:
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_transcribe_json_response(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"text": "hello world"}.__str__())
         t = OpenAITranscriber(api_key="key")
@@ -54,14 +54,14 @@ class TestOpenAIBatchTranscription:
         result = t.transcribe_batch(b"RIFF fake")
         assert isinstance(result, str)
 
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_transcribe_plain_text_fallback(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response("plain transcript")
         t = OpenAITranscriber(api_key="key")
         result = t.transcribe_batch(b"RIFF fake")
         assert result == "plain transcript"
 
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_transcribe_json_payload(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "Hallo Welt"}))
         t = OpenAITranscriber(api_key="key", language_mode="de")
@@ -77,7 +77,7 @@ class TestOpenAIBatchTranscription:
         assert "gpt-4o-mini-transcribe" in body
         assert "de" in body
 
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_http_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -86,7 +86,7 @@ class TestOpenAIBatchTranscription:
         with pytest.raises(TranscriptionError, match="Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_http_429_maps_to_rate_limit(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
@@ -95,7 +95,7 @@ class TestOpenAIBatchTranscription:
         with pytest.raises(TranscriptionError, match="Rate limit exceeded.*429"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_ssl_error_message_contains_proxy_hint(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = OpenAITranscriber(api_key="key")
@@ -104,7 +104,7 @@ class TestOpenAIBatchTranscription:
 
 
 class TestOpenAIConnectionTest:
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_connection_success(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response("{}", status=200)
         t = OpenAITranscriber(api_key="k")
@@ -112,7 +112,7 @@ class TestOpenAIConnectionTest:
         assert ok is True
         assert "valid" in msg.lower()
 
-    @patch("tts_app.transcriber.openai_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_connection_auth_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None

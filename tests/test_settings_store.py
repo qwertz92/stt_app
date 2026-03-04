@@ -1,6 +1,6 @@
 import json
 
-from tts_app.config import (
+from stt_app.config import (
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_ENGINE,
     DEFAULT_HISTORY_MAX_ITEMS,
@@ -17,7 +17,7 @@ from tts_app.config import (
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
 )
-from tts_app.settings_store import CURRENT_SCHEMA_VERSION, SettingsStore
+from stt_app.settings_store import CURRENT_SCHEMA_VERSION, SettingsStore
 
 
 def test_load_defaults_creates_file(tmp_path):

@@ -101,8 +101,8 @@ uv run python scripts/download_model.py --list
 
 ```powershell
 # Create and activate a venv
-...\tts_app> python -m venv .venv
-...\tts_app> .\.venv\Scripts\Activate.ps1 
+...\stt_app> python -m venv .venv
+...\stt_app> .\.venv\Scripts\Activate.ps1
 # Download the model (small in this case)
 python scripts/download_model.py --model small
 ```
@@ -190,7 +190,7 @@ Place the files in a folder (e.g. `C:\Downloads\faster-whisper-small\`) and run 
 ```powershell
 uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
 # or if uv doesn't work
-.\.venv\Scripts\Activate.ps1 
+.\.venv\Scripts\Activate.ps1
 python.exe .\scripts\import_model.py C:\Downloads\faster-whisper-small
 ```
 

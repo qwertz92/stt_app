@@ -2,10 +2,10 @@ import logging
 
 from PySide6 import QtGui, QtWidgets
 
-from tts_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
-from tts_app.controller import DictationController
-from tts_app.settings_store import AppSettings
-from tts_app.text_inserter import TextInsertionError
+from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
+from stt_app.controller import DictationController
+from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
 
 from conftest import (
     FakeCapture,
@@ -220,9 +220,9 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     focus_helper = FakeWindowFocusHelper()
     FakeCapture.instances = []
 
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
-        "tts_app.controller.create_transcriber", lambda _s, **kw: transcriber
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
     )
 
     controller = DictationController(
@@ -298,9 +298,9 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     focus_helper = FakeWindowFocusHelper()
     FakeCapture.instances = []
 
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
-        "tts_app.controller.create_transcriber", lambda _s, **kw: transcriber
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
     )
 
     controller = DictationController(
@@ -350,9 +350,9 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     focus_helper = FakeWindowFocusHelper()
     FakeCapture.instances = []
 
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
-        "tts_app.controller.create_transcriber", lambda _s, **kw: transcriber
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
     )
 
     controller = DictationController(
@@ -698,11 +698,11 @@ def test_preload_worker_persists_fallback_model(monkeypatch):
     tiny = DummyLocalTranscriber(should_fail=False)
 
     monkeypatch.setattr(
-        "tts_app.transcriber.local_faster_whisper.LocalFasterWhisperTranscriber",
+        "stt_app.transcriber.local_faster_whisper.LocalFasterWhisperTranscriber",
         DummyLocalTranscriber,
     )
     monkeypatch.setattr(
-        "tts_app.transcriber.local_faster_whisper.find_cached_models",
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
         lambda _model_dir="": ["tiny"],
     )
 

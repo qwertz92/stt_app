@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
-from tts_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+from stt_app.transcriber.base import TranscriptionError
 
 
 # ---------------------------------------------------------------------------
@@ -500,8 +500,8 @@ class TestAssemblyAIStreaming:
 class TestFactoryAssemblyAI:
     def test_factory_creates_assemblyai_transcriber(self):
         """create_transcriber routes engine='assemblyai' correctly."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         class FakeSecretStore:
             def get_api_key(self, provider):
@@ -517,8 +517,8 @@ class TestFactoryAssemblyAI:
 
     def test_factory_assemblyai_no_secret_store(self):
         """create_transcriber with no secret_store gives empty API key → error on use."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         # Without secret_store, api_key will be empty → TranscriptionError
         with pytest.raises(TranscriptionError, match="API key is missing"):
@@ -527,11 +527,11 @@ class TestFactoryAssemblyAI:
 
     def test_factory_local_unchanged(self):
         """Local engine routing still works after factory changes."""
-        from tts_app.transcriber.factory import create_transcriber
-        from tts_app.transcriber.local_faster_whisper import (
+        from stt_app.transcriber.factory import create_transcriber
+        from stt_app.transcriber.local_faster_whisper import (
             LocalFasterWhisperTranscriber,
         )
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         settings = AppSettings(engine="local", model_size="small")
         t = create_transcriber(settings)
@@ -545,24 +545,24 @@ class TestFactoryAssemblyAI:
 
 class TestSettingsStoreAssemblyAI:
     def test_has_assemblyai_key_default_false(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings()
         assert s.has_assemblyai_key is False
 
     def test_has_assemblyai_key_from_dict(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"has_assemblyai_key": True})
         assert s.has_assemblyai_key is True
 
     def test_assemblyai_in_valid_engines(self):
-        from tts_app.config import VALID_ENGINES
+        from stt_app.config import VALID_ENGINES
 
         assert "assemblyai" in VALID_ENGINES
 
     def test_assemblyai_engine_validated(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"engine": "assemblyai"})
         assert s.engine == "assemblyai"

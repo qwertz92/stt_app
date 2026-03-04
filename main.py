@@ -6,7 +6,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from tts_app.main import run
+from stt_app.main import run
 
 
 if __name__ == "__main__":

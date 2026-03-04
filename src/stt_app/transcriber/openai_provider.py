@@ -28,7 +28,7 @@ def _multipart_form_data(
     fields: list[tuple[str, str]],
     file_field: tuple[str, str, bytes, str],
 ) -> tuple[bytes, str]:
-    boundary = f"tts-app-{int(time.time() * 1000)}-{os.getpid()}"
+    boundary = f"stt-app-{int(time.time() * 1000)}-{os.getpid()}"
     lines: list[bytes] = []
 
     for name, value in fields:

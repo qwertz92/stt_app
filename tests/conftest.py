@@ -10,10 +10,10 @@ import logging
 
 from PySide6 import QtWidgets
 
-from tts_app.config import DEFAULT_CANCEL_HOTKEY, FALLBACK_HOTKEY
-from tts_app.controller import DictationController
-from tts_app.settings_store import AppSettings
-from tts_app.text_inserter import TextInsertionError
+from stt_app.config import DEFAULT_CANCEL_HOTKEY, FALLBACK_HOTKEY
+from stt_app.controller import DictationController
+from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
 
 
 class FakeSettingsStore:
@@ -54,15 +54,19 @@ class FakeCancelHotkeyManager(FakeHotkeyManager):
 class FakeOverlay:
     def __init__(self):
         self.states = []
+        self.state_kwargs = []
         self.opacity_values = []
+        self.compact_calls = 0
 
-    def set_state(self, state, detail=""):
+    def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))
+        self.state_kwargs.append(dict(kwargs))
 
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))
 
     def ensure_compact_size(self):
+        self.compact_calls += 1
         return None
 
 
@@ -192,7 +196,7 @@ class FakeCapture:
 
 class FakeCaptureFails(FakeCapture):
     def start(self):
-        from tts_app.audio_capture import AudioCaptureError
+        from stt_app.audio_capture import AudioCaptureError
 
         raise AudioCaptureError("no mic")
 

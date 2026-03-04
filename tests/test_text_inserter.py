@@ -2,7 +2,7 @@ import ctypes
 
 import pytest
 
-from tts_app.text_inserter import (
+from stt_app.text_inserter import (
     INPUT,
     TextInserter,
     TextInsertionError,

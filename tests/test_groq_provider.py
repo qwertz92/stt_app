@@ -6,8 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from tts_app.transcriber.groq_provider import GroqTranscriber
-from tts_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.groq_provider import GroqTranscriber
+from stt_app.transcriber.base import TranscriptionError
 
 
 # ---------------------------------------------------------------------------
@@ -372,8 +372,8 @@ class TestGroqStreamingStubs:
 class TestFactoryGroq:
     def test_factory_creates_groq_transcriber(self):
         """create_transcriber routes engine='groq' correctly."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         class FakeSecretStore:
             def get_api_key(self, provider):
@@ -394,8 +394,8 @@ class TestFactoryGroq:
 
     def test_factory_groq_no_secret_store(self):
         """create_transcriber with no secret_store gives empty API key."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         with pytest.raises(TranscriptionError, match="API key is missing"):
             settings = AppSettings(engine="groq")
@@ -403,8 +403,8 @@ class TestFactoryGroq:
 
     def test_factory_groq_default_model(self):
         """Default groq_model is used when not specified."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         class FakeSecretStore:
             def get_api_key(self, provider):
@@ -422,48 +422,48 @@ class TestFactoryGroq:
 
 class TestSettingsStoreGroq:
     def test_has_groq_key_default_false(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings()
         assert s.has_groq_key is False
 
     def test_has_groq_key_from_dict(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"has_groq_key": True})
         assert s.has_groq_key is True
 
     def test_groq_in_valid_engines(self):
-        from tts_app.config import VALID_ENGINES
+        from stt_app.config import VALID_ENGINES
 
         assert "groq" in VALID_ENGINES
 
     def test_groq_engine_validated(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"engine": "groq"})
         assert s.engine == "groq"
 
     def test_groq_model_default(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings()
         assert s.groq_model == "whisper-large-v3-turbo"
 
     def test_groq_model_from_dict(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"groq_model": "whisper-large-v3"})
         assert s.groq_model == "whisper-large-v3"
 
     def test_invalid_groq_model_falls_back(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"groq_model": "nonexistent"})
         assert s.groq_model == "whisper-large-v3-turbo"
 
     def test_groq_models_constant(self):
-        from tts_app.config import GROQ_MODELS
+        from stt_app.config import GROQ_MODELS
 
         assert "whisper-large-v3" in GROQ_MODELS
         assert "whisper-large-v3-turbo" in GROQ_MODELS
@@ -484,7 +484,7 @@ class TestGroqSSLBundle:
 
         fake_ctx = ssl.create_default_context()
         monkeypatch.setattr(
-            "tts_app.transcriber.groq_provider.create_ssl_context",
+            "stt_app.transcriber.groq_provider.create_ssl_context",
             lambda: fake_ctx,
         )
 
@@ -507,7 +507,7 @@ class TestGroqSSLBundle:
     def test_build_client_uses_default_when_no_bundle(self, monkeypatch):
         """Without a CA bundle, _build_client should NOT pass http_client."""
         monkeypatch.setattr(
-            "tts_app.transcriber.groq_provider.create_ssl_context",
+            "stt_app.transcriber.groq_provider.create_ssl_context",
             lambda: None,
         )
 

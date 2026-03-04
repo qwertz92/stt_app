@@ -3,17 +3,33 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .config import APP_NAME
+from .config import APP_NAME, LEGACY_APP_NAME
+
+
+def _appdata_base_root() -> Path:
+    appdata = os.environ.get("APPDATA")
+    if appdata:
+        return Path(appdata)
+    return Path.home() / "AppData" / "Roaming"
 
 
 def appdata_root() -> Path:
-    appdata = os.environ.get("APPDATA")
-    if appdata:
-        root = Path(appdata)
-    else:
-        root = Path.home() / "AppData" / "Roaming"
-
+    root = _appdata_base_root()
     path = root / APP_NAME
+    if path.is_dir():
+        path.mkdir(parents=True, exist_ok=True)
+        return path
+
+    # Keep existing user data when migrating from the legacy app folder name.
+    legacy_path = root / LEGACY_APP_NAME
+    if legacy_path.is_dir():
+        try:
+            legacy_path.replace(path)
+        except OSError:
+            # If atomic move fails, continue using legacy location.
+            legacy_path.mkdir(parents=True, exist_ok=True)
+            return legacy_path
+
     path.mkdir(parents=True, exist_ok=True)
     return path
 

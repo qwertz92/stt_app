@@ -109,6 +109,7 @@ class DictationController(QtCore.QObject):
         self._stream_abort_requested = False
         self._stream_committed_text = ""
         self._stream_last_partial_text = ""
+        self._recording_start_in_progress = False
         self._active_session_mode = "batch"
         self._focus_poll_timer = QtCore.QTimer(self)
         self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
@@ -249,62 +250,76 @@ class DictationController(QtCore.QObject):
             self.stop_recording()
 
     def start_recording(self) -> None:
-        self._overlay.ensure_compact_size()
-        self._overlay.set_state("Listening", "Starting recording...")
-        preload = self._preload_future
-        preload_running = preload is not None and not preload.done()
-
-        batch_settings: AppSettings | None = None
-        fallback_notice = ""
-        if preload_running and self._settings.engine == DEFAULT_ENGINE:
-            if self._settings.mode == "streaming":
-                self._overlay.set_state(
-                    "Error",
-                    "Model is still loading. Streaming starts after the selected "
-                    "model is ready.",
-                )
-                return
-
-            fallback_settings = self._resolve_preload_fallback_settings()
-            if fallback_settings is None:
-                try:
-                    detail = self._preload_progress_detail(
-                        include_fallback_hint=False
-                    )
-                except Exception:
-                    detail = "Selected model is still loading."
-                self._overlay.set_state(
-                    "Error",
-                    f"{detail} No cached fallback model available yet.",
-                )
-                return
-
-            batch_settings = fallback_settings
-            fallback_notice = (
-                f"Using fallback '{fallback_settings.model_size}' "
-                f"while '{self._settings.model_size}' loads."
-            )
-        # Check if the selected engine supports streaming mode.
-        if (
-            self._settings.engine not in STREAMING_ENGINES
-            and self._settings.mode == "streaming"
-        ):
+        self._recording_start_in_progress = True
+        try:
             self._overlay.set_state(
-                "Error",
-                "Streaming is not available for the selected provider. "
-                "Switch to batch mode, or use local/AssemblyAI/Deepgram for streaming.",
+                "Listening",
+                "Starting recording...",
+                compact=True,
             )
-            return
+            self._overlay.ensure_compact_size()
+            QtCore.QCoreApplication.processEvents(
+                QtCore.QEventLoop.ExcludeUserInputEvents,
+                25,
+            )
+            preload = self._preload_future
+            preload_running = preload is not None and not preload.done()
 
-        self._target_window_handle = self._window_focus_helper.capture_target_window()
-        self._target_focus_signature = self._capture_target_signature()
-        if self._settings.mode == "streaming":
-            self._start_streaming_recording()
-            return
-        self._start_batch_recording(
-            batch_settings or replace(self._settings),
-            fallback_notice=fallback_notice,
-        )
+            batch_settings: AppSettings | None = None
+            fallback_notice = ""
+            if preload_running and self._settings.engine == DEFAULT_ENGINE:
+                if self._settings.mode == "streaming":
+                    self._overlay.set_state(
+                        "Error",
+                        "Model is still loading. Streaming starts after the selected "
+                        "model is ready.",
+                    )
+                    return
+
+                fallback_settings = self._resolve_preload_fallback_settings()
+                if fallback_settings is None:
+                    try:
+                        detail = self._preload_progress_detail(
+                            include_fallback_hint=False
+                        )
+                    except Exception:
+                        detail = "Selected model is still loading."
+                    self._overlay.set_state(
+                        "Error",
+                        f"{detail} No cached fallback model available yet.",
+                    )
+                    return
+
+                batch_settings = fallback_settings
+                fallback_notice = (
+                    f"Using fallback '{fallback_settings.model_size}' "
+                    f"while '{self._settings.model_size}' loads."
+                )
+            # Check if the selected engine supports streaming mode.
+            if (
+                self._settings.engine not in STREAMING_ENGINES
+                and self._settings.mode == "streaming"
+            ):
+                self._overlay.set_state(
+                    "Error",
+                    "Streaming is not available for the selected provider. "
+                    "Switch to batch mode, or use local/AssemblyAI/Deepgram for "
+                    "streaming.",
+                )
+                return
+
+            self._target_window_handle = self._window_focus_helper.capture_target_window()
+            self._target_focus_signature = self._capture_target_signature()
+            if self._settings.mode == "streaming":
+                self._start_streaming_recording()
+                return
+
+            self._start_batch_recording(
+                batch_settings or replace(self._settings),
+                fallback_notice=fallback_notice,
+            )
+        finally:
+            self._recording_start_in_progress = False
 
     def _start_batch_recording(
         self,
@@ -341,6 +356,7 @@ class DictationController(QtCore.QObject):
                 )
                 if part
             ),
+            compact=True,
         )
 
     def _start_streaming_recording(self) -> None:
@@ -391,6 +407,7 @@ class DictationController(QtCore.QObject):
         self._overlay.set_state(
             "Listening",
             "Streaming active. Speak now, press hotkey to finalize.",
+            compact=True,
         )
 
     def _build_audio_capture(self, chunk_callback=None) -> AudioCapture:
@@ -705,7 +722,11 @@ class DictationController(QtCore.QObject):
             return
 
         # Do not overwrite listening/processing states of an active session.
-        if self._audio_capture is not None or self._streaming_recording:
+        if (
+            self._audio_capture is not None
+            or self._streaming_recording
+            or self._recording_start_in_progress
+        ):
             return
 
         try:
@@ -799,10 +820,15 @@ class DictationController(QtCore.QObject):
         ready_model = self._preload_target_model or self._settings.model_size
         self._preload_target_model = None
         self._terminate_preload_download_process()
+        session_active = (
+            self._audio_capture is not None
+            or self._streaming_recording
+            or self._recording_start_in_progress
+        )
 
         if self._preload_cancel_requested:
             self._preload_cancel_requested = False
-            if self._audio_capture is None and not self._streaming_recording:
+            if not session_active:
                 self._overlay.set_state("Done", "Model preload canceled.")
                 QtCore.QTimer.singleShot(1200, self.show_idle_status)
             return
@@ -810,9 +836,15 @@ class DictationController(QtCore.QObject):
         if success:
             self._logger.info("Model preload: %s", message)
             if "Fallback" in message:
-                self._overlay.set_state("Error", message)
+                if session_active:
+                    self._logger.info(
+                        "Suppressing preload fallback notice during active session: %s",
+                        message,
+                    )
+                else:
+                    self._overlay.set_state("Error", message)
             else:
-                if self._audio_capture is None and not self._streaming_recording:
+                if not session_active:
                     self._overlay.set_state(
                         "Done",
                         f"Model '{ready_model}' is ready. Next transcription uses it.",
@@ -825,10 +857,17 @@ class DictationController(QtCore.QObject):
         else:
             self._logger.warning("Model preload failed: %s", message)
             if "canceled" in message.lower():
-                self._overlay.set_state("Done", message)
-                QtCore.QTimer.singleShot(1200, self.show_idle_status)
+                if not session_active:
+                    self._overlay.set_state("Done", message)
+                    QtCore.QTimer.singleShot(1200, self.show_idle_status)
             else:
-                self._overlay.set_state("Error", message)
+                if session_active:
+                    self._logger.warning(
+                        "Suppressing preload error overlay during active session: %s",
+                        message,
+                    )
+                else:
+                    self._overlay.set_state("Error", message)
 
     # -- Transcription workers ------------------------------------------------
 
@@ -1102,7 +1141,7 @@ class DictationController(QtCore.QObject):
             try:
                 threading.Thread(
                     target=self._play_abort_beep,
-                    name="tts_app_abort_beep",
+                    name="stt_app_abort_beep",
                     daemon=True,
                 ).start()
                 emit_beep = False

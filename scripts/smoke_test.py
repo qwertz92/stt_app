@@ -12,7 +12,7 @@ if str(SRC) not in sys.path:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Windows smoke test for tts_app")
+    parser = argparse.ArgumentParser(description="Windows smoke test for stt_app")
     parser.add_argument(
         "--check-mic",
         action="store_true",
@@ -31,12 +31,12 @@ def main() -> int:
     args = parser.parse_args()
 
     print("[1/5] Import core modules")
-    from tts_app.config import DEFAULT_HOTKEY
-    from tts_app.hotkey import parse_hotkey
-    from tts_app.secret_store import KeyringSecretStore
-    from tts_app.settings_store import SettingsStore
-    from tts_app.text_inserter import TextInserter
-    from tts_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+    from stt_app.config import DEFAULT_HOTKEY
+    from stt_app.hotkey import parse_hotkey
+    from stt_app.secret_store import KeyringSecretStore
+    from stt_app.settings_store import SettingsStore
+    from stt_app.text_inserter import TextInserter
+    from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
     print("[2/5] Basic initialization")
     with tempfile.TemporaryDirectory() as temp_dir:

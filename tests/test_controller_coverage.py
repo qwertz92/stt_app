@@ -8,11 +8,11 @@ from unittest.mock import MagicMock
 
 from PySide6 import QtWidgets
 
-from tts_app.config import FALLBACK_HOTKEY
-from tts_app.controller import DictationController
-from tts_app.settings_store import AppSettings
-from tts_app.text_inserter import TextInsertionError
-from tts_app.transcriber.base import TranscriptionError
+from stt_app.config import FALLBACK_HOTKEY
+from stt_app.controller import DictationController
+from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
+from stt_app.transcriber.base import TranscriptionError
 
 from conftest import (
     FakeCapture,
@@ -95,7 +95,7 @@ def test_start_recording_uses_cached_fallback_while_preloading(monkeypatch):
         model_size="large-v3-turbo",
     )
     overlay = FakeOverlay()
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -158,7 +158,7 @@ def test_start_recording_remote_not_blocked_by_stale_local_preload(monkeypatch):
         mode="batch",
     )
     overlay = FakeOverlay()
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -173,11 +173,29 @@ def test_start_recording_remote_not_blocked_by_stale_local_preload(monkeypatch):
     _ = app
 
 
+def test_start_recording_forces_compact_listening_state(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert overlay.compact_calls >= 1
+    assert overlay.states[0][0] == "Listening"
+    assert overlay.state_kwargs[0].get("compact") is True
+    controller.shutdown()
+    _ = app
+
+
 def test_start_batch_recording_audio_capture_error(monkeypatch):
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
     overlay = FakeOverlay()
     FakeCapture.instances = []
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCaptureFails)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCaptureFails)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -202,7 +220,7 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
         t.start_stream = broken_start
         return t
 
-    monkeypatch.setattr("tts_app.controller.create_transcriber", fail_transcriber)
+    monkeypatch.setattr("stt_app.controller.create_transcriber", fail_transcriber)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -214,13 +232,26 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
     _ = app
 
 
+def test_preload_progress_poll_skips_during_recording_start():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._preload_future = _RunningFuture()
+    controller._recording_start_in_progress = True
+
+    controller._on_preload_progress_poll()
+
+    assert overlay.states == []
+    controller.shutdown()
+    _ = app
+
+
 def test_start_streaming_audio_capture_error_stops_transcriber(monkeypatch):
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
     overlay = FakeOverlay()
     transcriber = FakeStreamingTranscriber()
 
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCaptureFails)
-    monkeypatch.setattr("tts_app.controller.create_transcriber", lambda _s, **kw: transcriber)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCaptureFails)
+    monkeypatch.setattr("stt_app.controller.create_transcriber", lambda _s, **kw: transcriber)
 
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
@@ -245,7 +276,7 @@ def test_stop_recording_no_audio_shows_error(monkeypatch):
     empty_capture = FakeCapture()
     empty_capture._wav_bytes = b""
     FakeCapture.instances = []
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
 
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
@@ -536,7 +567,7 @@ def test_toggle_starts_then_stops(monkeypatch):
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
     overlay = FakeOverlay()
     FakeCapture.instances = []
-    monkeypatch.setattr("tts_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -666,13 +697,13 @@ def test_download_model_for_preload_skips_when_cached(monkeypatch):
     controller, app = _make_controller()
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
     monkeypatch.setattr(
-        "tts_app.transcriber.local_faster_whisper.find_cached_models",
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
         lambda _model_dir="": ["small"],
     )
 
     started = []
     monkeypatch.setattr(
-        "tts_app.controller.subprocess.Popen",
+        "stt_app.controller.subprocess.Popen",
         lambda *args, **kwargs: started.append(True),
     )
 

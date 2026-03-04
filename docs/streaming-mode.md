@@ -137,4 +137,4 @@ Streaming behavior can be tuned via config:
 - `STREAMING_ABORT_ON_FOCUS_CHANGE`
 - `STREAMING_BEEP_ON_ABORT`
 
-These defaults are set in `src/tts_app/config.py`.
+These defaults are set in `src/stt_app/config.py`.

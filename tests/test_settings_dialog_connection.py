@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from PySide6 import QtWidgets
 
-import tts_app.settings_dialog as settings_dialog_module
-from tts_app.settings_dialog import SettingsDialog
-from tts_app.settings_store import AppSettings
+import stt_app.settings_dialog as settings_dialog_module
+from stt_app.settings_dialog import SettingsDialog
+from stt_app.settings_store import AppSettings
 
 
 class _FakeSettingsStore:
@@ -80,7 +80,7 @@ def test_test_connection_missing_key_shows_error():
 
 
 def test_test_connection_runs_in_background_worker(monkeypatch):
-    import tts_app.transcriber.deepgram_provider as deepgram_provider_module
+    import stt_app.transcriber.deepgram_provider as deepgram_provider_module
 
     class _FakeDeepgramTranscriber:
         def __init__(self, api_key: str, language_mode: str = "auto") -> None:
@@ -115,7 +115,7 @@ def test_test_connection_runs_in_background_worker(monkeypatch):
 
 
 def test_openai_connection_runs_in_background_worker(monkeypatch):
-    import tts_app.transcriber.openai_provider as openai_provider_module
+    import stt_app.transcriber.openai_provider as openai_provider_module
 
     class _FakeOpenAITranscriber:
         def __init__(

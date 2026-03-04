@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from tts_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
 
 def test_add_entry_persists_and_respects_max_items(tmp_path):

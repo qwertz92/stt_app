@@ -1,6 +1,6 @@
 # Provider Cost and Quality Overview
 
-This document compares pricing, free-tier availability, and quality signals for providers currently available in `tts_app`.
+This document compares pricing, free-tier availability, and quality signals for providers currently available in `stt_app`.
 
 - Last verified: **2026-02-21**
 - Prices and limits can change at any time. Confirm on official pricing pages before production use.

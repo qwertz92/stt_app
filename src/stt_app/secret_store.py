@@ -5,7 +5,7 @@ from pathlib import Path
 
 from typing import Protocol
 
-from .config import KEYRING_SERVICE_NAME
+from .config import KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
 from .app_paths import insecure_keys_path
 
 
@@ -26,6 +26,7 @@ class KeyringSecretStore:
         self,
         keyring_backend=None,
         service_name: str = KEYRING_SERVICE_NAME,
+        legacy_service_names: tuple[str, ...] = LEGACY_KEYRING_SERVICE_NAMES,
     ) -> None:
         if keyring_backend is None:
             import keyring  # type: ignore
@@ -34,6 +35,13 @@ class KeyringSecretStore:
 
         self._keyring = keyring_backend
         self._service_name = service_name
+        self._legacy_service_names = tuple(
+            name
+            for name in legacy_service_names
+            if isinstance(name, str)
+            and name.strip()
+            and name.strip() != self._service_name
+        )
         self._insecure_fallback_enabled = False
         self._insecure_path: Path = insecure_keys_path()
 
@@ -79,9 +87,25 @@ class KeyringSecretStore:
         payload.pop(provider, None)
         self._write_insecure_store(payload)
 
+    def _get_keyring_value(self, service_name: str, provider: str) -> str | None:
+        try:
+            value = self._keyring.get_password(service_name, provider)
+        except Exception:
+            # keyring backends can fail with FileNotFoundError, OSError,
+            # or backend-specific errors on misconfigured systems.
+            return None
+        if value is None:
+            return None
+        return str(value)
+
     def set_api_key(self, provider: str, api_key: str) -> None:
         try:
             self._keyring.set_password(self._service_name, provider, api_key)
+            for legacy_name in self._legacy_service_names:
+                try:
+                    self._keyring.delete_password(legacy_name, provider)
+                except Exception:
+                    pass
             # Keyring succeeded: remove stale insecure fallback copy.
             self._delete_insecure_api_key(provider)
             return
@@ -91,23 +115,33 @@ class KeyringSecretStore:
         self._set_insecure_api_key(provider, api_key)
 
     def get_api_key(self, provider: str) -> str | None:
-        try:
-            value = self._keyring.get_password(self._service_name, provider)
-        except Exception:
-            # keyring backends can fail with FileNotFoundError, OSError,
-            # or backend-specific errors on misconfigured systems.
-            value = None
+        value = self._get_keyring_value(self._service_name, provider)
         if value is not None:
-            return str(value)
+            return value
+        for legacy_name in self._legacy_service_names:
+            legacy_value = self._get_keyring_value(legacy_name, provider)
+            if legacy_value is None:
+                continue
+            try:
+                self._keyring.set_password(
+                    self._service_name,
+                    provider,
+                    legacy_value,
+                )
+                self._keyring.delete_password(legacy_name, provider)
+            except Exception:
+                pass
+            return legacy_value
         if self._insecure_fallback_enabled:
             return self._get_insecure_api_key(provider)
         return None
 
     def delete_api_key(self, provider: str) -> None:
-        try:
-            self._keyring.delete_password(self._service_name, provider)
-        except Exception:
-            pass
+        for service_name in (self._service_name, *self._legacy_service_names):
+            try:
+                self._keyring.delete_password(service_name, provider)
+            except Exception:
+                pass
         if self._insecure_fallback_enabled:
             try:
                 self._delete_insecure_api_key(provider)

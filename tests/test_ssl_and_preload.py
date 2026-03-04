@@ -10,14 +10,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from tts_app.ssl_utils import (
+from stt_app.ssl_utils import (
     create_ssl_context,
     inject_system_trust_store,
     resolve_ca_bundle,
     sync_ca_bundle_env_vars,
 )
-from tts_app.transcriber.base import TranscriptionError
-from tts_app.transcriber.local_faster_whisper import (
+from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.local_faster_whisper import (
     LocalFasterWhisperTranscriber,
     _is_ssl_error,
     cached_model_paths,
@@ -257,7 +257,7 @@ class TestFindCachedModels:
     def test_finds_model_in_hf_cache(self, tmp_path):
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -266,7 +266,7 @@ class TestFindCachedModels:
     def test_finds_model_in_custom_dir(self, tmp_path):
         self._make_hf_cache(tmp_path, "tiny", "Systran/faster-whisper-tiny")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value="/nonexistent",
         ):
             result = find_cached_models(str(tmp_path))
@@ -278,7 +278,7 @@ class TestFindCachedModels:
         (flat_dir / "config.json").write_text("{}")
         (flat_dir / "model.bin").write_bytes(b"\x00")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -286,7 +286,7 @@ class TestFindCachedModels:
 
     def test_returns_empty_when_no_models(self, tmp_path):
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -300,7 +300,7 @@ class TestFindCachedModels:
         (snapshot_dir / "config.json").write_text("{}")
         # model.bin intentionally missing
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -310,7 +310,7 @@ class TestFindCachedModels:
         self._make_hf_cache(tmp_path, "tiny", "Systran/faster-whisper-tiny")
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -327,7 +327,7 @@ class TestFindCachedModels:
         self._make_hf_cache(hf_dir, "small", "Systran/faster-whisper-small")
         self._make_hf_cache(custom_dir, "tiny", "Systran/faster-whisper-tiny")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(hf_dir),
         ):
             result = find_cached_models(str(custom_dir))
@@ -346,7 +346,7 @@ class TestEstimateCachedModelBytes:
 
     def test_returns_zero_for_unknown_model(self, tmp_path):
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             assert estimate_cached_model_bytes("unknown") == 0
@@ -354,7 +354,7 @@ class TestEstimateCachedModelBytes:
     def test_estimates_hf_cache_size(self, tmp_path):
         self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             size = estimate_cached_model_bytes("small")
@@ -378,7 +378,7 @@ class TestEstimateCachedModelBytes:
         big_blob.write_bytes(b"\x00" * 100)
 
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(hf_dir),
         ):
             size = estimate_cached_model_bytes("small", str(custom_dir))
@@ -397,7 +397,7 @@ class TestDeleteCachedModel:
     def test_cached_model_paths_returns_existing_dirs(self, tmp_path):
         model_root = self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             paths = cached_model_paths("small")
@@ -406,7 +406,7 @@ class TestDeleteCachedModel:
     def test_delete_cached_model_removes_directories(self, tmp_path):
         model_root = self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
         with patch(
-            "tts_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             removed = delete_cached_model("small")
@@ -464,7 +464,7 @@ class TestPreloadModel:
 
 class TestAssemblyAISSLDetection:
     def test_ssl_error_in_transcribe_batch(self):
-        from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 
         aai = types.ModuleType("assemblyai")
         aai.settings = MagicMock()
@@ -495,7 +495,7 @@ class TestAssemblyAISSLDetection:
 
 class TestAssemblyAITestConnection:
     def test_successful_connection(self):
-        from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
         from unittest.mock import MagicMock
 
         t = AssemblyAITranscriber(api_key="test-key")
@@ -511,7 +511,7 @@ class TestAssemblyAITestConnection:
         assert "OK" in msg
 
     def test_auth_failure(self):
-        from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
         import urllib.error
 
         t = AssemblyAITranscriber(api_key="bad-key")
@@ -527,7 +527,7 @@ class TestAssemblyAITestConnection:
         assert "401" in msg
 
     def test_ssl_error_detected(self):
-        from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 
         t = AssemblyAITranscriber(api_key="test-key")
 
@@ -549,7 +549,7 @@ class TestDownloadScriptSSLDetection:
     def test_is_ssl_error_function(self):
         """The download script has its own _is_ssl_error — test it."""
         # We can import the function from local_faster_whisper since it's shared logic.
-        from tts_app.transcriber.local_faster_whisper import _is_ssl_error
+        from stt_app.transcriber.local_faster_whisper import _is_ssl_error
 
         exc = Exception("[SSL: CERTIFICATE_VERIFY_FAILED]")
         assert _is_ssl_error(exc) is True

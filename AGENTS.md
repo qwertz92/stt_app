@@ -46,7 +46,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
 | `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
-| `settings_store.py` | JSON settings persistence (`%APPDATA%\tts_app\settings.json`) |
+| `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
 | `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |

@@ -77,6 +77,14 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_button.setToolTip("Copy overlay text")
         self._copy_button.clicked.connect(self.copy_detail_text)
 
+        self._clear_button = QtWidgets.QPushButton("Clear")
+        self._clear_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._clear_button.setFixedWidth(64)
+        self._clear_button.setFixedHeight(24)
+        self._clear_button.setToolTip("Hide current text from overlay")
+        self._clear_button.clicked.connect(self.clear_detail_text)
+
         self._retry_button = QtWidgets.QPushButton("Retry")
         self._retry_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._retry_button.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -161,6 +169,7 @@ class OverlayUI(QtWidgets.QWidget):
         header.setSpacing(6)
         header.addWidget(self._history_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
+        header.addWidget(self._clear_button, 0, QtCore.Qt.AlignRight)
         header.addWidget(self._copy_button, 0, QtCore.Qt.AlignRight)
 
         self._controls_widget = QtWidgets.QWidget()
@@ -187,11 +196,13 @@ class OverlayUI(QtWidgets.QWidget):
     def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
         self._state_label.setText(state)
         self._detail_label.setText(detail)
+        has_detail = bool(detail.strip())
         if compact is None:
             self._compact_mode = state in {"Idle", "Listening", "Processing"}
         else:
             self._compact_mode = compact
-        self._copy_button.setEnabled(bool(detail.strip()))
+        self._copy_button.setEnabled(has_detail)
+        self._clear_button.setEnabled(has_detail and state in {"Done", "Error"})
         self._retry_button.setEnabled(state == "Error")
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})
         self._reset_pos_button.setEnabled(True)
@@ -410,9 +421,13 @@ class OverlayUI(QtWidgets.QWidget):
     def _show_detail_context_menu(self, pos) -> None:
         menu = QtWidgets.QMenu(self)
         copy_action = menu.addAction("Copy text")
+        clear_action = menu.addAction("Clear text from overlay")
+        clear_action.setEnabled(self._clear_button.isEnabled())
         selected = menu.exec(self._detail_label.mapToGlobal(pos))
         if selected == copy_action:
             self.copy_detail_text()
+        elif selected == clear_action:
+            self.clear_detail_text()
 
     def _update_detail_height(self) -> None:
         margins = self._layout.contentsMargins()
@@ -532,3 +547,13 @@ class OverlayUI(QtWidgets.QWidget):
             return
         self._set_copy_button_feedback(True)
         self._copy_feedback_timer.start()
+
+    def clear_detail_text(self) -> None:
+        if not self._detail_label.text().strip():
+            return
+        self._detail_label.setText("")
+        self._reset_copy_button_feedback()
+        self._copy_button.setEnabled(False)
+        self._clear_button.setEnabled(False)
+        self._compact_mode = True
+        self.ensure_compact_size()

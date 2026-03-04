@@ -1,4 +1,4 @@
-from tts_app.settings_dialog import (
+from stt_app.settings_dialog import (
     _app_hotkey_to_qt_hotkey_text,
     _hotkeys_conflict,
     _qt_hotkey_text_to_app_hotkey,

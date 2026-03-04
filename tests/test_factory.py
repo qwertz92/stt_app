@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from tts_app.settings_store import AppSettings
-from tts_app.transcriber.factory import create_transcriber
-from tts_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
-from tts_app.transcriber.assemblyai_provider import AssemblyAITranscriber
-from tts_app.transcriber.deepgram_provider import DeepgramTranscriber
-from tts_app.transcriber.openai_provider import OpenAITranscriber
+from stt_app.settings_store import AppSettings
+from stt_app.transcriber.factory import create_transcriber
+from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
+from stt_app.transcriber.openai_provider import OpenAITranscriber
 
 
 def test_factory_local_returns_local_transcriber():

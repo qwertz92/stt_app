@@ -4,9 +4,9 @@ import json
 
 from PySide6 import QtGui, QtTest, QtWidgets
 
-from tts_app.history_dialog import HistoryDialog
-from tts_app.settings_store import AppSettings, SettingsStore
-from tts_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.history_dialog import HistoryDialog
+from stt_app.settings_store import AppSettings, SettingsStore
+from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
 
 class _FakeClipboard:

@@ -1,8 +1,8 @@
 from PySide6 import QtCore, QtWidgets
 
-from tts_app.app_paths import debug_audio_path
-from tts_app.settings_dialog import SettingsDialog
-from tts_app.settings_store import AppSettings
+from stt_app.app_paths import debug_audio_path
+from stt_app.settings_dialog import SettingsDialog
+from stt_app.settings_store import AppSettings
 
 
 class _FakeSettingsStore:
@@ -246,7 +246,7 @@ def test_debug_wav_path_is_visible_in_general_tab(monkeypatch, tmp_path):
         app_logger=_FakeLogger(),
     )
 
-    expected = str(tmp_path / "tts_app" / "last_recording.wav")
+    expected = str(tmp_path / "stt_app" / "last_recording.wav")
     assert expected in dialog.save_wav_path_label.text()
     assert "overwritten on each recording" in dialog.save_wav_path_label.text()
     _ = app
@@ -274,11 +274,11 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
     calls = {"delete": 0}
 
     monkeypatch.setattr(
-        "tts_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog.find_cached_models",
         lambda _model_dir="": ["small"],
     )
     monkeypatch.setattr(
-        "tts_app.settings_dialog.delete_cached_model",
+        "stt_app.settings_dialog.delete_cached_model",
         lambda _model_name, _model_dir="": calls.__setitem__(
             "delete", calls["delete"] + 1
         )

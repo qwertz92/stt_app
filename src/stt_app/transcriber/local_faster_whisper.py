@@ -360,7 +360,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             self._stream_abort_requested = False
             thread = threading.Thread(
                 target=self._stream_worker,
-                name="tts_app_stream_worker",
+                name="stt_app_stream_worker",
                 daemon=True,
             )
             self._stream_thread = thread

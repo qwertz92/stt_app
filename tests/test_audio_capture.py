@@ -4,8 +4,8 @@ from io import BytesIO
 
 import numpy as np
 
-from tts_app.audio_capture import AudioCapture
-from tts_app.vad import VadDecision
+from stt_app.audio_capture import AudioCapture
+from stt_app.vad import VadDecision
 
 
 class FakeVad:

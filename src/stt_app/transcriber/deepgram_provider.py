@@ -259,7 +259,7 @@ class DeepgramTranscriber(ITranscriber):
         )
         thread = threading.Thread(
             target=ws.run_forever,
-            name="tts_app_deepgram_stream",
+            name="stt_app_deepgram_stream",
             daemon=True,
         )
         with self._stream_lock:

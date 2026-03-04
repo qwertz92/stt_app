@@ -31,8 +31,8 @@ import sys
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from tts_app.config import DOC_MODELS_PATH, DOC_SSL_PROXY_PATH, MODEL_REPO_MAP  # noqa: E402
-from tts_app.ssl_utils import is_ssl_error as _is_ssl_error  # noqa: E402
+from stt_app.config import DOC_MODELS_PATH, DOC_SSL_PROXY_PATH, MODEL_REPO_MAP  # noqa: E402
+from stt_app.ssl_utils import is_ssl_error as _is_ssl_error  # noqa: E402
 
 # Re-export under the name used throughout this script.
 MODELS = MODEL_REPO_MAP

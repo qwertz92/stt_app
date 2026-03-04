@@ -8,11 +8,11 @@ from unittest.mock import patch
 
 import pytest
 
-from tts_app.transcriber.deepgram_provider import (
+from stt_app.transcriber.deepgram_provider import (
     DEFAULT_DEEPGRAM_MODEL,
     DeepgramTranscriber,
 )
-from tts_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionError
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +99,7 @@ class TestDeepgramTranscriberInit:
 
 
 class TestDeepgramTranscribeBatch:
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_bytes(self, mock_urlopen):
         """Transcription with raw WAV bytes."""
         mock_urlopen.return_value = _make_fake_response(
@@ -110,7 +110,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake wav data")
         assert result == "Hallo Welt"
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_file_path(self, mock_urlopen, tmp_path):
         """Transcription with a file path reads the file."""
         mock_urlopen.return_value = _make_fake_response(
@@ -124,7 +124,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(str(wav))
         assert result == "hello world"
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_path_object(self, mock_urlopen, tmp_path):
         """Transcription with a Path object."""
         mock_urlopen.return_value = _make_fake_response(
@@ -138,7 +138,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(wav)
         assert result == "test output"
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_empty_result(self, mock_urlopen):
         """Empty transcript text returns empty string."""
         mock_urlopen.return_value = _make_fake_response(
@@ -148,7 +148,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake")
         assert result == ""
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_strips_whitespace(self, mock_urlopen):
         """Result text is stripped of whitespace."""
         mock_urlopen.return_value = _make_fake_response(
@@ -158,7 +158,7 @@ class TestDeepgramTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake")
         assert result == "trimmed text"
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_auto_language_sends_detect_language(self, mock_urlopen):
         """Auto language mode sends detect_language=true query param."""
         mock_urlopen.return_value = _make_fake_response(
@@ -172,7 +172,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert "detect_language=true" in req.full_url
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_explicit_language_sends_language_param(self, mock_urlopen):
         """Explicit language mode sends language=<code> query param."""
         mock_urlopen.return_value = _make_fake_response(
@@ -186,7 +186,7 @@ class TestDeepgramTranscribeBatch:
         assert "language=de" in req.full_url
         assert "detect_language" not in req.full_url
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_model_sent_in_query_params(self, mock_urlopen):
         """The selected model is sent as a query parameter."""
         mock_urlopen.return_value = _make_fake_response(
@@ -199,7 +199,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert "model=nova-2" in req.full_url
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_authorization_header_set(self, mock_urlopen):
         """Authorization header uses 'Token <key>' format."""
         mock_urlopen.return_value = _make_fake_response(
@@ -212,7 +212,7 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert req.get_header("Authorization") == "Token my-secret-key"
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_content_type_header_set(self, mock_urlopen):
         """Content-Type header is set to audio/wav."""
         mock_urlopen.return_value = _make_fake_response(
@@ -263,7 +263,7 @@ class TestDeepgramResponseParsing:
 
 
 class TestDeepgramErrorHandling:
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_http_401_gives_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -272,7 +272,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match="Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_http_402_gives_credits_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=402, msg="Payment Required", hdrs={}, fp=None
@@ -281,7 +281,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match="Insufficient credits.*402"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_http_429_gives_rate_limit_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
@@ -290,7 +290,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match="Rate limit.*429"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_http_500_gives_generic_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=500, msg="Internal Server Error", hdrs={}, fp=None
@@ -299,7 +299,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match="HTTP 500"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_ssl_error_gives_actionable_message(self, mock_urlopen):
         """SSL errors produce a message mentioning Zscaler/proxy."""
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
@@ -307,7 +307,7 @@ class TestDeepgramErrorHandling:
         with pytest.raises(TranscriptionError, match="SSL.*Zscaler"):
             t.transcribe_batch(b"RIFF fake")
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_generic_exception_wrapped(self, mock_urlopen):
         mock_urlopen.side_effect = ConnectionError("Network unreachable")
         t = DeepgramTranscriber(api_key="key")
@@ -321,7 +321,7 @@ class TestDeepgramErrorHandling:
 
 
 class TestDeepgramConnectionTest:
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_successful_connection(self, mock_urlopen):
         mock_urlopen.return_value = _make_fake_response(
             {"projects": []}, status=200
@@ -331,7 +331,7 @@ class TestDeepgramConnectionTest:
         assert ok is True
         assert "valid" in msg.lower()
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_auth_failure(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
@@ -341,7 +341,7 @@ class TestDeepgramConnectionTest:
         assert ok is False
         assert "401" in msg
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_connection_error(self, mock_urlopen):
         mock_urlopen.side_effect = ConnectionError("timeout")
         t = DeepgramTranscriber(api_key="key")
@@ -349,7 +349,7 @@ class TestDeepgramConnectionTest:
         assert ok is False
         assert "timeout" in msg.lower()
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_ssl_error_in_connection_test(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("certificate_verify_failed")
         t = DeepgramTranscriber(api_key="key")
@@ -357,7 +357,7 @@ class TestDeepgramConnectionTest:
         assert ok is False
         assert "ssl" in msg.lower()
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_connection_test_url(self, mock_urlopen):
         """Connection test uses the /projects endpoint."""
         mock_urlopen.return_value = _make_fake_response({"projects": []})
@@ -368,7 +368,7 @@ class TestDeepgramConnectionTest:
         req = call_args[0][0]
         assert "/projects" in req.full_url
 
-    @patch("tts_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_connection_test_auth_header(self, mock_urlopen):
         """Connection test sends correct Authorization header."""
         mock_urlopen.return_value = _make_fake_response({"projects": []})
@@ -485,8 +485,8 @@ class TestDeepgramStreaming:
 class TestFactoryDeepgram:
     def test_factory_creates_deepgram_transcriber(self):
         """create_transcriber routes engine='deepgram' correctly."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         class FakeSecretStore:
             def get_api_key(self, provider):
@@ -502,8 +502,8 @@ class TestFactoryDeepgram:
 
     def test_factory_deepgram_no_secret_store(self):
         """create_transcriber with no secret_store gives empty API key."""
-        from tts_app.settings_store import AppSettings
-        from tts_app.transcriber.factory import create_transcriber
+        from stt_app.settings_store import AppSettings
+        from stt_app.transcriber.factory import create_transcriber
 
         with pytest.raises(TranscriptionError, match="API key is missing"):
             settings = AppSettings(engine="deepgram")
@@ -517,24 +517,24 @@ class TestFactoryDeepgram:
 
 class TestSettingsStoreDeepgram:
     def test_has_deepgram_key_default_false(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings()
         assert s.has_deepgram_key is False
 
     def test_has_deepgram_key_from_dict(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"has_deepgram_key": True})
         assert s.has_deepgram_key is True
 
     def test_deepgram_in_valid_engines(self):
-        from tts_app.config import VALID_ENGINES
+        from stt_app.config import VALID_ENGINES
 
         assert "deepgram" in VALID_ENGINES
 
     def test_deepgram_engine_validated(self):
-        from tts_app.settings_store import AppSettings
+        from stt_app.settings_store import AppSettings
 
         s = AppSettings.from_dict({"engine": "deepgram"})
         assert s.engine == "deepgram"

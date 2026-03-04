@@ -983,7 +983,7 @@ class SettingsDialog(QtWidgets.QDialog):
         worker = threading.Thread(
             target=self._run_connection_test_worker,
             args=(test_id, tester),
-            name="tts_app_settings_connection_test",
+            name="stt_app_settings_connection_test",
             daemon=True,
         )
         self._active_connection_test_thread = worker
@@ -1307,7 +1307,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         threading.Thread(
             target=_run,
-            name="tts_app_import_file_transcription",
+            name="stt_app_import_file_transcription",
             daemon=True,
         ).start()
 

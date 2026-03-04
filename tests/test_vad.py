@@ -1,6 +1,6 @@
 import numpy as np
 
-from tts_app.vad import EnergyVad
+from stt_app.vad import EnergyVad
 
 
 def test_vad_detects_speech_then_silence_stop():

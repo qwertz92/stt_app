@@ -1,6 +1,6 @@
-# NVIDIA Parakeet — Evaluation for tts_app
+# NVIDIA Parakeet — Evaluation for stt_app
 
-This document summarizes our evaluation of NVIDIA's Parakeet ASR models for potential integration into tts_app.
+This document summarizes our evaluation of NVIDIA's Parakeet ASR models for potential integration into stt_app.
 
 ## Current project status
 
@@ -92,7 +92,7 @@ This section is intentionally kept as a historical/technical reference only. It 
 
 If NVIDIA GPU usage becomes a priority (e.g. power users, server deployment), Parakeet could be added as an **optional** engine:
 
-1. **New transcriber provider**: `src/tts_app/transcriber/nemo_provider.py` implementing the `ITranscriber` interface.
+1. **New transcriber provider**: `src/stt_app/transcriber/nemo_provider.py` implementing the `ITranscriber` interface.
 2. **Optional dependency group**: `uv sync --group nemo` to install NeMo/PyTorch only when needed.
 3. **GPU detection**: Check for CUDA availability at engine selection time, show clear error if no GPU.
 4. **Config changes**: Add `"nemo"` to `VALID_ENGINES`, Parakeet models to a separate model map.

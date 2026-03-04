@@ -3,8 +3,8 @@ import wave
 
 import pytest
 
-from tts_app.transcriber.base import TranscriptionError
-from tts_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
 
 class Segment:

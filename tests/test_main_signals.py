@@ -2,7 +2,7 @@ import signal
 
 from PySide6 import QtCore, QtWidgets
 
-from tts_app.main import _install_signal_handlers, _create_tray_icon
+from stt_app.main import _install_signal_handlers, _create_tray_icon
 
 
 def test_install_signal_handlers_registers_int_and_term(monkeypatch):

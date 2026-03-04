@@ -1,4 +1,4 @@
-# tts_app — Voice Dictation for Windows 11
+# stt_app — Voice Dictation for Windows 11
 
 Press a hotkey, speak, and the transcribed text appears at your cursor — in any application.
 

@@ -14,7 +14,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - `huggingface_hub` may warn on Windows if symlinks are not available. This is non-fatal; enabling Windows Developer Mode improves cache efficiency.
 - Unit tests with mocks do not reveal OS-level failures like UIPI/SendInput blocking; smoke/runtime checks are required for those paths.
 - Existing user settings can preserve old defaults; schema migrations must explicitly rewrite old default values when behavior should change globally.
-- `uv run tts-app` executes the installed package entrypoint; after code edits, run `uv sync --group dev` to ensure entrypoint uses latest code.
+- `uv run stt-app` executes the installed package entrypoint; after code edits, run `uv sync --group dev` to ensure entrypoint uses latest code.
 - Controller now keeps hotkey registration errors visible (no immediate idle overwrite), so registration issues are surfaced to users.
 - Hotkey registration errors now include Win32 error details (e.g., 1409 already registered).
 - Default hotkey reverted to `Ctrl+Alt+Space` on user request.
@@ -209,7 +209,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-03-02
 
-- **Settings dialog clarity: debug WAV location shown inline.** Added a persistent hint below `Save last WAV for debugging` that displays the exact file path (`%APPDATA%\\tts_app\\last_recording.wav`) and that it is overwritten on each recording.
+- **Settings dialog clarity: debug WAV location shown inline.** Added a persistent hint below `Save last WAV for debugging` that displays the exact file path (`%APPDATA%\\stt_app\\last_recording.wav`) and that it is overwritten on each recording.
 - **Engine-aware language control in settings UI.**
   - Added centralized language metadata constants in `config.py` (`LANGUAGE_MODE_LABELS`, `ENGINE_LANGUAGE_MODES`, `LOCAL_ENGLISH_ONLY_MODELS`).
   - Language combo is now rebuilt dynamically based on selected engine/mode/model.
@@ -291,7 +291,7 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-03-03 — Session 6: ENOENT hardening + key-storage fallback + History UX
 
-- **Remote ENOENT hardening:** AssemblyAI and Groq providers now create temporary WAV files in app-controlled `%APPDATA%\tts_app\temp` instead of relying on system TEMP/TMP defaults. This avoids failures on locked-down corporate machines with broken/missing temp env paths.
+- **Remote ENOENT hardening:** AssemblyAI and Groq providers now create temporary WAV files in app-controlled `%APPDATA%\stt_app\temp` instead of relying on system TEMP/TMP defaults. This avoids failures on locked-down corporate machines with broken/missing temp env paths.
 - **Clearer missing-file diagnostics:** Added explicit `FileNotFoundError` handling in remote providers and controller worker path so users get actionable messages instead of opaque `Unexpected transcription error`.
 - **API key storage fallback option:** Added settings flag `allow_insecure_key_storage` (schema v11). When enabled, `KeyringSecretStore` falls back to plain-text local storage (`insecure_api_keys.json`) if keyring is unavailable.
 - **Immediate key storage feedback:** Settings save now validates that key writes succeeded and shows clear status/warning in the Remote tab.
