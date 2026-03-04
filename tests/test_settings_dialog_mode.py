@@ -18,9 +18,14 @@ class _FakeSettingsStore:
 
 
 class _FakeSecretStore:
+    def __init__(self):
+        self._values: dict[str, str] = {}
+
     def set_api_key(self, provider: str, key: str) -> None:
-        _ = provider
-        _ = key
+        self._values[provider] = key
+
+    def get_api_key(self, provider: str) -> str | None:
+        return self._values.get(provider)
 
 
 class _FakeLogger:

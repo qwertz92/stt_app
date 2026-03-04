@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -74,6 +75,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._history_store = TranscriptHistoryStore()
         self._loaded_settings = self._settings_store.load()
         self._connection_test_id = 0
+        self._connection_test_details: dict[int, dict[str, tuple[bool, str]]] = {}
+        self._provider_key_edits: dict[str, QtWidgets.QLineEdit] = {}
+        self._provider_status_labels: dict[str, QtWidgets.QLabel] = {}
+        self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
+        self._provider_test_history: dict[str, tuple[bool, str, str]] = {}
         self._active_connection_test_thread: threading.Thread | None = None
         self._history_copy_feedback_timer = QtCore.QTimer(self)
         self._history_copy_feedback_timer.setSingleShot(True)
@@ -463,32 +469,58 @@ class SettingsDialog(QtWidgets.QDialog):
         # API keys
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
         provider_layout = QtWidgets.QFormLayout(provider_box)
-
-        self.assemblyai_key_edit = QtWidgets.QLineEdit()
-        self.groq_key_edit = QtWidgets.QLineEdit()
-        self.openai_key_edit = QtWidgets.QLineEdit()
-        self.deepgram_key_edit = QtWidgets.QLineEdit()
-        for field in (
-            self.assemblyai_key_edit,
-            self.groq_key_edit,
-            self.openai_key_edit,
-            self.deepgram_key_edit,
-        ):
-            field.setEchoMode(QtWidgets.QLineEdit.Password)
-            field.setPlaceholderText("Stored via keyring (Credential Manager)")
-            field.textChanged.connect(
-                lambda _text: self._update_import_engine_note()
+        provider_rows = (
+            ("assemblyai", "AssemblyAI"),
+            ("groq", "Groq"),
+            ("openai", "OpenAI"),
+            ("deepgram", "Deepgram"),
+        )
+        for provider, title in provider_rows:
+            key_field = QtWidgets.QLineEdit()
+            key_field.setEchoMode(QtWidgets.QLineEdit.Password)
+            key_field.setPlaceholderText(
+                "Enter new key to update; leave empty to keep stored key."
+            )
+            key_field.textChanged.connect(
+                lambda _text, p=provider: self._on_provider_key_changed(p)
             )
 
-        provider_layout.addRow("AssemblyAI", self.assemblyai_key_edit)
-        provider_layout.addRow("Groq", self.groq_key_edit)
-        provider_layout.addRow("OpenAI", self.openai_key_edit)
-        provider_layout.addRow("Deepgram", self.deepgram_key_edit)
+            status_badge = QtWidgets.QLabel("Not configured")
+            status_badge.setAlignment(
+                QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter
+            )
+            status_badge.setMinimumWidth(190)
+            status_badge.setStyleSheet(
+                "padding: 2px 8px; border: 1px solid #bbb; border-radius: 9px;"
+                " color: #555; background: #f2f2f2;"
+            )
+
+            field_row_widget = QtWidgets.QWidget()
+            field_row = QtWidgets.QHBoxLayout(field_row_widget)
+            field_row.setContentsMargins(0, 0, 0, 0)
+            field_row.setSpacing(8)
+            field_row.addWidget(key_field, 1)
+            field_row.addWidget(status_badge, 0)
+            provider_layout.addRow(title, field_row_widget)
+
+            last_test_label = QtWidgets.QLabel("Last test: never.")
+            last_test_label.setWordWrap(True)
+            last_test_label.setStyleSheet("color: #666;")
+            provider_layout.addRow("", last_test_label)
+
+            self._provider_key_edits[provider] = key_field
+            self._provider_status_labels[provider] = status_badge
+            self._provider_last_test_labels[provider] = last_test_label
+
+        self.assemblyai_key_edit = self._provider_key_edits["assemblyai"]
+        self.groq_key_edit = self._provider_key_edits["groq"]
+        self.openai_key_edit = self._provider_key_edits["openai"]
+        self.deepgram_key_edit = self._provider_key_edits["deepgram"]
         provider_note = QtWidgets.QLabel(
-            "Keys are saved via keyring (Windows Credential Manager preferred)."
+            "Status badges show where each key is currently sourced from."
         )
         provider_note.setStyleSheet("color: #555;")
-        provider_layout.addRow(provider_note)
+        provider_layout.addRow("", provider_note)
 
         self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
             "Allow insecure local API key fallback (plain text)"
@@ -507,15 +539,33 @@ class SettingsDialog(QtWidgets.QDialog):
         self.key_storage_status_label.setStyleSheet("color: #555;")
         provider_layout.addRow(self.key_storage_status_label)
 
+        self.test_conn_target_combo = QtWidgets.QComboBox()
+        self.test_conn_target_combo.addItem(
+            "All configured providers (Recommended)",
+            "all-configured",
+        )
+        self.test_conn_target_combo.addItem("AssemblyAI only", "assemblyai")
+        self.test_conn_target_combo.addItem("Groq only", "groq")
+        self.test_conn_target_combo.addItem("OpenAI only", "openai")
+        self.test_conn_target_combo.addItem("Deepgram only", "deepgram")
+        self.test_conn_target_combo.setToolTip(
+            "Choose which provider to test. "
+            "This is independent from the transcription engine selection."
+        )
+        provider_layout.addRow("Connection Target", self.test_conn_target_combo)
+
         # Test connection
-        self.test_conn_button = QtWidgets.QPushButton("Test Connection")
+        self.test_conn_button = QtWidgets.QPushButton("Run Connection Test")
         self.test_conn_button.setToolTip(
-            "Test the selected remote provider's API key and network connectivity."
+            "Test one provider or all configured providers. "
+            "Typed key input is preferred over stored key."
         )
         self.test_conn_button.clicked.connect(self._test_connection)
         self.test_conn_result = QtWidgets.QLabel("")
         self.test_conn_result.setWordWrap(True)
         provider_layout.addRow(self.test_conn_button, self.test_conn_result)
+
+        self._refresh_provider_key_statuses()
 
         layout.addWidget(provider_box)
         layout.addStretch(1)
@@ -918,17 +968,123 @@ class SettingsDialog(QtWidgets.QDialog):
         """React to model directory changes — update cached model info."""
         self._refresh_local_model_views()
 
+    def _on_provider_key_changed(self, provider: str) -> None:
+        self._refresh_provider_key_status(provider)
+        self._update_import_engine_note()
+
+    def _provider_label(self, provider: str) -> str:
+        labels = {
+            "assemblyai": "AssemblyAI",
+            "groq": "Groq",
+            "openai": "OpenAI",
+            "deepgram": "Deepgram",
+        }
+        return labels.get(provider, provider)
+
+    def _stored_key_source(self, provider: str) -> str:
+        source_getter = getattr(self._secret_store, "get_api_key_source", None)
+        if callable(source_getter):
+            try:
+                value = str(source_getter(provider) or "none").strip().lower()
+                return value or "none"
+            except Exception:
+                pass
+
+        key_getter = getattr(self._secret_store, "get_api_key", None)
+        if not callable(key_getter):
+            return "none"
+        try:
+            return "keyring" if key_getter(provider) else "none"
+        except Exception:
+            return "none"
+
+    def _set_provider_status_badge(
+        self,
+        provider: str,
+        text: str,
+        *,
+        text_color: str,
+        background: str,
+        border: str,
+    ) -> None:
+        badge = self._provider_status_labels.get(provider)
+        if badge is None:
+            return
+        badge.setText(text)
+        badge.setStyleSheet(
+            "padding: 2px 8px; border-radius: 9px; "
+            f"border: 1px solid {border}; "
+            f"color: {text_color}; "
+            f"background: {background};"
+        )
+
+    def _refresh_provider_key_status(self, provider: str) -> None:
+        key_field = self._provider_key_edits.get(provider)
+        if key_field is None:
+            return
+
+        typed_value = key_field.text().strip()
+        if typed_value:
+            self._set_provider_status_badge(
+                provider,
+                "Unsaved input",
+                text_color="#0d47a1",
+                background="#e3f2fd",
+                border="#90caf9",
+            )
+            return
+
+        source = self._stored_key_source(provider)
+        if source in {"keyring", "legacy-keyring"}:
+            label = "Stored securely"
+            if source == "legacy-keyring":
+                label = "Stored securely (legacy)"
+            self._set_provider_status_badge(
+                provider,
+                label,
+                text_color="#1b5e20",
+                background="#e8f5e9",
+                border="#a5d6a7",
+            )
+            return
+
+        if source == "insecure":
+            self._set_provider_status_badge(
+                provider,
+                "Stored insecure fallback",
+                text_color="#7a4a00",
+                background="#fff3e0",
+                border="#ffcc80",
+            )
+            return
+
+        if source == "insecure-disabled":
+            self._set_provider_status_badge(
+                provider,
+                "Stored insecure (disabled)",
+                text_color="#7a4a00",
+                background="#fff8e1",
+                border="#ffe082",
+            )
+            return
+
+        self._set_provider_status_badge(
+            provider,
+            "Not configured",
+            text_color="#555",
+            background="#f2f2f2",
+            border="#bbb",
+        )
+
+    def _refresh_provider_key_statuses(self) -> None:
+        for provider in self._provider_key_edits:
+            self._refresh_provider_key_status(provider)
+
     def _import_engine_has_api_key(self, engine: str) -> bool:
         engine_name = str(engine or "").strip().lower()
         if engine_name == DEFAULT_ENGINE:
             return True
-        field_map = {
-            "assemblyai": self.assemblyai_key_edit,
-            "groq": self.groq_key_edit,
-            "openai": self.openai_key_edit,
-            "deepgram": self.deepgram_key_edit,
-        }
-        key_field = field_map.get(engine_name)
+        key_field = self._provider_key_edits.get(engine_name)
         if key_field is None:
             return False
         return bool(self._resolve_api_key(engine_name, key_field))
@@ -946,48 +1102,81 @@ class SettingsDialog(QtWidgets.QDialog):
         if self._import_engine_has_api_key(engine):
             self.import_engine_note.setStyleSheet("color: #555;")
             self.import_engine_note.setText(
-                f"Import transcription will use the {engine} service."
+                f"Import transcription will use {self._provider_label(engine)}."
             )
             return
         self.import_engine_note.setStyleSheet("color: #b71c1c;")
         self.import_engine_note.setText(
-            f"No API key configured for {engine}. Set it in the Remote tab."
+            f"No API key configured for {self._provider_label(engine)}."
         )
 
     def _test_connection(self) -> None:
-        """Test connectivity for the selected remote provider."""
-        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-
-        if engine == DEFAULT_ENGINE:
+        """Test connectivity for one provider or all configured providers."""
+        target = str(
+            self.test_conn_target_combo.currentData() or "all-configured"
+        )
+        providers = self._providers_for_connection_target(target)
+        if not providers:
             self._set_test_connection_feedback(
-                "Local provider \u2014 no connection test needed.",
-                "#555",
+                "No configured provider keys found. Enter a key first.",
+                "#b71c1c",
             )
             return
 
-        tester, error_text = self._build_connection_tester(engine)
-        if tester is None:
-            if error_text:
-                self._set_test_connection_feedback(error_text, "#b71c1c")
-            else:
+        for provider in providers:
+            key_field = self._provider_key_edits.get(provider)
+            if key_field is None:
                 self._set_test_connection_feedback(
-                    f"Connection test not yet implemented for {engine}.",
-                    "#555",
+                    f"Unsupported provider: {provider}",
+                    "#b71c1c",
                 )
-            return
+                return
+            if not self._resolve_api_key(provider, key_field):
+                self._set_test_connection_feedback(
+                    f"No API key entered for {self._provider_label(provider)}.",
+                    "#b71c1c",
+                )
+                return
 
         self._connection_test_id += 1
         test_id = self._connection_test_id
         self.test_conn_button.setEnabled(False)
-        self._set_test_connection_feedback("Testing...", "#555")
+        self.test_conn_target_combo.setEnabled(False)
+        if len(providers) == 1:
+            provider_label = self._provider_label(providers[0])
+            self._set_test_connection_feedback(
+                f"Testing {provider_label}...",
+                "#555",
+            )
+        else:
+            self._set_test_connection_feedback(
+                "Testing all configured providers...",
+                "#555",
+            )
         worker = threading.Thread(
             target=self._run_connection_test_worker,
-            args=(test_id, tester),
+            args=(test_id, tuple(providers)),
             name="stt_app_settings_connection_test",
             daemon=True,
         )
         self._active_connection_test_thread = worker
         worker.start()
+
+    def _providers_for_connection_target(self, target: str) -> list[str]:
+        normalized = str(target or "").strip().lower()
+        remote_providers = ("assemblyai", "groq", "openai", "deepgram")
+        if normalized == "all-configured":
+            configured: list[str] = []
+            for provider in remote_providers:
+                key_field = self._provider_key_edits.get(provider)
+                if key_field is None:
+                    continue
+                if self._resolve_api_key(provider, key_field):
+                    configured.append(provider)
+            return configured
+        if normalized in remote_providers:
+            return [normalized]
+        return []
 
     def _build_connection_tester(self, engine: str):
         if engine == "assemblyai":
@@ -1053,21 +1242,89 @@ class SettingsDialog(QtWidgets.QDialog):
         api_key = key_field.text().strip()
         if api_key:
             return api_key
-        return self._secret_store.get_api_key(provider) or ""
-
-    def _run_connection_test_worker(self, test_id: int, tester) -> None:
+        key_getter = getattr(self._secret_store, "get_api_key", None)
+        if not callable(key_getter):
+            return ""
         try:
-            ok, msg = tester()
-        except Exception as exc:
-            ok, msg = False, f"Test failed: {exc}"
-        self.connection_test_finished.emit(test_id, bool(ok), str(msg))
+            return str(key_getter(provider) or "")
+        except Exception:
+            return ""
+
+    def _run_connection_test_worker(
+        self,
+        test_id: int,
+        providers: tuple[str, ...],
+    ) -> None:
+        results: dict[str, tuple[bool, str]] = {}
+        for provider in providers:
+            tester, error_text = self._build_connection_tester(provider)
+            if tester is None:
+                if error_text:
+                    results[provider] = (False, error_text)
+                else:
+                    results[provider] = (
+                        False,
+                        f"Connection test not implemented for {provider}.",
+                    )
+                continue
+            try:
+                ok, msg = tester()
+            except Exception as exc:
+                ok, msg = False, f"Test failed: {exc}"
+            results[provider] = (bool(ok), str(msg))
+
+        self._connection_test_details[test_id] = results
+        success_count = sum(1 for provider_ok, _ in results.values() if provider_ok)
+        total_count = len(results)
+        all_ok = total_count > 0 and success_count == total_count
+        if total_count <= 1:
+            if total_count == 1:
+                only_provider = next(iter(results))
+                summary = results[only_provider][1]
+            else:
+                summary = "No providers tested."
+        else:
+            summary = f"{success_count}/{total_count} provider tests passed."
+        self.connection_test_finished.emit(test_id, all_ok, summary)
 
     @QtCore.Slot(int, bool, str)
     def _on_connection_test_finished(self, test_id: int, ok: bool, msg: str) -> None:
+        details = self._connection_test_details.pop(test_id, {})
         if test_id != self._connection_test_id:
             return
         self.test_conn_button.setEnabled(True)
+        self.test_conn_target_combo.setEnabled(True)
         self._active_connection_test_thread = None
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        for provider, (provider_ok, provider_msg) in details.items():
+            self._provider_test_history[provider] = (
+                bool(provider_ok),
+                str(provider_msg),
+                timestamp,
+            )
+            last_label = self._provider_last_test_labels.get(provider)
+            if last_label is None:
+                continue
+            marker = "\u2713" if provider_ok else "\u2717"
+            color = "#1b5e20" if provider_ok else "#b71c1c"
+            last_label.setStyleSheet(f"color: {color};")
+            last_label.setText(
+                f"Last test ({timestamp}): {marker} {provider_msg}"
+            )
+
+        if len(details) > 1:
+            parts = []
+            for provider in ("assemblyai", "groq", "openai", "deepgram"):
+                if provider not in details:
+                    continue
+                provider_ok, _provider_msg = details[provider]
+                marker = "OK" if provider_ok else "Fail"
+                parts.append(f"{self._provider_label(provider)}: {marker}")
+            color = "#1b5e20" if ok else "#b26a00"
+            joined = " | ".join(parts)
+            self._set_test_connection_feedback(f"{msg} {joined}", color)
+            return
+
         if ok:
             self._set_test_connection_feedback(f"\u2713 {msg}", "#1b5e20")
         else:
@@ -1120,30 +1377,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(self.groq_model_combo, settings.groq_model)
         self._select_combo_data(self.openai_model_combo, settings.openai_model)
+        self._select_combo_data(self.test_conn_target_combo, "all-configured")
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_engine_note()
 
-        if settings.has_openai_key:
-            self.openai_key_edit.setPlaceholderText(
-                "Stored (leave empty to keep)"
-            )
-        if settings.has_deepgram_key:
-            self.deepgram_key_edit.setPlaceholderText(
-                "Stored (leave empty to keep)"
-            )
-        if settings.has_assemblyai_key:
-            self.assemblyai_key_edit.setPlaceholderText(
-                "Stored (leave empty to keep)"
-            )
-        if settings.has_groq_key:
-            self.groq_key_edit.setPlaceholderText(
-                "Stored (leave empty to keep)"
-            )
-
         self._update_engine_indicator()
         self._refresh_history_list()
         self._apply_secret_store_options()
+        self._refresh_provider_key_statuses()
 
     def _select_combo_data(
         self, combo: QtWidgets.QComboBox, value: str
@@ -1288,7 +1530,8 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         if not self._import_engine_has_api_key(import_engine):
             self.import_result_label.setText(
-                f"Failed: no API key configured for {import_engine}."
+                "Failed: no API key configured for "
+                f"{self._provider_label(import_engine)}."
             )
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             self.import_file_button.setEnabled(True)
@@ -1357,13 +1600,15 @@ class SettingsDialog(QtWidgets.QDialog):
         if enabled:
             self.key_storage_status_label.setStyleSheet("color: #b26a00;")
             self.key_storage_status_label.setText(
-                "Warning: insecure key fallback is enabled (plain-text local file)."
+                "Insecure key fallback is enabled. "
+                "If secure storage fails, keys are saved in plain text."
             )
-        elif not self.key_storage_status_label.text().strip():
+        elif not self.key_storage_status_label.text().startswith("Could not store"):
             self.key_storage_status_label.setStyleSheet("color: #555;")
             self.key_storage_status_label.setText(
                 "Credential Manager only (recommended)."
             )
+        self._refresh_provider_key_statuses()
 
     def _build_current_settings(
         self,
@@ -1491,10 +1736,14 @@ class SettingsDialog(QtWidgets.QDialog):
             if answer != QtWidgets.QMessageBox.Yes:
                 return
 
-        has_openai_key = self._loaded_settings.has_openai_key
-        has_deepgram_key = self._loaded_settings.has_deepgram_key
-        has_assemblyai_key = self._loaded_settings.has_assemblyai_key
-        has_groq_key = self._loaded_settings.has_groq_key
+        has_openai_key = bool(self._resolve_api_key("openai", self.openai_key_edit))
+        has_deepgram_key = bool(
+            self._resolve_api_key("deepgram", self.deepgram_key_edit)
+        )
+        has_assemblyai_key = bool(
+            self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
+        )
+        has_groq_key = bool(self._resolve_api_key("groq", self.groq_key_edit))
 
         self._apply_secret_store_options()
         key_storage_errors: list[str] = []
@@ -1507,25 +1756,37 @@ class SettingsDialog(QtWidgets.QDialog):
         if openai_value:
             try:
                 self._secret_store.set_api_key("openai", openai_value)
-                has_openai_key = bool(self._resolve_api_key("openai", self.openai_key_edit))
+                self.openai_key_edit.clear()
+                has_openai_key = bool(
+                    self._resolve_api_key("openai", self.openai_key_edit)
+                )
             except Exception as exc:
                 key_storage_errors.append(f"OpenAI: {exc}")
         if deepgram_value:
             try:
                 self._secret_store.set_api_key("deepgram", deepgram_value)
-                has_deepgram_key = bool(self._resolve_api_key("deepgram", self.deepgram_key_edit))
+                self.deepgram_key_edit.clear()
+                has_deepgram_key = bool(
+                    self._resolve_api_key("deepgram", self.deepgram_key_edit)
+                )
             except Exception as exc:
                 key_storage_errors.append(f"Deepgram: {exc}")
         if assemblyai_value:
             try:
                 self._secret_store.set_api_key("assemblyai", assemblyai_value)
-                has_assemblyai_key = bool(self._resolve_api_key("assemblyai", self.assemblyai_key_edit))
+                self.assemblyai_key_edit.clear()
+                has_assemblyai_key = bool(
+                    self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
+                )
             except Exception as exc:
                 key_storage_errors.append(f"AssemblyAI: {exc}")
         if groq_value:
             try:
                 self._secret_store.set_api_key("groq", groq_value)
-                has_groq_key = bool(self._resolve_api_key("groq", self.groq_key_edit))
+                self.groq_key_edit.clear()
+                has_groq_key = bool(
+                    self._resolve_api_key("groq", self.groq_key_edit)
+                )
             except Exception as exc:
                 key_storage_errors.append(f"Groq: {exc}")
 
@@ -1540,6 +1801,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.key_storage_status_label.setStyleSheet("color: #1b5e20;")
             if any((openai_value, deepgram_value, assemblyai_value, groq_value)):
                 self.key_storage_status_label.setText("API key storage check: OK")
+        self._refresh_provider_key_statuses()
+        self._update_import_engine_note()
 
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent

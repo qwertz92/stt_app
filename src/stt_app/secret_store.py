@@ -14,6 +14,8 @@ class SecretStore(Protocol):
 
     def get_api_key(self, provider: str) -> str | None: ...
 
+    def get_api_key_source(self, provider: str) -> str: ...
+
     def delete_api_key(self, provider: str) -> None: ...
 
     def has_api_key(self, provider: str) -> bool: ...
@@ -135,6 +137,24 @@ class KeyringSecretStore:
         if self._insecure_fallback_enabled:
             return self._get_insecure_api_key(provider)
         return None
+
+    def get_api_key_source(self, provider: str) -> str:
+        value = self._get_keyring_value(self._service_name, provider)
+        if value is not None:
+            return "keyring"
+
+        for legacy_name in self._legacy_service_names:
+            legacy_value = self._get_keyring_value(legacy_name, provider)
+            if legacy_value is not None:
+                return "legacy-keyring"
+
+        insecure_value = self._get_insecure_api_key(provider)
+        if insecure_value is not None:
+            if self._insecure_fallback_enabled:
+                return "insecure"
+            return "insecure-disabled"
+
+        return "none"
 
     def delete_api_key(self, provider: str) -> None:
         for service_name in (self._service_name, *self._legacy_service_names):

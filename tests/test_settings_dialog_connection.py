@@ -22,14 +22,28 @@ class _FakeSettingsStore:
 class _FakeSecretStore:
     def __init__(self, values: dict[str, str] | None = None):
         self._values = dict(values or {})
+        self._sources = {
+            provider: ("keyring" if value else "none")
+            for provider, value in self._values.items()
+        }
         self.set_calls: list[tuple[str, str]] = []
+        self._insecure_enabled = False
 
     def get_api_key(self, provider: str) -> str | None:
         return self._values.get(provider)
 
+    def get_api_key_source(self, provider: str) -> str:
+        return self._sources.get(provider, "none")
+
     def set_api_key(self, provider: str, api_key: str) -> None:
         self.set_calls.append((provider, api_key))
         self._values[provider] = api_key
+        self._sources[provider] = (
+            "insecure" if self._insecure_enabled else "keyring"
+        )
+
+    def set_insecure_fallback_enabled(self, enabled: bool) -> None:
+        self._insecure_enabled = bool(enabled)
 
 
 class _FakeLogger:
@@ -69,8 +83,8 @@ def test_engine_combo_hides_unimplemented_providers():
 
 def test_test_connection_missing_key_shows_error():
     dialog, app, _secret_store = _make_dialog(AppSettings(engine="assemblyai"))
-    engine_index = dialog.engine_combo.findData("assemblyai")
-    dialog.engine_combo.setCurrentIndex(engine_index)
+    target_index = dialog.test_conn_target_combo.findData("assemblyai")
+    dialog.test_conn_target_combo.setCurrentIndex(target_index)
 
     dialog._test_connection()
 
@@ -101,9 +115,9 @@ def test_test_connection_runs_in_background_worker(monkeypatch):
         _FakeDeepgramTranscriber,
     )
 
-    dialog, app, _secret_store = _make_dialog(AppSettings(engine="deepgram"))
-    engine_index = dialog.engine_combo.findData("deepgram")
-    dialog.engine_combo.setCurrentIndex(engine_index)
+    dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
+    target_index = dialog.test_conn_target_combo.findData("deepgram")
+    dialog.test_conn_target_combo.setCurrentIndex(target_index)
     dialog.deepgram_key_edit.setText("dg-test-key")
 
     dialog._test_connection()
@@ -142,9 +156,9 @@ def test_openai_connection_runs_in_background_worker(monkeypatch):
         _FakeOpenAITranscriber,
     )
 
-    dialog, app, _secret_store = _make_dialog(AppSettings(engine="openai"))
-    engine_index = dialog.engine_combo.findData("openai")
-    dialog.engine_combo.setCurrentIndex(engine_index)
+    dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
+    target_index = dialog.test_conn_target_combo.findData("openai")
+    dialog.test_conn_target_combo.setCurrentIndex(target_index)
     dialog.openai_key_edit.setText("oa-key")
     model_index = dialog.openai_model_combo.findData("gpt-4o-transcribe")
     dialog.openai_model_combo.setCurrentIndex(model_index)
@@ -165,6 +179,73 @@ def test_stale_connection_result_is_ignored():
     dialog._on_connection_test_finished(1, True, "stale")
 
     assert dialog.test_conn_result.text() == "Testing..."
+    _ = app
+
+
+def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
+    import stt_app.transcriber.deepgram_provider as deepgram_provider_module
+    import stt_app.transcriber.openai_provider as openai_provider_module
+
+    class _FakeDeepgramTranscriber:
+        def __init__(self, api_key: str, language_mode: str = "auto") -> None:
+            self._api_key = api_key
+            self._language_mode = language_mode
+
+        def test_connection(self) -> tuple[bool, str]:
+            return True, "Deepgram OK"
+
+    class _FakeOpenAITranscriber:
+        def __init__(
+            self,
+            api_key: str,
+            language_mode: str = "auto",
+            model: str = "gpt-4o-mini-transcribe",
+        ) -> None:
+            self._api_key = api_key
+            self._language_mode = language_mode
+            self._model = model
+
+        def test_connection(self) -> tuple[bool, str]:
+            return True, "OpenAI OK"
+
+    monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        deepgram_provider_module,
+        "DeepgramTranscriber",
+        _FakeDeepgramTranscriber,
+    )
+    monkeypatch.setattr(
+        openai_provider_module,
+        "OpenAITranscriber",
+        _FakeOpenAITranscriber,
+    )
+
+    dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
+    dialog.openai_key_edit.setText("oa-key")
+    dialog.deepgram_key_edit.setText("dg-key")
+    all_index = dialog.test_conn_target_combo.findData("all-configured")
+    dialog.test_conn_target_combo.setCurrentIndex(all_index)
+
+    dialog._test_connection()
+
+    assert dialog.test_conn_button.isEnabled() is True
+    assert "provider tests passed" in dialog.test_conn_result.text()
+    assert "OpenAI: OK" in dialog.test_conn_result.text()
+    assert "Deepgram: OK" in dialog.test_conn_result.text()
+    assert "Last test (" in dialog._provider_last_test_labels["openai"].text()
+    assert "Last test (" in dialog._provider_last_test_labels["deepgram"].text()
+    _ = app
+
+
+def test_provider_badge_shows_insecure_storage_source():
+    dialog, app, secret_store = _make_dialog(
+        AppSettings(engine="local"),
+        {"openai": "stored-key"},
+    )
+    secret_store._sources["openai"] = "insecure"
+    dialog._refresh_provider_key_statuses()
+
+    assert "insecure" in dialog._provider_status_labels["openai"].text().lower()
     _ = app
 
 

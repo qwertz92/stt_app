@@ -68,6 +68,28 @@ def test_keyring_secret_store_reads_legacy_service_and_migrates():
     assert backend.get_password("tts-app-test", "openai") is None
 
 
+def test_keyring_secret_store_reports_source_variants(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = FakeKeyringBackend()
+    backend.set_password("stt-app-test", "openai", "secure")
+    backend.set_password("tts-app-test", "groq", "legacy")
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=("tts-app-test",),
+    )
+    store.set_insecure_fallback_enabled(False)
+    store._set_insecure_api_key("deepgram", "plain")
+
+    assert store.get_api_key_source("openai") == "keyring"
+    assert store.get_api_key_source("groq") == "legacy-keyring"
+    assert store.get_api_key_source("deepgram") == "insecure-disabled"
+
+    store.set_insecure_fallback_enabled(True)
+    assert store.get_api_key_source("deepgram") == "insecure"
+    assert store.get_api_key_source("assemblyai") == "none"
+
+
 def test_insecure_fallback_disabled_raises_on_set(tmp_path, monkeypatch):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     store = KeyringSecretStore(
