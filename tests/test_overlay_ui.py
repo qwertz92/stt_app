@@ -1,6 +1,6 @@
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
-from stt_app.config import OVERLAY_HEIGHT, OVERLAY_MAX_HEIGHT
+from stt_app.config import OVERLAY_HEIGHT, OVERLAY_INITIAL_DETAIL, OVERLAY_MAX_HEIGHT
 from stt_app.overlay_ui import OverlayUI
 
 
@@ -99,7 +99,7 @@ def test_overlay_clear_button_enabled_for_done_text_only():
     assert overlay._clear_button.isEnabled() is True
 
 
-def test_overlay_clear_button_hides_text_and_resets_compact_height():
+def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     overlay.set_state("Done", "word " * 900)
@@ -108,10 +108,26 @@ def test_overlay_clear_button_hides_text_and_resets_compact_height():
 
     overlay._clear_button.click()
 
-    assert overlay._detail_label.text() == ""
-    assert overlay._copy_button.isEnabled() is False
+    assert overlay._state_label.text() == "Idle"
+    assert overlay._detail_label.text() == OVERLAY_INITIAL_DETAIL
+    assert overlay._copy_button.isEnabled() is True
     assert overlay._clear_button.isEnabled() is False
     assert overlay.height() < large_height
+
+
+def test_overlay_clear_button_restores_last_idle_detail_text():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_state("Idle", "Hotkey: Ctrl+Shift+Space | Cancel: Ctrl+Shift+Esc")
+    overlay.set_state("Done", "transcribed text")
+
+    overlay._clear_button.click()
+
+    assert overlay._state_label.text() == "Idle"
+    assert (
+        overlay._detail_label.text()
+        == "Hotkey: Ctrl+Shift+Space | Cancel: Ctrl+Shift+Esc"
+    )
 
 
 def test_overlay_grows_for_long_text_but_caps_at_max_height():

@@ -49,6 +49,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._initial_position: QtCore.QPoint | None = None
         self._initial_corner: str | None = None
         self._compact_mode = False
+        self._idle_default_detail = OVERLAY_INITIAL_DETAIL
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -194,6 +195,8 @@ class OverlayUI(QtWidgets.QWidget):
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
 
     def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
+        if state == "Idle" and detail.strip():
+            self._idle_default_detail = detail
         self._state_label.setText(state)
         self._detail_label.setText(detail)
         has_detail = bool(detail.strip())
@@ -551,9 +554,5 @@ class OverlayUI(QtWidgets.QWidget):
     def clear_detail_text(self) -> None:
         if not self._detail_label.text().strip():
             return
-        self._detail_label.setText("")
-        self._reset_copy_button_feedback()
-        self._copy_button.setEnabled(False)
-        self._clear_button.setEnabled(False)
-        self._compact_mode = True
+        self.set_state("Idle", self._idle_default_detail, compact=True)
         self.ensure_compact_size()

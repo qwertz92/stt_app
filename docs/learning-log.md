@@ -298,3 +298,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Recording persistence hardening:** On transcription failure, if `save_last_wav` is enabled, the failed WAV payload is written again to `last_recording.wav` as a safety net.
 - **UI stability improvement:** Language note row now uses fixed height to avoid small layout jumps when switching engine/model/mode constraints.
 - **History import workflow upgrade:** Import now uses a two-step flow (select file first, then explicit start with confirmation), plus a quick action to reuse the last recorded file.
+
+## 2026-03-05
+
+- **Overlay Clear behavior aligned with initial onboarding hint:**
+  - `OverlayUI.clear_detail_text()` now restores the current idle instruction
+    text instead of clearing to an empty detail area.
+  - Idle detail is cached when `set_state("Idle", detail)` is called, so
+    `Clear` restores either the initial onboarding hint or the current
+    hotkey/cancel-hint idle text managed by the controller.
+  - Keeps compact overlay sizing behavior after clear so stale expanded size is
+    removed immediately.
+  - Updated overlay UI test coverage to assert Idle state + restored hint text
+    after pressing `Clear`.
