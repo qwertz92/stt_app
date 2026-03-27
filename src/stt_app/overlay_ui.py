@@ -323,7 +323,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._initial_corner = None
 
     def reset_position(self) -> None:
-        self.ensure_compact_size()
+        if not self._should_preserve_size_on_reset():
+            self.ensure_compact_size()
+        else:
+            self._update_detail_height()
         if self._initial_corner:
             self.move_to_corner(self._initial_corner)
             return
@@ -513,6 +516,11 @@ class OverlayUI(QtWidgets.QWidget):
     def _capture_initial_size(self, *, force: bool = False) -> None:
         if force or self._initial_size is None:
             self._initial_size = QtCore.QSize(self.size())
+
+    def _should_preserve_size_on_reset(self) -> bool:
+        return bool(self._detail_label.text().strip()) and (
+            self._state_label.text() in {"Done", "Error"}
+        )
 
     def ensure_compact_size(self) -> None:
         self._compact_mode = True

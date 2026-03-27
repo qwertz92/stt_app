@@ -218,18 +218,20 @@ def test_overlay_shrinks_after_long_transcription():
     assert overlay.height() >= OVERLAY_HEIGHT
 
 
-def test_overlay_reset_position_moves_back_to_initial():
+def test_overlay_reset_position_preserves_expanded_result_size():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     initial_size = overlay.size()
     overlay.set_state("Done", "word " * 900)
+    expanded_size = overlay.size()
+    assert expanded_size.height() > initial_size.height()
     overlay.set_initial_position(QtCore.QPoint(120, 80))
     overlay.move(340, 260)
 
     overlay.reset_position()
 
     assert overlay.pos() == QtCore.QPoint(120, 80)
-    assert overlay.size() == initial_size
+    assert overlay.size() == expanded_size
 
 
 def test_overlay_processing_restores_initial_height_after_long_text():
