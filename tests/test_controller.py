@@ -5,11 +5,9 @@ from PySide6 import QtGui, QtWidgets
 from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
-from stt_app.text_inserter import TextInsertionError
 
 from conftest import (
     FakeCapture,
-    FakeCaptureFails,
     FakeHotkeyManager,
     FakeHotkeyManagerAllFail,
     FakeOverlay,

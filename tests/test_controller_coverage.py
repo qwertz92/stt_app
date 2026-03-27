@@ -3,15 +3,10 @@ transcription_worker error branches, streaming abort, focus poll."""
 
 from __future__ import annotations
 
-import logging
 from unittest.mock import MagicMock
 
-from PySide6 import QtWidgets
-
 from stt_app.config import FALLBACK_HOTKEY
-from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
-from stt_app.text_inserter import TextInsertionError
 from stt_app.transcriber.base import TranscriptionError
 
 from conftest import (
@@ -22,8 +17,6 @@ from conftest import (
     FakeOverlay,
     FakeSettingsStore,
     FakeStreamingTranscriber,
-    FakeTextInserter,
-    FakeWindowFocusHelper,
     ImmediateExecutor,
     make_controller as _make_controller,
 )

@@ -883,7 +883,6 @@ class DictationController(QtCore.QObject):
         )
 
         settings = self._settings
-        download_failed = False
         try:
             self._download_model_for_preload(settings)
         except RuntimeError as exc:
@@ -892,7 +891,6 @@ class DictationController(QtCore.QObject):
                 return
             # Download failed but cached models may still be usable.
             self._logger.warning("Model download failed: %s", exc)
-            download_failed = True
 
         try:
             transcriber = self._get_or_create_transcriber(settings)

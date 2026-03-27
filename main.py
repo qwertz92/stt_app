@@ -6,7 +6,7 @@ SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 
-from stt_app.main import run
+from stt_app.main import run  # noqa: E402 - import requires adjusted sys.path
 
 
 if __name__ == "__main__":

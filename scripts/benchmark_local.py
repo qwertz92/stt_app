@@ -391,7 +391,7 @@ def _run_case(
     total_steps = runs + (1 if warmup else 0)
     step = 0
 
-    print(f"  Loading model...", flush=True)
+    print("  Loading model...", flush=True)
     model_start = time.perf_counter()
     model = WhisperModel(
         model_name,

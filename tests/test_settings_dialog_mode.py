@@ -1,4 +1,4 @@
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtWidgets
 
 from stt_app.app_paths import debug_audio_path
 from stt_app.settings_dialog import SettingsDialog

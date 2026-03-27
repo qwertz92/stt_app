@@ -385,7 +385,7 @@ def main() -> None:
     )
 
     print(f"\n{'=' * 60}")
-    print(f"  SUCCESS — Model imported!")
+    print("  SUCCESS — Model imported!")
     print(f"{'=' * 60}")
     print(f"  Model:    {model_name}")
     print(f"  Location: {snapshot_dir}")
@@ -394,10 +394,10 @@ def main() -> None:
     print(f"  1. In the app Settings, select model size: {model_name}")
     if target_dir:
         print(f"  2. Set 'Model Dir' in Settings to: {target_dir}")
-        print(f"  3. Enable 'Offline mode' in Settings.")
+        print("  3. Enable 'Offline mode' in Settings.")
     else:
-        print(f"  2. Enable 'Offline mode' in Settings (optional).")
-    print(f"\n  The app will now find the model automatically.")
+        print("  2. Enable 'Offline mode' in Settings (optional).")
+    print("\n  The app will now find the model automatically.")
 
 
 if __name__ == "__main__":

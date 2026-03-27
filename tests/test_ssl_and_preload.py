@@ -136,8 +136,6 @@ class TestCreateSSLContext:
 
 class TestInjectSystemTrustStore:
     def test_returns_false_when_truststore_not_installed(self):
-        import importlib
-
         with patch.dict("sys.modules", {"truststore": None}):
             # Force import failure by clearing cached module
             result = inject_system_trust_store()

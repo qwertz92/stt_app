@@ -364,3 +364,25 @@ Agents and developers: use this as a knowledge base for past issues and solution
     `.venv\Scripts\pytest.exe -q`.
   - The Windows `.venv` is uv-managed; `pytest.exe` is available, but
     `python -m pytest` / `python -m pip` are not reliable entry points there.
+
+- **Dependency baseline was refreshed and re-locked intentionally:**
+  - Updated direct app/dev/build dependencies to the latest verified PyPI
+    releases in `pyproject.toml`, including PySide6 6.11.0, numpy 2.4.3,
+    pywin32 311, AssemblyAI 0.59.0, Groq 1.1.2, pytest 9.0.2, and
+    hatchling 1.29.0.
+  - Kept `requirements-win.txt` and `requirements-dev-win.txt` aligned with
+    the same direct dependency set so the non-`uv` installation path does not
+    drift from the `pyproject.toml` source of truth.
+  - Rebuilt `uv.lock` with `uv lock --upgrade`, which restored the modern
+    `revision = 3` header and refreshed transitive dependencies such as
+    PySide6/shiboken, Hugging Face tooling, `onnxruntime`, and `protobuf`.
+  - Synced the Windows uv-managed `.venv` via `uv sync --group dev`, then
+    re-ran the full Windows suite successfully on the upgraded dependency
+    graph.
+
+- **Low-risk lint debt was cleaned up while verifying the new stack:**
+  - Removed unused imports and a dead local variable uncovered by `ruff`.
+  - Marked the root `main.py` bootstrap import as an intentional post-path
+    insertion import, instead of leaving it as a standing E402 violation.
+  - Normalized a few no-op f-strings in helper scripts so `ruff check`
+    passes cleanly on the current codebase.
