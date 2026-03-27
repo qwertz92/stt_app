@@ -311,3 +311,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
     removed immediately.
   - Updated overlay UI test coverage to assert Idle state + restored hint text
     after pressing `Clear`.
+
+## 2026-03-27
+
+- **Overlay compact reset now restores the real startup size:**
+  - `OverlayUI` now caches the actual initial compact window size after the
+    first idle render.
+  - All later compact transitions (`Idle`, `Listening`, `Processing`,
+    `Reset Pos`, `Clear`) reuse that cached size instead of recomputing a fresh
+    compact height from current layout state.
+  - This hardens the overlay against cases where it stayed visually enlarged
+    after a long transcript and then only changed state without returning to
+    the original startup footprint.
+  - Added focused overlay tests that assert exact restoration to the initial
+    size after `Clear`, `Reset Pos`, and a retry-style `Processing` transition.

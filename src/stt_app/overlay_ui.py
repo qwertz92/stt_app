@@ -48,6 +48,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
         self._initial_corner: str | None = None
+        self._initial_size: QtCore.QSize | None = None
         self._compact_mode = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
 
@@ -193,6 +194,7 @@ class OverlayUI(QtWidgets.QWidget):
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
+        self._capture_initial_size()
 
     def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
         if state == "Idle" and detail.strip():
@@ -372,6 +374,8 @@ class OverlayUI(QtWidgets.QWidget):
         reset extended window styles when updating stylesheets or flags.
         """
         super().showEvent(event)
+        if self._compact_mode and self._state_label.text() == "Idle":
+            self._capture_initial_size(force=True)
         if sys.platform == "win32":
             self._apply_noactivate_style()
 
@@ -470,7 +474,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_scroll.setFixedHeight(desired_detail_height)
 
         if self._compact_mode:
-            desired_window_height = self._compact_window_height()
+            desired_window_height = self._compact_target_size().height()
         else:
             desired_window_height = (
                 margins.top()
@@ -501,14 +505,20 @@ class OverlayUI(QtWidgets.QWidget):
             + OVERLAY_DETAIL_MIN_HEIGHT
         )
 
+    def _compact_target_size(self) -> QtCore.QSize:
+        if self._initial_size is not None:
+            return QtCore.QSize(self._initial_size)
+        return QtCore.QSize(OVERLAY_WIDTH, self._compact_window_height())
+
+    def _capture_initial_size(self, *, force: bool = False) -> None:
+        if force or self._initial_size is None:
+            self._initial_size = QtCore.QSize(self.size())
+
     def ensure_compact_size(self) -> None:
         self._compact_mode = True
-        target_height = max(
-            OVERLAY_HEIGHT,
-            min(OVERLAY_MAX_HEIGHT, self._compact_window_height()),
-        )
-        if self.width() != OVERLAY_WIDTH or self.height() != target_height:
-            self.resize(OVERLAY_WIDTH, target_height)
+        target_size = self._compact_target_size()
+        if self.size() != target_size:
+            self.resize(target_size)
         self._detail_scroll.setFixedHeight(OVERLAY_DETAIL_MIN_HEIGHT)
         self._update_detail_height()
 

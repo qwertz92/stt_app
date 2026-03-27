@@ -102,6 +102,7 @@ def test_overlay_clear_button_enabled_for_done_text_only():
 def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
+    initial_height = overlay.height()
     overlay.set_state("Done", "word " * 900)
     large_height = overlay.height()
     assert large_height <= OVERLAY_MAX_HEIGHT
@@ -112,6 +113,7 @@ def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     assert overlay._detail_label.text() == OVERLAY_INITIAL_DETAIL
     assert overlay._copy_button.isEnabled() is True
     assert overlay._clear_button.isEnabled() is False
+    assert overlay.height() == initial_height
     assert overlay.height() < large_height
 
 
@@ -204,12 +206,14 @@ def test_overlay_control_signals_are_emitted():
 def test_overlay_shrinks_after_long_transcription():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
+    initial_height = overlay.height()
 
     overlay.set_state("Done", "word " * 900)
     large_height = overlay.height()
     assert large_height <= OVERLAY_MAX_HEIGHT
 
     overlay.set_state("Listening", "Speak now.")
+    assert overlay.height() == initial_height
     assert overlay.height() < large_height
     assert overlay.height() >= OVERLAY_HEIGHT
 
@@ -217,12 +221,28 @@ def test_overlay_shrinks_after_long_transcription():
 def test_overlay_reset_position_moves_back_to_initial():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
+    initial_size = overlay.size()
+    overlay.set_state("Done", "word " * 900)
     overlay.set_initial_position(QtCore.QPoint(120, 80))
     overlay.move(340, 260)
 
     overlay.reset_position()
 
     assert overlay.pos() == QtCore.QPoint(120, 80)
+    assert overlay.size() == initial_size
+
+
+def test_overlay_processing_restores_initial_height_after_long_text():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    initial_height = overlay.height()
+
+    overlay.set_state("Done", "word " * 900)
+    assert overlay.height() > initial_height
+
+    overlay.set_state("Processing", "Retrying transcription...")
+
+    assert overlay.height() == initial_height
 
 
 def test_overlay_opacity_slider_emits_clamped_values():
