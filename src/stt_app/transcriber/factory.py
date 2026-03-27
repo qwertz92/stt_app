@@ -29,6 +29,7 @@ def create_transcriber(
         return AssemblyAITranscriber(
             api_key=api_key,
             language_mode=settings.language_mode,
+            model=settings.assemblyai_model,
         )
     if settings.engine == "groq":
         api_key = ""
@@ -55,6 +56,7 @@ def create_transcriber(
         return DeepgramTranscriber(
             api_key=api_key,
             language_mode=settings.language_mode,
+            model=settings.deepgram_model,
         )
 
     # Unknown engine — fall back to local provider.

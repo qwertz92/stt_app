@@ -14,6 +14,12 @@ Quality has the highest priority. Take as much time as needed.
 - Every change must pass all existing tests.
 - Document decisions here; document history in `docs/learning-log.md`.
 
+## Commit style
+
+- Use logical commits for distinct bugfix/feature/refactor units.
+- Match the existing history: short conventional subject line, blank line, then concise `-` bullet points.
+- Wrap commit body lines to readable width (roughly 72-80 chars) and include validation when relevant.
+
 ## Language rule
 
 **All project content must be in English.** Code, comments, docs, commits, error messages, UI labels, logs.
@@ -79,9 +85,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Tests
 
-Run: `uv run python -m pytest` or `python -m pytest`
-
-Current: 386 tests (385 + 1 Windows-only ctypes struct-size test expected to fail on Linux).
+- Preferred on Windows: `.venv\Scripts\pytest.exe -q`
+- Alternate when the environment supports it: `uv run python -m pytest` or `python -m pytest`
+- Note: the project uses a uv-managed Windows `.venv`; `pytest.exe` may be available even when `python -m pytest` or `python -m pip` is not.
 
 ## Known limitations
 

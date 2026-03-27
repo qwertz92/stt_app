@@ -26,6 +26,7 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
 
     class FakeSpeechModel:
         best = "best"
+        nano = "nano"
 
     class FakeTranscriptionConfig:
         def __init__(self, **kwargs):
@@ -294,6 +295,26 @@ class TestAssemblyAILanguageConfig:
         config = t._build_config()
         assert config.kwargs.get("language_detection") is True
         assert "language_code" not in config.kwargs
+
+    def test_batch_model_uses_nano_enum_when_selected(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(
+            api_key="key",
+            model="nano",
+            aai_module=fake_aai,
+        )
+        config = t._build_config()
+        assert config.kwargs.get("speech_model") == "nano"
+
+    def test_batch_model_uses_speech_models_for_named_model(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(
+            api_key="key",
+            model="universal-3-pro",
+            aai_module=fake_aai,
+        )
+        config = t._build_config()
+        assert config.kwargs.get("speech_models") == ["universal-3-pro"]
 
 
 # ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ def test_factory_local_returns_local_transcriber():
 
 
 def test_factory_assemblyai_returns_assemblyai_transcriber():
-    settings = AppSettings(engine="assemblyai")
+    settings = AppSettings(engine="assemblyai", assemblyai_model="nano")
 
     class FakeSecretStore:
         def get_api_key(self, name):
@@ -25,6 +25,7 @@ def test_factory_assemblyai_returns_assemblyai_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, AssemblyAITranscriber)
+    assert t._model == "nano"
 
 
 def test_factory_openai_returns_openai_transcriber():
@@ -44,7 +45,7 @@ def test_factory_azure_falls_back_to_local():
 
 
 def test_factory_deepgram_returns_deepgram_transcriber():
-    settings = AppSettings(engine="deepgram")
+    settings = AppSettings(engine="deepgram", deepgram_model="nova-2")
 
     class FakeSecretStore:
         def get_api_key(self, name):
@@ -52,6 +53,7 @@ def test_factory_deepgram_returns_deepgram_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, DeepgramTranscriber)
+    assert t._model == "nova-2"
 
 
 def test_factory_unknown_engine_falls_back_to_local():

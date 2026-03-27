@@ -103,9 +103,15 @@ def test_test_connection_runs_in_background_worker(monkeypatch):
     import stt_app.transcriber.deepgram_provider as deepgram_provider_module
 
     class _FakeDeepgramTranscriber:
-        def __init__(self, api_key: str, language_mode: str = "auto") -> None:
+        def __init__(
+            self,
+            api_key: str,
+            language_mode: str = "auto",
+            model: str = "nova-3",
+        ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode
+            self._model = model
 
         def test_connection(self) -> tuple[bool, str]:
             return True, "Connection OK — API key is valid."
@@ -166,8 +172,10 @@ def test_openai_connection_runs_in_background_worker(monkeypatch):
     target_index = dialog.test_conn_target_combo.findData("openai")
     dialog.test_conn_target_combo.setCurrentIndex(target_index)
     dialog.openai_key_edit.setText("oa-key")
-    model_index = dialog.openai_model_combo.findData("gpt-4o-transcribe")
-    dialog.openai_model_combo.setCurrentIndex(model_index)
+    engine_index = dialog.engine_combo.findData("openai")
+    dialog.engine_combo.setCurrentIndex(engine_index)
+    model_index = dialog.remote_model_combo.findData("gpt-4o-transcribe")
+    dialog.remote_model_combo.setCurrentIndex(model_index)
 
     dialog._test_connection()
 
@@ -193,9 +201,15 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
     import stt_app.transcriber.openai_provider as openai_provider_module
 
     class _FakeDeepgramTranscriber:
-        def __init__(self, api_key: str, language_mode: str = "auto") -> None:
+        def __init__(
+            self,
+            api_key: str,
+            language_mode: str = "auto",
+            model: str = "nova-3",
+        ) -> None:
             self._api_key = api_key
             self._language_mode = language_mode
+            self._model = model
 
         def test_connection(self) -> tuple[bool, str]:
             return True, "Deepgram OK"
@@ -288,5 +302,13 @@ def test_save_persists_only_supported_remote_keys():
         "gpt-4o-mini-transcribe",
         "gpt-4o-transcribe",
         "whisper-1",
+    }
+    assert dialog._loaded_settings.deepgram_model in {"nova-3", "nova-2"}
+    assert dialog._loaded_settings.assemblyai_model in {
+        "best",
+        "nano",
+        "universal-3-pro",
+        "universal",
+        "slam-1",
     }
     _ = app

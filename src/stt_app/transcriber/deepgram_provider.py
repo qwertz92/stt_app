@@ -17,14 +17,11 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from ..config import AUDIO_SAMPLE_RATE, DOC_SSL_PROXY_PATH
+from ..config import AUDIO_SAMPLE_RATE, DEFAULT_DEEPGRAM_MODEL, DOC_SSL_PROXY_PATH
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
 DEEPGRAM_API_BASE = "https://api.deepgram.com/v1"
-DEFAULT_DEEPGRAM_MODEL = "nova-3"
-
-
 class DeepgramTranscriber(ITranscriber):
     """Batch transcription using Deepgram's pre-recorded audio REST API.
 

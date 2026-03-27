@@ -9,6 +9,7 @@ from .config import APP_DISPLAY_NAME, APP_LOGGER_NAME, DEFAULT_CANCEL_HOTKEY_ID
 from .history_dialog import HistoryDialog
 from .controller import DictationController
 from .hotkey import HotkeyManager, QtHotkeyEventFilter
+from .last_recording_store import LastRecordingStore
 from .logger import AppLogger
 from .overlay_ui import OverlayUI
 from .secret_store import KeyringSecretStore
@@ -35,6 +36,7 @@ def run() -> int:
     settings_store = SettingsStore()
     secret_store = KeyringSecretStore()
     history_store = TranscriptHistoryStore()
+    last_recording_store = LastRecordingStore()
     startup_settings = settings_store.load()
 
     overlay = OverlayUI()
@@ -55,6 +57,7 @@ def run() -> int:
         logger=logger,
         secret_store=secret_store,
         history_store=history_store,
+        last_recording_store=last_recording_store,
     )
 
     event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)
@@ -107,9 +110,17 @@ def run() -> int:
         settings_store=settings_store,
         secret_store=secret_store,
         app_logger=app_logger,
+        last_recording_store=last_recording_store,
         open_history_dialog=open_history_dialog,
     )
     tray_icon.show()
+    QtCore.QTimer.singleShot(
+        0,
+        lambda: _prompt_recoverable_last_recording(
+            last_recording_store,
+            tray_icon._open_settings_dialog,
+        ),
+    )
 
     app.aboutToQuit.connect(controller.shutdown)
     signal_timer = _install_signal_handlers(app)
@@ -133,6 +144,7 @@ def _create_tray_icon(
     settings_store: SettingsStore,
     secret_store: KeyringSecretStore,
     app_logger: AppLogger,
+    last_recording_store: LastRecordingStore,
     open_history_dialog,
 ) -> QtWidgets.QSystemTrayIcon:
     style = app.style()
@@ -161,21 +173,22 @@ def _create_tray_icon(
 
     _active_settings_dialog: SettingsDialog | None = None
 
-    def open_settings_dialog() -> None:
+    def open_settings_dialog() -> SettingsDialog:
         nonlocal _active_settings_dialog
         if _active_settings_dialog is not None:
             _active_settings_dialog.raise_()
             _active_settings_dialog.activateWindow()
-            return
+            return _active_settings_dialog
         dialog = SettingsDialog(
             settings_store=settings_store,
             secret_store=secret_store,
             app_logger=app_logger,
             controller=controller,
+            last_recording_store=last_recording_store,
         )
         dialog.settings_changed.connect(controller.on_settings_changed)
         dialog.settings_changed.connect(
-            lambda: overlay.move_to_corner(settings_store.load().overlay_corner)
+            lambda: _restore_overlay_after_settings_save(overlay, settings_store)
         )
         dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
 
@@ -186,6 +199,7 @@ def _create_tray_icon(
         dialog.finished.connect(_on_dialog_finished)
         _active_settings_dialog = dialog
         dialog.show()
+        return dialog
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())
@@ -209,7 +223,55 @@ def _create_tray_icon(
 
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.setContextMenu(menu)
+    tray_icon._open_settings_dialog = open_settings_dialog
     return tray_icon
+
+
+def _restore_overlay_after_settings_save(
+    overlay: OverlayUI,
+    settings_store: SettingsStore,
+) -> None:
+    settings = settings_store.load()
+    overlay.move_to_corner(settings.overlay_corner)
+    overlay.ensure_compact_size()
+
+
+def _prompt_recoverable_last_recording(
+    last_recording_store: LastRecordingStore,
+    open_settings_dialog,
+) -> None:
+    if not last_recording_store.has_recoverable_recording():
+        return
+
+    if last_recording_store.selectable_path() is None:
+        return
+
+    state = last_recording_store.load()
+    description = "A previous recording is still available."
+    if state is not None and state.created_at:
+        description = (
+            "A previous recording from "
+            f"{state.created_at} is still available."
+        )
+    if state is not None and state.status == "failed" and state.error:
+        description = f"{description}\n\nLast error: {state.error}"
+
+    answer = QtWidgets.QMessageBox.question(
+        None,
+        "Recover last recording",
+        (
+            f"{description}\n\n"
+            "Open Settings -> History and load it for transcription now?"
+        ),
+        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        QtWidgets.QMessageBox.Yes,
+    )
+    if answer != QtWidgets.QMessageBox.Yes:
+        return
+
+    dialog = open_settings_dialog()
+    if dialog is not None:
+        dialog.prepare_last_recording_import()
 
 
 def _install_signal_handlers(app: QtWidgets.QApplication) -> QtCore.QTimer:

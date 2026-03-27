@@ -2,7 +2,14 @@ import signal
 
 from PySide6 import QtCore, QtWidgets
 
-from stt_app.main import _install_signal_handlers, _create_tray_icon
+from stt_app.last_recording_store import LastRecordingStore
+from stt_app.main import (
+    _create_tray_icon,
+    _install_signal_handlers,
+    _prompt_recoverable_last_recording,
+    _restore_overlay_after_settings_save,
+)
+from stt_app.settings_store import AppSettings
 
 
 def test_install_signal_handlers_registers_int_and_term(monkeypatch):
@@ -64,7 +71,7 @@ class FakeController:
 
 class FakeSettingsStore:
     def load(self):
-        return None
+        return AppSettings()
 
     def save(self, s):
         pass
@@ -80,16 +87,41 @@ class FakeAppLogger:
         return "log output"
 
 
+class FakeOverlay:
+    def __init__(self):
+        self.moved_to = None
+        self.compact_calls = 0
+
+    def move_to_corner(self, corner):
+        self.moved_to = corner
+
+    def ensure_compact_size(self):
+        self.compact_calls += 1
+
+
+class FakeLastRecordingStore:
+    def has_recoverable_recording(self):
+        return False
+
+    def selectable_path(self):
+        return None
+
+    def load(self):
+        return None
+
+
 def test_create_tray_icon_has_expected_menu_actions():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = FakeController()
+    overlay = FakeOverlay()
     tray = _create_tray_icon(
         app=app,
         controller=controller,
-        overlay=type("obj", (object,), {"move_to_corner": lambda *a: None})(),
+        overlay=overlay,
         settings_store=FakeSettingsStore(),
         secret_store=FakeSecretStore(),
         app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
     menu = tray.contextMenu()
@@ -107,13 +139,15 @@ def test_create_tray_icon_has_expected_menu_actions():
 def test_tray_toggle_action_calls_controller():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = FakeController()
+    overlay = FakeOverlay()
     tray = _create_tray_icon(
         app=app,
         controller=controller,
-        overlay=type("obj", (object,), {"move_to_corner": lambda *a: None})(),
+        overlay=overlay,
         settings_store=FakeSettingsStore(),
         secret_store=FakeSecretStore(),
         app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
     menu = tray.contextMenu()
@@ -126,15 +160,54 @@ def test_tray_double_click_connected():
     """Double-clicking the tray icon should be connected to open settings."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = FakeController()
+    overlay = FakeOverlay()
     tray = _create_tray_icon(
         app=app,
         controller=controller,
-        overlay=type("obj", (object,), {"move_to_corner": lambda *a: None})(),
+        overlay=overlay,
         settings_store=FakeSettingsStore(),
         secret_store=FakeSecretStore(),
         app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
     # The activated signal should have at least one receiver connected.
     sig = QtCore.SIGNAL("activated(QSystemTrayIcon::ActivationReason)")
     assert tray.receivers(sig) > 0
+
+
+def test_restore_overlay_after_settings_save_repositions_and_compacts():
+    overlay = FakeOverlay()
+    store = FakeSettingsStore()
+
+    _restore_overlay_after_settings_save(overlay, store)
+
+    assert overlay.moved_to == "top-right"
+    assert overlay.compact_calls == 1
+
+
+def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    store.save_recording(b"RIFF", keep_after_success=False)
+    store.mark_failed("network")
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+
+    opened = []
+
+    class _FakeDialog:
+        def prepare_last_recording_import(self):
+            opened.append(True)
+
+    _prompt_recoverable_last_recording(store, lambda: _FakeDialog())
+
+    assert opened == [True]
+    _ = app

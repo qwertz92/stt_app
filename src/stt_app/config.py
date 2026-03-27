@@ -7,7 +7,7 @@ LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "stt_app"
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -135,6 +135,21 @@ OPENAI_MODELS = (
     "whisper-1",
 )
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini-transcribe"
+
+DEEPGRAM_MODELS = (
+    "nova-3",
+    "nova-2",
+)
+DEFAULT_DEEPGRAM_MODEL = "nova-3"
+
+ASSEMBLYAI_MODELS = (
+    "best",
+    "nano",
+    "universal-3-pro",
+    "universal",
+    "slam-1",
+)
+DEFAULT_ASSEMBLYAI_MODEL = "best"
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

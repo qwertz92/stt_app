@@ -325,3 +325,42 @@ Agents and developers: use this as a knowledge base for past issues and solution
     the original startup footprint.
   - Added focused overlay tests that assert exact restoration to the initial
     size after `Clear`, `Reset Pos`, and a retry-style `Processing` transition.
+
+- **Last-recording recovery is now first-class instead of a debug-only side path:**
+  - Added `LastRecordingStore` with persisted audio + metadata state
+    (`last_recording.wav` + `last_recording.json`).
+  - The latest recording is now always preserved until transcription either
+    succeeds, fails, or is canceled; `save_last_wav` now means
+    "keep after successful transcription".
+  - Recovery survives crashes and interrupted transcriptions: startup now
+    prompts to reopen Settings -> History with the unfinished recording loaded.
+  - `History -> Use last recording` no longer depends on the old debug-WAV
+    checkbox; orphaned leftover audio without metadata is still treated as
+    recoverable.
+  - Failure/cancel messaging was updated to explicitly say when the recording
+    remains available for re-transcription.
+
+- **Remote model selection was unified per provider:**
+  - Added persisted `deepgram_model` and `assemblyai_model` settings alongside
+    the existing Groq/OpenAI model settings.
+  - Replaced separate Groq/OpenAI controls with one provider-aware
+    `Remote Speech Model` selector that changes with the active remote engine.
+  - Deepgram model selection now flows through factory/provider creation.
+  - AssemblyAI batch model selection now supports both enum-backed values
+    (`best`, `nano`) and named routed models such as `universal-3-pro`.
+  - AssemblyAI streaming remains SDK-default-controlled for now; the UI
+    disables model switching in streaming mode and explains that the selection
+    still applies to batch/import transcription.
+
+- **History deletion and settings-save overlay reset were tightened:**
+  - Added `delete_entry` / `delete_entries` helpers in the transcript history
+    store and exposed `Delete selected` in both history UIs.
+  - Saving settings now explicitly restores the compact overlay size after
+    applying the new corner setting, closing a remaining reset gap after
+    recordings.
+
+- **Validation note:**
+  - Full Windows suite now runs successfully via
+    `.venv\Scripts\pytest.exe -q`.
+  - The Windows `.venv` is uv-managed; `pytest.exe` is available, but
+    `python -m pytest` / `python -m pip` are not reliable entry points there.

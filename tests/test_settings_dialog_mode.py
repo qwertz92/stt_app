@@ -253,7 +253,55 @@ def test_debug_wav_path_is_visible_in_general_tab(monkeypatch, tmp_path):
 
     expected = str(tmp_path / "stt_app" / "last_recording.wav")
     assert expected in dialog.save_wav_path_label.text()
-    assert "overwritten on each recording" in dialog.save_wav_path_label.text()
+    assert "always preserved until transcription finishes" in (
+        dialog.save_wav_path_label.text()
+    )
+    _ = app
+
+
+def test_remote_model_selector_tracks_selected_provider():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(engine="groq", groq_model="whisper-large-v3")
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.remote_model_combo.currentData() == "whisper-large-v3"
+
+    deepgram_idx = dialog.engine_combo.findData("deepgram")
+    dialog.engine_combo.setCurrentIndex(deepgram_idx)
+    nova2_idx = dialog.remote_model_combo.findData("nova-2")
+    dialog.remote_model_combo.setCurrentIndex(nova2_idx)
+
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.groq_model == "whisper-large-v3"
+    assert store.saved.deepgram_model == "nova-2"
+    _ = app
+
+
+def test_assemblyai_streaming_disables_remote_model_combo():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="assemblyai",
+            mode="streaming",
+            assemblyai_model="nano",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.remote_model_combo.isEnabled() is False
+    assert "batch transcription and imports" in dialog.remote_model_note_label.text()
     _ = app
 
 
@@ -435,4 +483,25 @@ def test_select_last_recording_sets_selected_file(monkeypatch, tmp_path):
 
     assert str(path) in dialog.import_selected_file_label.text()
     assert dialog.import_start_button.isEnabled() is True
+    _ = app
+
+
+def test_prepare_last_recording_import_switches_to_history_tab(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    path = debug_audio_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"RIFF")
+
+    opened = dialog.prepare_last_recording_import()
+
+    assert opened is True
+    assert dialog.tabs.currentIndex() == dialog.tabs.indexOf(dialog._history_tab)
+    assert str(path) in dialog.import_selected_file_label.text()
     _ = app

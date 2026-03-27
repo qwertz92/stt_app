@@ -18,6 +18,7 @@ from conftest import (
     FakeCapture,
     FakeCaptureFails,
     FakeHotkeyManager,
+    FakeLastRecordingStore,
     FakeOverlay,
     FakeSettingsStore,
     FakeStreamingTranscriber,
@@ -326,20 +327,12 @@ def test_transcribe_worker_emits_not_implemented_error():
         def transcribe_batch(self, wav):
             raise NotImplementedError("OpenAI provider not implemented yet")
 
-    controller._transcriber_cache = PlaceholderTranscriber()
-    controller._transcriber_cache_key = (
-        "openai",
-        "small",
-        "auto",
-        False,
-        False,
-        "",
-        "whisper-large-v3-turbo",
-        "gpt-4o-mini-transcribe",
+    controller._get_or_create_transcriber = (  # type: ignore[method-assign]
+        lambda _settings: PlaceholderTranscriber()
     )
 
     settings_snapshot = AppSettings(engine="openai", hotkey=FALLBACK_HOTKEY)
-    controller._transcribe_worker(b"audio", settings_snapshot)
+    controller._transcribe_worker(1, b"audio", settings_snapshot)
 
     assert overlay.states[-1][0] == "Error"
     assert "not implemented" in overlay.states[-1][1].lower()
@@ -356,20 +349,12 @@ def test_transcribe_worker_emits_unexpected_error():
         def transcribe_batch(self, wav):
             raise RuntimeError("something went wrong")
 
-    controller._transcriber_cache = BrokenTranscriber()
-    controller._transcriber_cache_key = (
-        "local",
-        "small",
-        "auto",
-        False,
-        False,
-        "",
-        "whisper-large-v3-turbo",
-        "gpt-4o-mini-transcribe",
+    controller._get_or_create_transcriber = (  # type: ignore[method-assign]
+        lambda _settings: BrokenTranscriber()
     )
 
     settings_snapshot = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
-    controller._transcribe_worker(b"audio", settings_snapshot)
+    controller._transcribe_worker(1, b"audio", settings_snapshot)
 
     assert overlay.states[-1][0] == "Error"
     assert "Unexpected" in overlay.states[-1][1]
@@ -386,7 +371,7 @@ def test_finalize_stream_worker_no_transcriber_emits_error():
     overlay = FakeOverlay()
     controller, app = _make_controller(overlay=overlay)
     controller._active_stream_transcriber = None
-    controller._finalize_stream_worker()
+    controller._finalize_stream_worker(1)
     assert overlay.states[-1][0] == "Error"
     assert "not initialized" in overlay.states[-1][1].lower()
     controller.shutdown()
@@ -399,7 +384,7 @@ def test_finalize_stream_worker_exception_emits_error():
     controller._active_stream_transcriber = FakeStreamingTranscriber(
         stop_raises=RuntimeError("boom")
     )
-    controller._finalize_stream_worker()
+    controller._finalize_stream_worker(1)
     assert overlay.states[-1][0] == "Error"
     assert "Unexpected" in overlay.states[-1][1]
     controller.shutdown()
@@ -642,9 +627,39 @@ def test_retry_last_transcription_resubmits_failed_audio():
     _ = app
 
 
+def test_stop_recording_persists_last_recording_and_marks_transcribing(monkeypatch):
+    overlay = FakeOverlay()
+    last_recording_store = FakeLastRecordingStore()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
+    controller._executor = ImmediateExecutor()
+    submitted = []
+
+    def fake_worker(request_token, wav_bytes, snapshot):
+        submitted.append((request_token, wav_bytes, snapshot.mode, snapshot.model_size))
+
+    controller._transcribe_worker = fake_worker  # type: ignore[method-assign]
+
+    controller.start_recording()
+    controller.stop_recording()
+
+    assert last_recording_store.saved == [(b"RIFF", False)]
+    assert last_recording_store.transcribing == [("local", "small", "batch")]
+    assert submitted == [(1, b"RIFF", "batch", "small")]
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_stops_active_batch_recording():
     overlay = FakeOverlay()
-    controller, app = _make_controller(overlay=overlay)
+    last_recording_store = FakeLastRecordingStore()
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
     capture = FakeCapture()
     controller._audio_capture = capture
     controller._streaming_recording = False
@@ -655,18 +670,28 @@ def test_cancel_current_action_stops_active_batch_recording():
     assert controller._audio_capture is None
     assert overlay.states[-1][0] == "Done"
     assert "canceled" in overlay.states[-1][1].lower()
+    assert "last recording" in overlay.states[-1][1].lower()
+    assert last_recording_store.saved == [(b"RIFF", False)]
+    assert last_recording_store.canceled == [
+        "Recording canceled before transcription."
+    ]
     controller.shutdown()
     _ = app
 
 
 def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     overlay = FakeOverlay()
-    controller, app = _make_controller(overlay=overlay)
+    last_recording_store = FakeLastRecordingStore()
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
     controller._active_request_token = 7
     controller._request_audio_by_token[7] = (
         b"wav-bytes",
         AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small"),
     )
+    last_recording_store._available = True
 
     controller.cancel_current_action()
     controller._on_transcription_failed("transcriber failed", request_token=7)
@@ -676,13 +701,17 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     assert "preserved in memory" in overlay.states[-1][1].lower()
     assert controller._last_failed_wav_bytes == b"wav-bytes"
     assert controller._active_request_token is None
+    assert last_recording_store.canceled == ["Transcription canceled by user."]
     controller.shutdown()
     _ = app
 
 
 def test_cancel_current_action_clears_stale_retry_audio_for_non_retryable_request():
     overlay = FakeOverlay()
-    controller, app = _make_controller(overlay=overlay)
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=FakeLastRecordingStore(),
+    )
     controller._last_failed_wav_bytes = b"older-wav"
     controller._active_request_token = 9
 
@@ -692,6 +721,70 @@ def test_cancel_current_action_clears_stale_retry_audio_for_non_retryable_reques
     assert "canceled" in overlay.states[-1][1].lower()
     assert "preserved in memory" not in overlay.states[-1][1].lower()
     assert controller._last_failed_wav_bytes == b""
+    controller.shutdown()
+    _ = app
+
+
+def test_transcribe_audio_file_marks_managed_last_recording_completed(
+    monkeypatch,
+    tmp_path,
+):
+    last_path = tmp_path / "last_recording.wav"
+    last_path.write_bytes(b"RIFF")
+    last_recording_store = FakeLastRecordingStore(str(last_path))
+    last_recording_store._available = True
+    controller, app = _make_controller(last_recording_store=last_recording_store)
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            return "import text"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+
+    ok, text = controller.transcribe_audio_file(
+        str(last_path),
+        settings_override=AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            engine="deepgram",
+            deepgram_model="nova-2",
+        ),
+    )
+
+    assert ok is True
+    assert text == "import text"
+    assert last_recording_store.transcribing == [("deepgram", "nova-2", "import")]
+    assert last_recording_store.completed == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_transcribe_audio_file_marks_managed_last_recording_failed(
+    monkeypatch,
+    tmp_path,
+):
+    last_path = tmp_path / "last_recording.wav"
+    last_path.write_bytes(b"RIFF")
+    last_recording_store = FakeLastRecordingStore(str(last_path))
+    last_recording_store._available = True
+    controller, app = _make_controller(last_recording_store=last_recording_store)
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            raise RuntimeError("provider failed")
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+
+    ok, text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is False
+    assert "provider failed" in text
+    assert last_recording_store.failed == ["provider failed"]
     controller.shutdown()
     _ = app
 

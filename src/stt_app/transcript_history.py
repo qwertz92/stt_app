@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -94,6 +95,25 @@ class TranscriptHistoryStore:
         removed = self.count()
         if removed:
             self.save([])
+        return removed
+
+    def delete_entry(self, entry: TranscriptHistoryEntry) -> int:
+        return self.delete_entries([entry])
+
+    def delete_entries(self, entries: list[TranscriptHistoryEntry]) -> int:
+        if not entries:
+            return 0
+        current = self.load()
+        removed = 0
+        for entry in entries:
+            try:
+                index = current.index(entry)
+            except ValueError:
+                continue
+            current.pop(index)
+            removed += 1
+        if removed > 0:
+            self.save(current)
         return removed
 
     def recent_entries(self, limit: int = 10) -> list[TranscriptHistoryEntry]:

@@ -13,7 +13,7 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtGui
 
-from .app_paths import debug_audio_path, recordings_dir
+from .app_paths import recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError
 from .config import (
     AUDIO_CHANNELS,
@@ -42,6 +42,7 @@ from .config import (
     VAD_MIN_SPEECH_MS,
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError
+from .last_recording_store import LastRecordingStore
 from .overlay_ui import OverlayUI
 from .settings_store import AppSettings, SettingsStore
 from .text_inserter import TextInserter, TextInsertionError
@@ -70,6 +71,7 @@ class DictationController(QtCore.QObject):
         window_focus_helper: WindowFocusHelper | None = None,
         secret_store=None,
         history_store: TranscriptHistoryStore | None = None,
+        last_recording_store: LastRecordingStore | None = None,
     ) -> None:
         super().__init__()
         self._settings_store = settings_store
@@ -81,6 +83,7 @@ class DictationController(QtCore.QObject):
         self._window_focus_helper = window_focus_helper or Win32WindowFocusHelper()
         self._secret_store = secret_store
         self._history_store = history_store or TranscriptHistoryStore()
+        self._last_recording_store = last_recording_store or LastRecordingStore()
 
         self._settings: AppSettings = self._settings_store.load()
         self._audio_capture: AudioCapture | None = None
@@ -445,6 +448,7 @@ class DictationController(QtCore.QObject):
 
         self._audio_capture = None
         wav_bytes = capture.stop()
+        self._persist_last_recording_audio(wav_bytes)
         self._save_recording_artifacts(capture, wav_bytes)
 
         if self._streaming_recording:
@@ -515,16 +519,22 @@ class DictationController(QtCore.QObject):
             return configured
         return str(recordings_dir())
 
+    def _persist_last_recording_audio(self, wav_bytes: bytes) -> bool:
+        if not wav_bytes:
+            return False
+        try:
+            self._last_recording_store.save_recording(
+                wav_bytes,
+                keep_after_success=self._settings.save_last_wav,
+            )
+            return True
+        except Exception:
+            self._logger.exception("Failed to persist last recording audio")
+            return False
+
     def _save_recording_artifacts(self, capture: AudioCapture, wav_bytes: bytes) -> None:
         if not wav_bytes:
             return
-
-        if self._settings.save_last_wav:
-            path = debug_audio_path()
-            try:
-                capture.save_wav(path, wav_bytes)
-            except Exception:
-                self._logger.exception("Failed to save debug wav")
 
         if not self._settings.save_all_recordings:
             return
@@ -589,6 +599,17 @@ class DictationController(QtCore.QObject):
             replace(settings),
         )
 
+    def _selected_model_name(self, settings: AppSettings) -> str:
+        if settings.engine == "groq":
+            return settings.groq_model
+        if settings.engine == "openai":
+            return settings.openai_model
+        if settings.engine == "deepgram":
+            return getattr(settings, "deepgram_model", "")
+        if settings.engine == "assemblyai":
+            return getattr(settings, "assemblyai_model", "")
+        return settings.model_size
+
     def _promote_request_audio_for_retry(self, request_token: int) -> bool:
         payload = self._request_audio_by_token.pop(request_token, None)
         if payload is None:
@@ -636,6 +657,14 @@ class DictationController(QtCore.QObject):
         self._active_request_token = request_token
         self._last_transcribe_settings = replace(settings)
         self._store_request_audio(request_token, wav_bytes, settings)
+        try:
+            self._last_recording_store.mark_transcribing(
+                engine=settings.engine,
+                model=self._selected_model_name(settings),
+                mode=settings.mode,
+            )
+        except Exception:
+            self._logger.exception("Failed to mark last recording as transcribing")
         self._executor.submit(
             self._transcribe_worker,
             request_token,
@@ -646,6 +675,15 @@ class DictationController(QtCore.QObject):
     def _submit_stream_finalize(self) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
+        settings = self._active_stream_settings or replace(self._settings)
+        try:
+            self._last_recording_store.mark_transcribing(
+                engine=settings.engine,
+                model=self._selected_model_name(settings),
+                mode=settings.mode,
+            )
+        except Exception:
+            self._logger.exception("Failed to mark streaming recording as transcribing")
         self._executor.submit(self._finalize_stream_worker, request_token)
 
     def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
@@ -654,22 +692,20 @@ class DictationController(QtCore.QObject):
             if has_retry_audio is None
             else bool(has_retry_audio)
         )
-        saved_wav_available = bool(
-            self._settings.save_last_wav and debug_audio_path().is_file()
-        )
+        last_recording_available = self._last_recording_store.selectable_path() is not None
         if retry_available:
             parts = [
                 "Captured audio is preserved in memory.",
                 "Fix provider/settings if needed, then use Retry to transcribe the same recording again with the current settings.",
             ]
-            if saved_wav_available:
+            if last_recording_available:
                 parts.append(
-                    "You can also use History -> Use last recording to transcribe the saved WAV with another service."
+                    "You can also use History -> Use last recording to transcribe the last recording file with another service."
                 )
             return " ".join(parts)
-        if saved_wav_available:
+        if last_recording_available:
             return (
-                "This recording is still available as the saved last WAV. "
+                "This recording is still available as the last recording file. "
                 "Use History -> Use last recording to transcribe it with the current settings or another service."
             )
         return "You can start a new recording and try again."
@@ -1080,6 +1116,8 @@ class DictationController(QtCore.QObject):
             getattr(settings, "model_dir", ""),
             getattr(settings, "groq_model", ""),
             getattr(settings, "openai_model", ""),
+            getattr(settings, "deepgram_model", ""),
+            getattr(settings, "assemblyai_model", ""),
         )
         with self._transcriber_cache_lock:
             if (
@@ -1124,6 +1162,10 @@ class DictationController(QtCore.QObject):
         self._last_transcript = text
 
         if not text.strip():
+            try:
+                self._last_recording_store.mark_completed()
+            except Exception:
+                self._logger.exception("Failed to finalize last recording state")
             self._overlay.set_state("Done", "No speech detected.")
             self._reset_streaming_state()
             return
@@ -1150,20 +1192,19 @@ class DictationController(QtCore.QObject):
             QtGui.QGuiApplication.clipboard().setText(text)
         try:
             used = self._last_transcribe_settings or stream_settings or self._settings
-            model_name = used.model_size
-            if used.engine == "groq":
-                model_name = used.groq_model
-            elif used.engine == "openai":
-                model_name = used.openai_model
             entry = TranscriptHistoryEntry.new(
                 text=text,
                 engine=used.engine,
-                model=model_name,
+                model=self._selected_model_name(used),
                 mode=session_mode,
             )
             self._history_store.add_entry(entry, used.history_max_items)
         except Exception:
             self._logger.exception("Failed to append transcript history")
+        try:
+            self._last_recording_store.mark_completed()
+        except Exception:
+            self._logger.exception("Failed to finalize last recording state")
         finally:
             self._last_transcribe_settings = None
         self._reset_streaming_state()
@@ -1202,11 +1243,10 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._last_transcribe_settings = None
         self._reset_streaming_state()
-        if self._settings.save_last_wav and self._last_failed_wav_bytes:
-            try:
-                debug_audio_path().write_bytes(self._last_failed_wav_bytes)
-            except Exception:
-                self._logger.exception("Failed to persist failed recording WAV")
+        try:
+            self._last_recording_store.mark_failed(error_text)
+        except Exception:
+            self._logger.exception("Failed to persist last recording failure state")
         self._overlay.set_state(
             "Error",
             f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}",
@@ -1270,7 +1310,12 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot(str, bool)
     def _on_stream_abort_requested(self, reason: str, beep: bool) -> None:
-        self._abort_streaming_session(reason, beep=beep, finalize_stream=False)
+        self._abort_streaming_session(
+            reason,
+            beep=beep,
+            finalize_stream=False,
+            preserve_audio=True,
+        )
 
     def _request_stream_abort(self, reason: str, beep: bool) -> None:
         if self._stream_abort_requested:
@@ -1295,6 +1340,7 @@ class DictationController(QtCore.QObject):
         *,
         beep: bool,
         finalize_stream: bool,
+        preserve_audio: bool = False,
     ) -> None:
         if beep:
             self._play_abort_beep()
@@ -1302,11 +1348,20 @@ class DictationController(QtCore.QObject):
         self._focus_poll_timer.stop()
         capture = self._audio_capture
         self._audio_capture = None
+        wav_bytes = b""
         if capture is not None:
             try:
-                capture.stop()
+                wav_bytes = capture.stop()
             except Exception:
                 pass
+        if capture is not None:
+            self._save_recording_artifacts(capture, wav_bytes)
+        if preserve_audio and wav_bytes:
+            self._persist_last_recording_audio(wav_bytes)
+            try:
+                self._last_recording_store.mark_canceled(reason)
+            except Exception:
+                self._logger.exception("Failed to persist aborted streaming recording")
 
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
@@ -1599,9 +1654,16 @@ class DictationController(QtCore.QObject):
             return False, "No file path provided."
         if not os.path.isfile(path):
             return False, "Selected file does not exist."
+        managed_last_recording = self._last_recording_store.is_managed_audio_path(path)
         try:
             base_settings = settings_override or self._settings
             settings = replace(base_settings, mode="batch")
+            if managed_last_recording:
+                self._last_recording_store.mark_transcribing(
+                    engine=settings.engine,
+                    model=self._selected_model_name(settings),
+                    mode="import",
+                )
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
             text = transcriber.transcribe_batch(path).strip()
             if text:
@@ -1609,20 +1671,23 @@ class DictationController(QtCore.QObject):
                     TranscriptHistoryEntry.new(
                         text=text,
                         engine=settings.engine,
-                        model=(
-                            settings.groq_model
-                            if settings.engine == "groq"
-                            else settings.openai_model
-                            if settings.engine == "openai"
-                            else settings.model_size
-                        ),
+                        model=self._selected_model_name(settings),
                         mode="import",
                     ),
                     settings.history_max_items,
                 )
+            if managed_last_recording:
+                self._last_recording_store.mark_completed()
             return True, text or "No speech detected."
         except Exception as exc:
             self._logger.exception("Failed to transcribe imported file")
+            if managed_last_recording:
+                try:
+                    self._last_recording_store.mark_failed(str(exc))
+                except Exception:
+                    self._logger.exception(
+                        "Failed to persist imported recording failure state"
+                    )
             return False, str(exc)
 
     def cancel_current_action(self) -> None:
@@ -1636,16 +1701,30 @@ class DictationController(QtCore.QObject):
                     "Streaming canceled.",
                     beep=False,
                     finalize_stream=False,
+                    preserve_audio=True,
                 )
                 return
             capture = self._audio_capture
             self._audio_capture = None
+            wav_bytes = b""
             try:
-                capture.stop()
+                wav_bytes = capture.stop()
             except Exception:
                 pass
+            self._persist_last_recording_audio(wav_bytes)
+            self._save_recording_artifacts(capture, wav_bytes)
+            if wav_bytes:
+                try:
+                    self._last_recording_store.mark_canceled(
+                        "Recording canceled before transcription."
+                    )
+                except Exception:
+                    self._logger.exception("Failed to mark canceled recording")
             self._active_batch_settings = None
-            self._overlay.set_state("Done", "Recording canceled.")
+            self._overlay.set_state(
+                "Done",
+                f"Recording canceled. {self._retry_guidance(has_retry_audio=False)}",
+            )
             self._reset_streaming_state()
             return
 
@@ -1655,6 +1734,10 @@ class DictationController(QtCore.QObject):
                 request_token,
                 preserve_audio=True,
             )
+            try:
+                self._last_recording_store.mark_canceled("Transcription canceled by user.")
+            except Exception:
+                self._logger.exception("Failed to mark canceled transcription")
             self._overlay.set_state(
                 "Done",
                 f"Transcription canceled. {self._retry_guidance(has_retry_audio=preserved_audio)}",

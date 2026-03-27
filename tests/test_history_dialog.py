@@ -53,6 +53,31 @@ def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
     _ = app
 
 
+def test_delete_selected_button_removes_entry(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._table.selectRow(0)
+
+    dialog._delete_button.click()
+
+    assert [entry.text for entry in history_store.load()] == ["alpha"]
+    _ = app
+
+
 def test_reducing_limit_confirms_and_trims(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")

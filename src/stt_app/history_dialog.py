@@ -91,6 +91,10 @@ class HistoryDialog(QtWidgets.QDialog):
         self._copy_button.setEnabled(False)
         self._copy_button.clicked.connect(self._copy_selected)
 
+        self._delete_button = QtWidgets.QPushButton("Delete selected")
+        self._delete_button.setEnabled(False)
+        self._delete_button.clicked.connect(self._delete_selected)
+
         self._close_button = QtWidgets.QPushButton("Close")
         self._close_button.clicked.connect(self.close)
 
@@ -101,6 +105,7 @@ class HistoryDialog(QtWidgets.QDialog):
         buttons.addWidget(self._clear_button)
         buttons.addStretch(1)
         buttons.addWidget(self._copy_button)
+        buttons.addWidget(self._delete_button)
         buttons.addWidget(self._close_button)
 
         root = QtWidgets.QVBoxLayout(self)
@@ -134,6 +139,7 @@ class HistoryDialog(QtWidgets.QDialog):
         else:
             self._detail.clear()
             self._copy_button.setEnabled(False)
+            self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
 
     def _on_selection_changed(self) -> None:
@@ -141,11 +147,13 @@ class HistoryDialog(QtWidgets.QDialog):
         if row is None:
             self._detail.clear()
             self._copy_button.setEnabled(False)
+            self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
             return
         entry = self._entries[row]
         self._detail.setPlainText(entry.text)
         self._copy_button.setEnabled(True)
+        self._delete_button.setEnabled(True)
         self._reset_copy_feedback()
 
     def _selected_row(self) -> int | None:
@@ -174,6 +182,30 @@ class HistoryDialog(QtWidgets.QDialog):
     def _reset_copy_feedback(self) -> None:
         self._copy_button.setText("Copy selected")
         self._copy_button.setStyleSheet("")
+
+    def _delete_selected(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        entry = self._entries[row]
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete history entry",
+            "Delete the selected transcription from history?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        removed = self._history_store.delete_entry(entry)
+        if removed <= 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Entry not found",
+                "The selected history entry could not be removed.",
+            )
+            return
+        self.reload()
 
     def _on_limit_spin_changed(self, value: int) -> None:
         next_limit = _normalize_history_limit(value)

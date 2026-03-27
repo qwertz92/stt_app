@@ -48,6 +48,14 @@ def test_debug_audio_path_returns_wav(monkeypatch, tmp_path):
     assert result.name == "last_recording.wav"
 
 
+def test_last_recording_state_path_returns_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from stt_app.app_paths import last_recording_state_path
+
+    result = last_recording_state_path()
+    assert result.name == "last_recording.json"
+
+
 def test_temp_audio_dir_is_created(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     from stt_app.app_paths import temp_audio_dir

@@ -7,6 +7,7 @@ classes to avoid duplicating ~150 lines of boilerplate.
 from __future__ import annotations
 
 import logging
+from pathlib import Path
 
 from PySide6 import QtWidgets
 
@@ -199,6 +200,48 @@ class FakeCaptureFails(FakeCapture):
         from stt_app.audio_capture import AudioCaptureError
 
         raise AudioCaptureError("no mic")
+
+
+class FakeLastRecordingStore:
+    def __init__(self, path: str = "/tmp/last_recording.wav"):
+        self.path = Path(path)
+        self.saved: list[tuple[bytes, bool]] = []
+        self.transcribing: list[tuple[str, str, str]] = []
+        self.failed: list[str] = []
+        self.canceled: list[str] = []
+        self.completed = 0
+        self._available = False
+
+    def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
+        self.saved.append((bytes(wav_bytes), bool(keep_after_success)))
+        self._available = bool(wav_bytes)
+        return None
+
+    def mark_transcribing(self, *, engine: str, model: str, mode: str) -> None:
+        self.transcribing.append((engine, model, mode))
+
+    def mark_failed(self, error: str) -> None:
+        self.failed.append(str(error))
+        self._available = True
+
+    def mark_canceled(self, detail: str = "") -> None:
+        self.canceled.append(str(detail))
+        self._available = True
+
+    def mark_completed(self) -> None:
+        self.completed += 1
+        self._available = False
+
+    def selectable_path(self):
+        if not self._available:
+            return None
+        return self.path
+
+    def is_managed_audio_path(self, path: str | Path) -> bool:
+        return Path(path) == self.path
+
+    def has_recoverable_recording(self) -> bool:
+        return self._available
 
 
 def make_controller(**kwargs):

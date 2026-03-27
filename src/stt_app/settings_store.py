@@ -11,11 +11,15 @@ from .persistence import (
     quarantine_corrupt_file,
 )
 from .config import (
+    ASSEMBLYAI_MODELS,
+    DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_CANCEL_HOTKEY,
+    DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
     DEFAULT_GROQ_MODEL,
     DEFAULT_HOTKEY,
+    DEEPGRAM_MODELS,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
@@ -85,6 +89,8 @@ DEFAULTS = {
     "has_groq_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
+    "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
+    "assemblyai_model": DEFAULT_ASSEMBLYAI_MODEL,
 }
 
 
@@ -119,6 +125,8 @@ class AppSettings:
     has_groq_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
+    deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
+    assemblyai_model: str = DEFAULT_ASSEMBLYAI_MODEL
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
@@ -158,6 +166,14 @@ class AppSettings:
         openai_model = str(merged.get("openai_model", DEFAULT_OPENAI_MODEL))
         if openai_model not in OPENAI_MODELS:
             openai_model = DEFAULT_OPENAI_MODEL
+        deepgram_model = str(merged.get("deepgram_model", DEFAULT_DEEPGRAM_MODEL))
+        if deepgram_model not in DEEPGRAM_MODELS:
+            deepgram_model = DEFAULT_DEEPGRAM_MODEL
+        assemblyai_model = str(
+            merged.get("assemblyai_model", DEFAULT_ASSEMBLYAI_MODEL)
+        )
+        if assemblyai_model not in ASSEMBLYAI_MODELS:
+            assemblyai_model = DEFAULT_ASSEMBLYAI_MODEL
         start_beep_tone = str(
             merged.get("start_beep_tone", DEFAULT_START_BEEP_TONE)
         ).strip().lower()
@@ -252,6 +268,8 @@ class AppSettings:
             has_groq_key=bool(merged.get("has_groq_key", False)),
             groq_model=groq_model,
             openai_model=openai_model,
+            deepgram_model=deepgram_model,
+            assemblyai_model=assemblyai_model,
         )
 
     def to_dict(self) -> dict[str, Any]:

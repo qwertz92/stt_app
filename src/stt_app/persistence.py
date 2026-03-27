@@ -34,17 +34,20 @@ def quarantine_corrupt_file(path: Path) -> Path | None:
 
 
 def atomic_write_text(path: Path, text: str, *, encoding: str = "utf-8") -> None:
+    atomic_write_bytes(path, text.encode(encoding))
+
+
+def atomic_write_bytes(path: Path, data: bytes) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temp_name = tempfile.mkstemp(
         prefix=f".{path.name}.",
         suffix=".tmp",
         dir=str(path.parent),
-        text=True,
     )
     temp_path = Path(temp_name)
     try:
-        with os.fdopen(fd, "w", encoding=encoding) as handle:
-            handle.write(text)
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
             handle.flush()
             os.fsync(handle.fileno())
         os.replace(temp_path, path)

@@ -9,7 +9,10 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import debug_audio_path, recordings_dir
 from .config import (
+    ASSEMBLYAI_MODELS,
+    DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CANCEL_HOTKEY,
+    DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
     DEFAULT_GROQ_MODEL,
     DEFAULT_HISTORY_MAX_ITEMS,
@@ -23,6 +26,7 @@ from .config import (
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DOC_MODELS_PATH,
+    DEEPGRAM_MODELS,
     ENGINE_LANGUAGE_MODES,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
@@ -41,6 +45,7 @@ from .config import (
     VALID_START_BEEP_TONES,
 )
 from .hotkey import parse_hotkey
+from .last_recording_store import LastRecordingStore
 from .logger import AppLogger
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
@@ -54,6 +59,43 @@ if TYPE_CHECKING:
     from .controller import DictationController
 
 
+_REMOTE_MODEL_LABELS: dict[str, str] = {
+    "whisper-large-v3": "whisper-large-v3 (best quality, $0.111/hr)",
+    "whisper-large-v3-turbo": "whisper-large-v3-turbo (faster, $0.04/hr)",
+    "gpt-4o-mini-transcribe": "gpt-4o-mini-transcribe (fast, low cost)",
+    "gpt-4o-transcribe": "gpt-4o-transcribe (higher quality)",
+    "whisper-1": "whisper-1 (legacy whisper model)",
+    "nova-3": "nova-3 (current default)",
+    "nova-2": "nova-2 (older generation)",
+    "best": "best (provider-managed default routing)",
+    "nano": "nano (lower latency, lower cost)",
+    "universal-3-pro": "universal-3-pro (latest premium batch model)",
+    "universal": "universal (broad language coverage)",
+    "slam-1": "slam-1 (speech understanding model)",
+}
+
+_REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
+    "groq": tuple((value, _REMOTE_MODEL_LABELS.get(value, value)) for value in GROQ_MODELS),
+    "openai": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in OPENAI_MODELS
+    ),
+    "deepgram": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value)) for value in DEEPGRAM_MODELS
+    ),
+    "assemblyai": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value))
+        for value in ASSEMBLYAI_MODELS
+    ),
+}
+
+_REMOTE_MODEL_DEFAULTS: dict[str, str] = {
+    "groq": DEFAULT_GROQ_MODEL,
+    "openai": DEFAULT_OPENAI_MODEL,
+    "deepgram": DEFAULT_DEEPGRAM_MODEL,
+    "assemblyai": DEFAULT_ASSEMBLYAI_MODEL,
+}
+
+
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
     import_transcription_finished = QtCore.Signal(bool, str)
@@ -65,6 +107,7 @@ class SettingsDialog(QtWidgets.QDialog):
         secret_store: SecretStore,
         app_logger: AppLogger,
         controller: DictationController | None = None,
+        last_recording_store: LastRecordingStore | None = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -73,6 +116,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._app_logger = app_logger
         self._controller = controller
         self._history_store = TranscriptHistoryStore()
+        self._last_recording_store = last_recording_store or LastRecordingStore()
         self._loaded_settings = self._settings_store.load()
         self._connection_test_id = 0
         self._connection_test_details: dict[int, dict[str, tuple[bool, str]]] = {}
@@ -81,6 +125,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
         self._provider_pending_clear: set[str] = set()
         self._provider_test_history: dict[str, tuple[bool, str, str]] = {}
+        self._remote_model_values: dict[str, str] = {
+            "groq": self._loaded_settings.groq_model,
+            "openai": self._loaded_settings.openai_model,
+            "deepgram": getattr(
+                self._loaded_settings,
+                "deepgram_model",
+                DEFAULT_DEEPGRAM_MODEL,
+            ),
+            "assemblyai": getattr(
+                self._loaded_settings,
+                "assemblyai_model",
+                DEFAULT_ASSEMBLYAI_MODEL,
+            ),
+        }
         self._active_connection_test_thread: threading.Thread | None = None
         self._history_copy_feedback_timer = QtCore.QTimer(self)
         self._history_copy_feedback_timer.setSingleShot(True)
@@ -267,9 +325,12 @@ class SettingsDialog(QtWidgets.QDialog):
         for value in VALID_START_BEEP_TONES:
             self.start_beep_tone_combo.addItem(tone_labels.get(value, value), value)
 
-        self.save_wav_checkbox = QtWidgets.QCheckBox("Save last WAV for debugging")
+        self.save_wav_checkbox = QtWidgets.QCheckBox(
+            "Keep last recording after successful transcription"
+        )
         self.save_wav_path_label = QtWidgets.QLabel(
-            f"Saved to: {debug_audio_path()} (overwritten on each recording)"
+            "The current recording is always preserved until transcription "
+            f"finishes. When enabled, the latest recording remains at: {debug_audio_path()}"
         )
         self.save_wav_path_label.setWordWrap(True)
         self.save_wav_path_label.setStyleSheet("color: #555;")
@@ -436,36 +497,20 @@ class SettingsDialog(QtWidgets.QDialog):
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
 
-        # Groq model selector
-        groq_box = QtWidgets.QGroupBox("Groq Settings")
-        groq_form = QtWidgets.QFormLayout(groq_box)
-        self.groq_model_combo = QtWidgets.QComboBox()
-        groq_model_labels = {
-            "whisper-large-v3": "whisper-large-v3 (best quality, $0.111/hr)",
-            "whisper-large-v3-turbo": "whisper-large-v3-turbo (faster, $0.04/hr)",
-        }
-        for value in GROQ_MODELS:
-            self.groq_model_combo.addItem(
-                groq_model_labels.get(value, value), value
-            )
-        groq_form.addRow("Groq Model", self.groq_model_combo)
-        layout.addWidget(groq_box)
-
-        # OpenAI model selector
-        openai_box = QtWidgets.QGroupBox("OpenAI Settings")
-        openai_form = QtWidgets.QFormLayout(openai_box)
-        self.openai_model_combo = QtWidgets.QComboBox()
-        openai_model_labels = {
-            "gpt-4o-mini-transcribe": "gpt-4o-mini-transcribe (fast, low cost)",
-            "gpt-4o-transcribe": "gpt-4o-transcribe (higher quality)",
-            "whisper-1": "whisper-1 (legacy whisper model)",
-        }
-        for value in OPENAI_MODELS:
-            self.openai_model_combo.addItem(
-                openai_model_labels.get(value, value), value
-            )
-        openai_form.addRow("OpenAI Model", self.openai_model_combo)
-        layout.addWidget(openai_box)
+        remote_model_box = QtWidgets.QGroupBox("Remote Speech Model")
+        remote_model_form = QtWidgets.QFormLayout(remote_model_box)
+        self.remote_model_provider_label = QtWidgets.QLabel("Local engine selected")
+        self.remote_model_combo = QtWidgets.QComboBox()
+        self.remote_model_combo.currentIndexChanged.connect(
+            self._on_remote_model_changed
+        )
+        self.remote_model_note_label = QtWidgets.QLabel("")
+        self.remote_model_note_label.setWordWrap(True)
+        self.remote_model_note_label.setStyleSheet("color: #555;")
+        remote_model_form.addRow("Active Provider", self.remote_model_provider_label)
+        remote_model_form.addRow("Model", self.remote_model_combo)
+        remote_model_form.addRow("", self.remote_model_note_label)
+        layout.addWidget(remote_model_box)
 
         # API keys
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
@@ -582,6 +627,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _build_history_tab(self) -> None:
         tab = QtWidgets.QWidget()
+        self._history_tab = tab
         layout = QtWidgets.QVBoxLayout(tab)
 
         history_box = QtWidgets.QGroupBox("Transcript History")
@@ -601,9 +647,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_copy_button = QtWidgets.QPushButton("Copy selected")
         self.history_copy_button.clicked.connect(self._copy_selected_history)
         self.history_copy_button.setEnabled(False)
+        self.history_delete_button = QtWidgets.QPushButton("Delete selected")
+        self.history_delete_button.clicked.connect(self._delete_selected_history)
+        self.history_delete_button.setEnabled(False)
         history_buttons.addWidget(self.history_refresh_button)
         history_buttons.addStretch(1)
         history_buttons.addWidget(self.history_copy_button)
+        history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
         layout.addWidget(history_box, 2)
 
@@ -767,6 +817,59 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_cached_models_list(cached)
         self._refresh_model_combo()
         self._update_language_availability()
+
+    def _remote_model_value_for_provider(self, provider: str) -> str:
+        normalized = str(provider or "").strip().lower()
+        fallback = _REMOTE_MODEL_DEFAULTS.get(normalized, "")
+        value = str(self._remote_model_values.get(normalized, fallback) or fallback)
+        valid_values = {item_value for item_value, _label in _REMOTE_MODEL_CHOICES.get(normalized, ())}
+        if value not in valid_values:
+            return fallback
+        return value
+
+    def _update_remote_model_selector(self) -> None:
+        if not hasattr(self, "remote_model_combo"):
+            return
+
+        provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        choices = _REMOTE_MODEL_CHOICES.get(provider, ())
+
+        self.remote_model_combo.blockSignals(True)
+        self.remote_model_combo.clear()
+
+        if provider == DEFAULT_ENGINE:
+            self.remote_model_provider_label.setText("Local engine selected")
+            self.remote_model_combo.addItem("Not applicable for local engine", "")
+            self.remote_model_combo.setEnabled(False)
+            self.remote_model_note_label.setText(
+                "Local transcription uses the faster-whisper model selected on the Local tab."
+            )
+            self.remote_model_combo.blockSignals(False)
+            return
+
+        for value, label in choices:
+            self.remote_model_combo.addItem(label, value)
+        self._select_combo_data(
+            self.remote_model_combo,
+            self._remote_model_value_for_provider(provider),
+        )
+        self.remote_model_provider_label.setText(self._provider_label(provider))
+        self.remote_model_combo.setEnabled(True)
+
+        note = (
+            f"The selected API key is reused across {self._provider_label(provider)} models."
+        )
+        if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
+            self.remote_model_combo.setEnabled(False)
+            note = (
+                "AssemblyAI streaming currently uses the SDK realtime default. "
+                "The selected model applies to batch transcription and imports."
+            )
+        elif provider == "deepgram":
+            note = "Deepgram uses the selected model for batch and streaming transcription."
+
+        self.remote_model_note_label.setText(note)
+        self.remote_model_combo.blockSignals(False)
 
     def _on_cached_model_selection_changed(self) -> None:
         self.delete_cached_model_button.setEnabled(
@@ -964,9 +1067,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_engine_indicator()
         self._update_mode_availability()
         self._update_language_availability()
+        self._update_remote_model_selector()
+        self._update_import_engine_note()
 
     def _on_mode_changed(self, _index: int = 0) -> None:
         self._update_language_availability()
+        self._update_remote_model_selector()
 
     def _on_model_changed(self, _index: int = 0) -> None:
         self._update_language_availability()
@@ -974,6 +1080,15 @@ class SettingsDialog(QtWidgets.QDialog):
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
         self._refresh_local_model_views()
+
+    def _on_remote_model_changed(self, _index: int = 0) -> None:
+        provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        if provider == DEFAULT_ENGINE:
+            return
+        value = str(self.remote_model_combo.currentData() or "")
+        if not value:
+            value = _REMOTE_MODEL_DEFAULTS.get(provider, "")
+        self._remote_model_values[provider] = value
 
     def _on_provider_key_changed(self, provider: str) -> None:
         key_field = self._provider_key_edits.get(provider)
@@ -1218,7 +1333,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
             from .transcriber.assemblyai_provider import AssemblyAITranscriber
 
-            transcriber = AssemblyAITranscriber(api_key=api_key)
+            transcriber = AssemblyAITranscriber(
+                api_key=api_key,
+                model=self._remote_model_value_for_provider("assemblyai"),
+            )
             return transcriber.test_connection, None
 
         if engine == "groq":
@@ -1231,7 +1349,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
             from .transcriber.groq_provider import GroqTranscriber
 
-            transcriber = GroqTranscriber(api_key=api_key)
+            transcriber = GroqTranscriber(
+                api_key=api_key,
+                model=self._remote_model_value_for_provider("groq"),
+            )
             return transcriber.test_connection, None
 
         if engine == "openai":
@@ -1247,7 +1368,7 @@ class SettingsDialog(QtWidgets.QDialog):
             transcriber = OpenAITranscriber(
                 api_key=api_key,
                 model=str(
-                    self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
+                    self._remote_model_value_for_provider("openai")
                 ),
             )
             return transcriber.test_connection, None
@@ -1262,7 +1383,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
             from .transcriber.deepgram_provider import DeepgramTranscriber
 
-            transcriber = DeepgramTranscriber(api_key=api_key)
+            transcriber = DeepgramTranscriber(
+                api_key=api_key,
+                model=self._remote_model_value_for_provider("deepgram"),
+            )
             return transcriber.test_connection, None
 
         return None, None
@@ -1404,8 +1528,23 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
-        self._select_combo_data(self.groq_model_combo, settings.groq_model)
-        self._select_combo_data(self.openai_model_combo, settings.openai_model)
+        self._remote_model_values.update(
+            {
+                "groq": settings.groq_model,
+                "openai": settings.openai_model,
+                "deepgram": getattr(
+                    settings,
+                    "deepgram_model",
+                    DEFAULT_DEEPGRAM_MODEL,
+                ),
+                "assemblyai": getattr(
+                    settings,
+                    "assemblyai_model",
+                    DEFAULT_ASSEMBLYAI_MODEL,
+                ),
+            }
+        )
+        self._update_remote_model_selector()
         self._select_combo_data(self.test_conn_target_combo, "all-configured")
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
@@ -1453,24 +1592,28 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_list.clear()
         self.history_detail.clear()
         self.history_copy_button.setEnabled(False)
+        self.history_delete_button.setEnabled(False)
         entries = self._history_store.recent_entries(self.history_max_spin.value())
         for entry in entries:
             text = entry.text.strip().replace("\n", " ")
             preview = text[:70] + ("..." if len(text) > 70 else "")
             label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
             item = QtWidgets.QListWidgetItem(label)
-            item.setData(QtCore.Qt.UserRole, entry.text)
+            item.setData(QtCore.Qt.UserRole, entry)
             self.history_list.addItem(item)
 
     def _on_history_item_selected(self) -> None:
         items = self.history_list.selectedItems()
         if not items:
             self.history_copy_button.setEnabled(False)
+            self.history_delete_button.setEnabled(False)
             self.history_detail.clear()
             self._reset_history_copy_feedback()
             return
-        text = str(items[0].data(QtCore.Qt.UserRole) or "")
+        entry = items[0].data(QtCore.Qt.UserRole)
+        text = str(getattr(entry, "text", "") or "")
         self.history_copy_button.setEnabled(bool(text))
+        self.history_delete_button.setEnabled(True)
         self.history_detail.setPlainText(text)
         self._reset_history_copy_feedback()
 
@@ -1478,7 +1621,8 @@ class SettingsDialog(QtWidgets.QDialog):
         items = self.history_list.selectedItems()
         if not items:
             return
-        text = str(items[0].data(QtCore.Qt.UserRole) or "")
+        entry = items[0].data(QtCore.Qt.UserRole)
+        text = str(getattr(entry, "text", "") or "")
         if not text:
             return
         QtGui.QGuiApplication.clipboard().setText(text)
@@ -1487,6 +1631,29 @@ class SettingsDialog(QtWidgets.QDialog):
             "background-color: #dff5e0; border: 1px solid #89c88f;"
         )
         self._history_copy_feedback_timer.start()
+
+    def _delete_selected_history(self) -> None:
+        items = self.history_list.selectedItems()
+        if not items:
+            return
+        entry = items[0].data(QtCore.Qt.UserRole)
+        if entry is None:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete history entry",
+            "Delete the selected transcription from history?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        removed = self._history_store.delete_entry(entry)
+        if removed <= 0:
+            self.import_result_label.setText("Selected history entry was not found.")
+            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            return
+        self._refresh_history_list()
 
     def _reset_history_copy_feedback(self) -> None:
         self.history_copy_button.setText("Copy selected")
@@ -1515,16 +1682,27 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         self._set_selected_import_file(path)
 
-    def _select_last_recording_file(self) -> None:
-        path = debug_audio_path()
-        if not path.is_file():
+    def _select_last_recording_file(self) -> bool:
+        path = self._last_recording_store.selectable_path()
+        if path is None:
             self.import_result_label.setText(
-                f"Last recording not found: {path}"
+                "No last recording is currently available."
             )
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             self.import_result_text.clear()
-            return
+            return False
         self._set_selected_import_file(str(path))
+        self.import_result_label.setText(
+            "Last recording loaded. Choose a provider and start transcription."
+        )
+        self.import_result_label.setStyleSheet("color: #555;")
+        return True
+
+    def prepare_last_recording_import(self) -> bool:
+        history_index = self.tabs.indexOf(self._history_tab)
+        if history_index >= 0:
+            self.tabs.setCurrentIndex(history_index)
+        return self._select_last_recording_file()
 
     def _confirm_and_transcribe_selected_file(self) -> None:
         path = self._selected_import_file_path
@@ -1558,9 +1736,17 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_engine_combo.currentData() or DEFAULT_ENGINE
         )
         if not self._import_engine_has_api_key(import_engine):
-            self.import_result_label.setText(
+            detail = (
                 "Failed: no API key configured for "
                 f"{self._provider_label(import_engine)}."
+            )
+            if self._last_recording_store.is_managed_audio_path(path):
+                detail = (
+                    f"{detail} The last recording stays available. "
+                    "Fix the provider settings and try again."
+                )
+            self.import_result_label.setText(
+                detail
             )
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             self.import_file_button.setEnabled(True)
@@ -1609,7 +1795,15 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_result_text.setPlainText(text)
             self._refresh_history_list()
             return
-        self.import_result_label.setText(f"Failed: {text}")
+        detail = f"Failed: {text}"
+        if self._last_recording_store.is_managed_audio_path(
+            self._selected_import_file_path
+        ):
+            detail = (
+                f"{detail} The last recording remains available. "
+                "Fix the settings and try again."
+            )
+        self.import_result_label.setText(detail)
         self.import_result_label.setStyleSheet("color: #b71c1c;")
         self.import_result_text.clear()
 
@@ -1691,12 +1885,10 @@ class SettingsDialog(QtWidgets.QDialog):
             has_deepgram_key=self._loaded_settings.has_deepgram_key,
             has_assemblyai_key=self._loaded_settings.has_assemblyai_key,
             has_groq_key=self._loaded_settings.has_groq_key,
-            groq_model=str(
-                self.groq_model_combo.currentData() or DEFAULT_GROQ_MODEL
-            ),
-            openai_model=str(
-                self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
-            ),
+            groq_model=self._remote_model_value_for_provider("groq"),
+            openai_model=self._remote_model_value_for_provider("openai"),
+            deepgram_model=self._remote_model_value_for_provider("deepgram"),
+            assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
         )
 
     # ------------------------------------------------------------------
@@ -1902,12 +2094,10 @@ class SettingsDialog(QtWidgets.QDialog):
             has_deepgram_key=has_deepgram_key,
             has_assemblyai_key=has_assemblyai_key,
             has_groq_key=has_groq_key,
-            groq_model=str(
-                self.groq_model_combo.currentData() or DEFAULT_GROQ_MODEL
-            ),
-            openai_model=str(
-                self.openai_model_combo.currentData() or DEFAULT_OPENAI_MODEL
-            ),
+            groq_model=self._remote_model_value_for_provider("groq"),
+            openai_model=self._remote_model_value_for_provider("openai"),
+            deepgram_model=self._remote_model_value_for_provider("deepgram"),
+            assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
         )
 
         if history_limit_changed and requested_history_limit > 0:

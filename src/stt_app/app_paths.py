@@ -48,6 +48,10 @@ def debug_audio_path() -> Path:
     return appdata_root() / "last_recording.wav"
 
 
+def last_recording_state_path() -> Path:
+    return appdata_root() / "last_recording.json"
+
+
 def temp_audio_dir() -> Path:
     path = appdata_root() / "temp"
     path.mkdir(parents=True, exist_ok=True)

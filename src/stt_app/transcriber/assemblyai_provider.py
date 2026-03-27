@@ -16,7 +16,11 @@ import threading
 from pathlib import Path
 
 from ..app_paths import temp_audio_dir
-from ..config import AUDIO_SAMPLE_RATE, DOC_SSL_PROXY_PATH
+from ..config import (
+    AUDIO_SAMPLE_RATE,
+    DEFAULT_ASSEMBLYAI_MODEL,
+    DOC_SSL_PROXY_PATH,
+)
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
@@ -53,6 +57,7 @@ class AssemblyAITranscriber(ITranscriber):
         self,
         api_key: str,
         language_mode: str = "auto",
+        model: str = DEFAULT_ASSEMBLYAI_MODEL,
         *,
         aai_module=None,
     ) -> None:
@@ -63,6 +68,7 @@ class AssemblyAITranscriber(ITranscriber):
             )
         self._api_key = api_key
         self._language_mode = (language_mode or "auto").strip().lower()
+        self._model = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
         self._aai = aai_module  # None → lazy import on first use
 
     def _get_aai(self):
@@ -79,9 +85,17 @@ class AssemblyAITranscriber(ITranscriber):
         """Build a TranscriptionConfig for the current language mode."""
         aai = self._get_aai()
 
-        kwargs: dict = {
-            "speech_model": aai.SpeechModel.best,
-        }
+        kwargs: dict = {}
+        selected_model = self._model or DEFAULT_ASSEMBLYAI_MODEL
+
+        if selected_model in {"best", "nano"} and hasattr(aai, "SpeechModel"):
+            speech_model = getattr(aai.SpeechModel, selected_model, None)
+            if speech_model is not None:
+                kwargs["speech_model"] = speech_model
+            else:
+                kwargs["speech_models"] = [selected_model]
+        else:
+            kwargs["speech_models"] = [selected_model]
 
         if self._language_mode == "auto":
             kwargs["language_detection"] = True

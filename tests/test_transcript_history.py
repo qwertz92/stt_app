@@ -157,6 +157,31 @@ def test_apply_max_items_trims_oldest_entries(tmp_path):
     ]
 
 
+def test_delete_entry_removes_selected_item(tmp_path):
+    path = tmp_path / "history.json"
+    store = TranscriptHistoryStore(path=path)
+    entries = [
+        TranscriptHistoryEntry.new(
+            text="keep",
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+        TranscriptHistoryEntry.new(
+            text="remove",
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+    ]
+    store.save(entries)
+
+    removed = store.delete_entry(entries[1])
+
+    assert removed == 1
+    assert [item.text for item in store.load()] == ["keep"]
+
+
 def test_export_and_import_roundtrip(tmp_path):
     source = TranscriptHistoryStore(path=tmp_path / "source.json")
     source.save(
