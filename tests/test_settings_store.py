@@ -17,6 +17,7 @@ from stt_app.config import (
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
 )
+from stt_app.persistence import backup_path
 from stt_app.settings_store import CURRENT_SCHEMA_VERSION, SettingsStore
 
 
@@ -95,6 +96,28 @@ def test_invalid_json_falls_back_to_defaults(tmp_path):
 
     assert settings.schema_version == CURRENT_SCHEMA_VERSION
     assert settings.hotkey == DEFAULT_HOTKEY
+    assert settings_path.exists() is False
+    quarantined = list(tmp_path.glob("settings.json.corrupt.*"))
+    assert len(quarantined) == 1
+    assert quarantined[0].read_text(encoding="utf-8") == "{not-json"
+
+
+def test_invalid_primary_settings_recovers_from_backup(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text("{not-json", encoding="utf-8")
+    backup = {
+        "hotkey": "Ctrl+Shift+D",
+        "engine": "openai",
+    }
+    backup_path(settings_path).write_text(json.dumps(backup), encoding="utf-8")
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.hotkey == "Ctrl+Shift+D"
+    assert settings.engine == "openai"
+    restored = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert restored["hotkey"] == "Ctrl+Shift+D"
+    assert restored["engine"] == "openai"
 
 
 def test_invalid_enum_values_fall_back_to_defaults(tmp_path):

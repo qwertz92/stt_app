@@ -79,6 +79,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._provider_key_edits: dict[str, QtWidgets.QLineEdit] = {}
         self._provider_status_labels: dict[str, QtWidgets.QLabel] = {}
         self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
+        self._provider_pending_clear: set[str] = set()
         self._provider_test_history: dict[str, tuple[bool, str, str]] = {}
         self._active_connection_test_thread: threading.Thread | None = None
         self._history_copy_feedback_timer = QtCore.QTimer(self)
@@ -479,10 +480,15 @@ class SettingsDialog(QtWidgets.QDialog):
             key_field = QtWidgets.QLineEdit()
             key_field.setEchoMode(QtWidgets.QLineEdit.Password)
             key_field.setPlaceholderText(
-                "Enter new key to update; leave empty to keep stored key."
+                "Enter new key to update; use Clear saved to remove the stored key."
             )
             key_field.textChanged.connect(
                 lambda _text, p=provider: self._on_provider_key_changed(p)
+            )
+            clear_button = QtWidgets.QPushButton("Clear saved")
+            clear_button.setToolTip("Delete the stored key for this provider on Save.")
+            clear_button.clicked.connect(
+                lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
             )
 
             status_badge = QtWidgets.QLabel("Not configured")
@@ -500,6 +506,7 @@ class SettingsDialog(QtWidgets.QDialog):
             field_row.setContentsMargins(0, 0, 0, 0)
             field_row.setSpacing(8)
             field_row.addWidget(key_field, 1)
+            field_row.addWidget(clear_button, 0)
             field_row.addWidget(status_badge, 0)
             provider_layout.addRow(title, field_row_widget)
 
@@ -969,6 +976,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_local_model_views()
 
     def _on_provider_key_changed(self, provider: str) -> None:
+        key_field = self._provider_key_edits.get(provider)
+        if key_field is not None and key_field.text().strip():
+            self._provider_pending_clear.discard(provider)
         self._refresh_provider_key_status(provider)
         self._update_import_engine_note()
 
@@ -1034,6 +1044,16 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             return
 
+        if provider in self._provider_pending_clear:
+            self._set_provider_status_badge(
+                provider,
+                "Will clear on Save",
+                text_color="#b26a00",
+                background="#fff3e0",
+                border="#ffcc80",
+            )
+            return
+
         source = self._stored_key_source(provider)
         if source in {"keyring", "legacy-keyring"}:
             label = "Stored securely"
@@ -1079,6 +1099,15 @@ class SettingsDialog(QtWidgets.QDialog):
     def _refresh_provider_key_statuses(self) -> None:
         for provider in self._provider_key_edits:
             self._refresh_provider_key_status(provider)
+
+    def _mark_provider_key_for_clear(self, provider: str) -> None:
+        key_field = self._provider_key_edits.get(provider)
+        if key_field is None:
+            return
+        key_field.clear()
+        self._provider_pending_clear.add(provider)
+        self._refresh_provider_key_status(provider)
+        self._update_import_engine_note()
 
     def _import_engine_has_api_key(self, engine: str) -> bool:
         engine_name = str(engine or "").strip().lower()
@@ -1747,6 +1776,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._apply_secret_store_options()
         key_storage_errors: list[str] = []
+        pending_clear = set(self._provider_pending_clear)
 
         openai_value = self.openai_key_edit.text().strip()
         deepgram_value = self.deepgram_key_edit.text().strip()
@@ -1762,6 +1792,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 )
             except Exception as exc:
                 key_storage_errors.append(f"OpenAI: {exc}")
+        elif "openai" in pending_clear:
+            try:
+                self._secret_store.delete_api_key("openai")
+                has_openai_key = False
+            except Exception as exc:
+                key_storage_errors.append(f"OpenAI delete: {exc}")
         if deepgram_value:
             try:
                 self._secret_store.set_api_key("deepgram", deepgram_value)
@@ -1771,6 +1807,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 )
             except Exception as exc:
                 key_storage_errors.append(f"Deepgram: {exc}")
+        elif "deepgram" in pending_clear:
+            try:
+                self._secret_store.delete_api_key("deepgram")
+                has_deepgram_key = False
+            except Exception as exc:
+                key_storage_errors.append(f"Deepgram delete: {exc}")
         if assemblyai_value:
             try:
                 self._secret_store.set_api_key("assemblyai", assemblyai_value)
@@ -1780,6 +1822,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 )
             except Exception as exc:
                 key_storage_errors.append(f"AssemblyAI: {exc}")
+        elif "assemblyai" in pending_clear:
+            try:
+                self._secret_store.delete_api_key("assemblyai")
+                has_assemblyai_key = False
+            except Exception as exc:
+                key_storage_errors.append(f"AssemblyAI delete: {exc}")
         if groq_value:
             try:
                 self._secret_store.set_api_key("groq", groq_value)
@@ -1789,6 +1837,14 @@ class SettingsDialog(QtWidgets.QDialog):
                 )
             except Exception as exc:
                 key_storage_errors.append(f"Groq: {exc}")
+        elif "groq" in pending_clear:
+            try:
+                self._secret_store.delete_api_key("groq")
+                has_groq_key = False
+            except Exception as exc:
+                key_storage_errors.append(f"Groq delete: {exc}")
+
+        self._provider_pending_clear.clear()
 
         if key_storage_errors:
             self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
@@ -1799,8 +1855,8 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         else:
             self.key_storage_status_label.setStyleSheet("color: #1b5e20;")
-            if any((openai_value, deepgram_value, assemblyai_value, groq_value)):
-                self.key_storage_status_label.setText("API key storage check: OK")
+            if any((openai_value, deepgram_value, assemblyai_value, groq_value)) or pending_clear:
+                self.key_storage_status_label.setText("API key storage updated.")
         self._refresh_provider_key_statuses()
         self._update_import_engine_note()
 

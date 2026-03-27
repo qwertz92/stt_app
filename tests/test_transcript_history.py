@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from stt_app.persistence import backup_path
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
 
@@ -87,6 +88,28 @@ def test_load_ignores_invalid_payload(tmp_path):
 
     assert len(entries) == 1
     assert entries[0].text == "ok"
+
+
+def test_history_recovers_from_backup_when_primary_is_invalid(tmp_path):
+    path = tmp_path / "history.json"
+    path.write_text("{not-json", encoding="utf-8")
+    backup_entries = [
+        {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "text": "recovered",
+            "engine": "local",
+            "model": "small",
+            "mode": "batch",
+        }
+    ]
+    backup_path(path).write_text(json.dumps(backup_entries), encoding="utf-8")
+    store = TranscriptHistoryStore(path=path)
+
+    entries = store.load()
+
+    assert [entry.text for entry in entries] == ["recovered"]
+    restored = json.loads(path.read_text(encoding="utf-8"))
+    assert restored[0]["text"] == "recovered"
 
 
 def test_add_entry_with_zero_limit_keeps_all_entries(tmp_path):

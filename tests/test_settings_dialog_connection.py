@@ -27,6 +27,7 @@ class _FakeSecretStore:
             for provider, value in self._values.items()
         }
         self.set_calls: list[tuple[str, str]] = []
+        self.delete_calls: list[str] = []
         self._insecure_enabled = False
 
     def get_api_key(self, provider: str) -> str | None:
@@ -41,6 +42,11 @@ class _FakeSecretStore:
         self._sources[provider] = (
             "insecure" if self._insecure_enabled else "keyring"
         )
+
+    def delete_api_key(self, provider: str) -> None:
+        self.delete_calls.append(provider)
+        self._values.pop(provider, None)
+        self._sources[provider] = "none"
 
     def set_insecure_fallback_enabled(self, enabled: bool) -> None:
         self._insecure_enabled = bool(enabled)
@@ -246,6 +252,23 @@ def test_provider_badge_shows_insecure_storage_source():
     dialog._refresh_provider_key_statuses()
 
     assert "insecure" in dialog._provider_status_labels["openai"].text().lower()
+    _ = app
+
+
+def test_save_can_clear_stored_provider_key():
+    dialog, app, secret_store = _make_dialog(
+        AppSettings(),
+        {"openai": "stored-key"},
+    )
+
+    dialog._mark_provider_key_for_clear("openai")
+    assert dialog._provider_status_labels["openai"].text() == "Will clear on Save"
+
+    dialog._save()
+
+    assert secret_store.delete_calls == ["openai"]
+    assert secret_store.get_api_key("openai") is None
+    assert dialog._provider_status_labels["openai"].text() == "Not configured"
     _ = app
 
 

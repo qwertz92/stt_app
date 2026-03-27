@@ -118,3 +118,21 @@ def test_insecure_fallback_stores_and_reads_key(tmp_path, monkeypatch):
 
     store.delete_api_key("groq")
     assert store.get_api_key("groq") is None
+
+
+def test_delete_api_key_also_removes_insecure_copy_when_fallback_disabled(
+    tmp_path,
+    monkeypatch,
+):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    store = KeyringSecretStore(
+        keyring_backend=FailingKeyringBackend(),
+        service_name="stt-app-test",
+    )
+    store.set_insecure_fallback_enabled(True)
+    store.set_api_key("openai", "sk-test")
+    store.set_insecure_fallback_enabled(False)
+
+    store.delete_api_key("openai")
+
+    assert store.get_api_key_source("openai") == "none"

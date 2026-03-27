@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 from .app_paths import transcript_history_path
+from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
 
 
 @dataclass(slots=True)
@@ -63,10 +63,7 @@ class TranscriptHistoryStore:
 
     def save(self, entries: list[TranscriptHistoryEntry]) -> None:
         payload = [asdict(item) for item in entries]
-        self._path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True),
-            encoding="utf-8",
-        )
+        atomic_write_json(self._path, payload, ensure_ascii=True, keep_backup=True)
 
     def add_entry(self, entry: TranscriptHistoryEntry, max_items: int) -> None:
         self.append_entries([entry], max_items=max_items)
@@ -109,10 +106,7 @@ class TranscriptHistoryStore:
         path.parent.mkdir(parents=True, exist_ok=True)
         entries = self.load()
         payload = [asdict(item) for item in entries]
-        path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True),
-            encoding="utf-8",
-        )
+        atomic_write_json(path, payload, ensure_ascii=True, keep_backup=False)
         return len(entries)
 
     def import_from_file(self, path: Path) -> list[TranscriptHistoryEntry]:
@@ -157,14 +151,18 @@ class TranscriptHistoryStore:
     def _load_from_path(cls, path: Path) -> list[TranscriptHistoryEntry]:
         if not path.exists():
             return []
-        try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        payload, source = load_json_with_backup(path, expected_type=list)
+        if payload is None:
+            quarantine_corrupt_file(path)
             return []
         try:
-            return cls._entries_from_payload(payload)
+            entries = cls._entries_from_payload(payload)
         except ValueError:
+            quarantine_corrupt_file(path)
             return []
+        if source == "backup":
+            cls(path=path).save(entries)
+        return entries
 
 
 def _normalize_limit(value: int) -> int:

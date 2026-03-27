@@ -7,6 +7,7 @@ from typing import Protocol
 
 from .config import KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
 from .app_paths import insecure_keys_path
+from .persistence import atomic_write_json
 
 
 class SecretStore(Protocol):
@@ -64,10 +65,11 @@ class KeyringSecretStore:
         return result
 
     def _write_insecure_store(self, payload: dict[str, str]) -> None:
-        self._insecure_path.parent.mkdir(parents=True, exist_ok=True)
-        self._insecure_path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True),
-            encoding="utf-8",
+        atomic_write_json(
+            self._insecure_path,
+            payload,
+            ensure_ascii=True,
+            keep_backup=False,
         )
 
     def _set_insecure_api_key(self, provider: str, api_key: str) -> None:
@@ -162,11 +164,10 @@ class KeyringSecretStore:
                 self._keyring.delete_password(service_name, provider)
             except Exception:
                 pass
-        if self._insecure_fallback_enabled:
-            try:
-                self._delete_insecure_api_key(provider)
-            except Exception:
-                pass
+        try:
+            self._delete_insecure_api_key(provider)
+        except Exception:
+            pass
 
     def has_api_key(self, provider: str) -> bool:
         return self.get_api_key(provider) is not None

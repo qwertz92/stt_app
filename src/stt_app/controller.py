@@ -53,8 +53,8 @@ from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHel
 
 
 class DictationController(QtCore.QObject):
-    transcription_ready = QtCore.Signal(str)
-    transcription_failed = QtCore.Signal(str)
+    transcription_ready = QtCore.Signal(int, str)
+    transcription_failed = QtCore.Signal(int, str)
     transcription_partial = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
     model_preload_done = QtCore.Signal(bool, str)  # (success, message)
@@ -98,9 +98,7 @@ class DictationController(QtCore.QObject):
         self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
         self._last_failed_wav_bytes: bytes = b""
-        self._last_failed_settings: AppSettings | None = None
         self._last_transcribe_settings: AppSettings | None = None
-        self._transcription_cancel_requested = False
         self._active_batch_settings: AppSettings | None = None
         self._streaming_recording = False
         self._active_stream_transcriber = None
@@ -123,9 +121,13 @@ class DictationController(QtCore.QObject):
         self._preload_cancel_requested = False
         self._preload_download_process: subprocess.Popen | None = None
         self._preload_download_lock = threading.Lock()
+        self._request_token_counter = 0
+        self._active_request_token: int | None = None
+        self._canceled_request_tokens: set[int] = set()
+        self._request_audio_by_token: dict[int, tuple[bytes, AppSettings]] = {}
 
-        self.transcription_ready.connect(self._on_transcription_ready)
-        self.transcription_failed.connect(self._on_transcription_failed)
+        self.transcription_ready.connect(self._on_transcription_ready_result)
+        self.transcription_failed.connect(self._on_transcription_failed_result)
         self.transcription_partial.connect(self._on_transcription_partial)
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
         self.model_preload_done.connect(self._on_model_preload_done)
@@ -172,6 +174,9 @@ class DictationController(QtCore.QObject):
                 preload_future.cancel()
             except Exception:
                 pass
+        self._active_request_token = None
+        self._canceled_request_tokens.clear()
+        self._request_audio_by_token.clear()
         self._reset_streaming_state()
         self._executor.shutdown(wait=False, cancel_futures=False)
         self._preload_executor.shutdown(wait=False, cancel_futures=False)
@@ -252,6 +257,7 @@ class DictationController(QtCore.QObject):
     def start_recording(self) -> None:
         self._recording_start_in_progress = True
         try:
+            self._supersede_active_request_result()
             self._overlay.set_state(
                 "Listening",
                 "Starting recording...",
@@ -451,7 +457,7 @@ class DictationController(QtCore.QObject):
                 )
                 return
             self._overlay.set_state("Processing", "Finalizing streaming transcript...")
-            self._executor.submit(self._finalize_stream_worker)
+            self._submit_stream_finalize()
             return
 
         if not wav_bytes:
@@ -461,10 +467,8 @@ class DictationController(QtCore.QObject):
 
         settings_snapshot = self._active_batch_settings or replace(self._settings)
         self._active_batch_settings = None
-        self._last_transcribe_settings = replace(settings_snapshot)
-        self._transcription_cancel_requested = False
         self._overlay.set_state("Processing", "Transcribing audio...")
-        self._executor.submit(self._transcribe_worker, wav_bytes, settings_snapshot)
+        self._submit_batch_transcription(wav_bytes, settings_snapshot)
 
     def _auto_stop_from_vad(self) -> None:
         QtCore.QTimer.singleShot(0, self.stop_recording)
@@ -569,6 +573,106 @@ class DictationController(QtCore.QObject):
         with self._transcriber_cache_lock:
             self._transcriber_cache = None
             self._transcriber_cache_key = None
+
+    def _next_request_token(self) -> int:
+        self._request_token_counter += 1
+        return self._request_token_counter
+
+    def _store_request_audio(
+        self,
+        request_token: int,
+        wav_bytes: bytes,
+        settings: AppSettings,
+    ) -> None:
+        self._request_audio_by_token[request_token] = (
+            bytes(wav_bytes),
+            replace(settings),
+        )
+
+    def _promote_request_audio_for_retry(self, request_token: int) -> bool:
+        payload = self._request_audio_by_token.pop(request_token, None)
+        if payload is None:
+            return False
+        wav_bytes, _settings = payload
+        self._last_failed_wav_bytes = wav_bytes
+        return True
+
+    def _drop_request_audio(self, request_token: int) -> None:
+        self._request_audio_by_token.pop(request_token, None)
+
+    def _cancel_request_result(
+        self,
+        request_token: int | None,
+        *,
+        preserve_audio: bool,
+    ) -> bool:
+        if request_token is None:
+            return False
+        self._canceled_request_tokens.add(request_token)
+        preserved = False
+        if preserve_audio:
+            preserved = self._promote_request_audio_for_retry(request_token)
+            if not preserved:
+                self._last_failed_wav_bytes = b""
+        else:
+            self._drop_request_audio(request_token)
+        if self._active_request_token == request_token:
+            self._active_request_token = None
+            self._last_transcribe_settings = None
+        return preserved
+
+    def _supersede_active_request_result(self) -> None:
+        self._cancel_request_result(
+            self._active_request_token,
+            preserve_audio=True,
+        )
+
+    def _submit_batch_transcription(
+        self,
+        wav_bytes: bytes,
+        settings: AppSettings,
+    ) -> None:
+        request_token = self._next_request_token()
+        self._active_request_token = request_token
+        self._last_transcribe_settings = replace(settings)
+        self._store_request_audio(request_token, wav_bytes, settings)
+        self._executor.submit(
+            self._transcribe_worker,
+            request_token,
+            wav_bytes,
+            settings,
+        )
+
+    def _submit_stream_finalize(self) -> None:
+        request_token = self._next_request_token()
+        self._active_request_token = request_token
+        self._executor.submit(self._finalize_stream_worker, request_token)
+
+    def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
+        retry_available = (
+            bool(self._last_failed_wav_bytes)
+            if has_retry_audio is None
+            else bool(has_retry_audio)
+        )
+        saved_wav_available = bool(
+            self._settings.save_last_wav and debug_audio_path().is_file()
+        )
+        if retry_available:
+            parts = [
+                "Captured audio is preserved in memory.",
+                "Fix provider/settings if needed, then use Retry to transcribe the same recording again with the current settings.",
+            ]
+            if saved_wav_available:
+                parts.append(
+                    "You can also use History -> Use last recording to transcribe the saved WAV with another service."
+                )
+            return " ".join(parts)
+        if saved_wav_available:
+            return (
+                "This recording is still available as the saved last WAV. "
+                "Use History -> Use last recording to transcribe it with the current settings or another service."
+            )
+        return "You can start a new recording and try again."
 
     # -- Model preloading -----------------------------------------------------
 
@@ -871,66 +975,64 @@ class DictationController(QtCore.QObject):
 
     # -- Transcription workers ------------------------------------------------
 
-    def _transcribe_worker(self, wav_bytes: bytes, settings: AppSettings) -> None:
+    def _transcribe_worker(
+        self,
+        request_token: int,
+        wav_bytes: bytes,
+        settings: AppSettings,
+    ) -> None:
         try:
             transcriber = self._get_or_create_transcriber(settings)
         except TranscriptionError as exc:
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_settings = replace(settings)
-            self.transcription_failed.emit(str(exc))
+            self.transcription_failed.emit(request_token, str(exc))
             return
         except Exception as exc:
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_settings = replace(settings)
             self._logger.exception("Failed to create transcriber")
             self.transcription_failed.emit(
+                request_token,
                 f"Transcriber initialization failed: {exc}"
             )
             return
 
         try:
             text = transcriber.transcribe_batch(wav_bytes)
-            if not self._transcription_cancel_requested:
-                self._last_failed_wav_bytes = b""
-                self._last_failed_settings = None
-            self.transcription_ready.emit(text)
+            self.transcription_ready.emit(request_token, text)
         except NotImplementedError as exc:
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_settings = replace(settings)
-            self.transcription_failed.emit(str(exc))
+            self.transcription_failed.emit(request_token, str(exc))
         except TranscriptionError as exc:
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_settings = replace(settings)
-            self.transcription_failed.emit(str(exc))
+            self.transcription_failed.emit(request_token, str(exc))
         except FileNotFoundError as exc:
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_settings = replace(settings)
             self._logger.exception("Transcription failed due to missing file path")
             self.transcription_failed.emit(
+                request_token,
                 "Transcription failed: missing file path. "
                 "Check input path and TEMP/TMP folder configuration. "
                 f"({exc})"
             )
         except Exception as exc:
-            self._last_failed_wav_bytes = bytes(wav_bytes)
-            self._last_failed_settings = replace(settings)
             self._logger.exception("Unexpected transcription failure")
-            self.transcription_failed.emit(f"Unexpected transcription error: {exc}")
+            self.transcription_failed.emit(
+                request_token,
+                f"Unexpected transcription error: {exc}",
+            )
 
-    def _finalize_stream_worker(self) -> None:
+    def _finalize_stream_worker(self, request_token: int) -> None:
         try:
             transcriber = self._active_stream_transcriber
             if transcriber is None:
                 raise TranscriptionError("Streaming session was not initialized.")
             text = transcriber.stop_stream()
-            self.transcription_ready.emit(text)
+            self.transcription_ready.emit(request_token, text)
         except NotImplementedError as exc:
-            self.transcription_failed.emit(str(exc))
+            self.transcription_failed.emit(request_token, str(exc))
         except TranscriptionError as exc:
-            self.transcription_failed.emit(str(exc))
+            self.transcription_failed.emit(request_token, str(exc))
         except Exception as exc:
             self._logger.exception("Unexpected streaming finalization failure")
-            self.transcription_failed.emit(f"Unexpected streaming error: {exc}")
+            self.transcription_failed.emit(
+                request_token,
+                f"Unexpected streaming error: {exc}",
+            )
         finally:
             self._focus_poll_timer.stop()
             self._active_stream_transcriber = None
@@ -962,7 +1064,11 @@ class DictationController(QtCore.QObject):
                 return
             self._stream_chunk_error_reported = True
             self._logger.exception("Failed to push streaming audio chunk")
-            self.transcription_failed.emit(f"Streaming chunk push failed: {exc}")
+            request_token = self._active_request_token or self._next_request_token()
+            self.transcription_failed.emit(
+                request_token,
+                f"Streaming chunk push failed: {exc}",
+            )
 
     def _get_or_create_transcriber(self, settings: AppSettings):
         cache_key = (
@@ -986,18 +1092,32 @@ class DictationController(QtCore.QObject):
                 self._transcriber_cache_key = cache_key
             return self._transcriber_cache
 
-    @QtCore.Slot(str)
-    def _on_transcription_ready(self, text: str) -> None:
-        if self._transcription_cancel_requested:
-            self._transcription_cancel_requested = False
-            self._last_transcribe_settings = None
-            self._overlay.set_state("Done", "Transcription canceled.")
-            self._reset_streaming_state()
-            return
+    @QtCore.Slot(int, str)
+    def _on_transcription_ready_result(self, request_token: int, text: str) -> None:
+        self._on_transcription_ready(text, request_token=request_token)
+
+    def _on_transcription_ready(
+        self,
+        text: str,
+        *,
+        request_token: int | None = None,
+    ) -> None:
+        if request_token is not None:
+            if request_token in self._canceled_request_tokens:
+                self._canceled_request_tokens.discard(request_token)
+                self._drop_request_audio(request_token)
+                return
+            if self._active_request_token not in {None, request_token}:
+                self._drop_request_audio(request_token)
+                return
+            self._active_request_token = None
+            self._drop_request_audio(request_token)
+            self._last_failed_wav_bytes = b""
 
         session_mode = self._active_session_mode
         self._focus_poll_timer.stop()
         self._streaming_recording = False
+        stream_settings = self._active_stream_settings
         self._active_stream_transcriber = None
         self._active_stream_settings = None
         self._stream_abort_requested = False
@@ -1029,7 +1149,7 @@ class DictationController(QtCore.QObject):
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
         try:
-            used = self._last_transcribe_settings or self._settings
+            used = self._last_transcribe_settings or stream_settings or self._settings
             model_name = used.model_size
             if used.engine == "groq":
                 model_name = used.groq_model
@@ -1048,14 +1168,34 @@ class DictationController(QtCore.QObject):
             self._last_transcribe_settings = None
         self._reset_streaming_state()
 
-    @QtCore.Slot(str)
-    def _on_transcription_failed(self, error_text: str) -> None:
-        if self._transcription_cancel_requested:
-            self._transcription_cancel_requested = False
-            self._last_transcribe_settings = None
-            self._overlay.set_state("Done", "Transcription canceled.")
-            self._reset_streaming_state()
-            return
+    @QtCore.Slot(int, str)
+    def _on_transcription_failed_result(
+        self,
+        request_token: int,
+        error_text: str,
+    ) -> None:
+        self._on_transcription_failed(error_text, request_token=request_token)
+
+    def _on_transcription_failed(
+        self,
+        error_text: str,
+        *,
+        request_token: int | None = None,
+    ) -> None:
+        preserved_audio = bool(self._last_failed_wav_bytes)
+        if request_token is not None:
+            if request_token in self._canceled_request_tokens:
+                self._canceled_request_tokens.discard(request_token)
+                self._drop_request_audio(request_token)
+                return
+            if self._active_request_token not in {None, request_token}:
+                self._drop_request_audio(request_token)
+                return
+            self._active_request_token = None
+            preserved_audio = self._promote_request_audio_for_retry(request_token)
+            if not preserved_audio:
+                self._last_failed_wav_bytes = b""
+
         self._focus_poll_timer.stop()
         self._streaming_recording = False
         self._active_stream_transcriber = None
@@ -1069,7 +1209,7 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to persist failed recording WAV")
         self._overlay.set_state(
             "Error",
-            f"{error_text} Use Retry to run the same audio again.",
+            f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}",
         )
 
     @QtCore.Slot(str)
@@ -1431,12 +1571,13 @@ class DictationController(QtCore.QObject):
         if not self._last_failed_wav_bytes:
             self._overlay.set_state("Error", "No failed transcription to retry.")
             return False
-        settings = self._last_failed_settings or replace(self._settings)
-        self._transcription_cancel_requested = False
-        self._overlay.set_state("Processing", "Retrying transcription...")
-        self._executor.submit(
-            self._transcribe_worker, self._last_failed_wav_bytes, settings
+        settings = replace(self._settings)
+        self._supersede_active_request_result()
+        self._overlay.set_state(
+            "Processing",
+            "Retrying transcription with current settings...",
         )
+        self._submit_batch_transcription(self._last_failed_wav_bytes, settings)
         return True
 
     def recent_transcriptions(self, limit: int | None = None):
@@ -1508,9 +1649,19 @@ class DictationController(QtCore.QObject):
             self._reset_streaming_state()
             return
 
-        # Cancel in-progress transcription result delivery (best-effort).
-        self._transcription_cancel_requested = True
-        self._overlay.set_state("Done", "Transcription canceled.")
+        request_token = self._active_request_token
+        if request_token is not None:
+            preserved_audio = self._cancel_request_result(
+                request_token,
+                preserve_audio=True,
+            )
+            self._overlay.set_state(
+                "Done",
+                f"Transcription canceled. {self._retry_guidance(has_retry_audio=preserved_audio)}",
+            )
+            return
+
+        self._overlay.set_state("Done", "Nothing to cancel.")
 
     def set_overlay_opacity_percent(self, value: int) -> None:
         clamped = max(

@@ -1,11 +1,15 @@
 from __future__ import annotations
 
-import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from .app_paths import settings_path
+from .persistence import (
+    atomic_write_json,
+    load_json_with_backup,
+    quarantine_corrupt_file,
+)
 from .config import (
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_CANCEL_HOTKEY,
@@ -271,16 +275,16 @@ class SettingsStore:
             self.save(settings)
             return settings
 
-        raw: dict[str, Any]
-        try:
-            raw = json.loads(self._path.read_text(encoding="utf-8"))
-            if not isinstance(raw, dict):
-                raw = {}
-        except (OSError, json.JSONDecodeError):
-            raw = {}
+        payload, source = load_json_with_backup(self._path, expected_type=dict)
+        if payload is None:
+            quarantine_corrupt_file(self._path)
+            settings = AppSettings()
+            return settings
+
+        raw = dict(payload)
 
         settings = AppSettings.from_dict(raw)
-        if raw != settings.to_dict():
+        if source == "backup" or raw != settings.to_dict():
             self.save(settings)
 
         return settings
@@ -296,10 +300,7 @@ class SettingsStore:
         ):
             payload.pop(secret_key, None)
 
-        self._path.write_text(
-            json.dumps(payload, indent=2, ensure_ascii=True),
-            encoding="utf-8",
-        )
+        atomic_write_json(self._path, payload, ensure_ascii=True, keep_backup=True)
 
 
 def _normalize_hotkey(value: str, *, default: str) -> str:
