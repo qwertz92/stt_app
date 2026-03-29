@@ -31,7 +31,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Win32 RegisterHotKey + SendInput (Windows 11 only; Linux/WSL for dev tooling)
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
-- Remote providers: AssemblyAI (SDK), OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket)
+- Remote providers: AssemblyAI (SDK), OpenAI (REST API), Groq (SDK),
+  Deepgram (REST + WebSocket), ElevenLabs (REST API)
 - keyring for secret storage
 
 ## Architecture
@@ -68,6 +69,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms prevents stale paste.
+- **Windows packaging**: end-user builds are layered. PyInstaller `onedir`
+  is the base portable bundle; Inno Setup wraps that bundle into the
+  installer; GitHub Actions builds artifacts manually on demand and publishes
+  only on version tags.
 
 ## Core flow
 
@@ -79,7 +84,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Engines
 
-- **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram
+- **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
 - All engine/model constants defined in `config.py`
 

@@ -72,7 +72,7 @@ python -m pip install --index-url https://your-artifactory.corp/pypi/simple -r r
 
 ---
 
-## Packaging as EXE (PyInstaller)
+## Packaging as EXE / Installer
 
 The project includes a PyInstaller spec file `stt_app.spec` and a release build
 script `scripts/build_windows_release.ps1`.
@@ -81,13 +81,23 @@ script `scripts/build_windows_release.ps1`.
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_release.ps1
 ```
 
+To wrap that portable bundle in a Windows installer, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_installer.ps1
+```
+
 Notes:
 
 - The current recommended artifact is a **PyInstaller `onedir` bundle** for
   end-user releases.
+- The installer is built with **Inno Setup** on top of that same `onedir`
+  bundle. It does not create a second packaging path.
 - The resulting EXE should be code-signed for corporate environments (unsigned binaries may be blocked by EDR/antivirus).
 - Some EDR solutions may block `SendInput` (used for text insertion). This requires a policy exception for the signed application.
 - The spec does not bundle model files — the user still needs to download models separately.
+- The repository also contains `.github/workflows/windows-release.yml` for
+  reproducible Windows release builds in GitHub Actions.
 - See `docs/windows-distribution.md` for the recommended release path.
 
 ---

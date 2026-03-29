@@ -460,3 +460,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Removed non-essential overlay button tooltips and the Windows tray tooltip
     to reduce transient `QLabel` helper windows that can trigger harmless but
     noisy `QWindowsWindow::setGeometry` warnings on some systems.
+- **Windows packaging moved from "spec exists" to a real release pipeline:** The
+  repo now treats PyInstaller `onedir` as the portable base artifact, adds an
+  Inno Setup wrapper on top of that portable bundle, and introduces a GitHub
+  Actions workflow that builds candidate artifacts on manual dispatch and
+  publishes official release assets on `v*` tags.
+- **Distribution guidance clarified for maintainers and end users:** The docs now
+  explain what `onedir` actually means, when to use the ZIP vs the installer,
+  and why the release workflow should be manual or tag-driven instead of
+  running on every commit.

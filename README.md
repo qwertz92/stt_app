@@ -40,6 +40,19 @@ python main.py
 
 </details>
 
+## End-user Windows download
+
+For end users, the recommended path is a GitHub Release asset, not the source
+repo.
+
+- `stt_app-win-x64.zip` is the portable bundle: unzip it and run
+  `stt_app.exe`.
+- `stt_app-win-x64-setup.exe` is the installer: run it once, then start the
+  app from the Start menu.
+
+Those artifacts only exist after a maintainer builds and publishes a release.
+The source repository by itself is still the developer path.
+
 ## How to dictate
 
 1. Click into any text field.
