@@ -443,3 +443,8 @@ Agents and developers: use this as a knowledge base for past issues and solution
     the same font size as the detail pane, and combo-box popups were switched
     to uniform single-pass list views to avoid the "jumping" popup effect on
     open.
+
+- **Windows tooltip noise was reduced defensively:**
+  - Removed non-essential overlay button tooltips and the Windows tray tooltip
+    to reduce transient `QLabel` helper windows that can trigger harmless but
+    noisy `QWindowsWindow::setGeometry` warnings on some systems.

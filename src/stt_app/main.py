@@ -153,7 +153,8 @@ def _create_tray_icon(
     icon = style.standardIcon(QtWidgets.QStyle.SP_MediaVolume)
 
     tray_icon = QtWidgets.QSystemTrayIcon(icon, app)
-    tray_icon.setToolTip(APP_DISPLAY_NAME)
+    if sys.platform != "win32":
+        tray_icon.setToolTip(APP_DISPLAY_NAME)
 
     menu = QtWidgets.QMenu()
 

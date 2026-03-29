@@ -68,7 +68,6 @@ class OverlayUI(QtWidgets.QWidget):
         self._history_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._history_button.setFixedWidth(68)
         self._history_button.setFixedHeight(24)
-        self._history_button.setToolTip("Show recent transcriptions")
         self._history_button.clicked.connect(self.history_requested.emit)
 
         self._copy_button = QtWidgets.QPushButton("Copy")
@@ -76,7 +75,6 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._copy_button.setFixedWidth(64)
         self._copy_button.setFixedHeight(24)
-        self._copy_button.setToolTip("Copy overlay text")
         self._copy_button.clicked.connect(self.copy_detail_text)
 
         self._clear_button = QtWidgets.QPushButton("Clear")
@@ -84,7 +82,6 @@ class OverlayUI(QtWidgets.QWidget):
         self._clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._clear_button.setFixedWidth(64)
         self._clear_button.setFixedHeight(24)
-        self._clear_button.setToolTip("Hide current text from overlay")
         self._clear_button.clicked.connect(self.clear_detail_text)
 
         self._retry_button = QtWidgets.QPushButton("Retry")
