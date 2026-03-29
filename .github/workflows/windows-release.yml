@@ -1,0 +1,85 @@
+name: Windows Release
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-release:
+    runs-on: windows-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+
+      - name: Build portable Windows bundle
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_release.ps1
+
+      - name: Build Windows installer
+        shell: pwsh
+        run: powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_installer.ps1 -SkipBundleBuild
+
+      - name: Upload workflow artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: stt_app-windows-release
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            release/stt_app-win-x64
+            release/stt_app-win-x64.zip
+            release/installer/stt_app-win-x64-setup.exe
+
+      - name: Publish GitHub release assets
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
+          @"
+          Windows release assets for stt_app.
+
+          Assets:
+          - stt_app-win-x64.zip: portable onedir bundle
+          - stt_app-win-x64-setup.exe: Inno Setup installer
+          "@ | Set-Content -Encoding UTF8 $notesPath
+
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+              gh release upload $tag `
+                  "release\stt_app-win-x64.zip" `
+                  "release\installer\stt_app-win-x64-setup.exe" `
+                  --clobber
+          }
+          else {
+              gh release create $tag `
+                  "release\stt_app-win-x64.zip" `
+                  "release\installer\stt_app-win-x64-setup.exe" `
+                  --title $tag `
+                  --notes-file $notesPath
+          }
