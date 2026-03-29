@@ -14,6 +14,7 @@ from .config import (
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
+    DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_GROQ_MODEL,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
@@ -27,6 +28,7 @@ from .config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DOC_MODELS_PATH,
     DEEPGRAM_MODELS,
+    ELEVENLABS_MODELS,
     ENGINE_LANGUAGE_MODES,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
@@ -72,6 +74,8 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "universal-3-pro": "universal-3-pro (latest premium batch model)",
     "universal": "universal (broad language coverage)",
     "slam-1": "slam-1 (speech understanding model)",
+    "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
+    "scribe_v1": "scribe_v1 (legacy batch model)",
 }
 
 _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
@@ -86,6 +90,10 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
         (value, _REMOTE_MODEL_LABELS.get(value, value))
         for value in ASSEMBLYAI_MODELS
     ),
+    "elevenlabs": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value))
+        for value in ELEVENLABS_MODELS
+    ),
 }
 
 _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
@@ -93,6 +101,7 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "openai": DEFAULT_OPENAI_MODEL,
     "deepgram": DEFAULT_DEEPGRAM_MODEL,
     "assemblyai": DEFAULT_ASSEMBLYAI_MODEL,
+    "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
 }
 
 
@@ -137,6 +146,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._loaded_settings,
                 "assemblyai_model",
                 DEFAULT_ASSEMBLYAI_MODEL,
+            ),
+            "elevenlabs": getattr(
+                self._loaded_settings,
+                "elevenlabs_model",
+                DEFAULT_ELEVENLABS_MODEL,
             ),
         }
         self._active_connection_test_thread: threading.Thread | None = None
@@ -272,6 +286,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "groq": "Remote (Groq)",
             "openai": "Remote (OpenAI)",
             "deepgram": "Remote (Deepgram)",
+            "elevenlabs": "Remote (ElevenLabs)",
         }
         for value in VALID_ENGINES:
             self.engine_combo.addItem(engine_labels.get(value, value), value)
@@ -520,6 +535,7 @@ class SettingsDialog(QtWidgets.QDialog):
             ("groq", "Groq"),
             ("openai", "OpenAI"),
             ("deepgram", "Deepgram"),
+            ("elevenlabs", "ElevenLabs"),
         )
         for provider, title in provider_rows:
             key_field = QtWidgets.QLineEdit()
@@ -568,6 +584,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.groq_key_edit = self._provider_key_edits["groq"]
         self.openai_key_edit = self._provider_key_edits["openai"]
         self.deepgram_key_edit = self._provider_key_edits["deepgram"]
+        self.elevenlabs_key_edit = self._provider_key_edits["elevenlabs"]
         provider_note = QtWidgets.QLabel(
             "Status badges show where each key is currently sourced from."
         )
@@ -600,6 +617,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.test_conn_target_combo.addItem("Groq only", "groq")
         self.test_conn_target_combo.addItem("OpenAI only", "openai")
         self.test_conn_target_combo.addItem("Deepgram only", "deepgram")
+        self.test_conn_target_combo.addItem("ElevenLabs only", "elevenlabs")
         self.test_conn_target_combo.setToolTip(
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
@@ -674,6 +692,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "groq": "Remote (Groq)",
             "openai": "Remote (OpenAI)",
             "deepgram": "Remote (Deepgram)",
+            "elevenlabs": "Remote (ElevenLabs)",
         }
         for value in VALID_ENGINES:
             self.import_engine_combo.addItem(
@@ -867,6 +886,12 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         elif provider == "deepgram":
             note = "Deepgram uses the selected model for batch and streaming transcription."
+        elif provider == "elevenlabs":
+            note = (
+                "ElevenLabs currently uses the selected model for batch transcription "
+                "and imports. Realtime Scribe is documented, but not yet wired into "
+                "this app's streaming mode."
+            )
 
         self.remote_model_note_label.setText(note)
         self.remote_model_combo.blockSignals(False)
@@ -972,6 +997,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 "language; selecting German/English sends a language hint."
             )
 
+        if engine == "elevenlabs":
+            return (
+                "ElevenLabs Scribe models are multilingual. 'Auto' lets the provider "
+                "detect language; selecting German/English sends a language hint."
+            )
+
         return ""
 
     def _update_language_availability(self, preferred_mode: str | None = None) -> None:
@@ -1023,7 +1054,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 "background-color: #e8f5e9; color: #1b5e20;"
             )
         else:
-            label = engine.capitalize()
+            label = self._provider_label(engine)
             self.engine_indicator.setText(f"Engine: REMOTE ({label})")
             self.engine_indicator.setStyleSheet(
                 "font-weight: bold; padding: 4px; border-radius: 4px; "
@@ -1103,6 +1134,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "groq": "Groq",
             "openai": "OpenAI",
             "deepgram": "Deepgram",
+            "elevenlabs": "ElevenLabs",
         }
         return labels.get(provider, provider)
 
@@ -1308,7 +1340,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _providers_for_connection_target(self, target: str) -> list[str]:
         normalized = str(target or "").strip().lower()
-        remote_providers = ("assemblyai", "groq", "openai", "deepgram")
+        remote_providers = ("assemblyai", "groq", "openai", "deepgram", "elevenlabs")
         if normalized == "all-configured":
             configured: list[str] = []
             for provider in remote_providers:
@@ -1386,6 +1418,23 @@ class SettingsDialog(QtWidgets.QDialog):
             transcriber = DeepgramTranscriber(
                 api_key=api_key,
                 model=self._remote_model_value_for_provider("deepgram"),
+            )
+            return transcriber.test_connection, None
+
+        if engine == "elevenlabs":
+            api_key = self._resolve_api_key("elevenlabs", self.elevenlabs_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+
+            from .transcriber.elevenlabs_provider import ElevenLabsTranscriber
+
+            transcriber = ElevenLabsTranscriber(
+                api_key=api_key,
+                language_mode=str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE),
+                model=self._remote_model_value_for_provider("elevenlabs"),
             )
             return transcriber.test_connection, None
 
@@ -1467,7 +1516,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         if len(details) > 1:
             parts = []
-            for provider in ("assemblyai", "groq", "openai", "deepgram"):
+            for provider in ("assemblyai", "groq", "openai", "deepgram", "elevenlabs"):
                 if provider not in details:
                     continue
                 provider_ok, _provider_msg = details[provider]
@@ -1541,6 +1590,11 @@ class SettingsDialog(QtWidgets.QDialog):
                     settings,
                     "assemblyai_model",
                     DEFAULT_ASSEMBLYAI_MODEL,
+                ),
+                "elevenlabs": getattr(
+                    settings,
+                    "elevenlabs_model",
+                    DEFAULT_ELEVENLABS_MODEL,
                 ),
             }
         )
@@ -1885,10 +1939,12 @@ class SettingsDialog(QtWidgets.QDialog):
             has_deepgram_key=self._loaded_settings.has_deepgram_key,
             has_assemblyai_key=self._loaded_settings.has_assemblyai_key,
             has_groq_key=self._loaded_settings.has_groq_key,
+            has_elevenlabs_key=getattr(self._loaded_settings, "has_elevenlabs_key", False),
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
             assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
+            elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
         )
 
     # ------------------------------------------------------------------
@@ -1965,6 +2021,9 @@ class SettingsDialog(QtWidgets.QDialog):
             self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
         )
         has_groq_key = bool(self._resolve_api_key("groq", self.groq_key_edit))
+        has_elevenlabs_key = bool(
+            self._resolve_api_key("elevenlabs", self.elevenlabs_key_edit)
+        )
 
         self._apply_secret_store_options()
         key_storage_errors: list[str] = []
@@ -1974,6 +2033,7 @@ class SettingsDialog(QtWidgets.QDialog):
         deepgram_value = self.deepgram_key_edit.text().strip()
         assemblyai_value = self.assemblyai_key_edit.text().strip()
         groq_value = self.groq_key_edit.text().strip()
+        elevenlabs_value = self.elevenlabs_key_edit.text().strip()
 
         if openai_value:
             try:
@@ -2035,6 +2095,21 @@ class SettingsDialog(QtWidgets.QDialog):
                 has_groq_key = False
             except Exception as exc:
                 key_storage_errors.append(f"Groq delete: {exc}")
+        if elevenlabs_value:
+            try:
+                self._secret_store.set_api_key("elevenlabs", elevenlabs_value)
+                self.elevenlabs_key_edit.clear()
+                has_elevenlabs_key = bool(
+                    self._resolve_api_key("elevenlabs", self.elevenlabs_key_edit)
+                )
+            except Exception as exc:
+                key_storage_errors.append(f"ElevenLabs: {exc}")
+        elif "elevenlabs" in pending_clear:
+            try:
+                self._secret_store.delete_api_key("elevenlabs")
+                has_elevenlabs_key = False
+            except Exception as exc:
+                key_storage_errors.append(f"ElevenLabs delete: {exc}")
 
         self._provider_pending_clear.clear()
 
@@ -2047,7 +2122,15 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         else:
             self.key_storage_status_label.setStyleSheet("color: #1b5e20;")
-            if any((openai_value, deepgram_value, assemblyai_value, groq_value)) or pending_clear:
+            if any(
+                (
+                    openai_value,
+                    deepgram_value,
+                    assemblyai_value,
+                    groq_value,
+                    elevenlabs_value,
+                )
+            ) or pending_clear:
                 self.key_storage_status_label.setText("API key storage updated.")
         self._refresh_provider_key_statuses()
         self._update_import_engine_note()
@@ -2094,10 +2177,12 @@ class SettingsDialog(QtWidgets.QDialog):
             has_deepgram_key=has_deepgram_key,
             has_assemblyai_key=has_assemblyai_key,
             has_groq_key=has_groq_key,
+            has_elevenlabs_key=has_elevenlabs_key,
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
             assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
+            elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
         )
 
         if history_limit_changed and requested_history_limit > 0:

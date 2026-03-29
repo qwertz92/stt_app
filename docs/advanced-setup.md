@@ -103,7 +103,7 @@ This happens when a corporate proxy (Zscaler, BlueCoat, Forcepoint) intercepts H
 **Affected features:**
 
 - Model download from HuggingFace Hub
-- All remote transcription providers (AssemblyAI, OpenAI, Groq, Deepgram)
+- All remote transcription providers (AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs)
 - Connection tests in the Settings dialog
 
 The app detects SSL errors and shows actionable instructions. The fix below applies to all HTTPS connections (model downloads AND remote providers).
@@ -132,6 +132,7 @@ If the automatic fix doesn't work, create a combined CA bundle manually.
 > | Groq        | `httpx`        | `SSL_CERT_FILE`*           |
 > | OpenAI      | `urllib`        | `SSL_CERT_FILE`            |
 > | Deepgram    | `urllib`        | `SSL_CERT_FILE`            |
+> | ElevenLabs  | `urllib`        | `SSL_CERT_FILE`            |
 > | AssemblyAI  | `requests`     | `REQUESTS_CA_BUNDLE`       |
 > | HuggingFace | `requests`     | `REQUESTS_CA_BUNDLE`       |
 >
@@ -443,4 +444,5 @@ src/stt_app/
     openai_provider.py      — OpenAI cloud transcription (batch)
     groq_provider.py        — Groq cloud transcription (batch)
     deepgram_provider.py    — Deepgram cloud transcription (batch + streaming)
+    elevenlabs_provider.py  — ElevenLabs cloud transcription (batch)
 ```

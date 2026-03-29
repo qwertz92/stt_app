@@ -83,6 +83,7 @@ def _make_dialog(settings: AppSettings, secret_values: dict[str, str] | None = N
 def test_engine_combo_hides_unimplemented_providers():
     dialog, app, _secret_store = _make_dialog(AppSettings())
     assert dialog.engine_combo.findData("openai") >= 0
+    assert dialog.engine_combo.findData("elevenlabs") >= 0
     assert dialog.engine_combo.findData("azure") == -1
     _ = app
 
@@ -175,6 +176,51 @@ def test_openai_connection_runs_in_background_worker(monkeypatch):
     engine_index = dialog.engine_combo.findData("openai")
     dialog.engine_combo.setCurrentIndex(engine_index)
     model_index = dialog.remote_model_combo.findData("gpt-4o-transcribe")
+    dialog.remote_model_combo.setCurrentIndex(model_index)
+
+    dialog._test_connection()
+
+    assert dialog.test_conn_button.isEnabled() is True
+    assert dialog.test_conn_result.text().startswith("\u2713")
+    assert "Connection OK" in dialog.test_conn_result.text()
+    _ = app
+
+
+def test_elevenlabs_connection_runs_in_background_worker(monkeypatch):
+    import stt_app.transcriber.elevenlabs_provider as elevenlabs_provider_module
+
+    class _FakeElevenLabsTranscriber:
+        def __init__(
+            self,
+            api_key: str,
+            language_mode: str = "auto",
+            model: str = "scribe_v2",
+        ) -> None:
+            self._api_key = api_key
+            self._language_mode = language_mode
+            self._model = model
+
+        def test_connection(self) -> tuple[bool, str]:
+            return True, "Connection OK — API key is valid."
+
+    monkeypatch.setattr(
+        settings_dialog_module.threading,
+        "Thread",
+        _ImmediateThread,
+    )
+    monkeypatch.setattr(
+        elevenlabs_provider_module,
+        "ElevenLabsTranscriber",
+        _FakeElevenLabsTranscriber,
+    )
+
+    dialog, app, _secret_store = _make_dialog(AppSettings(engine="local"))
+    target_index = dialog.test_conn_target_combo.findData("elevenlabs")
+    dialog.test_conn_target_combo.setCurrentIndex(target_index)
+    dialog.elevenlabs_key_edit.setText("el-key")
+    engine_index = dialog.engine_combo.findData("elevenlabs")
+    dialog.engine_combo.setCurrentIndex(engine_index)
+    model_index = dialog.remote_model_combo.findData("scribe_v1")
     dialog.remote_model_combo.setCurrentIndex(model_index)
 
     dialog._test_connection()
@@ -292,11 +338,18 @@ def test_save_persists_only_supported_remote_keys():
     dialog.groq_key_edit.setText("groq-key")
     dialog.openai_key_edit.setText("openai-key")
     dialog.deepgram_key_edit.setText("dg-key")
+    dialog.elevenlabs_key_edit.setText("el-key")
 
     dialog._save()
 
     providers = [provider for provider, _value in secret_store.set_calls]
-    assert providers == ["openai", "deepgram", "assemblyai", "groq"]
+    assert providers == [
+        "openai",
+        "deepgram",
+        "assemblyai",
+        "groq",
+        "elevenlabs",
+    ]
     assert "azure" not in providers
     assert dialog._loaded_settings.openai_model in {
         "gpt-4o-mini-transcribe",
@@ -311,4 +364,5 @@ def test_save_persists_only_supported_remote_keys():
         "universal",
         "slam-1",
     }
+    assert dialog._loaded_settings.elevenlabs_model in {"scribe_v2", "scribe_v1"}
     _ = app

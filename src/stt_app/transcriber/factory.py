@@ -1,10 +1,11 @@
 from __future__ import annotations
 
-from ..config import DEFAULT_ENGINE
+from ..config import DEFAULT_ELEVENLABS_MODEL, DEFAULT_ENGINE
 from ..settings_store import AppSettings
-from .base import ITranscriber
 from .assemblyai_provider import AssemblyAITranscriber
 from .deepgram_provider import DeepgramTranscriber
+from .base import ITranscriber
+from .elevenlabs_provider import ElevenLabsTranscriber
 from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
 from .openai_provider import OpenAITranscriber
@@ -57,6 +58,15 @@ def create_transcriber(
             api_key=api_key,
             language_mode=settings.language_mode,
             model=settings.deepgram_model,
+        )
+    if settings.engine == "elevenlabs":
+        api_key = ""
+        if secret_store is not None:
+            api_key = secret_store.get_api_key("elevenlabs") or ""
+        return ElevenLabsTranscriber(
+            api_key=api_key,
+            language_mode=settings.language_mode,
+            model=getattr(settings, "elevenlabs_model", DEFAULT_ELEVENLABS_MODEL),
         )
 
     # Unknown engine — fall back to local provider.

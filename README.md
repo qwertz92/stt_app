@@ -8,7 +8,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
-- **Cloud options** — use AssemblyAI, OpenAI, Groq, or Deepgram when you prefer managed transcription
+- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, or ElevenLabs when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
 - **Streaming** (experimental) — see partial results while you speak
@@ -54,7 +54,7 @@ Right-click the **system tray icon** → **Settings**.
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | Model size | Larger = more accurate, slower | `small` |
-| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram | Local |
+| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs | Local |
 | Mode | Batch (after stop) or Streaming (live, experimental) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
 | Paste mode | How text is inserted (Auto, WM_PASTE, SendInput) | Auto |
@@ -125,6 +125,7 @@ uv run python -m pytest
 | Groq cloud transcription (batch) | Stable |
 | Deepgram cloud transcription (batch) | Stable |
 | Deepgram streaming | Experimental |
+| ElevenLabs cloud transcription (batch) | Stable |
 
 ## License
 

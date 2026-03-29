@@ -386,3 +386,26 @@ Agents and developers: use this as a knowledge base for past issues and solution
     insertion import, instead of leaving it as a standing E402 violation.
   - Normalized a few no-op f-strings in helper scripts so `ruff check`
     passes cleanly on the current codebase.
+
+## 2026-03-29
+
+- **ElevenLabs was added as a new hosted transcription provider:**
+  - Added `ElevenLabsTranscriber` with batch transcription, provider-specific
+    HTTP/auth handling, connection testing, and explicit error messages for
+    auth, rate limits, SSL interception, and missing files.
+  - Added provider constants in `config.py`, persisted
+    `has_elevenlabs_key` / `elevenlabs_model` settings, and wired
+    provider-specific model selection through the controller/transcriber
+    factory.
+  - Extended the settings UI with ElevenLabs API key storage, model selection,
+    connection testing, import-engine visibility, and provider-aware help text
+    that explains the current batch-only app support.
+  - Updated user-facing documentation (`README`, quick start, advanced setup,
+    streaming mode, provider costs) to include ElevenLabs availability,
+    pricing, free-tier details, and the batch-vs-realtime distinction.
+  - Added targeted provider/settings tests and re-ran the full Windows suite
+    successfully after the integration.
+
+- **Validation note:**
+  - `python3 -m compileall src tests`
+  - `cmd.exe /d /c ".venv\\Scripts\\python.exe -m pytest -q"`

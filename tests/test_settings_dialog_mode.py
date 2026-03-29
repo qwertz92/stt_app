@@ -322,6 +322,23 @@ def test_groq_language_note_explains_auto_and_hints():
     _ = app
 
 
+def test_elevenlabs_remote_model_note_mentions_batch_only_app_support():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(engine="elevenlabs", mode="batch", language_mode="auto")
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.remote_model_combo.isEnabled() is True
+    assert "not yet wired" in dialog.remote_model_note_label.text()
+    assert "language hint" in dialog.language_note_label.text()
+    _ = app
+
+
 def test_delete_selected_cached_model_updates_feedback(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls = {"delete": 0}

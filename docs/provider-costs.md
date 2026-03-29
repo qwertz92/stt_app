@@ -2,7 +2,7 @@
 
 This document compares pricing, free-tier availability, and quality signals for providers currently available in `stt_app`.
 
-- Last verified: **2026-02-21**
+- Last verified: **2026-03-29**
 - Prices and limits can change at any time. Confirm on official pricing pages before production use.
 
 ---
@@ -18,11 +18,13 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour | $0.111/hour, $0.040/hour |
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min | $0.258/hour, $0.312/hour |
 | Deepgram | Streaming | `nova-3` | Mono: $0.0077/min, Multi: $0.0092/min | $0.462/hour, $0.552/hour |
+| ElevenLabs | Batch | `scribe_v2`, `scribe_v1` | Scribe v1/v2: $0.22/hour | $0.22/hour |
 
 Notes:
 
 - OpenAI `gpt-4o*` transcription is token-priced; minute values above are OpenAI estimates.
 - In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate whether your account bills this as multilingual.
+- ElevenLabs also offers `scribe_v2_realtime` publicly at $0.39/hour, but the current app integration remains batch-only.
 
 ---
 
@@ -35,6 +37,7 @@ Notes:
 | OpenAI | Limited / account-dependent | No standing free quota documented for transcription; `gpt-4o(-mini)-transcribe` are marked as not supported on free tier |
 | Groq | Yes | Free plan with no card; speech model rate limits (for `whisper-large-v3` and `-turbo`) include 20 RPM, 2,000 requests/day, 7,200 audio-seconds/hour, 28,800 audio-seconds/day |
 | Deepgram | Yes | $200 free credit, no credit card required |
+| ElevenLabs | Yes | Free plan includes 2 hours 30 minutes of Speech to Text usage |
 
 OpenAI caveat:
 
@@ -52,6 +55,7 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 | OpenAI | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | OpenAI reports `gpt-4o-transcribe` has lower WER than Whisper v2/v3 across FLEURS and competitive multilingual performance | Strong qualitative claim; OpenAI does not publish one global WER number per model on pricing page |
 | Groq | `whisper-large-v3`, `whisper-large-v3-turbo` | Groq speech docs list WER: **10.3%** (v3) and **12%** (v3-turbo) | Useful baseline; values come from Groq model table |
 | Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup | Good signal for Nova-3; vendor-run benchmark |
+| ElevenLabs | `scribe_v2`, `scribe_v1` | ElevenLabs positions Scribe v2 as its most accurate STT model and shows a vendor-run realtime comparison where Scribe v2 Realtime outperforms Gemini Flash 2.5, GPT-4o Mini, and Deepgram Nova 3 | Useful directional signal, but still vendor-run and not a published WER table |
 
 ---
 
@@ -97,6 +101,11 @@ Recommendation:
 - Different rates for streaming vs pre-recorded.
 - Multi-channel audio can multiply billed duration.
 
+### ElevenLabs
+
+- `scribe_v2_realtime` is priced separately from batch transcription.
+- Keyterm prompting adds `20%` cost, and entity detection adds `30%` cost.
+
 ---
 
 ## 6) Sources
@@ -114,4 +123,8 @@ Recommendation:
 - Groq pricing: <https://console.groq.com/docs/pricing>
 - Deepgram pricing: <https://deepgram.com/pricing>
 - Deepgram Nova-3 changelog: <https://developers.deepgram.com/changelog/speech-to-text-api-nova-3>
+- ElevenLabs STT overview: <https://elevenlabs.io/speech-to-text/>
+- ElevenLabs model reference: <https://elevenlabs.io/docs/overview/models>
+- ElevenLabs STT API reference: <https://elevenlabs.io/docs/api-reference/speech-to-text/convert>
+- ElevenLabs API pricing: <https://elevenlabs.io/pricing/api/>
 - Voice Writer STT leaderboard: <https://voicewriter.io/speech-to-text-api-leaderboard/>

@@ -72,7 +72,7 @@ Common settings to adjust:
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | **Model size** | Larger = better quality, slower | `small` |
-| **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram` | `Local` |
+| **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs` | `Local` |
 | **Mode** | `Batch` (transcribe after stop) or `Streaming` (live, experimental) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |
 | **Paste mode** | How text is inserted into the target app | Auto |
@@ -88,6 +88,6 @@ Right-click the **system tray icon** → **Quit**.
 ## Next steps
 
 - **Better accuracy?** Try `large-v3-turbo` (multilingual, ~809 MB) or `distil-large-v3.5` (English-only, fastest).
-- **Cloud transcription?** Switch Engine to `AssemblyAI`, `OpenAI`, `Groq`, or `Deepgram` in Settings and enter your API key.
+- **Cloud transcription?** Switch Engine to `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, or `ElevenLabs` in Settings and enter your API key.
 - **Corporate/offline setup?** See [Models & Offline Setup](models.md) or [Advanced Setup](advanced-setup.md).
 - **Full documentation:** See [README.md](../README.md).

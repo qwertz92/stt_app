@@ -608,6 +608,8 @@ class DictationController(QtCore.QObject):
             return getattr(settings, "deepgram_model", "")
         if settings.engine == "assemblyai":
             return getattr(settings, "assemblyai_model", "")
+        if settings.engine == "elevenlabs":
+            return getattr(settings, "elevenlabs_model", "")
         return settings.model_size
 
     def _promote_request_audio_for_retry(self, request_token: int) -> bool:
@@ -1116,6 +1118,7 @@ class DictationController(QtCore.QObject):
             getattr(settings, "openai_model", ""),
             getattr(settings, "deepgram_model", ""),
             getattr(settings, "assemblyai_model", ""),
+            getattr(settings, "elevenlabs_model", ""),
         )
         with self._transcriber_cache_lock:
             if (

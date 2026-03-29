@@ -5,6 +5,7 @@ from stt_app.config import (
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
+    DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
@@ -53,9 +54,11 @@ def test_load_defaults_creates_file(tmp_path):
     )
     assert settings.has_openai_key is False
     assert settings.has_deepgram_key is False
+    assert settings.has_elevenlabs_key is False
     assert settings.openai_model == DEFAULT_OPENAI_MODEL
     assert settings.deepgram_model == DEFAULT_DEEPGRAM_MODEL
     assert settings.assemblyai_model == DEFAULT_ASSEMBLYAI_MODEL
+    assert settings.elevenlabs_model == DEFAULT_ELEVENLABS_MODEL
     assert settings_path.exists()
 
     raw = json.loads(settings_path.read_text(encoding="utf-8"))
@@ -162,6 +165,16 @@ def test_openai_engine_is_valid(tmp_path):
     assert settings.engine == "openai"
 
 
+def test_elevenlabs_engine_is_valid(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"engine": "elevenlabs"}),
+        encoding="utf-8",
+    )
+    settings = SettingsStore(settings_path).load()
+    assert settings.engine == "elevenlabs"
+
+
 def test_openai_model_roundtrip(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
@@ -182,13 +195,14 @@ def test_openai_model_invalid_falls_back_to_default(tmp_path):
     assert settings.openai_model == DEFAULT_OPENAI_MODEL
 
 
-def test_deepgram_and_assemblyai_models_roundtrip(tmp_path):
+def test_remote_provider_models_roundtrip(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
         json.dumps(
             {
                 "deepgram_model": "nova-2",
                 "assemblyai_model": "nano",
+                "elevenlabs_model": "scribe_v1",
             }
         ),
         encoding="utf-8",
@@ -196,6 +210,7 @@ def test_deepgram_and_assemblyai_models_roundtrip(tmp_path):
     settings = SettingsStore(settings_path).load()
     assert settings.deepgram_model == "nova-2"
     assert settings.assemblyai_model == "nano"
+    assert settings.elevenlabs_model == "scribe_v1"
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):

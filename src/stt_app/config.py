@@ -7,7 +7,7 @@ LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "stt_app"
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -113,13 +113,14 @@ LANGUAGE_MODE_LABELS: dict[str, str] = {
     "en": "English",
 }
 # Only providers with implemented runtime paths should be user-selectable.
-VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "deepgram")
+VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "deepgram", "elevenlabs")
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": VALID_LANGUAGE_MODES,
     "assemblyai": VALID_LANGUAGE_MODES,
     "groq": VALID_LANGUAGE_MODES,
     "openai": VALID_LANGUAGE_MODES,
     "deepgram": VALID_LANGUAGE_MODES,
+    "elevenlabs": VALID_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
 STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
@@ -150,6 +151,12 @@ ASSEMBLYAI_MODELS = (
     "slam-1",
 )
 DEFAULT_ASSEMBLYAI_MODEL = "best"
+
+ELEVENLABS_MODELS = (
+    "scribe_v2",
+    "scribe_v1",
+)
+DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1
