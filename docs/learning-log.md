@@ -450,6 +450,8 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Added `scripts/build_windows_release.ps1` to produce a repeatable Windows
     release folder/zip without requiring end users to clone the repo or use
     `uv`.
+  - Added `PyInstaller` to the dev toolchain and verified that the Windows
+    release script can build a real `release\stt_app-win-x64` bundle.
   - Added `docs/windows-distribution.md` and linked it from the main docs so
     the preferred rollout path is now "GitHub Releases first, installer/winget
     later" instead of "repo checkout + terminal".

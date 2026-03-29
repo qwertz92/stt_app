@@ -1,15 +1,15 @@
-Set-StrictMode -Version Latest
-$ErrorActionPreference = "Stop"
-
 param(
     [string]$ReleaseName = "stt_app-win-x64",
     [switch]$SkipZip
 )
 
+Set-StrictMode -Version Latest
+$ErrorActionPreference = "Stop"
+
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-if (-not $IsWindows) {
+if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
     throw "This build script is intended to run on Windows."
 }
 
