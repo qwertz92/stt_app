@@ -108,10 +108,33 @@ Recommendation:
 
 ---
 
-## 6) Sources
+## 6) Researched but not integrated
+
+The table above only covers providers currently implemented in `stt_app`.
+The following candidate is tracked separately because it is interesting, but not
+ready enough to present as a supported engine.
+
+| Candidate | Public access signal | Pricing clarity | Local/offline fit | Current status |
+|-----------|----------------------|-----------------|-------------------|----------------|
+| Cohere Transcribe (`cohere-transcribe-03-2026`) | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Too unclear today; Cohere documents an audio model and an open source research release, but the public local runtime/self-hosting path is not concrete enough for this app | Not integrated; see `docs/cohere-transcribe-evaluation.md` |
+
+Recommendation:
+
+- Treat Cohere as a watched candidate, not a current option.
+- Revisit the hosted path if Cohere publishes explicit STT pricing and quotas.
+- Revisit the local path only if Cohere publishes a clearly documented public
+  runtime/deployment story for self-hosted transcription.
+
+---
+
+## 7) Sources
 
 - AssemblyAI pricing: <https://www.assemblyai.com/pricing>
 - AssemblyAI benchmarks: <https://www.assemblyai.com/benchmarks>
+- Cohere models overview: <https://docs.cohere.com/docs/models>
+- Cohere pricing: <https://cohere.com/pricing>
+- Cohere pricing docs: <https://docs.cohere.com/docs/how-does-cohere-pricing-work>
+- Cohere FAQs: <https://docs.cohere.com/v1/docs/cohere-faqs>
 - OpenAI pricing: <https://platform.openai.com/docs/pricing>
 - OpenAI audio models announcement: <https://openai.com/index/introducing-our-next-generation-audio-models/>
 - OpenAI model pages:  

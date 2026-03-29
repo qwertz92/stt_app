@@ -421,6 +421,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
     weak for a trustworthy local-engine decision, while hosted pricing and
     speech-specific quality evidence are not explicit enough to justify adding
     another remote provider.
+  - Added a separate "researched but not integrated" note in
+    `docs/provider-costs.md` so Cohere stays visible for product comparison
+    without being misread as a supported engine.
 
 - **Validation note:**
   - `python3 -m compileall src tests`
