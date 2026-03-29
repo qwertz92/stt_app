@@ -409,13 +409,18 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Cohere Transcribe was evaluated and documented, but not integrated:**
   - Added `docs/cohere-transcribe-evaluation.md` as a decision record similar
     to the existing Parakeet evaluation.
+  - Refined the analysis to distinguish the **local/open-weights** question
+    from the **hosted API** question instead of treating Cohere only as another
+    cloud provider.
   - Captured the current official product shape: `cohere-transcribe-03-2026`
     is documented by Cohere as an audio transcription model and open source
-    research release, but the current supported path is still a hosted
-    transcription endpoint with a documented 25 MB request limit.
-  - Deferred implementation because the current public evidence is weaker than
-    the supported providers already in the app, the pricing story is less
-    explicit, and it does not improve the local/offline value proposition.
+    research release, the hosted endpoint has a documented 25 MB limit, trial
+    API access is publicly available, and self-deployed/open-weights licensing
+    is still routed through Cohere's deployment/licensing guidance.
+  - Deferred implementation because the current public evidence is still too
+    weak for a trustworthy local-engine decision, while hosted pricing and
+    speech-specific quality evidence are not explicit enough to justify adding
+    another remote provider.
 
 - **Validation note:**
   - `python3 -m compileall src tests`
