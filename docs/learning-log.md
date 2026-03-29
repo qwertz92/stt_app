@@ -428,3 +428,18 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Validation note:**
   - `python3 -m compileall src tests`
   - `cmd.exe /d /c ".venv\\Scripts\\python.exe -m pytest -q"`
+
+- **Recovery prompt false-positives and settings/history UI density were tightened:**
+  - Successful transcriptions now attach a `source_recording_id` to history
+    entries, and `LastRecordingStore` persists a `recording_id` alongside the
+    managed WAV state.
+  - Startup recovery prompting now suppresses stale prompts when the last
+    recording already has a matching successful history entry, with a small
+    timestamp fallback for older/orphaned metadata cases.
+  - The remote speech model selector was moved next to the engine selection in
+    the General tab so provider/model choice is visible where users actually
+    switch engines.
+  - Settings/history spacing was tightened, the embedded history list now uses
+    the same font size as the detail pane, and combo-box popups were switched
+    to uniform single-pass list views to avoid the "jumping" popup effect on
+    open.

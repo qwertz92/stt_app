@@ -17,6 +17,7 @@ class TranscriptHistoryEntry:
     engine: str
     model: str
     mode: str
+    source_recording_id: str = ""
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "TranscriptHistoryEntry":
@@ -26,6 +27,7 @@ class TranscriptHistoryEntry:
             engine=str(raw.get("engine", "")),
             model=str(raw.get("model", "")),
             mode=str(raw.get("mode", "")),
+            source_recording_id=str(raw.get("source_recording_id", "")).strip(),
         )
 
     @classmethod
@@ -36,6 +38,7 @@ class TranscriptHistoryEntry:
         engine: str,
         model: str,
         mode: str,
+        source_recording_id: str = "",
     ) -> "TranscriptHistoryEntry":
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return cls(
@@ -44,6 +47,7 @@ class TranscriptHistoryEntry:
             engine=str(engine or ""),
             model=str(model or ""),
             mode=str(mode or ""),
+            source_recording_id=str(source_recording_id or "").strip(),
         )
 
 

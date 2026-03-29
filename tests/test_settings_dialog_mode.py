@@ -339,6 +339,53 @@ def test_elevenlabs_remote_model_note_mentions_batch_only_app_support():
     _ = app
 
 
+def test_remote_model_selector_is_visible_on_general_tab():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="openai"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    assert dialog.tabs.currentWidget() is not None
+    assert dialog.remote_model_combo.isVisibleTo(dialog.tabs.currentWidget()) is True
+    _ = app
+
+
+def test_history_list_matches_detail_font_and_compact_item_spacing():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.history_list.font().pointSizeF() == dialog.history_detail.font().pointSizeF()
+    assert dialog.history_list.uniformItemSizes() is True
+    assert "padding: 2px 4px" in dialog.history_list.styleSheet()
+    _ = app
+
+
+def test_combo_popups_use_single_pass_uniform_list_views():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    view = dialog.engine_combo.view()
+    assert isinstance(view, QtWidgets.QListView)
+    assert view.layoutMode() == QtWidgets.QListView.SinglePass
+    assert view.spacing() == 0
+    _ = app
+
+
 def test_delete_selected_cached_model_updates_feedback(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls = {"delete": 0}

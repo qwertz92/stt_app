@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 import sys
+from datetime import datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -119,6 +120,7 @@ def run() -> int:
         lambda: _prompt_recoverable_last_recording(
             last_recording_store,
             tray_icon._open_settings_dialog,
+            history_store,
         ),
     )
 
@@ -239,6 +241,7 @@ def _restore_overlay_after_settings_save(
 def _prompt_recoverable_last_recording(
     last_recording_store: LastRecordingStore,
     open_settings_dialog,
+    history_store: TranscriptHistoryStore | None = None,
 ) -> None:
     if not last_recording_store.has_recoverable_recording():
         return
@@ -247,6 +250,13 @@ def _prompt_recoverable_last_recording(
         return
 
     state = last_recording_store.load()
+    if _last_recording_already_transcribed(
+        last_recording_store,
+        history_store,
+        state=state,
+    ):
+        return
+
     description = "A previous recording is still available."
     if state is not None and state.created_at:
         description = (
@@ -272,6 +282,57 @@ def _prompt_recoverable_last_recording(
     dialog = open_settings_dialog()
     if dialog is not None:
         dialog.prepare_last_recording_import()
+
+
+def _last_recording_already_transcribed(
+    last_recording_store: LastRecordingStore,
+    history_store: TranscriptHistoryStore | None,
+    *,
+    state=None,
+) -> bool:
+    if history_store is None:
+        return False
+
+    current_state = state or last_recording_store.load()
+    if current_state is None:
+        return False
+
+    recording_id = str(
+        getattr(current_state, "recording_id", "")
+        or getattr(current_state, "created_at", "")
+    ).strip()
+    recent_entries = history_store.recent_entries(limit=50)
+    if recording_id:
+        for entry in recent_entries:
+            if str(getattr(entry, "source_recording_id", "")).strip() != recording_id:
+                continue
+            try:
+                last_recording_store.mark_completed()
+            except Exception:
+                pass
+            return True
+
+    path = last_recording_store.selectable_path()
+    if path is None:
+        return False
+    try:
+        audio_mtime = path.stat().st_mtime
+    except OSError:
+        return False
+
+    for entry in recent_entries:
+        try:
+            history_ts = datetime.fromisoformat(entry.created_at).timestamp()
+        except Exception:
+            continue
+        if 0 <= (history_ts - audio_mtime) <= 180:
+            try:
+                last_recording_store.mark_completed()
+            except Exception:
+                pass
+            return True
+        break
+    return False
 
 
 def _install_signal_handlers(app: QtWidgets.QApplication) -> QtCore.QTimer:

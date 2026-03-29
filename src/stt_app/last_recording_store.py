@@ -4,6 +4,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .app_paths import debug_audio_path, last_recording_state_path
 from .persistence import (
@@ -30,6 +31,7 @@ def _utc_now() -> str:
 class LastRecordingState:
     schema_version: int = _CURRENT_SCHEMA_VERSION
     audio_path: str = ""
+    recording_id: str = ""
     created_at: str = ""
     status: str = "captured"
     keep_after_success: bool = False
@@ -48,6 +50,9 @@ class LastRecordingState:
         return cls(
             schema_version=_CURRENT_SCHEMA_VERSION,
             audio_path=str(raw.get("audio_path", "")).strip(),
+            recording_id=str(
+                raw.get("recording_id", raw.get("created_at", ""))
+            ).strip(),
             created_at=str(raw.get("created_at", "")).strip(),
             status=status,
             keep_after_success=bool(raw.get("keep_after_success", False)),
@@ -104,6 +109,7 @@ class LastRecordingStore:
         atomic_write_bytes(self._audio_path, bytes(wav_bytes))
         state = LastRecordingState(
             audio_path=str(self._audio_path),
+            recording_id=uuid4().hex,
             created_at=_utc_now(),
             status="captured",
             keep_after_success=bool(keep_after_success),
@@ -124,8 +130,11 @@ class LastRecordingStore:
                 return
             state = LastRecordingState(
                 audio_path=str(self._audio_path),
+                recording_id=uuid4().hex,
                 created_at=_utc_now(),
             )
+        elif not state.recording_id:
+            state.recording_id = uuid4().hex
         state.status = "transcribing"
         state.engine = str(engine or "").strip()
         state.model = str(model or "").strip()
@@ -209,6 +218,7 @@ class LastRecordingStore:
             return None
         return LastRecordingState(
             audio_path=str(self._audio_path),
+            recording_id="",
             created_at="",
             status="captured",
         )

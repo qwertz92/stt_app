@@ -28,6 +28,7 @@ def test_save_and_complete_with_keep_preserves_audio(tmp_path):
 
     state = store.load()
     assert state is not None
+    assert state.recording_id
     assert state.status == "completed"
     assert store.selectable_path() == store.audio_path
     assert store.has_recoverable_recording() is False

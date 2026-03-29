@@ -10,6 +10,7 @@ from stt_app.main import (
     _restore_overlay_after_settings_save,
 )
 from stt_app.settings_store import AppSettings
+from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
 
 def test_install_signal_handlers_registers_int_and_term(monkeypatch):
@@ -210,4 +211,41 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
     _prompt_recoverable_last_recording(store, lambda: _FakeDialog())
 
     assert opened == [True]
+    _ = app
+
+
+def test_prompt_recoverable_last_recording_skips_completed_history_match(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    state = store.save_recording(b"RIFF", keep_after_success=False)
+    store.mark_transcribing(engine="openai", model="whisper-1", mode="batch")
+
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.add_entry(
+        TranscriptHistoryEntry.new(
+            text="done",
+            engine="openai",
+            model="whisper-1",
+            mode="batch",
+            source_recording_id=state.recording_id,
+        ),
+        max_items=20,
+    )
+
+    asked = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: asked.append(True) or QtWidgets.QMessageBox.Yes,
+    )
+
+    _prompt_recoverable_last_recording(store, lambda: None, history_store)
+
+    assert asked == []
+    assert store.has_recoverable_recording() is False
     _ = app

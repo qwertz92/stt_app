@@ -213,6 +213,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._build_local_tab()
         self._build_remote_tab()
         self._build_history_tab()
+        self._configure_combo_popups()
 
         # --- Bottom buttons ---
         self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
@@ -240,15 +241,36 @@ class SettingsDialog(QtWidgets.QDialog):
         buttons.addWidget(close_button)
 
         root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
         root.addWidget(self.engine_indicator)
         root.addWidget(self.tabs)
         root.addLayout(buttons)
+
+    def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
+        style = "color: #555; font-size: 11px;"
+        if bold:
+            style += " font-weight: bold;"
+        label.setStyleSheet(style)
+
+    def _configure_combo_popups(self) -> None:
+        for combo in self.findChildren(QtWidgets.QComboBox):
+            view = QtWidgets.QListView(combo)
+            view.setUniformItemSizes(True)
+            view.setLayoutMode(QtWidgets.QListView.SinglePass)
+            view.setSpacing(0)
+            view.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerItem)
+            combo.setView(view)
+            combo.setMaxVisibleItems(12)
 
     # --- General tab ---
 
     def _build_general_tab(self) -> None:
         tab = QtWidgets.QWidget()
         form = QtWidgets.QFormLayout(tab)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(4)
 
         self.hotkey_edit = QtWidgets.QKeySequenceEdit()
         self.hotkey_edit.setMaximumSequenceLength(1)
@@ -261,11 +283,11 @@ class SettingsDialog(QtWidgets.QDialog):
         hotkey_hint = QtWidgets.QLabel(
             "Click the hotkey field and press the combination to record it."
         )
-        hotkey_hint.setStyleSheet("color: #555;")
+        self._style_note_label(hotkey_hint)
         cancel_hotkey_hint = QtWidgets.QLabel(
             "Cancel hotkey stops current recording/transcription (must differ from main hotkey)."
         )
-        cancel_hotkey_hint.setStyleSheet("color: #555;")
+        self._style_note_label(cancel_hotkey_hint)
 
         self.language_combo = QtWidgets.QComboBox()
         for value in VALID_LANGUAGE_MODES:
@@ -274,10 +296,10 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self.language_note_label = QtWidgets.QLabel("")
         self.language_note_label.setWordWrap(True)
-        self.language_note_label.setStyleSheet("color: #555;")
+        self._style_note_label(self.language_note_label)
         self.language_note_label.setVisible(True)
-        self.language_note_label.setMinimumHeight(34)
-        self.language_note_label.setMaximumHeight(34)
+        self.language_note_label.setMinimumHeight(24)
+        self.language_note_label.setMaximumHeight(24)
 
         self.engine_combo = QtWidgets.QComboBox()
         engine_labels = {
@@ -291,6 +313,23 @@ class SettingsDialog(QtWidgets.QDialog):
         for value in VALID_ENGINES:
             self.engine_combo.addItem(engine_labels.get(value, value), value)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+
+        remote_model_widget = QtWidgets.QWidget()
+        remote_model_layout = QtWidgets.QVBoxLayout(remote_model_widget)
+        remote_model_layout.setContentsMargins(0, 0, 0, 0)
+        remote_model_layout.setSpacing(3)
+        self.remote_model_provider_label = QtWidgets.QLabel("Local engine selected")
+        self._style_note_label(self.remote_model_provider_label, bold=True)
+        self.remote_model_combo = QtWidgets.QComboBox()
+        self.remote_model_combo.currentIndexChanged.connect(
+            self._on_remote_model_changed
+        )
+        self.remote_model_note_label = QtWidgets.QLabel("")
+        self.remote_model_note_label.setWordWrap(True)
+        self._style_note_label(self.remote_model_note_label)
+        remote_model_layout.addWidget(self.remote_model_provider_label)
+        remote_model_layout.addWidget(self.remote_model_combo)
+        remote_model_layout.addWidget(self.remote_model_note_label)
 
         self.mode_combo = QtWidgets.QComboBox()
         mode_labels = {
@@ -348,7 +387,7 @@ class SettingsDialog(QtWidgets.QDialog):
             f"finishes. When enabled, the latest recording remains at: {debug_audio_path()}"
         )
         self.save_wav_path_label.setWordWrap(True)
-        self.save_wav_path_label.setStyleSheet("color: #555;")
+        self._style_note_label(self.save_wav_path_label)
 
         self.save_all_recordings_checkbox = QtWidgets.QCheckBox(
             "Archive every recording to folder"
@@ -403,6 +442,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("Cancel Hotkey", self.cancel_hotkey_edit)
         form.addRow("", cancel_hotkey_hint)
         form.addRow("Engine", self.engine_combo)
+        form.addRow("Remote Model", remote_model_widget)
         form.addRow("Language", self.language_combo)
         form.addRow("", self.language_note_label)
         form.addRow("Mode", self.mode_combo)
@@ -427,8 +467,13 @@ class SettingsDialog(QtWidgets.QDialog):
     def _build_local_tab(self) -> None:
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         form = QtWidgets.QFormLayout()
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(4)
 
         self.model_combo = QtWidgets.QComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
@@ -511,25 +556,15 @@ class SettingsDialog(QtWidgets.QDialog):
     def _build_remote_tab(self) -> None:
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
-
-        remote_model_box = QtWidgets.QGroupBox("Remote Speech Model")
-        remote_model_form = QtWidgets.QFormLayout(remote_model_box)
-        self.remote_model_provider_label = QtWidgets.QLabel("Local engine selected")
-        self.remote_model_combo = QtWidgets.QComboBox()
-        self.remote_model_combo.currentIndexChanged.connect(
-            self._on_remote_model_changed
-        )
-        self.remote_model_note_label = QtWidgets.QLabel("")
-        self.remote_model_note_label.setWordWrap(True)
-        self.remote_model_note_label.setStyleSheet("color: #555;")
-        remote_model_form.addRow("Active Provider", self.remote_model_provider_label)
-        remote_model_form.addRow("Model", self.remote_model_combo)
-        remote_model_form.addRow("", self.remote_model_note_label)
-        layout.addWidget(remote_model_box)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         # API keys
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
         provider_layout = QtWidgets.QFormLayout(provider_box)
+        provider_layout.setContentsMargins(10, 10, 10, 10)
+        provider_layout.setHorizontalSpacing(10)
+        provider_layout.setVerticalSpacing(4)
         provider_rows = (
             ("assemblyai", "AssemblyAI"),
             ("groq", "Groq"),
@@ -565,7 +600,7 @@ class SettingsDialog(QtWidgets.QDialog):
             field_row_widget = QtWidgets.QWidget()
             field_row = QtWidgets.QHBoxLayout(field_row_widget)
             field_row.setContentsMargins(0, 0, 0, 0)
-            field_row.setSpacing(8)
+            field_row.setSpacing(6)
             field_row.addWidget(key_field, 1)
             field_row.addWidget(clear_button, 0)
             field_row.addWidget(status_badge, 0)
@@ -573,7 +608,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
             last_test_label = QtWidgets.QLabel("Last test: never.")
             last_test_label.setWordWrap(True)
-            last_test_label.setStyleSheet("color: #666;")
+            self._style_note_label(last_test_label)
             provider_layout.addRow("", last_test_label)
 
             self._provider_key_edits[provider] = key_field
@@ -588,7 +623,7 @@ class SettingsDialog(QtWidgets.QDialog):
         provider_note = QtWidgets.QLabel(
             "Status badges show where each key is currently sourced from."
         )
-        provider_note.setStyleSheet("color: #555;")
+        self._style_note_label(provider_note)
         provider_layout.addRow("", provider_note)
 
         self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
@@ -605,7 +640,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.key_storage_status_label = QtWidgets.QLabel("")
         self.key_storage_status_label.setWordWrap(True)
-        self.key_storage_status_label.setStyleSheet("color: #555;")
+        self._style_note_label(self.key_storage_status_label)
         provider_layout.addRow(self.key_storage_status_label)
 
         self.test_conn_target_combo = QtWidgets.QComboBox()
@@ -647,16 +682,26 @@ class SettingsDialog(QtWidgets.QDialog):
         tab = QtWidgets.QWidget()
         self._history_tab = tab
         layout = QtWidgets.QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         history_box = QtWidgets.QGroupBox("Transcript History")
         history_layout = QtWidgets.QVBoxLayout(history_box)
+        history_layout.setContentsMargins(10, 10, 10, 10)
+        history_layout.setSpacing(6)
 
         self.history_list = QtWidgets.QListWidget()
+        history_font = QtGui.QFont(self.font())
+        self.history_list.setFont(history_font)
+        self.history_list.setSpacing(0)
+        self.history_list.setUniformItemSizes(True)
+        self.history_list.setStyleSheet("QListWidget::item { padding: 2px 4px; }")
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
         history_layout.addWidget(self.history_list)
 
         self.history_detail = QtWidgets.QPlainTextEdit()
         self.history_detail.setReadOnly(True)
+        self.history_detail.setFont(history_font)
         history_layout.addWidget(self.history_detail)
 
         history_buttons = QtWidgets.QHBoxLayout()
@@ -682,7 +727,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "directly here (useful after failures or for external recordings)."
         )
         import_hint.setWordWrap(True)
-        import_hint.setStyleSheet("color: #555;")
+        self._style_note_label(import_hint)
         import_layout.addWidget(import_hint)
 
         self.import_engine_combo = QtWidgets.QComboBox()
@@ -701,7 +746,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self.import_engine_note = QtWidgets.QLabel("")
         self.import_engine_note.setWordWrap(True)
-        self.import_engine_note.setStyleSheet("color: #555;")
+        self._style_note_label(self.import_engine_note)
         self.import_engine_combo.currentIndexChanged.connect(
             self._update_import_engine_note
         )

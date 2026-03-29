@@ -50,6 +50,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._history_count_label.setStyleSheet("color: #555;")
 
         controls = QtWidgets.QHBoxLayout()
+        controls.setSpacing(6)
         controls.addWidget(QtWidgets.QLabel("Stored history limit"))
         controls.addWidget(self._max_items_spin)
         controls.addStretch(1)
@@ -60,6 +61,10 @@ class HistoryDialog(QtWidgets.QDialog):
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        self._table.verticalHeader().setDefaultSectionSize(
+            self.fontMetrics().height() + 8
+        )
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(
             0, QtWidgets.QHeaderView.ResizeToContents
@@ -74,6 +79,7 @@ class HistoryDialog(QtWidgets.QDialog):
 
         self._detail = QtWidgets.QPlainTextEdit()
         self._detail.setReadOnly(True)
+        self._detail.setFont(self._table.font())
 
         self._refresh_button = QtWidgets.QPushButton("Refresh")
         self._refresh_button.clicked.connect(self.reload)
@@ -99,6 +105,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._close_button.clicked.connect(self.close)
 
         buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(6)
         buttons.addWidget(self._refresh_button)
         buttons.addWidget(self._export_button)
         buttons.addWidget(self._import_button)
@@ -109,6 +116,8 @@ class HistoryDialog(QtWidgets.QDialog):
         buttons.addWidget(self._close_button)
 
         root = QtWidgets.QVBoxLayout(self)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
         root.addLayout(controls)
         root.addWidget(self._table, 2)
         root.addWidget(self._detail, 1)

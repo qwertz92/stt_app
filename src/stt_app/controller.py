@@ -612,6 +612,19 @@ class DictationController(QtCore.QObject):
             return getattr(settings, "elevenlabs_model", "")
         return settings.model_size
 
+    def _current_last_recording_id(self) -> str:
+        try:
+            state = self._last_recording_store.load()
+        except Exception:
+            self._logger.exception("Failed to load last recording state")
+            return ""
+        if state is None:
+            return ""
+        return str(
+            getattr(state, "recording_id", "")
+            or getattr(state, "created_at", "")
+        ).strip()
+
     def _promote_request_audio_for_retry(self, request_token: int) -> bool:
         payload = self._request_audio_by_token.pop(request_token, None)
         if payload is None:
@@ -1193,11 +1206,13 @@ class DictationController(QtCore.QObject):
             QtGui.QGuiApplication.clipboard().setText(text)
         try:
             used = self._last_transcribe_settings or stream_settings or self._settings
+            source_recording_id = self._current_last_recording_id()
             entry = TranscriptHistoryEntry.new(
                 text=text,
                 engine=used.engine,
                 model=self._selected_model_name(used),
                 mode=session_mode,
+                source_recording_id=source_recording_id,
             )
             self._history_store.add_entry(entry, used.history_max_items)
         except Exception:
@@ -1668,12 +1683,18 @@ class DictationController(QtCore.QObject):
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
             text = transcriber.transcribe_batch(path).strip()
             if text:
+                source_recording_id = (
+                    self._current_last_recording_id()
+                    if managed_last_recording
+                    else ""
+                )
                 self._history_store.add_entry(
                     TranscriptHistoryEntry.new(
                         text=text,
                         engine=settings.engine,
                         model=self._selected_model_name(settings),
                         mode="import",
+                        source_recording_id=source_recording_id,
                     ),
                     settings.history_max_items,
                 )
