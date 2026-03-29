@@ -93,6 +93,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Quick Start](docs/quick-start.md) | New users | 5-minute setup guide |
 | [Models & Offline Setup](docs/models.md) | All users | Model choices, download, offline/corporate setup |
 | [Advanced Setup](docs/advanced-setup.md) | IT / DevOps | Corporate deployment, wheelhouse, PyInstaller, SSL/proxy, benchmarking |
+| [Windows Distribution](docs/windows-distribution.md) | Maintainers | Recommended release path for end-user Windows builds |
 | [Provider Costs](docs/provider-costs.md) | Product / Ops | Cost comparison across providers and models used by this app |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |

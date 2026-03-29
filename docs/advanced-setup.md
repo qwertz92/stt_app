@@ -74,18 +74,21 @@ python -m pip install --index-url https://your-artifactory.corp/pypi/simple -r r
 
 ## Packaging as EXE (PyInstaller)
 
-The project includes a starter spec file `stt_app.spec`.
+The project includes a PyInstaller spec file `stt_app.spec` and a release build
+script `scripts/build_windows_release.ps1`.
 
 ```powershell
-python -m pip install pyinstaller
-pyinstaller stt_app.spec
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_release.ps1
 ```
 
 Notes:
 
+- The current recommended artifact is a **PyInstaller `onedir` bundle** for
+  end-user releases.
 - The resulting EXE should be code-signed for corporate environments (unsigned binaries may be blocked by EDR/antivirus).
 - Some EDR solutions may block `SendInput` (used for text insertion). This requires a policy exception for the signed application.
 - The spec does not bundle model files — the user still needs to download models separately.
+- See `docs/windows-distribution.md` for the recommended release path.
 
 ---
 

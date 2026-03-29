@@ -444,6 +444,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
     to uniform single-pass list views to avoid the "jumping" popup effect on
     open.
 
+- **Windows distribution now has an explicit end-user release path:**
+  - Switched the PyInstaller spec from a bare EXE-oriented setup to a more
+    robust `onedir` bundle layout for Windows end-user builds.
+  - Added `scripts/build_windows_release.ps1` to produce a repeatable Windows
+    release folder/zip without requiring end users to clone the repo or use
+    `uv`.
+  - Added `docs/windows-distribution.md` and linked it from the main docs so
+    the preferred rollout path is now "GitHub Releases first, installer/winget
+    later" instead of "repo checkout + terminal".
+
 - **Windows tooltip noise was reduced defensively:**
   - Removed non-essential overlay button tooltips and the Windows tray tooltip
     to reduce transient `QLabel` helper windows that can trigger harmless but
