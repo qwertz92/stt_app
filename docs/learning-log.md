@@ -406,6 +406,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Added targeted provider/settings tests and re-ran the full Windows suite
     successfully after the integration.
 
+- **Cohere Transcribe was evaluated and documented, but not integrated:**
+  - Added `docs/cohere-transcribe-evaluation.md` as a decision record similar
+    to the existing Parakeet evaluation.
+  - Captured the current official product shape: `cohere-transcribe-03-2026`
+    is documented by Cohere as an audio transcription model and open source
+    research release, but the current supported path is still a hosted
+    transcription endpoint with a documented 25 MB request limit.
+  - Deferred implementation because the current public evidence is weaker than
+    the supported providers already in the app, the pricing story is less
+    explicit, and it does not improve the local/offline value proposition.
+
 - **Validation note:**
   - `python3 -m compileall src tests`
   - `cmd.exe /d /c ".venv\\Scripts\\python.exe -m pytest -q"`

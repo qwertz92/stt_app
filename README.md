@@ -96,6 +96,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Provider Costs](docs/provider-costs.md) | Product / Ops | Cost comparison across providers and models used by this app |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |
+| [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Decision record: why Cohere Transcribe is documented but not integrated |
 
 ## Troubleshooting
 
