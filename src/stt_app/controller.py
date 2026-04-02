@@ -256,12 +256,24 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot()
     def toggle_recording(self) -> None:
+        if self._audio_capture is None and self._streaming_recording:
+            self._overlay.set_state(
+                "Processing",
+                "Streaming transcript is still finalizing. Please wait.",
+            )
+            return
         if self._audio_capture is None:
             self.start_recording()
         else:
             self.stop_recording()
 
     def start_recording(self) -> None:
+        if self._audio_capture is None and self._streaming_recording:
+            self._overlay.set_state(
+                "Processing",
+                "Streaming transcript is still finalizing. Please wait.",
+            )
+            return
         self._recording_start_in_progress = True
         try:
             self._supersede_active_request_result()
@@ -402,7 +414,10 @@ class DictationController(QtCore.QObject):
             capture.start()
         except AudioCaptureError as exc:
             try:
-                transcriber.stop_stream()
+                if hasattr(transcriber, "abort_stream"):
+                    transcriber.abort_stream()
+                else:
+                    transcriber.stop_stream()
             except Exception:
                 pass
             self._overlay.set_state("Error", str(exc))
@@ -1336,6 +1351,8 @@ class DictationController(QtCore.QObject):
     @QtCore.Slot(str)
     def _on_transcription_partial(self, partial_text: str) -> None:
         if not self._streaming_recording or self._audio_capture is None:
+            return
+        if self._stream_abort_requested:
             return
         text = self._normalize_stream_text(partial_text)
         if not text:

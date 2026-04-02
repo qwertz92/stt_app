@@ -253,8 +253,36 @@ def test_start_streaming_audio_capture_error_stops_transcriber(monkeypatch):
     )
     controller.start_recording()
     assert transcriber.started is True
-    assert transcriber.stopped is True  # cleaned up after capture failure
+    assert transcriber.aborted is True  # cleaned up without blocking finalize path
+    assert transcriber.stopped is False
     assert overlay.states[-1][0] == "Error"
+    controller.shutdown()
+    _ = app
+
+
+def test_start_recording_waits_while_stream_finalize_is_in_progress(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    create_calls = {"count": 0}
+
+    def fake_create(_settings, **_kw):
+        create_calls["count"] += 1
+        return FakeStreamingTranscriber()
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", fake_create)
+
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller._streaming_recording = True
+    controller._audio_capture = None
+
+    controller.start_recording()
+
+    assert create_calls["count"] == 0
+    assert overlay.states[-1][0] == "Processing"
+    assert "finalizing" in overlay.states[-1][1].lower()
     controller.shutdown()
     _ = app
 
@@ -427,6 +455,20 @@ def test_on_stream_audio_chunk_reports_push_error_once():
     error_count_2 = sum(1 for s, _ in overlay.states if s == "Error")
     assert error_count_2 == error_count_1  # Only reported once
 
+    controller.shutdown()
+    _ = app
+
+
+def test_on_transcription_partial_ignored_after_abort_requested():
+    controller, app = _make_controller(overlay=FakeOverlay())
+    controller._streaming_recording = True
+    controller._audio_capture = object()
+    controller._stream_abort_requested = True
+    controller._stream_live_text = "hello world"
+
+    controller._on_transcription_partial("hello world again")
+
+    assert controller._stream_live_text == "hello world"
     controller.shutdown()
     _ = app
 
