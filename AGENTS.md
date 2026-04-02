@@ -18,10 +18,11 @@ Quality has the highest priority. Take as much time as needed.
 
 - Use logical commits for distinct bugfix/feature/refactor units.
 - Match the existing history: short conventional subject line, blank line, then concise `-` bullet points.
-- Hard-wrap every commit body line at a maximum of 80 characters.
+- Hard-wrap every commit body line at a maximum of 100 characters.
 - Never include literal escape sequences such as `\n` in commit messages; use real newlines.
 - For shell-driven commits, prefer a message file or stdin with real line breaks, then verify with `git log -1 --format=%B`.
-- Include validation when relevant.
+- Do not include validation blocks or lists of executed test commands in commit messages.
+- It is fine to mention newly added or updated tests as part of the change summary.
 
 ## Language rule
 
