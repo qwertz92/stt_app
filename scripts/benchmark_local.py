@@ -1,19 +1,30 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import multiprocessing as mp
-import statistics
+import os
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from faster_whisper import WhisperModel
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+from stt_app.local_benchmark import (
+    BenchmarkCase,
+    BenchmarkRun,
+    _case_from_dict,
+    _format_number,
+    _format_seconds,
+    _run_case as _shared_run_case,
+    _safe_float,
+    _successful_cases as _shared_successful_cases,
+    _write_csv as _shared_write_csv,
+)
 from faster_whisper.utils import _MODELS
 
 
@@ -35,39 +46,6 @@ def _validate_models(models: list[str]) -> list[str]:
             + names
         )
     return models
-
-
-def _audio_duration_seconds(path: Path) -> float | None:
-    try:
-        import wave
-
-        with wave.open(str(path), "rb") as handle:
-            frames = handle.getnframes()
-            rate = handle.getframerate()
-            if rate > 0:
-                return frames / float(rate)
-    except Exception:
-        return None
-    return None
-
-
-def _safe_float(value: Any, default: float = math.nan) -> float:
-    try:
-        return float(value)
-    except Exception:
-        return default
-
-
-def _format_seconds(value: float) -> str:
-    if not math.isfinite(value):
-        return "-"
-    return f"{value:.2f}s"
-
-
-def _format_number(value: float, digits: int = 3) -> str:
-    if not math.isfinite(value):
-        return "-"
-    return f"{value:.{digits}f}"
 
 
 def _bytes_to_human(value: int | None) -> str:
@@ -107,60 +85,6 @@ def _resolve_model_size_bytes(model_name: str) -> int | None:
     if total <= 0:
         return None
     return total
-
-
-@dataclass
-class BenchmarkRun:
-    run_index: int
-    seconds: float
-    audio_duration_seconds: float
-    real_time_factor: float
-    transcript_chars: int
-    transcript_words: int
-    detected_language: str
-    language_probability: float
-
-
-@dataclass
-class BenchmarkCase:
-    model: str
-    device: str
-    compute_type: str
-    download_seconds: float
-    load_seconds: float
-    runs: list[BenchmarkRun]
-    error: str | None = None
-
-    @property
-    def avg_seconds(self) -> float:
-        if not self.runs:
-            return math.nan
-        return statistics.mean(run.seconds for run in self.runs)
-
-    @property
-    def avg_rtf(self) -> float:
-        if not self.runs:
-            return math.nan
-        return statistics.mean(run.real_time_factor for run in self.runs)
-
-    @property
-    def stdev_seconds(self) -> float:
-        if len(self.runs) < 2:
-            return math.nan
-        return statistics.pstdev(run.seconds for run in self.runs)
-
-
-def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
-    runs = [BenchmarkRun(**entry) for entry in data.get("runs", [])]
-    return BenchmarkCase(
-        model=str(data.get("model", "")),
-        device=str(data.get("device", "")),
-        compute_type=str(data.get("compute_type", "")),
-        download_seconds=_safe_float(data.get("download_seconds"), default=0.0),
-        load_seconds=_safe_float(data.get("load_seconds"), default=math.nan),
-        runs=runs,
-        error=data.get("error"),
-    )
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -387,97 +311,19 @@ def _run_case(
     threads: int,
     download_seconds: float = 0.0,
 ) -> BenchmarkCase:
-    # Step 1: Load model (download already handled by _ensure_models_available)
-    total_steps = runs + (1 if warmup else 0)
-    step = 0
-
-    print("  Loading model...", flush=True)
-    model_start = time.perf_counter()
-    model = WhisperModel(
-        model_name,
+    return _shared_run_case(
+        audio_path=audio_path,
+        model_name=model_name,
         device=device,
         compute_type=compute_type,
-        cpu_threads=threads if threads > 0 else 0,
-    )
-    load_seconds = time.perf_counter() - model_start
-    print(f"  Model loaded ({_format_seconds(load_seconds)})")
-
-    # Optional warmup
-    if warmup:
-        step += 1
-        print(
-            f"  [{step}/{total_steps}] Warmup transcription...",
-            flush=True,
-        )
-        warm_segments, _ = model.transcribe(
-            str(audio_path),
-            language=language,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-        )
-        list(warm_segments)
-        print(f"  [{step}/{total_steps}] Warmup done")
-
-    duration_hint = _audio_duration_seconds(audio_path) or math.nan
-
-    # Step 2: Measured transcription runs
-    all_runs: list[BenchmarkRun] = []
-    for run_index in range(1, runs + 1):
-        step += 1
-        print(
-            f"  [{step}/{total_steps}] Transcribing run {run_index}/{runs}...",
-            flush=True,
-        )
-        started = time.perf_counter()
-        segments, info = model.transcribe(
-            str(audio_path),
-            language=language,
-            beam_size=beam_size,
-            vad_filter=vad_filter,
-        )
-        pieces: list[str] = []
-        for segment in segments:
-            text = getattr(segment, "text", "")
-            if text:
-                stripped = str(text).strip()
-                if stripped:
-                    pieces.append(stripped)
-        elapsed = time.perf_counter() - started
-
-        transcript = " ".join(pieces).strip()
-        transcript_words = len([p for p in transcript.split(" ") if p])
-        duration_seconds = _safe_float(
-            getattr(info, "duration", duration_hint),
-            default=duration_hint,
-        )
-        rtf = elapsed / duration_seconds if duration_seconds > 0 else math.nan
-        print(
-            f"  [{step}/{total_steps}] Run {run_index} done "
-            f"({_format_seconds(elapsed)}, RTF={_format_number(rtf)})"
-        )
-
-        all_runs.append(
-            BenchmarkRun(
-                run_index=run_index,
-                seconds=elapsed,
-                audio_duration_seconds=duration_seconds,
-                real_time_factor=rtf,
-                transcript_chars=len(transcript),
-                transcript_words=transcript_words,
-                detected_language=str(getattr(info, "language", "")),
-                language_probability=_safe_float(
-                    getattr(info, "language_probability", math.nan)
-                ),
-            )
-        )
-
-    return BenchmarkCase(
-        model=model_name,
-        device=device,
-        compute_type=compute_type,
+        runs=runs,
+        beam_size=beam_size,
+        language=language,
+        vad_filter=vad_filter,
+        warmup=warmup,
+        threads=threads,
         download_seconds=download_seconds,
-        load_seconds=load_seconds,
-        runs=all_runs,
+        progress_callback=lambda text: print(f"  {text}", flush=True),
     )
 
 
@@ -579,7 +425,7 @@ def _print_results(cases: list[BenchmarkCase]) -> None:
 
 
 def _successful_cases(cases: list[BenchmarkCase]) -> list[BenchmarkCase]:
-    return [case for case in cases if case.error is None and case.runs]
+    return _shared_successful_cases(cases)
 
 
 def _print_best_cases(cases: list[BenchmarkCase]) -> None:
@@ -612,88 +458,7 @@ def _print_best_cases(cases: list[BenchmarkCase]) -> None:
 
 
 def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "row_type",
-                "model",
-                "device",
-                "compute_type",
-                "run_index",
-                "seconds",
-                "audio_duration_seconds",
-                "real_time_factor",
-                "transcript_chars",
-                "transcript_words",
-                "detected_language",
-                "language_probability",
-                "download_seconds",
-                "load_seconds",
-                "avg_seconds",
-                "stdev_seconds",
-                "avg_rtf",
-                "status",
-                "error",
-            ],
-        )
-        writer.writeheader()
-
-        for case in cases:
-            status = "ok" if case.error is None else "error"
-            for run in case.runs:
-                writer.writerow(
-                    {
-                        "row_type": "run",
-                        "model": case.model,
-                        "device": case.device,
-                        "compute_type": case.compute_type,
-                        "run_index": run.run_index,
-                        "seconds": run.seconds,
-                        "audio_duration_seconds": run.audio_duration_seconds,
-                        "real_time_factor": run.real_time_factor,
-                        "transcript_chars": run.transcript_chars,
-                        "transcript_words": run.transcript_words,
-                        "detected_language": run.detected_language,
-                        "language_probability": run.language_probability,
-                        "download_seconds": case.download_seconds,
-                        "load_seconds": case.load_seconds,
-                        "avg_seconds": case.avg_seconds,
-                        "stdev_seconds": case.stdev_seconds,
-                        "avg_rtf": case.avg_rtf,
-                        "status": status,
-                        "error": case.error or "",
-                    }
-                )
-
-            writer.writerow(
-                {
-                    "row_type": "summary",
-                    "model": case.model,
-                    "device": case.device,
-                    "compute_type": case.compute_type,
-                    "run_index": "",
-                    "seconds": "",
-                    "audio_duration_seconds": "",
-                    "real_time_factor": "",
-                    "transcript_chars": "",
-                    "transcript_words": "",
-                    "detected_language": (
-                        case.runs[0].detected_language if case.runs else ""
-                    ),
-                    "language_probability": (
-                        case.runs[0].language_probability if case.runs else ""
-                    ),
-                    "download_seconds": case.download_seconds,
-                    "load_seconds": case.load_seconds,
-                    "avg_seconds": case.avg_seconds,
-                    "stdev_seconds": case.stdev_seconds,
-                    "avg_rtf": case.avg_rtf,
-                    "status": status,
-                    "error": case.error or "",
-                }
-            )
+    _shared_write_csv(path, cases)
 
 
 def main() -> int:

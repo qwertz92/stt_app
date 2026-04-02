@@ -48,12 +48,20 @@ from .config import (
 )
 from .hotkey import parse_hotkey
 from .last_recording_store import LastRecordingStore
+from .local_benchmark import (
+    BenchmarkCase,
+    _format_number,
+    _format_seconds,
+    format_benchmark_summary,
+    run_benchmark_cases,
+)
 from .logger import AppLogger
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_history import TranscriptHistoryStore
 from .transcriber.local_faster_whisper import (
     delete_cached_model,
+    download_model_snapshot,
     find_cached_models,
 )
 
@@ -108,6 +116,10 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
     import_transcription_finished = QtCore.Signal(bool, str)
+    local_model_download_progress = QtCore.Signal(str)
+    local_model_download_finished = QtCore.Signal(bool, str)
+    benchmark_progress = QtCore.Signal(str)
+    benchmark_finished = QtCore.Signal(bool, str, object)
     settings_changed = QtCore.Signal()
 
     def __init__(
@@ -134,6 +146,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
         self._provider_pending_clear: set[str] = set()
         self._provider_test_history: dict[str, tuple[bool, str, str]] = {}
+        self._active_local_model_download_thread: threading.Thread | None = None
+        self._active_benchmark_thread: threading.Thread | None = None
         self._remote_model_values: dict[str, str] = {
             "groq": self._loaded_settings.groq_model,
             "openai": self._loaded_settings.openai_model,
@@ -168,6 +182,14 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
         self.import_transcription_finished.connect(self._finish_import_transcription)
+        self.local_model_download_progress.connect(
+            self._on_local_model_download_progress
+        )
+        self.local_model_download_finished.connect(
+            self._on_local_model_download_finished
+        )
+        self.benchmark_progress.connect(self._on_benchmark_progress)
+        self.benchmark_finished.connect(self._on_benchmark_finished)
         self._build_ui()
         self._populate(self._loaded_settings)
 
@@ -211,6 +233,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._build_general_tab()
         self._build_local_tab()
+        self._build_benchmark_tab()
         self._build_remote_tab()
         self._build_history_tab()
         self._configure_combo_popups()
@@ -547,9 +570,192 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_local_models_label()
         self._refresh_cached_models_list()
 
+        download_box = QtWidgets.QGroupBox("Download Models")
+        download_layout = QtWidgets.QVBoxLayout(download_box)
+        download_hint = QtWidgets.QLabel(
+            "Download local models directly here without switching the active model. "
+            "Downloaded models also appear on the Benchmark tab."
+        )
+        download_hint.setWordWrap(True)
+        self._style_note_label(download_hint)
+        download_layout.addWidget(download_hint)
+
+        self.downloadable_models_list = QtWidgets.QListWidget()
+        self.downloadable_models_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.MultiSelection
+        )
+        self.downloadable_models_list.itemSelectionChanged.connect(
+            self._update_local_download_actions
+        )
+        download_layout.addWidget(self.downloadable_models_list)
+
+        download_buttons = QtWidgets.QHBoxLayout()
+        self.download_selected_models_button = QtWidgets.QPushButton(
+            "Download Selected"
+        )
+        self.download_selected_models_button.clicked.connect(
+            self._download_selected_local_models
+        )
+        self.download_all_missing_models_button = QtWidgets.QPushButton(
+            "Download All Missing"
+        )
+        self.download_all_missing_models_button.clicked.connect(
+            self._download_all_missing_local_models
+        )
+        download_buttons.addWidget(self.download_selected_models_button)
+        download_buttons.addWidget(self.download_all_missing_models_button)
+        download_buttons.addStretch(1)
+        download_layout.addLayout(download_buttons)
+
+        self.local_model_download_label = QtWidgets.QLabel("")
+        self.local_model_download_label.setWordWrap(True)
+        download_layout.addWidget(self.local_model_download_label)
+
         layout.addWidget(local_models_box)
+        layout.addWidget(download_box)
         layout.addStretch(1)
         self.tabs.addTab(tab, "Local")
+
+    def _build_benchmark_tab(self) -> None:
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        intro = QtWidgets.QLabel(
+            "Benchmark installed local faster-whisper models against one audio file. "
+            "If you want to compare more models, download them first on the Local tab."
+        )
+        intro.setWordWrap(True)
+        self._style_note_label(intro)
+        layout.addWidget(intro)
+
+        audio_box = QtWidgets.QGroupBox("Audio Sample")
+        audio_layout = QtWidgets.QVBoxLayout(audio_box)
+        audio_row = QtWidgets.QHBoxLayout()
+        self.benchmark_audio_edit = QtWidgets.QLineEdit()
+        self.benchmark_audio_edit.setPlaceholderText(
+            "Choose an audio file or use the last recording"
+        )
+        self.benchmark_audio_edit.textChanged.connect(
+            lambda _text: self._update_benchmark_actions()
+        )
+        self.benchmark_audio_browse_button = QtWidgets.QPushButton("Choose file...")
+        self.benchmark_audio_browse_button.clicked.connect(
+            self._choose_benchmark_audio_file
+        )
+        self.benchmark_audio_last_button = QtWidgets.QPushButton(
+            "Use last recording"
+        )
+        self.benchmark_audio_last_button.clicked.connect(
+            self._use_last_recording_for_benchmark
+        )
+        audio_row.addWidget(self.benchmark_audio_edit, 1)
+        audio_row.addWidget(self.benchmark_audio_browse_button)
+        audio_row.addWidget(self.benchmark_audio_last_button)
+        audio_layout.addLayout(audio_row)
+
+        self.benchmark_audio_status_label = QtWidgets.QLabel("No audio sample selected.")
+        self.benchmark_audio_status_label.setWordWrap(True)
+        self._style_note_label(self.benchmark_audio_status_label)
+        audio_layout.addWidget(self.benchmark_audio_status_label)
+        layout.addWidget(audio_box)
+
+        models_box = QtWidgets.QGroupBox("Installed Models")
+        models_layout = QtWidgets.QVBoxLayout(models_box)
+        self.benchmark_models_list = QtWidgets.QListWidget()
+        self.benchmark_models_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.MultiSelection
+        )
+        self.benchmark_models_list.itemSelectionChanged.connect(
+            self._update_benchmark_actions
+        )
+        models_layout.addWidget(self.benchmark_models_list)
+        self.refresh_benchmark_models_button = QtWidgets.QPushButton(
+            "Refresh Installed Models"
+        )
+        self.refresh_benchmark_models_button.clicked.connect(
+            self._refresh_local_model_views
+        )
+        models_layout.addWidget(self.refresh_benchmark_models_button)
+        layout.addWidget(models_box)
+
+        options_box = QtWidgets.QGroupBox("Run Options")
+        options_form = QtWidgets.QFormLayout(options_box)
+        options_form.setContentsMargins(10, 10, 10, 10)
+        options_form.setHorizontalSpacing(10)
+        options_form.setVerticalSpacing(4)
+
+        self.benchmark_compute_type_combo = QtWidgets.QComboBox()
+        for value in ("int8", "float16", "float32"):
+            self.benchmark_compute_type_combo.addItem(value, value)
+        options_form.addRow("Compute Type", self.benchmark_compute_type_combo)
+
+        self.benchmark_runs_spin = QtWidgets.QSpinBox()
+        self.benchmark_runs_spin.setRange(1, 10)
+        self.benchmark_runs_spin.setValue(1)
+        options_form.addRow("Runs", self.benchmark_runs_spin)
+
+        self.benchmark_beam_size_spin = QtWidgets.QSpinBox()
+        self.benchmark_beam_size_spin.setRange(1, 10)
+        self.benchmark_beam_size_spin.setValue(5)
+        options_form.addRow("Beam Size", self.benchmark_beam_size_spin)
+
+        self.benchmark_language_combo = QtWidgets.QComboBox()
+        self.benchmark_language_combo.addItem("Auto", "auto")
+        self.benchmark_language_combo.addItem("German", "de")
+        self.benchmark_language_combo.addItem("English", "en")
+        options_form.addRow("Language", self.benchmark_language_combo)
+
+        self.benchmark_warmup_checkbox = QtWidgets.QCheckBox(
+            "Run one warmup pass before measurements"
+        )
+        options_form.addRow("", self.benchmark_warmup_checkbox)
+
+        self.benchmark_vad_checkbox = QtWidgets.QCheckBox(
+            "Enable faster-whisper VAD filter"
+        )
+        options_form.addRow("", self.benchmark_vad_checkbox)
+        layout.addWidget(options_box)
+
+        benchmark_actions = QtWidgets.QHBoxLayout()
+        self.run_benchmark_button = QtWidgets.QPushButton("Run Benchmark")
+        self.run_benchmark_button.clicked.connect(self._run_local_benchmark)
+        self.clear_benchmark_results_button = QtWidgets.QPushButton("Clear Results")
+        self.clear_benchmark_results_button.clicked.connect(
+            self._clear_benchmark_results
+        )
+        benchmark_actions.addWidget(self.run_benchmark_button)
+        benchmark_actions.addWidget(self.clear_benchmark_results_button)
+        benchmark_actions.addStretch(1)
+        layout.addLayout(benchmark_actions)
+
+        self.benchmark_status_label = QtWidgets.QLabel("")
+        self.benchmark_status_label.setWordWrap(True)
+        layout.addWidget(self.benchmark_status_label)
+
+        results_box = QtWidgets.QGroupBox("Results")
+        results_layout = QtWidgets.QVBoxLayout(results_box)
+        self.benchmark_results_table = QtWidgets.QTableWidget(0, 6)
+        self.benchmark_results_table.setHorizontalHeaderLabels(
+            ["Model", "Compute", "Load", "Avg", "RTF", "Status"]
+        )
+        self.benchmark_results_table.verticalHeader().setVisible(False)
+        self.benchmark_results_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.benchmark_results_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.NoSelection
+        )
+        self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
+        results_layout.addWidget(self.benchmark_results_table)
+
+        self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
+        self.benchmark_summary_text.setReadOnly(True)
+        results_layout.addWidget(self.benchmark_summary_text)
+        layout.addWidget(results_box, 1)
+
+        self.tabs.addTab(tab, "Benchmark")
 
     # --- Remote tab ---
 
@@ -802,6 +1008,9 @@ class SettingsDialog(QtWidgets.QDialog):
         "distil-large-v3.5": "distil-large-v3.5 (~756 MB, English only, improved)",
     }
 
+    def _model_label(self, model_name: str) -> str:
+        return self._MODEL_LABELS.get(model_name, model_name)
+
     def _refresh_model_combo(self, selected: str | None = None) -> None:
         """Rebuild model combo: downloaded models on top, separator, rest below."""
         model_dir = self.model_dir_edit.text().strip()
@@ -819,14 +1028,14 @@ class SettingsDialog(QtWidgets.QDialog):
         not_downloaded = [m for m in VALID_MODEL_SIZES if m not in cached]
 
         for value in downloaded:
-            label = self._MODEL_LABELS.get(value, value)
+            label = self._model_label(value)
             self.model_combo.addItem(f"\u2713 {label}", value)
 
         if downloaded and not_downloaded:
             self.model_combo.insertSeparator(self.model_combo.count())
 
         for value in not_downloaded:
-            label = self._MODEL_LABELS.get(value, value)
+            label = self._model_label(value)
             self.model_combo.addItem(f"   {label}", value)
 
         if current_data:
@@ -852,7 +1061,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.local_models_label.setStyleSheet("color: #1b5e20;")
         else:
             self.local_models_label.setText(
-                "No local models found. Models will be downloaded on first use.\n"
+                "No local models found. Download models below or let the app fetch one on first use.\n"
                 f"See {DOC_MODELS_PATH} if downloads are blocked."
             )
             self.local_models_label.setStyleSheet("color: #b71c1c;")
@@ -871,6 +1080,76 @@ class SettingsDialog(QtWidgets.QDialog):
             self.cached_models_list.addItem(item)
         self.delete_cached_model_button.setEnabled(False)
 
+    def _refresh_downloadable_models_list(
+        self,
+        cached: list[str] | None = None,
+    ) -> None:
+        if not hasattr(self, "downloadable_models_list"):
+            return
+        if cached is None:
+            model_dir = self.model_dir_edit.text().strip()
+            try:
+                cached = find_cached_models(model_dir)
+            except Exception:
+                cached = []
+
+        selected = {
+            str(item.data(QtCore.Qt.UserRole) or "")
+            for item in self.downloadable_models_list.selectedItems()
+        }
+        cached_set = set(cached)
+
+        self.downloadable_models_list.clear()
+        for model_name in VALID_MODEL_SIZES:
+            status = "Downloaded" if model_name in cached_set else "Not downloaded"
+            if model_name in LOCAL_ENGLISH_ONLY_MODELS:
+                status = f"{status}, English only"
+            item = QtWidgets.QListWidgetItem(
+                f"{self._model_label(model_name)} - {status}"
+            )
+            item.setData(QtCore.Qt.UserRole, model_name)
+            item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
+            if model_name in cached_set:
+                item.setForeground(QtGui.QColor("#1b5e20"))
+            self.downloadable_models_list.addItem(item)
+            if model_name in selected:
+                item.setSelected(True)
+
+        self._update_local_download_actions()
+
+    def _refresh_benchmark_model_list(
+        self,
+        cached: list[str] | None = None,
+    ) -> None:
+        if not hasattr(self, "benchmark_models_list"):
+            return
+        if cached is None:
+            model_dir = self.model_dir_edit.text().strip()
+            try:
+                cached = find_cached_models(model_dir)
+            except Exception:
+                cached = []
+
+        selected = {
+            str(item.data(QtCore.Qt.UserRole) or "")
+            for item in self.benchmark_models_list.selectedItems()
+        }
+        self.benchmark_models_list.clear()
+
+        for model_name in cached:
+            suffix = " (English only)" if model_name in LOCAL_ENGLISH_ONLY_MODELS else ""
+            item = QtWidgets.QListWidgetItem(
+                f"{self._model_label(model_name)}{suffix}"
+            )
+            item.setData(QtCore.Qt.UserRole, model_name)
+            self.benchmark_models_list.addItem(item)
+            if selected:
+                item.setSelected(model_name in selected)
+            else:
+                item.setSelected(True)
+
+        self._update_benchmark_actions()
+
     def _refresh_local_model_views(self) -> None:
         model_dir = self.model_dir_edit.text().strip()
         try:
@@ -879,8 +1158,350 @@ class SettingsDialog(QtWidgets.QDialog):
             cached = []
         self._refresh_local_models_label(cached)
         self._refresh_cached_models_list(cached)
+        self._refresh_downloadable_models_list(cached)
         self._refresh_model_combo()
+        self._refresh_benchmark_model_list(cached)
         self._update_language_availability()
+
+    def _selected_downloadable_model_names(self) -> list[str]:
+        if not hasattr(self, "downloadable_models_list"):
+            return []
+        return [
+            str(item.data(QtCore.Qt.UserRole) or "").strip()
+            for item in self.downloadable_models_list.selectedItems()
+            if str(item.data(QtCore.Qt.UserRole) or "").strip()
+        ]
+
+    def _update_local_download_actions(self) -> None:
+        if not hasattr(self, "download_selected_models_button"):
+            return
+
+        busy = self._active_local_model_download_thread is not None
+        selected = self._selected_downloadable_model_names()
+        missing = []
+        if hasattr(self, "downloadable_models_list"):
+            for index in range(self.downloadable_models_list.count()):
+                item = self.downloadable_models_list.item(index)
+                if not bool(item.data(QtCore.Qt.UserRole + 1)):
+                    missing.append(str(item.data(QtCore.Qt.UserRole) or ""))
+
+        self.downloadable_models_list.setEnabled(not busy)
+        self.refresh_local_models_button.setEnabled(not busy)
+        self.delete_cached_model_button.setEnabled(
+            (not busy) and bool(self.cached_models_list.selectedItems())
+        )
+        self.download_selected_models_button.setEnabled(
+            (not busy) and bool(selected)
+        )
+        self.download_all_missing_models_button.setEnabled(
+            (not busy) and bool(missing)
+        )
+
+    def _download_selected_local_models(self) -> None:
+        selected = self._selected_downloadable_model_names()
+        if not selected:
+            return
+        missing = self._missing_downloadable_models(selected)
+        if not missing:
+            self.local_model_download_label.setStyleSheet("color: #555;")
+            self.local_model_download_label.setText(
+                "All selected models are already downloaded."
+            )
+            return
+        self._start_local_model_download(missing)
+
+    def _download_all_missing_local_models(self) -> None:
+        missing = self._missing_downloadable_models()
+        if not missing:
+            self.local_model_download_label.setStyleSheet("color: #555;")
+            self.local_model_download_label.setText(
+                "All available local models are already downloaded."
+            )
+            return
+        self._start_local_model_download(missing)
+
+    def _missing_downloadable_models(
+        self,
+        names: list[str] | None = None,
+    ) -> list[str]:
+        wanted = set(names or [
+            str(self.downloadable_models_list.item(index).data(QtCore.Qt.UserRole) or "")
+            for index in range(self.downloadable_models_list.count())
+        ])
+        missing: list[str] = []
+        for index in range(self.downloadable_models_list.count()):
+            item = self.downloadable_models_list.item(index)
+            model_name = str(item.data(QtCore.Qt.UserRole) or "")
+            if model_name not in wanted:
+                continue
+            if not bool(item.data(QtCore.Qt.UserRole + 1)):
+                missing.append(model_name)
+        return missing
+
+    def _start_local_model_download(self, model_names: list[str]) -> None:
+        if not model_names or self._active_local_model_download_thread is not None:
+            return
+
+        self.local_model_download_label.setStyleSheet("color: #555;")
+        self.local_model_download_label.setText(
+            f"Preparing download for: {', '.join(model_names)}"
+        )
+        self._update_local_download_actions()
+
+        model_dir = self.model_dir_edit.text().strip()
+
+        def _run() -> None:
+            successes: list[str] = []
+            failures: list[str] = []
+            total = len(model_names)
+            for index, model_name in enumerate(model_names, start=1):
+                self.local_model_download_progress.emit(
+                    f"Downloading {index}/{total}: {model_name}..."
+                )
+                try:
+                    download_model_snapshot(model_name, model_dir)
+                    successes.append(model_name)
+                except Exception as exc:
+                    failures.append(f"{model_name}: {exc}")
+
+            if failures and successes:
+                message = (
+                    f"Completed with errors. Downloaded: {', '.join(successes)}. "
+                    f"Failed: {' | '.join(failures)}"
+                )
+                self.local_model_download_finished.emit(False, message)
+                return
+            if failures:
+                self.local_model_download_finished.emit(
+                    False,
+                    f"Download failed: {' | '.join(failures)}",
+                )
+                return
+            self.local_model_download_finished.emit(
+                True,
+                f"Downloaded: {', '.join(successes)}",
+            )
+
+        self._active_local_model_download_thread = threading.Thread(
+            target=_run,
+            name="stt_app_local_model_download",
+            daemon=True,
+        )
+        self._active_local_model_download_thread.start()
+        self._update_local_download_actions()
+
+    def _on_local_model_download_progress(self, text: str) -> None:
+        self.local_model_download_label.setStyleSheet("color: #555;")
+        self.local_model_download_label.setText(text)
+
+    def _on_local_model_download_finished(self, success: bool, text: str) -> None:
+        self._active_local_model_download_thread = None
+        if success:
+            self.local_model_download_label.setStyleSheet("color: #1b5e20;")
+        elif text.startswith("Completed with errors"):
+            self.local_model_download_label.setStyleSheet("color: #b26a00;")
+        else:
+            self.local_model_download_label.setStyleSheet("color: #b71c1c;")
+        self.local_model_download_label.setText(text)
+        self._refresh_local_model_views()
+
+    def _selected_benchmark_model_names(self) -> list[str]:
+        if not hasattr(self, "benchmark_models_list"):
+            return []
+        return [
+            str(item.data(QtCore.Qt.UserRole) or "").strip()
+            for item in self.benchmark_models_list.selectedItems()
+            if str(item.data(QtCore.Qt.UserRole) or "").strip()
+        ]
+
+    def _set_benchmark_audio_path(self, path: str) -> None:
+        selected = str(path or "").strip()
+        self.benchmark_audio_edit.setText(selected)
+        if selected:
+            self.benchmark_audio_status_label.setText(f"Selected: {selected}")
+            self.benchmark_audio_status_label.setStyleSheet("color: #1b5e20;")
+        else:
+            self.benchmark_audio_status_label.setText("No audio sample selected.")
+            self.benchmark_audio_status_label.setStyleSheet("color: #555;")
+        self._update_benchmark_actions()
+
+    def _choose_benchmark_audio_file(self) -> None:
+        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+            self,
+            "Select benchmark audio file",
+            "",
+            "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.webm);;All files (*)",
+        )
+        if path:
+            self._set_benchmark_audio_path(path)
+
+    def _use_last_recording_for_benchmark(self) -> None:
+        path = self._last_recording_store.selectable_path()
+        if path is None:
+            self._set_benchmark_status(
+                "No last recording is currently available.",
+                "#b71c1c",
+            )
+            return
+        self._set_benchmark_audio_path(str(path))
+        self._set_benchmark_status(
+            "Last recording loaded for benchmarking.",
+            "#555",
+        )
+
+    def _set_benchmark_status(self, text: str, color: str) -> None:
+        self.benchmark_status_label.setText(text)
+        self.benchmark_status_label.setStyleSheet(f"color: {color};")
+
+    def _update_benchmark_actions(self) -> None:
+        if not hasattr(self, "run_benchmark_button"):
+            return
+
+        busy = self._active_benchmark_thread is not None
+        audio_path = self.benchmark_audio_edit.text().strip()
+        has_audio = bool(audio_path) and Path(audio_path).is_file()
+        has_models = bool(self._selected_benchmark_model_names())
+
+        self.benchmark_audio_edit.setEnabled(not busy)
+        self.benchmark_audio_browse_button.setEnabled(not busy)
+        self.benchmark_audio_last_button.setEnabled(not busy)
+        self.benchmark_models_list.setEnabled(not busy)
+        self.refresh_benchmark_models_button.setEnabled(not busy)
+        self.benchmark_compute_type_combo.setEnabled(not busy)
+        self.benchmark_runs_spin.setEnabled(not busy)
+        self.benchmark_beam_size_spin.setEnabled(not busy)
+        self.benchmark_language_combo.setEnabled(not busy)
+        self.benchmark_warmup_checkbox.setEnabled(not busy)
+        self.benchmark_vad_checkbox.setEnabled(not busy)
+        self.run_benchmark_button.setEnabled((not busy) and has_audio and has_models)
+        self.clear_benchmark_results_button.setEnabled(not busy)
+
+    def _clear_benchmark_results(self) -> None:
+        self.benchmark_results_table.setRowCount(0)
+        self.benchmark_summary_text.clear()
+        self._set_benchmark_status("", "#555")
+        self._update_benchmark_actions()
+
+    def _populate_benchmark_results(self, cases: list[BenchmarkCase]) -> None:
+        self.benchmark_results_table.setRowCount(len(cases))
+        for row, case in enumerate(cases):
+            status = "OK" if case.error is None else "Error"
+            values = [
+                case.model,
+                case.compute_type,
+                _format_seconds(case.load_seconds),
+                _format_seconds(case.avg_seconds),
+                _format_number(case.avg_rtf),
+                status,
+            ]
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                if case.error and column == len(values) - 1:
+                    item.setToolTip(case.error)
+                self.benchmark_results_table.setItem(row, column, item)
+
+    def _run_local_benchmark(self) -> None:
+        if self._active_benchmark_thread is not None:
+            return
+
+        audio_path = self.benchmark_audio_edit.text().strip()
+        if not audio_path or not Path(audio_path).is_file():
+            self._set_benchmark_status(
+                "Choose a valid audio file before starting the benchmark.",
+                "#b71c1c",
+            )
+            return
+
+        model_names = self._selected_benchmark_model_names()
+        if not model_names:
+            self._set_benchmark_status(
+                "Select at least one installed model for the benchmark.",
+                "#b71c1c",
+            )
+            return
+
+        language_value = str(self.benchmark_language_combo.currentData() or "auto")
+        if language_value == "de" and any(
+            model_name in LOCAL_ENGLISH_ONLY_MODELS for model_name in model_names
+        ):
+            self._set_benchmark_status(
+                "German cannot be benchmarked with the selected English-only model. "
+                "Use Auto or English, or deselect distil-large-v3.5.",
+                "#b71c1c",
+            )
+            return
+
+        self._set_benchmark_status("Running benchmark...", "#555")
+        compute_type = str(self.benchmark_compute_type_combo.currentData() or "int8")
+        run_count = int(self.benchmark_runs_spin.value())
+        beam_size = int(self.benchmark_beam_size_spin.value())
+        use_vad = self.benchmark_vad_checkbox.isChecked()
+        warmup = self.benchmark_warmup_checkbox.isChecked()
+        model_dir = self.model_dir_edit.text().strip()
+        self._update_benchmark_actions()
+
+        def _progress(text: str) -> None:
+            self.benchmark_progress.emit(text)
+
+        def _run() -> None:
+            try:
+                cases = run_benchmark_cases(
+                    audio_path=audio_path,
+                    model_names=model_names,
+                    device="auto",
+                    compute_type=compute_type,
+                    runs=run_count,
+                    beam_size=beam_size,
+                    language=None if language_value == "auto" else language_value,
+                    vad_filter=use_vad,
+                    warmup=warmup,
+                    threads=0,
+                    model_dir=model_dir,
+                    progress_callback=_progress,
+                )
+            except Exception as exc:
+                self.benchmark_finished.emit(False, str(exc), [])
+                return
+
+            self.benchmark_finished.emit(
+                True,
+                format_benchmark_summary(cases),
+                cases,
+            )
+
+        self._active_benchmark_thread = threading.Thread(
+            target=_run,
+            name="stt_app_local_benchmark",
+            daemon=True,
+        )
+        self._active_benchmark_thread.start()
+        self._update_benchmark_actions()
+
+    def _on_benchmark_progress(self, text: str) -> None:
+        self._set_benchmark_status(text, "#555")
+
+    def _on_benchmark_finished(
+        self,
+        success: bool,
+        text: str,
+        payload: object,
+    ) -> None:
+        self._active_benchmark_thread = None
+        self._update_benchmark_actions()
+        if not success:
+            self._set_benchmark_status(text, "#b71c1c")
+            return
+
+        cases = [case for case in payload if isinstance(case, BenchmarkCase)]
+        self._populate_benchmark_results(cases)
+        self.benchmark_summary_text.setPlainText(text)
+        if any(case.error for case in cases):
+            self._set_benchmark_status(
+                "Benchmark completed with errors. See the summary for details.",
+                "#b26a00",
+            )
+        else:
+            self._set_benchmark_status("Benchmark finished.", "#1b5e20")
 
     def _remote_model_value_for_provider(self, provider: str) -> str:
         normalized = str(provider or "").strip().lower()
@@ -1649,6 +2270,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_engine_note()
 
+        self._refresh_local_model_views()
         self._update_engine_indicator()
         self._refresh_history_list()
         self._apply_secret_store_options()

@@ -32,20 +32,10 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from stt_app.config import DOC_MODELS_PATH, DOC_SSL_PROXY_PATH, MODEL_REPO_MAP  # noqa: E402
-from stt_app.ssl_utils import is_ssl_error as _is_ssl_error  # noqa: E402
+from stt_app.transcriber.local_faster_whisper import download_model_snapshot  # noqa: E402
 
 # Re-export under the name used throughout this script.
 MODELS = MODEL_REPO_MAP
-
-# Only these files are needed by CTranslate2 / faster-whisper.
-ALLOW_PATTERNS: list[str] = [
-    "config.json",
-    "preprocessor_config.json",
-    "model.bin",
-    "tokenizer.json",
-    "vocabulary.*",
-]
-
 
 def _print_ssl_help(model_name: str) -> None:
     """Print actionable guidance when SSL verification fails."""
@@ -92,16 +82,6 @@ def _print_ssl_help(model_name: str) -> None:
 
 def download_model(name: str, output_dir: str | None = None) -> str:
     """Download a single model and return the local snapshot path."""
-    try:
-        from huggingface_hub import snapshot_download  # type: ignore
-    except ImportError:
-        print(
-            "ERROR: huggingface_hub is not installed. "
-            "Install it with: pip install huggingface_hub",
-            file=sys.stderr,
-        )
-        sys.exit(1)
-
     repo_id = MODELS.get(name)
     if repo_id is None:
         print(f"ERROR: Unknown model '{name}'.", file=sys.stderr)
@@ -110,19 +90,12 @@ def download_model(name: str, output_dir: str | None = None) -> str:
 
     print(f"Downloading {name} ({repo_id})...")
 
-    kwargs: dict = {
-        "allow_patterns": ALLOW_PATTERNS,
-    }
-    if output_dir:
-        kwargs["cache_dir"] = output_dir
-
     try:
-        path = snapshot_download(repo_id, **kwargs)
+        path = download_model_snapshot(name, output_dir or "")
     except Exception as exc:
-        if _is_ssl_error(exc):
+        if "SSL certificate verification failed" in str(exc):
             _print_ssl_help(name)
             sys.exit(2)
-        # Re-raise with context for other errors.
         print(f"ERROR: Download failed: {exc}", file=sys.stderr)
         sys.exit(1)
 

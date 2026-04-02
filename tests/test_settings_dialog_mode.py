@@ -1,6 +1,7 @@
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from stt_app.app_paths import debug_audio_path
+from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
 
@@ -31,6 +32,14 @@ class _FakeSecretStore:
 class _FakeLogger:
     def diagnostics_text(self) -> str:
         return "diag"
+
+
+class _ImmediateThread:
+    def __init__(self, target, name=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
 
 
 def _combo_data(combo: QtWidgets.QComboBox) -> list[str]:
@@ -419,6 +428,105 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
 
     assert calls["delete"] == 1
     assert "Deleted 'small'" in dialog.local_models_action_label.text()
+    _ = app
+
+
+def test_local_tab_can_download_selected_model(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    cached: list[str] = []
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda _model_dir="": list(cached),
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.download_model_snapshot",
+        lambda model_name, _model_dir="": cached.append(model_name) or f"/tmp/{model_name}",
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    for index in range(dialog.downloadable_models_list.count()):
+        item = dialog.downloadable_models_list.item(index)
+        if item.data(QtCore.Qt.UserRole) == "tiny":
+            item.setSelected(True)
+            break
+
+    dialog._download_selected_local_models()
+
+    assert "Downloaded: tiny" in dialog.local_model_download_label.text()
+    assert "tiny" in dialog.local_models_label.text()
+    _ = app
+
+
+def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda _model_dir="": ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    def _fake_run_benchmark_cases(**_kwargs):
+        return [
+            BenchmarkCase(
+                model="small",
+                device="auto",
+                compute_type="int8",
+                download_seconds=0.0,
+                load_seconds=0.45,
+                runs=[
+                    BenchmarkRun(
+                        run_index=1,
+                        seconds=1.2,
+                        audio_duration_seconds=2.0,
+                        real_time_factor=0.6,
+                        transcript_chars=12,
+                        transcript_words=2,
+                        detected_language="en",
+                        language_probability=0.98,
+                    )
+                ],
+            )
+        ]
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.run_benchmark_cases",
+        _fake_run_benchmark_cases,
+    )
+
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._set_benchmark_audio_path(str(audio_path))
+
+    assert dialog.benchmark_models_list.count() == 1
+    assert dialog.run_benchmark_button.isEnabled() is True
+
+    dialog._run_local_benchmark()
+
+    assert dialog.benchmark_results_table.rowCount() == 1
+    assert dialog.benchmark_results_table.item(0, 0).text() == "small"
+    assert dialog.benchmark_summary_text.toPlainText().startswith("Benchmark summary:")
+    assert "Benchmark finished" in dialog.benchmark_status_label.text()
     _ = app
 
 

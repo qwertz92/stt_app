@@ -27,6 +27,13 @@ from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
 
 _STREAM_SENTINEL = object()
+_DOWNLOAD_ALLOW_PATTERNS: list[str] = [
+    "config.json",
+    "preprocessor_config.json",
+    "model.bin",
+    "tokenizer.json",
+    "vocabulary.*",
+]
 
 # --- HuggingFace repo mapping (imported from config) ---
 _MODEL_REPO_MAP = MODEL_REPO_MAP
@@ -129,6 +136,41 @@ def delete_cached_model(model_name: str, model_dir: str = "") -> int:
         except FileNotFoundError:
             continue
     return removed
+
+
+def format_model_download_error(model_name: str, exc: Exception) -> str:
+    if _is_ssl_error(exc):
+        return (
+            "SSL certificate verification failed while downloading the model. "
+            "This is commonly caused by a corporate proxy. "
+            "Set REQUESTS_CA_BUNDLE to your corporate CA bundle or download the model "
+            f"on another machine. See {DOC_SSL_PROXY_PATH} and {DOC_MODELS_PATH}."
+        )
+    return f"Model download failed for '{model_name}': {exc}"
+
+
+def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
+    try:
+        from huggingface_hub import snapshot_download  # type: ignore
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is not installed. Install dependencies and try again."
+        ) from exc
+
+    repo_id = _MODEL_REPO_MAP.get(model_name)
+    if repo_id is None:
+        raise ValueError(f"Unknown model '{model_name}'.")
+
+    kwargs: dict[str, object] = {
+        "allow_patterns": _DOWNLOAD_ALLOW_PATTERNS,
+    }
+    if model_dir and model_dir.strip():
+        kwargs["cache_dir"] = model_dir.strip()
+
+    try:
+        return str(snapshot_download(repo_id, **kwargs))
+    except Exception as exc:
+        raise RuntimeError(format_model_download_error(model_name, exc)) from exc
 
 
 def find_cached_models(model_dir: str = "") -> list[str]:
