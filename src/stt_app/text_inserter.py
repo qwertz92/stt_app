@@ -58,6 +58,12 @@ class Win32ClipboardBackend:
     def send_ctrl_v(self) -> None:
         _send_ctrl_v_input()
 
+    def select_left(self, count: int) -> None:
+        _send_shift_left_input(max(0, int(count or 0)))
+
+    def delete_selection(self) -> None:
+        _send_backspace_input(1)
+
     def send_paste(self, target_hwnd: int | None = None) -> str:
         return self.send_paste_with_mode("auto", target_hwnd=target_hwnd)
 
@@ -180,15 +186,13 @@ class TextInserter:
             paste_mode="auto",
         )
 
-    def insert_text_with_options(
+    def _paste_text_with_options(
         self,
         text: str,
-        target_hwnd: int | None = None,
-        paste_mode: str = "auto",
+        *,
+        target_hwnd: int | None,
+        paste_mode: str,
     ) -> bool:
-        if not text or not text.strip():
-            return False
-
         requested_mode = paste_mode
         previous_state = self._backend.capture_clipboard_state()
         actual_mode = "send_input"
@@ -225,7 +229,9 @@ class TextInserter:
                 f"Failed to paste text ({paste_error}) and failed to restore clipboard ({restore_error})."
             ) from paste_error
         if paste_error is not None:
-            raise TextInsertionError(f"Failed to insert transcribed text: {paste_error}") from paste_error
+            raise TextInsertionError(
+                f"Failed to insert transcribed text: {paste_error}"
+            ) from paste_error
         if restore_error is not None:
             raise TextInsertionError(
                 f"Text pasted but clipboard restore failed: {restore_error}"
@@ -233,12 +239,80 @@ class TextInserter:
 
         return True
 
+    def insert_text_with_options(
+        self,
+        text: str,
+        target_hwnd: int | None = None,
+        paste_mode: str = "auto",
+    ) -> bool:
+        if not text or not text.strip():
+            return False
+        return self._paste_text_with_options(
+            text,
+            target_hwnd=target_hwnd,
+            paste_mode=paste_mode,
+        )
+
+    def replace_recent_text_with_options(
+        self,
+        previous_text: str,
+        new_text: str,
+        target_hwnd: int | None = None,
+        paste_mode: str = "auto",
+    ) -> bool:
+        previous = str(previous_text or "")
+        replacement = str(new_text or "")
+        if previous == replacement:
+            return False
+        if not previous:
+            if not replacement:
+                return False
+            return self.insert_text_with_options(
+                replacement,
+                target_hwnd=target_hwnd,
+                paste_mode=paste_mode,
+            )
+
+        selector = getattr(self._backend, "select_left", None)
+        if not callable(selector):
+            raise TextInsertionError("Backend does not support text replacement.")
+        try:
+            selector(len(previous))
+        except Exception as exc:
+            raise TextInsertionError(
+                f"Failed to select previously inserted text: {exc}"
+            ) from exc
+
+        if replacement:
+            return self._paste_text_with_options(
+                replacement,
+                target_hwnd=target_hwnd,
+                paste_mode=paste_mode,
+            )
+
+        deleter = getattr(self._backend, "delete_selection", None)
+        if not callable(deleter):
+            raise TextInsertionError("Backend does not support text deletion.")
+        try:
+            deleter()
+        except Exception as exc:
+            raise TextInsertionError(
+                f"Failed to delete previously inserted text: {exc}"
+            ) from exc
+        return True
+
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 VK_CONTROL = 0x11
+VK_SHIFT = 0x10
 VK_V = 0x56
-ULONG_PTR = ctypes.c_ulonglong if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_ulong
+VK_LEFT = 0x25
+VK_BACK = 0x08
+WIN_WORD = ctypes.c_uint16
+WIN_DWORD = ctypes.c_uint32
+WIN_LONG = ctypes.c_int32
+ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
 WM_PASTE = 0x0302
 SMTO_ABORTIFHUNG = 0x0002
 
@@ -259,30 +333,30 @@ class GUITHREADINFO(ctypes.Structure):
 
 class KEYBDINPUT(ctypes.Structure):
     _fields_ = [
-        ("wVk", ctypes.wintypes.WORD),
-        ("wScan", ctypes.wintypes.WORD),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
+        ("wVk", WIN_WORD),
+        ("wScan", WIN_WORD),
+        ("dwFlags", WIN_DWORD),
+        ("time", WIN_DWORD),
         ("dwExtraInfo", ULONG_PTR),
     ]
 
 
 class MOUSEINPUT(ctypes.Structure):
     _fields_ = [
-        ("dx", ctypes.wintypes.LONG),
-        ("dy", ctypes.wintypes.LONG),
-        ("mouseData", ctypes.wintypes.DWORD),
-        ("dwFlags", ctypes.wintypes.DWORD),
-        ("time", ctypes.wintypes.DWORD),
+        ("dx", WIN_LONG),
+        ("dy", WIN_LONG),
+        ("mouseData", WIN_DWORD),
+        ("dwFlags", WIN_DWORD),
+        ("time", WIN_DWORD),
         ("dwExtraInfo", ULONG_PTR),
     ]
 
 
 class HARDWAREINPUT(ctypes.Structure):
     _fields_ = [
-        ("uMsg", ctypes.wintypes.DWORD),
-        ("wParamL", ctypes.wintypes.WORD),
-        ("wParamH", ctypes.wintypes.WORD),
+        ("uMsg", WIN_DWORD),
+        ("wParamL", WIN_WORD),
+        ("wParamH", WIN_WORD),
     ]
 
 
@@ -296,7 +370,7 @@ class _INPUTUNION(ctypes.Union):
 
 class INPUT(ctypes.Structure):
     _fields_ = [
-        ("type", ctypes.wintypes.DWORD),
+        ("type", WIN_DWORD),
         ("union", _INPUTUNION),
     ]
 
@@ -306,7 +380,10 @@ def _keyboard_input(vk: int, keyup: bool = False) -> INPUT:
     return INPUT(type=INPUT_KEYBOARD, union=_INPUTUNION(ki=KEYBDINPUT(vk, 0, flags, 0, 0)))
 
 
-def _send_ctrl_v_input() -> None:
+def _send_input_batch(events: list[INPUT]) -> None:
+    if not events:
+        return
+
     user32 = ctypes.WinDLL("user32", use_last_error=True)
     send_input = user32.SendInput
     send_input.argtypes = (
@@ -315,12 +392,7 @@ def _send_ctrl_v_input() -> None:
         ctypes.c_int,
     )
     send_input.restype = ctypes.wintypes.UINT
-    inputs = (INPUT * 4)(
-        _keyboard_input(VK_CONTROL, keyup=False),
-        _keyboard_input(VK_V, keyup=False),
-        _keyboard_input(VK_V, keyup=True),
-        _keyboard_input(VK_CONTROL, keyup=True),
-    )
+    inputs = (INPUT * len(events))(*events)
     expected = len(inputs)
 
     last_error = 0
@@ -340,6 +412,38 @@ def _send_ctrl_v_input() -> None:
 
     detail = _format_sendinput_failure(last_sent, expected, last_error)
     raise TextInsertionError(detail)
+
+
+def _modified_key_inputs(modifier_vk: int, key_vk: int) -> list[INPUT]:
+    return [
+        _keyboard_input(modifier_vk, keyup=False),
+        _keyboard_input(key_vk, keyup=False),
+        _keyboard_input(key_vk, keyup=True),
+        _keyboard_input(modifier_vk, keyup=True),
+    ]
+
+
+def _repeat_key_inputs(vk: int, count: int) -> list[INPUT]:
+    events: list[INPUT] = []
+    for _ in range(max(0, int(count or 0))):
+        events.append(_keyboard_input(vk, keyup=False))
+        events.append(_keyboard_input(vk, keyup=True))
+    return events
+
+
+def _send_ctrl_v_input() -> None:
+    _send_input_batch(_modified_key_inputs(VK_CONTROL, VK_V))
+
+
+def _send_shift_left_input(count: int) -> None:
+    events: list[INPUT] = []
+    for _ in range(max(0, int(count or 0))):
+        events.extend(_modified_key_inputs(VK_SHIFT, VK_LEFT))
+    _send_input_batch(events)
+
+
+def _send_backspace_input(count: int) -> None:
+    _send_input_batch(_repeat_key_inputs(VK_BACK, count))
 
 
 def _format_sendinput_failure(sent: int, expected: int, error_code: int) -> str:

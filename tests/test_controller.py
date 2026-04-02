@@ -246,7 +246,14 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     assert transcriber.chunks == [b"\x00\x01"]
     assert transcriber.stopped is True
     assert inserter.calls == [
-        ("stream final", focus_helper.captured_caret, settings.paste_mode)
+        ("stream", focus_helper.captured_caret, settings.paste_mode),
+        (
+            "replace",
+            "stream",
+            "stream final",
+            focus_helper.captured_caret,
+            settings.paste_mode,
+        ),
     ]
     assert overlay.states[-1][0] == "Done"
 
@@ -379,7 +386,7 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     _ = app
 
 
-def test_stream_live_delta_waits_for_partial_stability():
+def test_stream_live_delta_keeps_first_partial_revisable():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
@@ -392,28 +399,28 @@ def test_stream_live_delta_waits_for_partial_stability():
     )
 
     delta, committed = controller._compute_stream_live_delta("", "", "hello world")
-    assert delta == ""
+    assert delta == "hello world"
     assert committed == ""
 
     delta, committed = controller._compute_stream_live_delta(
         "", "hello world", "hello world now"
     )
-    assert delta == "hello"
-    assert committed == "hello"
+    assert delta == "hello world now"
+    assert committed == ""
 
     delta, committed = controller._compute_stream_live_delta(
-        "hello",
+        "",
         "hello world now",
         "hello world now again",
     )
-    assert delta == "world"
-    assert committed == "hello world"
+    assert delta == "world now again"
+    assert committed == "hello"
 
     controller.shutdown()
     _ = app
 
 
-def test_stream_live_delta_recovers_after_partial_revision():
+def test_stream_live_delta_extends_locked_prefix_only_when_prefix_stays_consistent():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
@@ -426,20 +433,20 @@ def test_stream_live_delta_recovers_after_partial_revision():
     )
 
     delta, committed = controller._compute_stream_live_delta(
-        "hello world",
+        "hello",
         "hello there foo bar",
         "hello there foo bar baz",
     )
-    assert delta == "there foo"
-    assert committed == "hello world there foo"
+    assert delta == "foo bar baz"
+    assert committed == "hello there"
 
     delta2, committed2 = controller._compute_stream_live_delta(
         committed,
         "hello there foo bar baz",
         "hello there foo bar baz qux",
     )
-    assert delta2 == "bar"
-    assert committed2.endswith("there foo bar")
+    assert delta2 == "bar baz qux"
+    assert committed2 == "hello there foo"
 
     controller.shutdown()
     _ = app
@@ -500,17 +507,63 @@ def test_streaming_partial_insertions_continue_after_revisions():
     for partial in partials:
         controller._on_transcription_partial(partial)
 
-    inserted_texts = [call[0] for call in inserter.calls]
-    assert len(inserted_texts) >= 3
-    assert any("there this" in text for text in inserted_texts)
-    assert any("is" in text for text in inserted_texts)
+    assert inserter.calls[0] == ("hello world", focus_helper.captured_caret, settings.paste_mode)
+    replace_calls = [call for call in inserter.calls if call[0] == "replace"]
+    assert replace_calls
+    assert any(call[1] == "hello world" and call[2] == "hello world this" for call in replace_calls)
+    assert any(call[1] == "hello world this" and call[2] == "hello there this is" for call in replace_calls)
+    assert any(call[1] == " this is" and call[2] == " this is working" for call in replace_calls)
+    assert any(call[1] == " is working" and call[2] == " is working now" for call in replace_calls)
     assert overlay.states[-1][0] == "Listening"
+    assert controller._stream_live_text == "hello there this is working now"
 
     controller.shutdown()
     _ = app
 
 
-def test_streaming_finalize_does_not_copy_revision_to_clipboard(monkeypatch):
+def test_streaming_partial_revision_can_shrink_live_tail():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        keep_transcript_in_clipboard=False,
+    )
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._streaming_recording = True
+    controller._audio_capture = object()
+    controller._target_window_handle = focus_helper.captured
+    controller._target_focus_signature = focus_helper.capture_target_signature()
+
+    controller._on_transcription_partial("hello world this")
+    controller._on_transcription_partial("hello world")
+
+    assert inserter.calls == [
+        ("hello world this", focus_helper.captured_caret, settings.paste_mode),
+        (
+            "replace",
+            "hello world this",
+            "hello world",
+            focus_helper.captured_caret,
+            settings.paste_mode,
+        ),
+    ]
+    assert controller._stream_live_text == "hello world"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_streaming_finalize_replaces_live_tail_without_copying_revision(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
@@ -531,13 +584,62 @@ def test_streaming_finalize_does_not_copy_revision_to_clipboard(monkeypatch):
     monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
 
     controller._active_session_mode = "streaming"
-    controller._stream_committed_text = "hello world"
+    controller._stream_committed_text = "hello"
+    controller._stream_live_text = "hello world now"
+    controller._stream_last_partial_text = "hello world now"
     controller._target_window_handle = 555
-    controller._on_transcription_ready("world plus")
+    controller._target_focus_signature = (555, 556, 557)
+    controller._on_transcription_ready("hello there now")
 
     assert fake_clipboard.text() == ""
-    assert inserter.calls[-1][0] == " plus"
+    assert inserter.calls[-1] == (
+        "replace",
+        " world now",
+        " there now",
+        557,
+        settings.paste_mode,
+    )
     assert overlay.states[-1][0] == "Done"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_streaming_finalize_can_remove_live_tail(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+    )
+    inserter = FakeTextInserter()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    controller._active_session_mode = "streaming"
+    controller._stream_committed_text = "hello world"
+    controller._stream_live_text = "hello world extra"
+    controller._stream_last_partial_text = "hello world extra"
+    controller._target_window_handle = 555
+    controller._target_focus_signature = (555, 556, 557)
+    controller._on_transcription_ready("hello world")
+
+    assert fake_clipboard.text() == ""
+    assert inserter.calls[-1] == (
+        "replace",
+        " extra",
+        "",
+        557,
+        settings.paste_mode,
+    )
 
     controller.shutdown()
     _ = app

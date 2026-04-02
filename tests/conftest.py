@@ -88,6 +88,18 @@ class FakeTextInserter:
             raise TextInsertionError("failed insert")
         return True
 
+    def replace_recent_text_with_options(
+        self,
+        previous_text,
+        new_text,
+        target_hwnd=None,
+        paste_mode="auto",
+    ):
+        self.calls.append(("replace", previous_text, new_text, target_hwnd, paste_mode))
+        if self.should_fail:
+            raise TextInsertionError("failed insert")
+        return True
+
 
 class FakeWindowFocusHelper:
     def __init__(self):

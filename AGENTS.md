@@ -99,7 +99,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Known limitations
 
-- Streaming: append-oriented (no word deletions), best-effort focus-change abort.
+- Streaming: recent live tail is revisable, but older locked text is not rewritten; focus-change abort remains best-effort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - NVIDIA Parakeet is intentionally not implemented; see `docs/parakeet-evaluation.md` for rationale.

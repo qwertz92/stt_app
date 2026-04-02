@@ -490,7 +490,21 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Added regression coverage for controller mid-stream failure cleanup,
     AssemblyAI/Deepgram runtime-error callbacks, local streaming runtime-error
     propagation, and delayed Deepgram finalize messages.
+- **Streaming live insertion is now revisable instead of append-only:**
+  - Controller now keeps a locked prefix plus a mutable live tail, so partial
+    revisions can replace or shrink recent inserted text instead of only
+    appending more words.
+  - Finalization can now replace or delete the remaining live tail in place,
+    which reduces duplicated trailing words when the provider shortens or
+    rewrites the ending.
+  - Added regression coverage for shrinking partials, tail deletion on
+    finalize, and the new replacement path in `text_inserter.py`.
+- **Win32 input structs are now defined with fixed Windows-width ctypes:**
+  - Replaced platform-dependent `ctypes.wintypes` fields in `INPUT`-related
+    structures with explicit 16/32/64-bit Windows types.
+  - This fixed the cross-platform `INPUT` size mismatch in
+    `tests/test_text_inserter.py` and makes the low-level input path testable on
+    Linux/WSL too.
 - **Validation:**
-  - `.venv/bin/python -m pytest tests/test_controller_coverage.py tests/test_assemblyai_provider.py tests/test_deepgram_provider.py tests/test_transcriber.py -q`
-  - `.venv/bin/python -m pytest -q` on Linux still has one unrelated failing
-    test: `tests/test_text_inserter.py::test_input_struct_size_matches_windows_expectation`
+  - `.venv/bin/python -m pytest tests/test_controller.py tests/test_controller_coverage.py tests/test_text_inserter.py tests/test_assemblyai_provider.py tests/test_deepgram_provider.py tests/test_transcriber.py -q`
+  - `.venv/bin/python -m pytest -q`

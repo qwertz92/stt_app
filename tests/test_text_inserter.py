@@ -54,6 +54,12 @@ class PasteBackend(LegacyBackend):
         self.last_requested_mode = mode
         return self.send_paste(target_hwnd=target_hwnd)
 
+    def select_left(self, count):
+        self.calls.append(f"select_left:{count}")
+
+    def delete_selection(self):
+        self.calls.append("delete_selection")
+
 
 def test_text_inserter_saves_and_restores_clipboard():
     backend = LegacyBackend()
@@ -150,6 +156,59 @@ def test_text_inserter_waits_before_restore_after_sendinput_paste():
     assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
     assert backend.last_requested_mode == "send_input"
     assert sleep_calls == [0.05, 0.2]
+
+
+def test_text_inserter_replaces_recent_text_via_selection_and_paste():
+    backend = PasteBackend(paste_mode="wm_paste")
+    sleep_calls = []
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=sleep_calls.append,
+        clipboard_settle_s=0.05,
+        sendinput_restore_delay_s=0.2,
+    )
+
+    result = inserter.replace_recent_text_with_options(
+        "hello",
+        "world",
+        target_hwnd=123,
+        paste_mode="wm_paste",
+    )
+
+    assert result is True
+    assert backend.calls == [
+        "select_left:5",
+        "capture",
+        "set:world",
+        "paste:123",
+        "restore",
+    ]
+    assert sleep_calls == [0.05]
+
+
+def test_text_inserter_replaces_recent_text_with_delete_only():
+    backend = PasteBackend(paste_mode="send_input")
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    result = inserter.replace_recent_text_with_options("hello", "")
+
+    assert result is True
+    assert backend.calls == ["select_left:5", "delete_selection"]
+
+
+def test_text_inserter_replace_falls_back_to_insert_when_previous_empty():
+    backend = PasteBackend(paste_mode="wm_paste")
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    result = inserter.replace_recent_text_with_options(
+        "",
+        "hello",
+        target_hwnd=123,
+        paste_mode="wm_paste",
+    )
+
+    assert result is True
+    assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
 
 
 def test_format_sendinput_failure_uipi_message():

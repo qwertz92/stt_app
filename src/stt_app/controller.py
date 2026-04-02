@@ -32,6 +32,7 @@ from .config import (
     STREAMING_FOCUS_POLL_MS,
     STREAMING_LIVE_INSERT_ENABLED,
     STREAMING_OVERLAY_MAX_CHARS,
+    STREAMING_REVISION_WORD_WINDOW,
     STREAMING_STABLE_WORD_GUARD,
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
@@ -110,6 +111,7 @@ class DictationController(QtCore.QObject):
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
         self._stream_committed_text = ""
+        self._stream_live_text = ""
         self._stream_last_partial_text = ""
         self._recording_start_in_progress = False
         self._active_session_mode = "batch"
@@ -343,6 +345,7 @@ class DictationController(QtCore.QObject):
         self._active_session_mode = "batch"
         self._streaming_recording = False
         self._stream_last_partial_text = ""
+        self._stream_live_text = ""
 
         # Play beep BEFORE starting capture so the microphone does not
         # pick up the beep sound (winsound.Beep is synchronous/blocking).
@@ -411,6 +414,7 @@ class DictationController(QtCore.QObject):
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
         self._stream_committed_text = ""
+        self._stream_live_text = ""
         self._stream_last_partial_text = ""
         self._active_session_mode = "streaming"
         self._active_stream_transcriber = transcriber
@@ -577,6 +581,7 @@ class DictationController(QtCore.QObject):
         self._focus_poll_timer.stop()
         self._stream_abort_requested = False
         self._stream_committed_text = ""
+        self._stream_live_text = ""
         self._stream_last_partial_text = ""
         self._active_batch_settings = None
         self._active_session_mode = "batch"
@@ -1227,14 +1232,23 @@ class DictationController(QtCore.QObject):
 
         if session_mode == "streaming":
             final_text = self._normalize_stream_text(text)
-            committed = self._stream_committed_text
-            tail = self._best_stream_finalize_tail(committed, final_text)
-            if tail:
-                insertion = self._stream_insertion_text(committed, tail)
-                if not self._insert_text_at_target(insertion, restore_focus=True):
+            committed = self._stream_committed_text if STREAMING_LIVE_INSERT_ENABLED else ""
+            current_tail = self._best_stream_extension_tail(
+                committed,
+                self._stream_live_text,
+            )
+            desired_tail = self._best_stream_finalize_tail(committed, final_text)
+            current_insertion = self._stream_insertion_text(committed, current_tail)
+            desired_insertion = self._stream_insertion_text(committed, desired_tail)
+            if current_insertion != desired_insertion:
+                if not self._replace_text_at_target(
+                    current_insertion,
+                    desired_insertion,
+                    restore_focus=True,
+                ):
                     self._reset_streaming_state()
                     return
-                self._stream_committed_text = self._stream_join_text(committed, tail)
+            self._stream_live_text = self._stream_join_text(committed, desired_tail)
             self._overlay.set_state("Done", final_text)
         else:
             if not self._insert_text_at_target(text, restore_focus=True):
@@ -1335,18 +1349,27 @@ class DictationController(QtCore.QObject):
         previous_partial = self._stream_last_partial_text
         self._stream_last_partial_text = text
         if STREAMING_LIVE_INSERT_ENABLED:
-            delta, next_committed = self._compute_stream_live_delta(
+            desired_tail, next_committed = self._compute_stream_live_delta(
                 self._stream_committed_text,
                 previous_partial,
                 text,
             )
-            if delta:
-                insertion = self._stream_insertion_text(
-                    self._stream_committed_text,
-                    delta,
-                )
-                if not self._insert_text_at_target(
-                    insertion,
+            current_tail = self._best_stream_extension_tail(
+                next_committed,
+                self._stream_live_text,
+            )
+            current_insertion = self._stream_insertion_text(
+                next_committed,
+                current_tail,
+            )
+            desired_insertion = self._stream_insertion_text(
+                next_committed,
+                desired_tail,
+            )
+            if current_insertion != desired_insertion:
+                if not self._replace_text_at_target(
+                    current_insertion,
+                    desired_insertion,
                     restore_focus=False,
                     copy_on_error=False,
                     show_overlay_error=False,
@@ -1356,7 +1379,11 @@ class DictationController(QtCore.QObject):
                         beep=STREAMING_BEEP_ON_ABORT,
                     )
                     return
-                self._stream_committed_text = next_committed
+            self._stream_committed_text = next_committed
+            self._stream_live_text = self._stream_join_text(
+                next_committed,
+                desired_tail,
+            )
         if len(text) > STREAMING_OVERLAY_MAX_CHARS:
             text = text[-STREAMING_OVERLAY_MAX_CHARS:]
             text = f"...{text}".strip()
@@ -1577,6 +1604,53 @@ class DictationController(QtCore.QObject):
             return False
         return True
 
+    def _replace_text_at_target(
+        self,
+        previous_text: str,
+        new_text: str,
+        *,
+        restore_focus: bool,
+        copy_on_error: bool = True,
+        show_overlay_error: bool = True,
+    ) -> bool:
+        if previous_text == new_text:
+            return True
+        if not previous_text:
+            return self._insert_text_at_target(
+                new_text,
+                restore_focus=restore_focus,
+                copy_on_error=copy_on_error,
+                show_overlay_error=show_overlay_error,
+            )
+        if not new_text and not previous_text:
+            return True
+        if restore_focus:
+            try:
+                self._window_focus_helper.restore_target_window(
+                    self._target_window_handle
+                )
+            except Exception:
+                self._logger.exception("Failed to restore target window focus")
+        insert_hwnd = self._target_insert_window()
+        try:
+            self._text_inserter.replace_recent_text_with_options(
+                previous_text,
+                new_text,
+                target_hwnd=insert_hwnd,
+                paste_mode=self._settings.paste_mode,
+            )
+        except TextInsertionError as exc:
+            if copy_on_error and new_text.strip():
+                QtGui.QGuiApplication.clipboard().setText(new_text)
+            if show_overlay_error:
+                detail = str(exc)
+                if copy_on_error and new_text.strip():
+                    detail = f"{detail} Transcript copied to clipboard."
+                self._overlay.set_state("Error", detail)
+            self._logger.exception("Text replacement failed")
+            return False
+        return True
+
     def _target_insert_window(self) -> int | None:
         signature = self._target_focus_signature
         if signature is not None:
@@ -1632,41 +1706,60 @@ class DictationController(QtCore.QObject):
                 overlap = size
         return overlap
 
+    def _compute_stream_locked_prefix(
+        self,
+        committed: str,
+        previous_partial: str,
+        current_partial: str,
+    ) -> str:
+        committed_words = self._split_stream_words(committed)
+        previous_words = self._split_stream_words(previous_partial)
+        current_words = self._split_stream_words(current_partial)
+        if not current_words or not previous_words:
+            return self._normalize_stream_text(committed)
+
+        stable_len = self._common_prefix_len(previous_words, current_words)
+        guard = max(0, int(STREAMING_STABLE_WORD_GUARD))
+        revision_window = max(0, int(STREAMING_REVISION_WORD_WINDOW))
+        locked_len = max(0, stable_len - guard - revision_window)
+        if locked_len <= len(committed_words):
+            return self._normalize_stream_text(committed)
+
+        candidate_words = current_words[:locked_len]
+        if self._common_prefix_len(committed_words, candidate_words) < len(committed_words):
+            return self._normalize_stream_text(committed)
+        return " ".join(candidate_words).strip()
+
+    def _best_stream_extension_tail(self, committed: str, candidate: str) -> str:
+        committed_words = self._split_stream_words(committed)
+        candidate_words = self._split_stream_words(candidate)
+        if not candidate_words:
+            return ""
+        prefix_len = self._common_prefix_len(committed_words, candidate_words)
+        candidate_tail = candidate_words[prefix_len:]
+        committed_tail = committed_words[prefix_len:]
+        overlap_len = self._suffix_prefix_overlap_len(
+            committed_tail,
+            candidate_tail,
+        )
+        delta_words = candidate_tail[overlap_len:]
+        return " ".join(delta_words).strip()
+
     def _compute_stream_live_delta(
         self,
         committed: str,
         previous_partial: str,
         current_partial: str,
     ) -> tuple[str, str]:
-        committed_words = self._split_stream_words(committed)
-        previous_words = self._split_stream_words(previous_partial)
-        current_words = self._split_stream_words(current_partial)
-        if not current_words:
-            return "", self._normalize_stream_text(committed)
-        if not previous_words:
-            # First partial is unstable; wait for one confirmation window.
-            return "", self._normalize_stream_text(committed)
-
-        stable_len = self._common_prefix_len(previous_words, current_words)
-        guard = max(0, int(STREAMING_STABLE_WORD_GUARD))
-        stable_commit_len = max(0, stable_len - guard)
-        if stable_commit_len <= 0:
-            return "", self._normalize_stream_text(committed)
-
-        stable_commit_words = current_words[:stable_commit_len]
-        committed_prefix_len = self._common_prefix_len(
-            committed_words, stable_commit_words
+        next_committed = self._compute_stream_locked_prefix(
+            committed,
+            previous_partial,
+            current_partial,
         )
-        stable_tail_words = stable_commit_words[committed_prefix_len:]
-        committed_tail_words = committed_words[committed_prefix_len:]
-        overlap_len = self._suffix_prefix_overlap_len(
-            committed_tail_words, stable_tail_words
+        return (
+            self._best_stream_extension_tail(next_committed, current_partial),
+            next_committed,
         )
-        delta_words = stable_tail_words[overlap_len:]
-        if not delta_words:
-            return "", self._normalize_stream_text(committed)
-        delta_text = " ".join(delta_words).strip()
-        return delta_text, self._stream_join_text(committed, delta_text)
 
     def _best_stream_finalize_tail(self, committed: str, final_text: str) -> str:
         committed_words = self._split_stream_words(committed)
@@ -1683,14 +1776,15 @@ class DictationController(QtCore.QObject):
                 committed_tail, candidate_tail
             )
             delta_words = candidate_tail[overlap_len:]
-            if delta_words:
-                score = prefix_len + overlap_len
-                # Prefer candidates that genuinely extend already committed text.
-                if prefix_len < len(committed_words) and overlap_len == 0:
-                    score -= 1
-                if score > best_score:
-                    best_score = score
-                    best_tail = " ".join(delta_words).strip()
+            score = prefix_len + overlap_len
+            # Prefer candidates that genuinely extend already committed text,
+            # but still allow an empty tail when the authoritative final result
+            # says the mutable live suffix should disappear.
+            if prefix_len < len(committed_words) and overlap_len == 0:
+                score -= 1
+            if score > best_score:
+                best_score = score
+                best_tail = " ".join(delta_words).strip()
         return best_tail
 
     def copy_last_transcript_to_clipboard(self) -> bool:

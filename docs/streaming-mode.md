@@ -56,7 +56,7 @@ Characteristics:
 - For `streaming`, it calls `transcriber.start_stream(...)` and starts capture with a chunk callback.
 - Partial updates are emitted via `transcription_partial` Qt signal, shown in overlay, and incrementally inserted at caret.
 - Runtime stream/provider errors now fail fast: the controller stops capture, aborts the active stream, preserves the current recording for retry, and surfaces an error immediately instead of waiting for the user to press Stop.
-- Live insertion uses a stable-prefix rule with a trailing-word guard before committing text; suffix/prefix overlap reconciliation is used when partials diverge.
+- Live insertion now keeps a locked prefix plus a revisable tail: the tail is replaced in-place as partials evolve, while older text is only locked after the stable-prefix guard and revision window are satisfied.
 - Stop action triggers `transcriber.stop_stream()` in background worker and only inserts remaining text delta.
 - Focus-signature guard aborts streaming when target focus/cursor changes.
 - Abort path uses fast stream cancellation (no heavy final re-transcription) to keep abort beep low-latency.
@@ -99,7 +99,7 @@ Characteristics:
 Streaming does not necessarily mean lower final quality, but in this implementation:
 
 - partial text may be less stable (revisions happen),
-- if revisions differ from already live-inserted text, only append-only reconciliation is possible (already inserted words are not deleted),
+- recent live text can now be revised in place, but older locked text is intentionally not rewritten again,
 - finalize tail uses last partial as fallback when final pass diverges from already committed live text,
 - CPU contention on slower machines can indirectly affect responsiveness,
 - final text quality is typically close to batch for the same model when enough context is captured.
@@ -131,6 +131,7 @@ Streaming behavior can be tuned via config:
 - `STREAMING_PARTIAL_MIN_AUDIO_S`
 - `STREAMING_PARTIAL_WINDOW_S`
 - `STREAMING_STABLE_WORD_GUARD`
+- `STREAMING_REVISION_WORD_WINDOW`
 - `STREAMING_FOCUS_POLL_MS`
 - `STREAMING_ABORT_BEEP_HZ`
 - `STREAMING_ABORT_BEEP_DURATION_MS`
