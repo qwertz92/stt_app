@@ -18,7 +18,10 @@ Quality has the highest priority. Take as much time as needed.
 
 - Use logical commits for distinct bugfix/feature/refactor units.
 - Match the existing history: short conventional subject line, blank line, then concise `-` bullet points.
-- Wrap commit body lines to readable width (roughly 72-80 chars) and include validation when relevant.
+- Hard-wrap every commit body line at a maximum of 80 characters.
+- Never include literal escape sequences such as `\n` in commit messages; use real newlines.
+- For shell-driven commits, prefer a message file or stdin with real line breaks, then verify with `git log -1 --format=%B`.
+- Include validation when relevant.
 
 ## Language rule
 
@@ -40,7 +43,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 ### Module responsibilities
 
 | Module | Purpose |
-|--------|---------|
+| ------ | ------- |
 | `config.py` | All tunables/constants; `MODEL_REPO_MAP` (single source of truth) |
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
