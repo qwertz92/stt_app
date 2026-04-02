@@ -469,3 +469,28 @@ Agents and developers: use this as a knowledge base for past issues and solution
   explain what `onedir` actually means, when to use the ZIP vs the installer,
   and why the release workflow should be manual or tag-driven instead of
   running on every commit.
+
+## 2026-04-02
+
+- **Streaming runtime failures now fail fast instead of lingering until Stop:**
+  - Added an explicit streaming runtime error callback path from transcribers to
+    the controller.
+  - Controller now tears down active streaming capture/transcriber state on
+    mid-stream failures, preserves captured audio for retry, and marks the last
+    recording as failed.
+  - Fixed a cleanup gap where chunk-push failures could leave the microphone
+    capture and provider session alive even though the overlay already showed an
+    error.
+- **Deepgram finalization is now less truncation-prone:** `stop_stream()` sends
+  `Finalize`, waits briefly for trailing final transcript messages, and only
+  then closes the socket.
+- **Provider consistency/testing improved:**
+  - Local, AssemblyAI, and Deepgram streaming paths now report runtime errors
+    immediately to the controller.
+  - Added regression coverage for controller mid-stream failure cleanup,
+    AssemblyAI/Deepgram runtime-error callbacks, local streaming runtime-error
+    propagation, and delayed Deepgram finalize messages.
+- **Validation:**
+  - `.venv/bin/python -m pytest tests/test_controller_coverage.py tests/test_assemblyai_provider.py tests/test_deepgram_provider.py tests/test_transcriber.py -q`
+  - `.venv/bin/python -m pytest -q` on Linux still has one unrelated failing
+    test: `tests/test_text_inserter.py::test_input_struct_size_matches_windows_expectation`

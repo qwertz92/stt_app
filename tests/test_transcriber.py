@@ -190,6 +190,29 @@ def test_local_transcriber_abort_stream_ends_session_without_error():
         transcriber.stop_stream()
 
 
+def test_local_transcriber_streaming_reports_runtime_error_immediately():
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        model_factory=lambda *args, **kwargs: ExplodingModel(),
+    )
+    errors = []
+
+    transcriber.start_stream(on_partial=lambda _text: None, on_error=errors.append)
+    with transcriber._stream_lock:
+        transcriber._stream_pcm_buffer.extend(_build_pcm16_chunk())
+        transcriber._stream_last_partial_at = 0.0
+        transcriber._stream_last_partial_size = 0
+    transcriber._maybe_emit_partial()
+
+    assert errors
+    assert errors[0].startswith("Local streaming failed:")
+
+    with pytest.raises(TranscriptionError, match="Local streaming failed"):
+        transcriber.stop_stream()
+
+
 def test_stream_partial_uses_configured_window(monkeypatch):
     transcriber = LocalFasterWhisperTranscriber(
         model_size="small",

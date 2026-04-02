@@ -208,7 +208,7 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
     def fail_transcriber(_s, **kw):
         t = FakeStreamingTranscriber()
 
-        def broken_start(on_partial=None):
+        def broken_start(on_partial=None, on_error=None):
             raise TranscriptionError("model not loaded")
 
         t.start_stream = broken_start
@@ -426,6 +426,41 @@ def test_on_stream_audio_chunk_reports_push_error_once():
     controller._on_stream_audio_chunk(b"data2")
     error_count_2 = sum(1 for s, _ in overlay.states if s == "Error")
     assert error_count_2 == error_count_1  # Only reported once
+
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_runtime_failure_cleans_up_active_session(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    last_recording_store = FakeLastRecordingStore()
+    transcriber = FakeStreamingTranscriber(push_raises=RuntimeError("push failed"))
+    FakeCapture.instances = []
+
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
+
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
+    controller.start_recording()
+
+    capture = FakeCapture.instances[-1]
+    capture.chunk_callback(b"data")
+
+    assert capture.stopped is True
+    assert controller._audio_capture is None
+    assert transcriber.aborted is True
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    assert last_recording_store.saved == [(b"RIFF", False)]
+    assert last_recording_store.failed == ["Streaming chunk push failed: push failed"]
+    assert overlay.states[-1][0] == "Error"
+    assert "preserved in memory" in overlay.states[-1][1].lower()
 
     controller.shutdown()
     _ = app

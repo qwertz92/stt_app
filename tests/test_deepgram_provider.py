@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 from unittest.mock import patch
 
@@ -391,6 +392,9 @@ class _FakeABNF:
 
 class _FakeWebSocketApp:
     instances = []
+    finalize_message = None
+    finalize_delay_s = 0.0
+    close_after_finalize = False
 
     def __init__(self, url, header, on_open, on_message, on_error, on_close):
         self.url = url
@@ -408,6 +412,23 @@ class _FakeWebSocketApp:
 
     def send(self, payload, opcode=None):
         self.send_calls.append((payload, opcode))
+        if (
+            payload == json.dumps({"type": "Finalize"})
+            and _FakeWebSocketApp.finalize_message is not None
+        ):
+            def deliver():
+                if self.closed:
+                    return
+                self.on_message(self, _FakeWebSocketApp.finalize_message)
+                if _FakeWebSocketApp.close_after_finalize and not self.closed:
+                    self.close()
+
+            if _FakeWebSocketApp.finalize_delay_s > 0:
+                timer = threading.Timer(_FakeWebSocketApp.finalize_delay_s, deliver)
+                timer.daemon = True
+                timer.start()
+            else:
+                deliver()
 
     def close(self):
         self.closed = True
@@ -427,6 +448,9 @@ class TestDeepgramStreaming:
 
     def test_streaming_lifecycle(self, monkeypatch):
         _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
         t = DeepgramTranscriber(api_key="key")
         monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
         partials = []
@@ -463,6 +487,9 @@ class TestDeepgramStreaming:
 
     def test_start_stream_twice_raises(self, monkeypatch):
         _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
         t = DeepgramTranscriber(api_key="key")
         monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
 
@@ -475,6 +502,52 @@ class TestDeepgramStreaming:
         t = DeepgramTranscriber(api_key="key")
         with pytest.raises(TranscriptionError, match="not active"):
             t.stop_stream()
+
+    def test_on_error_callback_receives_runtime_error(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        errors = []
+
+        t.start_stream(on_error=errors.append)
+        ws = _FakeWebSocketApp.instances[-1]
+        ws.on_error(ws, RuntimeError("socket lost"))
+
+        assert errors == ["Deepgram streaming failed: socket lost"]
+        t.abort_stream()
+
+    def test_stop_stream_waits_briefly_for_finalize_message(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = json.dumps(
+            {
+                "channel": {"alternatives": [{"transcript": "hello world"}]},
+                "is_final": True,
+            }
+        )
+        _FakeWebSocketApp.finalize_delay_s = 0.05
+        _FakeWebSocketApp.close_after_finalize = False
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        t.start_stream()
+        t._handle_stream_message(
+            json.dumps(
+                {
+                    "channel": {"alternatives": [{"transcript": "hello"}]},
+                    "is_final": False,
+                }
+            )
+        )
+
+        final = t.stop_stream()
+
+        assert final == "hello world"
+        _FakeWebSocketApp.finalize_message = None
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
 
 
 # ---------------------------------------------------------------------------

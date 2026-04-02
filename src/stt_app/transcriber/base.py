@@ -6,6 +6,7 @@ from typing import Callable
 
 AudioInput = bytes | str | Path
 StreamingCallback = Callable[[str], None]
+StreamingErrorCallback = Callable[[str], None]
 
 
 class TranscriptionError(RuntimeError):
@@ -17,7 +18,11 @@ class ITranscriber(ABC):
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         raise NotImplementedError
 
-    def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
+    def start_stream(
+        self,
+        on_partial: StreamingCallback | None = None,
+        on_error: StreamingErrorCallback | None = None,
+    ) -> None:
         raise NotImplementedError("Phase 2: streaming is not implemented.")
 
     def push_audio_chunk(self, chunk: bytes) -> None:

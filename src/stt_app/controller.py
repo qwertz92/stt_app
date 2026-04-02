@@ -57,6 +57,7 @@ class DictationController(QtCore.QObject):
     transcription_ready = QtCore.Signal(int, str)
     transcription_failed = QtCore.Signal(int, str)
     transcription_partial = QtCore.Signal(str)
+    stream_runtime_failed = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
     model_preload_done = QtCore.Signal(bool, str)  # (success, message)
 
@@ -132,6 +133,7 @@ class DictationController(QtCore.QObject):
         self.transcription_ready.connect(self._on_transcription_ready_result)
         self.transcription_failed.connect(self._on_transcription_failed_result)
         self.transcription_partial.connect(self._on_transcription_partial)
+        self.stream_runtime_failed.connect(self._on_stream_runtime_failed)
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
         self.model_preload_done.connect(self._on_model_preload_done)
 
@@ -372,7 +374,10 @@ class DictationController(QtCore.QObject):
         settings_snapshot = replace(self._settings)
         try:
             transcriber = self._get_or_create_transcriber(settings_snapshot)
-            transcriber.start_stream(on_partial=self._emit_stream_partial)
+            transcriber.start_stream(
+                on_partial=self._emit_stream_partial,
+                on_error=self._emit_stream_runtime_failure,
+            )
         except NotImplementedError as exc:
             self._overlay.set_state("Error", str(exc))
             return
@@ -1091,6 +1096,43 @@ class DictationController(QtCore.QObject):
     def _emit_stream_partial(self, text: str) -> None:
         self.transcription_partial.emit(text)
 
+    def _emit_stream_runtime_failure(self, error_text: str) -> None:
+        message = str(error_text or "Streaming failed.").strip()
+        self.stream_runtime_failed.emit(message or "Streaming failed.")
+
+    def _stop_active_capture(self, *, persist_audio: bool) -> bytes:
+        capture = self._audio_capture
+        self._audio_capture = None
+        if capture is None:
+            return b""
+
+        wav_bytes = b""
+        try:
+            wav_bytes = capture.stop()
+        except Exception:
+            self._logger.exception("Failed to stop active audio capture")
+
+        self._save_recording_artifacts(capture, wav_bytes)
+        if persist_audio and wav_bytes:
+            self._persist_last_recording_audio(wav_bytes)
+        return wav_bytes
+
+    def _teardown_active_stream_runtime(self, *, preserve_audio: bool) -> bytes:
+        wav_bytes = self._stop_active_capture(persist_audio=preserve_audio)
+
+        transcriber = self._active_stream_transcriber
+        self._active_stream_transcriber = None
+        if transcriber is not None:
+            try:
+                if hasattr(transcriber, "abort_stream"):
+                    transcriber.abort_stream()
+                else:
+                    transcriber.stop_stream()
+            except Exception:
+                self._logger.exception("Failed to abort active streaming transcriber")
+
+        return wav_bytes
+
     def _on_stream_audio_chunk(self, chunk: bytes) -> None:
         """Called from the PortAudio callback thread — must be lightweight.
 
@@ -1100,7 +1142,7 @@ class DictationController(QtCore.QObject):
         """
         if self._audio_capture is None:
             return
-        if self._stream_abort_requested:
+        if self._stream_abort_requested or self._stream_chunk_error_reported:
             return
 
         transcriber = self._active_stream_transcriber
@@ -1112,11 +1154,10 @@ class DictationController(QtCore.QObject):
             if self._stream_chunk_error_reported:
                 return
             self._stream_chunk_error_reported = True
+            self._stream_abort_requested = True
             self._logger.exception("Failed to push streaming audio chunk")
-            request_token = self._active_request_token or self._next_request_token()
-            self.transcription_failed.emit(
-                request_token,
-                f"Streaming chunk push failed: {exc}",
+            self._emit_stream_runtime_failure(
+                f"Streaming chunk push failed: {exc}"
             )
 
     def _get_or_create_transcriber(self, settings: AppSettings):
@@ -1254,6 +1295,16 @@ class DictationController(QtCore.QObject):
                 self._last_failed_wav_bytes = b""
 
         self._focus_poll_timer.stop()
+        runtime_stream_failed = (
+            self._audio_capture is not None
+            or self._active_stream_transcriber is not None
+            or self._streaming_recording
+        )
+        if runtime_stream_failed:
+            wav_bytes = self._teardown_active_stream_runtime(preserve_audio=True)
+            if wav_bytes:
+                self._last_failed_wav_bytes = bytes(wav_bytes)
+                preserved_audio = True
         self._streaming_recording = False
         self._active_stream_transcriber = None
         self._active_stream_settings = None
@@ -1310,6 +1361,16 @@ class DictationController(QtCore.QObject):
             text = text[-STREAMING_OVERLAY_MAX_CHARS:]
             text = f"...{text}".strip()
         self._overlay.set_state("Listening", f"Live: {text}")
+
+    @QtCore.Slot(str)
+    def _on_stream_runtime_failed(self, error_text: str) -> None:
+        if not (
+            self._audio_capture is not None
+            or self._active_stream_transcriber is not None
+            or self._streaming_recording
+        ):
+            return
+        self._on_transcription_failed(error_text)
 
     @QtCore.Slot()
     def _on_stream_focus_poll(self) -> None:

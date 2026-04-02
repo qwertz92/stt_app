@@ -449,11 +449,23 @@ class TestAssemblyAIStreaming:
         assert rt.closed is True
 
     def test_push_chunk_without_start_is_noop(self):
-        """push_audio_chunk before start_stream is a no-op."""
+        """push_audio_chunk before start_stream fails clearly."""
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
-        # Should not raise.
-        t.push_audio_chunk(b"\x00\x00" * 160)
+        with pytest.raises(TranscriptionError, match="not active"):
+            t.push_audio_chunk(b"\x00\x00" * 160)
+
+    def test_on_error_callback_receives_runtime_error(self):
+        fake_aai = _make_fake_aai()
+        errors = []
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t.start_stream(on_error=errors.append)
+
+        rt = fake_aai.RealtimeTranscriber.instances[0]
+        rt.on_error(RuntimeError("WebSocket disconnected"))
+
+        assert errors == ["AssemblyAI streaming failed: WebSocket disconnected"]
+        t.abort_stream()
 
     def test_on_error_stores_error(self):
         """on_error callback stores the error for later reporting."""

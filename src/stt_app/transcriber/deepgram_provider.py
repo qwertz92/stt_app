@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -19,7 +20,13 @@ from pathlib import Path
 
 from ..config import AUDIO_SAMPLE_RATE, DEFAULT_DEEPGRAM_MODEL, DOC_SSL_PROXY_PATH
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
-from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
+from .base import (
+    AudioInput,
+    ITranscriber,
+    StreamingCallback,
+    StreamingErrorCallback,
+    TranscriptionError,
+)
 
 DEEPGRAM_API_BASE = "https://api.deepgram.com/v1"
 class DeepgramTranscriber(ITranscriber):
@@ -58,8 +65,38 @@ class DeepgramTranscriber(ITranscriber):
         self._stream_closed = threading.Event()
         self._stream_error: Exception | None = None
         self._stream_on_partial: StreamingCallback | None = None
+        self._stream_on_error: StreamingErrorCallback | None = None
         self._stream_finals: list[str] = []
         self._stream_partial_text = ""
+        self._stream_error_reported = False
+        self._stream_last_message_at = 0.0
+
+    def _stream_combined_text_locked(self) -> str:
+        parts = list(self._stream_finals)
+        if self._stream_partial_text:
+            parts.append(self._stream_partial_text)
+        return " ".join(p for p in parts if p).strip()
+
+    def _format_stream_error(self, error: Exception) -> str:
+        detail = str(error)
+        if _is_ssl_error(error):
+            detail = (
+                "SSL certificate verification failed (likely a corporate "
+                f"proxy). See {DOC_SSL_PROXY_PATH} for details."
+            )
+        return f"Deepgram streaming failed: {detail}"
+
+    def _notify_stream_error(self, error: Exception) -> None:
+        with self._stream_lock:
+            callback = self._stream_on_error
+            if callback is None or self._stream_error_reported:
+                return
+            self._stream_error_reported = True
+
+        try:
+            callback(self._format_stream_error(error))
+        except Exception:
+            pass
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via Deepgram pre-recorded API.
@@ -198,12 +235,14 @@ class DeepgramTranscriber(ITranscriber):
         return websocket
 
     def _stream_combined_text(self) -> str:
-        parts = list(self._stream_finals)
-        if self._stream_partial_text:
-            parts.append(self._stream_partial_text)
-        return " ".join(p for p in parts if p).strip()
+        with self._stream_lock:
+            return self._stream_combined_text_locked()
 
-    def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
+    def start_stream(
+        self,
+        on_partial: StreamingCallback | None = None,
+        on_error: StreamingErrorCallback | None = None,
+    ) -> None:
         with self._stream_lock:
             if self._stream_ws is not None:
                 raise TranscriptionError("Streaming session already active.")
@@ -228,8 +267,11 @@ class DeepgramTranscriber(ITranscriber):
         self._stream_closed.clear()
         self._stream_error = None
         self._stream_on_partial = on_partial
+        self._stream_on_error = on_error
         self._stream_finals = []
         self._stream_partial_text = ""
+        self._stream_error_reported = False
+        self._stream_last_message_at = 0.0
 
         def _on_open(_ws):
             self._stream_connected.set()
@@ -238,10 +280,11 @@ class DeepgramTranscriber(ITranscriber):
             self._handle_stream_message(message)
 
         def _on_error(_ws, error):
-            if isinstance(error, Exception):
+            if not isinstance(error, Exception):
+                error = RuntimeError(str(error))
+            with self._stream_lock:
                 self._stream_error = error
-            else:
-                self._stream_error = Exception(str(error))
+            self._notify_stream_error(error)
 
         def _on_close(_ws, _status, _reason):
             self._stream_closed.set()
@@ -305,6 +348,22 @@ class DeepgramTranscriber(ITranscriber):
                 f"Deepgram streaming: failed to send audio: {exc}"
             ) from exc
 
+    def _wait_for_finalize_drain(self) -> None:
+        quiet_period_s = 0.25
+        deadline = time.monotonic() + 1.25
+        last_seen = time.monotonic()
+
+        while time.monotonic() < deadline:
+            if self._stream_closed.wait(timeout=quiet_period_s):
+                return
+            with self._stream_lock:
+                last_message_at = self._stream_last_message_at
+            if last_message_at > last_seen:
+                last_seen = last_message_at
+                continue
+            if time.monotonic() - last_seen >= quiet_period_s:
+                return
+
     def stop_stream(self) -> str:
         with self._stream_lock:
             ws = self._stream_ws
@@ -319,29 +378,28 @@ class DeepgramTranscriber(ITranscriber):
             ws.send(json.dumps({"type": "Finalize"}))
         except Exception:
             pass
+        self._wait_for_finalize_drain()
         try:
             ws.close()
         except Exception:
             pass
         thread.join(timeout=5.0)
 
-        text = self._stream_combined_text()
-        error = self._stream_error
-        self._stream_on_partial = None
-        self._stream_finals = []
-        self._stream_partial_text = ""
+        with self._stream_lock:
+            text = self._stream_combined_text_locked()
+            error = self._stream_error
+            self._stream_on_partial = None
+            self._stream_on_error = None
+            self._stream_finals = []
+            self._stream_partial_text = ""
+            self._stream_error = None
+            self._stream_error_reported = False
+            self._stream_last_message_at = 0.0
         self._stream_connected.clear()
         self._stream_closed.clear()
-        self._stream_error = None
 
         if error is not None and not text:
-            detail = str(error)
-            if _is_ssl_error(error):
-                detail = (
-                    "SSL certificate verification failed (likely a corporate "
-                    f"proxy). See {DOC_SSL_PROXY_PATH} for details."
-                )
-            raise TranscriptionError(f"Deepgram streaming failed: {detail}") from error
+            raise TranscriptionError(self._format_stream_error(error)) from error
         return text
 
     def abort_stream(self) -> None:
@@ -358,12 +416,16 @@ class DeepgramTranscriber(ITranscriber):
         if thread is not None:
             thread.join(timeout=0.2)
 
-        self._stream_on_partial = None
-        self._stream_finals = []
-        self._stream_partial_text = ""
+        with self._stream_lock:
+            self._stream_on_partial = None
+            self._stream_on_error = None
+            self._stream_finals = []
+            self._stream_partial_text = ""
+            self._stream_error = None
+            self._stream_error_reported = False
+            self._stream_last_message_at = 0.0
         self._stream_connected.clear()
         self._stream_closed.clear()
-        self._stream_error = None
 
     def _handle_stream_message(self, message) -> None:
         try:
@@ -387,16 +449,17 @@ class DeepgramTranscriber(ITranscriber):
             return
 
         is_final = bool(payload.get("is_final", False))
-        if is_final:
-            self._stream_finals.append(transcript)
-            self._stream_partial_text = ""
-        else:
-            self._stream_partial_text = transcript
-
-        callback = self._stream_on_partial
+        with self._stream_lock:
+            self._stream_last_message_at = time.monotonic()
+            if is_final:
+                self._stream_finals.append(transcript)
+                self._stream_partial_text = ""
+            else:
+                self._stream_partial_text = transcript
+            callback = self._stream_on_partial
+            combined = self._stream_combined_text_locked()
         if callback is None:
             return
-        combined = self._stream_combined_text()
         if not combined:
             return
         try:

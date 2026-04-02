@@ -55,6 +55,7 @@ Characteristics:
 - `DictationController.start_recording()` branches by `settings.mode`.
 - For `streaming`, it calls `transcriber.start_stream(...)` and starts capture with a chunk callback.
 - Partial updates are emitted via `transcription_partial` Qt signal, shown in overlay, and incrementally inserted at caret.
+- Runtime stream/provider errors now fail fast: the controller stops capture, aborts the active stream, preserves the current recording for retry, and surfaces an error immediately instead of waiting for the user to press Stop.
 - Live insertion uses a stable-prefix rule with a trailing-word guard before committing text; suffix/prefix overlap reconciliation is used when partials diverge.
 - Stop action triggers `transcriber.stop_stream()` in background worker and only inserts remaining text delta.
 - Focus-signature guard aborts streaming when target focus/cursor changes.
@@ -91,6 +92,7 @@ Characteristics:
 
 - `DeepgramTranscriber` supports streaming via Deepgram's WebSocket `listen` endpoint.
 - Audio chunks are sent as binary `linear16`; incoming partial/final messages are merged into one accumulated transcript for callback delivery.
+- On stop, the client now sends `Finalize` and gives the socket a short quiet-period drain window before closing, reducing cases where the last final transcript tokens are lost.
 
 ## 4) Quality impact
 

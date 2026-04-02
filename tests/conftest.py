@@ -144,15 +144,17 @@ class FakeStreamingTranscriber:
         self.aborted = False
         self.chunks = []
         self.on_partial = None
+        self.on_error = None
         self._stop_raises = stop_raises
         self._push_raises = push_raises
 
     def transcribe_batch(self, audio_source):
         return "batch"
 
-    def start_stream(self, on_partial=None):
+    def start_stream(self, on_partial=None, on_error=None):
         self.started = True
         self.on_partial = on_partial
+        self.on_error = on_error
 
     def push_audio_chunk(self, chunk: bytes):
         if self._push_raises:

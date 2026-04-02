@@ -24,7 +24,13 @@ from ..config import (
     VALID_MODEL_SIZES,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
+from .base import (
+    AudioInput,
+    ITranscriber,
+    StreamingCallback,
+    StreamingErrorCallback,
+    TranscriptionError,
+)
 
 _STREAM_SENTINEL = object()
 _DOWNLOAD_ALLOW_PATTERNS: list[str] = [
@@ -266,6 +272,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_lock = threading.Lock()
         self._stream_active = False
         self._stream_on_partial: StreamingCallback | None = None
+        self._stream_on_error: StreamingErrorCallback | None = None
         self._stream_queue: queue.Queue[bytes | object] | None = None
         self._stream_thread: threading.Thread | None = None
         self._stream_pcm_buffer = bytearray()
@@ -275,6 +282,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_last_partial_at = 0.0
         self._stream_last_partial_size = 0
         self._stream_abort_requested = False
+        self._stream_error_reported = False
 
     def _ensure_model(self):
         if self._model is not None:
@@ -386,12 +394,17 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 except OSError:
                     pass
 
-    def start_stream(self, on_partial: StreamingCallback | None = None) -> None:
+    def start_stream(
+        self,
+        on_partial: StreamingCallback | None = None,
+        on_error: StreamingErrorCallback | None = None,
+    ) -> None:
         with self._stream_lock:
             if self._stream_active:
                 raise TranscriptionError("Streaming session already active.")
             self._stream_active = True
             self._stream_on_partial = on_partial
+            self._stream_on_error = on_error
             self._stream_queue = queue.Queue()
             self._stream_pcm_buffer = bytearray()
             self._stream_error = None
@@ -400,6 +413,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             self._stream_last_partial_at = time.monotonic()
             self._stream_last_partial_size = 0
             self._stream_abort_requested = False
+            self._stream_error_reported = False
             thread = threading.Thread(
                 target=self._stream_worker,
                 name="stt_app_stream_worker",
@@ -468,6 +482,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         """Reset all streaming state. Must be called with ``_stream_lock`` held."""
         self._stream_active = False
         self._stream_on_partial = None
+        self._stream_on_error = None
         self._stream_queue = None
         self._stream_thread = None
         self._stream_pcm_buffer = bytearray()
@@ -477,6 +492,20 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_last_partial_size = 0
         self._stream_last_partial_at = 0.0
         self._stream_abort_requested = False
+        self._stream_error_reported = False
+
+    def _notify_stream_error(self, exc: Exception) -> None:
+        with self._stream_lock:
+            callback = self._stream_on_error
+            if callback is None or self._stream_error_reported:
+                return
+            self._stream_error_reported = True
+
+        detail = self._format_transcription_error(exc)
+        try:
+            callback(f"Local streaming failed: {detail}")
+        except Exception:
+            pass
 
     def _stream_worker(self) -> None:
         while True:
@@ -549,9 +578,14 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         except Exception as exc:
             with self._stream_lock:
                 self._stream_error = exc
+                self._stream_abort_requested = True
+            self._notify_stream_error(exc)
             return
 
         with self._stream_lock:
+            if self._stream_abort_requested:
+                return
+            callback = self._stream_on_partial
             self._stream_latest_text = text
 
         if callback is not None and text.strip():
