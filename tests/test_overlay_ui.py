@@ -1,7 +1,21 @@
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
-from stt_app.config import OVERLAY_HEIGHT, OVERLAY_INITIAL_DETAIL, OVERLAY_MAX_HEIGHT
+from stt_app.config import (
+    OVERLAY_HEIGHT,
+    OVERLAY_INITIAL_DETAIL,
+    OVERLAY_MARGIN_X,
+    OVERLAY_MARGIN_Y,
+    OVERLAY_MAX_HEIGHT,
+)
 from stt_app.overlay_ui import OverlayUI
+
+
+class _FakeScreen:
+    def __init__(self, geometry: QtCore.QRect):
+        self._geometry = geometry
+
+    def availableGeometry(self) -> QtCore.QRect:
+        return self._geometry
 
 
 class FakeClipboard:
@@ -245,6 +259,37 @@ def test_overlay_processing_restores_initial_height_after_long_text():
     overlay.set_state("Processing", "Retrying transcription...")
 
     assert overlay.height() == initial_height
+
+
+def test_overlay_reset_position_uses_current_screen_corner(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    first_screen = _FakeScreen(QtCore.QRect(0, 0, 800, 600))
+    second_screen = _FakeScreen(QtCore.QRect(1000, 0, 800, 600))
+    overlay.move_to_corner("top-right", screen=first_screen)
+    overlay.move(1180, 220)
+    monkeypatch.setattr(overlay, "_current_screen", lambda: second_screen)
+
+    overlay.reset_position()
+
+    expected_x = (
+        second_screen.availableGeometry().right() - overlay.width() - OVERLAY_MARGIN_X
+    )
+    expected_y = second_screen.availableGeometry().top() + OVERLAY_MARGIN_Y
+    assert overlay.pos() == QtCore.QPoint(expected_x, expected_y)
+
+
+def test_overlay_bottom_corner_resize_stays_within_current_screen(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 460, 260))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.move_to_corner("bottom-right", screen=screen)
+
+    overlay.set_state("Done", "word " * 900)
+
+    assert overlay.frameGeometry().bottom() <= screen.availableGeometry().bottom()
+    assert overlay.frameGeometry().right() <= screen.availableGeometry().right()
 
 
 def test_overlay_opacity_slider_emits_clamped_values():

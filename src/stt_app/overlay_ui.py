@@ -48,9 +48,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
         self._initial_corner: str | None = None
-        self._initial_size: QtCore.QSize | None = None
         self._compact_mode = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
+        self._manual_positioned = False
+        self._screen_change_connected = False
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -191,7 +192,6 @@ class OverlayUI(QtWidgets.QWidget):
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
-        self._capture_initial_size()
 
     def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
         if state == "Idle" and detail.strip():
@@ -296,28 +296,27 @@ class OverlayUI(QtWidgets.QWidget):
             """
         )
 
-    def move_to_corner(self, corner: str = "top-right") -> None:
-        screen = QtGui.QGuiApplication.primaryScreen()
+    def move_to_corner(
+        self,
+        corner: str = "top-right",
+        *,
+        screen: QtGui.QScreen | None = None,
+    ) -> None:
+        screen = screen or self._current_screen()
         if screen is None:
             return
 
-        geometry = screen.availableGeometry()
         normalized = str(corner or "top-right").strip().lower()
-        if normalized.endswith("left"):
-            x = geometry.left() + OVERLAY_MARGIN_X
-        else:
-            x = geometry.right() - self.width() - OVERLAY_MARGIN_X
-        if normalized.startswith("bottom"):
-            y = geometry.bottom() - self.height() - OVERLAY_MARGIN_Y
-        else:
-            y = geometry.top() + OVERLAY_MARGIN_Y
-        self.move(x, y)
-        self._initial_position = QtCore.QPoint(x, y)
+        target = self._position_for_corner(screen, normalized)
+        self.move(target)
+        self._initial_position = QtCore.QPoint(target)
         self._initial_corner = normalized
+        self._manual_positioned = False
 
     def set_initial_position(self, point: QtCore.QPoint) -> None:
         self._initial_position = QtCore.QPoint(point)
         self._initial_corner = None
+        self._manual_positioned = True
 
     def reset_position(self) -> None:
         if not self._should_preserve_size_on_reset():
@@ -325,22 +324,21 @@ class OverlayUI(QtWidgets.QWidget):
         else:
             self._update_detail_height()
         if self._initial_corner:
-            self.move_to_corner(self._initial_corner)
+            self.move_to_corner(
+                self._initial_corner,
+                screen=self._current_screen(),
+            )
             return
         if self._initial_position is None:
             return
         target = QtCore.QPoint(self._initial_position)
         screen = QtGui.QGuiApplication.screenAt(target)
         if screen is None:
-            screen = QtGui.QGuiApplication.primaryScreen()
+            screen = self._current_screen()
         if screen is not None:
-            geometry = screen.availableGeometry()
-            max_x = geometry.right() - self.width()
-            max_y = geometry.bottom() - self.height()
-            clamped_x = max(geometry.left(), min(target.x(), max_x))
-            clamped_y = max(geometry.top(), min(target.y(), max_y))
-            target = QtCore.QPoint(clamped_x, clamped_y)
+            target = self._clamp_point_to_screen(target, screen)
         self.move(target)
+        self._manual_positioned = self._initial_corner is None
 
     def nativeEvent(self, event_type, message):
         """Prevent window activation on mouse click (Windows).
@@ -374,8 +372,22 @@ class OverlayUI(QtWidgets.QWidget):
         reset extended window styles when updating stylesheets or flags.
         """
         super().showEvent(event)
-        if self._compact_mode and self._state_label.text() == "Idle":
-            self._capture_initial_size(force=True)
+        handle = self.windowHandle()
+        if handle is not None and not self._screen_change_connected:
+            handle.screenChanged.connect(self._on_screen_changed)
+            self._screen_change_connected = True
+        if self._compact_mode:
+            self.ensure_compact_size()
+        else:
+            self._reposition_within_current_screen()
+        if sys.platform == "win32":
+            self._apply_noactivate_style()
+
+    def _on_screen_changed(self, _screen: QtGui.QScreen | None) -> None:
+        if self._compact_mode:
+            self.ensure_compact_size()
+        else:
+            self._update_detail_height()
         if sys.platform == "win32":
             self._apply_noactivate_style()
 
@@ -421,6 +433,7 @@ class OverlayUI(QtWidgets.QWidget):
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() == QtCore.Qt.LeftButton and self._drag_active:
             self._drag_active = False
+            self._manual_positioned = True
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -437,6 +450,7 @@ class OverlayUI(QtWidgets.QWidget):
             self.clear_detail_text()
 
     def _update_detail_height(self) -> None:
+        previous_size = QtCore.QSize(self.size())
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
         available_width = max(80, self._detail_scroll.viewport().width() - 2)
@@ -491,6 +505,7 @@ class OverlayUI(QtWidgets.QWidget):
         )
         if self.height() != desired_window_height:
             self.resize(self.width(), desired_window_height)
+        self._reposition_within_current_screen(previous_size)
 
     def _compact_window_height(self) -> int:
         margins = self._layout.contentsMargins()
@@ -506,13 +521,8 @@ class OverlayUI(QtWidgets.QWidget):
         )
 
     def _compact_target_size(self) -> QtCore.QSize:
-        if self._initial_size is not None:
-            return QtCore.QSize(self._initial_size)
-        return QtCore.QSize(OVERLAY_WIDTH, self._compact_window_height())
-
-    def _capture_initial_size(self, *, force: bool = False) -> None:
-        if force or self._initial_size is None:
-            self._initial_size = QtCore.QSize(self.size())
+        current_width = self.width() if self.width() > 0 else OVERLAY_WIDTH
+        return QtCore.QSize(max(OVERLAY_WIDTH, current_width), self._compact_window_height())
 
     def _should_preserve_size_on_reset(self) -> bool:
         return bool(self._detail_label.text().strip()) and (
@@ -526,6 +536,65 @@ class OverlayUI(QtWidgets.QWidget):
             self.resize(target_size)
         self._detail_scroll.setFixedHeight(OVERLAY_DETAIL_MIN_HEIGHT)
         self._update_detail_height()
+
+    def _current_screen(self) -> QtGui.QScreen | None:
+        frame = self.frameGeometry()
+        for point in (frame.center(), frame.topLeft(), self.pos()):
+            screen = QtGui.QGuiApplication.screenAt(point)
+            if screen is not None:
+                return screen
+        handle = self.windowHandle()
+        if handle is not None and handle.screen() is not None:
+            return handle.screen()
+        return QtGui.QGuiApplication.primaryScreen()
+
+    def _position_for_corner(
+        self,
+        screen: QtGui.QScreen,
+        corner: str,
+    ) -> QtCore.QPoint:
+        geometry = screen.availableGeometry()
+        normalized = str(corner or "top-right").strip().lower()
+        if normalized.endswith("left"):
+            x = geometry.left() + OVERLAY_MARGIN_X
+        else:
+            x = geometry.right() - self.width() - OVERLAY_MARGIN_X
+        if normalized.startswith("bottom"):
+            y = geometry.bottom() - self.height() - OVERLAY_MARGIN_Y
+        else:
+            y = geometry.top() + OVERLAY_MARGIN_Y
+        return QtCore.QPoint(x, y)
+
+    def _clamp_point_to_screen(
+        self,
+        point: QtCore.QPoint,
+        screen: QtGui.QScreen,
+    ) -> QtCore.QPoint:
+        geometry = screen.availableGeometry()
+        max_x = geometry.right() - self.width()
+        max_y = geometry.bottom() - self.height()
+        clamped_x = max(geometry.left(), min(point.x(), max_x))
+        clamped_y = max(geometry.top(), min(point.y(), max_y))
+        return QtCore.QPoint(clamped_x, clamped_y)
+
+    def _reposition_within_current_screen(
+        self,
+        previous_size: QtCore.QSize | None = None,
+    ) -> None:
+        screen = self._current_screen()
+        if screen is None:
+            return
+
+        target = QtCore.QPoint(self.pos())
+        if not self._manual_positioned and self._initial_corner:
+            target = self._position_for_corner(screen, self._initial_corner)
+        elif previous_size is not None:
+            target = self._clamp_point_to_screen(target, screen)
+        else:
+            target = self._clamp_point_to_screen(target, screen)
+
+        if target != self.pos():
+            self.move(target)
 
     def _on_opacity_slider_changed(self, value: int) -> None:
         self.set_opacity_percent(value, emit_signal=True)
