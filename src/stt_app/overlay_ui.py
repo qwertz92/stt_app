@@ -379,7 +379,7 @@ class OverlayUI(QtWidgets.QWidget):
         if self._compact_mode:
             self.ensure_compact_size()
         else:
-            self._reposition_within_current_screen()
+            self._update_detail_height()
         if sys.platform == "win32":
             self._apply_noactivate_style()
 
@@ -434,6 +434,7 @@ class OverlayUI(QtWidgets.QWidget):
         if event.button() == QtCore.Qt.LeftButton and self._drag_active:
             self._drag_active = False
             self._manual_positioned = True
+            self._reposition_within_current_screen()
             event.accept()
             return
         super().mouseReleaseEvent(event)
@@ -453,12 +454,14 @@ class OverlayUI(QtWidgets.QWidget):
         previous_size = QtCore.QSize(self.size())
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
+        target_window_width = self._target_window_width()
+        target_content_width = max(
+            80,
+            target_window_width - margins.left() - margins.right() - 4,
+        )
         available_width = max(80, self._detail_scroll.viewport().width() - 2)
-        if available_width <= 82:
-            available_width = max(
-                80,
-                self.width() - margins.left() - margins.right() - 4,
-            )
+        if available_width <= 82 or available_width > target_content_width:
+            available_width = target_content_width
         self._detail_label.setFixedWidth(available_width)
         self._detail_label.adjustSize()
 
@@ -503,8 +506,9 @@ class OverlayUI(QtWidgets.QWidget):
             OVERLAY_HEIGHT,
             min(OVERLAY_MAX_HEIGHT, desired_window_height),
         )
-        if self.height() != desired_window_height:
-            self.resize(self.width(), desired_window_height)
+        desired_size = QtCore.QSize(target_window_width, desired_window_height)
+        if self.size() != desired_size:
+            self.resize(desired_size)
         self._reposition_within_current_screen(previous_size)
 
     def _compact_window_height(self) -> int:
@@ -521,8 +525,20 @@ class OverlayUI(QtWidgets.QWidget):
         )
 
     def _compact_target_size(self) -> QtCore.QSize:
-        current_width = self.width() if self.width() > 0 else OVERLAY_WIDTH
-        return QtCore.QSize(max(OVERLAY_WIDTH, current_width), self._compact_window_height())
+        return QtCore.QSize(
+            self._target_window_width(),
+            self._compact_window_height(),
+        )
+
+    def _target_window_width(self) -> int:
+        margins = self._layout.contentsMargins()
+        content_width = max(
+            OVERLAY_WIDTH - margins.left() - margins.right(),
+            self._header_widget.sizeHint().width(),
+            self._controls_widget.sizeHint().width(),
+            self._footer_widget.sizeHint().width(),
+        )
+        return max(OVERLAY_WIDTH, content_width + margins.left() + margins.right())
 
     def _should_preserve_size_on_reset(self) -> bool:
         return bool(self._detail_label.text().strip()) and (

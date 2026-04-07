@@ -117,6 +117,7 @@ def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     initial_height = overlay.height()
+    initial_width = overlay.width()
     overlay.set_state("Done", "word " * 900)
     large_height = overlay.height()
     assert large_height <= OVERLAY_MAX_HEIGHT
@@ -128,6 +129,7 @@ def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     assert overlay._copy_button.isEnabled() is True
     assert overlay._clear_button.isEnabled() is False
     assert overlay.height() == initial_height
+    assert overlay.width() == initial_width
     assert overlay.height() < large_height
 
 
@@ -254,6 +256,34 @@ def test_overlay_reset_position_preserves_expanded_result_size():
 
     assert overlay.pos() == expected_position
     assert overlay.size() == expanded_size
+
+
+def test_overlay_screen_change_normalizes_runaway_width(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1400, 900))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+
+    overlay.resize(32767, overlay.height())
+    overlay._on_screen_changed(screen)
+
+    assert overlay.width() == overlay._target_window_width()
+    assert overlay.frameGeometry().right() <= screen.availableGeometry().right()
+
+
+def test_overlay_reset_position_normalizes_runaway_width(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1400, 900))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.set_state("Done", "word " * 900)
+    overlay.set_initial_position(QtCore.QPoint(120, 80))
+    overlay.resize(32767, overlay.height())
+
+    overlay.reset_position()
+
+    assert overlay.width() == overlay._target_window_width()
+    assert overlay.pos().x() >= screen.availableGeometry().left()
 
 
 def test_overlay_processing_restores_initial_height_after_long_text():
