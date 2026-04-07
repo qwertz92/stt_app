@@ -177,7 +177,13 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.setWindowTitle("Dictation Settings")
         self.setModal(False)
+        self.setWindowFlag(QtCore.Qt.Window, True)
+        self.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
         self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, False)
+        self.setMinimumSize(480, 360)
         self.resize(580, 620)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
@@ -207,6 +213,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # --- Tab widget ---
         self.tabs = QtWidgets.QTabWidget()
+        self.tabs.tabBar().setUsesScrollButtons(True)
+        self.tabs.tabBar().setElideMode(QtCore.Qt.ElideRight)
         self.tabs.setStyleSheet(
             """
             QTabBar::tab {
@@ -236,6 +244,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._build_benchmark_tab()
         self._build_remote_tab()
         self._build_history_tab()
+        self._build_import_tab()
         self._configure_combo_popups()
 
         # --- Bottom buttons ---
@@ -286,11 +295,21 @@ class SettingsDialog(QtWidgets.QDialog):
             combo.setView(view)
             combo.setMaxVisibleItems(12)
 
+    def _create_scroll_tab(self) -> tuple[QtWidgets.QScrollArea, QtWidgets.QWidget]:
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        content = QtWidgets.QWidget()
+        scroll.setWidget(content)
+        return scroll, content
+
     # --- General tab ---
 
     def _build_general_tab(self) -> None:
-        tab = QtWidgets.QWidget()
-        form = QtWidgets.QFormLayout(tab)
+        tab, content = self._create_scroll_tab()
+        form = QtWidgets.QFormLayout(content)
         form.setContentsMargins(10, 10, 10, 10)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(4)
@@ -377,6 +396,17 @@ class SettingsDialog(QtWidgets.QDialog):
             self.paste_mode_combo.addItem(
                 paste_mode_labels.get(value, value), value
             )
+        self.paste_mode_combo.setToolTip(
+            "Auto tries SendInput first and falls back to WM_PASTE. "
+            "WM_PASTE only sends the window message directly. "
+            "SendInput only simulates Ctrl+V."
+        )
+        paste_mode_hint = QtWidgets.QLabel(
+            "Paste Mode controls how the paste command is delivered to the target app. "
+            "It does not decide what stays in your clipboard afterwards."
+        )
+        paste_mode_hint.setWordWrap(True)
+        self._style_note_label(paste_mode_hint)
 
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
         self.vad_threshold_spin = QtWidgets.QDoubleSpinBox()
@@ -435,17 +465,6 @@ class SettingsDialog(QtWidgets.QDialog):
             "Keep only the newest N archived recordings."
         )
 
-        self.history_max_spin = QtWidgets.QSpinBox()
-        self.history_max_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
-        self.history_max_spin.setSpecialValueText("Unlimited (0)")
-        self.history_max_spin.setValue(DEFAULT_HISTORY_MAX_ITEMS)
-        self.history_max_spin.setToolTip(
-            "Maximum transcript history items stored (0 = unlimited)."
-        )
-        self.history_max_spin.valueChanged.connect(
-            lambda _value: self._refresh_history_list()
-        )
-
         self.overlay_corner_combo = QtWidgets.QComboBox()
         corner_labels = {
             "top-right": "Top Right",
@@ -459,6 +478,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
             "Keep transcript in clipboard after insertion"
         )
+        self.keep_clipboard_checkbox.setToolTip(
+            "When enabled, the transcript remains in the clipboard after insertion. "
+            "When disabled, the previous clipboard contents are restored."
+        )
+        keep_clipboard_hint = QtWidgets.QLabel(
+            "Clipboard retention is separate from Paste Mode: this only controls whether "
+            "the final transcript stays in the clipboard after insertion completes."
+        )
+        keep_clipboard_hint.setWordWrap(True)
+        self._style_note_label(keep_clipboard_hint)
 
         form.addRow("Hotkey", self.hotkey_edit)
         form.addRow("", hotkey_hint)
@@ -470,6 +499,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.language_note_label)
         form.addRow("Mode", self.mode_combo)
         form.addRow("Paste Mode", self.paste_mode_combo)
+        form.addRow("", paste_mode_hint)
         form.addRow("", self.vad_checkbox)
         form.addRow("VAD Threshold", self.vad_threshold_spin)
         form.addRow("", self.start_beep_checkbox)
@@ -480,16 +510,16 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.save_all_recordings_checkbox)
         form.addRow("Recordings Folder", recordings_dir_layout)
         form.addRow("Keep Recordings", self.recordings_max_spin)
-        form.addRow("History Size", self.history_max_spin)
         form.addRow("", self.keep_clipboard_checkbox)
+        form.addRow("", keep_clipboard_hint)
 
         self.tabs.addTab(tab, "General")
 
     # --- Local tab ---
 
     def _build_local_tab(self) -> None:
-        tab = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(tab)
+        tab, content = self._create_scroll_tab()
+        layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
@@ -617,8 +647,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.tabs.addTab(tab, "Local")
 
     def _build_benchmark_tab(self) -> None:
-        tab = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(tab)
+        tab, content = self._create_scroll_tab()
+        layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
@@ -760,8 +790,8 @@ class SettingsDialog(QtWidgets.QDialog):
     # --- Remote tab ---
 
     def _build_remote_tab(self) -> None:
-        tab = QtWidgets.QWidget()
-        layout = QtWidgets.QVBoxLayout(tab)
+        tab, content = self._create_scroll_tab()
+        layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
@@ -885,11 +915,35 @@ class SettingsDialog(QtWidgets.QDialog):
     # --- History tab ---
 
     def _build_history_tab(self) -> None:
-        tab = QtWidgets.QWidget()
+        tab, content = self._create_scroll_tab()
         self._history_tab = tab
-        layout = QtWidgets.QVBoxLayout(tab)
+        layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
+
+        history_intro = QtWidgets.QLabel(
+            "Browse recent transcripts here. Audio-file imports live on their own tab so "
+            "this view stays compact on smaller screens."
+        )
+        history_intro.setWordWrap(True)
+        self._style_note_label(history_intro)
+        layout.addWidget(history_intro)
+
+        self.history_max_spin = QtWidgets.QSpinBox()
+        self.history_max_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
+        self.history_max_spin.setSpecialValueText("Unlimited (0)")
+        self.history_max_spin.setValue(DEFAULT_HISTORY_MAX_ITEMS)
+        self.history_max_spin.setToolTip(
+            "Maximum transcript history items stored (0 = unlimited)."
+        )
+        self.history_max_spin.valueChanged.connect(
+            lambda _value: self._refresh_history_list()
+        )
+        history_controls = QtWidgets.QHBoxLayout()
+        history_controls.addWidget(QtWidgets.QLabel("History Size"))
+        history_controls.addWidget(self.history_max_spin)
+        history_controls.addStretch(1)
+        layout.addLayout(history_controls)
 
         history_box = QtWidgets.QGroupBox("Transcript History")
         history_layout = QtWidgets.QVBoxLayout(history_box)
@@ -924,7 +978,16 @@ class SettingsDialog(QtWidgets.QDialog):
         history_buttons.addWidget(self.history_copy_button)
         history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
-        layout.addWidget(history_box, 2)
+        layout.addWidget(history_box)
+        layout.addStretch(1)
+        self.tabs.addTab(tab, "History")
+
+    def _build_import_tab(self) -> None:
+        tab, content = self._create_scroll_tab()
+        self._import_tab = tab
+        layout = QtWidgets.QVBoxLayout(content)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
 
         import_box = QtWidgets.QGroupBox("Import Audio File")
         import_layout = QtWidgets.QVBoxLayout(import_box)
@@ -991,8 +1054,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._selected_import_file_path = ""
 
-        layout.addWidget(import_box, 2)
-        self.tabs.addTab(tab, "History")
+        layout.addWidget(import_box)
+        layout.addStretch(1)
+        self.tabs.addTab(tab, "Import Audio")
 
     # ------------------------------------------------------------------
     # Model combo helpers
@@ -2420,9 +2484,9 @@ class SettingsDialog(QtWidgets.QDialog):
         return True
 
     def prepare_last_recording_import(self) -> bool:
-        history_index = self.tabs.indexOf(self._history_tab)
-        if history_index >= 0:
-            self.tabs.setCurrentIndex(history_index)
+        import_index = self.tabs.indexOf(self._import_tab)
+        if import_index >= 0:
+            self.tabs.setCurrentIndex(import_index)
         return self._select_last_recording_file()
 
     def _confirm_and_transcribe_selected_file(self) -> None:

@@ -1,3 +1,4 @@
+import pytest
 from PySide6 import QtCore, QtWidgets
 
 from stt_app.app_paths import debug_audio_path
@@ -40,6 +41,18 @@ class _ImmediateThread:
 
     def start(self):
         self._target()
+
+
+@pytest.fixture(autouse=True)
+def _close_top_level_windows_after_test():
+    yield
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.topLevelWidgets()):
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
 
 
 def _combo_data(combo: QtWidgets.QComboBox) -> list[str]:
@@ -589,6 +602,74 @@ def test_settings_dialog_has_tab_stylesheet():
     _ = app
 
 
+def test_settings_tabs_use_scroll_areas_and_scroll_buttons():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    for index in range(dialog.tabs.count()):
+        widget = dialog.tabs.widget(index)
+        assert isinstance(widget, QtWidgets.QScrollArea)
+        assert widget.widgetResizable() is True
+
+    assert dialog.tabs.tabBar().usesScrollButtons() is True
+    assert dialog.tabs.tabBar().elideMode() == QtCore.Qt.ElideRight
+    _ = app
+
+
+def test_history_and_import_are_separate_tabs():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    tab_labels = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
+    assert "History" in tab_labels
+    assert "Import Audio" in tab_labels
+    assert dialog._history_tab is not dialog._import_tab
+    _ = app
+
+
+def test_settings_dialog_window_has_native_minimize_button():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    flags = dialog.windowFlags()
+    assert bool(flags & QtCore.Qt.Window)
+    assert bool(flags & QtCore.Qt.WindowSystemMenuHint)
+    assert bool(flags & QtCore.Qt.WindowMinimizeButtonHint)
+    assert bool(flags & QtCore.Qt.WindowCloseButtonHint)
+    _ = app
+
+
+def test_general_tab_explains_paste_mode_and_clipboard_retention_separately():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert "WM_PASTE" in dialog.paste_mode_combo.toolTip()
+    assert "previous clipboard contents are restored" in (
+        dialog.keep_clipboard_checkbox.toolTip()
+    )
+    _ = app
+
+
 def test_history_size_allows_unlimited_zero_and_persists():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
@@ -658,7 +739,7 @@ def test_select_last_recording_sets_selected_file(monkeypatch, tmp_path):
     _ = app
 
 
-def test_prepare_last_recording_import_switches_to_history_tab(monkeypatch, tmp_path):
+def test_prepare_last_recording_import_switches_to_import_tab(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setenv("APPDATA", str(tmp_path))
     store = _FakeSettingsStore(AppSettings())
@@ -674,6 +755,6 @@ def test_prepare_last_recording_import_switches_to_history_tab(monkeypatch, tmp_
     opened = dialog.prepare_last_recording_import()
 
     assert opened is True
-    assert dialog.tabs.currentIndex() == dialog.tabs.indexOf(dialog._history_tab)
+    assert dialog.tabs.currentIndex() == dialog.tabs.indexOf(dialog._import_tab)
     assert str(path) in dialog.import_selected_file_label.text()
     _ = app

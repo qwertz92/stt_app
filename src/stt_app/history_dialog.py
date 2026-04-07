@@ -36,6 +36,11 @@ class HistoryDialog(QtWidgets.QDialog):
         self.setWindowTitle("Recent Transcriptions")
         self.resize(820, 500)
         self.setModal(False)
+        self.setWindowFlag(QtCore.Qt.Window, True)
+        self.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
 
         self._max_items_spin = QtWidgets.QSpinBox()
         self._max_items_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)

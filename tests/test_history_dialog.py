@@ -2,7 +2,8 @@ from __future__ import annotations
 
 import json
 
-from PySide6 import QtGui, QtTest, QtWidgets
+import pytest
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from stt_app.history_dialog import HistoryDialog
 from stt_app.settings_store import AppSettings, SettingsStore
@@ -27,6 +28,18 @@ def _entry(text: str) -> TranscriptHistoryEntry:
         model="small",
         mode="batch",
     )
+
+
+@pytest.fixture(autouse=True)
+def _close_top_level_windows_after_test():
+    yield
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.topLevelWidgets()):
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
 
 
 def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
@@ -155,4 +168,23 @@ def test_import_overflow_can_switch_to_unlimited(monkeypatch, tmp_path):
 
     assert settings_store.load().history_max_items == 0
     assert history_store.count() == 4
+    _ = app
+
+
+def test_history_dialog_window_has_native_minimize_button(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    flags = dialog.windowFlags()
+    assert bool(flags & QtCore.Qt.Window)
+    assert bool(flags & QtCore.Qt.WindowSystemMenuHint)
+    assert bool(flags & QtCore.Qt.WindowMinimizeButtonHint)
+    assert bool(flags & QtCore.Qt.WindowCloseButtonHint)
     _ = app
