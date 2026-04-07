@@ -13,6 +13,8 @@ Quality has the highest priority. Take as much time as needed.
 - No dead code or unused imports.
 - Every change must pass all existing tests.
 - Document decisions here; document history in `docs/learning-log.md`.
+- User requests may come through speech-to-text and can contain mistranscribed words or malformed phrases.
+- If the intent is unclear, ask for clarification before making a change that may not match the user's actual goal.
 
 ## Commit style
 
