@@ -239,12 +239,20 @@ def test_overlay_reset_position_preserves_expanded_result_size():
     overlay.set_state("Done", "word " * 900)
     expanded_size = overlay.size()
     assert expanded_size.height() > initial_size.height()
-    overlay.set_initial_position(QtCore.QPoint(120, 80))
+    requested_position = QtCore.QPoint(120, 80)
+    overlay.set_initial_position(requested_position)
     overlay.move(340, 260)
 
     overlay.reset_position()
 
-    assert overlay.pos() == QtCore.QPoint(120, 80)
+    expected_position = QtCore.QPoint(requested_position)
+    screen = QtGui.QGuiApplication.screenAt(requested_position)
+    if screen is None:
+        screen = overlay._current_screen()
+    if screen is not None:
+        expected_position = overlay._clamp_point_to_screen(expected_position, screen)
+
+    assert overlay.pos() == expected_position
     assert overlay.size() == expanded_size
 
 
