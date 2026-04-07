@@ -69,6 +69,31 @@ if TYPE_CHECKING:
     from .controller import DictationController
 
 
+class _WheelPassthroughComboBox(QtWidgets.QComboBox):
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        view = self.view()
+        if self.hasFocus() or (view is not None and view.isVisible()):
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+
+class _WheelPassthroughSpinBox(QtWidgets.QSpinBox):
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+
+class _WheelPassthroughDoubleSpinBox(QtWidgets.QDoubleSpinBox):
+    def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
+        if self.hasFocus():
+            super().wheelEvent(event)
+            return
+        event.ignore()
+
+
 _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-large-v3": "whisper-large-v3 (best quality, $0.111/hr)",
     "whisper-large-v3-turbo": "whisper-large-v3-turbo (faster, $0.04/hr)",
@@ -241,10 +266,10 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._build_general_tab()
         self._build_local_tab()
-        self._build_benchmark_tab()
         self._build_remote_tab()
         self._build_history_tab()
         self._build_import_tab()
+        self._build_benchmark_tab()
         self._configure_combo_popups()
 
         # --- Bottom buttons ---
@@ -331,7 +356,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._style_note_label(cancel_hotkey_hint)
 
-        self.language_combo = QtWidgets.QComboBox()
+        self.language_combo = _WheelPassthroughComboBox()
         for value in VALID_LANGUAGE_MODES:
             self.language_combo.addItem(
                 LANGUAGE_MODE_LABELS.get(value, value), value
@@ -343,7 +368,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.language_note_label.setMinimumHeight(24)
         self.language_note_label.setMaximumHeight(24)
 
-        self.engine_combo = QtWidgets.QComboBox()
+        self.engine_combo = _WheelPassthroughComboBox()
         engine_labels = {
             "local": "Local (faster-whisper)",
             "assemblyai": "Remote (AssemblyAI)",
@@ -355,6 +380,11 @@ class SettingsDialog(QtWidgets.QDialog):
         for value in VALID_ENGINES:
             self.engine_combo.addItem(engine_labels.get(value, value), value)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        engine_hint = QtWidgets.QLabel(
+            "Local keeps audio on your machine. Remote providers need internet and an API key."
+        )
+        engine_hint.setWordWrap(True)
+        self._style_note_label(engine_hint)
 
         remote_model_widget = QtWidgets.QWidget()
         remote_model_layout = QtWidgets.QVBoxLayout(remote_model_widget)
@@ -362,7 +392,7 @@ class SettingsDialog(QtWidgets.QDialog):
         remote_model_layout.setSpacing(3)
         self.remote_model_provider_label = QtWidgets.QLabel("Local engine selected")
         self._style_note_label(self.remote_model_provider_label, bold=True)
-        self.remote_model_combo = QtWidgets.QComboBox()
+        self.remote_model_combo = _WheelPassthroughComboBox()
         self.remote_model_combo.currentIndexChanged.connect(
             self._on_remote_model_changed
         )
@@ -373,7 +403,7 @@ class SettingsDialog(QtWidgets.QDialog):
         remote_model_layout.addWidget(self.remote_model_combo)
         remote_model_layout.addWidget(self.remote_model_note_label)
 
-        self.mode_combo = QtWidgets.QComboBox()
+        self.mode_combo = _WheelPassthroughComboBox()
         mode_labels = {
             "batch": "Batch",
             "streaming": "Streaming (Experimental)",
@@ -385,8 +415,14 @@ class SettingsDialog(QtWidgets.QDialog):
             "auto-abort on focus change. Batch remains the recommended default."
         )
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
+        mode_hint = QtWidgets.QLabel(
+            "Batch inserts text after recording stops. Streaming writes while you speak, "
+            "but is more sensitive to focus changes and provider differences."
+        )
+        mode_hint.setWordWrap(True)
+        self._style_note_label(mode_hint)
 
-        self.paste_mode_combo = QtWidgets.QComboBox()
+        self.paste_mode_combo = _WheelPassthroughComboBox()
         paste_mode_labels = {
             "auto": "Auto (SendInput -> WM_PASTE)",
             "wm_paste": "WM_PASTE only",
@@ -409,7 +445,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(paste_mode_hint)
 
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
-        self.vad_threshold_spin = QtWidgets.QDoubleSpinBox()
+        self.vad_threshold_spin = _WheelPassthroughDoubleSpinBox()
         self.vad_threshold_spin.setDecimals(3)
         self.vad_threshold_spin.setSingleStep(0.002)
         self.vad_threshold_spin.setRange(
@@ -422,7 +458,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
         self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
-        self.start_beep_tone_combo = QtWidgets.QComboBox()
+        self.start_beep_tone_combo = _WheelPassthroughComboBox()
         tone_labels = {
             "soft": "Soft beep",
             "high": "High beep",
@@ -458,14 +494,19 @@ class SettingsDialog(QtWidgets.QDialog):
         recordings_dir_layout.addWidget(self.recordings_dir_edit, 1)
         recordings_dir_layout.addWidget(self.recordings_dir_browse)
         recordings_dir_layout.addWidget(self.recordings_open_button)
-        self.recordings_max_spin = QtWidgets.QSpinBox()
+        self.recordings_max_spin = _WheelPassthroughSpinBox()
         self.recordings_max_spin.setRange(1, 500)
         self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
         self.recordings_max_spin.setToolTip(
             "Keep only the newest N archived recordings."
         )
+        recordings_hint = QtWidgets.QLabel(
+            "Archiving stores the original WAV files so you can retry or inspect recordings later."
+        )
+        recordings_hint.setWordWrap(True)
+        self._style_note_label(recordings_hint)
 
-        self.overlay_corner_combo = QtWidgets.QComboBox()
+        self.overlay_corner_combo = _WheelPassthroughComboBox()
         corner_labels = {
             "top-right": "Top Right",
             "top-left": "Top Left",
@@ -494,10 +535,12 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("Cancel Hotkey", self.cancel_hotkey_edit)
         form.addRow("", cancel_hotkey_hint)
         form.addRow("Engine", self.engine_combo)
+        form.addRow("", engine_hint)
         form.addRow("Remote Model", remote_model_widget)
         form.addRow("Language", self.language_combo)
         form.addRow("", self.language_note_label)
         form.addRow("Mode", self.mode_combo)
+        form.addRow("", mode_hint)
         form.addRow("Paste Mode", self.paste_mode_combo)
         form.addRow("", paste_mode_hint)
         form.addRow("", self.vad_checkbox)
@@ -510,6 +553,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.save_all_recordings_checkbox)
         form.addRow("Recordings Folder", recordings_dir_layout)
         form.addRow("Keep Recordings", self.recordings_max_spin)
+        form.addRow("", recordings_hint)
         form.addRow("", self.keep_clipboard_checkbox)
         form.addRow("", keep_clipboard_hint)
 
@@ -528,7 +572,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(4)
 
-        self.model_combo = QtWidgets.QComboBox()
+        self.model_combo = _WheelPassthroughComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         form.addRow("Model Size", self.model_combo)
 
@@ -689,6 +733,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_audio_status_label.setWordWrap(True)
         self._style_note_label(self.benchmark_audio_status_label)
         audio_layout.addWidget(self.benchmark_audio_status_label)
+        audio_help = QtWidgets.QLabel(
+            "Use a representative sample. The benchmark measures model speed and runtime factor on this file."
+        )
+        audio_help.setWordWrap(True)
+        self._style_note_label(audio_help)
+        audio_layout.addWidget(audio_help)
         layout.addWidget(audio_box)
 
         models_box = QtWidgets.QGroupBox("Installed Models")
@@ -708,6 +758,12 @@ class SettingsDialog(QtWidgets.QDialog):
             self._refresh_local_model_views
         )
         models_layout.addWidget(self.refresh_benchmark_models_button)
+        models_help = QtWidgets.QLabel(
+            "Only locally available models can be benchmarked here. Download missing models on the Local tab first."
+        )
+        models_help.setWordWrap(True)
+        self._style_note_label(models_help)
+        models_layout.addWidget(models_help)
         layout.addWidget(models_box)
 
         options_box = QtWidgets.QGroupBox("Run Options")
@@ -716,36 +772,90 @@ class SettingsDialog(QtWidgets.QDialog):
         options_form.setHorizontalSpacing(10)
         options_form.setVerticalSpacing(4)
 
-        self.benchmark_compute_type_combo = QtWidgets.QComboBox()
+        self.benchmark_compute_type_combo = _WheelPassthroughComboBox()
         for value in ("int8", "float16", "float32"):
             self.benchmark_compute_type_combo.addItem(value, value)
+        self.benchmark_compute_type_combo.setToolTip(
+            "int8 is usually fastest and smallest. float16 is useful on capable GPUs. float32 is the most compatible but slowest."
+        )
         options_form.addRow("Compute Type", self.benchmark_compute_type_combo)
+        compute_type_note = QtWidgets.QLabel(
+            "Controls precision: int8 is usually fastest, float32 is slowest but safest."
+        )
+        compute_type_note.setWordWrap(True)
+        self._style_note_label(compute_type_note)
+        options_form.addRow("", compute_type_note)
 
-        self.benchmark_runs_spin = QtWidgets.QSpinBox()
+        self.benchmark_runs_spin = _WheelPassthroughSpinBox()
         self.benchmark_runs_spin.setRange(1, 10)
         self.benchmark_runs_spin.setValue(1)
+        self.benchmark_runs_spin.setToolTip(
+            "Run the same benchmark multiple times. More runs reduce noise but take longer."
+        )
         options_form.addRow("Runs", self.benchmark_runs_spin)
+        runs_note = QtWidgets.QLabel(
+            "Repeat count for the same audio sample. Higher values give more stable averages."
+        )
+        runs_note.setWordWrap(True)
+        self._style_note_label(runs_note)
+        options_form.addRow("", runs_note)
 
-        self.benchmark_beam_size_spin = QtWidgets.QSpinBox()
+        self.benchmark_beam_size_spin = _WheelPassthroughSpinBox()
         self.benchmark_beam_size_spin.setRange(1, 10)
         self.benchmark_beam_size_spin.setValue(5)
+        self.benchmark_beam_size_spin.setToolTip(
+            "Beam size controls decoding breadth. Higher values can improve quality but slow the run down."
+        )
         options_form.addRow("Beam Size", self.benchmark_beam_size_spin)
+        beam_note = QtWidgets.QLabel(
+            "Decoder search width. Larger beams may improve recognition, but increase latency."
+        )
+        beam_note.setWordWrap(True)
+        self._style_note_label(beam_note)
+        options_form.addRow("", beam_note)
 
-        self.benchmark_language_combo = QtWidgets.QComboBox()
+        self.benchmark_language_combo = _WheelPassthroughComboBox()
         self.benchmark_language_combo.addItem("Auto", "auto")
         self.benchmark_language_combo.addItem("German", "de")
         self.benchmark_language_combo.addItem("English", "en")
+        self.benchmark_language_combo.setToolTip(
+            "Use Auto for unknown or mixed audio. A fixed language removes one source of model guesswork."
+        )
         options_form.addRow("Language", self.benchmark_language_combo)
+        language_note = QtWidgets.QLabel(
+            "Language hint for decoding. Auto detects language; fixed values can be more consistent on known input."
+        )
+        language_note.setWordWrap(True)
+        self._style_note_label(language_note)
+        options_form.addRow("", language_note)
 
         self.benchmark_warmup_checkbox = QtWidgets.QCheckBox(
             "Run one warmup pass before measurements"
         )
+        self.benchmark_warmup_checkbox.setToolTip(
+            "Runs one unmeasured pass first so model loading and first-run caches affect the final numbers less."
+        )
         options_form.addRow("", self.benchmark_warmup_checkbox)
+        warmup_note = QtWidgets.QLabel(
+            "Useful when you want cleaner timings after the first cold run."
+        )
+        warmup_note.setWordWrap(True)
+        self._style_note_label(warmup_note)
+        options_form.addRow("", warmup_note)
 
         self.benchmark_vad_checkbox = QtWidgets.QCheckBox(
             "Enable faster-whisper VAD filter"
         )
+        self.benchmark_vad_checkbox.setToolTip(
+            "Filters silence before transcription. This can improve speed on pause-heavy audio, but also changes the workload."
+        )
         options_form.addRow("", self.benchmark_vad_checkbox)
+        vad_note = QtWidgets.QLabel(
+            "Silence filtering. Can speed up long recordings with pauses, but changes the benchmark scenario."
+        )
+        vad_note.setWordWrap(True)
+        self._style_note_label(vad_note)
+        options_form.addRow("", vad_note)
         layout.addWidget(options_box)
 
         benchmark_actions = QtWidgets.QHBoxLayout()
@@ -799,8 +909,9 @@ class SettingsDialog(QtWidgets.QDialog):
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
         provider_layout = QtWidgets.QFormLayout(provider_box)
         provider_layout.setContentsMargins(10, 10, 10, 10)
-        provider_layout.setHorizontalSpacing(10)
+        provider_layout.setHorizontalSpacing(6)
         provider_layout.setVerticalSpacing(4)
+        provider_layout.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         provider_rows = (
             ("assemblyai", "AssemblyAI"),
             ("groq", "Groq"),
@@ -808,17 +919,27 @@ class SettingsDialog(QtWidgets.QDialog):
             ("deepgram", "Deepgram"),
             ("elevenlabs", "ElevenLabs"),
         )
+        provider_intro = QtWidgets.QLabel(
+            "Enter a key only when you want to replace the stored one. The status badge shows whether the app already has a usable key."
+        )
+        provider_intro.setWordWrap(True)
+        self._style_note_label(provider_intro)
+        provider_layout.addRow("", provider_intro)
         for provider, title in provider_rows:
             key_field = QtWidgets.QLineEdit()
             key_field.setEchoMode(QtWidgets.QLineEdit.Password)
             key_field.setPlaceholderText(
                 "Enter new key to update; use Clear saved to remove the stored key."
             )
+            key_field.setMinimumWidth(220)
+            key_field.setMaximumWidth(420)
             key_field.textChanged.connect(
                 lambda _text, p=provider: self._on_provider_key_changed(p)
             )
             clear_button = QtWidgets.QPushButton("Clear saved")
             clear_button.setToolTip("Delete the stored key for this provider on Save.")
+            clear_button.setMinimumWidth(84)
+            clear_button.setMaximumWidth(96)
             clear_button.clicked.connect(
                 lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
             )
@@ -827,11 +948,19 @@ class SettingsDialog(QtWidgets.QDialog):
             status_badge.setAlignment(
                 QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter
             )
-            status_badge.setMinimumWidth(190)
+            status_badge.setMinimumWidth(160)
+            status_badge.setMaximumWidth(182)
+            status_badge.setSizePolicy(
+                QtWidgets.QSizePolicy.Fixed,
+                QtWidgets.QSizePolicy.Fixed,
+            )
             status_badge.setStyleSheet(
                 "padding: 2px 8px; border: 1px solid #bbb; border-radius: 9px;"
                 " color: #555; background: #f2f2f2;"
             )
+
+            title_label = QtWidgets.QLabel(title)
+            title_label.setMinimumWidth(78)
 
             field_row_widget = QtWidgets.QWidget()
             field_row = QtWidgets.QHBoxLayout(field_row_widget)
@@ -840,7 +969,8 @@ class SettingsDialog(QtWidgets.QDialog):
             field_row.addWidget(key_field, 1)
             field_row.addWidget(clear_button, 0)
             field_row.addWidget(status_badge, 0)
-            provider_layout.addRow(title, field_row_widget)
+            field_row.addStretch(1)
+            provider_layout.addRow(title_label, field_row_widget)
 
             last_test_label = QtWidgets.QLabel("Last test: never.")
             last_test_label.setWordWrap(True)
@@ -879,7 +1009,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(self.key_storage_status_label)
         provider_layout.addRow(self.key_storage_status_label)
 
-        self.test_conn_target_combo = QtWidgets.QComboBox()
+        self.test_conn_target_combo = _WheelPassthroughComboBox()
         self.test_conn_target_combo.addItem(
             "All configured providers (Recommended)",
             "all-configured",
@@ -929,7 +1059,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(history_intro)
         layout.addWidget(history_intro)
 
-        self.history_max_spin = QtWidgets.QSpinBox()
+        self.history_max_spin = _WheelPassthroughSpinBox()
         self.history_max_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
         self.history_max_spin.setSpecialValueText("Unlimited (0)")
         self.history_max_spin.setValue(DEFAULT_HISTORY_MAX_ITEMS)
@@ -999,7 +1129,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(import_hint)
         import_layout.addWidget(import_hint)
 
-        self.import_engine_combo = QtWidgets.QComboBox()
+        self.import_engine_combo = _WheelPassthroughComboBox()
         import_engine_labels = {
             "local": "Local (faster-whisper)",
             "assemblyai": "Remote (AssemblyAI)",

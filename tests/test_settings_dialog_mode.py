@@ -1,5 +1,5 @@
 import pytest
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from stt_app.app_paths import debug_audio_path
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
@@ -540,6 +540,84 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     assert dialog.benchmark_results_table.item(0, 0).text() == "small"
     assert dialog.benchmark_summary_text.toPlainText().startswith("Benchmark summary:")
     assert "Benchmark finished" in dialog.benchmark_status_label.text()
+    _ = app
+
+
+def test_benchmark_tab_is_last():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.tabs.tabText(dialog.tabs.count() - 1) == "Benchmark"
+    _ = app
+
+
+def test_benchmark_controls_explain_their_options():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert "fastest" in dialog.benchmark_compute_type_combo.toolTip()
+    assert "reduce noise" in dialog.benchmark_runs_spin.toolTip()
+    assert "Beam size controls decoding breadth" in dialog.benchmark_beam_size_spin.toolTip()
+    assert "fixed language removes one source of model guesswork" in dialog.benchmark_language_combo.toolTip()
+    assert "first-run caches" in dialog.benchmark_warmup_checkbox.toolTip()
+    assert "Filters silence before transcription" in dialog.benchmark_vad_checkbox.toolTip()
+    _ = app
+
+
+def test_closed_combo_does_not_change_selection_on_mouse_wheel():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="local"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    combo = dialog.engine_combo
+    combo.clearFocus()
+    initial_index = combo.currentIndex()
+    center = combo.rect().center()
+    event = QtGui.QWheelEvent(
+        QtCore.QPointF(center),
+        QtCore.QPointF(combo.mapToGlobal(center)),
+        QtCore.QPoint(),
+        QtCore.QPoint(0, 120),
+        QtCore.Qt.NoButton,
+        QtCore.Qt.NoModifier,
+        QtCore.Qt.ScrollUpdate,
+        False,
+    )
+
+    QtWidgets.QApplication.sendEvent(combo, event)
+
+    assert combo.currentIndex() == initial_index
+    _ = app
+
+
+def test_remote_provider_rows_limit_key_and_badge_growth():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.assemblyai_key_edit.maximumWidth() == 420
+    assert dialog._provider_status_labels["assemblyai"].maximumWidth() == 182
+    assert dialog._provider_status_labels["assemblyai"].minimumWidth() == 160
     _ = app
 
 
