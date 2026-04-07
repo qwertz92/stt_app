@@ -428,6 +428,10 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
         "question",
         lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
     )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
 
     store = _FakeSettingsStore(AppSettings())
     dialog = SettingsDialog(
@@ -553,6 +557,58 @@ def test_benchmark_tab_is_last():
     )
 
     assert dialog.tabs.tabText(dialog.tabs.count() - 1) == "Benchmark"
+    _ = app
+
+
+def test_settings_dialog_initialization_scans_local_models_once(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda model_dir="": calls.append(model_dir) or ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    store = _FakeSettingsStore(AppSettings(model_dir="/tmp/models"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert calls == ["/tmp/models"]
+    assert "small" in dialog.local_models_label.text()
+    _ = app
+
+
+def test_model_dir_change_triggers_single_rescan(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda model_dir="": calls.append(model_dir) or ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    store = _FakeSettingsStore(AppSettings(model_dir=""))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    calls.clear()
+
+    dialog.model_dir_edit.setText("/tmp/other-models")
+
+    assert calls == ["/tmp/other-models"]
     _ = app
 
 

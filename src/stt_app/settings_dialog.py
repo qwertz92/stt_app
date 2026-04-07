@@ -141,6 +141,7 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
     import_transcription_finished = QtCore.Signal(bool, str)
+    local_model_scan_finished = QtCore.Signal(int, str, object)
     local_model_download_progress = QtCore.Signal(str)
     local_model_download_finished = QtCore.Signal(bool, str)
     benchmark_progress = QtCore.Signal(str)
@@ -171,6 +172,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._provider_last_test_labels: dict[str, QtWidgets.QLabel] = {}
         self._provider_pending_clear: set[str] = set()
         self._provider_test_history: dict[str, tuple[bool, str, str]] = {}
+        self._active_local_model_scan_thread: threading.Thread | None = None
+        self._local_model_scan_token = 0
+        self._local_model_scan_pending = False
+        self._cached_local_models: list[str] = []
+        self._cached_local_models_dir = ""
         self._active_local_model_download_thread: threading.Thread | None = None
         self._active_benchmark_thread: threading.Thread | None = None
         self._remote_model_values: dict[str, str] = {
@@ -213,6 +219,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
         self.import_transcription_finished.connect(self._finish_import_transcription)
+        self.local_model_scan_finished.connect(self._on_local_model_scan_finished)
         self.local_model_download_progress.connect(
             self._on_local_model_download_progress
         )
@@ -641,8 +648,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_models_action_label = QtWidgets.QLabel("")
         self.local_models_action_label.setWordWrap(True)
         local_models_layout.addWidget(self.local_models_action_label)
-        self._refresh_local_models_label()
-        self._refresh_cached_models_list()
+        self._set_local_model_scan_loading()
 
         download_box = QtWidgets.QGroupBox("Download Models")
         download_layout = QtWidgets.QVBoxLayout(download_box)
@@ -1205,21 +1211,21 @@ class SettingsDialog(QtWidgets.QDialog):
     def _model_label(self, model_name: str) -> str:
         return self._MODEL_LABELS.get(model_name, model_name)
 
-    def _refresh_model_combo(self, selected: str | None = None) -> None:
+    def _refresh_model_combo(
+        self,
+        selected: str | None = None,
+        cached: list[str] | None = None,
+    ) -> None:
         """Rebuild model combo: downloaded models on top, separator, rest below."""
-        model_dir = self.model_dir_edit.text().strip()
-        try:
-            cached = set(find_cached_models(model_dir))
-        except Exception:
-            cached = set()
+        cached_set = set(self._known_cached_models(cached))
 
         current_data = selected or str(self.model_combo.currentData() or "")
 
         self.model_combo.blockSignals(True)
         self.model_combo.clear()
 
-        downloaded = [m for m in VALID_MODEL_SIZES if m in cached]
-        not_downloaded = [m for m in VALID_MODEL_SIZES if m not in cached]
+        downloaded = [m for m in VALID_MODEL_SIZES if m in cached_set]
+        not_downloaded = [m for m in VALID_MODEL_SIZES if m not in cached_set]
 
         for value in downloaded:
             label = self._model_label(value)
@@ -1240,13 +1246,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.model_combo.blockSignals(False)
 
     def _refresh_local_models_label(self, cached: list[str] | None = None) -> None:
-        """Scan for locally cached models and update the label."""
-        if cached is None:
-            model_dir = self.model_dir_edit.text().strip()
-            try:
-                cached = find_cached_models(model_dir)
-            except Exception:
-                cached = []
+        """Update the label for locally cached models."""
+        cached = self._known_cached_models(cached)
 
         if cached:
             self.local_models_label.setText(
@@ -1261,12 +1262,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.local_models_label.setStyleSheet("color: #b71c1c;")
 
     def _refresh_cached_models_list(self, cached: list[str] | None = None) -> None:
-        if cached is None:
-            model_dir = self.model_dir_edit.text().strip()
-            try:
-                cached = find_cached_models(model_dir)
-            except Exception:
-                cached = []
+        cached = self._known_cached_models(cached)
         self.cached_models_list.clear()
         for model_name in cached:
             item = QtWidgets.QListWidgetItem(model_name)
@@ -1280,12 +1276,7 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         if not hasattr(self, "downloadable_models_list"):
             return
-        if cached is None:
-            model_dir = self.model_dir_edit.text().strip()
-            try:
-                cached = find_cached_models(model_dir)
-            except Exception:
-                cached = []
+        cached = self._known_cached_models(cached)
 
         selected = {
             str(item.data(QtCore.Qt.UserRole) or "")
@@ -1317,12 +1308,7 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         if not hasattr(self, "benchmark_models_list"):
             return
-        if cached is None:
-            model_dir = self.model_dir_edit.text().strip()
-            try:
-                cached = find_cached_models(model_dir)
-            except Exception:
-                cached = []
+        cached = self._known_cached_models(cached)
 
         selected = {
             str(item.data(QtCore.Qt.UserRole) or "")
@@ -1344,18 +1330,102 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._update_benchmark_actions()
 
-    def _refresh_local_model_views(self) -> None:
-        model_dir = self.model_dir_edit.text().strip()
-        try:
-            cached = find_cached_models(model_dir)
-        except Exception:
-            cached = []
+    def _refresh_local_model_views(self, *, force: bool = True) -> None:
+        self._request_local_model_scan(force=force)
+
+    def _known_cached_models(self, cached: list[str] | None = None) -> list[str]:
+        if cached is not None:
+            return list(cached)
+        current_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
+        if current_dir == self._cached_local_models_dir:
+            return list(self._cached_local_models)
+        return []
+
+    def _set_local_model_scan_loading(self) -> None:
+        if hasattr(self, "local_models_label"):
+            self.local_models_label.setText("Scanning local model cache...")
+            self.local_models_label.setStyleSheet("color: #555;")
+        if hasattr(self, "cached_models_list"):
+            self.cached_models_list.setEnabled(False)
+        if hasattr(self, "downloadable_models_list"):
+            self.downloadable_models_list.setEnabled(False)
+        if hasattr(self, "benchmark_models_list"):
+            self.benchmark_models_list.setEnabled(False)
+        if hasattr(self, "refresh_local_models_button"):
+            self.refresh_local_models_button.setEnabled(False)
+
+    def _apply_local_model_scan_result(self, cached: list[str]) -> None:
         self._refresh_local_models_label(cached)
         self._refresh_cached_models_list(cached)
         self._refresh_downloadable_models_list(cached)
-        self._refresh_model_combo()
+        self._refresh_model_combo(cached=cached)
         self._refresh_benchmark_model_list(cached)
+        self.cached_models_list.setEnabled(True)
+        self.downloadable_models_list.setEnabled(
+            self._active_local_model_download_thread is None
+        )
+        self.benchmark_models_list.setEnabled(True)
+        self.refresh_local_models_button.setEnabled(
+            self._active_local_model_download_thread is None
+        )
         self._update_language_availability()
+        self._update_local_download_actions()
+        self._update_benchmark_actions()
+
+    def _request_local_model_scan(self, *, force: bool = False) -> None:
+        model_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
+        if (
+            not force
+            and self._active_local_model_scan_thread is None
+            and model_dir == self._cached_local_models_dir
+        ):
+            self._apply_local_model_scan_result(self._cached_local_models)
+            return
+
+        self._set_local_model_scan_loading()
+        if self._active_local_model_scan_thread is not None:
+            self._local_model_scan_pending = True
+            return
+
+        self._local_model_scan_token += 1
+        token = self._local_model_scan_token
+
+        def _run() -> None:
+            try:
+                cached = find_cached_models(model_dir)
+            except Exception:
+                cached = []
+            self.local_model_scan_finished.emit(token, model_dir, list(cached))
+
+        self._active_local_model_scan_thread = threading.Thread(
+            target=_run,
+            name="stt_app_local_model_scan",
+            daemon=True,
+        )
+        self._active_local_model_scan_thread.start()
+
+    @QtCore.Slot(int, str, object)
+    def _on_local_model_scan_finished(
+        self,
+        token: int,
+        model_dir: str,
+        payload: object,
+    ) -> None:
+        if token != self._local_model_scan_token:
+            return
+
+        self._active_local_model_scan_thread = None
+        cached = [value for value in payload if isinstance(value, str)]
+        self._cached_local_models = cached
+        self._cached_local_models_dir = model_dir
+
+        current_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
+        if current_dir == model_dir:
+            self._apply_local_model_scan_result(cached)
+
+        if self._local_model_scan_pending:
+            self._local_model_scan_pending = False
+            self._request_local_model_scan(force=True)
 
     def _selected_downloadable_model_names(self) -> list[str]:
         if not hasattr(self, "downloadable_models_list"):
@@ -1497,7 +1567,7 @@ class SettingsDialog(QtWidgets.QDialog):
         else:
             self.local_model_download_label.setStyleSheet("color: #b71c1c;")
         self.local_model_download_label.setText(text)
-        self._refresh_local_model_views()
+        self._refresh_local_model_views(force=True)
 
     def _selected_benchmark_model_names(self) -> list[str]:
         if not hasattr(self, "benchmark_models_list"):
@@ -1970,7 +2040,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
-        self._refresh_local_model_views()
+        self._refresh_local_model_views(force=True)
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
@@ -2413,8 +2483,10 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         # Model Dir must be set before refreshing the model combo so it can
         # scan the correct directory for cached models.
+        blocker = QtCore.QSignalBlocker(self.model_dir_edit)
         self.model_dir_edit.setText(settings.model_dir or "")
-        self._refresh_model_combo(selected=settings.model_size)
+        del blocker
+        self._refresh_model_combo(selected=settings.model_size, cached=[])
         self.vad_checkbox.setChecked(settings.vad_enabled)
         self.vad_threshold_spin.setValue(float(settings.vad_energy_threshold))
         self.start_beep_checkbox.setChecked(settings.start_beep_enabled)
@@ -2464,7 +2536,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_engine_note()
 
-        self._refresh_local_model_views()
+        self._refresh_local_model_views(force=True)
         self._update_engine_indicator()
         self._refresh_history_list()
         self._apply_secret_store_options()
