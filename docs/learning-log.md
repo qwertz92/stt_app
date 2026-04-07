@@ -508,3 +508,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Validation:**
   - `.venv/bin/python -m pytest tests/test_controller.py tests/test_controller_coverage.py tests/test_text_inserter.py tests/test_assemblyai_provider.py tests/test_deepgram_provider.py tests/test_transcriber.py -q`
   - `.venv/bin/python -m pytest -q`
+
+## 2026-04-08
+
+- **Line-ending churn across Windows/WSL was a repository policy gap:**
+  - Root cause: tracked text files were stored with LF in Git, but some local
+    edits rewrote them to CRLF because the repo had no shared line-ending policy.
+  - Added `.gitattributes` to normalize repository text files to LF and mark
+    common binary assets explicitly.
+  - Added `.editorconfig` so editors save LF consistently on every machine.
+  - Renormalized the affected text files so CRLF-only noise no longer appears as
+    fake code changes.

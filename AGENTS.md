@@ -75,6 +75,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms prevents stale paste.
+- **Line endings**: Repository text files are normalized to LF via `.gitattributes`; `.editorconfig` mirrors that policy so Windows/WSL edits do not create CRLF-only diffs.
 - **Windows packaging**: end-user builds are layered. PyInstaller `onedir`
   is the base portable bundle; Inno Setup wraps that bundle into the
   installer; GitHub Actions builds artifacts manually on demand and publishes
