@@ -73,7 +73,7 @@ if TYPE_CHECKING:
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         view = self.view()
-        if self.hasFocus() or (view is not None and view.isVisible()):
+        if view is not None and view.isVisible():
             super().wheelEvent(event)
             return
         event.ignore()
@@ -228,10 +228,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setWindowFlag(QtCore.Qt.Window, True)
         self.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)
         self.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
         self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, False)
-        self.setMinimumSize(480, 360)
+        self.setMinimumSize(420, 320)
         self.resize(580, 620)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
@@ -253,6 +254,7 @@ class SettingsDialog(QtWidgets.QDialog):
     # ------------------------------------------------------------------
 
     def _build_ui(self) -> None:
+        self.setStyleSheet(self._dialog_scrollbar_stylesheet())
         # --- Engine indicator bar (always visible) ---
         self.engine_indicator = QtWidgets.QLabel()
         self.engine_indicator.setAlignment(QtCore.Qt.AlignCenter)
@@ -329,10 +331,56 @@ class SettingsDialog(QtWidgets.QDialog):
         root.addLayout(buttons)
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
-        style = "color: #555; font-size: 11px;"
+        style = "color: #555; font-size: 11px; padding: 0 0 4px 0;"
         if bold:
             style += " font-weight: bold;"
         label.setStyleSheet(style)
+
+    def _dialog_scrollbar_stylesheet(self) -> str:
+        return """
+        QScrollBar:vertical {
+            width: 14px;
+            background: #eef2f7;
+            margin: 0;
+            border-radius: 7px;
+        }
+        QScrollBar::handle:vertical {
+            min-height: 36px;
+            background: #97a7bb;
+            border-radius: 7px;
+            border: 1px solid #7d8ea4;
+        }
+        QScrollBar::handle:vertical:hover {
+            background: #7f91a8;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: transparent;
+        }
+        QScrollBar:horizontal {
+            height: 14px;
+            background: #eef2f7;
+            margin: 0;
+            border-radius: 7px;
+        }
+        QScrollBar::handle:horizontal {
+            min-width: 36px;
+            background: #97a7bb;
+            border-radius: 7px;
+            border: 1px solid #7d8ea4;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background: #7f91a8;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0;
+        }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: transparent;
+        }
+        """
 
     def _configure_combo_popups(self) -> None:
         for combo in self.findChildren(QtWidgets.QComboBox):
@@ -348,9 +396,13 @@ class SettingsDialog(QtWidgets.QDialog):
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         content = QtWidgets.QWidget()
+        content.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Preferred,
+        )
         scroll.setWidget(content)
         return scroll, content
 
@@ -389,8 +441,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.language_note_label.setWordWrap(True)
         self._style_note_label(self.language_note_label)
         self.language_note_label.setVisible(True)
-        self.language_note_label.setMinimumHeight(24)
-        self.language_note_label.setMaximumHeight(24)
 
         self.engine_combo = _WheelPassthroughComboBox()
         engine_labels = {
@@ -725,7 +775,7 @@ class SettingsDialog(QtWidgets.QDialog):
         tab, content = self._create_scroll_tab()
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         intro = QtWidgets.QLabel(
             "Benchmark installed local faster-whisper models against one audio file. "
@@ -934,7 +984,7 @@ class SettingsDialog(QtWidgets.QDialog):
         tab, content = self._create_scroll_tab()
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         # API keys
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
@@ -943,6 +993,9 @@ class SettingsDialog(QtWidgets.QDialog):
         provider_layout.setHorizontalSpacing(6)
         provider_layout.setVerticalSpacing(4)
         provider_layout.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        provider_layout.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.AllNonFixedFieldsGrow
+        )
         provider_rows = (
             ("assemblyai", "AssemblyAI"),
             ("groq", "Groq"),
@@ -962,15 +1015,14 @@ class SettingsDialog(QtWidgets.QDialog):
             key_field.setPlaceholderText(
                 "Enter new key to update; use Clear saved to remove the stored key."
             )
-            key_field.setMinimumWidth(220)
-            key_field.setMaximumWidth(420)
+            key_field.setMinimumWidth(180)
             key_field.textChanged.connect(
                 lambda _text, p=provider: self._on_provider_key_changed(p)
             )
             clear_button = QtWidgets.QPushButton("Clear saved")
             clear_button.setToolTip("Delete the stored key for this provider on Save.")
-            clear_button.setMinimumWidth(84)
-            clear_button.setMaximumWidth(96)
+            clear_button.setMinimumWidth(78)
+            clear_button.setMaximumWidth(88)
             clear_button.clicked.connect(
                 lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
             )
@@ -979,8 +1031,8 @@ class SettingsDialog(QtWidgets.QDialog):
             status_badge.setAlignment(
                 QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter
             )
-            status_badge.setMinimumWidth(160)
-            status_badge.setMaximumWidth(182)
+            status_badge.setMinimumWidth(148)
+            status_badge.setMaximumWidth(170)
             status_badge.setSizePolicy(
                 QtWidgets.QSizePolicy.Fixed,
                 QtWidgets.QSizePolicy.Fixed,
@@ -991,7 +1043,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
 
             title_label = QtWidgets.QLabel(title)
-            title_label.setMinimumWidth(78)
+            title_label.setMinimumWidth(64)
 
             field_row_widget = QtWidgets.QWidget()
             field_row = QtWidgets.QHBoxLayout(field_row_widget)
@@ -1000,7 +1052,6 @@ class SettingsDialog(QtWidgets.QDialog):
             field_row.addWidget(key_field, 1)
             field_row.addWidget(clear_button, 0)
             field_row.addWidget(status_badge, 0)
-            field_row.addStretch(1)
             provider_layout.addRow(title_label, field_row_widget)
 
             last_test_label = QtWidgets.QLabel("Last test: never.")
@@ -1080,7 +1131,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._history_tab = tab
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         history_intro = QtWidgets.QLabel(
             "Browse recent transcripts here. Audio-file imports live on their own tab so "
@@ -1148,7 +1199,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._import_tab = tab
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         import_box = QtWidgets.QGroupBox("Import Audio File")
         import_layout = QtWidgets.QVBoxLayout(import_box)

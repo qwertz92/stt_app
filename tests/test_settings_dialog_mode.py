@@ -761,6 +761,38 @@ def test_closed_combo_does_not_change_selection_on_mouse_wheel():
     _ = app
 
 
+def test_focused_combo_still_ignores_mouse_wheel_until_popup_is_open():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="local"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    combo = dialog.engine_combo
+    combo.setFocus()
+    initial_index = combo.currentIndex()
+    center = combo.rect().center()
+    event = QtGui.QWheelEvent(
+        QtCore.QPointF(center),
+        QtCore.QPointF(combo.mapToGlobal(center)),
+        QtCore.QPoint(),
+        QtCore.QPoint(0, 120),
+        QtCore.Qt.NoButton,
+        QtCore.Qt.NoModifier,
+        QtCore.Qt.ScrollUpdate,
+        False,
+    )
+
+    QtWidgets.QApplication.sendEvent(combo, event)
+
+    assert combo.currentIndex() == initial_index
+    _ = app
+
+
 def test_remote_provider_rows_limit_key_and_badge_growth():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
@@ -770,9 +802,9 @@ def test_remote_provider_rows_limit_key_and_badge_growth():
         app_logger=_FakeLogger(),
     )
 
-    assert dialog.assemblyai_key_edit.maximumWidth() == 420
-    assert dialog._provider_status_labels["assemblyai"].maximumWidth() == 182
-    assert dialog._provider_status_labels["assemblyai"].minimumWidth() == 160
+    assert dialog.assemblyai_key_edit.maximumWidth() == 16777215
+    assert dialog._provider_status_labels["assemblyai"].maximumWidth() == 170
+    assert dialog._provider_status_labels["assemblyai"].minimumWidth() == 148
     _ = app
 
 
@@ -893,6 +925,7 @@ def test_settings_tabs_use_scroll_areas_and_scroll_buttons():
         widget = dialog.tabs.widget(index)
         assert isinstance(widget, QtWidgets.QScrollArea)
         assert widget.widgetResizable() is True
+        assert widget.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAsNeeded
 
     assert dialog.tabs.tabBar().usesScrollButtons() is True
     assert dialog.tabs.tabBar().elideMode() == QtCore.Qt.ElideRight
@@ -928,7 +961,38 @@ def test_settings_dialog_window_has_native_minimize_button():
     assert bool(flags & QtCore.Qt.Window)
     assert bool(flags & QtCore.Qt.WindowSystemMenuHint)
     assert bool(flags & QtCore.Qt.WindowMinimizeButtonHint)
+    assert bool(flags & QtCore.Qt.WindowMaximizeButtonHint)
     assert bool(flags & QtCore.Qt.WindowCloseButtonHint)
+    _ = app
+
+
+def test_settings_dialog_can_enter_maximized_state():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    dialog.showMaximized()
+    app.processEvents()
+
+    assert dialog.isMaximized() is True
+    _ = app
+
+
+def test_settings_dialog_applies_custom_scrollbar_stylesheet():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    stylesheet = dialog.styleSheet()
+    assert "QScrollBar:vertical" in stylesheet
+    assert "width: 14px" in stylesheet
+    assert "QScrollBar:horizontal" in stylesheet
     _ = app
 
 
