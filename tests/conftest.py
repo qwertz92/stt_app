@@ -58,6 +58,8 @@ class FakeOverlay:
         self.state_kwargs = []
         self.opacity_values = []
         self.compact_calls = 0
+        self.always_on_top_values = []
+        self.reveal_calls = 0
 
     def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))
@@ -65,6 +67,12 @@ class FakeOverlay:
 
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))
+
+    def set_always_on_top(self, value: bool):
+        self.always_on_top_values.append(bool(value))
+
+    def reveal_temporarily(self):
+        self.reveal_calls += 1
 
     def ensure_compact_size(self):
         self.compact_calls += 1

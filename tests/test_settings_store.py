@@ -13,6 +13,7 @@ from stt_app.config import (
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
     DEFAULT_OPENAI_MODEL,
+    DEFAULT_OVERLAY_ALWAYS_ON_TOP,
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
@@ -42,6 +43,7 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.recordings_max_count == DEFAULT_RECORDINGS_MAX_COUNT
     assert settings.history_max_items == DEFAULT_HISTORY_MAX_ITEMS
     assert settings.overlay_opacity_percent == DEFAULT_OVERLAY_OPACITY_PERCENT
+    assert settings.overlay_always_on_top == DEFAULT_OVERLAY_ALWAYS_ON_TOP
     assert settings.start_beep_enabled is False
     assert settings.start_beep_tone == DEFAULT_START_BEEP_TONE
     assert settings.overlay_corner == DEFAULT_OVERLAY_CORNER
@@ -93,6 +95,18 @@ def test_load_fills_missing_values_with_defaults(tmp_path):
     assert persisted["schema_version"] == CURRENT_SCHEMA_VERSION
     assert persisted["mode"] == DEFAULT_MODE
     assert persisted["engine"] == DEFAULT_ENGINE
+
+
+def test_overlay_always_on_top_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"overlay_always_on_top": False}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.overlay_always_on_top is False
 
 
 def test_invalid_json_falls_back_to_defaults(tmp_path):

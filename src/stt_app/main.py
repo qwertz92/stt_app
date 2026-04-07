@@ -42,6 +42,7 @@ def run() -> int:
 
     overlay = OverlayUI()
     overlay.set_opacity_percent(startup_settings.overlay_opacity_percent)
+    overlay.set_always_on_top(startup_settings.overlay_always_on_top)
     overlay.move_to_corner(startup_settings.overlay_corner)
     overlay.show()
 
@@ -97,6 +98,7 @@ def run() -> int:
     overlay.retry_requested.connect(controller.retry_last_transcription)
     overlay.cancel_requested.connect(controller.cancel_current_action)
     overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
+    overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
 
     try:
         controller.initialize()
@@ -235,6 +237,7 @@ def _restore_overlay_after_settings_save(
     settings_store: SettingsStore,
 ) -> None:
     settings = settings_store.load()
+    overlay.set_always_on_top(settings.overlay_always_on_top)
     overlay.move_to_corner(settings.overlay_corner)
     overlay.ensure_compact_size()
 

@@ -71,8 +71,11 @@ class FakeController:
 
 
 class FakeSettingsStore:
+    def __init__(self, settings: AppSettings | None = None):
+        self._settings = settings or AppSettings()
+
     def load(self):
-        return AppSettings()
+        return self._settings
 
     def save(self, s):
         pass
@@ -92,9 +95,13 @@ class FakeOverlay:
     def __init__(self):
         self.moved_to = None
         self.compact_calls = 0
+        self.always_on_top_values = []
 
     def move_to_corner(self, corner):
         self.moved_to = corner
+
+    def set_always_on_top(self, value):
+        self.always_on_top_values.append(bool(value))
 
     def ensure_compact_size(self):
         self.compact_calls += 1
@@ -184,6 +191,7 @@ def test_restore_overlay_after_settings_save_repositions_and_compacts():
     _restore_overlay_after_settings_save(overlay, store)
 
     assert overlay.moved_to == "top-right"
+    assert overlay.always_on_top_values == [True]
     assert overlay.compact_calls == 1
 
 

@@ -197,6 +197,9 @@ class DictationController(QtCore.QObject):
             except Exception:
                 self._logger.exception("Failed to apply insecure key fallback setting")
         self._overlay.set_opacity_percent(self._settings.overlay_opacity_percent)
+        self._overlay.set_always_on_top(
+            bool(getattr(self._settings, "overlay_always_on_top", True))
+        )
         self._reset_transcriber_cache()
         if re_register_hotkey:
             self._hotkey_registration_ok = self._register_hotkey_with_fallback()
@@ -277,6 +280,8 @@ class DictationController(QtCore.QObject):
         self._recording_start_in_progress = True
         try:
             self._supersede_active_request_result()
+            if not bool(getattr(self._settings, "overlay_always_on_top", True)):
+                self._overlay.reveal_temporarily()
             self._overlay.set_state(
                 "Listening",
                 "Starting recording...",
@@ -1952,6 +1957,16 @@ class DictationController(QtCore.QObject):
             self._settings_store.save(self._settings)
         except Exception:
             self._logger.exception("Failed to persist overlay opacity")
+
+    def set_overlay_always_on_top(self, enabled: bool) -> None:
+        normalized = bool(enabled)
+        if bool(getattr(self._settings, "overlay_always_on_top", True)) == normalized:
+            return
+        self._settings = replace(self._settings, overlay_always_on_top=normalized)
+        try:
+            self._settings_store.save(self._settings)
+        except Exception:
+            self._logger.exception("Failed to persist overlay always-on-top mode")
 
     def set_history_max_items(self, value: int) -> None:
         normalized = max(0, int(value))

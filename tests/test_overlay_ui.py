@@ -219,6 +219,42 @@ def test_overlay_control_signals_are_emitted():
     assert got == {"history": 1, "retry": 1, "cancel": 1}
 
 
+def test_overlay_always_on_top_toggle_updates_state_and_signal():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    emitted: list[bool] = []
+    overlay.always_on_top_changed.connect(emitted.append)
+
+    assert overlay.always_on_top is True
+    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+
+    overlay._always_on_top_button.click()
+    app.processEvents()
+
+    assert overlay.always_on_top is False
+    assert emitted == [False]
+    assert overlay._always_on_top_button.text() == "Floating"
+    assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+
+
+def test_overlay_reveal_temporarily_restores_non_pinned_mode():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    overlay.set_always_on_top(False)
+
+    overlay.reveal_temporarily(duration_ms=50)
+
+    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+    QtTest.QTest.qWait(80)
+    app.processEvents()
+    assert overlay.always_on_top is False
+    assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+
+
 def test_overlay_shrinks_after_long_transcription():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

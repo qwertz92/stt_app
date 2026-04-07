@@ -24,19 +24,15 @@ class OverlayUI(QtWidgets.QWidget):
     retry_requested = QtCore.Signal()
     cancel_requested = QtCore.Signal()
     opacity_changed = QtCore.Signal(int)
+    always_on_top_changed = QtCore.Signal(bool)
 
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("Dictation")
 
-        flags = (
-            QtCore.Qt.Tool
-            | QtCore.Qt.FramelessWindowHint
-            | QtCore.Qt.WindowStaysOnTopHint
-        )
-        if hasattr(QtCore.Qt, "WindowDoesNotAcceptFocus"):
-            flags |= QtCore.Qt.WindowDoesNotAcceptFocus
-        self.setWindowFlags(flags)
+        self._always_on_top = True
+        self._temporary_foreground_active = False
+        self.setWindowFlags(self._base_window_flags())
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
 
@@ -44,6 +40,11 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_feedback_timer.setSingleShot(True)
         self._copy_feedback_timer.setInterval(850)
         self._copy_feedback_timer.timeout.connect(self._reset_copy_button_feedback)
+        self._temporary_foreground_timer = QtCore.QTimer(self)
+        self._temporary_foreground_timer.setSingleShot(True)
+        self._temporary_foreground_timer.timeout.connect(
+            self._clear_temporary_foreground
+        )
         self._drag_active = False
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
@@ -70,6 +71,14 @@ class OverlayUI(QtWidgets.QWidget):
         self._history_button.setFixedWidth(68)
         self._history_button.setFixedHeight(24)
         self._history_button.clicked.connect(self.history_requested.emit)
+
+        self._always_on_top_button = QtWidgets.QPushButton("")
+        self._always_on_top_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._always_on_top_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._always_on_top_button.setCheckable(True)
+        self._always_on_top_button.setFixedWidth(74)
+        self._always_on_top_button.setFixedHeight(24)
+        self._always_on_top_button.clicked.connect(self._on_always_on_top_clicked)
 
         self._copy_button = QtWidgets.QPushButton("Copy")
         self._copy_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -168,6 +177,7 @@ class OverlayUI(QtWidgets.QWidget):
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(6)
         header.addWidget(self._history_button, 0, QtCore.Qt.AlignLeft)
+        header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
         header.addWidget(self._clear_button, 0, QtCore.Qt.AlignRight)
         header.addWidget(self._copy_button, 0, QtCore.Qt.AlignRight)
@@ -192,6 +202,76 @@ class OverlayUI(QtWidgets.QWidget):
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
+        self._sync_always_on_top_button()
+
+    @property
+    def always_on_top(self) -> bool:
+        return self._always_on_top
+
+    def _base_window_flags(self) -> QtCore.Qt.WindowType:
+        flags = QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint
+        if self._always_on_top or self._temporary_foreground_active:
+            flags |= QtCore.Qt.WindowStaysOnTopHint
+        if hasattr(QtCore.Qt, "WindowDoesNotAcceptFocus"):
+            flags |= QtCore.Qt.WindowDoesNotAcceptFocus
+        return flags
+
+    def _sync_always_on_top_button(self) -> None:
+        checked = bool(self._always_on_top)
+        self._always_on_top_button.setChecked(checked)
+        self._always_on_top_button.setText("Pinned" if checked else "Floating")
+        self._always_on_top_button.setToolTip(
+            "Keep the overlay above other windows."
+            if checked
+            else "Allow the overlay to stay behind other windows."
+        )
+
+    def _apply_window_flags(self, *, raise_window: bool = False) -> None:
+        was_visible = self.isVisible()
+        self.setWindowFlags(self._base_window_flags())
+        if was_visible or raise_window:
+            self.show()
+            if raise_window:
+                self.raise_()
+        if sys.platform == "win32":
+            self._apply_noactivate_style()
+
+    def _on_always_on_top_clicked(self, checked: bool) -> None:
+        self.set_always_on_top(checked, emit_signal=True)
+
+    def set_always_on_top(
+        self,
+        enabled: bool,
+        *,
+        emit_signal: bool = False,
+    ) -> None:
+        normalized = bool(enabled)
+        if self._always_on_top == normalized:
+            self._sync_always_on_top_button()
+            return
+        self._always_on_top = normalized
+        if normalized:
+            self._temporary_foreground_active = False
+            self._temporary_foreground_timer.stop()
+        self._sync_always_on_top_button()
+        self._apply_window_flags(raise_window=normalized)
+        if emit_signal:
+            self.always_on_top_changed.emit(normalized)
+
+    def reveal_temporarily(self, duration_ms: int = 1800) -> None:
+        if self._always_on_top:
+            self.show()
+            self.raise_()
+            return
+        self._temporary_foreground_active = True
+        self._apply_window_flags(raise_window=True)
+        self._temporary_foreground_timer.start(max(1, int(duration_ms)))
+
+    def _clear_temporary_foreground(self) -> None:
+        if self._always_on_top or not self._temporary_foreground_active:
+            return
+        self._temporary_foreground_active = False
+        self._apply_window_flags()
 
     def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
         if state == "Idle" and detail.strip():
@@ -388,8 +468,10 @@ class OverlayUI(QtWidgets.QWidget):
             self.ensure_compact_size()
         else:
             self._update_detail_height()
+        self._reposition_within_current_screen()
         if sys.platform == "win32":
             self._apply_noactivate_style()
+        self._reposition_within_current_screen()
 
     def _apply_noactivate_style(self) -> None:
         """Set ``WS_EX_NOACTIVATE`` on the native window handle."""

@@ -76,6 +76,27 @@ def test_start_recording_rejects_streaming_for_remote_engine():
     _ = app
 
 
+def test_start_recording_temporarily_reveals_non_pinned_overlay(monkeypatch):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="batch",
+        overlay_always_on_top=False,
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert overlay.reveal_calls == 1
+    controller.shutdown()
+    _ = app
+
+
 class _RunningFuture:
     def done(self):
         return False
@@ -115,6 +136,23 @@ def test_start_recording_uses_cached_fallback_while_preloading(monkeypatch):
     assert controller._active_batch_settings.model_size == "small"
     assert overlay.states[-1][0] == "Listening"
     assert "fallback 'small'" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_set_overlay_always_on_top_persists_setting():
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        overlay_always_on_top=True,
+    )
+    store = FakeSettingsStore(settings)
+    controller, app = _make_controller(settings_store=store)
+
+    controller.set_overlay_always_on_top(False)
+
+    assert controller.settings.overlay_always_on_top is False
+    assert store.saved is not None
+    assert store.saved.overlay_always_on_top is False
     controller.shutdown()
     _ = app
 

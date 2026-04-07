@@ -28,6 +28,7 @@ from .config import (
     DEFAULT_MODEL_DIR,
     DEFAULT_MODEL_SIZE,
     DEFAULT_OFFLINE_MODE,
+    DEFAULT_OVERLAY_ALWAYS_ON_TOP,
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
@@ -75,6 +76,7 @@ DEFAULTS = {
     "recordings_max_count": DEFAULT_RECORDINGS_MAX_COUNT,
     "history_max_items": DEFAULT_HISTORY_MAX_ITEMS,
     "overlay_opacity_percent": DEFAULT_OVERLAY_OPACITY_PERCENT,
+    "overlay_always_on_top": DEFAULT_OVERLAY_ALWAYS_ON_TOP,
     "engine": DEFAULT_ENGINE,
     "mode": DEFAULT_MODE,
     "paste_mode": DEFAULT_PASTE_MODE,
@@ -113,6 +115,7 @@ class AppSettings:
     recordings_max_count: int = DEFAULT_RECORDINGS_MAX_COUNT
     history_max_items: int = DEFAULT_HISTORY_MAX_ITEMS
     overlay_opacity_percent: int = DEFAULT_OVERLAY_OPACITY_PERCENT
+    overlay_always_on_top: bool = DEFAULT_OVERLAY_ALWAYS_ON_TOP
     engine: str = DEFAULT_ENGINE
     mode: str = DEFAULT_MODE
     paste_mode: str = DEFAULT_PASTE_MODE
@@ -251,6 +254,12 @@ class AppSettings:
             recordings_max_count=recordings_max_count,
             history_max_items=history_max_items,
             overlay_opacity_percent=overlay_opacity_percent,
+            overlay_always_on_top=bool(
+                merged.get(
+                    "overlay_always_on_top",
+                    DEFAULT_OVERLAY_ALWAYS_ON_TOP,
+                )
+            ),
             engine=engine,
             mode=mode,
             paste_mode=paste_mode,
