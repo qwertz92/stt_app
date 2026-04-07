@@ -677,6 +677,51 @@ def test_remote_provider_rows_limit_key_and_badge_growth():
     _ = app
 
 
+def test_import_model_selector_tracks_selected_import_engine():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="local",
+            model_size="medium",
+            openai_model="whisper-1",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.import_model_combo.currentData() == "medium"
+
+    openai_idx = dialog.import_engine_combo.findData("openai")
+    dialog.import_engine_combo.setCurrentIndex(openai_idx)
+
+    assert _combo_data(dialog.import_model_combo) == [
+        "gpt-4o-mini-transcribe",
+        "gpt-4o-transcribe",
+        "whisper-1",
+    ]
+    assert dialog.import_model_combo.currentData() == "whisper-1"
+    _ = app
+
+
+def test_local_model_lists_use_compact_item_spacing():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.cached_models_list.uniformItemSizes() is True
+    assert dialog.downloadable_models_list.uniformItemSizes() is True
+    assert "padding: 2px 4px" in dialog.cached_models_list.styleSheet()
+    assert "padding: 2px 4px" in dialog.downloadable_models_list.styleSheet()
+    _ = app
+
+
 # ------------------------------------------------------------------
 # Save behaviour: dialog stays open, emits settings_changed signal
 # ------------------------------------------------------------------
@@ -827,9 +872,11 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
     class _Controller:
         def __init__(self):
             self.received_engine = None
+            self.received_model = None
 
         def transcribe_audio_file(self, _path: str, settings_override=None):
             self.received_engine = getattr(settings_override, "engine", None)
+            self.received_model = getattr(settings_override, "openai_model", None)
             return True, "ok"
 
     controller = _Controller()
@@ -843,11 +890,18 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
 
     openai_idx = dialog.import_engine_combo.findData("openai")
     dialog.import_engine_combo.setCurrentIndex(openai_idx)
-    settings = dialog._build_current_settings(engine_override="openai")
+    whisper1_idx = dialog.import_model_combo.findData("whisper-1")
+    dialog.import_model_combo.setCurrentIndex(whisper1_idx)
+    settings = dialog._build_current_settings(
+        engine_override="openai",
+        model_override="whisper-1",
+    )
     dialog._transcribe_import_file("dummy.wav", settings)
 
     assert controller.received_engine == "openai"
+    assert controller.received_model == "whisper-1"
     assert dialog.engine_combo.currentData() == "local"
+    assert dialog.model_combo.currentData() == "small"
     _ = app
 
 

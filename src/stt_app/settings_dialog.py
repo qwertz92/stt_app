@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -197,6 +198,14 @@ class SettingsDialog(QtWidgets.QDialog):
                 "elevenlabs_model",
                 DEFAULT_ELEVENLABS_MODEL,
             ),
+        }
+        self._import_model_values: dict[str, str] = {
+            "local": self._loaded_settings.model_size,
+            "groq": self._remote_model_values["groq"],
+            "openai": self._remote_model_values["openai"],
+            "deepgram": self._remote_model_values["deepgram"],
+            "assemblyai": self._remote_model_values["assemblyai"],
+            "elevenlabs": self._remote_model_values["elevenlabs"],
         }
         self._active_connection_test_thread: threading.Thread | None = None
         self._history_copy_feedback_timer = QtCore.QTimer(self)
@@ -572,7 +581,7 @@ class SettingsDialog(QtWidgets.QDialog):
         tab, content = self._create_scroll_tab()
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setSpacing(6)
 
         form = QtWidgets.QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
@@ -625,6 +634,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.cached_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.SingleSelection
         )
+        self.cached_models_list.setUniformItemSizes(True)
+        self.cached_models_list.setStyleSheet(
+            "QListWidget::item { padding: 2px 4px; }"
+        )
         self.cached_models_list.itemSelectionChanged.connect(
             self._on_cached_model_selection_changed
         )
@@ -663,6 +676,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.downloadable_models_list = QtWidgets.QListWidget()
         self.downloadable_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.MultiSelection
+        )
+        self.downloadable_models_list.setUniformItemSizes(True)
+        self.downloadable_models_list.setStyleSheet(
+            "QListWidget::item { padding: 2px 4px; }"
         )
         self.downloadable_models_list.itemSelectionChanged.connect(
             self._update_local_download_actions
@@ -1129,7 +1146,7 @@ class SettingsDialog(QtWidgets.QDialog):
         import_layout = QtWidgets.QVBoxLayout(import_box)
         import_hint = QtWidgets.QLabel(
             "Transcribe an existing audio file and select the transcription service "
-            "directly here (useful after failures or for external recordings)."
+            "and model directly here (useful after failures or for external recordings)."
         )
         import_hint.setWordWrap(True)
         self._style_note_label(import_hint)
@@ -1153,11 +1170,22 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_engine_note.setWordWrap(True)
         self._style_note_label(self.import_engine_note)
         self.import_engine_combo.currentIndexChanged.connect(
-            self._update_import_engine_note
+            self._on_import_engine_changed
         )
         import_layout.addWidget(QtWidgets.QLabel("Import Service"))
         import_layout.addWidget(self.import_engine_combo)
         import_layout.addWidget(self.import_engine_note)
+
+        self.import_model_combo = _WheelPassthroughComboBox()
+        self.import_model_note = QtWidgets.QLabel("")
+        self.import_model_note.setWordWrap(True)
+        self._style_note_label(self.import_model_note)
+        self.import_model_combo.currentIndexChanged.connect(
+            self._on_import_model_changed
+        )
+        import_layout.addWidget(QtWidgets.QLabel("Import Model"))
+        import_layout.addWidget(self.import_model_combo)
+        import_layout.addWidget(self.import_model_note)
 
         import_buttons = QtWidgets.QHBoxLayout()
         self.import_file_button = QtWidgets.QPushButton("Choose file...")
@@ -1776,6 +1804,85 @@ class SettingsDialog(QtWidgets.QDialog):
             return fallback
         return value
 
+    def _import_model_choices(
+        self,
+        engine: str,
+    ) -> tuple[tuple[str, str], ...]:
+        normalized = str(engine or "").strip().lower()
+        if normalized == DEFAULT_ENGINE:
+            return tuple(
+                (value, self._model_label(value))
+                for value in VALID_MODEL_SIZES
+            )
+        return _REMOTE_MODEL_CHOICES.get(normalized, ())
+
+    def _import_model_value_for_engine(self, engine: str) -> str:
+        normalized = str(engine or "").strip().lower()
+        if normalized == DEFAULT_ENGINE:
+            fallback = str(self._loaded_settings.model_size or DEFAULT_MODEL_SIZE)
+            value = str(self._import_model_values.get(normalized, fallback) or fallback)
+            if value not in VALID_MODEL_SIZES:
+                return DEFAULT_MODEL_SIZE
+            return value
+        fallback = _REMOTE_MODEL_DEFAULTS.get(normalized, "")
+        value = str(self._import_model_values.get(normalized, fallback) or fallback)
+        valid_values = {
+            item_value
+            for item_value, _label in self._import_model_choices(normalized)
+        }
+        if value not in valid_values:
+            return fallback
+        return value
+
+    def _update_import_model_selector(self) -> None:
+        if not hasattr(self, "import_model_combo"):
+            return
+
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        choices = self._import_model_choices(engine)
+        current_value = self._import_model_value_for_engine(engine)
+
+        self.import_model_combo.blockSignals(True)
+        self.import_model_combo.clear()
+        for value, label in choices:
+            self.import_model_combo.addItem(label, value)
+        self._select_combo_data(self.import_model_combo, current_value)
+        self.import_model_combo.setEnabled(self.import_model_combo.count() > 0)
+        self.import_model_combo.blockSignals(False)
+
+        if engine == DEFAULT_ENGINE:
+            self.import_model_note.setText(
+                "This import uses the selected local faster-whisper model only for the imported file."
+            )
+            return
+        self.import_model_note.setText(
+            f"This import uses the selected {self._provider_label(engine)} model only for the imported file."
+        )
+
+    def _apply_engine_model_selection(
+        self,
+        settings: AppSettings,
+        engine: str,
+        model_value: str,
+    ) -> AppSettings:
+        normalized_engine = str(engine or "").strip().lower()
+        selected_model = str(model_value or "").strip()
+        if normalized_engine == DEFAULT_ENGINE:
+            if selected_model and selected_model in VALID_MODEL_SIZES:
+                return replace(settings, model_size=selected_model)
+            return settings
+        if normalized_engine == "groq" and selected_model:
+            return replace(settings, groq_model=selected_model)
+        if normalized_engine == "openai" and selected_model:
+            return replace(settings, openai_model=selected_model)
+        if normalized_engine == "deepgram" and selected_model:
+            return replace(settings, deepgram_model=selected_model)
+        if normalized_engine == "assemblyai" and selected_model:
+            return replace(settings, assemblyai_model=selected_model)
+        if normalized_engine == "elevenlabs" and selected_model:
+            return replace(settings, elevenlabs_model=selected_model)
+        return settings
+
     def _update_remote_model_selector(self) -> None:
         if not hasattr(self, "remote_model_combo"):
             return
@@ -2051,6 +2158,20 @@ class SettingsDialog(QtWidgets.QDialog):
             value = _REMOTE_MODEL_DEFAULTS.get(provider, "")
         self._remote_model_values[provider] = value
 
+    def _on_import_engine_changed(self, _index: int = 0) -> None:
+        self._update_import_model_selector()
+        self._update_import_engine_note()
+
+    def _on_import_model_changed(self, _index: int = 0) -> None:
+        if not hasattr(self, "import_model_combo"):
+            return
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        value = str(self.import_model_combo.currentData() or "")
+        if not value:
+            value = self._import_model_value_for_engine(engine)
+        self._import_model_values[engine] = value
+        self._update_import_engine_note()
+
     def _on_provider_key_changed(self, provider: str) -> None:
         key_field = self._provider_key_edits.get(provider)
         if key_field is not None and key_field.text().strip():
@@ -2199,16 +2320,26 @@ class SettingsDialog(QtWidgets.QDialog):
         if not hasattr(self, "import_engine_combo"):
             return
         engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        selected_model = (
+            str(self.import_model_combo.currentData() or "")
+            if hasattr(self, "import_model_combo")
+            else ""
+        )
         if engine == DEFAULT_ENGINE:
             self.import_engine_note.setStyleSheet("color: #555;")
             self.import_engine_note.setText(
-                "Local import transcription uses the currently selected local model."
+                "Local import transcription stays independent from the main Local tab selection."
             )
             return
         if self._import_engine_has_api_key(engine):
             self.import_engine_note.setStyleSheet("color: #555;")
+            model_text = (
+                f" using model '{selected_model}'."
+                if selected_model
+                else "."
+            )
             self.import_engine_note.setText(
-                f"Import transcription will use {self._provider_label(engine)}."
+                f"Import transcription will use {self._provider_label(engine)}{model_text}"
             )
             return
         self.import_engine_note.setStyleSheet("color: #b71c1c;")
@@ -2530,10 +2661,33 @@ class SettingsDialog(QtWidgets.QDialog):
                 ),
             }
         )
+        self._import_model_values.update(
+            {
+                "local": settings.model_size,
+                "groq": settings.groq_model,
+                "openai": settings.openai_model,
+                "deepgram": getattr(
+                    settings,
+                    "deepgram_model",
+                    DEFAULT_DEEPGRAM_MODEL,
+                ),
+                "assemblyai": getattr(
+                    settings,
+                    "assemblyai_model",
+                    DEFAULT_ASSEMBLYAI_MODEL,
+                ),
+                "elevenlabs": getattr(
+                    settings,
+                    "elevenlabs_model",
+                    DEFAULT_ELEVENLABS_MODEL,
+                ),
+            }
+        )
         self._update_remote_model_selector()
         self._select_combo_data(self.test_conn_target_combo, "all-configured")
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
+            self._update_import_model_selector()
             self._update_import_engine_note()
 
         self._refresh_local_model_views(force=True)
@@ -2716,12 +2870,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_last_recording_button.setEnabled(False)
         self.import_start_button.setEnabled(False)
         self.import_engine_combo.setEnabled(False)
+        self.import_model_combo.setEnabled(False)
 
         # Build settings on the GUI thread — widgets must not be accessed
         # from background threads.
         import_engine = str(
             self.import_engine_combo.currentData() or DEFAULT_ENGINE
         )
+        import_model = str(self.import_model_combo.currentData() or "")
         if not self._import_engine_has_api_key(import_engine):
             detail = (
                 "Failed: no API key configured for "
@@ -2740,8 +2896,12 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_last_recording_button.setEnabled(True)
             self.import_start_button.setEnabled(bool(self._selected_import_file_path))
             self.import_engine_combo.setEnabled(True)
+            self.import_model_combo.setEnabled(True)
             return
-        settings = self._build_current_settings(engine_override=import_engine)
+        settings = self._build_current_settings(
+            engine_override=import_engine,
+            model_override=import_model,
+        )
 
         def _run() -> None:
             try:
@@ -2776,6 +2936,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_last_recording_button.setEnabled(True)
         self.import_start_button.setEnabled(bool(self._selected_import_file_path))
         self.import_engine_combo.setEnabled(True)
+        self.import_model_combo.setEnabled(True)
         if ok:
             self.import_result_label.setText("Transcription finished.")
             self.import_result_label.setStyleSheet("color: #1b5e20;")
@@ -2824,6 +2985,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self,
         *,
         engine_override: str | None = None,
+        model_override: str | None = None,
     ) -> AppSettings:
         """Construct an ``AppSettings`` from current widget state.
 
@@ -2832,7 +2994,7 @@ class SettingsDialog(QtWidgets.QDialog):
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent
         )
-        return AppSettings(
+        settings = AppSettings(
             hotkey=self._loaded_settings.hotkey,
             cancel_hotkey=self._loaded_settings.cancel_hotkey,
             model_size=str(
@@ -2878,6 +3040,14 @@ class SettingsDialog(QtWidgets.QDialog):
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
             assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
             elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
+        )
+        effective_engine = str(
+            engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
+        )
+        return self._apply_engine_model_selection(
+            settings,
+            effective_engine,
+            str(model_override or ""),
         )
 
     # ------------------------------------------------------------------
