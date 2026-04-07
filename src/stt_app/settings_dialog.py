@@ -138,6 +138,8 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
 }
 
+_LOCAL_MODEL_SCAN_SESSION_CACHE: dict[str, list[str]] = {}
+
 
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
@@ -214,6 +216,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._history_copy_feedback_timer.timeout.connect(
             self._reset_history_copy_feedback
         )
+        self._deferred_local_model_refresh_timer = QtCore.QTimer(self)
+        self._deferred_local_model_refresh_timer.setSingleShot(True)
+        self._deferred_local_model_refresh_timer.timeout.connect(
+            self._run_deferred_local_model_refresh
+        )
+        self._deferred_local_model_refresh_pending = False
 
         self.setWindowTitle("Dictation Settings")
         self.setModal(False)
@@ -1239,6 +1247,31 @@ class SettingsDialog(QtWidgets.QDialog):
     def _model_label(self, model_name: str) -> str:
         return self._MODEL_LABELS.get(model_name, model_name)
 
+    def _local_model_cache_key(self, model_dir: str | None = None) -> str:
+        return str(model_dir or "").strip()
+
+    def _prime_local_model_views_from_session_cache(self) -> bool:
+        cache_key = self._local_model_cache_key(self.model_dir_edit.text())
+        cached = list(_LOCAL_MODEL_SCAN_SESSION_CACHE.get(cache_key, []))
+        if not cached:
+            return False
+        self._cached_local_models = cached
+        self._cached_local_models_dir = cache_key
+        self._apply_local_model_scan_result(cached)
+        return True
+
+    def _schedule_deferred_local_model_refresh(self) -> None:
+        self._deferred_local_model_refresh_pending = True
+        if self._deferred_local_model_refresh_timer.isActive():
+            return
+        self._deferred_local_model_refresh_timer.start(0)
+
+    def _run_deferred_local_model_refresh(self) -> None:
+        if not self._deferred_local_model_refresh_pending:
+            return
+        self._deferred_local_model_refresh_pending = False
+        self._request_local_model_scan(force=True)
+
     def _refresh_model_combo(
         self,
         selected: str | None = None,
@@ -1369,10 +1402,16 @@ class SettingsDialog(QtWidgets.QDialog):
             return list(self._cached_local_models)
         return []
 
-    def _set_local_model_scan_loading(self) -> None:
+    def _set_local_model_scan_loading(self, *, preserve_current: bool = False) -> None:
         if hasattr(self, "local_models_label"):
-            self.local_models_label.setText("Scanning local model cache...")
+            self.local_models_label.setText(
+                "Refreshing local model cache..."
+                if preserve_current
+                else "Scanning local model cache..."
+            )
             self.local_models_label.setStyleSheet("color: #555;")
+        if preserve_current:
+            return
         if hasattr(self, "cached_models_list"):
             self.cached_models_list.setEnabled(False)
         if hasattr(self, "downloadable_models_list"):
@@ -1410,7 +1449,11 @@ class SettingsDialog(QtWidgets.QDialog):
             self._apply_local_model_scan_result(self._cached_local_models)
             return
 
-        self._set_local_model_scan_loading()
+        preserve_current = (
+            bool(self._cached_local_models)
+            and model_dir == self._cached_local_models_dir
+        )
+        self._set_local_model_scan_loading(preserve_current=preserve_current)
         if self._active_local_model_scan_thread is not None:
             self._local_model_scan_pending = True
             return
@@ -1444,6 +1487,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._active_local_model_scan_thread = None
         cached = [value for value in payload if isinstance(value, str)]
+        _LOCAL_MODEL_SCAN_SESSION_CACHE[model_dir] = list(cached)
         self._cached_local_models = cached
         self._cached_local_models_dir = model_dir
 
@@ -2690,7 +2734,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self._update_import_model_selector()
             self._update_import_engine_note()
 
-        self._refresh_local_model_views(force=True)
+        self._prime_local_model_views_from_session_cache()
+        self._schedule_deferred_local_model_refresh()
         self._update_engine_indicator()
         self._refresh_history_list()
         self._apply_secret_store_options()
