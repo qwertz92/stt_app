@@ -562,6 +562,39 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     _ = app
 
 
+def test_clear_benchmark_results_restores_initial_dialog_size():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    initial_size = dialog.size()
+    dialog.resize(initial_size.width() + 180, initial_size.height() + 140)
+    dialog.benchmark_results_table.setRowCount(1)
+    for column in range(dialog.benchmark_results_table.columnCount()):
+        dialog.benchmark_results_table.setItem(
+            0,
+            column,
+            QtWidgets.QTableWidgetItem(f"value-{column}"),
+        )
+    dialog.benchmark_summary_text.setPlainText("Benchmark summary:\nsmall")
+    dialog._set_benchmark_status("Benchmark finished.", "#1b5e20")
+
+    dialog._clear_benchmark_results()
+    app.processEvents()
+
+    assert dialog.size() == initial_size
+    assert dialog.benchmark_results_table.rowCount() == 0
+    assert dialog.benchmark_summary_text.toPlainText() == ""
+    assert dialog.benchmark_status_label.text() == ""
+    _ = app
+
+
 def test_benchmark_tab_is_last():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())

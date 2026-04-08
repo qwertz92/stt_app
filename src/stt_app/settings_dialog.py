@@ -130,6 +130,8 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(580, 620)
+
 _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "groq": DEFAULT_GROQ_MODEL,
     "openai": DEFAULT_OPENAI_MODEL,
@@ -233,7 +235,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
         self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, False)
         self.setMinimumSize(420, 320)
-        self.resize(580, 620)
+        self._default_dialog_size = QtCore.QSize(_DEFAULT_SETTINGS_DIALOG_SIZE)
+        self.resize(self._default_dialog_size)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
         self.import_transcription_finished.connect(self._finish_import_transcription)
@@ -329,6 +332,14 @@ class SettingsDialog(QtWidgets.QDialog):
         root.addWidget(self.engine_indicator)
         root.addWidget(self.tabs)
         root.addLayout(buttons)
+
+    def _restore_default_dialog_size(self) -> None:
+        target_size = QtCore.QSize(self._default_dialog_size)
+        target_size = target_size.expandedTo(self.minimumSize())
+        minimum_hint = self.minimumSizeHint()
+        if minimum_hint.isValid():
+            target_size = target_size.expandedTo(minimum_hint)
+        self.resize(target_size)
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
         style = "color: #555; font-size: 11px; padding: 0 0 4px 0;"
@@ -1768,6 +1779,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_summary_text.clear()
         self._set_benchmark_status("", "#555")
         self._update_benchmark_actions()
+        self._restore_default_dialog_size()
 
     def _populate_benchmark_results(self, cases: list[BenchmarkCase]) -> None:
         self.benchmark_results_table.setRowCount(len(cases))
