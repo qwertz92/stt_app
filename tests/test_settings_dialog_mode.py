@@ -104,6 +104,21 @@ def _combo_item_enabled(combo: QtWidgets.QComboBox, value: str) -> bool:
     return bool(item.isEnabled())
 
 
+def _send_wheel_event(widget: QtWidgets.QWidget) -> None:
+    center = widget.rect().center()
+    event = QtGui.QWheelEvent(
+        QtCore.QPointF(center),
+        QtCore.QPointF(widget.mapToGlobal(center)),
+        QtCore.QPoint(),
+        QtCore.QPoint(0, 120),
+        QtCore.Qt.NoButton,
+        QtCore.Qt.NoModifier,
+        QtCore.Qt.ScrollUpdate,
+        False,
+    )
+    QtWidgets.QApplication.sendEvent(widget, event)
+
+
 def test_streaming_mode_is_selectable_and_persisted():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings(mode="batch"))
@@ -882,19 +897,7 @@ def test_closed_combo_does_not_change_selection_on_mouse_wheel():
     combo = dialog.engine_combo
     combo.clearFocus()
     initial_index = combo.currentIndex()
-    center = combo.rect().center()
-    event = QtGui.QWheelEvent(
-        QtCore.QPointF(center),
-        QtCore.QPointF(combo.mapToGlobal(center)),
-        QtCore.QPoint(),
-        QtCore.QPoint(0, 120),
-        QtCore.Qt.NoButton,
-        QtCore.Qt.NoModifier,
-        QtCore.Qt.ScrollUpdate,
-        False,
-    )
-
-    QtWidgets.QApplication.sendEvent(combo, event)
+    _send_wheel_event(combo)
 
     assert combo.currentIndex() == initial_index
     _ = app
@@ -914,21 +917,49 @@ def test_focused_combo_still_ignores_mouse_wheel_until_popup_is_open():
     combo = dialog.engine_combo
     combo.setFocus()
     initial_index = combo.currentIndex()
-    center = combo.rect().center()
-    event = QtGui.QWheelEvent(
-        QtCore.QPointF(center),
-        QtCore.QPointF(combo.mapToGlobal(center)),
-        QtCore.QPoint(),
-        QtCore.QPoint(0, 120),
-        QtCore.Qt.NoButton,
-        QtCore.Qt.NoModifier,
-        QtCore.Qt.ScrollUpdate,
-        False,
-    )
-
-    QtWidgets.QApplication.sendEvent(combo, event)
+    _send_wheel_event(combo)
 
     assert combo.currentIndex() == initial_index
+    _ = app
+
+
+def test_focused_spin_box_ignores_mouse_wheel():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    spin_box = dialog.recordings_max_spin
+    spin_box.setFocus()
+    initial_value = spin_box.value()
+
+    _send_wheel_event(spin_box)
+
+    assert spin_box.value() == initial_value
+    _ = app
+
+
+def test_focused_double_spin_box_ignores_mouse_wheel():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    spin_box = dialog.vad_threshold_spin
+    spin_box.setFocus()
+    initial_value = spin_box.value()
+
+    _send_wheel_event(spin_box)
+
+    assert spin_box.value() == initial_value
     _ = app
 
 

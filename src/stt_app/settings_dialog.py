@@ -82,17 +82,11 @@ class _WheelPassthroughComboBox(QtWidgets.QComboBox):
 
 class _WheelPassthroughSpinBox(QtWidgets.QSpinBox):
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
         event.ignore()
 
 
 class _WheelPassthroughDoubleSpinBox(QtWidgets.QDoubleSpinBox):
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
-        if self.hasFocus():
-            super().wheelEvent(event)
-            return
         event.ignore()
 
 
