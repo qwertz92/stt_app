@@ -332,6 +332,27 @@ class TestFindCachedModels:
         assert "tiny" in result
         assert "small" in result
 
+    def test_does_not_iterate_entire_cache_root(self, tmp_path, monkeypatch):
+        self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
+        original_iterdir = Path.iterdir
+
+        def guarded_iterdir(path_self: Path):
+            if path_self == tmp_path:
+                raise AssertionError(
+                    "find_cached_models should not enumerate the cache root"
+                )
+            return original_iterdir(path_self)
+
+        monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
+
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            result = find_cached_models()
+
+        assert result == ["small"]
+
 
 class TestEstimateCachedModelBytes:
     def _make_hf_cache(self, root: Path, repo_id: str) -> Path:

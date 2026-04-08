@@ -36,6 +36,29 @@ class _FakeLogger:
         return "diag"
 
 
+class _FakeLocalModelInventoryStore:
+    def __init__(self, values: dict[str, list[str]] | None = None):
+        self.values = {
+            str(model_dir).strip(): list(models)
+            for model_dir, models in (values or {}).items()
+        }
+        self.saved: list[tuple[str, list[str]]] = []
+
+    def load_cached_models(self, model_dir: str = "") -> list[str] | None:
+        key = str(model_dir or "").strip()
+        if key not in self.values:
+            return None
+        return list(self.values[key])
+
+    def save_cached_models(self, model_dir: str, cached_models: list[str]) -> None:
+        key = str(model_dir or "").strip()
+        self.values[key] = list(cached_models)
+        self.saved.append((key, list(cached_models)))
+
+    def clear_cached_models(self, model_dir: str = "") -> None:
+        self.values.pop(str(model_dir or "").strip(), None)
+
+
 class _ImmediateThread:
     def __init__(self, target, name=None, daemon=None):
         self._target = target
@@ -689,6 +712,89 @@ def test_settings_dialog_uses_session_cached_models_before_refresh(monkeypatch):
     app.processEvents()
     assert calls == ["/tmp/models"]
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    _ = app
+
+
+def test_settings_dialog_uses_persistent_local_model_cache_before_refresh(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls: list[str] = []
+    inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda model_dir="": calls.append(model_dir) or ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(model_dir="/tmp/models")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        local_model_inventory_store=inventory_store,
+    )
+
+    assert calls == []
+    assert "tiny" in dialog.local_models_label.text()
+    assert dialog.cached_models_list.count() == 1
+
+    app.processEvents()
+
+    assert calls == ["/tmp/models"]
+    assert "small" in dialog.local_models_label.text()
+    assert inventory_store.values["/tmp/models"] == ["small"]
+    assert dialog.local_models_scan_status_label.text() == ""
+    _ = app
+
+
+def test_settings_dialog_shows_background_refresh_note_for_persistent_cache(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _IdleThread,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(model_dir="/tmp/models")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        local_model_inventory_store=_FakeLocalModelInventoryStore(
+            {"/tmp/models": ["small"]}
+        ),
+    )
+
+    assert "small" in dialog.local_models_label.text()
+    app.processEvents()
+
+    assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
+    assert "small" in dialog.local_models_label.text()
+    _ = app
+
+
+def test_settings_dialog_treats_empty_persistent_cache_as_valid(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _IdleThread,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(model_dir="/tmp/empty-models")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        local_model_inventory_store=_FakeLocalModelInventoryStore(
+            {"/tmp/empty-models": []}
+        ),
+    )
+
+    assert "No local models found" in dialog.local_models_label.text()
+    app.processEvents()
+
+    assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
     _ = app
 
 

@@ -44,13 +44,6 @@ _DOWNLOAD_ALLOW_PATTERNS: list[str] = [
 # --- HuggingFace repo mapping (imported from config) ---
 _MODEL_REPO_MAP = MODEL_REPO_MAP
 
-# Reverse map: folder-safe repo name → short model name.
-# e.g. "models--Systran--faster-whisper-small" → "small"
-_REPO_FOLDER_TO_SHORT: dict[str, str] = {}
-for _short, _repo in _MODEL_REPO_MAP.items():
-    _folder_name = f"models--{_repo.replace('/', '--')}"
-    _REPO_FOLDER_TO_SHORT[_folder_name] = _short
-
 
 def _default_hf_cache_dir() -> str:
     """Return the default HuggingFace Hub cache directory."""
@@ -179,6 +172,31 @@ def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
         raise RuntimeError(format_model_download_error(model_name, exc)) from exc
 
 
+def _directory_has_required_files(directory: Path, required_files: set[str]) -> bool:
+    if not directory.is_dir():
+        return False
+    try:
+        files = {entry.name for entry in directory.iterdir() if entry.is_file()}
+    except OSError:
+        return False
+    return required_files.issubset(files)
+
+
+def _has_valid_model_snapshot(cache_dir: Path, required_files: set[str]) -> bool:
+    snapshots_dir = cache_dir / "snapshots"
+    if not snapshots_dir.is_dir():
+        return False
+    try:
+        for snapshot in snapshots_dir.iterdir():
+            if not snapshot.is_dir():
+                continue
+            if _directory_has_required_files(snapshot, required_files):
+                return True
+    except OSError:
+        return False
+    return False
+
+
 def find_cached_models(model_dir: str = "") -> list[str]:
     """Scan HF cache (and optional custom model_dir) for locally available models.
 
@@ -193,40 +211,34 @@ def find_cached_models(model_dir: str = "") -> list[str]:
         search_dirs.append(model_dir.strip())
     search_dirs.append(_default_hf_cache_dir())
 
-    required_files = {"config.json", "model.bin"}
-
+    existing_search_dirs: list[Path] = []
+    seen_search_dirs: set[Path] = set()
     for base_dir in search_dirs:
         base = Path(base_dir)
-        if not base.is_dir():
+        if not base.is_dir() or base in seen_search_dirs:
+            continue
+        seen_search_dirs.add(base)
+        existing_search_dirs.append(base)
+
+    required_files = {"config.json", "model.bin"}
+
+    for short_name in VALID_MODEL_SIZES:
+        repo_id = _MODEL_REPO_MAP.get(short_name)
+        if repo_id is None:
             continue
 
-        # Check HF-style cache: models--<org>--<name>/snapshots/<hash>/
-        for entry in base.iterdir():
-            if not entry.is_dir():
-                continue
-            short_name = _REPO_FOLDER_TO_SHORT.get(entry.name)
-            if short_name is None:
-                continue
-            snapshots_dir = entry / "snapshots"
-            if not snapshots_dir.is_dir():
-                continue
-            for snapshot in snapshots_dir.iterdir():
-                if not snapshot.is_dir():
-                    continue
-                files = {f.name for f in snapshot.iterdir() if f.is_file()}
-                if required_files.issubset(files):
-                    found.add(short_name)
-                    break
+        folder_name = f"models--{repo_id.replace('/', '--')}"
+        repo_basename = repo_id.rsplit("/", 1)[-1]
 
-        # Check flat model directories (direct path usage).
-        for short_name, repo_id in _MODEL_REPO_MAP.items():
-            # e.g. <base_dir>/faster-whisper-small/
-            repo_basename = repo_id.rsplit("/", 1)[-1]
+        for base in existing_search_dirs:
+            if _has_valid_model_snapshot(base / folder_name, required_files):
+                found.add(short_name)
+                break
+
             flat_dir = base / repo_basename
-            if flat_dir.is_dir():
-                files = {f.name for f in flat_dir.iterdir() if f.is_file()}
-                if required_files.issubset(files):
-                    found.add(short_name)
+            if _directory_has_required_files(flat_dir, required_files):
+                found.add(short_name)
+                break
 
     # Return in the canonical order from VALID_MODEL_SIZES.
     return [m for m in VALID_MODEL_SIZES if m in found]

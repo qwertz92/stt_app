@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import threading
 from datetime import datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -11,6 +12,7 @@ from .history_dialog import HistoryDialog
 from .controller import DictationController
 from .hotkey import HotkeyManager, QtHotkeyEventFilter
 from .last_recording_store import LastRecordingStore
+from .local_model_inventory_store import LocalModelInventoryStore
 from .logger import AppLogger
 from .overlay_ui import OverlayUI
 from .secret_store import KeyringSecretStore
@@ -38,6 +40,7 @@ def run() -> int:
     secret_store = KeyringSecretStore()
     history_store = TranscriptHistoryStore()
     last_recording_store = LastRecordingStore()
+    local_model_inventory_store = LocalModelInventoryStore()
     startup_settings = settings_store.load()
 
     overlay = OverlayUI()
@@ -114,9 +117,15 @@ def run() -> int:
         secret_store=secret_store,
         app_logger=app_logger,
         last_recording_store=last_recording_store,
+        local_model_inventory_store=local_model_inventory_store,
         open_history_dialog=open_history_dialog,
     )
     tray_icon.show()
+    _start_local_model_inventory_prewarm(
+        getattr(startup_settings, "model_dir", ""),
+        local_model_inventory_store,
+        logger,
+    )
     QtCore.QTimer.singleShot(
         0,
         lambda: _prompt_recoverable_last_recording(
@@ -150,6 +159,7 @@ def _create_tray_icon(
     app_logger: AppLogger,
     last_recording_store: LastRecordingStore,
     open_history_dialog,
+    local_model_inventory_store: LocalModelInventoryStore | None = None,
 ) -> QtWidgets.QSystemTrayIcon:
     style = app.style()
     icon = style.standardIcon(QtWidgets.QStyle.SP_MediaVolume)
@@ -190,6 +200,7 @@ def _create_tray_icon(
             app_logger=app_logger,
             controller=controller,
             last_recording_store=last_recording_store,
+            local_model_inventory_store=local_model_inventory_store,
         )
         dialog.settings_changed.connect(controller.on_settings_changed)
         dialog.settings_changed.connect(
@@ -230,6 +241,50 @@ def _create_tray_icon(
     tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
     return tray_icon
+
+
+def _run_local_model_inventory_prewarm(
+    model_dir: str,
+    local_model_inventory_store: LocalModelInventoryStore,
+    logger,
+) -> None:
+    from .transcriber.local_faster_whisper import find_cached_models
+
+    try:
+        cached_models = find_cached_models(str(model_dir or "").strip())
+    except Exception:
+        if hasattr(logger, "exception"):
+            logger.exception("Failed to prewarm local model inventory cache")
+        return
+
+    try:
+        local_model_inventory_store.save_cached_models(model_dir, cached_models)
+    except Exception:
+        if hasattr(logger, "exception"):
+            logger.exception("Failed to persist prewarmed local model inventory")
+
+
+def _start_local_model_inventory_prewarm(
+    model_dir: str,
+    local_model_inventory_store: LocalModelInventoryStore | None,
+    logger,
+) -> threading.Thread | None:
+    if local_model_inventory_store is None:
+        return None
+
+    normalized_model_dir = str(model_dir or "").strip()
+    cached_models = local_model_inventory_store.load_cached_models(normalized_model_dir)
+    if cached_models is not None:
+        return None
+
+    thread = threading.Thread(
+        target=_run_local_model_inventory_prewarm,
+        args=(normalized_model_dir, local_model_inventory_store, logger),
+        name="stt_app_local_model_inventory_prewarm",
+        daemon=True,
+    )
+    thread.start()
+    return thread
 
 
 def _restore_overlay_after_settings_save(

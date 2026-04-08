@@ -118,6 +118,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **AGENTS.md refactored:** Extracted learning log to `docs/learning-log.md` to reduce context window usage.
 - **Groq provider implemented:** `transcriber/groq_provider.py` with whisper-large-v3 and whisper-large-v3-turbo models.
 - **Git LFS documentation improved:** Installation instructions for Ubuntu and Windows, manual download alternatives.
+
+## 2026-04-08
+
+- Optimized `find_cached_models()` to probe only the known faster-whisper cache paths instead of enumerating the entire HuggingFace cache root.
+- Added `local_model_inventory_store.py`, a dedicated JSON cache for last-known local model inventories keyed by `model_dir`.
+- Settings dialog Local and Benchmark model views now use cached inventory immediately when available, then verify in the background and refresh automatically.
+- Empty cached inventories are treated as valid cached state, so the "no local models found" view can also render immediately instead of falling back to a fresh scanning placeholder.
+- Added a low-impact startup prewarm for the local model inventory cache: on app start, a background thread refreshes the inventory only when no cached entry exists yet for the active `model_dir`.
 - **Benchmark download confirmation:** User is now asked before downloading uncached models.
 - **Settings dialog overhaul:** Tabs for Local/Remote, save confirmation status bar, provider activation/testing dialog.
 
@@ -508,8 +516,6 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Validation:**
   - `.venv/bin/python -m pytest tests/test_controller.py tests/test_controller_coverage.py tests/test_text_inserter.py tests/test_assemblyai_provider.py tests/test_deepgram_provider.py tests/test_transcriber.py -q`
   - `.venv/bin/python -m pytest -q`
-
-## 2026-04-08
 
 - **Line-ending churn across Windows/WSL was a repository policy gap:**
   - Root cause: tracked text files were stored with LF in Git, but some local

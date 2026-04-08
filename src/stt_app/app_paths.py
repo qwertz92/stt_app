@@ -52,6 +52,10 @@ def last_recording_state_path() -> Path:
     return appdata_root() / "last_recording.json"
 
 
+def local_model_inventory_path() -> Path:
+    return appdata_root() / "local_model_inventory.json"
+
+
 def temp_audio_dir() -> Path:
     path = appdata_root() / "temp"
     path.mkdir(parents=True, exist_ok=True)

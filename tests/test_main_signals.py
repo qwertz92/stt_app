@@ -7,8 +7,11 @@ from stt_app.main import (
     _create_tray_icon,
     _install_signal_handlers,
     _prompt_recoverable_last_recording,
+    _run_local_model_inventory_prewarm,
     _restore_overlay_after_settings_save,
+    _start_local_model_inventory_prewarm,
 )
+from stt_app.local_model_inventory_store import LocalModelInventoryStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
@@ -89,6 +92,9 @@ class FakeSecretStore:
 class FakeAppLogger:
     def diagnostics_text(self):
         return "log output"
+
+    def exception(self, *_args, **_kwargs):
+        return None
 
 
 class FakeOverlay:
@@ -220,6 +226,79 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
 
     assert opened == [True]
     _ = app
+
+
+def test_run_local_model_inventory_prewarm_saves_scan_result(monkeypatch, tmp_path):
+    store = LocalModelInventoryStore(tmp_path / "local_model_inventory.json")
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda model_dir="": ["small"] if model_dir == "/tmp/models" else [],
+    )
+
+    _run_local_model_inventory_prewarm(
+        "/tmp/models",
+        store,
+        FakeAppLogger(),
+    )
+
+    assert store.load_cached_models("/tmp/models") == ["small"]
+
+
+def test_start_local_model_inventory_prewarm_skips_existing_cache(monkeypatch, tmp_path):
+    store = LocalModelInventoryStore(tmp_path / "local_model_inventory.json")
+    store.save_cached_models("/tmp/models", ["tiny"])
+    starts: list[str] = []
+
+    class _FakeThread:
+        def __init__(self, *args, **kwargs):
+            starts.append(str(kwargs.get("name", "")))
+
+        def start(self):
+            starts.append("started")
+
+    monkeypatch.setattr("stt_app.main.threading.Thread", _FakeThread)
+
+    thread = _start_local_model_inventory_prewarm(
+        "/tmp/models",
+        store,
+        FakeAppLogger(),
+    )
+
+    assert thread is None
+    assert starts == []
+
+
+def test_start_local_model_inventory_prewarm_starts_background_thread(monkeypatch, tmp_path):
+    store = LocalModelInventoryStore(tmp_path / "local_model_inventory.json")
+    observed: dict[str, object] = {}
+    logger = FakeAppLogger()
+
+    class _FakeThread:
+        def __init__(self, *args, **kwargs):
+            observed["target"] = kwargs.get("target")
+            observed["args"] = kwargs.get("args")
+            observed["name"] = kwargs.get("name")
+            observed["daemon"] = kwargs.get("daemon")
+            observed["started"] = False
+
+        def start(self):
+            observed["started"] = True
+
+    monkeypatch.setattr("stt_app.main.threading.Thread", _FakeThread)
+
+    thread = _start_local_model_inventory_prewarm(
+        "/tmp/models",
+        store,
+        logger,
+    )
+
+    assert thread is not None
+    assert observed["target"] is _run_local_model_inventory_prewarm
+    assert observed["args"] == ("/tmp/models", store, logger)
+    assert observed["name"] == "stt_app_local_model_inventory_prewarm"
+    assert observed["daemon"] is True
+    assert observed["started"] is True
 
 
 def test_prompt_recoverable_last_recording_skips_completed_history_match(
