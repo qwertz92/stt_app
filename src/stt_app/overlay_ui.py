@@ -64,6 +64,15 @@ class OverlayUI(QtWidgets.QWidget):
         state_font = QtGui.QFont()
         state_font.setBold(True)
         self._state_label.setFont(state_font)
+        # Fix stable width: ensure the label reserves space for the widest
+        # state text so that _target_window_width() returns a constant value
+        # across all overlay states and prevents horizontal jumping.
+        _state_fm = QtGui.QFontMetrics(state_font)
+        _max_state_w = max(
+            _state_fm.horizontalAdvance(s)
+            for s in ("Idle", "Listening", "Processing", "Done", "Error")
+        )
+        self._state_label.setMinimumWidth(_max_state_w)
 
         self._history_button = QtWidgets.QPushButton("History")
         self._history_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -97,19 +106,19 @@ class OverlayUI(QtWidgets.QWidget):
         self._retry_button = QtWidgets.QPushButton("Retry")
         self._retry_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._retry_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._retry_button.setFixedHeight(22)
+        self._retry_button.setFixedSize(64, 22)
         self._retry_button.clicked.connect(self.retry_requested.emit)
 
         self._cancel_button = QtWidgets.QPushButton("Cancel")
         self._cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._cancel_button.setFixedHeight(22)
+        self._cancel_button.setFixedSize(64, 22)
         self._cancel_button.clicked.connect(self.cancel_requested.emit)
 
         self._reset_pos_button = QtWidgets.QPushButton("Reset Pos")
         self._reset_pos_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._reset_pos_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._reset_pos_button.setFixedHeight(22)
+        self._reset_pos_button.setFixedSize(74, 22)
         self._reset_pos_button.clicked.connect(self.reset_position)
 
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
