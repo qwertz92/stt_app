@@ -490,12 +490,17 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
         app_logger=_FakeLogger(),
     )
     app.processEvents()
-    dialog.cached_models_list.setCurrentRow(0)
+    # Select the "small" model in the unified list
+    for index in range(dialog.local_models_list.count()):
+        item = dialog.local_models_list.item(index)
+        if item.data(QtCore.Qt.UserRole) == "small":
+            item.setSelected(True)
+            break
 
     dialog._delete_selected_cached_model()
 
     assert calls["delete"] == 1
-    assert "Deleted 'small'" in dialog.local_models_action_label.text()
+    assert "Deleted small" in dialog.local_models_action_label.text()
     _ = app
 
 
@@ -524,15 +529,15 @@ def test_local_tab_can_download_selected_model(monkeypatch):
     )
     app.processEvents()
 
-    for index in range(dialog.downloadable_models_list.count()):
-        item = dialog.downloadable_models_list.item(index)
+    for index in range(dialog.local_models_list.count()):
+        item = dialog.local_models_list.item(index)
         if item.data(QtCore.Qt.UserRole) == "tiny":
             item.setSelected(True)
             break
 
     dialog._download_selected_local_models()
 
-    assert "Downloaded: tiny" in dialog.local_model_download_label.text()
+    assert "Downloaded: tiny" in dialog.local_models_action_label.text()
     assert "tiny" in dialog.local_models_label.text()
     _ = app
 
@@ -753,7 +758,7 @@ def test_settings_dialog_uses_persistent_local_model_cache_before_refresh(monkey
 
     assert calls == []
     assert "tiny" in dialog.local_models_label.text()
-    assert dialog.cached_models_list.count() == 1
+    assert dialog.local_models_list.count() > 0
 
     app.processEvents()
 
@@ -831,8 +836,7 @@ def test_soft_local_model_refresh_keeps_lists_enabled(monkeypatch):
 
     app.processEvents()
 
-    assert dialog.cached_models_list.isEnabled() is True
-    assert dialog.downloadable_models_list.isEnabled() is True
+    assert dialog.local_models_list.isEnabled() is True
     assert dialog.refresh_local_models_button.isEnabled() is True
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
@@ -1016,10 +1020,8 @@ def test_local_model_lists_use_compact_item_spacing():
         app_logger=_FakeLogger(),
     )
 
-    assert dialog.cached_models_list.uniformItemSizes() is True
-    assert dialog.downloadable_models_list.uniformItemSizes() is True
-    assert "padding: 2px 4px" in dialog.cached_models_list.styleSheet()
-    assert "padding: 2px 4px" in dialog.downloadable_models_list.styleSheet()
+    assert dialog.local_models_list.uniformItemSizes() is True
+    assert "padding: 2px 4px" in dialog.local_models_list.styleSheet()
     _ = app
 
 
@@ -1161,7 +1163,7 @@ def test_settings_dialog_applies_custom_scrollbar_stylesheet():
 
     stylesheet = dialog.styleSheet()
     assert "QScrollBar:vertical" in stylesheet
-    assert "width: 14px" in stylesheet
+    assert "width: 12px" in stylesheet
     assert "QScrollBar:horizontal" in stylesheet
     _ = app
 

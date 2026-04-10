@@ -232,7 +232,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
         self.setWindowFlag(QtCore.Qt.WindowStaysOnTopHint, False)
-        self.setMinimumSize(420, 320)
+        self.setMinimumSize(520, 400)
         self._default_dialog_size = QtCore.QSize(_DEFAULT_SETTINGS_DIALOG_SIZE)
         self.resize(self._default_dialog_size)
 
@@ -340,27 +340,39 @@ class SettingsDialog(QtWidgets.QDialog):
         self.resize(target_size)
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
-        style = "color: #555; font-size: 11px; padding: 0 0 4px 0;"
+        style = "color: #555; font-size: 11px; padding: 0 0 6px 0;"
         if bold:
             style += " font-weight: bold;"
         label.setStyleSheet(style)
 
+    @staticmethod
+    def _field_with_hint(
+        control: QtWidgets.QWidget,
+        hint: QtWidgets.QLabel,
+    ) -> QtWidgets.QWidget:
+        """Wrap *control* and its *hint* label in a tight vertical group."""
+        wrapper = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(wrapper)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(control)
+        layout.addWidget(hint)
+        return wrapper
+
     def _dialog_scrollbar_stylesheet(self) -> str:
         return """
         QScrollBar:vertical {
-            width: 14px;
-            background: #eef2f7;
+            width: 12px;
+            background: transparent;
             margin: 0;
-            border-radius: 7px;
         }
         QScrollBar::handle:vertical {
             min-height: 36px;
-            background: #97a7bb;
-            border-radius: 7px;
-            border: 1px solid #7d8ea4;
+            background: #c4cdd8;
+            border-radius: 6px;
         }
         QScrollBar::handle:vertical:hover {
-            background: #7f91a8;
+            background: #b0bac6;
         }
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
             height: 0;
@@ -369,19 +381,17 @@ class SettingsDialog(QtWidgets.QDialog):
             background: transparent;
         }
         QScrollBar:horizontal {
-            height: 14px;
-            background: #eef2f7;
+            height: 12px;
+            background: transparent;
             margin: 0;
-            border-radius: 7px;
         }
         QScrollBar::handle:horizontal {
             min-width: 36px;
-            background: #97a7bb;
-            border-radius: 7px;
-            border: 1px solid #7d8ea4;
+            background: #c4cdd8;
+            border-radius: 6px;
         }
         QScrollBar::handle:horizontal:hover {
-            background: #7f91a8;
+            background: #b0bac6;
         }
         QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
             width: 0;
@@ -419,37 +429,49 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _build_general_tab(self) -> None:
         tab, content = self._create_scroll_tab()
-        form = QtWidgets.QFormLayout(content)
-        form.setContentsMargins(10, 10, 10, 10)
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(4)
+        layout = QtWidgets.QVBoxLayout(content)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+
+        # --- Hotkeys section ---
+        hotkey_box = QtWidgets.QGroupBox("Hotkeys")
+        hotkey_form = QtWidgets.QFormLayout(hotkey_box)
+        hotkey_form.setContentsMargins(10, 10, 10, 10)
+        hotkey_form.setHorizontalSpacing(10)
+        hotkey_form.setVerticalSpacing(6)
+        hotkey_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
         self.hotkey_edit = QtWidgets.QKeySequenceEdit()
         self.hotkey_edit.setMaximumSequenceLength(1)
         if hasattr(self.hotkey_edit, "setClearButtonEnabled"):
             self.hotkey_edit.setClearButtonEnabled(True)
-        self.cancel_hotkey_edit = QtWidgets.QKeySequenceEdit()
-        self.cancel_hotkey_edit.setMaximumSequenceLength(1)
-        if hasattr(self.cancel_hotkey_edit, "setClearButtonEnabled"):
-            self.cancel_hotkey_edit.setClearButtonEnabled(True)
         hotkey_hint = QtWidgets.QLabel(
             "Click the hotkey field and press the combination to record it."
         )
         self._style_note_label(hotkey_hint)
+        hotkey_form.addRow("Hotkey", self._field_with_hint(self.hotkey_edit, hotkey_hint))
+
+        self.cancel_hotkey_edit = QtWidgets.QKeySequenceEdit()
+        self.cancel_hotkey_edit.setMaximumSequenceLength(1)
+        if hasattr(self.cancel_hotkey_edit, "setClearButtonEnabled"):
+            self.cancel_hotkey_edit.setClearButtonEnabled(True)
         cancel_hotkey_hint = QtWidgets.QLabel(
             "Cancel hotkey stops current recording/transcription (must differ from main hotkey)."
         )
         self._style_note_label(cancel_hotkey_hint)
+        hotkey_form.addRow(
+            "Cancel Hotkey",
+            self._field_with_hint(self.cancel_hotkey_edit, cancel_hotkey_hint),
+        )
+        layout.addWidget(hotkey_box)
 
-        self.language_combo = _WheelPassthroughComboBox()
-        for value in VALID_LANGUAGE_MODES:
-            self.language_combo.addItem(
-                LANGUAGE_MODE_LABELS.get(value, value), value
-            )
-        self.language_note_label = QtWidgets.QLabel("")
-        self.language_note_label.setWordWrap(True)
-        self._style_note_label(self.language_note_label)
-        self.language_note_label.setVisible(True)
+        # --- Engine / Mode section ---
+        engine_box = QtWidgets.QGroupBox("Engine && Mode")
+        engine_form = QtWidgets.QFormLayout(engine_box)
+        engine_form.setContentsMargins(10, 10, 10, 10)
+        engine_form.setHorizontalSpacing(10)
+        engine_form.setVerticalSpacing(6)
+        engine_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
         self.engine_combo = _WheelPassthroughComboBox()
         engine_labels = {
@@ -468,6 +490,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         engine_hint.setWordWrap(True)
         self._style_note_label(engine_hint)
+        engine_form.addRow("Engine", self._field_with_hint(self.engine_combo, engine_hint))
 
         remote_model_widget = QtWidgets.QWidget()
         remote_model_layout = QtWidgets.QVBoxLayout(remote_model_widget)
@@ -482,9 +505,27 @@ class SettingsDialog(QtWidgets.QDialog):
         self.remote_model_note_label = QtWidgets.QLabel("")
         self.remote_model_note_label.setWordWrap(True)
         self._style_note_label(self.remote_model_note_label)
+        self.remote_model_note_label.setMinimumHeight(
+            self.fontMetrics().height() + 8
+        )
         remote_model_layout.addWidget(self.remote_model_provider_label)
         remote_model_layout.addWidget(self.remote_model_combo)
         remote_model_layout.addWidget(self.remote_model_note_label)
+        engine_form.addRow("Remote Model", remote_model_widget)
+
+        self.language_combo = _WheelPassthroughComboBox()
+        for value in VALID_LANGUAGE_MODES:
+            self.language_combo.addItem(
+                LANGUAGE_MODE_LABELS.get(value, value), value
+            )
+        self.language_note_label = QtWidgets.QLabel("")
+        self.language_note_label.setWordWrap(True)
+        self._style_note_label(self.language_note_label)
+        self.language_note_label.setVisible(True)
+        engine_form.addRow(
+            "Language",
+            self._field_with_hint(self.language_combo, self.language_note_label),
+        )
 
         self.mode_combo = _WheelPassthroughComboBox()
         mode_labels = {
@@ -504,6 +545,16 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         mode_hint.setWordWrap(True)
         self._style_note_label(mode_hint)
+        engine_form.addRow("Mode", self._field_with_hint(self.mode_combo, mode_hint))
+        layout.addWidget(engine_box)
+
+        # --- Text Insertion section ---
+        paste_box = QtWidgets.QGroupBox("Text Insertion")
+        paste_form = QtWidgets.QFormLayout(paste_box)
+        paste_form.setContentsMargins(10, 10, 10, 10)
+        paste_form.setHorizontalSpacing(10)
+        paste_form.setVerticalSpacing(6)
+        paste_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
         self.paste_mode_combo = _WheelPassthroughComboBox()
         paste_mode_labels = {
@@ -526,78 +577,10 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         paste_mode_hint.setWordWrap(True)
         self._style_note_label(paste_mode_hint)
-
-        self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
-        self.vad_threshold_spin = _WheelPassthroughDoubleSpinBox()
-        self.vad_threshold_spin.setDecimals(3)
-        self.vad_threshold_spin.setSingleStep(0.002)
-        self.vad_threshold_spin.setRange(
-            VAD_ENERGY_THRESHOLD_MIN,
-            VAD_ENERGY_THRESHOLD_MAX,
+        paste_form.addRow(
+            "Paste Mode",
+            self._field_with_hint(self.paste_mode_combo, paste_mode_hint),
         )
-        self.vad_threshold_spin.setValue(DEFAULT_VAD_ENERGY_THRESHOLD)
-        self.vad_threshold_spin.setToolTip(
-            "Lower value = more sensitive for quiet speech/whispering."
-        )
-
-        self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
-        self.start_beep_tone_combo = _WheelPassthroughComboBox()
-        tone_labels = {
-            "soft": "Soft beep",
-            "high": "High beep",
-            "chime": "Two-tone chime",
-            "system": "System notification",
-        }
-        for value in VALID_START_BEEP_TONES:
-            self.start_beep_tone_combo.addItem(tone_labels.get(value, value), value)
-
-        self.save_wav_checkbox = QtWidgets.QCheckBox(
-            "Keep last recording after successful transcription"
-        )
-        self.save_wav_path_label = QtWidgets.QLabel(
-            "The current recording is always preserved until transcription "
-            f"finishes. When enabled, the latest recording remains at: {debug_audio_path()}"
-        )
-        self.save_wav_path_label.setWordWrap(True)
-        self._style_note_label(self.save_wav_path_label)
-
-        self.save_all_recordings_checkbox = QtWidgets.QCheckBox(
-            "Archive every recording to folder"
-        )
-        self.recordings_dir_edit = QtWidgets.QLineEdit()
-        self.recordings_dir_edit.setPlaceholderText(
-            f"Leave empty for default ({recordings_dir()})"
-        )
-        self.recordings_dir_browse = QtWidgets.QPushButton("Browse...")
-        self.recordings_dir_browse.setFixedWidth(80)
-        self.recordings_dir_browse.clicked.connect(self._browse_recordings_dir)
-        self.recordings_open_button = QtWidgets.QPushButton("Open Folder")
-        self.recordings_open_button.clicked.connect(self._open_recordings_dir)
-        recordings_dir_layout = QtWidgets.QHBoxLayout()
-        recordings_dir_layout.addWidget(self.recordings_dir_edit, 1)
-        recordings_dir_layout.addWidget(self.recordings_dir_browse)
-        recordings_dir_layout.addWidget(self.recordings_open_button)
-        self.recordings_max_spin = _WheelPassthroughSpinBox()
-        self.recordings_max_spin.setRange(1, 500)
-        self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
-        self.recordings_max_spin.setToolTip(
-            "Keep only the newest N archived recordings."
-        )
-        recordings_hint = QtWidgets.QLabel(
-            "Archiving stores the original WAV files so you can retry or inspect recordings later."
-        )
-        recordings_hint.setWordWrap(True)
-        self._style_note_label(recordings_hint)
-
-        self.overlay_corner_combo = _WheelPassthroughComboBox()
-        corner_labels = {
-            "top-right": "Top Right",
-            "top-left": "Top Left",
-            "bottom-right": "Bottom Right",
-            "bottom-left": "Bottom Left",
-        }
-        for value in VALID_OVERLAY_CORNERS:
-            self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
 
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
             "Keep transcript in clipboard after insertion"
@@ -612,34 +595,131 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         keep_clipboard_hint.setWordWrap(True)
         self._style_note_label(keep_clipboard_hint)
+        paste_form.addRow(
+            "",
+            self._field_with_hint(self.keep_clipboard_checkbox, keep_clipboard_hint),
+        )
+        layout.addWidget(paste_box)
 
-        form.addRow("Hotkey", self.hotkey_edit)
-        form.addRow("", hotkey_hint)
-        form.addRow("Cancel Hotkey", self.cancel_hotkey_edit)
-        form.addRow("", cancel_hotkey_hint)
-        form.addRow("Engine", self.engine_combo)
-        form.addRow("", engine_hint)
-        form.addRow("Remote Model", remote_model_widget)
-        form.addRow("Language", self.language_combo)
-        form.addRow("", self.language_note_label)
-        form.addRow("Mode", self.mode_combo)
-        form.addRow("", mode_hint)
-        form.addRow("Paste Mode", self.paste_mode_combo)
-        form.addRow("", paste_mode_hint)
-        form.addRow("", self.vad_checkbox)
-        form.addRow("VAD Threshold", self.vad_threshold_spin)
-        form.addRow("", self.start_beep_checkbox)
-        form.addRow("Start Tone", self.start_beep_tone_combo)
-        form.addRow("Overlay Corner", self.overlay_corner_combo)
-        form.addRow("", self.save_wav_checkbox)
-        form.addRow("", self.save_wav_path_label)
-        form.addRow("", self.save_all_recordings_checkbox)
-        form.addRow("Recordings Folder", recordings_dir_layout)
-        form.addRow("Keep Recordings", self.recordings_max_spin)
-        form.addRow("", recordings_hint)
-        form.addRow("", self.keep_clipboard_checkbox)
-        form.addRow("", keep_clipboard_hint)
+        # --- Audio / VAD section ---
+        audio_box = QtWidgets.QGroupBox("Audio && Voice Detection")
+        audio_form = QtWidgets.QFormLayout(audio_box)
+        audio_form.setContentsMargins(10, 10, 10, 10)
+        audio_form.setHorizontalSpacing(10)
+        audio_form.setVerticalSpacing(6)
+        audio_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
+        self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
+        audio_form.addRow("", self.vad_checkbox)
+
+        self.vad_threshold_spin = _WheelPassthroughDoubleSpinBox()
+        self.vad_threshold_spin.setDecimals(3)
+        self.vad_threshold_spin.setSingleStep(0.002)
+        self.vad_threshold_spin.setRange(
+            VAD_ENERGY_THRESHOLD_MIN,
+            VAD_ENERGY_THRESHOLD_MAX,
+        )
+        self.vad_threshold_spin.setValue(DEFAULT_VAD_ENERGY_THRESHOLD)
+        self.vad_threshold_spin.setToolTip(
+            "Lower value = more sensitive for quiet speech/whispering."
+        )
+        audio_form.addRow("VAD Threshold", self.vad_threshold_spin)
+
+        self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
+        audio_form.addRow("", self.start_beep_checkbox)
+
+        self.start_beep_tone_combo = _WheelPassthroughComboBox()
+        tone_labels = {
+            "soft": "Soft beep",
+            "high": "High beep",
+            "chime": "Two-tone chime",
+            "system": "System notification",
+        }
+        for value in VALID_START_BEEP_TONES:
+            self.start_beep_tone_combo.addItem(tone_labels.get(value, value), value)
+        audio_form.addRow("Start Tone", self.start_beep_tone_combo)
+        layout.addWidget(audio_box)
+
+        # --- Recordings section ---
+        recordings_box = QtWidgets.QGroupBox("Recordings")
+        recordings_form = QtWidgets.QFormLayout(recordings_box)
+        recordings_form.setContentsMargins(10, 10, 10, 10)
+        recordings_form.setHorizontalSpacing(10)
+        recordings_form.setVerticalSpacing(6)
+        recordings_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        self.save_wav_checkbox = QtWidgets.QCheckBox(
+            "Keep last recording after successful transcription"
+        )
+        self.save_wav_path_label = QtWidgets.QLabel(
+            "The current recording is always preserved until transcription "
+            f"finishes. When enabled, the latest recording remains at: {debug_audio_path()}"
+        )
+        self.save_wav_path_label.setWordWrap(True)
+        self._style_note_label(self.save_wav_path_label)
+        recordings_form.addRow(
+            "",
+            self._field_with_hint(self.save_wav_checkbox, self.save_wav_path_label),
+        )
+
+        self.save_all_recordings_checkbox = QtWidgets.QCheckBox(
+            "Archive every recording to folder"
+        )
+        recordings_form.addRow("", self.save_all_recordings_checkbox)
+
+        self.recordings_dir_edit = QtWidgets.QLineEdit()
+        self.recordings_dir_edit.setPlaceholderText(
+            f"Leave empty for default ({recordings_dir()})"
+        )
+        self.recordings_dir_browse = QtWidgets.QPushButton("Browse...")
+        self.recordings_dir_browse.setFixedWidth(80)
+        self.recordings_dir_browse.clicked.connect(self._browse_recordings_dir)
+        self.recordings_open_button = QtWidgets.QPushButton("Open Folder")
+        self.recordings_open_button.clicked.connect(self._open_recordings_dir)
+        recordings_dir_layout = QtWidgets.QHBoxLayout()
+        recordings_dir_layout.addWidget(self.recordings_dir_edit, 1)
+        recordings_dir_layout.addWidget(self.recordings_dir_browse)
+        recordings_dir_layout.addWidget(self.recordings_open_button)
+        recordings_form.addRow("Recordings Folder", recordings_dir_layout)
+
+        self.recordings_max_spin = _WheelPassthroughSpinBox()
+        self.recordings_max_spin.setRange(1, 500)
+        self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
+        self.recordings_max_spin.setToolTip(
+            "Keep only the newest N archived recordings."
+        )
+        recordings_hint = QtWidgets.QLabel(
+            "Archiving stores the original WAV files so you can retry or inspect recordings later."
+        )
+        recordings_hint.setWordWrap(True)
+        self._style_note_label(recordings_hint)
+        recordings_form.addRow(
+            "Keep Recordings",
+            self._field_with_hint(self.recordings_max_spin, recordings_hint),
+        )
+        layout.addWidget(recordings_box)
+
+        # --- Appearance section ---
+        appearance_box = QtWidgets.QGroupBox("Appearance")
+        appearance_form = QtWidgets.QFormLayout(appearance_box)
+        appearance_form.setContentsMargins(10, 10, 10, 10)
+        appearance_form.setHorizontalSpacing(10)
+        appearance_form.setVerticalSpacing(6)
+        appearance_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        self.overlay_corner_combo = _WheelPassthroughComboBox()
+        corner_labels = {
+            "top-right": "Top Right",
+            "top-left": "Top Left",
+            "bottom-right": "Bottom Right",
+            "bottom-left": "Bottom Left",
+        }
+        for value in VALID_OVERLAY_CORNERS:
+            self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
+        appearance_form.addRow("Overlay Corner", self.overlay_corner_combo)
+        layout.addWidget(appearance_box)
+
+        layout.addStretch(1)
         self.tabs.addTab(tab, "General")
 
     # --- Local tab ---
@@ -653,7 +733,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form = QtWidgets.QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(4)
+        form.setVerticalSpacing(6)
 
         self.model_combo = _WheelPassthroughComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
@@ -690,7 +770,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         layout.addLayout(form)
 
-        # Local models info
+        # Unified local models section
         local_models_box = QtWidgets.QGroupBox("Local Models")
         local_models_layout = QtWidgets.QVBoxLayout(local_models_box)
         self.local_models_label = QtWidgets.QLabel("Scanning...")
@@ -702,63 +782,31 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(self.local_models_scan_status_label)
         local_models_layout.addWidget(self.local_models_scan_status_label)
 
-        self.cached_models_list = QtWidgets.QListWidget()
-        self.cached_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.SingleSelection
+        download_hint = QtWidgets.QLabel(
+            "Select models to download or delete. Green entries are already cached locally."
         )
-        self.cached_models_list.setUniformItemSizes(True)
-        self.cached_models_list.setStyleSheet(
+        download_hint.setWordWrap(True)
+        self._style_note_label(download_hint)
+        local_models_layout.addWidget(download_hint)
+
+        self.local_models_list = QtWidgets.QListWidget()
+        self.local_models_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.MultiSelection
+        )
+        self.local_models_list.setUniformItemSizes(True)
+        self.local_models_list.setStyleSheet(
             "QListWidget::item { padding: 2px 4px; }"
         )
-        self.cached_models_list.itemSelectionChanged.connect(
-            self._on_cached_model_selection_changed
+        self.local_models_list.itemSelectionChanged.connect(
+            self._update_local_model_actions
         )
-        local_models_layout.addWidget(self.cached_models_list)
+        local_models_layout.addWidget(self.local_models_list)
 
         manage_buttons = QtWidgets.QHBoxLayout()
         self.refresh_local_models_button = QtWidgets.QPushButton("Refresh")
         self.refresh_local_models_button.clicked.connect(
             self._refresh_local_model_views
         )
-        self.delete_cached_model_button = QtWidgets.QPushButton("Delete Selected")
-        self.delete_cached_model_button.setEnabled(False)
-        self.delete_cached_model_button.clicked.connect(
-            self._delete_selected_cached_model
-        )
-        manage_buttons.addWidget(self.refresh_local_models_button)
-        manage_buttons.addStretch(1)
-        manage_buttons.addWidget(self.delete_cached_model_button)
-        local_models_layout.addLayout(manage_buttons)
-
-        self.local_models_action_label = QtWidgets.QLabel("")
-        self.local_models_action_label.setWordWrap(True)
-        local_models_layout.addWidget(self.local_models_action_label)
-        self._set_local_model_scan_loading()
-
-        download_box = QtWidgets.QGroupBox("Download Models")
-        download_layout = QtWidgets.QVBoxLayout(download_box)
-        download_hint = QtWidgets.QLabel(
-            "Download local models directly here without switching the active model. "
-            "Downloaded models also appear on the Benchmark tab."
-        )
-        download_hint.setWordWrap(True)
-        self._style_note_label(download_hint)
-        download_layout.addWidget(download_hint)
-
-        self.downloadable_models_list = QtWidgets.QListWidget()
-        self.downloadable_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.MultiSelection
-        )
-        self.downloadable_models_list.setUniformItemSizes(True)
-        self.downloadable_models_list.setStyleSheet(
-            "QListWidget::item { padding: 2px 4px; }"
-        )
-        self.downloadable_models_list.itemSelectionChanged.connect(
-            self._update_local_download_actions
-        )
-        download_layout.addWidget(self.downloadable_models_list)
-
-        download_buttons = QtWidgets.QHBoxLayout()
         self.download_selected_models_button = QtWidgets.QPushButton(
             "Download Selected"
         )
@@ -771,17 +819,24 @@ class SettingsDialog(QtWidgets.QDialog):
         self.download_all_missing_models_button.clicked.connect(
             self._download_all_missing_local_models
         )
-        download_buttons.addWidget(self.download_selected_models_button)
-        download_buttons.addWidget(self.download_all_missing_models_button)
-        download_buttons.addStretch(1)
-        download_layout.addLayout(download_buttons)
+        self.delete_selected_model_button = QtWidgets.QPushButton("Delete Selected")
+        self.delete_selected_model_button.setEnabled(False)
+        self.delete_selected_model_button.clicked.connect(
+            self._delete_selected_cached_model
+        )
+        manage_buttons.addWidget(self.refresh_local_models_button)
+        manage_buttons.addWidget(self.download_selected_models_button)
+        manage_buttons.addWidget(self.download_all_missing_models_button)
+        manage_buttons.addStretch(1)
+        manage_buttons.addWidget(self.delete_selected_model_button)
+        local_models_layout.addLayout(manage_buttons)
 
-        self.local_model_download_label = QtWidgets.QLabel("")
-        self.local_model_download_label.setWordWrap(True)
-        download_layout.addWidget(self.local_model_download_label)
+        self.local_models_action_label = QtWidgets.QLabel("")
+        self.local_models_action_label.setWordWrap(True)
+        local_models_layout.addWidget(self.local_models_action_label)
+        self._set_local_model_scan_loading()
 
         layout.addWidget(local_models_box)
-        layout.addWidget(download_box)
         layout.addStretch(1)
         self.tabs.addTab(tab, "Local")
 
@@ -865,7 +920,7 @@ class SettingsDialog(QtWidgets.QDialog):
         options_form = QtWidgets.QFormLayout(options_box)
         options_form.setContentsMargins(10, 10, 10, 10)
         options_form.setHorizontalSpacing(10)
-        options_form.setVerticalSpacing(4)
+        options_form.setVerticalSpacing(6)
 
         self.benchmark_compute_type_combo = _WheelPassthroughComboBox()
         for value in ("int8", "float16", "float32"):
@@ -873,13 +928,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_compute_type_combo.setToolTip(
             "int8 is usually fastest and smallest. float16 is useful on capable GPUs. float32 is the most compatible but slowest."
         )
-        options_form.addRow("Compute Type", self.benchmark_compute_type_combo)
         compute_type_note = QtWidgets.QLabel(
             "Controls precision: int8 is usually fastest, float32 is slowest but safest."
         )
         compute_type_note.setWordWrap(True)
         self._style_note_label(compute_type_note)
-        options_form.addRow("", compute_type_note)
+        options_form.addRow(
+            "Compute Type",
+            self._field_with_hint(self.benchmark_compute_type_combo, compute_type_note),
+        )
 
         self.benchmark_runs_spin = _WheelPassthroughSpinBox()
         self.benchmark_runs_spin.setRange(1, 10)
@@ -887,13 +944,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_runs_spin.setToolTip(
             "Run the same benchmark multiple times. More runs reduce noise but take longer."
         )
-        options_form.addRow("Runs", self.benchmark_runs_spin)
         runs_note = QtWidgets.QLabel(
             "Repeat count for the same audio sample. Higher values give more stable averages."
         )
         runs_note.setWordWrap(True)
         self._style_note_label(runs_note)
-        options_form.addRow("", runs_note)
+        options_form.addRow(
+            "Runs",
+            self._field_with_hint(self.benchmark_runs_spin, runs_note),
+        )
 
         self.benchmark_beam_size_spin = _WheelPassthroughSpinBox()
         self.benchmark_beam_size_spin.setRange(1, 10)
@@ -901,13 +960,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_beam_size_spin.setToolTip(
             "Beam size controls decoding breadth. Higher values can improve quality but slow the run down."
         )
-        options_form.addRow("Beam Size", self.benchmark_beam_size_spin)
         beam_note = QtWidgets.QLabel(
             "Decoder search width. Larger beams may improve recognition, but increase latency."
         )
         beam_note.setWordWrap(True)
         self._style_note_label(beam_note)
-        options_form.addRow("", beam_note)
+        options_form.addRow(
+            "Beam Size",
+            self._field_with_hint(self.benchmark_beam_size_spin, beam_note),
+        )
 
         self.benchmark_language_combo = _WheelPassthroughComboBox()
         self.benchmark_language_combo.addItem("Auto", "auto")
@@ -916,13 +977,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_language_combo.setToolTip(
             "Use Auto for unknown or mixed audio. A fixed language removes one source of model guesswork."
         )
-        options_form.addRow("Language", self.benchmark_language_combo)
         language_note = QtWidgets.QLabel(
             "Language hint for decoding. Auto detects language; fixed values can be more consistent on known input."
         )
         language_note.setWordWrap(True)
         self._style_note_label(language_note)
-        options_form.addRow("", language_note)
+        options_form.addRow(
+            "Language",
+            self._field_with_hint(self.benchmark_language_combo, language_note),
+        )
 
         self.benchmark_warmup_checkbox = QtWidgets.QCheckBox(
             "Run one warmup pass before measurements"
@@ -930,13 +993,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_warmup_checkbox.setToolTip(
             "Runs one unmeasured pass first so model loading and first-run caches affect the final numbers less."
         )
-        options_form.addRow("", self.benchmark_warmup_checkbox)
         warmup_note = QtWidgets.QLabel(
             "Useful when you want cleaner timings after the first cold run."
         )
         warmup_note.setWordWrap(True)
         self._style_note_label(warmup_note)
-        options_form.addRow("", warmup_note)
+        options_form.addRow(
+            "",
+            self._field_with_hint(self.benchmark_warmup_checkbox, warmup_note),
+        )
 
         self.benchmark_vad_checkbox = QtWidgets.QCheckBox(
             "Enable faster-whisper VAD filter"
@@ -944,13 +1009,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_vad_checkbox.setToolTip(
             "Filters silence before transcription. This can improve speed on pause-heavy audio, but also changes the workload."
         )
-        options_form.addRow("", self.benchmark_vad_checkbox)
         vad_note = QtWidgets.QLabel(
             "Silence filtering. Can speed up long recordings with pauses, but changes the benchmark scenario."
         )
         vad_note.setWordWrap(True)
         self._style_note_label(vad_note)
-        options_form.addRow("", vad_note)
+        options_form.addRow(
+            "",
+            self._field_with_hint(self.benchmark_vad_checkbox, vad_note),
+        )
         layout.addWidget(options_box)
 
         benchmark_actions = QtWidgets.QHBoxLayout()
@@ -1004,8 +1071,8 @@ class SettingsDialog(QtWidgets.QDialog):
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
         provider_layout = QtWidgets.QFormLayout(provider_box)
         provider_layout.setContentsMargins(10, 10, 10, 10)
-        provider_layout.setHorizontalSpacing(6)
-        provider_layout.setVerticalSpacing(4)
+        provider_layout.setHorizontalSpacing(10)
+        provider_layout.setVerticalSpacing(6)
         provider_layout.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
         provider_layout.setFieldGrowthPolicy(
             QtWidgets.QFormLayout.AllNonFixedFieldsGrow
@@ -1057,7 +1124,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
 
             title_label = QtWidgets.QLabel(title)
-            title_label.setMinimumWidth(64)
+            title_label.setMinimumWidth(54)
 
             field_row_widget = QtWidgets.QWidget()
             field_row = QtWidgets.QHBoxLayout(field_row_widget)
@@ -1066,12 +1133,14 @@ class SettingsDialog(QtWidgets.QDialog):
             field_row.addWidget(key_field, 1)
             field_row.addWidget(clear_button, 0)
             field_row.addWidget(status_badge, 0)
-            provider_layout.addRow(title_label, field_row_widget)
 
             last_test_label = QtWidgets.QLabel("Last test: never.")
             last_test_label.setWordWrap(True)
             self._style_note_label(last_test_label)
-            provider_layout.addRow("", last_test_label)
+            provider_layout.addRow(
+                title_label,
+                self._field_with_hint(field_row_widget, last_test_label),
+            )
 
             self._provider_key_edits[provider] = key_field
             self._provider_status_labels[provider] = status_badge
@@ -1392,45 +1461,41 @@ class SettingsDialog(QtWidgets.QDialog):
         self.model_combo.blockSignals(False)
 
     def _refresh_local_models_label(self, cached: list[str] | None = None) -> None:
-        """Update the label for locally cached models."""
+        """Update the label for locally cached models with tag-style badges."""
         cached = self._known_cached_models(cached)
 
         if cached:
-            self.local_models_label.setText(
-                f"Available locally: {', '.join(cached)}"
+            tags = "".join(
+                f'<span style="background-color: #f5f5f5; color: #333;'
+                f" border: 1px solid #d0d0d0; border-radius: 10px;"
+                f' padding: 2px 10px; margin-right: 4px;">{name}</span>&nbsp;'
+                for name in cached
             )
-            self.local_models_label.setStyleSheet("color: #1b5e20;")
+            self.local_models_label.setTextFormat(QtCore.Qt.RichText)
+            self.local_models_label.setText(
+                f'<span style="color: #1b5e20;">Available locally:</span><br>{tags}'
+            )
+            self.local_models_label.setStyleSheet("")
         else:
+            self.local_models_label.setTextFormat(QtCore.Qt.PlainText)
             self.local_models_label.setText(
                 "No local models found. Download models below or let the app fetch one on first use.\n"
                 f"See {DOC_MODELS_PATH} if downloads are blocked."
             )
             self.local_models_label.setStyleSheet("color: #b71c1c;")
 
-    def _refresh_cached_models_list(self, cached: list[str] | None = None) -> None:
-        cached = self._known_cached_models(cached)
-        self.cached_models_list.clear()
-        for model_name in cached:
-            item = QtWidgets.QListWidgetItem(model_name)
-            item.setData(QtCore.Qt.UserRole, model_name)
-            self.cached_models_list.addItem(item)
-        self.delete_cached_model_button.setEnabled(False)
-
-    def _refresh_downloadable_models_list(
-        self,
-        cached: list[str] | None = None,
-    ) -> None:
-        if not hasattr(self, "downloadable_models_list"):
+    def _refresh_local_models_list(self, cached: list[str] | None = None) -> None:
+        if not hasattr(self, "local_models_list"):
             return
         cached = self._known_cached_models(cached)
 
         selected = {
             str(item.data(QtCore.Qt.UserRole) or "")
-            for item in self.downloadable_models_list.selectedItems()
+            for item in self.local_models_list.selectedItems()
         }
         cached_set = set(cached)
 
-        self.downloadable_models_list.clear()
+        self.local_models_list.clear()
         for model_name in VALID_MODEL_SIZES:
             status = "Downloaded" if model_name in cached_set else "Not downloaded"
             if model_name in LOCAL_ENGLISH_ONLY_MODELS:
@@ -1441,12 +1506,13 @@ class SettingsDialog(QtWidgets.QDialog):
             item.setData(QtCore.Qt.UserRole, model_name)
             item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
             if model_name in cached_set:
+                item.setBackground(QtGui.QColor("#e8f5e9"))
                 item.setForeground(QtGui.QColor("#1b5e20"))
-            self.downloadable_models_list.addItem(item)
+            self.local_models_list.addItem(item)
             if model_name in selected:
                 item.setSelected(True)
 
-        self._update_local_download_actions()
+        self._update_local_model_actions()
 
     def _refresh_benchmark_model_list(
         self,
@@ -1496,17 +1562,15 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
     def _reset_local_model_scan_views(self) -> None:
-        if hasattr(self, "cached_models_list"):
-            self.cached_models_list.clear()
-        if hasattr(self, "downloadable_models_list"):
-            self.downloadable_models_list.clear()
+        if hasattr(self, "local_models_list"):
+            self.local_models_list.clear()
         if hasattr(self, "benchmark_models_list"):
             self.benchmark_models_list.clear()
         if hasattr(self, "model_combo"):
             self._refresh_model_combo(cached=[])
-        if hasattr(self, "delete_cached_model_button"):
-            self.delete_cached_model_button.setEnabled(False)
-        self._update_local_download_actions()
+        if hasattr(self, "delete_selected_model_button"):
+            self.delete_selected_model_button.setEnabled(False)
+        self._update_local_model_actions()
         self._update_benchmark_actions()
 
     def _set_local_model_scan_loading(self, *, preserve_current: bool = False) -> None:
@@ -1524,10 +1588,8 @@ class SettingsDialog(QtWidgets.QDialog):
         if preserve_current:
             return
         self._reset_local_model_scan_views()
-        if hasattr(self, "cached_models_list"):
-            self.cached_models_list.setEnabled(False)
-        if hasattr(self, "downloadable_models_list"):
-            self.downloadable_models_list.setEnabled(False)
+        if hasattr(self, "local_models_list"):
+            self.local_models_list.setEnabled(False)
         if hasattr(self, "benchmark_models_list"):
             self.benchmark_models_list.setEnabled(False)
         if hasattr(self, "refresh_local_models_button"):
@@ -1535,21 +1597,17 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _apply_local_model_scan_result(self, cached: list[str]) -> None:
         self._refresh_local_models_label(cached)
-        self._refresh_cached_models_list(cached)
-        self._refresh_downloadable_models_list(cached)
+        self._refresh_local_models_list(cached)
         self._refresh_model_combo(cached=cached)
         self._refresh_benchmark_model_list(cached)
         self._set_local_model_scan_status("")
-        self.cached_models_list.setEnabled(True)
-        self.downloadable_models_list.setEnabled(
-            self._active_local_model_download_thread is None
-        )
+        self.local_models_list.setEnabled(True)
         self.benchmark_models_list.setEnabled(True)
         self.refresh_local_models_button.setEnabled(
             self._active_local_model_download_thread is None
         )
         self._update_language_availability()
-        self._update_local_download_actions()
+        self._update_local_model_actions()
         self._update_benchmark_actions()
 
     def _request_local_model_scan(self, *, force: bool = False) -> None:
@@ -1620,37 +1678,51 @@ class SettingsDialog(QtWidgets.QDialog):
             self._request_local_model_scan(force=True)
 
     def _selected_downloadable_model_names(self) -> list[str]:
-        if not hasattr(self, "downloadable_models_list"):
+        if not hasattr(self, "local_models_list"):
             return []
         return [
             str(item.data(QtCore.Qt.UserRole) or "").strip()
-            for item in self.downloadable_models_list.selectedItems()
+            for item in self.local_models_list.selectedItems()
             if str(item.data(QtCore.Qt.UserRole) or "").strip()
         ]
 
-    def _update_local_download_actions(self) -> None:
+    def _update_local_model_actions(self) -> None:
         if not hasattr(self, "download_selected_models_button"):
             return
 
         busy = self._active_local_model_download_thread is not None
         selected = self._selected_downloadable_model_names()
-        missing = []
-        if hasattr(self, "downloadable_models_list"):
-            for index in range(self.downloadable_models_list.count()):
-                item = self.downloadable_models_list.item(index)
-                if not bool(item.data(QtCore.Qt.UserRole + 1)):
-                    missing.append(str(item.data(QtCore.Qt.UserRole) or ""))
 
-        self.downloadable_models_list.setEnabled(not busy)
+        # Determine missing and downloaded from selection
+        missing: list[str] = []
+        selected_downloaded: list[str] = []
+        if hasattr(self, "local_models_list"):
+            for item in self.local_models_list.selectedItems():
+                name = str(item.data(QtCore.Qt.UserRole) or "")
+                if bool(item.data(QtCore.Qt.UserRole + 1)):
+                    selected_downloaded.append(name)
+                else:
+                    missing.append(name)
+
+        # Any missing models at all (for "Download All Missing")?
+        any_missing = False
+        if hasattr(self, "local_models_list"):
+            for index in range(self.local_models_list.count()):
+                item = self.local_models_list.item(index)
+                if not bool(item.data(QtCore.Qt.UserRole + 1)):
+                    any_missing = True
+                    break
+
+        self.local_models_list.setEnabled(not busy)
         self.refresh_local_models_button.setEnabled(not busy)
-        self.delete_cached_model_button.setEnabled(
-            (not busy) and bool(self.cached_models_list.selectedItems())
+        self.delete_selected_model_button.setEnabled(
+            (not busy) and bool(selected_downloaded)
         )
         self.download_selected_models_button.setEnabled(
             (not busy) and bool(selected)
         )
         self.download_all_missing_models_button.setEnabled(
-            (not busy) and bool(missing)
+            (not busy) and any_missing
         )
 
     def _download_selected_local_models(self) -> None:
@@ -1659,8 +1731,8 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         missing = self._missing_downloadable_models(selected)
         if not missing:
-            self.local_model_download_label.setStyleSheet("color: #555;")
-            self.local_model_download_label.setText(
+            self.local_models_action_label.setStyleSheet("color: #555;")
+            self.local_models_action_label.setText(
                 "All selected models are already downloaded."
             )
             return
@@ -1669,8 +1741,8 @@ class SettingsDialog(QtWidgets.QDialog):
     def _download_all_missing_local_models(self) -> None:
         missing = self._missing_downloadable_models()
         if not missing:
-            self.local_model_download_label.setStyleSheet("color: #555;")
-            self.local_model_download_label.setText(
+            self.local_models_action_label.setStyleSheet("color: #555;")
+            self.local_models_action_label.setText(
                 "All available local models are already downloaded."
             )
             return
@@ -1681,12 +1753,12 @@ class SettingsDialog(QtWidgets.QDialog):
         names: list[str] | None = None,
     ) -> list[str]:
         wanted = set(names or [
-            str(self.downloadable_models_list.item(index).data(QtCore.Qt.UserRole) or "")
-            for index in range(self.downloadable_models_list.count())
+            str(self.local_models_list.item(index).data(QtCore.Qt.UserRole) or "")
+            for index in range(self.local_models_list.count())
         ])
         missing: list[str] = []
-        for index in range(self.downloadable_models_list.count()):
-            item = self.downloadable_models_list.item(index)
+        for index in range(self.local_models_list.count()):
+            item = self.local_models_list.item(index)
             model_name = str(item.data(QtCore.Qt.UserRole) or "")
             if model_name not in wanted:
                 continue
@@ -1698,11 +1770,11 @@ class SettingsDialog(QtWidgets.QDialog):
         if not model_names or self._active_local_model_download_thread is not None:
             return
 
-        self.local_model_download_label.setStyleSheet("color: #555;")
-        self.local_model_download_label.setText(
+        self.local_models_action_label.setStyleSheet("color: #555;")
+        self.local_models_action_label.setText(
             f"Preparing download for: {', '.join(model_names)}"
         )
-        self._update_local_download_actions()
+        self._update_local_model_actions()
 
         model_dir = self.model_dir_edit.text().strip()
 
@@ -1744,21 +1816,21 @@ class SettingsDialog(QtWidgets.QDialog):
             daemon=True,
         )
         self._active_local_model_download_thread.start()
-        self._update_local_download_actions()
+        self._update_local_model_actions()
 
     def _on_local_model_download_progress(self, text: str) -> None:
-        self.local_model_download_label.setStyleSheet("color: #555;")
-        self.local_model_download_label.setText(text)
+        self.local_models_action_label.setStyleSheet("color: #555;")
+        self.local_models_action_label.setText(text)
 
     def _on_local_model_download_finished(self, success: bool, text: str) -> None:
         self._active_local_model_download_thread = None
         if success:
-            self.local_model_download_label.setStyleSheet("color: #1b5e20;")
+            self.local_models_action_label.setStyleSheet("color: #1b5e20;")
         elif text.startswith("Completed with errors"):
-            self.local_model_download_label.setStyleSheet("color: #b26a00;")
+            self.local_models_action_label.setStyleSheet("color: #b26a00;")
         else:
-            self.local_model_download_label.setStyleSheet("color: #b71c1c;")
-        self.local_model_download_label.setText(text)
+            self.local_models_action_label.setStyleSheet("color: #b71c1c;")
+        self.local_models_action_label.setText(text)
         self._refresh_local_model_views(force=True)
 
     def _selected_benchmark_model_names(self) -> list[str]:
@@ -2099,25 +2171,31 @@ class SettingsDialog(QtWidgets.QDialog):
         self.remote_model_combo.blockSignals(False)
 
     def _on_cached_model_selection_changed(self) -> None:
-        self.delete_cached_model_button.setEnabled(
-            bool(self.cached_models_list.selectedItems())
-        )
+        self._update_local_model_actions()
 
     def _delete_selected_cached_model(self) -> None:
-        selected_items = self.cached_models_list.selectedItems()
+        selected_items = [
+            item
+            for item in self.local_models_list.selectedItems()
+            if bool(item.data(QtCore.Qt.UserRole + 1))
+        ]
         if not selected_items:
-            self.delete_cached_model_button.setEnabled(False)
+            self.delete_selected_model_button.setEnabled(False)
             return
-        model_name = str(selected_items[0].data(QtCore.Qt.UserRole) or "").strip()
-        if not model_name:
-            self.delete_cached_model_button.setEnabled(False)
+        names = [
+            str(item.data(QtCore.Qt.UserRole) or "").strip()
+            for item in selected_items
+        ]
+        names = [n for n in names if n]
+        if not names:
+            self.delete_selected_model_button.setEnabled(False)
             return
 
         answer = QtWidgets.QMessageBox.question(
             self,
             "Delete local model",
             (
-                f"Delete local cache for model '{model_name}'?\n\n"
+                f"Delete local cache for: {', '.join(names)}?\n\n"
                 "This removes downloaded files from disk."
             ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
@@ -2126,27 +2204,32 @@ class SettingsDialog(QtWidgets.QDialog):
         if answer != QtWidgets.QMessageBox.Yes:
             return
 
-        try:
-            removed = delete_cached_model(
-                model_name,
-                self.model_dir_edit.text().strip(),
-            )
-        except Exception as exc:
+        total_removed = 0
+        errors: list[str] = []
+        for model_name in names:
+            try:
+                removed = delete_cached_model(
+                    model_name,
+                    self.model_dir_edit.text().strip(),
+                )
+                total_removed += removed
+            except Exception as exc:
+                errors.append(f"'{model_name}': {exc}")
+
+        if errors:
             self.local_models_action_label.setStyleSheet("color: #b71c1c;")
             self.local_models_action_label.setText(
-                f"Failed to delete '{model_name}': {exc}"
+                f"Failed to delete: {'; '.join(errors)}"
             )
-            return
-
-        if removed <= 0:
+        elif total_removed <= 0:
             self.local_models_action_label.setStyleSheet("color: #555;")
             self.local_models_action_label.setText(
-                f"No cache directories found for '{model_name}'."
+                f"No cache directories found for: {', '.join(names)}."
             )
         else:
             self.local_models_action_label.setStyleSheet("color: #1b5e20;")
             self.local_models_action_label.setText(
-                f"Deleted '{model_name}' ({removed} folder(s) removed)."
+                f"Deleted {', '.join(names)} ({total_removed} folder(s) removed)."
             )
         self._refresh_local_model_views()
 
