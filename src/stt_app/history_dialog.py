@@ -35,12 +35,15 @@ class HistoryDialog(QtWidgets.QDialog):
 
         self.setWindowTitle("Recent Transcriptions")
         self.resize(820, 500)
+        self.setMinimumSize(600, 400)
         self.setModal(False)
         self.setWindowFlag(QtCore.Qt.Window, True)
         self.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)
         self.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
+
+        self.setStyleSheet(self._scrollbar_stylesheet())
 
         self._max_items_spin = QtWidgets.QSpinBox()
         self._max_items_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
@@ -66,6 +69,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(
             self.fontMetrics().height() + 8
@@ -196,6 +200,49 @@ class HistoryDialog(QtWidgets.QDialog):
     def _reset_copy_feedback(self) -> None:
         self._copy_button.setText("Copy selected")
         self._copy_button.setStyleSheet("")
+
+    @staticmethod
+    def _scrollbar_stylesheet() -> str:
+        return """
+        QScrollBar:vertical {
+            width: 12px;
+            background: transparent;
+            margin: 0;
+        }
+        QScrollBar::handle:vertical {
+            min-height: 36px;
+            background: #c4cdd8;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:vertical:hover {
+            background: #b0bac6;
+        }
+        QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+            height: 0;
+        }
+        QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+            background: transparent;
+        }
+        QScrollBar:horizontal {
+            height: 12px;
+            background: transparent;
+            margin: 0;
+        }
+        QScrollBar::handle:horizontal {
+            min-width: 36px;
+            background: #c4cdd8;
+            border-radius: 6px;
+        }
+        QScrollBar::handle:horizontal:hover {
+            background: #b0bac6;
+        }
+        QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+            width: 0;
+        }
+        QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
+            background: transparent;
+        }
+        """
 
     def _delete_selected(self) -> None:
         row = self._selected_row()
