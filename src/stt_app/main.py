@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import signal
 import sys
-import threading
 from datetime import datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -121,11 +120,6 @@ def run() -> int:
         open_history_dialog=open_history_dialog,
     )
     tray_icon.show()
-    _start_local_model_inventory_prewarm(
-        getattr(startup_settings, "model_dir", ""),
-        local_model_inventory_store,
-        logger,
-    )
     QtCore.QTimer.singleShot(
         0,
         lambda: _prompt_recoverable_last_recording(
@@ -241,50 +235,6 @@ def _create_tray_icon(
     tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
     return tray_icon
-
-
-def _run_local_model_inventory_prewarm(
-    model_dir: str,
-    local_model_inventory_store: LocalModelInventoryStore,
-    logger,
-) -> None:
-    from .transcriber.local_faster_whisper import find_cached_models
-
-    try:
-        cached_models = find_cached_models(str(model_dir or "").strip())
-    except Exception:
-        if hasattr(logger, "exception"):
-            logger.exception("Failed to prewarm local model inventory cache")
-        return
-
-    try:
-        local_model_inventory_store.save_cached_models(model_dir, cached_models)
-    except Exception:
-        if hasattr(logger, "exception"):
-            logger.exception("Failed to persist prewarmed local model inventory")
-
-
-def _start_local_model_inventory_prewarm(
-    model_dir: str,
-    local_model_inventory_store: LocalModelInventoryStore | None,
-    logger,
-) -> threading.Thread | None:
-    if local_model_inventory_store is None:
-        return None
-
-    normalized_model_dir = str(model_dir or "").strip()
-    cached_models = local_model_inventory_store.load_cached_models(normalized_model_dir)
-    if cached_models is not None:
-        return None
-
-    thread = threading.Thread(
-        target=_run_local_model_inventory_prewarm,
-        args=(normalized_model_dir, local_model_inventory_store, logger),
-        name="stt_app_local_model_inventory_prewarm",
-        daemon=True,
-    )
-    thread.start()
-    return thread
 
 
 def _restore_overlay_after_settings_save(

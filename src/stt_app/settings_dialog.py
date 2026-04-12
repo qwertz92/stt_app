@@ -180,6 +180,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._cached_local_models: list[str] = []
         self._cached_local_models_dir = ""
         self._cached_local_models_available = False
+        self._local_model_auto_refresh_requested_dirs: set[str] = set()
+        self._local_model_auto_refreshed_dirs: set[str] = set()
+        self._local_tab_index: int | None = None
+        self._benchmark_tab_index: int | None = None
         self._active_local_model_download_thread: threading.Thread | None = None
         self._active_benchmark_thread: threading.Thread | None = None
         self._remote_model_values: dict[str, str] = {
@@ -222,6 +226,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._run_deferred_local_model_refresh
         )
         self._deferred_local_model_refresh_pending = False
+        self._deferred_local_model_refresh_force = False
 
         self.setWindowTitle("Dictation Settings")
         self.setModal(False)
@@ -248,6 +253,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_progress.connect(self._on_benchmark_progress)
         self.benchmark_finished.connect(self._on_benchmark_finished)
         self._build_ui()
+        self.tabs.currentChanged.connect(self._on_settings_tab_changed)
         self._populate(self._loaded_settings)
 
     # ------------------------------------------------------------------
@@ -834,11 +840,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_models_action_label = QtWidgets.QLabel("")
         self.local_models_action_label.setWordWrap(True)
         local_models_layout.addWidget(self.local_models_action_label)
-        self._set_local_model_scan_loading()
+        self._show_local_model_unverified_state(
+            "Open this tab to verify local model availability in the background."
+        )
 
         layout.addWidget(local_models_box)
         layout.addStretch(1)
-        self.tabs.addTab(tab, "Local")
+        self._local_tab_index = self.tabs.addTab(tab, "Local")
 
     def _build_benchmark_tab(self) -> None:
         tab, content = self._create_scroll_tab()
@@ -1057,7 +1065,7 @@ class SettingsDialog(QtWidgets.QDialog):
         results_layout.addWidget(self.benchmark_summary_text)
         layout.addWidget(results_box, 1)
 
-        self.tabs.addTab(tab, "Benchmark")
+        self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
 
     # --- Remote tab ---
 
@@ -1414,17 +1422,30 @@ class SettingsDialog(QtWidgets.QDialog):
             return True
         return self._prime_local_model_views_from_persistent_cache()
 
-    def _schedule_deferred_local_model_refresh(self) -> None:
+    def _schedule_deferred_local_model_refresh(
+        self,
+        *,
+        delay_ms: int = 0,
+        force: bool = True,
+    ) -> None:
         self._deferred_local_model_refresh_pending = True
-        if self._deferred_local_model_refresh_timer.isActive():
-            return
-        self._deferred_local_model_refresh_timer.start(0)
+        self._deferred_local_model_refresh_force = (
+            self._deferred_local_model_refresh_force or force
+        )
+        self._deferred_local_model_refresh_timer.start(max(0, int(delay_ms)))
 
     def _run_deferred_local_model_refresh(self) -> None:
         if not self._deferred_local_model_refresh_pending:
             return
         self._deferred_local_model_refresh_pending = False
-        self._request_local_model_scan(force=True)
+        force = self._deferred_local_model_refresh_force
+        self._deferred_local_model_refresh_force = False
+        model_dir = self._local_model_cache_key(self.model_dir_edit.text())
+        if force and model_dir in self._local_model_auto_refresh_requested_dirs:
+            return
+        if force:
+            self._local_model_auto_refresh_requested_dirs.add(model_dir)
+        self._request_local_model_scan(force=force)
 
     def _refresh_model_combo(
         self,
@@ -1543,6 +1564,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_benchmark_actions()
 
     def _refresh_local_model_views(self, *, force: bool = True) -> None:
+        if force:
+            self._mark_local_model_refresh_stale()
         self._request_local_model_scan(force=force)
 
     def _known_cached_models(self, cached: list[str] | None = None) -> list[str]:
@@ -1561,15 +1584,28 @@ class SettingsDialog(QtWidgets.QDialog):
             f"color: {color}; font-size: 11px; padding: 0 0 4px 0;"
         )
 
-    def _reset_local_model_scan_views(self) -> None:
+    def _show_local_model_unverified_state(self, status_text: str) -> None:
+        if hasattr(self, "local_models_label"):
+            self.local_models_label.setTextFormat(QtCore.Qt.PlainText)
+            self.local_models_label.setText(
+                "Local model inventory has not been verified yet.\n"
+                "Models are shown as unavailable until the background check finishes."
+            )
+            self.local_models_label.setStyleSheet("color: #555;")
         if hasattr(self, "local_models_list"):
-            self.local_models_list.clear()
+            self._refresh_local_models_list([])
+            self.local_models_list.setEnabled(True)
         if hasattr(self, "benchmark_models_list"):
-            self.benchmark_models_list.clear()
+            self._refresh_benchmark_model_list([])
+            self.benchmark_models_list.setEnabled(True)
         if hasattr(self, "model_combo"):
             self._refresh_model_combo(cached=[])
-        if hasattr(self, "delete_selected_model_button"):
-            self.delete_selected_model_button.setEnabled(False)
+        if hasattr(self, "refresh_local_models_button"):
+            self.refresh_local_models_button.setEnabled(
+                self._active_local_model_download_thread is None
+            )
+        self._set_local_model_scan_status(status_text)
+        self._update_language_availability()
         self._update_local_model_actions()
         self._update_benchmark_actions()
 
@@ -1580,20 +1616,9 @@ class SettingsDialog(QtWidgets.QDialog):
                     "Showing the last known local models while the cache is verified in the background."
                 )
             else:
-                self.local_models_label.setText("Scanning local model cache...")
-                self.local_models_label.setStyleSheet("color: #555;")
-                self._set_local_model_scan_status(
-                    "The model lists update automatically when the background scan finishes."
+                self._show_local_model_unverified_state(
+                    "Checking local model availability in the background."
                 )
-        if preserve_current:
-            return
-        self._reset_local_model_scan_views()
-        if hasattr(self, "local_models_list"):
-            self.local_models_list.setEnabled(False)
-        if hasattr(self, "benchmark_models_list"):
-            self.benchmark_models_list.setEnabled(False)
-        if hasattr(self, "refresh_local_models_button"):
-            self.refresh_local_models_button.setEnabled(False)
 
     def _apply_local_model_scan_result(self, cached: list[str]) -> None:
         self._refresh_local_models_label(cached)
@@ -1609,6 +1634,41 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_language_availability()
         self._update_local_model_actions()
         self._update_benchmark_actions()
+
+    def _inventory_tab_is_visible(self) -> bool:
+        current_index = self.tabs.currentIndex() if hasattr(self, "tabs") else -1
+        return current_index in {
+            index
+            for index in (self._local_tab_index, self._benchmark_tab_index)
+            if index is not None
+        }
+
+    def _mark_local_model_refresh_stale(self, model_dir: str | None = None) -> None:
+        cache_key = self._local_model_cache_key(
+            self.model_dir_edit.text() if model_dir is None else model_dir
+        )
+        self._local_model_auto_refresh_requested_dirs.discard(cache_key)
+        self._local_model_auto_refreshed_dirs.discard(cache_key)
+
+    def _schedule_local_model_auto_refresh(
+        self,
+        *,
+        delay_ms: int,
+    ) -> None:
+        if not self._inventory_tab_is_visible():
+            return
+        cache_key = self._local_model_cache_key(self.model_dir_edit.text())
+        if (
+            cache_key in self._local_model_auto_refreshed_dirs
+            or cache_key in self._local_model_auto_refresh_requested_dirs
+        ):
+            return
+        preserve_current = (
+            self._cached_local_models_available
+            and cache_key == self._cached_local_models_dir
+        )
+        self._set_local_model_scan_loading(preserve_current=preserve_current)
+        self._schedule_deferred_local_model_refresh(delay_ms=delay_ms, force=True)
 
     def _request_local_model_scan(self, *, force: bool = False) -> None:
         model_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
@@ -1658,6 +1718,8 @@ class SettingsDialog(QtWidgets.QDialog):
             return
 
         self._active_local_model_scan_thread = None
+        self._local_model_auto_refresh_requested_dirs.discard(model_dir)
+        self._local_model_auto_refreshed_dirs.add(model_dir)
         cached = [value for value in payload if isinstance(value, str)]
         _LOCAL_MODEL_SCAN_SESSION_CACHE[model_dir] = list(cached)
         self._cached_local_models = cached
@@ -2395,8 +2457,16 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
-        self._prime_local_model_views_from_available_cache()
-        self._refresh_local_model_views(force=True)
+        self._mark_local_model_refresh_stale()
+        if not self._prime_local_model_views_from_available_cache():
+            status = (
+                "Checking the selected model directory in the background."
+                if self._inventory_tab_is_visible()
+                else "Open Local or Benchmark to verify this model directory in the background."
+            )
+            self._show_local_model_unverified_state(status)
+        if self._inventory_tab_is_visible():
+            self._schedule_local_model_auto_refresh(delay_ms=250)
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
@@ -2410,6 +2480,9 @@ class SettingsDialog(QtWidgets.QDialog):
     def _on_import_engine_changed(self, _index: int = 0) -> None:
         self._update_import_model_selector()
         self._update_import_engine_note()
+
+    def _on_settings_tab_changed(self, _index: int) -> None:
+        self._schedule_local_model_auto_refresh(delay_ms=75)
 
     def _on_import_model_changed(self, _index: int = 0) -> None:
         if not hasattr(self, "import_model_combo"):
@@ -2939,8 +3012,10 @@ class SettingsDialog(QtWidgets.QDialog):
             self._update_import_model_selector()
             self._update_import_engine_note()
 
-        self._prime_local_model_views_from_available_cache()
-        self._schedule_deferred_local_model_refresh()
+        if not self._prime_local_model_views_from_available_cache():
+            self._show_local_model_unverified_state(
+                "Open Local or Benchmark to verify local model availability in the background."
+            )
         self._update_engine_indicator()
         self._refresh_history_list()
         self._apply_secret_store_options()

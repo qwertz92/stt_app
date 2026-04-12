@@ -1,5 +1,5 @@
 import pytest
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app.app_paths import debug_audio_path
@@ -489,7 +489,8 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
     # Select the "small" model in the unified list
     for index in range(dialog.local_models_list.count()):
         item = dialog.local_models_list.item(index)
@@ -527,7 +528,8 @@ def test_local_tab_can_download_selected_model(monkeypatch):
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
 
     for index in range(dialog.local_models_list.count()):
         item = dialog.local_models_list.item(index)
@@ -590,7 +592,8 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    QtTest.QTest.qWait(100)
     dialog._set_benchmark_audio_path(str(audio_path))
 
     assert dialog.benchmark_models_list.count() == 1
@@ -651,34 +654,7 @@ def test_benchmark_tab_is_last():
     _ = app
 
 
-def test_settings_dialog_initialization_scans_local_models_once(monkeypatch):
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    calls: list[str] = []
-    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
-
-    monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
-        lambda model_dir="": calls.append(model_dir) or ["small"],
-    )
-    monkeypatch.setattr(
-        "stt_app.settings_dialog.threading.Thread",
-        _ImmediateThread,
-    )
-
-    store = _FakeSettingsStore(AppSettings(model_dir="/tmp/models"))
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-
-    app.processEvents()
-    assert calls == ["/tmp/models"]
-    assert "small" in dialog.local_models_label.text()
-    _ = app
-
-
-def test_settings_dialog_defers_initial_local_model_scan_until_event_loop(monkeypatch):
+def test_settings_dialog_scans_local_models_once_after_local_tab_is_selected(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -700,7 +676,38 @@ def test_settings_dialog_defers_initial_local_model_scan_until_event_loop(monkey
     )
 
     assert calls == []
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
+    assert calls == ["/tmp/models"]
+    assert "small" in dialog.local_models_label.text()
+    _ = app
+
+
+def test_settings_dialog_defers_local_model_scan_until_tab_event_loop(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls: list[str] = []
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda model_dir="": calls.append(model_dir) or ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    store = _FakeSettingsStore(AppSettings(model_dir="/tmp/models"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert calls == []
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    assert calls == []
+    QtTest.QTest.qWait(100)
     assert calls == ["/tmp/models"]
     _ = app
 
@@ -729,7 +736,8 @@ def test_settings_dialog_uses_session_cached_models_before_refresh(monkeypatch):
 
     assert "small" in dialog.local_models_label.text()
     assert calls == []
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
     assert calls == ["/tmp/models"]
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
@@ -760,7 +768,8 @@ def test_settings_dialog_uses_persistent_local_model_cache_before_refresh(monkey
     assert "tiny" in dialog.local_models_label.text()
     assert dialog.local_models_list.count() > 0
 
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
 
     assert calls == ["/tmp/models"]
     assert "small" in dialog.local_models_label.text()
@@ -787,7 +796,8 @@ def test_settings_dialog_shows_background_refresh_note_for_persistent_cache(monk
     )
 
     assert "small" in dialog.local_models_label.text()
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
 
     assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
     assert "small" in dialog.local_models_label.text()
@@ -812,7 +822,8 @@ def test_settings_dialog_treats_empty_persistent_cache_as_valid(monkeypatch):
     )
 
     assert "No local models found" in dialog.local_models_label.text()
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
 
     assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
     _ = app
@@ -834,7 +845,8 @@ def test_soft_local_model_refresh_keeps_lists_enabled(monkeypatch):
         app_logger=_FakeLogger(),
     )
 
-    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
 
     assert dialog.local_models_list.isEnabled() is True
     assert dialog.refresh_local_models_button.isEnabled() is True
@@ -861,9 +873,12 @@ def test_model_dir_change_triggers_single_rescan(monkeypatch):
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(100)
     calls.clear()
 
     dialog.model_dir_edit.setText("/tmp/other-models")
+    QtTest.QTest.qWait(300)
 
     assert calls == ["/tmp/other-models"]
     _ = app

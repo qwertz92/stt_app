@@ -129,6 +129,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Benchmark download confirmation:** User is now asked before downloading uncached models.
 - **Settings dialog overhaul:** Tabs for Local/Remote, save confirmation status bar, provider activation/testing dialog.
 
+## 2026-04-12
+
+- Local model inventory refresh is now demand-driven by the Local/Benchmark tabs instead of being kicked off during every settings-dialog initialization.
+- The Local tab now renders either cached inventory or a neutral "not yet verified" placeholder immediately, then refreshes in the background after the tab is visible.
+- `model_dir` changes are now debounced before re-scanning, which avoids stacking repeated cache probes while the user edits the path.
+- Removed the startup local-model inventory prewarm because it could race with the dialog's own refresh path and contribute to first-open UI stalls.
+
 ## 2026-02-21
 
 - **AssemblyAI streaming implemented:** Real-time transcription via `aai.RealtimeTranscriber` (WebSocket).
