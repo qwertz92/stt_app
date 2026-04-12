@@ -125,7 +125,9 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(580, 620)
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 720)
+_DIALOG_SCREEN_MARGIN = 48
+_COMPACT_LIST_ITEM_STYLESHEET = "QListWidget::item { padding: 1px 4px; }"
 
 _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "groq": DEFAULT_GROQ_MODEL,
@@ -227,6 +229,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._deferred_local_model_refresh_pending = False
         self._deferred_local_model_refresh_force = False
+        self._initial_dialog_size_applied = False
 
         self.setWindowTitle("Dictation Settings")
         self.setModal(False)
@@ -334,16 +337,63 @@ class SettingsDialog(QtWidgets.QDialog):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         root.addWidget(self.engine_indicator)
-        root.addWidget(self.tabs)
+        root.addWidget(self.tabs, 1)
         root.addLayout(buttons)
 
     def _restore_default_dialog_size(self) -> None:
-        target_size = QtCore.QSize(self._default_dialog_size)
-        target_size = target_size.expandedTo(self.minimumSize())
-        minimum_hint = self.minimumSizeHint()
-        if minimum_hint.isValid():
-            target_size = target_size.expandedTo(minimum_hint)
+        target_size = self._refresh_default_dialog_size()
         self.resize(target_size)
+
+    def _refresh_default_dialog_size(self) -> QtCore.QSize:
+        target_size = self._preferred_dialog_size()
+        available_size = self._available_dialog_size()
+        if available_size.isValid():
+            target_size = target_size.boundedTo(available_size)
+        self._default_dialog_size = QtCore.QSize(target_size)
+        return QtCore.QSize(target_size)
+
+    def _preferred_dialog_size(self) -> QtCore.QSize:
+        preferred = QtCore.QSize(_DEFAULT_SETTINGS_DIALOG_SIZE)
+        if not hasattr(self, "tabs"):
+            return preferred
+
+        self.ensurePolished()
+        root_layout = self.layout()
+        if root_layout is not None:
+            root_layout.activate()
+
+        current_index = self.tabs.currentIndex()
+        updates_enabled = self.updatesEnabled()
+        blocker = QtCore.QSignalBlocker(self.tabs)
+        self.setUpdatesEnabled(False)
+        try:
+            for index in range(self.tabs.count()):
+                self.tabs.setCurrentIndex(index)
+                if root_layout is not None:
+                    root_layout.activate()
+                preferred = preferred.expandedTo(self.sizeHint())
+        finally:
+            self.tabs.setCurrentIndex(current_index)
+            del blocker
+            self.setUpdatesEnabled(updates_enabled)
+            if root_layout is not None:
+                root_layout.activate()
+
+        return preferred.expandedTo(self.minimumSize())
+
+    def _available_dialog_size(self) -> QtCore.QSize:
+        screen = (
+            self.screen()
+            or QtGui.QGuiApplication.screenAt(QtGui.QCursor.pos())
+            or QtGui.QGuiApplication.primaryScreen()
+        )
+        if screen is None:
+            return QtCore.QSize()
+        geometry = screen.availableGeometry()
+        return QtCore.QSize(
+            max(0, geometry.width() - _DIALOG_SCREEN_MARGIN),
+            max(0, geometry.height() - _DIALOG_SCREEN_MARGIN),
+        )
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
         style = "color: #555; font-size: 11px; padding: 0 0 6px 0;"
@@ -364,6 +414,39 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(control)
         layout.addWidget(hint)
         return wrapper
+
+    @staticmethod
+    def _configure_compact_list_widget(
+        widget: QtWidgets.QListWidget,
+        *,
+        expand: bool = False,
+        adjust_to_contents: bool = False,
+    ) -> None:
+        widget.setUniformItemSizes(True)
+        widget.setSpacing(0)
+        widget.setStyleSheet(_COMPACT_LIST_ITEM_STYLESHEET)
+        widget.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        if expand:
+            widget.setSizePolicy(
+                QtWidgets.QSizePolicy.Expanding,
+                QtWidgets.QSizePolicy.Expanding,
+            )
+        if adjust_to_contents:
+            widget.setSizeAdjustPolicy(
+                QtWidgets.QAbstractScrollArea.AdjustToContents
+            )
+
+    @staticmethod
+    def _minimum_list_height_for_rows(
+        widget: QtWidgets.QListWidget,
+        row_count: int,
+    ) -> int:
+        effective_rows = max(1, int(row_count))
+        row_height = widget.sizeHintForRow(0)
+        if row_height <= 0:
+            row_height = widget.fontMetrics().height() + 10
+        frame = widget.frameWidth() * 2
+        return frame + (row_height * effective_rows) + 2
 
     def _dialog_scrollbar_stylesheet(self) -> str:
         return """
@@ -426,7 +509,7 @@ class SettingsDialog(QtWidgets.QDialog):
         content = QtWidgets.QWidget()
         content.setSizePolicy(
             QtWidgets.QSizePolicy.Preferred,
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Expanding,
         )
         scroll.setWidget(content)
         return scroll, content
@@ -777,8 +860,13 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addLayout(form)
 
         # Unified local models section
-        local_models_box = QtWidgets.QGroupBox("Local Models")
-        local_models_layout = QtWidgets.QVBoxLayout(local_models_box)
+        self.local_models_box = QtWidgets.QGroupBox("Local Models")
+        self.local_models_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        local_models_layout = QtWidgets.QVBoxLayout(self.local_models_box)
+        local_models_layout.setSpacing(4)
         self.local_models_label = QtWidgets.QLabel("Scanning...")
         self.local_models_label.setWordWrap(True)
         local_models_layout.addWidget(self.local_models_label)
@@ -799,14 +887,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.MultiSelection
         )
-        self.local_models_list.setUniformItemSizes(True)
-        self.local_models_list.setStyleSheet(
-            "QListWidget::item { padding: 2px 4px; }"
+        self._configure_compact_list_widget(
+            self.local_models_list,
+            expand=True,
+            adjust_to_contents=True,
         )
         self.local_models_list.itemSelectionChanged.connect(
             self._update_local_model_actions
         )
-        local_models_layout.addWidget(self.local_models_list)
+        local_models_layout.addWidget(self.local_models_list, 1)
 
         manage_buttons = QtWidgets.QHBoxLayout()
         self.refresh_local_models_button = QtWidgets.QPushButton("Refresh")
@@ -844,8 +933,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Open this tab to verify local model availability in the background."
         )
 
-        layout.addWidget(local_models_box)
-        layout.addStretch(1)
+        layout.addWidget(self.local_models_box, 1)
         self._local_tab_index = self.tabs.addTab(tab, "Local")
 
     def _build_benchmark_tab(self) -> None:
@@ -900,15 +988,24 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(audio_box)
 
         models_box = QtWidgets.QGroupBox("Installed Models")
+        models_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Preferred,
+        )
         models_layout = QtWidgets.QVBoxLayout(models_box)
         self.benchmark_models_list = QtWidgets.QListWidget()
         self.benchmark_models_list.setSelectionMode(
             QtWidgets.QAbstractItemView.MultiSelection
         )
+        self._configure_compact_list_widget(
+            self.benchmark_models_list,
+            expand=True,
+            adjust_to_contents=True,
+        )
         self.benchmark_models_list.itemSelectionChanged.connect(
             self._update_benchmark_actions
         )
-        models_layout.addWidget(self.benchmark_models_list)
+        models_layout.addWidget(self.benchmark_models_list, 1)
         self.refresh_benchmark_models_button = QtWidgets.QPushButton(
             "Refresh Installed Models"
         )
@@ -1256,9 +1353,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_list = QtWidgets.QListWidget()
         history_font = QtGui.QFont(self.font())
         self.history_list.setFont(history_font)
-        self.history_list.setSpacing(0)
-        self.history_list.setUniformItemSizes(True)
-        self.history_list.setStyleSheet("QListWidget::item { padding: 2px 4px; }")
+        self._configure_compact_list_widget(self.history_list)
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
         history_layout.addWidget(self.history_list)
 
@@ -1371,6 +1466,13 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(import_box)
         layout.addStretch(1)
         self.tabs.addTab(tab, "Import Audio")
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        if self._initial_dialog_size_applied:
+            return
+        self._initial_dialog_size_applied = True
+        self._restore_default_dialog_size()
 
     # ------------------------------------------------------------------
     # Model combo helpers
@@ -1533,6 +1635,13 @@ class SettingsDialog(QtWidgets.QDialog):
             if model_name in selected:
                 item.setSelected(True)
 
+        visible_rows = min(max(self.local_models_list.count(), 1), 5)
+        self.local_models_list.setMinimumHeight(
+            self._minimum_list_height_for_rows(
+                self.local_models_list,
+                visible_rows,
+            )
+        )
         self._update_local_model_actions()
 
     def _refresh_benchmark_model_list(
@@ -1561,6 +1670,13 @@ class SettingsDialog(QtWidgets.QDialog):
             else:
                 item.setSelected(True)
 
+        visible_rows = min(max(self.benchmark_models_list.count(), 1), 4)
+        self.benchmark_models_list.setMinimumHeight(
+            self._minimum_list_height_for_rows(
+                self.benchmark_models_list,
+                visible_rows,
+            )
+        )
         self._update_benchmark_actions()
 
     def _refresh_local_model_views(self, *, force: bool = True) -> None:

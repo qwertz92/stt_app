@@ -438,7 +438,7 @@ def test_history_list_matches_detail_font_and_compact_item_spacing():
 
     assert dialog.history_list.font().pointSizeF() == dialog.history_detail.font().pointSizeF()
     assert dialog.history_list.uniformItemSizes() is True
-    assert "padding: 2px 4px" in dialog.history_list.styleSheet()
+    assert "padding: 1px 4px" in dialog.history_list.styleSheet()
     _ = app
 
 
@@ -1036,7 +1036,64 @@ def test_local_model_lists_use_compact_item_spacing():
     )
 
     assert dialog.local_models_list.uniformItemSizes() is True
-    assert "padding: 2px 4px" in dialog.local_models_list.styleSheet()
+    assert dialog.local_models_list.spacing() == 0
+    assert "padding: 1px 4px" in dialog.local_models_list.styleSheet()
+    _ = app
+
+
+def test_settings_dialog_show_expands_to_remote_tab_width():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    dialog.show()
+    app.processEvents()
+    remote_index = [
+        index
+        for index in range(dialog.tabs.count())
+        if dialog.tabs.tabText(index) == "Remote"
+    ][0]
+    dialog.tabs.setCurrentIndex(remote_index)
+    app.processEvents()
+    remote_tab = dialog.tabs.currentWidget()
+
+    assert dialog.width() >= settings_dialog_module._DEFAULT_SETTINGS_DIALOG_SIZE.width()
+    assert remote_tab.horizontalScrollBar().maximum() == 0
+    _ = app
+
+
+def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small", "medium"]
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _IdleThread,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    app.processEvents()
+
+    initial_box_height = dialog.local_models_box.height()
+    initial_list_height = dialog.local_models_list.height()
+
+    dialog.resize(dialog.width() + 120, dialog.height() + 220)
+    app.processEvents()
+
+    assert dialog.local_models_box.height() > initial_box_height
+    assert dialog.local_models_list.height() > initial_list_height
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
 
 

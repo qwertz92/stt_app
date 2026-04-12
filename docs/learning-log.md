@@ -136,6 +136,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - `model_dir` changes are now debounced before re-scanning, which avoids stacking repeated cache probes while the user edits the path.
 - Removed the startup local-model inventory prewarm because it could race with the dialog's own refresh path and contribute to first-open UI stalls.
 
+## 2026-04-13
+
+- The settings dialog now computes its initial size from the widest tab, bounded by the available screen size, so it opens without unnecessary horizontal scrolling on normal displays.
+- The Local Models group now expands with the dialog height, while its list keeps a small minimum height so inner scrolling only appears when the available space is genuinely limited.
+- Compact list-item padding is shared across the Local and History views to reduce wasted vertical space without changing their overall structure.
+
 ## 2026-02-21
 
 - **AssemblyAI streaming implemented:** Real-time transcription via `aai.RealtimeTranscriber` (WebSocket).
