@@ -91,6 +91,13 @@ runner decodes WAV input itself and passes Float32 audio directly to
 Transformers.js. Use the app's last recording or another WAV file when
 benchmarking Cohere/Granite.
 
+Long audio is handled conservatively. Cohere uses the Transformers.js Cohere
+ASR pipeline, which chunks long audio internally. Granite is processed through a
+model-specific path, so the app chunks Granite audio at quiet boundaries with a
+maximum chunk size of 30 seconds before generation. This keeps long recordings
+from being sent as one very large prompt/audio feature block, but it is still
+not a replacement for a dedicated long-form transcription pipeline.
+
 Unlike faster-whisper models, Cohere and Granite are not preloaded when the app
 starts. This avoids expensive background CPU model loading before the user
 actually starts an experimental transcription. The Local tab has an expert

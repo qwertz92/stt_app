@@ -21,8 +21,8 @@ Status after the 2026-04-18 implementation pass:
   a heavyweight, NVIDIA-oriented runtime.
 - Qwen3-ASR 0.6B and 1.7B were evaluated, but are not implemented because the
   official path uses a separate `qwen-asr`/PyTorch or vLLM stack and the
-  available community ONNX/GGUF packages do not match the shared
-  Transformers.js/WebGPU runtime used for Cohere and Granite.
+  available community ONNX/GGUF packages require custom runtime code rather
+  than the shared Transformers.js ASR pipeline used for Cohere and Granite.
 
 The next step is an on-device benchmark on the target Intel GPU. That benchmark
 should compare:
@@ -145,7 +145,7 @@ recommended local path.
 | NVIDIA Parakeet v3 | Excellent speed and good WER on supported hardware | Poor as NeMo production path | NVIDIA-only for official path | Do not implement official NeMo path |
 | Parakeet community ONNX | Potentially useful | Medium-low, community maintained | Plausible via ONNX/WebGPU only | Optional benchmark, not first priority |
 | IBM Granite 4.0 1B Speech | Very close to Cohere on English Open ASR | Medium as WebGPU | Plausible via WebGPU | Experimental selectable model; benchmark alongside Cohere |
-| Qwen3-ASR 0.6B / 1.7B | Strong official ASR family | Poor for current WebGPU path; possible future GGUF/ONNX CPU experiment | Runtime-specific | Watch; do not add without a separate runtime decision |
+| Qwen3-ASR 0.6B / 1.7B | Strong official ASR family, but not ahead of Cohere/Granite on English Open ASR average | Poor for current WebGPU path; possible future GGUF/custom ONNX experiment | Runtime-specific | Watch; do not add without a separate runtime decision |
 | Canary / Voxtral / Kyutai | Interesting but less compelling for this app | Unproven | Runtime-specific | Watch only |
 
 ## Cohere Transcribe
@@ -388,10 +388,15 @@ automatic language identification, and examples through `qwen-asr`,
 That is not the same integration class as the Cohere and Granite models added
 in this branch. The current app integration depends on a Transformers.js ONNX
 pipeline that can select `webgpu`, `dml`, or `cpu` from the same helper process.
-Qwen3-ASR does not currently have a maintained, official ONNX/WebGPU package
-with the same pipeline compatibility. Community GGUF and ONNX CPU packages
-exist, but they imply a separate runtime family and separate model-management
-rules.
+Qwen3-ASR has community ONNX and GGUF packages, including int4 ONNX Runtime
+exports and CPU-only ONNX pipelines. They are real options, but they imply a
+separate runtime family and separate model-management rules.
+
+The current public English comparison does not make Qwen an obvious upgrade:
+Cohere reports average WER 5.42, Granite 5.52, and Qwen3-ASR-1.7B 5.76 on the
+English Open ASR set. A Japanese RTX 5090 benchmark found Qwen3-ASR-1.7B
+excellent for Japanese media audio, but that is not enough to justify adding a
+new Windows desktop runtime for German/English dictation.
 
 The dedicated Qwen note is `docs/qwen3-asr-evaluation.md`.
 
@@ -535,9 +540,9 @@ Do not spend time on a native PyTorch production provider unless the WebGPU path
 fails and a CPU/NVIDIA-only research path is explicitly desired.
 
 Do not add Qwen3-ASR to the normal local model picker until a runtime decision
-is made. A community GGUF or CPU ONNX experiment can be useful, but it should be
-treated as a new runtime family, not folded into the Cohere/Granite WebGPU
-helper.
+is made and app-specific benchmark data shows a quality win. A community GGUF
+or custom ONNX experiment can be useful, but it should be treated as a new
+runtime family, not folded into the Cohere/Granite WebGPU helper.
 
 ## Sources
 
@@ -561,6 +566,12 @@ helper.
   <https://huggingface.co/Qwen/Qwen3-ASR-0.6B>
 - Qwen3-ASR 1.7B model card:
   <https://huggingface.co/Qwen/Qwen3-ASR-1.7B>
+- Qwen3-ASR 0.6B ONNX Runtime community package:
+  <https://huggingface.co/andrewleech/qwen3-asr-0.6b-onnx>
+- Qwen3-ASR 0.6B ONNX CPU community package:
+  <https://huggingface.co/wolfofbackstreet/Qwen3-ASR-0.6B-ONNX-CPU>
+- Qwen3-ASR 0.6B GGUF community package:
+  <https://huggingface.co/cstr/qwen3-asr-0.6b-GGUF>
 - Hugging Face Open ASR Leaderboard repository:
   <https://github.com/huggingface/open_asr_leaderboard>
 - Transformers.js v4 announcement:

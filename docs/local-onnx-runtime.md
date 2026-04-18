@@ -23,6 +23,25 @@ The experimental Cohere and Granite models use a separate out-of-process stack:
 The helper is a child process by design. If the JavaScript runtime crashes, the
 main app can report the error and continue instead of taking down the UI.
 
+## Runtime Formats
+
+ONNX is not a GPU-only format. ONNX is a portable model graph format, and ONNX
+Runtime chooses one or more execution providers to run that graph. The same
+ONNX model can run on CPU, CUDA, DirectML, WebGPU, OpenVINO, or another provider
+if the model graph and provider support match.
+
+CTranslate2 is different. It is a custom inference runtime and model format
+optimized for supported Transformer architectures. In this app, CTranslate2 is
+the mature production path because `faster-whisper` already handles Whisper
+preprocessing, decoding, timestamps, language detection, quantization, and CPU
+performance well.
+
+GGUF is also different. It is a model-file format used by ggml/llama.cpp-style
+runtimes. A GGUF file does not run by itself and is not automatically compatible
+with ONNX Runtime or CTranslate2. Adding a GGUF ASR model means selecting,
+packaging, testing, and maintaining a compatible GGUF runtime for that exact ASR
+architecture.
+
 ## Execution Targets
 
 `stt_app` exposes these ONNX targets for Cohere and Granite benchmarks:
@@ -118,7 +137,15 @@ Important details:
 
 The on-disk download size is not the same thing as runtime memory.
 
-Why a q4 model can still be around 2 GB:
+The lower-bound estimate for weight storage is:
+
+`parameter_count * bits_per_parameter / 8`
+
+That estimate is only useful when the parameter count and quantized tensor set
+are known. It does not mean every file in a package is 4-bit, and it does not
+include metadata, runtime buffers, activations, or duplicate graph structures.
+
+Why the current q4 ONNX downloads are still around 2 GB:
 
 - Not every tensor is quantized to 4 bits.
 - ONNX models often split encoder, decoder, embeddings, and external data into
@@ -150,22 +177,43 @@ helper process exits afterward.
 Parameter-count names such as `1B`, `2B`, or `3B` are approximate marketing and
 architecture labels. They do not directly predict download size.
 
-The common estimate is:
-
-`parameter_count * bits_per_parameter / 8`
-
-That estimate only covers quantized weight tensors. Real packages include
-metadata, tokenizer files, unquantized tensors, split graph files, external data
-files, embeddings, and runtime-specific duplicated structures.
-
 Examples from currently evaluated candidates:
 
 - Granite's "1B Speech" name refers to its base LLM family, but the full speech
-  package includes an audio stack and HF metadata reports a larger total model.
+  package includes an audio stack, adapter/projector components, tokenizer
+  assets, and multiple ONNX graph files.
 - Qwen3-ASR-0.6B community notes report the speech model as roughly 782M-900M
   parameters once audio encoder and LLM pieces are counted.
-- Cohere's ONNX package is q4 but still downloads around 2.13 GB because it is a
-  multi-part ASR model, not a single flat 4-bit tensor file.
+- Cohere's ONNX package is q4 and 2B parameters, so a raw 4-bit weight lower
+  bound is already about 1 GB before unquantized tensors, model graph overhead,
+  external data files, tokenizer assets, and runtime buffers are counted.
+
+## Long Audio Behavior
+
+The app is a dictation tool, not a long-form transcription server. Long audio
+needs explicit handling because memory can grow in several places: decoded WAV
+samples, mel features, audio tokens, generated text tokens, and decoder KV
+cache.
+
+Current behavior:
+
+- The Node helper decodes the whole WAV file into one 16 kHz mono `Float32Array`
+  before model-specific processing starts. This is usually fine for dictation,
+  but very long files still allocate the decoded waveform in one process.
+- Cohere uses the Transformers.js Cohere ASR pipeline. That pipeline calls the
+  Cohere feature extractor's `split_audio()` helper, which splits long audio at
+  quiet boundaries and joins per-chunk transcripts.
+- Granite does not use the generic ASR pipeline. The app now chunks Granite
+  audio at quiet boundaries with a maximum chunk size of 30 seconds before
+  running generation for each chunk. This keeps the prompt/audio-token size
+  bounded for long recordings.
+- If the JavaScript helper still crashes or is killed by the OS, the main PySide
+  app should report a transcription error instead of crashing with it.
+
+Important limitation: chunking reduces peak model memory, but it is not the
+same as a full long-form transcription system with diarization, overlap merging,
+timestamp alignment, or context carry-over. For long meetings, a dedicated
+segmentation/VAD workflow is still the safer product direction.
 
 ## Language Handling
 
@@ -207,3 +255,11 @@ For the current Windows Intel GPU test machine:
   <https://onnxruntime.ai/docs/execution-providers/>
 - ONNX Runtime DirectML execution provider:
   <https://onnxruntime.ai/docs/execution-providers/DirectML-ExecutionProvider.html>
+- CTranslate2 project overview:
+  <https://github.com/OpenNMT/CTranslate2>
+- GGUF format reference:
+  <https://www.mintlify.com/ggml-org/llama.cpp/concepts/gguf-format>
+- Cohere Transcribe model card:
+  <https://huggingface.co/CohereLabs/cohere-transcribe-03-2026>
+- Granite ONNX/WebGPU model card:
+  <https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX>

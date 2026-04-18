@@ -53,14 +53,18 @@ Agents and developers: use this as a knowledge base for past issues and solution
     WebGPU, or GPU+CPU comparison targets and now shows the resolved device.
   - The ONNX runner decodes WAV input directly because Transformers.js cannot
     use browser `AudioContext` path loading in Node.
+  - Cohere's Transformers.js ASR pipeline chunks long audio internally. Granite
+    now gets app-side quiet-boundary chunking before generation to avoid one
+    giant prompt/audio feature block for long recordings.
   - `auto` can fall back from a GPU runtime to CPU during transcription if an
     ONNX operator fails after the model loaded successfully.
   - `gpu` can fall back between GPU runtimes during transcription, but never
     falls back to CPU.
   - Granite keeps automatic language mode generic; Cohere maps Auto to German
     because its ONNX path requires an explicit language.
-  - Qwen3-ASR 0.6B/1.7B were evaluated and documented, but not implemented
-    because they do not currently share the Cohere/Granite WebGPU runtime path.
+  - Qwen3-ASR 0.6B/1.7B community ONNX and GGUF packages exist, but were not
+    implemented because they require custom runtime code and do not currently
+    show a clear app-specific quality/speed win over Cohere/Granite.
   - App startup now uses a single-instance lock to avoid duplicate tray/overlay
     processes competing for hotkeys and background work.
 - **Runtime packaging hooks were added:**

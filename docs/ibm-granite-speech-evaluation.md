@@ -49,6 +49,11 @@ The q4 ONNX download is about 1.84 GB. Runtime RAM/VRAM can be higher because
 the model includes an audio encoder, decoder, tokenizer assets, activation
 buffers, and GPU driver allocations.
 
+The app chunks Granite audio at quiet boundaries with a maximum chunk size of
+30 seconds before generation. This bounds prompt/audio-token growth for long
+recordings, but Granite should still be treated as a dictation model rather
+than a long-meeting transcription pipeline.
+
 Benchmarks close each Granite helper process after the case. Normal dictation
 also closes the helper by default. The expert keep-loaded setting can keep it
 warm after dictation to avoid the next load cost.
