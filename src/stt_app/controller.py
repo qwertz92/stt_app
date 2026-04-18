@@ -187,6 +187,7 @@ class DictationController(QtCore.QObject):
         self._canceled_request_tokens.clear()
         self._request_audio_by_token.clear()
         self._reset_streaming_state()
+        self._reset_transcriber_cache()
         self._executor.shutdown(wait=False, cancel_futures=False)
         self._preload_executor.shutdown(wait=False, cancel_futures=False)
 
@@ -770,7 +771,10 @@ class DictationController(QtCore.QObject):
     # -- Model preloading -----------------------------------------------------
 
     def _start_local_model_preload(self) -> None:
-        if self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
+        if (
+            self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+            and not bool(getattr(self._settings, "keep_onnx_model_loaded", False))
+        ):
             self._preload_progress_timer.stop()
             self._preload_target_model = None
             self._preload_future = None
@@ -1095,6 +1099,7 @@ class DictationController(QtCore.QObject):
         close_after_transcription = (
             settings.engine == DEFAULT_ENGINE
             and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+            and not bool(getattr(settings, "keep_onnx_model_loaded", False))
         )
         transcriber = None
         try:
@@ -1238,10 +1243,12 @@ class DictationController(QtCore.QObject):
             getattr(settings, "deepgram_model", ""),
             getattr(settings, "assemblyai_model", ""),
             getattr(settings, "elevenlabs_model", ""),
+            bool(getattr(settings, "keep_onnx_model_loaded", False)),
         )
         if (
             settings.engine == DEFAULT_ENGINE
             and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+            and not bool(getattr(settings, "keep_onnx_model_loaded", False))
         ):
             return create_transcriber(settings, secret_store=self._secret_store)
         with self._transcriber_cache_lock:

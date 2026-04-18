@@ -7,7 +7,7 @@ LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "stt_app"
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -32,6 +32,7 @@ DEFAULT_PASTE_MODE = "auto"
 DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = False
 DEFAULT_ALLOW_INSECURE_KEY_STORAGE = False
 DEFAULT_OFFLINE_MODE = False
+DEFAULT_KEEP_ONNX_MODEL_LOADED = False
 DEFAULT_START_BEEP_ENABLED = False
 DEFAULT_START_BEEP_TONE = "soft"
 DEFAULT_OVERLAY_ALWAYS_ON_TOP = True

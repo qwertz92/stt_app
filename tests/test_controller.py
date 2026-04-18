@@ -739,6 +739,34 @@ def test_controller_initialize_skips_preload_for_webgpu_local_model():
     _ = app
 
 
+def test_controller_initialize_preloads_webgpu_when_keep_loaded_enabled():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=True,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller.initialize()
+
+    assert preload_called == [True]
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_initialize_local_uses_preload_executor_only():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
@@ -834,7 +862,9 @@ def test_webgpu_batch_transcriber_is_closed_after_worker(monkeypatch):
         window_focus_helper=FakeWindowFocusHelper(),
     )
     emitted = []
-    controller.transcription_ready.connect(lambda token, text: emitted.append((token, text)))
+    controller.transcription_ready.connect(
+        lambda token, text: emitted.append((token, text))
+    )
 
     controller._transcribe_worker(7, b"RIFF", settings)
 
@@ -842,6 +872,56 @@ def test_webgpu_batch_transcriber_is_closed_after_worker(monkeypatch):
     assert transcriber.closed is True
     assert controller._transcriber_cache is None
     controller.shutdown()
+    _ = app
+
+
+def test_webgpu_batch_transcriber_is_cached_when_keep_loaded(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=True,
+    )
+
+    class FakeWebGpuTranscriber:
+        def __init__(self) -> None:
+            self.closed = False
+            self.calls = 0
+
+        def transcribe_batch(self, _audio_source):
+            self.calls += 1
+            return "hello"
+
+        def close(self):
+            self.closed = True
+
+    transcriber = FakeWebGpuTranscriber()
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    emitted = []
+    controller.transcription_ready.connect(
+        lambda token, text: emitted.append((token, text))
+    )
+
+    controller._transcribe_worker(7, b"RIFF", settings)
+
+    assert emitted == [(7, "hello")]
+    assert transcriber.closed is False
+    assert controller._transcriber_cache is transcriber
+    controller.shutdown()
+    assert transcriber.closed is True
     _ = app
 
 

@@ -8,6 +8,7 @@ from stt_app.config import (
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
+    DEFAULT_KEEP_ONNX_MODEL_LOADED,
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
@@ -54,6 +55,7 @@ def test_load_defaults_creates_file(tmp_path):
         settings.keep_transcript_in_clipboard
         == DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     )
+    assert settings.keep_onnx_model_loaded == DEFAULT_KEEP_ONNX_MODEL_LOADED
     assert settings.has_openai_key is False
     assert settings.has_deepgram_key is False
     assert settings.has_elevenlabs_key is False

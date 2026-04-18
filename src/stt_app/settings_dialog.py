@@ -869,6 +869,28 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         form.addRow("", self.offline_mode_checkbox)
 
+        self.keep_onnx_model_loaded_checkbox = QtWidgets.QCheckBox(
+            "Keep experimental ONNX model loaded after dictation"
+        )
+        self.keep_onnx_model_loaded_checkbox.setToolTip(
+            "Expert option for Cohere and Granite. Keeps the last ONNX runtime "
+            "process alive so short follow-up dictations skip model load time. "
+            "Disable it if RAM or GPU memory pressure matters more."
+        )
+        keep_onnx_note = QtWidgets.QLabel(
+            "ONNX models can use several GB of RAM/VRAM while loaded. Benchmarks "
+            "always close each case after measuring it."
+        )
+        keep_onnx_note.setWordWrap(True)
+        self._style_note_label(keep_onnx_note)
+        form.addRow(
+            "",
+            self._field_with_hint(
+                self.keep_onnx_model_loaded_checkbox,
+                keep_onnx_note,
+            ),
+        )
+
         layout.addLayout(form)
 
         # Unified local models section
@@ -2584,8 +2606,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 "Experimental ONNX model: the app tries WebGPU, then DirectML "
                 "on Windows, and falls back to CPU if no compatible "
                 "Intel/AMD/NVIDIA GPU runtime loads. CPU fallback can be much "
-                "slower than large-v3-turbo. Batch mode only. The exact device "
-                "is shown in benchmark results after the model loads."
+                "slower than large-v3-turbo. Batch mode only. Benchmark WebGPU, "
+                "DirectML, and CPU on this machine before choosing a default."
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return
@@ -3187,6 +3209,9 @@ class SettingsDialog(QtWidgets.QDialog):
             bool(getattr(settings, "allow_insecure_key_storage", False))
         )
         self.offline_mode_checkbox.setChecked(settings.offline_mode)
+        self.keep_onnx_model_loaded_checkbox.setChecked(
+            bool(getattr(settings, "keep_onnx_model_loaded", False))
+        )
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
         self._update_mode_availability()
@@ -3575,6 +3600,7 @@ class SettingsDialog(QtWidgets.QDialog):
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
+            keep_onnx_model_loaded=self.keep_onnx_model_loaded_checkbox.isChecked(),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
             start_beep_tone=str(
                 self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE
@@ -3821,6 +3847,7 @@ class SettingsDialog(QtWidgets.QDialog):
             ),
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
+            keep_onnx_model_loaded=self.keep_onnx_model_loaded_checkbox.isChecked(),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
             start_beep_tone=str(
                 self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE

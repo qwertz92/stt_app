@@ -23,6 +23,7 @@ from .config import (
     DEEPGRAM_MODELS,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
+    DEFAULT_KEEP_ONNX_MODEL_LOADED,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_MODEL_DIR,
@@ -83,6 +84,7 @@ DEFAULTS = {
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "allow_insecure_key_storage": DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     "offline_mode": DEFAULT_OFFLINE_MODE,
+    "keep_onnx_model_loaded": DEFAULT_KEEP_ONNX_MODEL_LOADED,
     "start_beep_enabled": DEFAULT_START_BEEP_ENABLED,
     "start_beep_tone": DEFAULT_START_BEEP_TONE,
     "overlay_corner": DEFAULT_OVERLAY_CORNER,
@@ -122,6 +124,7 @@ class AppSettings:
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     allow_insecure_key_storage: bool = DEFAULT_ALLOW_INSECURE_KEY_STORAGE
     offline_mode: bool = DEFAULT_OFFLINE_MODE
+    keep_onnx_model_loaded: bool = DEFAULT_KEEP_ONNX_MODEL_LOADED
     start_beep_enabled: bool = DEFAULT_START_BEEP_ENABLED
     start_beep_tone: str = DEFAULT_START_BEEP_TONE
     overlay_corner: str = DEFAULT_OVERLAY_CORNER
@@ -276,6 +279,12 @@ class AppSettings:
                 )
             ),
             offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),
+            keep_onnx_model_loaded=bool(
+                merged.get(
+                    "keep_onnx_model_loaded",
+                    DEFAULT_KEEP_ONNX_MODEL_LOADED,
+                )
+            ),
             start_beep_enabled=bool(
                 merged.get("start_beep_enabled", DEFAULT_START_BEEP_ENABLED)
             ),
