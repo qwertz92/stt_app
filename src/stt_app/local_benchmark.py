@@ -267,6 +267,7 @@ def _run_webgpu_case(
     transcriber.preload_model()
     load_seconds = time.perf_counter() - model_start
     runtime_device = transcriber.runtime_device or "auto"
+    final_runtime_device = runtime_device
 
     if progress_callback is not None:
         progress_callback(
@@ -278,6 +279,7 @@ def _run_webgpu_case(
         if progress_callback is not None:
             progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
         transcriber.transcribe_batch(audio_path)
+        final_runtime_device = transcriber.runtime_device or final_runtime_device
 
     duration_hint = _audio_duration_seconds(audio_path) or math.nan
 
@@ -292,6 +294,7 @@ def _run_webgpu_case(
             started = time.perf_counter()
             transcript = transcriber.transcribe_batch(audio_path)
             elapsed = time.perf_counter() - started
+            final_runtime_device = transcriber.runtime_device or final_runtime_device
 
             transcript_words = len(
                 [piece for piece in transcript.split(" ") if piece]
@@ -315,7 +318,7 @@ def _run_webgpu_case(
 
     return BenchmarkCase(
         model=model_name,
-        device=runtime_device,
+        device=final_runtime_device,
         compute_type="onnx-q4",
         download_seconds=0.0,
         load_seconds=load_seconds,

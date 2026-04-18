@@ -3,8 +3,8 @@ import {
   GraniteSpeechForConditionalGeneration,
   env,
   pipeline,
-  read_audio,
 } from "@huggingface/transformers";
+import { readFileSync } from "node:fs";
 
 env.allowLocalModels = true;
 env.allowRemoteModels = false;
@@ -64,6 +64,127 @@ function formatError(error) {
 
 function modelPathForTransformers(modelPath) {
   return String(modelPath || "").replaceAll("\\", "/");
+}
+
+function readAscii(buffer, offset, length) {
+  return buffer.toString("ascii", offset, offset + length);
+}
+
+function findChunk(buffer, chunkId) {
+  let offset = 12;
+  while (offset + 8 <= buffer.length) {
+    const id = readAscii(buffer, offset, 4);
+    const size = buffer.readUInt32LE(offset + 4);
+    const dataOffset = offset + 8;
+    if (id === chunkId) {
+      return { offset: dataOffset, size };
+    }
+    offset = dataOffset + size + (size % 2);
+  }
+  return null;
+}
+
+function decodePcmSample(buffer, byteOffset, bitsPerSample) {
+  if (bitsPerSample === 8) {
+    return (buffer.readUInt8(byteOffset) - 128) / 128;
+  }
+  if (bitsPerSample === 16) {
+    return Math.max(-1, buffer.readInt16LE(byteOffset) / 32768);
+  }
+  if (bitsPerSample === 24) {
+    const raw = buffer.readUIntLE(byteOffset, 3);
+    const signed = raw & 0x800000 ? raw | 0xff000000 : raw;
+    return Math.max(-1, signed / 8388608);
+  }
+  if (bitsPerSample === 32) {
+    return Math.max(-1, buffer.readInt32LE(byteOffset) / 2147483648);
+  }
+  throw new Error(`Unsupported PCM WAV bit depth: ${bitsPerSample}`);
+}
+
+function decodeFloatSample(buffer, byteOffset, bitsPerSample) {
+  if (bitsPerSample === 32) {
+    return buffer.readFloatLE(byteOffset);
+  }
+  if (bitsPerSample === 64) {
+    return buffer.readDoubleLE(byteOffset);
+  }
+  throw new Error(`Unsupported float WAV bit depth: ${bitsPerSample}`);
+}
+
+function resampleLinear(audio, sourceRate, targetRate) {
+  if (sourceRate === targetRate) {
+    return audio;
+  }
+  if (sourceRate <= 0 || targetRate <= 0) {
+    throw new Error(`Invalid WAV sample rate: ${sourceRate}`);
+  }
+  const targetLength = Math.max(1, Math.round(audio.length * targetRate / sourceRate));
+  const output = new Float32Array(targetLength);
+  const ratio = sourceRate / targetRate;
+  for (let index = 0; index < targetLength; index += 1) {
+    const position = index * ratio;
+    const leftIndex = Math.floor(position);
+    const rightIndex = Math.min(leftIndex + 1, audio.length - 1);
+    const fraction = position - leftIndex;
+    output[index] = audio[leftIndex] * (1 - fraction) + audio[rightIndex] * fraction;
+  }
+  return output;
+}
+
+function decodeWavFile(audioPath, targetSampleRate) {
+  const buffer = readFileSync(audioPath);
+  if (
+    buffer.length < 44 ||
+    readAscii(buffer, 0, 4) !== "RIFF" ||
+    readAscii(buffer, 8, 4) !== "WAVE"
+  ) {
+    throw new Error(
+      "The ONNX runtime can decode WAV input only. Use a WAV benchmark sample or the app's last recording.",
+    );
+  }
+
+  const fmt = findChunk(buffer, "fmt ");
+  const data = findChunk(buffer, "data");
+  if (!fmt || !data) {
+    throw new Error("Invalid WAV file: missing fmt or data chunk.");
+  }
+  if (fmt.size < 16) {
+    throw new Error("Invalid WAV file: fmt chunk is too small.");
+  }
+
+  const audioFormat = buffer.readUInt16LE(fmt.offset);
+  const channelCount = buffer.readUInt16LE(fmt.offset + 2);
+  const sampleRate = buffer.readUInt32LE(fmt.offset + 4);
+  const blockAlign = buffer.readUInt16LE(fmt.offset + 12);
+  const bitsPerSample = buffer.readUInt16LE(fmt.offset + 14);
+  if (channelCount <= 0 || blockAlign <= 0) {
+    throw new Error("Invalid WAV file: channel count or block alignment is zero.");
+  }
+
+  const bytesPerSample = Math.ceil(bitsPerSample / 8);
+  const frameCount = Math.floor(data.size / blockAlign);
+  const mono = new Float32Array(frameCount);
+  const isPcm = audioFormat === 1 || audioFormat === 65534;
+  const isFloat = audioFormat === 3;
+  if (!isPcm && !isFloat) {
+    throw new Error(`Unsupported WAV encoding: ${audioFormat}. Use PCM or float WAV.`);
+  }
+
+  for (let frame = 0; frame < frameCount; frame += 1) {
+    const frameOffset = data.offset + frame * blockAlign;
+    let sum = 0;
+    for (let channel = 0; channel < channelCount; channel += 1) {
+      const sampleOffset = frameOffset + channel * bytesPerSample;
+      const sample = isFloat
+        ? decodeFloatSample(buffer, sampleOffset, bitsPerSample)
+        : decodePcmSample(buffer, sampleOffset, bitsPerSample);
+      sum += Number.isFinite(sample) ? sample : 0;
+    }
+    mono[frame] = Math.max(-1, Math.min(1, sum / channelCount));
+  }
+
+  return resampleLinear(mono, sampleRate, targetSampleRate);
 }
 
 async function hasWebGpuAdapter() {
@@ -144,7 +265,8 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
       gpuAvailable: accelerated,
       webgpuAvailable,
       async transcribe(request) {
-        const result = await transcriber(request.audioPath, {
+        const audio = request.audio;
+        const result = await transcriber(audio, {
           max_new_tokens: request.maxNewTokens || 1024,
           language: request.language || "en",
         });
@@ -164,7 +286,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
       gpuAvailable: accelerated,
       webgpuAvailable,
       async transcribe(request) {
-        const audio = await read_audio(request.audioPath, 16000);
+        const audio = request.audio;
         const messages = [
           {
             role: "user",
@@ -197,9 +319,15 @@ async function loadRuntime(options) {
   const webgpuAvailable = await hasWebGpuAdapter();
   const candidateDevices = resolveDevice(options.device, webgpuAvailable);
   const errors = [];
-  for (const device of candidateDevices) {
+  for (let index = 0; index < candidateDevices.length; index += 1) {
+    const device = candidateDevices[index];
     try {
-      return await loadRuntimeForDevice(options, device, webgpuAvailable);
+      return {
+        runtime: await loadRuntimeForDevice(options, device, webgpuAvailable),
+        candidateDevices,
+        index,
+        webgpuAvailable,
+      };
     } catch (error) {
       errors.push(`${device}: ${formatError(error)}`);
     }
@@ -211,8 +339,15 @@ async function loadRuntime(options) {
 
 async function runServer(options) {
   let runtime;
+  let candidateDevices = [];
+  let runtimeIndex = -1;
+  let webgpuAvailable = false;
   try {
-    runtime = await loadRuntime(options);
+    const loaded = await loadRuntime(options);
+    runtime = loaded.runtime;
+    candidateDevices = loaded.candidateDevices;
+    runtimeIndex = loaded.index;
+    webgpuAvailable = loaded.webgpuAvailable;
     writeJson({
       type: "ready",
       ok: true,
@@ -225,6 +360,32 @@ async function runServer(options) {
     writeJson({ type: "ready", ok: false, error: formatError(error) });
     process.exitCode = 1;
     return;
+  }
+
+  async function transcribeWithFallback(request) {
+    const audio = decodeWavFile(request.audioPath, 16000);
+    const preparedRequest = { ...request, audio };
+    try {
+      return await runtime.transcribe(preparedRequest);
+    } catch (error) {
+      if (options.device !== "auto") {
+        throw error;
+      }
+      const errors = [`${runtime.device}: ${formatError(error)}`];
+      for (let index = runtimeIndex + 1; index < candidateDevices.length; index += 1) {
+        const nextDevice = candidateDevices[index];
+        try {
+          runtime = await loadRuntimeForDevice(options, nextDevice, webgpuAvailable);
+          runtimeIndex = index;
+          return await runtime.transcribe(preparedRequest);
+        } catch (nextError) {
+          errors.push(`${nextDevice}: ${formatError(nextError)}`);
+        }
+      }
+      throw new Error(
+        `ONNX runtime failed during transcription on all fallback devices.\n\n${errors.join("\n\n")}`,
+      );
+    }
   }
 
   let buffer = "";
@@ -262,7 +423,7 @@ async function runServer(options) {
       }
 
       try {
-        const text = await runtime.transcribe(request);
+        const text = await transcribeWithFallback(request);
         writeJson({
           id: request.id,
           ok: true,

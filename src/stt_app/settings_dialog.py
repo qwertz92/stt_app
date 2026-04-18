@@ -994,7 +994,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(self.benchmark_audio_status_label)
         audio_layout.addWidget(self.benchmark_audio_status_label)
         audio_help = QtWidgets.QLabel(
-            "Use a representative sample. The benchmark measures model speed and runtime factor on this file."
+            "Use a representative sample. The benchmark measures model speed and runtime factor on this file. "
+            "Cohere and Granite require WAV input in the Node runtime."
         )
         audio_help.setWordWrap(True)
         self._style_note_label(audio_help)

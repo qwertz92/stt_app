@@ -77,6 +77,16 @@ DirectML is the practical Windows GPU fallback. The app shows a red warning
 under the model selector because pure CPU fallback can be much slower than the
 CTranslate2 Whisper models.
 
+The app also falls back from DirectML/WebGPU to CPU during transcription when a
+model loads on a GPU runtime but the first generation call fails because an ONNX
+operator is not supported by that provider. Benchmark `GPU only` intentionally
+does not use this CPU fallback, so provider failures remain visible.
+
+Node.js cannot decode arbitrary audio files through `AudioContext`. The ONNX
+runner decodes WAV input itself and passes Float32 audio directly to
+Transformers.js. Use the app's last recording or another WAV file when
+benchmarking Cohere/Granite.
+
 Unlike faster-whisper models, Cohere and Granite are not preloaded when the app
 starts. This avoids expensive background CPU model loading before the user
 actually starts an experimental transcription.
