@@ -51,6 +51,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
+| `transcriber/local_webgpu_asr.py` | Experimental batch-only Cohere/Granite q4 ONNX runtime via Transformers.js |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
@@ -82,6 +83,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   is the base portable bundle; Inno Setup wraps that bundle into the
   installer; GitHub Actions builds artifacts manually on demand and publishes
   only on version tags.
+- **Experimental ONNX/WebGPU local ASR**: Cohere Transcribe and IBM Granite
+  Speech are selectable local models through `transcriber/local_webgpu_asr.py`.
+  They are batch-only, use q4 ONNX snapshots, require Node.js plus
+  `@huggingface/transformers`, and try WebGPU, then Windows DirectML, then CPU.
+  Keep faster-whisper as the stable local default until real target-hardware
+  benchmarks justify switching.
 
 ## Core flow
 
@@ -108,4 +115,5 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Streaming: recent live tail is revisable, but older locked text is not rewritten; focus-change abort remains best-effort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
-- NVIDIA Parakeet is intentionally not implemented; see `docs/parakeet-evaluation.md` for rationale.
+- NVIDIA Parakeet is intentionally not implemented through NeMo; see
+  `docs/local-asr-model-candidates-2026.md` for rationale.

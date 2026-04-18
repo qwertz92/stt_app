@@ -12,6 +12,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Engine | App mode(s) | Model(s) in app | Public price | Normalized cost |
 |--------|-------------|-----------------|--------------|-----------------|
 | Local (`faster-whisper`) | Batch + Streaming | `tiny`..`distil-large-v3.5` | No API fee | $0 API cost (hardware/power only) |
+| Local experimental ONNX/WebGPU | Batch | `cohere-transcribe-03-2026`, `granite-4.0-1b-speech` | No API fee | $0 API cost (hardware/power only) |
 | AssemblyAI | Batch | Universal-3 Pro (primary), Universal-2 fallback | U3 Pro: $0.21/hour, U2: $0.15/hour | $0.15-$0.21/hour |
 | AssemblyAI | Streaming | Universal Streaming | $0.15/hour | $0.15/hour |
 | OpenAI | Batch | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | Mini: est. $0.003/min, 4o: est. $0.006/min, Whisper: $0.006/min | $0.18/hour, $0.36/hour, $0.36/hour |
@@ -116,14 +117,14 @@ ready enough to present as a supported engine.
 
 | Candidate | Public access signal | Pricing clarity | Local/offline fit | Current status |
 |-----------|----------------------|-----------------|-------------------|----------------|
-| Cohere Transcribe (`cohere-transcribe-03-2026`) | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Too unclear today; Cohere documents an audio model and an open source research release, but the public local runtime/self-hosting path is not concrete enough for this app | Not integrated; see `docs/cohere-transcribe-evaluation.md` |
+| Cohere Transcribe (`cohere-transcribe-03-2026`) | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Open weights and local runtimes exist now, but they are separate from the app's CTranslate2 local engine and need a WebGPU/ONNX benchmark before product integration | Not integrated; see `docs/local-asr-model-candidates-2026.md` |
 
 Recommendation:
 
 - Treat Cohere as a watched candidate, not a current option.
 - Revisit the hosted path if Cohere publishes explicit STT pricing and quotas.
-- Revisit the local path only if Cohere publishes a clearly documented public
-  runtime/deployment story for self-hosted transcription.
+- Revisit the local path through an isolated ONNX/WebGPU benchmark on the
+  target Intel GPU before adding app integration.
 
 ---
 

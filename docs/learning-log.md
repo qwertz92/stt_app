@@ -3,6 +3,53 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-04-18
+
+- **Local ASR candidates were re-evaluated against the app's Windows/Intel GPU
+  goals:**
+  - Added `docs/local-asr-model-candidates-2026.md` as the canonical evaluation
+    for Cohere Transcribe, NVIDIA Parakeet, IBM Granite Speech, and adjacent
+    2026 ASR candidates.
+  - Updated the older Cohere and Parakeet notes to point at the canonical
+    evaluation instead of duplicating model/runtime analysis.
+  - Key conclusion: keep `faster-whisper`/CTranslate2 as the production local
+    engine for now. Cohere and Granite are worth an isolated ONNX/WebGPU
+    benchmark on the user's Intel GPU, but they are not drop-in CTranslate2
+    models.
+  - Official Parakeet through NeMo remains out of scope because its strongest
+    path is NVIDIA-centered and does not solve the Intel GPU requirement.
+- **Experimental Cohere/Granite local ASR was integrated behind the local model
+  selector:**
+  - Added `cohere-transcribe-03-2026` and `granite-4.0-1b-speech` to the local
+    model catalog with a separate q4 ONNX/WebGPU runtime.
+  - Added a persistent Transformers.js helper process for batch transcription,
+    automatic GPU selection, and CPU fallback warnings.
+  - Kept these models batch-only and disabled Auto language mode because the
+    app currently sends explicit German/English language hints to this runtime.
+  - Left NVIDIA Parakeet unimplemented because the practical local path remains
+    NeMo/PyTorch and would add a heavier, NVIDIA-oriented runtime.
+- **Local model UX now distinguishes runtime classes:**
+  - The Settings dialog labels Cohere/Granite as ONNX/WebGPU models, disables
+    streaming for them, and shows a red CPU fallback warning under the
+    model selector.
+  - Local model scanning and downloads now include both CTranslate2 and q4
+    ONNX/WebGPU snapshots while keeping manual import CTranslate2-only.
+  - ONNX/WebGPU downloads use a symlink-free local folder layout so Windows
+    systems without Developer Mode/admin symlink privileges do not fail with
+    `WinError 1314`.
+  - Experimental ONNX/WebGPU models are not preloaded at app startup to avoid
+    surprise CPU load on machines where a GPU runtime is not selected.
+  - Transformers.js v4 on Node does not accept `wasm` as a device. Auto device
+    selection now tries WebGPU, then Windows DirectML, then CPU.
+- **Runtime packaging hooks were added:**
+  - Added `package.json`/`package-lock.json` for `@huggingface/transformers`.
+  - Included the JavaScript runner in wheel/PyInstaller data files.
+  - Documented the Node.js and `npm install` setup requirement.
+- **Test coverage was added for the new path:**
+  - Factory routing, settings persistence, Settings dialog model constraints,
+    WebGPU snapshot detection, q4 download filters, and provider request/cleanup
+    behavior now have regression tests.
+
 ## 2026-02-08
 
 - `faster-whisper` model/runtime path can fail with `ModuleNotFoundError: requests` on some environments.

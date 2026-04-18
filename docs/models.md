@@ -4,17 +4,22 @@ Everything about model choices, downloading, and configuring models for offline 
 
 ## Available models
 
-The app uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models (CTranslate2 format, downloaded from HuggingFace).
+The app has two local runtime families:
 
-| Model | Size | Languages | Best for |
-|-------|------|-----------|----------|
-| `tiny` | ~75 MB | Multilingual | Quick testing, fallback |
-| `base` | ~141 MB | Multilingual | Light usage |
-| `small` | ~484 MB | Multilingual | **Default — good balance for German + English** |
-| `medium` | ~1.4 GB | Multilingual | Better quality, slower |
-| `large-v3` | ~3.1 GB | Multilingual | Best quality (GPU recommended) |
-| `large-v3-turbo` | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
-| `distil-large-v3.5` | ~756 MB | **English only** | Fastest high-quality English transcription |
+- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models in CTranslate2 format.
+- Experimental q4 ONNX/WebGPU models through `@huggingface/transformers`.
+
+| Model | Runtime | Size | Languages | Best for |
+|-------|---------|------|-----------|----------|
+| `tiny` | CTranslate2 | ~75 MB | Multilingual | Quick testing, fallback |
+| `base` | CTranslate2 | ~141 MB | Multilingual | Light usage |
+| `small` | CTranslate2 | ~484 MB | Multilingual | **Default — good balance for German + English** |
+| `medium` | CTranslate2 | ~1.4 GB | Multilingual | Better quality, slower |
+| `large-v3` | CTranslate2 | ~3.1 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
+| `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
+| `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
+| `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | Multilingual, explicit `de`/`en` in the app | Experimental quality trial, batch mode only |
+| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Multilingual, explicit `de`/`en` in the app | Experimental compact speech-LM trial, batch mode only |
 
 ### Which model should I use?
 
@@ -24,6 +29,8 @@ The app uses [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models 
 | Better quality, still reasonable speed | `large-v3-turbo` |
 | Best possible quality, NVIDIA GPU available | `large-v3` |
 | English only, maximum speed | `distil-large-v3.5` |
+| Highest experimental local ASR quality trial | `cohere-transcribe-03-2026` |
+| Speech-LM comparison trial | `granite-4.0-1b-speech` |
 | Testing / very limited resources | `tiny` |
 
 ### Accuracy reference (Word Error Rate)
@@ -55,13 +62,42 @@ Lower is better. These are published benchmark values — your results depend on
 
 Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benchmarks](https://github.com/SYSTRAN/faster-whisper).
 
+### Experimental ONNX/WebGPU local models
+
+Cohere Transcribe and IBM Granite Speech are selectable under the normal local
+model list, but they are not CTranslate2 models. They use a separate
+Transformers.js q4 ONNX runtime, run in **batch mode only**, and keep the model
+loaded in a persistent local helper process while selected.
+
+The runtime automatically tries WebGPU first, then DirectML on Windows, and
+falls back to CPU if no compatible GPU runtime loads. Current Node.js builds may
+expose no `navigator.gpu`, even on a machine with an Intel/AMD/NVIDIA GPU, so
+DirectML is the practical Windows GPU fallback. The app shows a red warning
+under the model selector because pure CPU fallback can be much slower than the
+CTranslate2 Whisper models.
+
+Unlike faster-whisper models, Cohere and Granite are not preloaded when the app
+starts. This avoids expensive background CPU model loading before the user
+actually starts an experimental transcription.
+
+NVIDIA Parakeet is still not implemented. Its best-supported local path is the
+NeMo/PyTorch stack, which would add a second heavyweight Python ML runtime and
+does not solve the Intel-GPU requirement cleanly. See
+[Local ASR Model Candidates - 2026 Re-evaluation](local-asr-model-candidates-2026.md).
+
 ### CPU vs GPU
 
-The app works on **CPU** (default) and **NVIDIA GPU** (if CUDA is available).
+The CTranslate2/faster-whisper runtime works on **CPU** (default) and
+**NVIDIA GPU** (if CUDA is available).
 
 - **Intel/AMD CPU**: works out of the box. Most users run on CPU.
 - **NVIDIA GPU**: much faster. Set device to `auto` or `cuda` in the benchmark script.
 - **Intel iGPU / AMD GPU**: not supported by the CTranslate2 backend. Use CPU.
+
+The experimental ONNX/WebGPU runtime is designed to be vendor-neutral when
+WebGPU or DirectML is available, so Intel, AMD, and NVIDIA GPUs are all valid
+targets. If neither GPU runtime can be selected by the JavaScript runtime, the
+model uses CPU and will likely be slower than `large-v3-turbo`.
 
 ---
 
@@ -70,6 +106,17 @@ The app works on **CPU** (default) and **NVIDIA GPU** (if CUDA is available).
 On first use, the app downloads the selected model automatically from HuggingFace Hub. The `small` model (~484 MB) takes about a minute. After that, it loads from cache in seconds.
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
+
+For Cohere and Granite, install the JavaScript runtime dependencies once from
+the repository root:
+
+```powershell
+npm install
+```
+
+The packaged Windows release must include the same JavaScript runtime files and
+`node.exe`; source checkouts can use the system Node.js installation. Set
+`STT_APP_NODE_PATH` if Node.js is installed in a non-standard location.
 
 ---
 
@@ -85,6 +132,9 @@ uv run python scripts/download_model.py
 
 # Download a specific model:
 uv run python scripts/download_model.py --model large-v3-turbo
+
+# Download an experimental ONNX/WebGPU model:
+uv run python scripts/download_model.py --model cohere-transcribe-03-2026
 
 # Download into a custom directory (USB stick, network share):
 uv run python scripts/download_model.py --model small --output-dir C:\whisper-models
@@ -149,11 +199,16 @@ git lfs install           # one-time setup (skip if already done)
 git clone https://huggingface.co/Systran/faster-whisper-small
 ```
 
-Then import into the app's cache structure:
+Then import CTranslate2/faster-whisper models into the app's cache structure:
 
 ```powershell
 uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
 ```
+
+The import script is intentionally CTranslate2-only. For Cohere and Granite,
+use `scripts/download_model.py`; it downloads only the q4 ONNX files required by
+the app and stores them in a real local folder to avoid Windows symlink
+privilege errors.
 
 <details>
 <summary>All model repositories</summary>
@@ -167,13 +222,17 @@ git clone https://huggingface.co/Systran/faster-whisper-medium
 git clone https://huggingface.co/Systran/faster-whisper-large-v3
 git clone https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo
 git clone https://huggingface.co/distil-whisper/distil-large-v3.5-ct2
+git clone https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX
+git clone https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX
 ```
 
 </details>
 
 ### Method 3: Manual browser download
 
-Download these files from the HuggingFace model page: `config.json`, `model.bin`, `tokenizer.json`, `vocabulary.txt` (or `vocabulary.json`).
+Manual browser import is supported for CTranslate2/faster-whisper models only.
+Download these files from the HuggingFace model page: `config.json`, `model.bin`,
+`tokenizer.json`, `vocabulary.txt` (or `vocabulary.json`).
 
 | Model | Download page |
 |-------|---------------|
