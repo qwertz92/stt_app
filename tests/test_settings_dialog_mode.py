@@ -284,6 +284,38 @@ def test_local_distil_model_limits_language_to_auto_and_english():
     _ = app
 
 
+def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="local",
+            mode="streaming",
+            model_size="cohere-transcribe-03-2026",
+            language_mode="auto",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.model_combo.currentData() == "cohere-transcribe-03-2026"
+    assert dialog.mode_combo.currentData() == "batch"
+    assert _combo_item_enabled(dialog.mode_combo, "streaming") is False
+    assert dialog.language_combo.currentData() == "de"
+    assert dialog.language_combo.isEnabled() is True
+    assert _combo_item_enabled(dialog.language_combo, "auto") is False
+    assert _combo_item_enabled(dialog.language_combo, "de") is True
+    assert _combo_item_enabled(dialog.language_combo, "en") is True
+    assert "Auto is disabled" in dialog.language_note_label.text()
+    assert "ONNX/WebGPU" in dialog.engine_indicator.text()
+    assert "DirectML" in dialog.local_model_runtime_warning_label.text()
+    assert "CPU fallback" in dialog.local_model_runtime_warning_label.text()
+    assert "Batch mode only" in dialog.local_model_runtime_warning_label.text()
+    _ = app
+
+
 def test_switching_assemblyai_mode_updates_language_options():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(

@@ -710,6 +710,35 @@ def test_controller_initialize_skips_preload_for_remote_engine():
     _ = app
 
 
+def test_controller_initialize_skips_preload_for_webgpu_local_model():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+    )
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller.initialize()
+
+    assert preload_called == []
+    assert any(state == "Idle" for state, _detail in overlay.states)
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_initialize_local_uses_preload_executor_only():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
@@ -935,5 +964,35 @@ def test_on_settings_changed_skips_preload_for_remote_engine():
     # Should show idle (or error from hotkey fallback) — NOT "Processing"
     last_state = overlay.states[-1][0]
     assert last_state in ("Idle", "Error")
+    controller.shutdown()
+    _ = app
+
+
+def test_on_settings_changed_skips_preload_for_webgpu_local_model():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="granite-4.0-1b-speech",
+        hotkey=FALLBACK_HOTKEY,
+    )
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller.on_settings_changed()
+
+    assert preload_called == []
+    assert any(state == "Idle" for state, _detail in overlay.states)
     controller.shutdown()
     _ = app

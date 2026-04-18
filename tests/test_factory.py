@@ -8,12 +8,19 @@ from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscrib
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
+from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
 
 def test_factory_local_returns_local_transcriber():
     settings = AppSettings(engine="local")
     t = create_transcriber(settings)
     assert isinstance(t, LocalFasterWhisperTranscriber)
+
+
+def test_factory_local_webgpu_model_returns_onnx_webgpu_transcriber():
+    settings = AppSettings(engine="local", model_size="cohere-transcribe-03-2026")
+    t = create_transcriber(settings)
+    assert isinstance(t, LocalOnnxWebGpuTranscriber)
 
 
 def test_factory_assemblyai_returns_assemblyai_transcriber():
@@ -60,3 +67,12 @@ def test_factory_unknown_engine_falls_back_to_local():
     settings = AppSettings(engine="unknown_provider_xyz")
     t = create_transcriber(settings)
     assert isinstance(t, LocalFasterWhisperTranscriber)
+
+
+def test_factory_unknown_engine_with_webgpu_model_preserves_webgpu_runtime():
+    settings = AppSettings(
+        engine="unknown_provider_xyz",
+        model_size="granite-4.0-1b-speech",
+    )
+    t = create_transcriber(settings)
+    assert isinstance(t, LocalOnnxWebGpuTranscriber)

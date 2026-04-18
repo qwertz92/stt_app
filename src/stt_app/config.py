@@ -73,7 +73,7 @@ VALID_START_BEEP_TONES = ("soft", "high", "chime", "system")
 # It handles the correct directory structure automatically.
 DEFAULT_MODEL_DIR = ""
 
-VALID_MODEL_SIZES = (
+FASTER_WHISPER_MODEL_SIZES = (
     "tiny",
     "base",
     "small",
@@ -83,8 +83,15 @@ VALID_MODEL_SIZES = (
     "distil-large-v3.5",  # English-only, ~756 MB, improved v3 (98k h training data)
 )
 
+LOCAL_WEBGPU_MODEL_SIZES = (
+    "cohere-transcribe-03-2026",
+    "granite-4.0-1b-speech",
+)
+
+VALID_MODEL_SIZES = FASTER_WHISPER_MODEL_SIZES + LOCAL_WEBGPU_MODEL_SIZES
+
 # Short model name → HuggingFace repo ID.
-# Single source of truth used by local transcriber, download script, and settings.
+# Single source of truth used by local transcribers, download script, and settings.
 MODEL_REPO_MAP: dict[str, str] = {
     "tiny": "Systran/faster-whisper-tiny",
     "base": "Systran/faster-whisper-base",
@@ -93,6 +100,13 @@ MODEL_REPO_MAP: dict[str, str] = {
     "large-v3": "Systran/faster-whisper-large-v3",
     "large-v3-turbo": "mobiuslabsgmbh/faster-whisper-large-v3-turbo",
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
+    "cohere-transcribe-03-2026": "onnx-community/cohere-transcribe-03-2026-ONNX",
+    "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
+}
+
+LOCAL_MODEL_RUNTIME: dict[str, str] = {
+    **{name: "faster-whisper" for name in FASTER_WHISPER_MODEL_SIZES},
+    **{name: "onnx-webgpu" for name in LOCAL_WEBGPU_MODEL_SIZES},
 }
 
 # Approximate model sizes for UI progress estimation.
@@ -105,6 +119,9 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "large-v3": 3_000,
     "large-v3-turbo": 809,
     "distil-large-v3.5": 756,
+    # q4 ONNX/WebGPU downloads only. Full precision variants are much larger.
+    "cohere-transcribe-03-2026": 2_128,
+    "granite-4.0-1b-speech": 1_843,
 }
 
 VALID_LANGUAGE_MODES = ("auto", "de", "en")
@@ -124,6 +141,8 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "elevenlabs": VALID_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
+LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES
+LOCAL_EXPLICIT_LANGUAGE_MODELS = LOCAL_WEBGPU_MODEL_SIZES
 STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")

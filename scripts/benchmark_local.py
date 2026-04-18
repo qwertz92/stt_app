@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from stt_app.local_benchmark import (
     BenchmarkCase,
-    BenchmarkRun,
+    BenchmarkRun,  # noqa: F401 - re-exported for script tests and JSON helpers.
     _case_from_dict,
     _format_number,
     _format_seconds,

@@ -35,7 +35,11 @@ from pathlib import Path
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from stt_app.config import MODEL_REPO_MAP  # noqa: E402
+from stt_app.config import FASTER_WHISPER_MODEL_SIZES, MODEL_REPO_MAP  # noqa: E402
+
+IMPORTABLE_MODEL_REPO_MAP = {
+    name: MODEL_REPO_MAP[name] for name in FASTER_WHISPER_MODEL_SIZES
+}
 
 # Files required by CTranslate2 / faster-whisper.
 REQUIRED_FILES = {"config.json", "model.bin", "tokenizer.json"}
@@ -51,7 +55,7 @@ _MODEL_BIN_MIN_BYTES = 10_000_000  # 10 MB
 
 # Build reverse map: common folder name patterns → short model name
 _FOLDER_HINTS: dict[str, str] = {}
-for _short, _repo in MODEL_REPO_MAP.items():
+for _short, _repo in IMPORTABLE_MODEL_REPO_MAP.items():
     # "Systran/faster-whisper-small" → "faster-whisper-small"
     _repo_name = _repo.split("/")[-1]
     _FOLDER_HINTS[_repo_name.lower()] = _short
@@ -202,10 +206,15 @@ def import_model(
 
     Returns the path to the snapshot directory where files were copied.
     """
-    repo_id = MODEL_REPO_MAP.get(model_name)
+    repo_id = IMPORTABLE_MODEL_REPO_MAP.get(model_name)
     if repo_id is None:
         print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
-        print(f"Available: {', '.join(MODEL_REPO_MAP)}", file=sys.stderr)
+        print(
+            "This script imports CTranslate2/faster-whisper models only. "
+            "Use scripts/download_model.py for ONNX/WebGPU models.",
+            file=sys.stderr,
+        )
+        print(f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr)
         sys.exit(1)
 
     cache_dir = target_dir or get_default_hf_cache_dir()
@@ -273,7 +282,7 @@ def main() -> None:
         help=(
             f"Which model this is (e.g. small, large-v3-turbo). "
             f"If not specified, the script tries to detect it from the folder name. "
-            f"Choices: {', '.join(MODEL_REPO_MAP)}"
+            f"Choices: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}"
         ),
     )
     parser.add_argument(
@@ -300,9 +309,10 @@ def main() -> None:
 
     if args.list:
         print("Available models:")
-        for name, repo_id in MODEL_REPO_MAP.items():
+        for name, repo_id in IMPORTABLE_MODEL_REPO_MAP.items():
             lang = "English only" if "distil" in name else "multilingual"
             print(f"  {name:20s} -> {repo_id} ({lang})")
+        print("\nONNX/WebGPU models are downloaded with scripts/download_model.py.")
         return
 
     if args.source is None:
@@ -348,21 +358,26 @@ def main() -> None:
                 file=sys.stderr,
             )
             print(
-                f"Available models: {', '.join(MODEL_REPO_MAP)}",
+                f"Available models: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}",
                 file=sys.stderr,
             )
             sys.exit(1)
         print(f"Detected model: {model_name}")
     else:
-        if model_name not in MODEL_REPO_MAP:
+        if model_name not in IMPORTABLE_MODEL_REPO_MAP:
             print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
             print(
-                f"Available: {', '.join(MODEL_REPO_MAP)}", file=sys.stderr
+                "This script imports CTranslate2/faster-whisper models only. "
+                "Use scripts/download_model.py for ONNX/WebGPU models.",
+                file=sys.stderr,
+            )
+            print(
+                f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr
             )
             sys.exit(1)
         print(f"Model: {model_name}")
 
-    repo_id = MODEL_REPO_MAP[model_name]
+    repo_id = IMPORTABLE_MODEL_REPO_MAP[model_name]
     print(f"Repository: {repo_id}")
 
     if args.validate_only:

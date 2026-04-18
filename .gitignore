@@ -43,3 +43,6 @@ benchmark/
 *.bin
 *.pt
 *.onnx
+
+# JavaScript runtime dependencies
+node_modules/

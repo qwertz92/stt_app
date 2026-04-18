@@ -16,6 +16,8 @@ from ..config import (
     DEFAULT_MODEL_SIZE,
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
+    FASTER_WHISPER_MODEL_SIZES,
+    LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
@@ -149,6 +151,11 @@ def format_model_download_error(model_name: str, exc: Exception) -> str:
 
 
 def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
+    if model_name in LOCAL_WEBGPU_MODEL_SIZES:
+        from .local_webgpu_asr import download_webgpu_model_snapshot
+
+        return download_webgpu_model_snapshot(model_name, model_dir)
+
     try:
         from huggingface_hub import snapshot_download  # type: ignore
     except ImportError as exc:
@@ -222,7 +229,7 @@ def find_cached_models(model_dir: str = "") -> list[str]:
 
     required_files = {"config.json", "model.bin"}
 
-    for short_name in VALID_MODEL_SIZES:
+    for short_name in FASTER_WHISPER_MODEL_SIZES:
         repo_id = _MODEL_REPO_MAP.get(short_name)
         if repo_id is None:
             continue
@@ -239,6 +246,13 @@ def find_cached_models(model_dir: str = "") -> list[str]:
             if _directory_has_required_files(flat_dir, required_files):
                 found.add(short_name)
                 break
+
+    try:
+        from .local_webgpu_asr import find_cached_webgpu_models
+
+        found.update(find_cached_webgpu_models(model_dir or _default_hf_cache_dir()))
+    except Exception:
+        pass
 
     # Return in the canonical order from VALID_MODEL_SIZES.
     return [m for m in VALID_MODEL_SIZES if m in found]

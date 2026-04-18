@@ -1,0 +1,10 @@
+{
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "install:webgpu-runtime": "npm install"
+  },
+  "dependencies": {
+    "@huggingface/transformers": "^4.1.0"
+  }
+}

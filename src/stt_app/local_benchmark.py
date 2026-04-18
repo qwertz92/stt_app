@@ -4,9 +4,11 @@ import csv
 import math
 import statistics
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
+
+from .config import LOCAL_WEBGPU_MODEL_SIZES
 
 
 def _audio_duration_seconds(path: Path) -> float | None:
@@ -204,6 +206,89 @@ def _run_case(
     )
 
 
+def _run_webgpu_case(
+    *,
+    audio_path: Path,
+    model_name: str,
+    runs: int,
+    language: str | None,
+    warmup: bool,
+    model_dir: str = "",
+    progress_callback: Callable[[str], None] | None = None,
+) -> BenchmarkCase:
+    from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
+
+    total_steps = runs + (1 if warmup else 0)
+    step = 0
+    language_mode = language or "de"
+
+    if progress_callback is not None:
+        progress_callback("Loading ONNX/WebGPU model...")
+    model_start = time.perf_counter()
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size=model_name,
+        language_mode=language_mode,
+        model_dir=model_dir,
+    )
+    transcriber.preload_model()
+    load_seconds = time.perf_counter() - model_start
+    runtime_device = transcriber.runtime_device or "auto"
+
+    if progress_callback is not None:
+        progress_callback(
+            f"Model loaded on {runtime_device} ({_format_seconds(load_seconds)})"
+        )
+
+    if warmup:
+        step += 1
+        if progress_callback is not None:
+            progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
+        transcriber.transcribe_batch(audio_path)
+
+    duration_hint = _audio_duration_seconds(audio_path) or math.nan
+
+    all_runs: list[BenchmarkRun] = []
+    try:
+        for run_index in range(1, runs + 1):
+            step += 1
+            if progress_callback is not None:
+                progress_callback(
+                    f"[{step}/{total_steps}] {model_name}: run {run_index}/{runs}..."
+                )
+            started = time.perf_counter()
+            transcript = transcriber.transcribe_batch(audio_path)
+            elapsed = time.perf_counter() - started
+
+            transcript_words = len(
+                [piece for piece in transcript.split(" ") if piece]
+            )
+            rtf = elapsed / duration_hint if duration_hint > 0 else math.nan
+
+            all_runs.append(
+                BenchmarkRun(
+                    run_index=run_index,
+                    seconds=elapsed,
+                    audio_duration_seconds=duration_hint,
+                    real_time_factor=rtf,
+                    transcript_chars=len(transcript),
+                    transcript_words=transcript_words,
+                    detected_language=language_mode,
+                    language_probability=math.nan,
+                )
+            )
+    finally:
+        transcriber.close()
+
+    return BenchmarkCase(
+        model=model_name,
+        device=runtime_device,
+        compute_type="onnx-webgpu-q4",
+        download_seconds=0.0,
+        load_seconds=load_seconds,
+        runs=all_runs,
+    )
+
+
 def run_benchmark_cases(
     *,
     audio_path: str | Path,
@@ -228,25 +313,41 @@ def run_benchmark_cases(
                 f"[Case {case_index}/{total_cases}] {model_name} ({compute_type})"
             )
         try:
-            case = _run_case(
-                audio_path=path,
-                model_name=model_name,
-                device=device,
-                compute_type=compute_type,
-                runs=runs,
-                beam_size=beam_size,
-                language=language,
-                vad_filter=vad_filter,
-                warmup=warmup,
-                threads=threads,
-                model_dir=model_dir,
-                progress_callback=progress_callback,
-            )
+            if model_name in LOCAL_WEBGPU_MODEL_SIZES:
+                case = _run_webgpu_case(
+                    audio_path=path,
+                    model_name=model_name,
+                    runs=runs,
+                    language=language,
+                    warmup=warmup,
+                    model_dir=model_dir,
+                    progress_callback=progress_callback,
+                )
+            else:
+                case = _run_case(
+                    audio_path=path,
+                    model_name=model_name,
+                    device=device,
+                    compute_type=compute_type,
+                    runs=runs,
+                    beam_size=beam_size,
+                    language=language,
+                    vad_filter=vad_filter,
+                    warmup=warmup,
+                    threads=threads,
+                    model_dir=model_dir,
+                    progress_callback=progress_callback,
+                )
         except Exception as exc:
+            display_compute_type = (
+                "onnx-webgpu-q4"
+                if model_name in LOCAL_WEBGPU_MODEL_SIZES
+                else compute_type
+            )
             case = BenchmarkCase(
                 model=model_name,
                 device=device,
-                compute_type=compute_type,
+                compute_type=display_compute_type,
                 download_seconds=0.0,
                 load_seconds=math.nan,
                 runs=[],

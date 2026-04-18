@@ -35,6 +35,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/stt_app"]
+include = ["src/stt_app/webgpu_asr_runner.mjs"]
 
 [tool.pytest.ini_options]
 pythonpath = ["src"]

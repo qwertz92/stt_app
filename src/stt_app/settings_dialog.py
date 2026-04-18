@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_HOTKEY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
+    DEFAULT_MODEL_SIZE,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
@@ -34,7 +35,10 @@ from .config import (
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     LANGUAGE_MODE_LABELS,
+    LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
+    LOCAL_EXPLICIT_LANGUAGE_MODELS,
+    LOCAL_WEBGPU_MODEL_SIZES,
     OPENAI_MODELS,
     STREAMING_ENGINES,
     VAD_ENERGY_THRESHOLD_MAX,
@@ -827,6 +831,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.model_combo = _WheelPassthroughComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
         form.addRow("Model Size", self.model_combo)
+        self.local_model_runtime_warning_label = QtWidgets.QLabel("")
+        self.local_model_runtime_warning_label.setWordWrap(True)
+        self.local_model_runtime_warning_label.setStyleSheet(
+            "color: #b71c1c; font-size: 11px;"
+        )
+        form.addRow("", self.local_model_runtime_warning_label)
 
         self.model_dir_edit = QtWidgets.QLineEdit()
         self.model_dir_edit.setPlaceholderText(
@@ -877,7 +887,8 @@ class SettingsDialog(QtWidgets.QDialog):
         local_models_layout.addWidget(self.local_models_scan_status_label)
 
         download_hint = QtWidgets.QLabel(
-            "Select models to download or delete. Green entries are already cached locally."
+            "Select models to download or delete. Green entries are already cached locally. "
+            "Cohere and Granite use the experimental ONNX/WebGPU runtime."
         )
         download_hint.setWordWrap(True)
         self._style_note_label(download_hint)
@@ -1486,6 +1497,12 @@ class SettingsDialog(QtWidgets.QDialog):
         "large-v3": "large-v3 (~3 GB, multilingual)",
         "large-v3-turbo": "large-v3-turbo (~809 MB, multilingual, fast)",
         "distil-large-v3.5": "distil-large-v3.5 (~756 MB, English only, improved)",
+        "cohere-transcribe-03-2026": (
+            "Cohere Transcribe 03-2026 (~2.13 GB q4, ONNX/WebGPU)"
+        ),
+        "granite-4.0-1b-speech": (
+            "IBM Granite 4.0 1B Speech (~1.84 GB q4, ONNX/WebGPU)"
+        ),
     }
 
     def _model_label(self, model_name: str) -> str:
@@ -1623,6 +1640,8 @@ class SettingsDialog(QtWidgets.QDialog):
             status = "Downloaded" if model_name in cached_set else "Not downloaded"
             if model_name in LOCAL_ENGLISH_ONLY_MODELS:
                 status = f"{status}, English only"
+            if model_name in LOCAL_WEBGPU_MODEL_SIZES:
+                status = f"{status}, ONNX/WebGPU, batch only"
             item = QtWidgets.QListWidgetItem(
                 f"{self._model_label(model_name)} - {status}"
             )
@@ -2267,7 +2286,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         if engine == DEFAULT_ENGINE:
             self.import_model_note.setText(
-                "This import uses the selected local faster-whisper model only for the imported file."
+                "This import uses the selected local model only for the imported file."
             )
             return
         self.import_model_note.setText(
@@ -2431,6 +2450,9 @@ class SettingsDialog(QtWidgets.QDialog):
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
             return ("auto", "en")
 
+        if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
+            return ("de", "en")
+
         return ENGINE_LANGUAGE_MODES.get(engine, VALID_LANGUAGE_MODES)
 
     def _language_constraint_note(self) -> str:
@@ -2452,6 +2474,12 @@ class SettingsDialog(QtWidgets.QDialog):
             return (
                 "distil-large-v3.5 is an English-only model "
                 "(German is disabled for this model)."
+            )
+
+        if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
+            return (
+                "Cohere and Granite require an explicit language in this app; "
+                "Auto is disabled for these experimental local models."
             )
 
         if engine == "groq":
@@ -2502,6 +2530,28 @@ class SettingsDialog(QtWidgets.QDialog):
             or "Choose the recognition language for the selected engine."
         )
 
+    def _update_local_model_runtime_warning(self) -> None:
+        if not hasattr(self, "local_model_runtime_warning_label"):
+            return
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        model_name = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+        if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
+            self.local_model_runtime_warning_label.setText(
+                "Experimental ONNX model: the app tries WebGPU, then DirectML "
+                "on Windows, and falls back to CPU if no compatible "
+                "Intel/AMD/NVIDIA GPU runtime loads. CPU fallback can be much "
+                "slower than large-v3-turbo. Batch mode only. Requires Node.js "
+                "and `npm install` for the local runtime."
+            )
+            self.local_model_runtime_warning_label.setVisible(True)
+            return
+        self.local_model_runtime_warning_label.setText(" ")
+        self.local_model_runtime_warning_label.setVisible(False)
+
     # ------------------------------------------------------------------
     # Engine indicator
     # ------------------------------------------------------------------
@@ -2510,7 +2560,13 @@ class SettingsDialog(QtWidgets.QDialog):
         """Update the always-visible engine indicator bar."""
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         if engine == "local":
-            label = "Engine: LOCAL (faster-whisper)"
+            model = (
+                str(self.model_combo.currentData() or "")
+                if hasattr(self, "model_combo")
+                else ""
+            )
+            runtime = "ONNX/WebGPU" if model in LOCAL_WEBGPU_MODEL_SIZES else "faster-whisper"
+            label = f"Engine: LOCAL ({runtime})"
             self.engine_indicator.setText(label)
             self.engine_indicator.setStyleSheet(
                 "font-weight: bold; padding: 4px; border-radius: 4px; "
@@ -2527,7 +2583,14 @@ class SettingsDialog(QtWidgets.QDialog):
     def _update_mode_availability(self) -> None:
         """Enable/disable streaming option based on the selected engine."""
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
-        supports_streaming = engine in STREAMING_ENGINES
+        model_name = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+        supports_streaming = (
+            engine in STREAMING_ENGINES and model_name not in LOCAL_BATCH_ONLY_MODELS
+        )
         streaming_idx = self.mode_combo.findData("streaming")
 
         if streaming_idx < 0:
@@ -2542,10 +2605,17 @@ class SettingsDialog(QtWidgets.QDialog):
                 item.setToolTip("")
             else:
                 item.setEnabled(False)
-                item.setToolTip(
-                    f"Streaming is not supported by the {engine} provider. "
-                    "Use local, AssemblyAI, or Deepgram for streaming."
-                )
+                if engine == "local" and model_name in LOCAL_BATCH_ONLY_MODELS:
+                    item.setToolTip(
+                        "Streaming is not supported by the experimental "
+                        "ONNX/WebGPU local models. Use batch mode."
+                    )
+                else:
+                    item.setToolTip(
+                        f"Streaming is not supported by the {engine} provider. "
+                        "Use faster-whisper local models, AssemblyAI, or Deepgram "
+                        "for streaming."
+                    )
 
         # If streaming is selected but not supported, switch to batch.
         if not supports_streaming and self.mode_combo.currentData() == "streaming":
@@ -2561,6 +2631,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_engine_indicator()
         self._update_mode_availability()
         self._update_language_availability()
+        self._update_local_model_runtime_warning()
         self._update_remote_model_selector()
         self._update_import_engine_note()
 
@@ -2569,7 +2640,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_remote_model_selector()
 
     def _on_model_changed(self, _index: int = 0) -> None:
+        self._update_engine_indicator()
+        self._update_mode_availability()
         self._update_language_availability()
+        self._update_local_model_runtime_warning()
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""
@@ -2598,7 +2672,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_import_engine_note()
 
     def _on_settings_tab_changed(self, _index: int) -> None:
-        self._schedule_local_model_auto_refresh(delay_ms=75)
+        self._schedule_local_model_auto_refresh(delay_ms=0)
 
     def _on_import_model_changed(self, _index: int = 0) -> None:
         if not hasattr(self, "import_model_combo"):
@@ -3077,6 +3151,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._select_combo_data(self.mode_combo, settings.mode)
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
+        self._update_local_model_runtime_warning()
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._remote_model_values.update(
             {
@@ -3369,7 +3444,11 @@ class SettingsDialog(QtWidgets.QDialog):
             )
 
         transcriber = create_transcriber(settings, secret_store=self._secret_store)
-        text = transcriber.transcribe_batch(path)
+        try:
+            text = transcriber.transcribe_batch(path)
+        finally:
+            if hasattr(transcriber, "close"):
+                transcriber.close()
         return True, str(text or "").strip()
 
     def _finish_import_transcription(self, ok: bool, text: str) -> None:

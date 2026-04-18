@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download faster-whisper models for offline use.
+"""Download local transcription models for offline use.
 
 Usage examples:
 
@@ -20,6 +20,8 @@ Usage examples:
 
 After downloading, the models are ready for offline use.  Set "Offline mode"
 in the app settings, and optionally set "Model Dir" to the --output-dir path.
+faster-whisper models use CTranslate2. Cohere and Granite use the experimental
+q4 ONNX/WebGPU runtime and require the JavaScript runtime from package.json.
 """
 
 from __future__ import annotations
@@ -31,7 +33,12 @@ import sys
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from stt_app.config import DOC_MODELS_PATH, DOC_SSL_PROXY_PATH, MODEL_REPO_MAP  # noqa: E402
+from stt_app.config import (  # noqa: E402
+    DOC_MODELS_PATH,
+    DOC_SSL_PROXY_PATH,
+    LOCAL_WEBGPU_MODEL_SIZES,
+    MODEL_REPO_MAP,
+)
 from stt_app.transcriber.local_faster_whisper import download_model_snapshot  # noqa: E402
 
 # Re-export under the name used throughout this script.
@@ -105,7 +112,7 @@ def download_model(name: str, output_dir: str | None = None) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Download faster-whisper models for offline use.",
+        description="Download local transcription models for offline use.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
@@ -138,7 +145,9 @@ def main() -> None:
     if args.list:
         print("Available models:")
         for name, repo_id in MODELS.items():
-            if "distil" in name:
+            if name in LOCAL_WEBGPU_MODEL_SIZES:
+                note = " (multilingual, q4 ONNX/WebGPU, batch only)"
+            elif "distil" in name:
                 note = " (English only)"
             else:
                 note = " (multilingual)"

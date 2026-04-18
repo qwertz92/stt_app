@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('src/stt_app/webgpu_asr_runner.mjs', 'stt_app')],
     hiddenimports=['stt_app.main'],
     hookspath=[],
     hooksconfig={},

@@ -23,6 +23,8 @@ from .config import (
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
     FALLBACK_HOTKEY,
+    FASTER_WHISPER_MODEL_SIZES,
+    LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_ESTIMATED_SIZE_MB,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
     STREAMING_ABORT_BEEP_DURATION_MS,
@@ -611,8 +613,18 @@ class DictationController(QtCore.QObject):
 
     def _reset_transcriber_cache(self) -> None:
         with self._transcriber_cache_lock:
+            cached = self._transcriber_cache
+            self._close_cached_transcriber(cached)
             self._transcriber_cache = None
             self._transcriber_cache_key = None
+
+    def _close_cached_transcriber(self, transcriber) -> None:
+        if transcriber is None or not hasattr(transcriber, "close"):
+            return
+        try:
+            transcriber.close()
+        except Exception:
+            self._logger.exception("Failed to close cached transcriber")
 
     def _next_request_token(self) -> int:
         self._request_token_counter += 1
@@ -758,6 +770,15 @@ class DictationController(QtCore.QObject):
     # -- Model preloading -----------------------------------------------------
 
     def _start_local_model_preload(self) -> None:
+        if self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
+            self._preload_progress_timer.stop()
+            self._preload_target_model = None
+            self._preload_future = None
+            self._preload_cancel_requested = False
+            self._terminate_preload_download_process()
+            self.show_idle_status()
+            return
+
         previous = self._preload_future
         self._preload_cancel_requested = False
         self._terminate_preload_download_process()
@@ -794,7 +815,11 @@ class DictationController(QtCore.QObject):
         selected_model: str,
         cached_models: list[str],
     ) -> str | None:
-        candidates = [m for m in cached_models if m != selected_model]
+        candidates = [
+            m
+            for m in cached_models
+            if m != selected_model and m in FASTER_WHISPER_MODEL_SIZES
+        ]
         if not candidates:
             return None
 
@@ -926,6 +951,7 @@ class DictationController(QtCore.QObject):
             LocalFasterWhisperTranscriber,
             find_cached_models,
         )
+        from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
         settings = self._settings
         try:
@@ -939,7 +965,10 @@ class DictationController(QtCore.QObject):
 
         try:
             transcriber = self._get_or_create_transcriber(settings)
-            if isinstance(transcriber, LocalFasterWhisperTranscriber):
+            if isinstance(
+                transcriber,
+                (LocalFasterWhisperTranscriber, LocalOnnxWebGpuTranscriber),
+            ):
                 transcriber.preload_model()
             self.model_preload_done.emit(True, f"Model loaded: {settings.model_size}")
             return
@@ -970,7 +999,10 @@ class DictationController(QtCore.QObject):
                 fallback_settings = replace(settings, model_size=fallback)
                 self._reset_transcriber_cache()
                 transcriber = self._get_or_create_transcriber(fallback_settings)
-                if isinstance(transcriber, LocalFasterWhisperTranscriber):
+                if isinstance(
+                    transcriber,
+                    (LocalFasterWhisperTranscriber, LocalOnnxWebGpuTranscriber),
+                ):
                     transcriber.preload_model()
                 self._settings = fallback_settings
                 try:
@@ -1204,6 +1236,7 @@ class DictationController(QtCore.QObject):
                 self._transcriber_cache is None
                 or self._transcriber_cache_key != cache_key
             ):
+                self._close_cached_transcriber(self._transcriber_cache)
                 self._transcriber_cache = create_transcriber(
                     settings, secret_store=self._secret_store
                 )
@@ -1858,7 +1891,11 @@ class DictationController(QtCore.QObject):
                     mode="import",
                 )
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
-            text = transcriber.transcribe_batch(path).strip()
+            try:
+                text = transcriber.transcribe_batch(path).strip()
+            finally:
+                if hasattr(transcriber, "close"):
+                    transcriber.close()
             if text:
                 source_recording_id = (
                     self._current_last_recording_id()
