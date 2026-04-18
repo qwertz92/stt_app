@@ -20,6 +20,7 @@ from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcript_history import TranscriptHistoryStore
+from .app_paths import appdata_root
 
 
 def run() -> int:
@@ -31,6 +32,16 @@ def run() -> int:
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setQuitOnLastWindowClosed(False)
+
+    instance_lock = QtCore.QLockFile(str(appdata_root() / "stt_app.lock"))
+    instance_lock.setStaleLockTime(0)
+    if not instance_lock.tryLock(0):
+        QtWidgets.QMessageBox.information(
+            None,
+            APP_DISPLAY_NAME,
+            f"{APP_DISPLAY_NAME} is already running.",
+        )
+        return 0
 
     app_logger = AppLogger()
     logger = app_logger.get_logger(APP_LOGGER_NAME)
@@ -139,6 +150,7 @@ def run() -> int:
         "cancel_event_filter": cancel_event_filter,
         "tray_icon": tray_icon,
         "signal_timer": signal_timer,
+        "instance_lock": instance_lock,
     }
 
     return app.exec()
