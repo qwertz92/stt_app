@@ -41,14 +41,20 @@ Agents and developers: use this as a knowledge base for past issues and solution
     surprise CPU load on machines where a GPU runtime is not selected.
   - Transformers.js v4 on Node does not accept `wasm` as a device. Auto device
     selection now tries WebGPU, then Windows DirectML, then CPU.
+  - WebGPU is attempted even when Node's `navigator.gpu` adapter probe returns
+    false; explicit WebGPU can still work through the Transformers.js backend.
   - ONNX helper processes are not cached after normal dictation, so they cannot
     keep consuming CPU while idle after one experimental transcription.
+  - Benchmark startup and preload failures close their ONNX helper process to
+    avoid orphaned Node processes holding RAM or GPU memory.
   - Benchmarking can run Cohere/Granite on Auto, GPU-only, CPU-only, DirectML,
     WebGPU, or GPU+CPU comparison targets and now shows the resolved device.
   - The ONNX runner decodes WAV input directly because Transformers.js cannot
     use browser `AudioContext` path loading in Node.
   - `auto` can fall back from a GPU runtime to CPU during transcription if an
     ONNX operator fails after the model loaded successfully.
+  - `gpu` can fall back between GPU runtimes during transcription, but never
+    falls back to CPU.
   - App startup now uses a single-instance lock to avoid duplicate tray/overlay
     processes competing for hotkeys and background work.
 - **Runtime packaging hooks were added:**

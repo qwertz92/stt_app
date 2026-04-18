@@ -264,27 +264,27 @@ def _run_webgpu_case(
         device=device,
         model_dir=model_dir,
     )
-    transcriber.preload_model()
-    load_seconds = time.perf_counter() - model_start
-    runtime_device = transcriber.runtime_device or "auto"
-    final_runtime_device = runtime_device
-
-    if progress_callback is not None:
-        progress_callback(
-            f"Model loaded on {runtime_device} ({_format_seconds(load_seconds)})"
-        )
-
-    if warmup:
-        step += 1
-        if progress_callback is not None:
-            progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
-        transcriber.transcribe_batch(audio_path)
-        final_runtime_device = transcriber.runtime_device or final_runtime_device
-
-    duration_hint = _audio_duration_seconds(audio_path) or math.nan
-
-    all_runs: list[BenchmarkRun] = []
     try:
+        transcriber.preload_model()
+        load_seconds = time.perf_counter() - model_start
+        runtime_device = transcriber.runtime_device or "auto"
+        final_runtime_device = runtime_device
+
+        if progress_callback is not None:
+            progress_callback(
+                f"Model loaded on {runtime_device} ({_format_seconds(load_seconds)})"
+            )
+
+        if warmup:
+            step += 1
+            if progress_callback is not None:
+                progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
+            transcriber.transcribe_batch(audio_path)
+            final_runtime_device = transcriber.runtime_device or final_runtime_device
+
+        duration_hint = _audio_duration_seconds(audio_path) or math.nan
+
+        all_runs: list[BenchmarkRun] = []
         for run_index in range(1, runs + 1):
             step += 1
             if progress_callback is not None:

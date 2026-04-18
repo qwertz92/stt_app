@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
+
 from stt_app.config import MODEL_REPO_MAP
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.local_webgpu_asr import (
@@ -176,3 +178,54 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert requests[0]["language"] == "en"
     assert Path(requests[0]["audioPath"]).exists() is False
     assert requests[-1]["command"] == "shutdown"
+
+
+def test_webgpu_transcriber_closes_process_when_startup_response_fails(
+    monkeypatch,
+    tmp_path,
+):
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    fake_process = _FakeProcess()
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_ensure_snapshot",
+        lambda self: tmp_path,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_start_reader_threads",
+        lambda self, process: None,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, timeout_s: (_ for _ in ()).throw(
+            local_webgpu_asr.TranscriptionError("startup timeout")
+        ),
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner: None,
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess,
+        "Popen",
+        lambda command, **kwargs: fake_process,
+    )
+
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        language_mode="en",
+        node_path="node",
+        runner_path=runner,
+    )
+
+    with pytest.raises(local_webgpu_asr.TranscriptionError, match="startup timeout"):
+        transcriber.preload_model()
+
+    assert fake_process.wait_calls == 1
+    assert json.loads(fake_process.stdin.getvalue().strip()) == {"command": "shutdown"}
+    assert transcriber.is_model_loaded is False

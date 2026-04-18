@@ -71,16 +71,17 @@ process is kept alive only while a transcription or benchmark case is active, so
 the app does not keep a large ONNX runtime idling after normal dictation.
 
 The runtime automatically tries WebGPU first, then DirectML on Windows, and
-falls back to CPU if no compatible GPU runtime loads. Current Node.js builds may
-expose no `navigator.gpu`, even on a machine with an Intel/AMD/NVIDIA GPU, so
-DirectML is the practical Windows GPU fallback. The app shows a red warning
-under the model selector because pure CPU fallback can be much slower than the
-CTranslate2 Whisper models.
+falls back to CPU if no compatible GPU runtime loads. It attempts WebGPU even
+when Node's `navigator.gpu` probe is unavailable, because the Transformers.js
+runtime can still expose a working WebGPU backend on some machines. The app
+shows a red warning under the model selector because pure CPU fallback can be
+much slower than the CTranslate2 Whisper models.
 
 The app also falls back from DirectML/WebGPU to CPU during transcription when a
 model loads on a GPU runtime but the first generation call fails because an ONNX
-operator is not supported by that provider. Benchmark `GPU only` intentionally
-does not use this CPU fallback, so provider failures remain visible.
+operator is not supported by that provider. Benchmark `GPU only` may move
+between WebGPU and DirectML, but intentionally does not use CPU fallback, so GPU
+provider failures remain visible.
 
 Node.js cannot decode arbitrary audio files through `AudioContext`. The ONNX
 runner decodes WAV input itself and passes Float32 audio directly to

@@ -501,7 +501,11 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
         self._stderr_lines = []
         self._start_reader_threads(process)
 
-        ready = self._read_json_message(self.startup_timeout_s)
+        try:
+            ready = self._read_json_message(self.startup_timeout_s)
+        except Exception:
+            self.close()
+            raise
         if not bool(ready.get("ok")):
             detail = str(ready.get("error") or self._stderr_tail())
             self.close()

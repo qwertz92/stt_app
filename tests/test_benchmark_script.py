@@ -122,6 +122,43 @@ def test_run_benchmark_cases_expands_webgpu_device_targets(monkeypatch, tmp_path
     assert [case.device for case in cases] == ["gpu", "cpu"]
 
 
+def test_webgpu_benchmark_case_closes_transcriber_when_preload_fails(
+    monkeypatch,
+    tmp_path,
+):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    instances = []
+
+    class FakeWebGpuTranscriber:
+        def __init__(self, **kwargs):
+            self.closed = False
+            instances.append(self)
+
+        def preload_model(self):
+            raise RuntimeError("load failed")
+
+        def close(self):
+            self.closed = True
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_webgpu_asr.LocalOnnxWebGpuTranscriber",
+        FakeWebGpuTranscriber,
+    )
+
+    with pytest.raises(RuntimeError, match="load failed"):
+        local_benchmark._run_webgpu_case(
+            audio_path=audio_path,
+            model_name="cohere-transcribe-03-2026",
+            runs=1,
+            language="en",
+            warmup=False,
+        )
+
+    assert instances
+    assert instances[0].closed is True
+
+
 # --- BenchmarkCase download_seconds tests ---
 
 

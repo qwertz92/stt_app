@@ -200,7 +200,7 @@ async function hasWebGpuAdapter() {
   }
 }
 
-function resolveDevice(requestedDevice, webgpuAvailable) {
+function resolveDevice(requestedDevice) {
   const requested = String(requestedDevice || "auto").toLowerCase();
   if (requested === "wasm") {
     throw new Error(
@@ -208,31 +208,22 @@ function resolveDevice(requestedDevice, webgpuAvailable) {
     );
   }
 
-  const gpuDevices = [];
-  if (webgpuAvailable) {
-    gpuDevices.push("webgpu");
-  }
+  const gpuDevices = ["webgpu"];
   if (process.platform === "win32") {
     gpuDevices.push("dml");
   }
-  if (process.platform === "linux" && process.arch === "x64") {
-    gpuDevices.push("cuda");
-  }
 
   if (requested === "gpu") {
-    if (gpuDevices.length === 0) {
-      throw new Error("No GPU runtime candidate is available in this Node process.");
-    }
     return gpuDevices;
   }
 
-  if (["webgpu", "dml", "cuda", "cpu"].includes(requested)) {
+  if (["webgpu", "dml", "cpu"].includes(requested)) {
     return [requested];
   }
 
   if (requested !== "auto") {
     throw new Error(
-      `Unsupported device policy: "${requestedDevice}". Use auto, gpu, webgpu, dml, cuda, or cpu.`,
+      `Unsupported device policy: "${requestedDevice}". Use auto, gpu, webgpu, dml, or cpu.`,
     );
   }
 
@@ -252,7 +243,8 @@ function graniteDtype(dtype) {
 
 async function loadRuntimeForDevice(options, device, webgpuAvailable) {
   const modelPath = modelPathForTransformers(options.modelPath);
-  const accelerated = ["webgpu", "dml", "cuda"].includes(device);
+  const accelerated = ["webgpu", "dml"].includes(device);
+  const runtimeWebGpuAvailable = webgpuAvailable || device === "webgpu";
 
   if (options.model === "cohere-transcribe-03-2026") {
     const transcriber = await pipeline(
@@ -263,7 +255,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
     return {
       device,
       gpuAvailable: accelerated,
-      webgpuAvailable,
+      webgpuAvailable: runtimeWebGpuAvailable,
       async transcribe(request) {
         const audio = request.audio;
         const result = await transcriber(audio, {
@@ -284,7 +276,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
     return {
       device,
       gpuAvailable: accelerated,
-      webgpuAvailable,
+      webgpuAvailable: runtimeWebGpuAvailable,
       async transcribe(request) {
         const audio = request.audio;
         const messages = [
@@ -317,7 +309,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
 
 async function loadRuntime(options) {
   const webgpuAvailable = await hasWebGpuAdapter();
-  const candidateDevices = resolveDevice(options.device, webgpuAvailable);
+  const candidateDevices = resolveDevice(options.device);
   const errors = [];
   for (let index = 0; index < candidateDevices.length; index += 1) {
     const device = candidateDevices[index];
@@ -368,7 +360,7 @@ async function runServer(options) {
     try {
       return await runtime.transcribe(preparedRequest);
     } catch (error) {
-      if (options.device !== "auto") {
+      if (!["auto", "gpu"].includes(options.device)) {
         throw error;
       }
       const errors = [`${runtime.device}: ${formatError(error)}`];
