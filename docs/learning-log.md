@@ -41,10 +41,18 @@ Agents and developers: use this as a knowledge base for past issues and solution
     surprise CPU load on machines where a GPU runtime is not selected.
   - Transformers.js v4 on Node does not accept `wasm` as a device. Auto device
     selection now tries WebGPU, then Windows DirectML, then CPU.
+  - ONNX helper processes are not cached after normal dictation, so they cannot
+    keep consuming CPU while idle after one experimental transcription.
+  - Benchmarking can run Cohere/Granite on Auto, GPU-only, CPU-only, DirectML,
+    WebGPU, or GPU+CPU comparison targets and now shows the resolved device.
+  - App startup now uses a single-instance lock to avoid duplicate tray/overlay
+    processes competing for hotkeys and background work.
 - **Runtime packaging hooks were added:**
   - Added `package.json`/`package-lock.json` for `@huggingface/transformers`.
-  - Included the JavaScript runner in wheel/PyInstaller data files.
-  - Documented the Node.js and `npm install` setup requirement.
+  - Included the JavaScript runner in wheel/PyInstaller data files and include
+    `node_modules` in packaged builds when available.
+  - Source checkouts try to install missing JavaScript dependencies on first
+    ONNX use instead of requiring a manual `npm install` upfront.
 - **Test coverage was added for the new path:**
   - Factory routing, settings persistence, Settings dialog model constraints,
     WebGPU snapshot detection, q4 download filters, and provider request/cleanup

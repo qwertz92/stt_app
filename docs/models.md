@@ -66,8 +66,9 @@ Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benc
 
 Cohere Transcribe and IBM Granite Speech are selectable under the normal local
 model list, but they are not CTranslate2 models. They use a separate
-Transformers.js q4 ONNX runtime, run in **batch mode only**, and keep the model
-loaded in a persistent local helper process while selected.
+Transformers.js q4 ONNX runtime and run in **batch mode only**. The helper
+process is kept alive only while a transcription or benchmark case is active, so
+the app does not keep a large ONNX runtime idling after normal dictation.
 
 The runtime automatically tries WebGPU first, then DirectML on Windows, and
 falls back to CPU if no compatible GPU runtime loads. Current Node.js builds may
@@ -79,6 +80,10 @@ CTranslate2 Whisper models.
 Unlike faster-whisper models, Cohere and Granite are not preloaded when the app
 starts. This avoids expensive background CPU model loading before the user
 actually starts an experimental transcription.
+
+`wasm` is not a valid device in the Transformers.js Node runtime used by this
+app. It appears in the browser/web ONNX bundle, but the app process uses the
+Node ONNX runtime where the practical targets are DirectML, WebGPU, and CPU.
 
 NVIDIA Parakeet is still not implemented. Its best-supported local path is the
 NeMo/PyTorch stack, which would add a second heavyweight Python ML runtime and
@@ -107,16 +112,13 @@ On first use, the app downloads the selected model automatically from HuggingFac
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 
-For Cohere and Granite, install the JavaScript runtime dependencies once from
-the repository root:
-
-```powershell
-npm install
-```
-
-The packaged Windows release must include the same JavaScript runtime files and
-`node.exe`; source checkouts can use the system Node.js installation. Set
-`STT_APP_NODE_PATH` if Node.js is installed in a non-standard location.
+For Cohere and Granite, source checkouts use the system Node.js executable. If
+`@huggingface/transformers` is missing, the app attempts `npm install`
+automatically from the repository root on first ONNX use. The packaged Windows
+release includes the JavaScript dependency tree when `node_modules` is present
+at build time, but it still needs a Node.js executable unless the distribution
+bundle adds one separately. Set `STT_APP_NODE_PATH` if Node.js is installed in a
+non-standard location.
 
 ---
 

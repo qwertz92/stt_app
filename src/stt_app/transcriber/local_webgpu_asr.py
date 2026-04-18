@@ -15,6 +15,7 @@ from typing import Any
 from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
@@ -66,6 +67,8 @@ _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
 }
 
 _ACCELERATED_DEVICES = {"webgpu", "dml", "cuda", "gpu", "webnn-gpu"}
+_JS_RUNTIME_READY: set[tuple[str, str]] = set()
+_JS_RUNTIME_LOCK = threading.Lock()
 
 
 def _default_hf_cache_dir() -> str:
@@ -207,6 +210,99 @@ def _default_node_path() -> str | None:
     return None
 
 
+def _find_source_package_root(runner: Path) -> Path | None:
+    for directory in (runner.parent, *runner.parents):
+        if (
+            (directory / "package.json").is_file()
+            and (directory / "package-lock.json").is_file()
+            and (directory / ".git").exists()
+        ):
+            return directory
+    return None
+
+
+def _run_transformers_import_probe(
+    node_path: str,
+    cwd: Path,
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [
+            node_path,
+            "--input-type=module",
+            "-e",
+            "await import('@huggingface/transformers')",
+        ],
+        cwd=str(cwd),
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=30,
+        check=False,
+    )
+
+
+def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
+    cache_key = (str(Path(node_path)), str(runner.parent))
+    with _JS_RUNTIME_LOCK:
+        if cache_key in _JS_RUNTIME_READY:
+            return
+
+        probe: subprocess.CompletedProcess[str] | None = None
+        probe_error = ""
+        try:
+            probe = _run_transformers_import_probe(node_path, runner.parent)
+        except Exception as exc:
+            probe_error = str(exc)
+
+        if probe is not None and probe.returncode == 0:
+            _JS_RUNTIME_READY.add(cache_key)
+            return
+
+        source_root = _find_source_package_root(runner)
+        npm_path = shutil.which("npm") or shutil.which("npm.cmd")
+        if source_root is not None and npm_path:
+            try:
+                install = subprocess.run(
+                    [npm_path, "install"],
+                    cwd=str(source_root),
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=300,
+                    check=False,
+                )
+            except Exception as exc:
+                probe_error = str(exc)
+            else:
+                if install.returncode == 0:
+                    try:
+                        probe = _run_transformers_import_probe(node_path, runner.parent)
+                    except Exception as exc:
+                        probe_error = str(exc)
+                    else:
+                        if probe.returncode == 0:
+                            _JS_RUNTIME_READY.add(cache_key)
+                            return
+                elif install.stderr or install.stdout:
+                    probe_error = (install.stderr or install.stdout).strip()
+
+        detail = (
+            probe_error
+            or ((probe.stderr or probe.stdout or "").strip() if probe is not None else "")
+        )
+        install_hint = (
+            "The app tried to install the JavaScript runtime automatically, but "
+            "the import still failed."
+            if source_root is not None and npm_path
+            else "Install Node.js and run npm install, or use the packaged app with bundled JavaScript dependencies."
+        )
+        raise TranscriptionError(
+            "The ONNX JavaScript runtime is not available. "
+            f"{install_hint}"
+            + (f"\n{detail}" if detail else "")
+        )
+
+
 class LocalOnnxWebGpuTranscriber(ITranscriber):
     """Local Cohere/Granite ASR through a persistent Transformers.js process."""
 
@@ -223,8 +319,14 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
         startup_timeout_s: float = 180.0,
         request_timeout_s: float = 600.0,
     ) -> None:
+        device = str(device or "auto").strip().lower()
         if model_size not in LOCAL_WEBGPU_MODEL_SIZES:
             raise ValueError(f"Unsupported ONNX/WebGPU model '{model_size}'.")
+        if device not in LOCAL_WEBGPU_DEVICE_POLICIES:
+            raise ValueError(
+                "Unsupported ONNX/WebGPU device policy "
+                f"'{device}'. Use one of: {', '.join(LOCAL_WEBGPU_DEVICE_POLICIES)}."
+            )
         self.model_size = model_size
         self.language_mode = language_mode
         self.device = device
@@ -364,9 +466,12 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
 
     def _start_process(self) -> None:
         snapshot = self._ensure_snapshot()
+        node_path = self._node_executable()
+        runner = self._runner_file()
+        _ensure_js_runtime_available(node_path, runner)
         command = [
-            self._node_executable(),
-            str(self._runner_file()),
+            node_path,
+            str(runner),
             "--server",
             "--model",
             self.model_size,

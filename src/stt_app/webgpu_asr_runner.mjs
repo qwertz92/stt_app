@@ -80,16 +80,43 @@ async function hasWebGpuAdapter() {
 }
 
 function resolveDevice(requestedDevice, webgpuAvailable) {
-  if (requestedDevice && requestedDevice !== "auto") {
-    return [requestedDevice];
+  const requested = String(requestedDevice || "auto").toLowerCase();
+  if (requested === "wasm") {
+    throw new Error(
+      "The Transformers.js Node runtime does not support device \"wasm\". Use \"cpu\" for CPU inference.",
+    );
   }
-  const devices = [];
+
+  const gpuDevices = [];
   if (webgpuAvailable) {
-    devices.push("webgpu");
+    gpuDevices.push("webgpu");
   }
   if (process.platform === "win32") {
-    devices.push("dml");
+    gpuDevices.push("dml");
   }
+  if (process.platform === "linux" && process.arch === "x64") {
+    gpuDevices.push("cuda");
+  }
+
+  if (requested === "gpu") {
+    if (gpuDevices.length === 0) {
+      throw new Error("No GPU runtime candidate is available in this Node process.");
+    }
+    return gpuDevices;
+  }
+
+  if (["webgpu", "dml", "cuda", "cpu"].includes(requested)) {
+    return [requested];
+  }
+
+  if (requested !== "auto") {
+    throw new Error(
+      `Unsupported device policy: "${requestedDevice}". Use auto, gpu, webgpu, dml, cuda, or cpu.`,
+    );
+  }
+
+  const devices = [];
+  devices.push(...gpuDevices);
   devices.push("cpu");
   return devices;
 }
@@ -104,7 +131,7 @@ function graniteDtype(dtype) {
 
 async function loadRuntimeForDevice(options, device, webgpuAvailable) {
   const modelPath = modelPathForTransformers(options.modelPath);
-  const accelerated = device === "webgpu" || device === "dml";
+  const accelerated = ["webgpu", "dml", "cuda"].includes(device);
 
   if (options.model === "cohere-transcribe-03-2026") {
     const transcriber = await pipeline(

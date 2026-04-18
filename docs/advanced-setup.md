@@ -363,10 +363,11 @@ Benchmark time is dominated by model loading, not audio length. Larger models ta
 | `audio_path` | Input audio file |
 | `--models` | Comma-separated model IDs |
 | `--device` | `auto`, `cpu`, or `cuda` |
+| `--webgpu-devices` | ONNX targets for Cohere/Granite: `auto`, `gpu`, `cpu`, `gpu,cpu`, `dml`, `webgpu`, or `all` |
 | `--compute-types` | Precision: `int8`, `float32`, `float16` |
 | `--runs` | Number of measured runs per case |
 | `--warmup` | Run one unmeasured pass first |
-| `--beam-size` | Decoding beam size (higher = better but slower) |
+| `--beam-size` | faster-whisper decoding beam size; ignored by Cohere/Granite ONNX models |
 | `--language` | Force language code (e.g. `de`, `en`) |
 | `--vad-filter` | Enable built-in VAD filtering |
 | `--csv-out` | Export results as CSV |

@@ -590,7 +590,10 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
         _ImmediateThread,
     )
 
-    def _fake_run_benchmark_cases(**_kwargs):
+    captured_kwargs = {}
+
+    def _fake_run_benchmark_cases(**kwargs):
+        captured_kwargs.update(kwargs)
         return [
             BenchmarkCase(
                 model="small",
@@ -635,6 +638,8 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
 
     assert dialog.benchmark_results_table.rowCount() == 1
     assert dialog.benchmark_results_table.item(0, 0).text() == "small"
+    assert dialog.benchmark_results_table.item(0, 1).text() == "auto"
+    assert captured_kwargs["webgpu_devices"] == ["auto"]
     assert dialog.benchmark_summary_text.toPlainText().startswith("Benchmark summary:")
     assert "Benchmark finished" in dialog.benchmark_status_label.text()
     _ = app
@@ -926,6 +931,7 @@ def test_benchmark_controls_explain_their_options():
     )
 
     assert "fastest" in dialog.benchmark_compute_type_combo.toolTip()
+    assert "Cohere and Granite" in dialog.benchmark_webgpu_device_combo.toolTip()
     assert "reduce noise" in dialog.benchmark_runs_spin.toolTip()
     assert "Beam size controls decoding breadth" in dialog.benchmark_beam_size_spin.toolTip()
     assert "fixed language removes one source of model guesswork" in dialog.benchmark_language_combo.toolTip()

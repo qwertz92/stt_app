@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from .config import LOCAL_WEBGPU_MODEL_SIZES
+from .config import LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS, LOCAL_WEBGPU_MODEL_SIZES
 
 
 def _audio_duration_seconds(path: Path) -> float | None:
@@ -42,6 +42,38 @@ def _format_number(value: float, digits: int = 3) -> str:
     if not math.isfinite(value):
         return "-"
     return f"{value:.{digits}f}"
+
+
+def normalize_webgpu_benchmark_devices(
+    value: str | list[str] | tuple[str, ...] | None,
+) -> list[str]:
+    if value is None:
+        return ["auto"]
+    if isinstance(value, str):
+        if value in LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS:
+            return list(LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS[value])
+        raw_items = value.split(",")
+    else:
+        raw_items = list(value)
+
+    devices: list[str] = []
+    for item in raw_items:
+        device = str(item or "").strip().lower()
+        if not device:
+            continue
+        if device in LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS:
+            for grouped_device in LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS[device]:
+                if grouped_device not in devices:
+                    devices.append(grouped_device)
+            continue
+        if device not in {"auto", "gpu", "cpu", "dml", "webgpu"}:
+            raise ValueError(
+                "Unsupported ONNX device target "
+                f"'{device}'. Use auto, gpu, cpu, dml, webgpu, gpu,cpu, or all."
+            )
+        if device not in devices:
+            devices.append(device)
+    return devices or ["auto"]
 
 
 @dataclass
@@ -213,6 +245,7 @@ def _run_webgpu_case(
     runs: int,
     language: str | None,
     warmup: bool,
+    device: str = "auto",
     model_dir: str = "",
     progress_callback: Callable[[str], None] | None = None,
 ) -> BenchmarkCase:
@@ -228,6 +261,7 @@ def _run_webgpu_case(
     transcriber = LocalOnnxWebGpuTranscriber(
         model_size=model_name,
         language_mode=language_mode,
+        device=device,
         model_dir=model_dir,
     )
     transcriber.preload_model()
@@ -282,7 +316,7 @@ def _run_webgpu_case(
     return BenchmarkCase(
         model=model_name,
         device=runtime_device,
-        compute_type="onnx-webgpu-q4",
+        compute_type="onnx-q4",
         download_seconds=0.0,
         load_seconds=load_seconds,
         runs=all_runs,
@@ -302,58 +336,71 @@ def run_benchmark_cases(
     warmup: bool = False,
     threads: int = 0,
     model_dir: str = "",
+    webgpu_devices: str | list[str] | tuple[str, ...] | None = None,
     progress_callback: Callable[[str], None] | None = None,
 ) -> list[BenchmarkCase]:
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []
-    total_cases = len(model_names)
-    for case_index, model_name in enumerate(model_names, start=1):
-        if progress_callback is not None:
-            progress_callback(
-                f"[Case {case_index}/{total_cases}] {model_name} ({compute_type})"
-            )
-        try:
-            if model_name in LOCAL_WEBGPU_MODEL_SIZES:
-                case = _run_webgpu_case(
-                    audio_path=path,
-                    model_name=model_name,
-                    runs=runs,
-                    language=language,
-                    warmup=warmup,
-                    model_dir=model_dir,
-                    progress_callback=progress_callback,
-                )
-            else:
-                case = _run_case(
-                    audio_path=path,
-                    model_name=model_name,
-                    device=device,
-                    compute_type=compute_type,
-                    runs=runs,
-                    beam_size=beam_size,
-                    language=language,
-                    vad_filter=vad_filter,
-                    warmup=warmup,
-                    threads=threads,
-                    model_dir=model_dir,
-                    progress_callback=progress_callback,
-                )
-        except Exception as exc:
+    webgpu_device_targets = normalize_webgpu_benchmark_devices(webgpu_devices)
+    total_cases = sum(
+        len(webgpu_device_targets) if model_name in LOCAL_WEBGPU_MODEL_SIZES else 1
+        for model_name in model_names
+    )
+    case_index = 0
+    for model_name in model_names:
+        device_targets = (
+            webgpu_device_targets
+            if model_name in LOCAL_WEBGPU_MODEL_SIZES
+            else [device]
+        )
+        for device_target in device_targets:
+            case_index += 1
             display_compute_type = (
-                "onnx-webgpu-q4"
-                if model_name in LOCAL_WEBGPU_MODEL_SIZES
-                else compute_type
+                "onnx-q4" if model_name in LOCAL_WEBGPU_MODEL_SIZES else compute_type
             )
-            case = BenchmarkCase(
-                model=model_name,
-                device=device,
-                compute_type=display_compute_type,
-                download_seconds=0.0,
-                load_seconds=math.nan,
-                runs=[],
-                error=str(exc),
-            )
-        cases.append(case)
+            if progress_callback is not None:
+                progress_callback(
+                    f"[Case {case_index}/{total_cases}] "
+                    f"{model_name} ({device_target}/{display_compute_type})"
+                )
+            try:
+                if model_name not in LOCAL_WEBGPU_MODEL_SIZES:
+                    case = _run_case(
+                        audio_path=path,
+                        model_name=model_name,
+                        device=device_target,
+                        compute_type=compute_type,
+                        runs=runs,
+                        beam_size=beam_size,
+                        language=language,
+                        vad_filter=vad_filter,
+                        warmup=warmup,
+                        threads=threads,
+                        model_dir=model_dir,
+                        progress_callback=progress_callback,
+                    )
+                else:
+                    case = _run_webgpu_case(
+                        audio_path=path,
+                        model_name=model_name,
+                        runs=runs,
+                        language=language,
+                        warmup=warmup,
+                        device=device_target,
+                        model_dir=model_dir,
+                        progress_callback=progress_callback,
+                    )
+            except Exception as exc:
+                case = BenchmarkCase(
+                    model=model_name,
+                    device=device_target,
+                    compute_type=display_compute_type,
+                    download_seconds=0.0,
+                    load_seconds=math.nan,
+                    runs=[],
+                    error=str(exc),
+                )
+            cases.append(case)
     return cases
 
 
@@ -369,7 +416,7 @@ def format_benchmark_summary(cases: list[BenchmarkCase]) -> str:
     for case in cases:
         status = "ok" if case.error is None else f"error: {case.error}"
         lines.append(
-            f"- {case.model} ({case.compute_type}): "
+            f"- {case.model} ({case.device}/{case.compute_type}): "
             f"load={_format_seconds(case.load_seconds)}, "
             f"avg={_format_seconds(case.avg_seconds)}, "
             f"rtf={_format_number(case.avg_rtf)} [{status}]"
@@ -382,8 +429,12 @@ def format_benchmark_summary(cases: list[BenchmarkCase]) -> str:
         lines.extend(
             [
                 "",
-                f"Fastest average latency: {fastest.model} ({_format_seconds(fastest.avg_seconds)})",
-                f"Best real-time factor: {best_rtf.model} ({_format_number(best_rtf.avg_rtf)})",
+                "Fastest average latency: "
+                f"{fastest.model} on {fastest.device} "
+                f"({_format_seconds(fastest.avg_seconds)})",
+                "Best real-time factor: "
+                f"{best_rtf.model} on {best_rtf.device} "
+                f"({_format_number(best_rtf.avg_rtf)})",
                 "RTF < 1.0 means faster than real-time.",
             ]
         )
@@ -486,5 +537,6 @@ __all__ = [
     "_successful_cases",
     "_write_csv",
     "format_benchmark_summary",
+    "normalize_webgpu_benchmark_devices",
     "run_benchmark_cases",
 ]

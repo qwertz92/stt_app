@@ -1,11 +1,22 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from pathlib import Path
+
+
+datas = [('src/stt_app/webgpu_asr_runner.mjs', 'stt_app')]
+for source, target in (
+    ('package.json', '.'),
+    ('package-lock.json', '.'),
+    ('node_modules', 'node_modules'),
+):
+    if Path(source).exists():
+        datas.append((source, target))
 
 a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[],
-    datas=[('src/stt_app/webgpu_asr_runner.mjs', 'stt_app')],
+    datas=datas,
     hiddenimports=['stt_app.main'],
     hookspath=[],
     hooksconfig={},

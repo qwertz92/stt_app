@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from stt_app import local_benchmark
+
 
 def _load_benchmark_module():
     root = Path(__file__).resolve().parents[1]
@@ -82,6 +84,42 @@ def test_successful_cases_filters_errors():
 
     successful = module._successful_cases([ok_case, bad_case])
     assert successful == [ok_case]
+
+
+def test_normalize_webgpu_benchmark_devices_expands_groups():
+    module = _load_benchmark_module()
+
+    assert module.normalize_webgpu_benchmark_devices("gpu,cpu") == ["gpu", "cpu"]
+    assert module.normalize_webgpu_benchmark_devices("all") == [
+        "webgpu",
+        "dml",
+        "cpu",
+    ]
+
+
+def test_run_benchmark_cases_expands_webgpu_device_targets(monkeypatch, tmp_path):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+
+    def fake_webgpu_case(**kwargs):
+        return local_benchmark.BenchmarkCase(
+            model=kwargs["model_name"],
+            device=kwargs["device"],
+            compute_type="onnx-q4",
+            download_seconds=0.0,
+            load_seconds=0.1,
+            runs=[],
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_webgpu_case", fake_webgpu_case)
+
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio_path,
+        model_names=["cohere-transcribe-03-2026"],
+        webgpu_devices="gpu,cpu",
+    )
+
+    assert [case.device for case in cases] == ["gpu", "cpu"]
 
 
 # --- BenchmarkCase download_seconds tests ---

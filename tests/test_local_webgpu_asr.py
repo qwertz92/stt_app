@@ -110,6 +110,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     runner = tmp_path / "runner.mjs"
     runner.write_text("", encoding="utf-8")
     fake_process = _FakeProcess()
+    commands = []
     messages = [
         {"ok": True, "device": "cpu", "gpuAvailable": False},
         {
@@ -137,14 +138,20 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
         lambda self, timeout_s: messages.pop(0),
     )
     monkeypatch.setattr(
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner: None,
+    )
+    monkeypatch.setattr(
         local_webgpu_asr.subprocess,
         "Popen",
-        lambda *args, **kwargs: fake_process,
+        lambda command, **kwargs: commands.append(command) or fake_process,
     )
 
     transcriber = LocalOnnxWebGpuTranscriber(
         model_size="cohere-transcribe-03-2026",
         language_mode="en",
+        device="cpu",
         node_path="node",
         runner_path=runner,
     )
@@ -158,6 +165,8 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert transcriber.runtime_device == "cpu"
     assert transcriber.gpu_available is False
     assert "CPU" in transcriber.runtime_warning
+    assert commands
+    assert commands[0][commands[0].index("--device") + 1] == "cpu"
     requests = [
         json.loads(line)
         for line in fake_process.stdin.getvalue().splitlines()

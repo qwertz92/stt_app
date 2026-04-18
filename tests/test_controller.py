@@ -801,6 +801,50 @@ def test_controller_preload_fallback_on_failure():
     _ = app
 
 
+def test_webgpu_batch_transcriber_is_closed_after_worker(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+    )
+
+    class FakeWebGpuTranscriber:
+        def __init__(self) -> None:
+            self.closed = False
+
+        def transcribe_batch(self, _audio_source):
+            return "hello"
+
+        def close(self):
+            self.closed = True
+
+    transcriber = FakeWebGpuTranscriber()
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    emitted = []
+    controller.transcription_ready.connect(lambda token, text: emitted.append((token, text)))
+
+    controller._transcribe_worker(7, b"RIFF", settings)
+
+    assert emitted == [(7, "hello")]
+    assert transcriber.closed is True
+    assert controller._transcriber_cache is None
+    controller.shutdown()
+    _ = app
+
+
 def test_preload_worker_persists_fallback_model(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)

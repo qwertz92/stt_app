@@ -38,6 +38,7 @@ from .config import (
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
+    LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     LOCAL_WEBGPU_MODEL_SIZES,
     OPENAI_MODELS,
     STREAMING_ENGINES,
@@ -59,6 +60,7 @@ from .local_benchmark import (
     _format_number,
     _format_seconds,
     format_benchmark_summary,
+    normalize_webgpu_benchmark_devices,
     run_benchmark_cases,
 )
 from .logger import AppLogger
@@ -954,8 +956,9 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.setSpacing(6)
 
         intro = QtWidgets.QLabel(
-            "Benchmark installed local faster-whisper models against one audio file. "
-            "If you want to compare more models, download them first on the Local tab."
+            "Benchmark installed local models against one audio file. "
+            "Cohere and Granite use fixed q4 ONNX weights and can be run on "
+            "Auto, GPU-only, CPU-only, DirectML, or WebGPU targets."
         )
         intro.setWordWrap(True)
         self._style_note_label(intro)
@@ -1054,6 +1057,36 @@ class SettingsDialog(QtWidgets.QDialog):
             self._field_with_hint(self.benchmark_compute_type_combo, compute_type_note),
         )
 
+        self.benchmark_webgpu_device_combo = _WheelPassthroughComboBox()
+        webgpu_device_choices = (
+            ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
+            ("GPU only (WebGPU -> DirectML)", "gpu"),
+            ("CPU only", "cpu"),
+            ("GPU + CPU comparison", "gpu,cpu"),
+            ("DirectML only", "dml"),
+            ("WebGPU only", "webgpu"),
+            ("All explicit targets", "all"),
+        )
+        for label, value in webgpu_device_choices:
+            if value in LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS:
+                self.benchmark_webgpu_device_combo.addItem(label, value)
+        self.benchmark_webgpu_device_combo.setToolTip(
+            "Controls only Cohere and Granite ONNX benchmarks. Auto tries GPU first "
+            "and falls back to CPU; GPU-only fails instead of using CPU."
+        )
+        webgpu_device_note = QtWidgets.QLabel(
+            "ONNX target selection. Faster-whisper models ignore this and use the standard Device setting."
+        )
+        webgpu_device_note.setWordWrap(True)
+        self._style_note_label(webgpu_device_note)
+        options_form.addRow(
+            "ONNX Device",
+            self._field_with_hint(
+                self.benchmark_webgpu_device_combo,
+                webgpu_device_note,
+            ),
+        )
+
         self.benchmark_runs_spin = _WheelPassthroughSpinBox()
         self.benchmark_runs_spin.setRange(1, 10)
         self.benchmark_runs_spin.setValue(1)
@@ -1077,7 +1110,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Beam size controls decoding breadth. Higher values can improve quality but slow the run down."
         )
         beam_note = QtWidgets.QLabel(
-            "Decoder search width. Larger beams may improve recognition, but increase latency."
+            "Decoder search width for faster-whisper. Cohere and Granite ignore this setting."
         )
         beam_note.setWordWrap(True)
         self._style_note_label(beam_note)
@@ -1154,9 +1187,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         results_box = QtWidgets.QGroupBox("Results")
         results_layout = QtWidgets.QVBoxLayout(results_box)
-        self.benchmark_results_table = QtWidgets.QTableWidget(0, 6)
+        self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
         self.benchmark_results_table.setHorizontalHeaderLabels(
-            ["Model", "Compute", "Load", "Avg", "RTF", "Status"]
+            ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
         )
         self.benchmark_results_table.verticalHeader().setVisible(False)
         self.benchmark_results_table.setEditTriggers(
@@ -2093,6 +2126,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_models_list.setEnabled(not busy)
         self.refresh_benchmark_models_button.setEnabled(not busy)
         self.benchmark_compute_type_combo.setEnabled(not busy)
+        self.benchmark_webgpu_device_combo.setEnabled(not busy)
         self.benchmark_runs_spin.setEnabled(not busy)
         self.benchmark_beam_size_spin.setEnabled(not busy)
         self.benchmark_language_combo.setEnabled(not busy)
@@ -2114,6 +2148,7 @@ class SettingsDialog(QtWidgets.QDialog):
             status = "OK" if case.error is None else "Error"
             values = [
                 case.model,
+                case.device,
                 case.compute_type,
                 _format_seconds(case.load_seconds),
                 _format_seconds(case.avg_seconds),
@@ -2159,6 +2194,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._set_benchmark_status("Running benchmark...", "#555")
         compute_type = str(self.benchmark_compute_type_combo.currentData() or "int8")
+        webgpu_devices = normalize_webgpu_benchmark_devices(
+            str(self.benchmark_webgpu_device_combo.currentData() or "auto")
+        )
         run_count = int(self.benchmark_runs_spin.value())
         beam_size = int(self.benchmark_beam_size_spin.value())
         use_vad = self.benchmark_vad_checkbox.isChecked()
@@ -2183,6 +2221,7 @@ class SettingsDialog(QtWidgets.QDialog):
                     warmup=warmup,
                     threads=0,
                     model_dir=model_dir,
+                    webgpu_devices=webgpu_devices,
                     progress_callback=_progress,
                 )
             except Exception as exc:
@@ -2544,8 +2583,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 "Experimental ONNX model: the app tries WebGPU, then DirectML "
                 "on Windows, and falls back to CPU if no compatible "
                 "Intel/AMD/NVIDIA GPU runtime loads. CPU fallback can be much "
-                "slower than large-v3-turbo. Batch mode only. Requires Node.js "
-                "and `npm install` for the local runtime."
+                "slower than large-v3-turbo. Batch mode only. The exact device "
+                "is shown in benchmark results after the model loads."
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return

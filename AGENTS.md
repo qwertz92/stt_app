@@ -87,6 +87,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Speech are selectable local models through `transcriber/local_webgpu_asr.py`.
   They are batch-only, use q4 ONNX snapshots, require Node.js plus
   `@huggingface/transformers`, and try WebGPU, then Windows DirectML, then CPU.
+  They are not preloaded and are closed after normal batch dictation to avoid
+  idle ONNX/Node CPU load.
   Keep faster-whisper as the stable local default until real target-hardware
   benchmarks justify switching.
 

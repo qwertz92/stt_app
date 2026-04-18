@@ -20,12 +20,22 @@ from stt_app.local_benchmark import (
     _case_from_dict,
     _format_number,
     _format_seconds,
-    _run_case as _shared_run_case,
+    normalize_webgpu_benchmark_devices,
+    run_benchmark_cases as _shared_run_benchmark_cases,
     _safe_float,
     _successful_cases as _shared_successful_cases,
     _write_csv as _shared_write_csv,
 )
-from faster_whisper.utils import _MODELS
+from stt_app.config import (
+    LOCAL_WEBGPU_MODEL_SIZES,
+    MODEL_ESTIMATED_SIZE_MB,
+    MODEL_REPO_MAP,
+    VALID_MODEL_SIZES,
+)
+from stt_app.transcriber.local_faster_whisper import (
+    download_model_snapshot,
+    find_cached_models,
+)
 
 
 def _parse_csv(value: str | None, *, fallback: list[str]) -> list[str]:
@@ -36,9 +46,9 @@ def _parse_csv(value: str | None, *, fallback: list[str]) -> list[str]:
 
 
 def _validate_models(models: list[str]) -> list[str]:
-    unknown = [model for model in models if model not in _MODELS]
+    unknown = [model for model in models if model not in VALID_MODEL_SIZES]
     if unknown:
-        names = ", ".join(sorted(_MODELS.keys()))
+        names = ", ".join(VALID_MODEL_SIZES)
         raise ValueError(
             "Unknown model(s): "
             + ", ".join(unknown)
@@ -67,7 +77,7 @@ def _resolve_model_size_bytes(model_name: str) -> int | None:
     except Exception:
         return None
 
-    repo_id = _MODELS.get(model_name)
+    repo_id = MODEL_REPO_MAP.get(model_name)
     if not repo_id:
         return None
 
@@ -90,7 +100,7 @@ def _resolve_model_size_bytes(model_name: str) -> int | None:
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Benchmark local faster-whisper transcription runs over one audio file."
+            "Benchmark local transcription runs over one audio file."
         )
     )
     parser.add_argument(
@@ -107,7 +117,15 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--device",
         default="auto",
-        help="Device passed to WhisperModel (e.g. auto, cpu, cuda).",
+        help="Device passed to faster-whisper models (e.g. auto, cpu, cuda).",
+    )
+    parser.add_argument(
+        "--webgpu-devices",
+        default="auto",
+        help=(
+            "ONNX device targets for Cohere/Granite. Use auto, gpu, cpu, "
+            "gpu,cpu, dml, webgpu, or all."
+        ),
     )
     parser.add_argument(
         "--compute-types",
@@ -153,7 +171,7 @@ def _build_parser() -> argparse.ArgumentParser:
         "--list-models",
         action="store_true",
         default=False,
-        help="Print supported faster-whisper model names and exit.",
+        help="Print supported local model names and exit.",
     )
     parser.add_argument(
         "--show-model-sizes",
@@ -192,17 +210,20 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _print_model_table(show_sizes: bool) -> None:
-    print("Supported faster-whisper models:")
+    print("Supported local models:")
     print("")
-    header = f"{'Model':<24} {'Hub Repo':<40} {'Approx Repo Size':<18}"
+    header = f"{'Model':<28} {'Runtime':<16} {'Hub Repo':<48} {'Approx Size':<14}"
     print(header)
     print("-" * len(header))
-    for model in sorted(_MODELS.keys()):
-        repo = _MODELS[model]
+    for model in VALID_MODEL_SIZES:
+        repo = MODEL_REPO_MAP[model]
+        runtime = "ONNX q4" if model in LOCAL_WEBGPU_MODEL_SIZES else "CTranslate2"
         size_human = "-"
         if show_sizes:
             size_human = _bytes_to_human(_resolve_model_size_bytes(model))
-        print(f"{model:<24} {repo:<40} {size_human:<18}")
+        elif model in MODEL_ESTIMATED_SIZE_MB:
+            size_human = f"~{MODEL_ESTIMATED_SIZE_MB[model]} MB"
+        print(f"{model:<28} {runtime:<16} {repo:<48} {size_human:<14}")
 
 
 def _ensure_models_available(
@@ -214,23 +235,21 @@ def _ensure_models_available(
     Download progress bars are shown by huggingface_hub automatically.
     If uncached models are found, the user is prompted before downloading.
     """
-    from huggingface_hub import snapshot_download
-
     download_times: dict[str, float] = {}
 
     # Phase 1: classify models as cached or uncached.
+    cached_models = set(find_cached_models(""))
     cached: list[str] = []
     uncached: list[str] = []
     for model_name in model_names:
-        repo_id = _MODELS.get(model_name)
+        repo_id = MODEL_REPO_MAP.get(model_name)
         if not repo_id:
             download_times[model_name] = 0.0
             continue
-        try:
-            snapshot_download(repo_id, local_files_only=True)
+        if model_name in cached_models:
             cached.append(model_name)
             download_times[model_name] = 0.0
-        except Exception:
+        else:
             uncached.append(model_name)
 
     if cached:
@@ -243,23 +262,16 @@ def _ensure_models_available(
     print("")
     print("  The following models need to be downloaded:")
     print("")
-    _APPROX_SIZES: dict[str, str] = {
-        "tiny": "~75 MB",
-        "base": "~141 MB",
-        "small": "~484 MB",
-        "medium": "~1.4 GB",
-        "large-v3": "~3.1 GB",
-        "large-v3-turbo": "~809 MB",
-        "distil-large-v3.5": "~756 MB",
-    }
     for model_name in uncached:
-        size_hint = _APPROX_SIZES.get(model_name, "unknown size")
-        print(f"    • {model_name}  ({size_hint})")
+        size_mb = MODEL_ESTIMATED_SIZE_MB.get(model_name)
+        size_hint = f"~{size_mb} MB" if size_mb else "unknown size"
+        print(f"    - {model_name}  ({size_hint})")
     print("")
 
     try:
         answer = input(
-            "  Download these models now? [y]es / [s]kip (benchmark cached only) / [a]bort: "
+            "  Download these models now? [y]es / [s]kip "
+            "(benchmark cached only) / [a]bort: "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
         answer = "a"
@@ -269,23 +281,23 @@ def _ensure_models_available(
         sys.exit(0)
 
     if answer in ("s", "skip"):
-        print("  Skipping downloads — benchmarking cached models only.")
+        print("  Skipping downloads - benchmarking cached models only.")
         for model_name in uncached:
             download_times.pop(model_name, None)
         return download_times
 
     # Phase 3: download uncached models.
     for i, model_name in enumerate(uncached, 1):
-        repo_id = _MODELS.get(model_name)
+        repo_id = MODEL_REPO_MAP.get(model_name)
         if not repo_id:
             download_times[model_name] = 0.0
             continue
 
         label = f"  [{i}/{len(uncached)}] {model_name}"
-        print(f"{label} — downloading ({repo_id})...")
+        print(f"{label} - downloading ({repo_id})...")
         dl_start = time.perf_counter()
         try:
-            snapshot_download(repo_id)
+            download_model_snapshot(model_name)
             elapsed = time.perf_counter() - dl_start
             print(f"  Downloaded in {_format_seconds(elapsed)}")
             download_times[model_name] = elapsed
@@ -309,11 +321,12 @@ def _run_case(
     vad_filter: bool,
     warmup: bool,
     threads: int,
+    webgpu_device: str = "auto",
     download_seconds: float = 0.0,
 ) -> BenchmarkCase:
-    return _shared_run_case(
+    cases = _shared_run_benchmark_cases(
         audio_path=audio_path,
-        model_name=model_name,
+        model_names=[model_name],
         device=device,
         compute_type=compute_type,
         runs=runs,
@@ -322,9 +335,22 @@ def _run_case(
         vad_filter=vad_filter,
         warmup=warmup,
         threads=threads,
-        download_seconds=download_seconds,
+        webgpu_devices=[webgpu_device],
         progress_callback=lambda text: print(f"  {text}", flush=True),
     )
+    if not cases:
+        return BenchmarkCase(
+            model=model_name,
+            device=device,
+            compute_type=compute_type,
+            download_seconds=download_seconds,
+            load_seconds=math.nan,
+            runs=[],
+            error="No benchmark result was produced.",
+        )
+    case = cases[0]
+    case.download_seconds = download_seconds
+    return case
 
 
 def _run_case_worker(params: dict[str, Any], output_queue) -> None:
@@ -365,7 +391,7 @@ def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
             return _case_from_dict(raw_case)
         return BenchmarkCase(
             model=str(params.get("model_name", "")),
-            device=str(params.get("device", "")),
+            device=str(params.get("webgpu_device") or params.get("device", "")),
             compute_type=str(params.get("compute_type", "")),
             download_seconds=_safe_float(params.get("download_seconds"), default=0.0),
             load_seconds=math.nan,
@@ -380,7 +406,7 @@ def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
         error_text = f"Worker exited with code {process.exitcode}."
     return BenchmarkCase(
         model=str(params.get("model_name", "")),
-        device=str(params.get("device", "")),
+        device=str(params.get("webgpu_device") or params.get("device", "")),
         compute_type=str(params.get("compute_type", "")),
         download_seconds=_safe_float(params.get("download_seconds"), default=0.0),
         load_seconds=math.nan,
@@ -486,16 +512,22 @@ def main() -> int:
     model_names = _parse_csv(args.models, fallback=["small"])
     compute_types = _parse_csv(args.compute_types, fallback=["int8"])
     try:
+        webgpu_devices = normalize_webgpu_benchmark_devices(args.webgpu_devices)
+    except ValueError as exc:
+        parser.error(str(exc))
+        return 2
+    try:
         model_names = _validate_models(model_names)
     except ValueError as exc:
         parser.error(str(exc))
         return 2
 
-    print("faster-whisper local benchmark")
+    print("local transcription benchmark")
     print(f"timestamp: {datetime.now(timezone.utc).isoformat()}")
     print(f"audio: {audio_path.resolve()}")
     print(f"models: {', '.join(model_names)}")
     print(f"device: {args.device}")
+    print(f"onnx_devices: {', '.join(webgpu_devices)}")
     print(f"compute_types: {', '.join(compute_types)}")
     print(f"runs per case: {args.runs}")
     print(f"beam_size: {args.beam_size}")
@@ -518,18 +550,30 @@ def main() -> int:
     cases: list[BenchmarkCase] = []
     failures = 0
     interrupted = False
-    total_cases = len(model_names) * len(compute_types)
-    case_index = 0
-
-    try:
-        for model_name in model_names:
-            for compute_type in compute_types:
-                case_index += 1
-                print(
-                    f"[Case {case_index}/{total_cases}] model={model_name}, "
-                    f"device={args.device}, compute_type={compute_type}"
+    case_params: list[dict[str, Any]] = []
+    for model_name in model_names:
+        if model_name in LOCAL_WEBGPU_MODEL_SIZES:
+            for webgpu_device in webgpu_devices:
+                case_params.append(
+                    {
+                        "audio_path": audio_path,
+                        "model_name": model_name,
+                        "device": args.device,
+                        "compute_type": "onnx-q4",
+                        "runs": args.runs,
+                        "beam_size": args.beam_size,
+                        "language": args.language,
+                        "vad_filter": args.vad_filter,
+                        "warmup": args.warmup,
+                        "threads": args.threads,
+                        "webgpu_device": webgpu_device,
+                        "download_seconds": download_times.get(model_name, 0.0),
+                    }
                 )
-                params = {
+            continue
+        for compute_type in compute_types:
+            case_params.append(
+                {
                     "audio_path": audio_path,
                     "model_name": model_name,
                     "device": args.device,
@@ -540,26 +584,43 @@ def main() -> int:
                     "vad_filter": args.vad_filter,
                     "warmup": args.warmup,
                     "threads": args.threads,
+                    "webgpu_device": "auto",
                     "download_seconds": download_times.get(model_name, 0.0),
                 }
-                if args.isolated_case:
-                    case = _run_case_isolated(params)
-                else:
-                    try:
-                        case = _run_case(**params)
-                    except Exception as exc:
-                        case = BenchmarkCase(
-                            model=model_name,
-                            device=args.device,
-                            compute_type=compute_type,
-                            download_seconds=download_times.get(model_name, 0.0),
-                            load_seconds=math.nan,
-                            runs=[],
-                            error=str(exc),
-                        )
-                if case.error:
-                    failures += 1
-                cases.append(case)
+            )
+
+    try:
+        for case_index, params in enumerate(case_params, start=1):
+            display_device = (
+                params["webgpu_device"]
+                if params["model_name"] in LOCAL_WEBGPU_MODEL_SIZES
+                else params["device"]
+            )
+            print(
+                f"[Case {case_index}/{len(case_params)}] "
+                f"model={params['model_name']}, "
+                f"device={display_device}, compute_type={params['compute_type']}"
+            )
+            if args.isolated_case:
+                case = _run_case_isolated(params)
+            else:
+                try:
+                    case = _run_case(**params)
+                except Exception as exc:
+                    case = BenchmarkCase(
+                        model=str(params["model_name"]),
+                        device=str(display_device),
+                        compute_type=str(params["compute_type"]),
+                        download_seconds=download_times.get(
+                            str(params["model_name"]), 0.0
+                        ),
+                        load_seconds=math.nan,
+                        runs=[],
+                        error=str(exc),
+                    )
+            if case.error:
+                failures += 1
+            cases.append(case)
     except KeyboardInterrupt:
         interrupted = True
         print("")
@@ -575,6 +636,7 @@ def main() -> int:
             "timestamp_utc": datetime.now(timezone.utc).isoformat(),
             "audio_path": str(audio_path.resolve()),
             "device": args.device,
+            "onnx_devices": webgpu_devices,
             "compute_types": compute_types,
             "models": model_names,
             "runs_per_case": args.runs,

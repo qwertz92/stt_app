@@ -88,6 +88,18 @@ LOCAL_WEBGPU_MODEL_SIZES = (
     "granite-4.0-1b-speech",
 )
 
+LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
+
+LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
+    "auto": ("auto",),
+    "gpu": ("gpu",),
+    "cpu": ("cpu",),
+    "gpu,cpu": ("gpu", "cpu"),
+    "dml": ("dml",),
+    "webgpu": ("webgpu",),
+    "all": ("webgpu", "dml", "cpu"),
+}
+
 VALID_MODEL_SIZES = FASTER_WHISPER_MODEL_SIZES + LOCAL_WEBGPU_MODEL_SIZES
 
 # Short model name → HuggingFace repo ID.

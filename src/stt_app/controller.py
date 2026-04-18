@@ -1092,6 +1092,11 @@ class DictationController(QtCore.QObject):
         wav_bytes: bytes,
         settings: AppSettings,
     ) -> None:
+        close_after_transcription = (
+            settings.engine == DEFAULT_ENGINE
+            and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+        )
+        transcriber = None
         try:
             transcriber = self._get_or_create_transcriber(settings)
         except TranscriptionError as exc:
@@ -1126,6 +1131,9 @@ class DictationController(QtCore.QObject):
                 request_token,
                 f"Unexpected transcription error: {exc}",
             )
+        finally:
+            if close_after_transcription and transcriber is not None:
+                self._close_cached_transcriber(transcriber)
 
     def _finalize_stream_worker(self, request_token: int) -> None:
         try:
@@ -1231,6 +1239,11 @@ class DictationController(QtCore.QObject):
             getattr(settings, "assemblyai_model", ""),
             getattr(settings, "elevenlabs_model", ""),
         )
+        if (
+            settings.engine == DEFAULT_ENGINE
+            and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+        ):
+            return create_transcriber(settings, secret_store=self._secret_store)
         with self._transcriber_cache_lock:
             if (
                 self._transcriber_cache is None

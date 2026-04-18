@@ -2,7 +2,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "install:webgpu-runtime": "npm install"
+    "install:webgpu-runtime": "npm install",
+    "verify:webgpu-runtime": "node --input-type=module -e \"await import('@huggingface/transformers')\""
   },
   "dependencies": {
     "@huggingface/transformers": "^4.1.0"
