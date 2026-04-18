@@ -9,6 +9,9 @@ The app has two local runtime families:
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models in CTranslate2 format.
 - Experimental q4 ONNX/WebGPU models through `@huggingface/transformers`.
 
+For deeper background on WebGPU, DirectML, CPU fallback, memory behavior, and
+language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
+
 | Model | Runtime | Size | Languages | Best for |
 |-------|---------|------|-----------|----------|
 | `tiny` | CTranslate2 | ~75 MB | Multilingual | Quick testing, fallback |
@@ -90,7 +93,9 @@ benchmarking Cohere/Granite.
 
 Unlike faster-whisper models, Cohere and Granite are not preloaded when the app
 starts. This avoids expensive background CPU model loading before the user
-actually starts an experimental transcription.
+actually starts an experimental transcription. The Local tab has an expert
+setting to keep the last experimental ONNX model loaded after dictation when
+warm latency matters more than RAM/VRAM use.
 
 `wasm` is not a valid device in the Transformers.js Node runtime used by this
 app. It appears in the browser/web ONNX bundle, but the app process uses the

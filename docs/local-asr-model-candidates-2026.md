@@ -19,6 +19,10 @@ Status after the 2026-04-18 implementation pass:
   warning in Settings.
 - NVIDIA Parakeet remains unimplemented because the official NeMo path is still
   a heavyweight, NVIDIA-oriented runtime.
+- Qwen3-ASR 0.6B and 1.7B were evaluated, but are not implemented because the
+  official path uses a separate `qwen-asr`/PyTorch or vLLM stack and the
+  available community ONNX/GGUF packages do not match the shared
+  Transformers.js/WebGPU runtime used for Cohere and Granite.
 
 The next step is an on-device benchmark on the target Intel GPU. That benchmark
 should compare:
@@ -26,7 +30,8 @@ should compare:
 - current `faster-whisper` models through CTranslate2 on CPU,
 - `CohereLabs/cohere-transcribe-03-2026` through ONNX/WebGPU,
 - `ibm-granite/granite-4.0-1b-speech` through ONNX/WebGPU,
-- optionally `nvidia/parakeet-tdt-0.6b-v3` through a community ONNX path.
+- optionally Parakeet or Qwen3-ASR through a separate community runtime
+  experiment if the ONNX/WebGPU candidates do not win clearly.
 
 Only promote a candidate from experimental to recommended/default if it wins on
 the user's real Windows hardware in warm latency, total dictation latency,
@@ -140,7 +145,8 @@ recommended local path.
 | NVIDIA Parakeet v3 | Excellent speed and good WER on supported hardware | Poor as NeMo production path | NVIDIA-only for official path | Do not implement official NeMo path |
 | Parakeet community ONNX | Potentially useful | Medium-low, community maintained | Plausible via ONNX/WebGPU only | Optional benchmark, not first priority |
 | IBM Granite 4.0 1B Speech | Very close to Cohere on English Open ASR | Medium as WebGPU | Plausible via WebGPU | Experimental selectable model; benchmark alongside Cohere |
-| Qwen3-ASR / Canary / Voxtral / Kyutai | Interesting but less compelling for this app | Unproven | Runtime-specific | Watch only |
+| Qwen3-ASR 0.6B / 1.7B | Strong official ASR family | Poor for current WebGPU path; possible future GGUF/ONNX CPU experiment | Runtime-specific | Watch; do not add without a separate runtime decision |
+| Canary / Voxtral / Kyutai | Interesting but less compelling for this app | Unproven | Runtime-specific | Watch only |
 
 ## Cohere Transcribe
 
@@ -372,11 +378,22 @@ Granite should be benchmarked in at least two configurations: a low-memory
 
 ## Other watched candidates
 
-### Qwen3-ASR-1.7B
+### Qwen3-ASR 0.6B and 1.7B
 
-Cohere's launch comparison lists Qwen3-ASR-1.7B at 5.76 English Open ASR mean
-WER, which is competitive. It is worth watching, but it is not a better first
-prototype than Cohere or Granite unless its Windows/WebGPU path proves simpler.
+Qwen3-ASR is a serious ASR family and should stay on the watch list. The
+official 0.6B and 1.7B model cards describe broad multilingual ASR support,
+automatic language identification, and examples through `qwen-asr`,
+`transformers`, and vLLM-style Python runtimes.
+
+That is not the same integration class as the Cohere and Granite models added
+in this branch. The current app integration depends on a Transformers.js ONNX
+pipeline that can select `webgpu`, `dml`, or `cpu` from the same helper process.
+Qwen3-ASR does not currently have a maintained, official ONNX/WebGPU package
+with the same pipeline compatibility. Community GGUF and ONNX CPU packages
+exist, but they imply a separate runtime family and separate model-management
+rules.
+
+The dedicated Qwen note is `docs/qwen3-asr-evaluation.md`.
 
 ### ElevenLabs Scribe v2
 
@@ -493,27 +510,34 @@ Required app changes:
 | Parakeet NeMo | 3-5 days | 1-3 weeks | High and NVIDIA-only |
 | Parakeet community ONNX/WebGPU | 3-7 days | 3-6 weeks | High |
 | Granite ONNX/WebGPU | 3-6 days | 3-6 weeks | Medium-high |
+| Qwen3-ASR community GGUF or ONNX CPU | 3-7 days | 3-6 weeks | High |
 
 These estimates assume no major driver/runtime blockers. A single missing ONNX
 operator or WebGPU runtime issue can change the estimate materially.
 
 ## Final recommendation
 
-Do not implement any of these directly in the production app yet.
+Keep Cohere Transcribe and IBM Granite Speech as experimental selectable local
+models, not as the production default.
 
-Do implement a benchmark/prototype if the user wants to spend effort on local
-quality improvements for Intel GPU. The highest-value prototype order is:
+The highest-value validation order is:
 
 1. Cohere ONNX/WebGPU.
 2. Granite ONNX/WebGPU.
 3. Current `faster-whisper` baselines in the same report.
-4. Optional Parakeet ONNX/WebGPU if the first two do not clearly win.
+4. Optional Parakeet or Qwen3-ASR through a separate community runtime
+   experiment if the first two do not clearly win.
 
 Do not spend time on the official Parakeet NeMo path unless NVIDIA-only support
 becomes acceptable.
 
 Do not spend time on a native PyTorch production provider unless the WebGPU path
 fails and a CPU/NVIDIA-only research path is explicitly desired.
+
+Do not add Qwen3-ASR to the normal local model picker until a runtime decision
+is made. A community GGUF or CPU ONNX experiment can be useful, but it should be
+treated as a new runtime family, not folded into the Cohere/Granite WebGPU
+helper.
 
 ## Sources
 
@@ -533,6 +557,10 @@ fails and a CPU/NVIDIA-only research path is explicitly desired.
   <https://huggingface.co/ibm-granite/granite-4.0-1b-speech>
 - IBM Granite ONNX/WebGPU model card:
   <https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX>
+- Qwen3-ASR 0.6B model card:
+  <https://huggingface.co/Qwen/Qwen3-ASR-0.6B>
+- Qwen3-ASR 1.7B model card:
+  <https://huggingface.co/Qwen/Qwen3-ASR-1.7B>
 - Hugging Face Open ASR Leaderboard repository:
   <https://github.com/huggingface/open_asr_leaderboard>
 - Transformers.js v4 announcement:

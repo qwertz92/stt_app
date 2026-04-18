@@ -45,6 +45,8 @@ Agents and developers: use this as a knowledge base for past issues and solution
     false; explicit WebGPU can still work through the Transformers.js backend.
   - ONNX helper processes are not cached after normal dictation, so they cannot
     keep consuming CPU while idle after one experimental transcription.
+  - An expert keep-loaded setting can keep the last ONNX helper warm after
+    dictation, and shutdown/settings changes close the cached helper.
   - Benchmark startup and preload failures close their ONNX helper process to
     avoid orphaned Node processes holding RAM or GPU memory.
   - Benchmarking can run Cohere/Granite on Auto, GPU-only, CPU-only, DirectML,
@@ -55,6 +57,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
     ONNX operator fails after the model loaded successfully.
   - `gpu` can fall back between GPU runtimes during transcription, but never
     falls back to CPU.
+  - Granite keeps automatic language mode generic; Cohere maps Auto to German
+    because its ONNX path requires an explicit language.
+  - Qwen3-ASR 0.6B/1.7B were evaluated and documented, but not implemented
+    because they do not currently share the Cohere/Granite WebGPU runtime path.
   - App startup now uses a single-instance lock to avoid duplicate tray/overlay
     processes competing for hotkeys and background work.
 - **Runtime packaging hooks were added:**
