@@ -105,6 +105,15 @@ def test_webgpu_transcriber_defaults_auto_language_to_german():
     assert transcriber._language_arg() == "de"
 
 
+def test_granite_webgpu_transcriber_allows_auto_language():
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-4.0-1b-speech",
+        language_mode="auto",
+    )
+
+    assert transcriber._language_arg() == ""
+
+
 def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     monkeypatch,
     tmp_path,

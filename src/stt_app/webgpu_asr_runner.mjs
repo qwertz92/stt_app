@@ -241,6 +241,16 @@ function graniteDtype(dtype) {
   };
 }
 
+function granitePrompt(language) {
+  if (language === "de") {
+    return "<|audio|>transcribe the German speech into a written format.";
+  }
+  if (language === "en") {
+    return "<|audio|>transcribe the English speech into a written format.";
+  }
+  return "<|audio|>can you transcribe the speech into a written format?";
+}
+
 async function loadRuntimeForDevice(options, device, webgpuAvailable) {
   const modelPath = modelPathForTransformers(options.modelPath);
   const accelerated = ["webgpu", "dml"].includes(device);
@@ -282,7 +292,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
         const messages = [
           {
             role: "user",
-            content: "<|audio|>can you transcribe the speech into a written format?",
+            content: granitePrompt(request.language || ""),
           },
         ];
         const prompt = processor.apply_chat_template(messages, {

@@ -359,6 +359,8 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
         mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
         if mode in {"de", "en"}:
             return mode
+        if self.model_size == "granite-4.0-1b-speech":
+            return ""
         # Cohere requires an explicit language. German is the safer default for
         # this app's primary user workflow when Auto reaches this provider.
         return "de"
