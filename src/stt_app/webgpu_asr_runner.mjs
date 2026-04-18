@@ -11,6 +11,11 @@ env.allowRemoteModels = false;
 env.useBrowserCache = false;
 env.useFSCache = true;
 
+const TARGET_SAMPLE_RATE = 16000;
+const GRANITE_MAX_CHUNK_SECONDS = 30;
+const GRANITE_BOUNDARY_CONTEXT_SECONDS = 5;
+const GRANITE_MIN_ENERGY_WINDOW_SAMPLES = 1600;
+
 function parseArgs(argv) {
   const args = {
     server: false,
@@ -187,6 +192,62 @@ function decodeWavFile(audioPath, targetSampleRate) {
   return resampleLinear(mono, sampleRate, targetSampleRate);
 }
 
+function findQuietestSplitPoint(audio, start, end, windowSamples) {
+  let bestIndex = start;
+  let bestEnergy = Infinity;
+  const step = Math.max(1, Math.floor(windowSamples / 2));
+  for (let index = start; index < end; index += step) {
+    const windowEnd = Math.min(index + windowSamples, end);
+    if (windowEnd <= index) {
+      break;
+    }
+    let energy = 0;
+    for (let sampleIndex = index; sampleIndex < windowEnd; sampleIndex += 1) {
+      const sample = audio[sampleIndex] || 0;
+      energy += sample * sample;
+    }
+    energy /= windowEnd - index;
+    if (energy < bestEnergy) {
+      bestEnergy = energy;
+      bestIndex = index + Math.floor((windowEnd - index) / 2);
+    }
+  }
+  return bestIndex;
+}
+
+function splitAudioAtQuietBoundaries(audio, sampleRate, maxChunkSeconds) {
+  const maxSamples = Math.max(1, Math.round(maxChunkSeconds * sampleRate));
+  if (audio.length <= maxSamples) {
+    return [audio];
+  }
+
+  const boundaryContextSamples = Math.max(
+    1,
+    Math.round(GRANITE_BOUNDARY_CONTEXT_SECONDS * sampleRate),
+  );
+  const chunks = [];
+  let offset = 0;
+  while (offset < audio.length) {
+    const hardEnd = Math.min(offset + maxSamples, audio.length);
+    if (hardEnd >= audio.length) {
+      chunks.push(audio.slice(offset, audio.length));
+      break;
+    }
+
+    const searchStart = Math.max(offset + 1, hardEnd - boundaryContextSamples);
+    const splitPoint = findQuietestSplitPoint(
+      audio,
+      searchStart,
+      hardEnd,
+      GRANITE_MIN_ENERGY_WINDOW_SAMPLES,
+    );
+    const safeSplitPoint = Math.max(offset + 1, Math.min(splitPoint, audio.length));
+    chunks.push(audio.slice(offset, safeSplitPoint));
+    offset = safeSplitPoint;
+  }
+  return chunks;
+}
+
 async function hasWebGpuAdapter() {
   const gpu = globalThis.navigator?.gpu;
   if (!gpu) {
@@ -251,6 +312,38 @@ function granitePrompt(language) {
   return "<|audio|>can you transcribe the speech into a written format?";
 }
 
+function joinTranscriptChunks(texts) {
+  return texts
+    .map((text) => String(text || "").trim())
+    .filter(Boolean)
+    .join(" ")
+    .replace(/\s+([,.;:!?])/g, "$1");
+}
+
+async function transcribeGraniteChunk(processor, model, audio, language, maxNewTokens) {
+  const messages = [
+    {
+      role: "user",
+      content: granitePrompt(language || ""),
+    },
+  ];
+  const prompt = processor.apply_chat_template(messages, {
+    add_generation_prompt: false,
+    tokenize: false,
+  });
+  const inputs = await processor(prompt, audio);
+  const generatedIds = await model.generate({
+    ...inputs,
+    max_new_tokens: maxNewTokens || 1024,
+  });
+  const inputLength = inputs.input_ids.dims.at(-1);
+  const generatedTexts = processor.batch_decode(
+    generatedIds.slice(null, [inputLength, null]),
+    { skip_special_tokens: true },
+  );
+  return String(generatedTexts?.[0] || "");
+}
+
 async function loadRuntimeForDevice(options, device, webgpuAvailable) {
   const modelPath = modelPathForTransformers(options.modelPath);
   const accelerated = ["webgpu", "dml"].includes(device);
@@ -289,27 +382,24 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
       webgpuAvailable: runtimeWebGpuAvailable,
       async transcribe(request) {
         const audio = request.audio;
-        const messages = [
-          {
-            role: "user",
-            content: granitePrompt(request.language || ""),
-          },
-        ];
-        const prompt = processor.apply_chat_template(messages, {
-          add_generation_prompt: false,
-          tokenize: false,
-        });
-        const inputs = await processor(prompt, audio);
-        const generatedIds = await model.generate({
-          ...inputs,
-          max_new_tokens: request.maxNewTokens || 1024,
-        });
-        const inputLength = inputs.input_ids.dims.at(-1);
-        const generatedTexts = processor.batch_decode(
-          generatedIds.slice(null, [inputLength, null]),
-          { skip_special_tokens: true },
+        const audioChunks = splitAudioAtQuietBoundaries(
+          audio,
+          TARGET_SAMPLE_RATE,
+          GRANITE_MAX_CHUNK_SECONDS,
         );
-        return String(generatedTexts?.[0] || "");
+        const chunkTexts = [];
+        for (const chunk of audioChunks) {
+          chunkTexts.push(
+            await transcribeGraniteChunk(
+              processor,
+              model,
+              chunk,
+              request.language || "",
+              request.maxNewTokens,
+            ),
+          );
+        }
+        return joinTranscriptChunks(chunkTexts);
       },
     };
   }
@@ -365,7 +455,7 @@ async function runServer(options) {
   }
 
   async function transcribeWithFallback(request) {
-    const audio = decodeWavFile(request.audioPath, 16000);
+    const audio = decodeWavFile(request.audioPath, TARGET_SAMPLE_RATE);
     const preparedRequest = { ...request, audio };
     try {
       return await runtime.transcribe(preparedRequest);
