@@ -16,6 +16,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - The Import Audio tab now starts transcription immediately without a
   confirmation prompt, shows remote-provider progress, and puts failures in
   the selectable result text area so errors can be copied.
+- Windows reports AltGr as Ctrl+Alt. The hotkey manager now ignores Ctrl+Alt
+  hotkey messages while right Alt is down so AltGr combinations do not start
+  dictation accidentally.
 
 ## 2026-04-18
 

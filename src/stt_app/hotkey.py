@@ -11,6 +11,8 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
+VK_RMENU = 0xA5
+KEY_STATE_DOWN_MASK = 0x8000
 
 _KEY_MAP = {
     "SPACE": 0x20,
@@ -62,6 +64,9 @@ class Win32HotkeyApi:
 
     def get_last_error(self) -> int:
         return int(ctypes.GetLastError() or 0)
+
+    def is_key_down(self, virtual_key: int) -> bool:
+        return bool(self._user32.GetAsyncKeyState(virtual_key) & KEY_STATE_DOWN_MASK)
 
 
 def parse_hotkey(value: str, include_norepeat: bool = True) -> tuple[int, int]:
@@ -115,6 +120,8 @@ class HotkeyManager:
         self._hotkey_id = hotkey_id
         self._hwnd = hwnd
         self._is_registered = False
+        self._registered_modifiers = 0
+        self._registered_vk = 0
 
     @property
     def hotkey_id(self) -> int:
@@ -143,6 +150,8 @@ class HotkeyManager:
             )
 
         self._is_registered = True
+        self._registered_modifiers = modifiers
+        self._registered_vk = vk
 
     def unregister(self) -> None:
         if not self._is_registered:
@@ -150,9 +159,27 @@ class HotkeyManager:
 
         self._api.unregister_hotkey(self._hwnd, self._hotkey_id)
         self._is_registered = False
+        self._registered_modifiers = 0
+        self._registered_vk = 0
 
     def matches_message(self, message_id: int, wparam: int) -> bool:
-        return message_id == WM_HOTKEY and int(wparam) == self._hotkey_id
+        if message_id != WM_HOTKEY or int(wparam) != self._hotkey_id:
+            return False
+        return not self._is_altgr_alias_active()
+
+    def _is_altgr_alias_active(self) -> bool:
+        if not (
+            self._registered_modifiers & MOD_CONTROL
+            and self._registered_modifiers & MOD_ALT
+        ):
+            return False
+        key_down = getattr(self._api, "is_key_down", None)
+        if not callable(key_down):
+            return False
+        try:
+            return bool(key_down(VK_RMENU))
+        except Exception:
+            return False
 
 
 def _format_register_hotkey_error(error_code: int) -> str:

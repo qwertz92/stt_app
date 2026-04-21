@@ -82,6 +82,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
   current default in settings persistence and are not shown in the UI.
+- **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
+  manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
+  AltGr combinations do not trigger dictation accidentally.
 - **Line endings**: Repository text files are normalized to LF via `.gitattributes`; `.editorconfig` mirrors that policy so Windows/WSL edits do not create CRLF-only diffs.
 - **Windows packaging**: end-user builds are layered. PyInstaller `onedir`
   is the base portable bundle; Inno Setup wraps that bundle into the

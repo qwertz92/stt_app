@@ -5,6 +5,8 @@ from stt_app.hotkey import (
     MOD_CONTROL,
     MOD_NOREPEAT,
     MOD_WIN,
+    VK_RMENU,
+    WM_HOTKEY,
     HotkeyManager,
     HotkeyRegistrationError,
     parse_hotkey,
@@ -18,6 +20,7 @@ class FakeWin32HotkeyApi:
         self.last_error = last_error
         self.register_calls = []
         self.unregister_calls = []
+        self.down_keys: set[int] = set()
 
     def register_hotkey(self, hwnd, hotkey_id, modifiers, virtual_key):
         self.register_calls.append((hwnd, hotkey_id, modifiers, virtual_key))
@@ -29,6 +32,9 @@ class FakeWin32HotkeyApi:
 
     def get_last_error(self):
         return self.last_error
+
+    def is_key_down(self, virtual_key):
+        return int(virtual_key) in self.down_keys
 
 
 def test_parse_hotkey_ctrl_alt_space():
@@ -89,3 +95,29 @@ def test_re_register_unregisters_previous_first():
 
     assert api.unregister_calls == [(None, 7)]
     assert len(api.register_calls) == 2
+
+
+def test_ctrl_alt_hotkey_ignores_altgr_alias():
+    api = FakeWin32HotkeyApi()
+    api.down_keys.add(VK_RMENU)
+    manager = HotkeyManager(api=api, hotkey_id=42)
+    manager.register("Ctrl+Alt+Space")
+
+    assert manager.matches_message(WM_HOTKEY, 42) is False
+
+
+def test_ctrl_alt_hotkey_matches_without_altgr():
+    api = FakeWin32HotkeyApi()
+    manager = HotkeyManager(api=api, hotkey_id=42)
+    manager.register("Ctrl+Alt+Space")
+
+    assert manager.matches_message(WM_HOTKEY, 42) is True
+
+
+def test_non_ctrl_alt_hotkey_does_not_check_altgr():
+    api = FakeWin32HotkeyApi()
+    api.down_keys.add(VK_RMENU)
+    manager = HotkeyManager(api=api, hotkey_id=42)
+    manager.register("Ctrl+Shift+Space")
+
+    assert manager.matches_message(WM_HOTKEY, 42) is True
