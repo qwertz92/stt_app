@@ -194,11 +194,18 @@ def _create_tray_icon(
 
     _active_settings_dialog: SettingsDialog | None = None
 
+    def present_settings_dialog(dialog: SettingsDialog) -> None:
+        if dialog.isMinimized():
+            dialog.showNormal()
+        else:
+            dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
     def open_settings_dialog() -> SettingsDialog:
         nonlocal _active_settings_dialog
         if _active_settings_dialog is not None:
-            _active_settings_dialog.raise_()
-            _active_settings_dialog.activateWindow()
+            present_settings_dialog(_active_settings_dialog)
             return _active_settings_dialog
         dialog = SettingsDialog(
             settings_store=settings_store,
@@ -220,7 +227,7 @@ def _create_tray_icon(
 
         dialog.finished.connect(_on_dialog_finished)
         _active_settings_dialog = dialog
-        dialog.show()
+        present_settings_dialog(dialog)
         return dialog
 
     def copy_diagnostics() -> None:

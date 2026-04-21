@@ -7,6 +7,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 - Benchmark audio selection now starts in the effective recordings directory,
   matching the folder used for archived normal recordings.
+- Opening Settings from the tray now presents the dialog immediately after
+  creation. On Windows, a newly shown tray-launched window can otherwise stay
+  behind other windows until the next activation path raises it.
 
 ## 2026-04-18
 

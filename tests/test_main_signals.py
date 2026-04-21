@@ -2,6 +2,7 @@ import signal
 
 from PySide6 import QtCore, QtWidgets
 
+import stt_app.main as main_module
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
     _create_tray_icon,
@@ -185,6 +186,60 @@ def test_tray_double_click_connected():
     # The activated signal should have at least one receiver connected.
     sig = QtCore.SIGNAL("activated(QSystemTrayIcon::ActivationReason)")
     assert tray.receivers(sig) > 0
+
+
+def test_tray_double_click_presents_settings_dialog(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    instances = []
+
+    class FakeSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.show_calls = 0
+            self.raise_calls = 0
+            self.activate_calls = 0
+            instances.append(self)
+
+        def show(self):
+            self.show_calls += 1
+
+        def showNormal(self):
+            self.show_calls += 1
+
+        def raise_(self):
+            self.raise_calls += 1
+
+        def activateWindow(self):
+            self.activate_calls += 1
+
+    monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
+
+    tray = _create_tray_icon(
+        app=app,
+        controller=FakeController(),
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.DoubleClick)
+
+    assert len(instances) == 1
+    assert instances[0].show_calls == 1
+    assert instances[0].raise_calls == 1
+    assert instances[0].activate_calls == 1
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.DoubleClick)
+
+    assert len(instances) == 1
+    assert instances[0].show_calls == 2
+    assert instances[0].raise_calls == 2
+    assert instances[0].activate_calls == 2
 
 
 def test_restore_overlay_after_settings_save_repositions_and_compacts():
