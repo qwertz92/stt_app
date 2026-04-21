@@ -7,3 +7,7 @@ Model selection and offline setup:
 Benchmarking instructions:
 
 - [Advanced Setup: Benchmarking](advanced-setup.md#benchmarking)
+
+Collected benchmark results:
+
+- [Local Benchmark Results](benchmarks/README.md)
