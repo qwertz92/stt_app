@@ -2110,7 +2110,7 @@ class SettingsDialog(QtWidgets.QDialog):
         path, _filter = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Select benchmark audio file",
-            "",
+            self._recordings_file_dialog_dir(),
             "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.webm);;All files (*)",
         )
         if path:
@@ -3309,6 +3309,14 @@ class SettingsDialog(QtWidgets.QDialog):
         if text:
             return text
         return str(recordings_dir())
+
+    def _recordings_file_dialog_dir(self) -> str:
+        target = self._effective_recordings_dir()
+        try:
+            Path(target).mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return str(recordings_dir())
+        return target
 
     def _refresh_history_list(self) -> None:
         self.history_list.clear()

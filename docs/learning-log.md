@@ -3,6 +3,11 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-04-21
+
+- Benchmark audio selection now starts in the effective recordings directory,
+  matching the folder used for archived normal recordings.
+
 ## 2026-04-18
 
 - **Local ASR candidates were re-evaluated against the app's Windows/Intel GPU

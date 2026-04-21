@@ -646,6 +646,36 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     _ = app
 
 
+def test_benchmark_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    recordings_path = tmp_path / "recordings"
+    captured: dict[str, str] = {}
+
+    def fake_get_open_file_name(parent, title, directory, file_filter):
+        captured["directory"] = directory
+        return "", ""
+
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        fake_get_open_file_name,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(
+            AppSettings(recordings_dir=str(recordings_path))
+        ),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    dialog._choose_benchmark_audio_file()
+
+    assert captured["directory"] == str(recordings_path)
+    assert recordings_path.is_dir()
+    _ = app
+
+
 def test_clear_benchmark_results_restores_initial_dialog_size():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
