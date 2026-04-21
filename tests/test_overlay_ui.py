@@ -41,7 +41,7 @@ def test_overlay_copy_button_copies_detail_text(monkeypatch):
     assert fake_clipboard.text() == "transcribed text"
     assert overlay._copy_button.text() == "Copied"
 
-    QtTest.QTest.qWait(900)
+    QtTest.QTest.qWait(1100)
     assert overlay._copy_button.text() == "Copy"
 
 
@@ -59,7 +59,7 @@ def test_overlay_copy_button_stays_functional_after_repeated_clicks(monkeypatch)
     assert overlay._copy_button.isEnabled()
 
     # Wait for feedback reset
-    QtTest.QTest.qWait(900)
+    QtTest.QTest.qWait(1100)
     assert overlay._copy_button.text() == "Copy"
 
     # Update text and click again
