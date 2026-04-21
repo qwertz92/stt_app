@@ -25,7 +25,13 @@ from ..config import (
     VALID_LANGUAGE_MODES,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
-from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
+from .base import (
+    AudioInput,
+    ITranscriber,
+    ProgressReporter,
+    StreamingCallback,
+    TranscriptionError,
+)
 
 ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
 
@@ -69,7 +75,7 @@ def _multipart_form_data(
     return body, content_type_header
 
 
-class ElevenLabsTranscriber(ITranscriber):
+class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
     def __init__(
         self,
         api_key: str,
@@ -77,6 +83,7 @@ class ElevenLabsTranscriber(ITranscriber):
         model: str = DEFAULT_ELEVENLABS_MODEL,
         request_timeout_s: int = 120,
     ) -> None:
+        ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
                 "ElevenLabs API key is missing. "
@@ -144,6 +151,9 @@ class ElevenLabsTranscriber(ITranscriber):
 
             req = self._build_request(audio_bytes, filename)
             ssl_ctx = create_ssl_context()
+            self._emit_progress(
+                "Uploading audio to ElevenLabs and waiting for transcription..."
+            )
             with urllib.request.urlopen(
                 req, timeout=self._request_timeout_s, context=ssl_ctx
             ) as resp:

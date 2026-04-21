@@ -126,6 +126,20 @@ class TestDeepgramTranscribeBatch:
         assert result == "hello world"
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_progress_callback_reports_remote_wait(self, mock_urlopen):
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("done"))
+        progress: list[str] = []
+        t = DeepgramTranscriber(api_key="test-key")
+        t.set_progress_callback(progress.append)
+
+        result = t.transcribe_batch(b"RIFF fake")
+
+        assert result == "done"
+        assert progress == [
+            "Uploading audio to Deepgram and waiting for transcription..."
+        ]
+
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_path_object(self, mock_urlopen, tmp_path):
         """Transcription with a Path object."""
         mock_urlopen.return_value = _make_fake_response(

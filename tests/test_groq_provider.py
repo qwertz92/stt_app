@@ -145,6 +145,19 @@ class TestGroqTranscribeBatch:
         result = t.transcribe_batch(b"RIFF fake wav data")
         assert result == "hello world"
 
+    def test_progress_callback_reports_remote_wait(self):
+        cls = _make_fake_groq_class(text="done")
+        progress: list[str] = []
+        t = GroqTranscriber(api_key="test-key", groq_client_class=cls)
+        t.set_progress_callback(progress.append)
+
+        result = t.transcribe_batch(b"RIFF fake wav data")
+
+        assert result == "done"
+        assert progress == [
+            "Uploading audio to Groq and waiting for transcription..."
+        ]
+
     def test_transcribe_empty_result(self):
         """Empty transcript text returns empty string."""
         cls = _make_fake_groq_class(text="")

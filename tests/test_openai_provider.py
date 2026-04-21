@@ -78,6 +78,20 @@ class TestOpenAIBatchTranscription:
         assert "de" in body
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_progress_callback_reports_remote_wait(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_response(json.dumps({"text": "done"}))
+        progress: list[str] = []
+        t = OpenAITranscriber(api_key="key")
+        t.set_progress_callback(progress.append)
+
+        result = t.transcribe_batch(b"RIFF fake")
+
+        assert result == "done"
+        assert progress == [
+            "Uploading audio to OpenAI and waiting for transcription..."
+        ]
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_http_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = urllib.error.HTTPError(
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None

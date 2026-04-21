@@ -230,7 +230,7 @@ def test_remote_provider_models_roundtrip(tmp_path):
         json.dumps(
             {
                 "deepgram_model": "nova-2",
-                "assemblyai_model": "nano",
+                "assemblyai_model": "universal-2",
                 "elevenlabs_model": "scribe_v1",
             }
         ),
@@ -238,8 +238,20 @@ def test_remote_provider_models_roundtrip(tmp_path):
     )
     settings = SettingsStore(settings_path).load()
     assert settings.deepgram_model == "nova-2"
-    assert settings.assemblyai_model == "nano"
+    assert settings.assemblyai_model == "universal-2"
     assert settings.elevenlabs_model == "scribe_v1"
+
+
+def test_legacy_assemblyai_model_falls_back_to_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"assemblyai_model": "nano"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.assemblyai_model == DEFAULT_ASSEMBLYAI_MODEL
 
 
 def test_invalid_hotkey_falls_back_to_default(tmp_path):

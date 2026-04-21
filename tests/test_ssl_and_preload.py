@@ -488,9 +488,6 @@ class TestAssemblyAISSLDetection:
         aai = types.ModuleType("assemblyai")
         aai.settings = MagicMock()
 
-        class FakeSpeechModel:
-            best = "best"
-
         class FakeConfig:
             def __init__(self, **kw):
                 pass
@@ -502,7 +499,6 @@ class TestAssemblyAISSLDetection:
                 )
                 raise Exception("upload failed") from cause
 
-        aai.SpeechModel = FakeSpeechModel
         aai.TranscriptionConfig = FakeConfig
         aai.Transcriber = FakeTranscriber
         aai.TranscriptStatus = MagicMock()

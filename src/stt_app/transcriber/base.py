@@ -7,6 +7,7 @@ from typing import Callable
 AudioInput = bytes | str | Path
 StreamingCallback = Callable[[str], None]
 StreamingErrorCallback = Callable[[str], None]
+ProgressCallback = Callable[[str], None]
 
 
 class TranscriptionError(RuntimeError):
@@ -36,3 +37,19 @@ class ITranscriber(ABC):
 
 
 Transcriber = ITranscriber
+
+
+class ProgressReporter:
+    def __init__(self) -> None:
+        self._progress_callback: ProgressCallback | None = None
+
+    def set_progress_callback(self, callback: ProgressCallback | None) -> None:
+        self._progress_callback = callback
+
+    def _emit_progress(self, text: str) -> None:
+        if self._progress_callback is None:
+            return
+        try:
+            self._progress_callback(text)
+        except Exception:
+            pass

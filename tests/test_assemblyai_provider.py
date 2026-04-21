@@ -24,10 +24,6 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
         error = "error"
         completed = "completed"
 
-    class FakeSpeechModel:
-        best = "best"
-        nano = "nano"
-
     class FakeTranscriptionConfig:
         def __init__(self, **kwargs):
             self.kwargs = kwargs
@@ -43,11 +39,22 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
                 self.error = None
                 self.text = transcript_text
 
+        def wait_for_completion(self):
+            return self
+
     class FakeTranscriber:
         calls: list = []
 
         def transcribe(self, audio_file, config=None):
             FakeTranscriber.calls.append({"audio_file": audio_file, "config": config})
+            return FakeTranscript()
+
+        def upload_file(self, audio_file):
+            FakeTranscriber.calls.append({"upload_file": audio_file})
+            return "https://assemblyai.test/uploaded.wav"
+
+        def submit(self, audio_url, config=None):
+            FakeTranscriber.calls.append({"audio_url": audio_url, "config": config})
             return FakeTranscript()
 
     class FakeSettings:
@@ -92,7 +99,6 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
             self.connected = False
 
     aai.TranscriptStatus = FakeTranscriptStatus
-    aai.SpeechModel = FakeSpeechModel
     aai.TranscriptionConfig = FakeTranscriptionConfig
     aai.Transcriber = FakeTranscriber
     aai.settings = FakeSettings()
@@ -296,17 +302,17 @@ class TestAssemblyAILanguageConfig:
         assert config.kwargs.get("language_detection") is True
         assert "language_code" not in config.kwargs
 
-    def test_batch_model_uses_nano_enum_when_selected(self):
+    def test_batch_model_uses_universal_2_when_selected(self):
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(
             api_key="key",
-            model="nano",
+            model="universal-2",
             aai_module=fake_aai,
         )
         config = t._build_config()
-        assert config.kwargs.get("speech_model") == "nano"
+        assert config.kwargs.get("speech_models") == ["universal-2"]
 
-    def test_batch_model_uses_speech_models_for_named_model(self):
+    def test_batch_model_uses_universal_3_with_fallback(self):
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(
             api_key="key",
@@ -314,7 +320,41 @@ class TestAssemblyAILanguageConfig:
             aai_module=fake_aai,
         )
         config = t._build_config()
-        assert config.kwargs.get("speech_models") == ["universal-3-pro"]
+        assert config.kwargs.get("speech_models") == [
+            "universal-3-pro",
+            "universal-2",
+        ]
+
+    def test_legacy_batch_model_is_rejected(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(
+            api_key="key",
+            model="nano",
+            aai_module=fake_aai,
+        )
+        with pytest.raises(TranscriptionError, match="Unsupported AssemblyAI model"):
+            t._build_config()
+
+    def test_progress_callback_splits_upload_and_polling_phases(self, tmp_path):
+        fake_aai = _make_fake_aai(transcript_text="done")
+        t = AssemblyAITranscriber(api_key="test-key", aai_module=fake_aai)
+        progress: list[str] = []
+        t.set_progress_callback(progress.append)
+        wav = tmp_path / "test.wav"
+        wav.write_bytes(b"RIFF fake wav data")
+
+        result = t.transcribe_batch(str(wav))
+
+        assert result == "done"
+        assert progress == [
+            "Uploading audio to AssemblyAI...",
+            "Upload complete. Submitting transcription to AssemblyAI...",
+            "AssemblyAI is transcribing audio...",
+        ]
+        assert fake_aai.Transcriber.calls[0]["upload_file"] == str(wav)
+        assert fake_aai.Transcriber.calls[1]["audio_url"] == (
+            "https://assemblyai.test/uploaded.wav"
+        )
 
 
 # ---------------------------------------------------------------------------

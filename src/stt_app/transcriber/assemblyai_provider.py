@@ -25,6 +25,7 @@ from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import (
     AudioInput,
     ITranscriber,
+    ProgressReporter,
     StreamingCallback,
     StreamingErrorCallback,
     TranscriptionError,
@@ -45,7 +46,7 @@ def _default_assemblyai():
         )
 
 
-class AssemblyAITranscriber(ITranscriber):
+class AssemblyAITranscriber(ProgressReporter, ITranscriber):
     """Batch transcription using AssemblyAI's REST API via the official SDK.
 
     Parameters
@@ -67,6 +68,7 @@ class AssemblyAITranscriber(ITranscriber):
         *,
         aai_module=None,
     ) -> None:
+        ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
                 "AssemblyAI API key is missing. "
@@ -101,15 +103,7 @@ class AssemblyAITranscriber(ITranscriber):
 
         kwargs: dict = {}
         selected_model = self._model or DEFAULT_ASSEMBLYAI_MODEL
-
-        if selected_model in {"best", "nano"} and hasattr(aai, "SpeechModel"):
-            speech_model = getattr(aai.SpeechModel, selected_model, None)
-            if speech_model is not None:
-                kwargs["speech_model"] = speech_model
-            else:
-                kwargs["speech_models"] = [selected_model]
-        else:
-            kwargs["speech_models"] = [selected_model]
+        kwargs["speech_models"] = self._speech_models_for_selection(selected_model)
 
         if self._language_mode == "auto":
             kwargs["language_detection"] = True
@@ -132,6 +126,18 @@ class AssemblyAITranscriber(ITranscriber):
                 kwargs["language_detection"] = True
 
         return aai.TranscriptionConfig(**kwargs)
+
+    @staticmethod
+    def _speech_models_for_selection(model: str) -> list[str]:
+        selected = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
+        if selected == "universal-2":
+            return ["universal-2"]
+        if selected == "universal-3-pro":
+            return ["universal-3-pro", "universal-2"]
+        raise TranscriptionError(
+            "Unsupported AssemblyAI model: "
+            f"{model}. Choose universal-3-pro or universal-2."
+        )
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via AssemblyAI batch API.
@@ -158,7 +164,17 @@ class AssemblyAITranscriber(ITranscriber):
 
             config = self._build_config()
             transcriber = aai.Transcriber()
-            transcript = transcriber.transcribe(file_path, config=config)
+            if self._progress_callback is not None:
+                self._emit_progress("Uploading audio to AssemblyAI...")
+                audio_url = transcriber.upload_file(file_path)
+                self._emit_progress(
+                    "Upload complete. Submitting transcription to AssemblyAI..."
+                )
+                transcript = transcriber.submit(audio_url, config=config)
+                self._emit_progress("AssemblyAI is transcribing audio...")
+                transcript = transcript.wait_for_completion()
+            else:
+                transcript = transcriber.transcribe(file_path, config=config)
 
             if transcript.status == aai.TranscriptStatus.error:
                 raise TranscriptionError(

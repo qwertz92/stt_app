@@ -10,6 +10,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Opening Settings from the tray now presents the dialog immediately after
   creation. On Windows, a newly shown tray-launched window can otherwise stay
   behind other windows until the next activation path raises it.
+- AssemblyAI pre-recorded import now uses the current `speech_models` request
+  parameter. The old `speech_model` parameter caused API failures for legacy
+  "best"/"nano" selections after AssemblyAI deprecated that field.
+- The Import Audio tab now starts transcription immediately without a
+  confirmation prompt, shows remote-provider progress, and puts failures in
+  the selectable result text area so errors can be copied.
 
 ## 2026-04-18
 

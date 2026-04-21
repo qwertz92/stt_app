@@ -24,7 +24,7 @@ def test_factory_local_webgpu_model_returns_onnx_webgpu_transcriber():
 
 
 def test_factory_assemblyai_returns_assemblyai_transcriber():
-    settings = AppSettings(engine="assemblyai", assemblyai_model="nano")
+    settings = AppSettings(engine="assemblyai", assemblyai_model="universal-2")
 
     class FakeSecretStore:
         def get_api_key(self, name):
@@ -32,7 +32,7 @@ def test_factory_assemblyai_returns_assemblyai_transcriber():
 
     t = create_transcriber(settings, secret_store=FakeSecretStore())
     assert isinstance(t, AssemblyAITranscriber)
-    assert t._model == "nano"
+    assert t._model == "universal-2"
 
 
 def test_factory_openai_returns_openai_transcriber():

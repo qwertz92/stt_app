@@ -177,13 +177,10 @@ DEEPGRAM_MODELS = (
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
 
 ASSEMBLYAI_MODELS = (
-    "best",
-    "nano",
     "universal-3-pro",
-    "universal",
-    "slam-1",
+    "universal-2",
 )
-DEFAULT_ASSEMBLYAI_MODEL = "best"
+DEFAULT_ASSEMBLYAI_MODEL = "universal-3-pro"
 
 ELEVENLABS_MODELS = (
     "scribe_v2",

@@ -4,7 +4,7 @@ import threading
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -104,11 +104,8 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-1": "whisper-1 (legacy whisper model)",
     "nova-3": "nova-3 (current default)",
     "nova-2": "nova-2 (older generation)",
-    "best": "best (provider-managed default routing)",
-    "nano": "nano (lower latency, lower cost)",
-    "universal-3-pro": "universal-3-pro (latest premium batch model)",
-    "universal": "universal (broad language coverage)",
-    "slam-1": "slam-1 (speech understanding model)",
+    "universal-3-pro": "universal-3-pro (highest accuracy, falls back to universal-2)",
+    "universal-2": "universal-2 (fast, broad language coverage)",
     "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
     "scribe_v1": "scribe_v1 (legacy batch model)",
 }
@@ -146,9 +143,19 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
 _LOCAL_MODEL_SCAN_SESSION_CACHE: dict[str, list[str]] = {}
 
 
+def _set_transcriber_progress_callback(
+    transcriber: object,
+    callback: Callable[[str], None],
+) -> None:
+    setter = getattr(transcriber, "set_progress_callback", None)
+    if callable(setter):
+        setter(callback)
+
+
 class SettingsDialog(QtWidgets.QDialog):
     connection_test_finished = QtCore.Signal(int, bool, str)
     import_transcription_finished = QtCore.Signal(bool, str)
+    import_transcription_progress = QtCore.Signal(str)
     local_model_scan_finished = QtCore.Signal(int, str, object)
     local_model_download_progress = QtCore.Signal(str)
     local_model_download_finished = QtCore.Signal(bool, str)
@@ -222,6 +229,13 @@ class SettingsDialog(QtWidgets.QDialog):
             "elevenlabs": self._remote_model_values["elevenlabs"],
         }
         self._active_connection_test_thread: threading.Thread | None = None
+        self._import_progress_message = ""
+        self._import_progress_started_at: datetime | None = None
+        self._import_progress_timer = QtCore.QTimer(self)
+        self._import_progress_timer.setInterval(1000)
+        self._import_progress_timer.timeout.connect(
+            self._refresh_import_progress_label
+        )
         self._history_copy_feedback_timer = QtCore.QTimer(self)
         self._history_copy_feedback_timer.setSingleShot(True)
         self._history_copy_feedback_timer.setInterval(900)
@@ -251,6 +265,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.resize(self._default_dialog_size)
 
         self.connection_test_finished.connect(self._on_connection_test_finished)
+        self.import_transcription_progress.connect(
+            self._on_import_transcription_progress
+        )
         self.import_transcription_finished.connect(self._finish_import_transcription)
         self.local_model_scan_finished.connect(self._on_local_model_scan_finished)
         self.local_model_download_progress.connect(
@@ -1502,13 +1519,17 @@ class SettingsDialog(QtWidgets.QDialog):
         import_buttons = QtWidgets.QHBoxLayout()
         self.import_file_button = QtWidgets.QPushButton("Choose file...")
         self.import_file_button.clicked.connect(self._choose_import_file)
-        self.import_last_recording_button = QtWidgets.QPushButton("Use last recording")
+        self.import_last_recording_button = QtWidgets.QPushButton(
+            "Use last recording"
+        )
         self.import_last_recording_button.clicked.connect(
             self._select_last_recording_file
         )
         self.import_start_button = QtWidgets.QPushButton("Start transcription")
         self.import_start_button.setEnabled(False)
-        self.import_start_button.clicked.connect(self._confirm_and_transcribe_selected_file)
+        self.import_start_button.clicked.connect(
+            self._transcribe_selected_import_file
+        )
         import_buttons.addWidget(self.import_file_button)
         import_buttons.addWidget(self.import_last_recording_button)
         import_buttons.addWidget(self.import_start_button)
@@ -1522,6 +1543,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.import_result_label = QtWidgets.QLabel("")
         self.import_result_label.setWordWrap(True)
+        self.import_result_label.setTextInteractionFlags(
+            QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+        )
         import_layout.addWidget(self.import_result_label)
 
         self.import_result_text = QtWidgets.QPlainTextEdit()
@@ -3434,25 +3458,17 @@ class SettingsDialog(QtWidgets.QDialog):
             self.tabs.setCurrentIndex(import_index)
         return self._select_last_recording_file()
 
-    def _confirm_and_transcribe_selected_file(self) -> None:
+    def _transcribe_selected_import_file(self) -> None:
         path = self._selected_import_file_path
         if not path:
             self.import_result_label.setText("Select a file first.")
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             return
-        answer = QtWidgets.QMessageBox.question(
-            self,
-            "Start transcription",
-            f"Transcribe selected file?\n\n{path}",
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.Yes,
-        )
-        if answer != QtWidgets.QMessageBox.Yes:
-            return
         self._start_import_transcription(path)
 
     def _start_import_transcription(self, path: str) -> None:
-        self.import_result_label.setText("Transcribing...")
+        self._import_progress_started_at = datetime.now()
+        self._set_import_progress("Preparing transcription...")
         self.import_result_label.setStyleSheet("color: #555;")
         self.import_result_text.clear()
         self.import_file_button.setEnabled(False)
@@ -3460,6 +3476,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_start_button.setEnabled(False)
         self.import_engine_combo.setEnabled(False)
         self.import_model_combo.setEnabled(False)
+        self._import_progress_timer.start()
 
         # Build settings on the GUI thread — widgets must not be accessed
         # from background threads.
@@ -3468,6 +3485,9 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         import_model = str(self.import_model_combo.currentData() or "")
         if not self._import_engine_has_api_key(import_engine):
+            self._import_progress_timer.stop()
+            self._import_progress_message = ""
+            self._import_progress_started_at = None
             detail = (
                 "Failed: no API key configured for "
                 f"{self._provider_label(import_engine)}."
@@ -3477,13 +3497,13 @@ class SettingsDialog(QtWidgets.QDialog):
                     f"{detail} The last recording stays available. "
                     "Fix the provider settings and try again."
                 )
-            self.import_result_label.setText(
-                detail
-            )
+            self.import_result_label.setText(detail)
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             self.import_file_button.setEnabled(True)
             self.import_last_recording_button.setEnabled(True)
-            self.import_start_button.setEnabled(bool(self._selected_import_file_path))
+            self.import_start_button.setEnabled(
+                bool(self._selected_import_file_path)
+            )
             self.import_engine_combo.setEnabled(True)
             self.import_model_combo.setEnabled(True)
             return
@@ -3493,8 +3513,16 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
         def _run() -> None:
+            def _progress(text: str) -> None:
+                self.import_transcription_progress.emit(str(text))
+
             try:
-                ok, text = self._transcribe_import_file(path, settings)
+                _progress(f"Sending audio to {self._provider_label(import_engine)}...")
+                ok, text = self._transcribe_import_file(
+                    path,
+                    settings,
+                    progress_callback=_progress,
+                )
             except Exception as exc:
                 ok, text = False, str(exc)
             self.import_transcription_finished.emit(bool(ok), str(text))
@@ -3505,12 +3533,40 @@ class SettingsDialog(QtWidgets.QDialog):
             daemon=True,
         ).start()
 
+    def _set_import_progress(self, text: str) -> None:
+        self._import_progress_message = str(text or "").strip()
+        self._refresh_import_progress_label()
+
+    def _refresh_import_progress_label(self) -> None:
+        message = self._import_progress_message.strip()
+        if not message:
+            return
+        if self._import_progress_started_at is None:
+            self.import_result_label.setText(message)
+            return
+        elapsed = int(
+            (datetime.now() - self._import_progress_started_at).total_seconds()
+        )
+        self.import_result_label.setText(f"{message} ({elapsed}s)")
+
+    def _on_import_transcription_progress(self, text: str) -> None:
+        self._set_import_progress(text)
+
     def _transcribe_import_file(
-        self, path: str, settings: AppSettings
+        self,
+        path: str,
+        settings: AppSettings,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> tuple[bool, str]:
         from .transcriber import create_transcriber
 
         if self._controller is not None:
+            if progress_callback is not None:
+                return self._controller.transcribe_audio_file(
+                    path,
+                    settings_override=settings,
+                    progress_callback=progress_callback,
+                )
             return self._controller.transcribe_audio_file(
                 path,
                 settings_override=settings,
@@ -3518,6 +3574,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
         transcriber = create_transcriber(settings, secret_store=self._secret_store)
         try:
+            if progress_callback is not None:
+                _set_transcriber_progress_callback(transcriber, progress_callback)
             text = transcriber.transcribe_batch(path)
         finally:
             if hasattr(transcriber, "close"):
@@ -3525,6 +3583,9 @@ class SettingsDialog(QtWidgets.QDialog):
         return True, str(text or "").strip()
 
     def _finish_import_transcription(self, ok: bool, text: str) -> None:
+        self._import_progress_timer.stop()
+        self._import_progress_message = ""
+        self._import_progress_started_at = None
         self.import_file_button.setEnabled(True)
         self.import_last_recording_button.setEnabled(True)
         self.import_start_button.setEnabled(bool(self._selected_import_file_path))
@@ -3546,7 +3607,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self.import_result_label.setText(detail)
         self.import_result_label.setStyleSheet("color: #b71c1c;")
-        self.import_result_text.clear()
+        self.import_result_text.setPlainText(detail)
 
     def _copy_diagnostics(self) -> None:
         text = self._app_logger.diagnostics_text()

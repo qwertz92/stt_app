@@ -396,7 +396,7 @@ def test_assemblyai_streaming_disables_remote_model_combo():
         AppSettings(
             engine="assemblyai",
             mode="streaming",
-            assemblyai_model="nano",
+            assemblyai_model="universal-2",
         )
     )
     dialog = SettingsDialog(
@@ -1378,6 +1378,90 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
     assert controller.received_model == "whisper-1"
     assert dialog.engine_combo.currentData() == "local"
     assert dialog.model_combo.currentData() == "small"
+    _ = app
+
+
+def test_import_start_transcribes_without_confirmation(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: pytest.fail("Import should start without confirmation"),
+    )
+
+    class _Controller:
+        def transcribe_audio_file(
+            self,
+            _path: str,
+            settings_override=None,
+            progress_callback=None,
+        ):
+            return True, "imported text"
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(engine="local")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=_Controller(),
+    )
+    dialog._set_selected_import_file("dummy.wav")
+
+    dialog._transcribe_selected_import_file()
+
+    assert dialog.import_result_label.text() == "Transcription finished."
+    assert dialog.import_result_text.toPlainText() == "imported text"
+    _ = app
+
+
+def test_import_progress_callback_is_passed_to_controller(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
+    received_progress_callback = []
+
+    class _Controller:
+        def transcribe_audio_file(
+            self,
+            _path: str,
+            settings_override=None,
+            progress_callback=None,
+        ):
+            received_progress_callback.append(callable(progress_callback))
+            if progress_callback is not None:
+                progress_callback("Uploading audio to provider...")
+            return True, "ok"
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(engine="local")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=_Controller(),
+    )
+    dialog._set_selected_import_file("dummy.wav")
+
+    dialog._start_import_transcription("dummy.wav")
+
+    assert received_progress_callback == [True]
+    assert dialog.import_result_text.toPlainText() == "ok"
+    _ = app
+
+
+def test_import_failure_details_are_copyable():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    detail = "AssemblyAI transcription failed: speech_model is deprecated."
+
+    dialog._finish_import_transcription(False, detail)
+
+    assert detail in dialog.import_result_label.text()
+    assert detail in dialog.import_result_text.toPlainText()
+    assert dialog.import_result_label.textInteractionFlags() & (
+        QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+    )
     _ = app
 
 

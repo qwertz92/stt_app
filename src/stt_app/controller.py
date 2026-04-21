@@ -10,6 +10,7 @@ import time
 from datetime import datetime
 from dataclasses import replace
 from pathlib import Path
+from typing import Callable
 
 from PySide6 import QtCore, QtGui
 
@@ -1893,6 +1894,7 @@ class DictationController(QtCore.QObject):
         self,
         file_path: str,
         settings_override: AppSettings | None = None,
+        progress_callback: Callable[[str], None] | None = None,
     ) -> tuple[bool, str]:
         """Transcribe a file directly without live recording."""
         path = str(file_path or "").strip()
@@ -1900,7 +1902,9 @@ class DictationController(QtCore.QObject):
             return False, "No file path provided."
         if not os.path.isfile(path):
             return False, "Selected file does not exist."
-        managed_last_recording = self._last_recording_store.is_managed_audio_path(path)
+        managed_last_recording = self._last_recording_store.is_managed_audio_path(
+            path
+        )
         try:
             base_settings = settings_override or self._settings
             settings = replace(base_settings, mode="batch")
@@ -1910,8 +1914,16 @@ class DictationController(QtCore.QObject):
                     model=self._selected_model_name(settings),
                     mode="import",
                 )
-            transcriber = create_transcriber(settings, secret_store=self._secret_store)
+            transcriber = create_transcriber(
+                settings,
+                secret_store=self._secret_store,
+            )
             try:
+                if progress_callback is not None:
+                    self._set_transcriber_progress_callback(
+                        transcriber,
+                        progress_callback,
+                    )
                 text = transcriber.transcribe_batch(path).strip()
             finally:
                 if hasattr(transcriber, "close"):
@@ -1945,6 +1957,15 @@ class DictationController(QtCore.QObject):
                         "Failed to persist imported recording failure state"
                     )
             return False, str(exc)
+
+    @staticmethod
+    def _set_transcriber_progress_callback(
+        transcriber: object,
+        callback: Callable[[str], None],
+    ) -> None:
+        setter = getattr(transcriber, "set_progress_callback", None)
+        if callable(setter):
+            setter(callback)
 
     def cancel_current_action(self) -> None:
         if self._cancel_model_preload_if_running():

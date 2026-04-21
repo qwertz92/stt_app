@@ -358,11 +358,8 @@ def test_save_persists_only_supported_remote_keys():
     }
     assert dialog._loaded_settings.deepgram_model in {"nova-3", "nova-2"}
     assert dialog._loaded_settings.assemblyai_model in {
-        "best",
-        "nano",
         "universal-3-pro",
-        "universal",
-        "slam-1",
+        "universal-2",
     }
     assert dialog._loaded_settings.elevenlabs_model in {"scribe_v2", "scribe_v1"}
     _ = app

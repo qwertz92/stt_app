@@ -78,6 +78,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms prevents stale paste.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately and refresh in the background without silently mutating user settings.
+- **AssemblyAI pre-recorded model selection**: use the current `speech_models`
+  parameter for batch/import requests. `universal-3-pro` is sent with
+  `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
+  current default in settings persistence and are not shown in the UI.
 - **Line endings**: Repository text files are normalized to LF via `.gitattributes`; `.editorconfig` mirrors that policy so Windows/WSL edits do not create CRLF-only diffs.
 - **Windows packaging**: end-user builds are layered. PyInstaller `onedir`
   is the base portable bundle; Inno Setup wraps that bundle into the

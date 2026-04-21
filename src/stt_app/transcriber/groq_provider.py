@@ -15,7 +15,13 @@ from pathlib import Path
 from ..app_paths import temp_audio_dir
 from ..config import DEFAULT_GROQ_MODEL, DOC_SSL_PROXY_PATH
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
-from .base import AudioInput, ITranscriber, StreamingCallback, TranscriptionError
+from .base import (
+    AudioInput,
+    ITranscriber,
+    ProgressReporter,
+    StreamingCallback,
+    TranscriptionError,
+)
 
 
 def _default_groq():
@@ -32,7 +38,7 @@ def _default_groq():
         )
 
 
-class GroqTranscriber(ITranscriber):
+class GroqTranscriber(ProgressReporter, ITranscriber):
     """Batch transcription using Groq's audio transcription API.
 
     Parameters
@@ -56,6 +62,7 @@ class GroqTranscriber(ITranscriber):
         *,
         groq_client_class=None,
     ) -> None:
+        ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
                 "Groq API key is missing. "
@@ -124,6 +131,9 @@ class GroqTranscriber(ITranscriber):
 
             with open(file_path, "rb") as audio_file:
                 kwargs["file"] = (Path(file_path).name, audio_file)
+                self._emit_progress(
+                    "Uploading audio to Groq and waiting for transcription..."
+                )
                 transcription = client.audio.transcriptions.create(**kwargs)
 
             # response_format="text" returns a string directly.

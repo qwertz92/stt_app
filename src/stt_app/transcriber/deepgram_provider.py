@@ -23,13 +23,16 @@ from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import (
     AudioInput,
     ITranscriber,
+    ProgressReporter,
     StreamingCallback,
     StreamingErrorCallback,
     TranscriptionError,
 )
 
 DEEPGRAM_API_BASE = "https://api.deepgram.com/v1"
-class DeepgramTranscriber(ITranscriber):
+
+
+class DeepgramTranscriber(ProgressReporter, ITranscriber):
     """Batch transcription using Deepgram's pre-recorded audio REST API.
 
     Parameters
@@ -49,6 +52,7 @@ class DeepgramTranscriber(ITranscriber):
         language_mode: str = "auto",
         model: str = DEFAULT_DEEPGRAM_MODEL,
     ) -> None:
+        ProgressReporter.__init__(self)
         if not api_key:
             raise TranscriptionError(
                 "Deepgram API key is missing. "
@@ -128,6 +132,9 @@ class DeepgramTranscriber(ITranscriber):
             req.add_header("Content-Type", "audio/wav")
 
             ssl_ctx = create_ssl_context()
+            self._emit_progress(
+                "Uploading audio to Deepgram and waiting for transcription..."
+            )
             with urllib.request.urlopen(req, timeout=120, context=ssl_ctx) as resp:
                 body = json.loads(resp.read().decode("utf-8"))
 
