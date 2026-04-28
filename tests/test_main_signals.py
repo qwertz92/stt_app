@@ -115,7 +115,7 @@ class FakeLastRecordingStore:
     def has_recoverable_recording(self):
         return False
 
-    def selectable_path(self):
+    def selectable_path(self, archived_recordings_dir=None):
         return None
 
     def load(self):

@@ -254,7 +254,7 @@ class FakeLastRecordingStore:
         self.completed += 1
         self._available = False
 
-    def selectable_path(self):
+    def selectable_path(self, archived_recordings_dir=None):
         if not self._available:
             return None
         return self.path

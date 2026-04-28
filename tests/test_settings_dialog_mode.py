@@ -1,8 +1,11 @@
+import os
+
 import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app.app_paths import debug_audio_path
+from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
@@ -1507,6 +1510,39 @@ def test_select_last_recording_sets_selected_file(monkeypatch, tmp_path):
 
     assert str(path) in dialog.import_selected_file_label.text()
     assert dialog.import_start_button.isEnabled() is True
+    _ = app
+
+
+def test_select_last_recording_prefers_newest_archived_recording(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    archive_dir = tmp_path / "recordings"
+    archive_dir.mkdir()
+
+    store = _FakeSettingsStore(
+        AppSettings(
+            save_all_recordings=True,
+            recordings_dir=str(archive_dir),
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    managed_store = LastRecordingStore()
+    managed_store.save_recording(b"RIFF-old", keep_after_success=True)
+    managed_store.mark_completed()
+    managed = debug_audio_path()
+    archived = archive_dir / "recording_20260428_101500_000000.wav"
+    archived.write_bytes(b"RIFF-new")
+    os.utime(managed, (100, 100))
+    os.utime(archived, (200, 200))
+
+    dialog._select_last_recording_file()
+
+    assert str(archived) in dialog.import_selected_file_label.text()
     _ = app
 
 

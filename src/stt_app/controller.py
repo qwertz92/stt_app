@@ -554,6 +554,14 @@ class DictationController(QtCore.QObject):
             return configured
         return str(recordings_dir())
 
+    def _selectable_last_recording_path(self) -> Path | None:
+        archived_dir = (
+            self._resolve_recordings_dir()
+            if self._settings.save_all_recordings
+            else None
+        )
+        return self._last_recording_store.selectable_path(archived_dir)
+
     def _persist_last_recording_audio(self, wav_bytes: bytes) -> bool:
         if not wav_bytes:
             return False
@@ -753,7 +761,7 @@ class DictationController(QtCore.QObject):
             if has_retry_audio is None
             else bool(has_retry_audio)
         )
-        last_recording_available = self._last_recording_store.selectable_path() is not None
+        last_recording_available = self._selectable_last_recording_path() is not None
         if retry_available:
             parts = [
                 "Captured audio is preserved in memory.",

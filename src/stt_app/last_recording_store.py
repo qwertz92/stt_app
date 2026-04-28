@@ -171,10 +171,61 @@ class LastRecordingStore:
             return
         self.clear()
 
-    def selectable_path(self) -> Path | None:
-        if not self._audio_path.is_file():
+    def selectable_path(
+        self,
+        archived_recordings_dir: str | Path | None = None,
+    ) -> Path | None:
+        candidates: list[Path] = []
+        if self._audio_path.is_file():
+            if self._managed_recording_is_recoverable():
+                return self._audio_path
+            candidates.append(self._audio_path)
+        archived = self._latest_archived_recording(archived_recordings_dir)
+        if archived is not None and not self.is_managed_audio_path(archived):
+            candidates.append(archived)
+        if not candidates:
             return None
-        return self._audio_path
+        return max(candidates, key=self._recording_sort_key)
+
+    def _managed_recording_is_recoverable(self) -> bool:
+        state = self.load()
+        if state is None:
+            return False
+        return state.status in RECOVERABLE_RECORDING_STATUSES
+
+    @staticmethod
+    def _latest_archived_recording(
+        archived_recordings_dir: str | Path | None,
+    ) -> Path | None:
+        if archived_recordings_dir is None:
+            return None
+        root = Path(archived_recordings_dir)
+        if not root.is_dir():
+            return None
+        try:
+            candidates = [
+                path
+                for path in root.iterdir()
+                if path.is_file() and path.suffix.lower() == ".wav"
+            ]
+        except OSError:
+            return None
+        if not candidates:
+            return None
+        return max(candidates, key=LastRecordingStore._recording_sort_key)
+
+    @staticmethod
+    def _recording_sort_key(path: Path) -> tuple[int, str]:
+        try:
+            stat = path.stat()
+        except OSError:
+            return (0, path.name)
+        mtime_ns = getattr(
+            stat,
+            "st_mtime_ns",
+            int(stat.st_mtime * 1_000_000_000),
+        )
+        return (mtime_ns, path.name)
 
     def has_recoverable_recording(self) -> bool:
         state = self.load()

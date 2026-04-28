@@ -2201,7 +2201,9 @@ class SettingsDialog(QtWidgets.QDialog):
             self._set_benchmark_audio_path(path)
 
     def _use_last_recording_for_benchmark(self) -> None:
-        path = self._last_recording_store.selectable_path()
+        path = self._last_recording_store.selectable_path(
+            self._archived_recordings_dir_for_selection()
+        )
         if path is None:
             self._set_benchmark_status(
                 "No last recording is currently available.",
@@ -3402,6 +3404,11 @@ class SettingsDialog(QtWidgets.QDialog):
             return str(recordings_dir())
         return target
 
+    def _archived_recordings_dir_for_selection(self) -> str | None:
+        if not self.save_all_recordings_checkbox.isChecked():
+            return None
+        return self._effective_recordings_dir()
+
     def _refresh_history_list(self) -> None:
         self.history_list.clear()
         self.history_detail.clear()
@@ -3498,7 +3505,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._set_selected_import_file(path)
 
     def _select_last_recording_file(self) -> bool:
-        path = self._last_recording_store.selectable_path()
+        path = self._last_recording_store.selectable_path(
+            self._archived_recordings_dir_for_selection()
+        )
         if path is None:
             self.import_result_label.setText(
                 "No last recording is currently available."
