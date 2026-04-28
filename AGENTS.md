@@ -96,8 +96,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `@huggingface/transformers`, and try WebGPU, then Windows DirectML, then CPU.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.
+  The resolved runtime device is reported through transcriber progress messages
+  so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
   Keep faster-whisper as the stable local default until real target-hardware
   benchmarks justify switching.
+- **Last recording selection**: `LastRecordingStore.selectable_path()` is the
+  single selection point for "Use last recording". When an archived recordings
+  directory is supplied, it chooses the newest managed/archive WAV, but
+  recoverable managed recordings still win so retry/recovery state remains
+  intact.
 
 ## Core flow
 

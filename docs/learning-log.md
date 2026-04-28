@@ -3,6 +3,27 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-04-28
+
+- Settings density was tightened again after the tab layout grew too loose:
+  history, local-model, benchmark-model, benchmark-result, and standalone
+  history rows now use explicit compact row heights instead of relying on
+  platform style defaults.
+- The embedded Settings -> History transcript box now expands with the dialog
+  instead of keeping a small fixed-feeling scroll area and leaving blank space
+  below it.
+- Settings dialog first-show sizing is computed before the window is shown.
+  This avoids the visible show-resize-present sequence that looked like the
+  dialog briefly disappeared on first open from the tray.
+- Combo popup animation effects are disabled for the settings dialog to reduce
+  flicker when opening dropdowns on Windows.
+- Local ONNX/WebGPU transcription now reports the actual resolved runtime
+  device through progress messages. Normal dictation shows it in the overlay;
+  Import Audio shows it in the import progress label.
+- "Use last recording" now considers the configured archived recordings folder
+  when recording archival is enabled, while still preferring a recoverable
+  managed last recording so retry/recovery state is not lost.
+
 ## 2026-04-21
 
 - Benchmark audio selection now starts in the effective recordings directory,
