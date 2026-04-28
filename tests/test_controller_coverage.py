@@ -919,6 +919,28 @@ def test_canceled_stale_transcription_result_is_ignored_during_new_recording(mon
     _ = app
 
 
+def test_transcription_progress_updates_overlay_for_active_request():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._active_request_token = 7
+
+    controller._on_transcription_progress_result(
+        7,
+        "ONNX runtime active on WebGPU.",
+    )
+
+    assert overlay.states[-1] == ("Processing", "ONNX runtime active on WebGPU.")
+    assert overlay.state_kwargs[-1] == {"compact": False}
+
+    state_count = len(overlay.states)
+    controller._active_request_token = 8
+    controller._on_transcription_progress_result(7, "stale")
+
+    assert len(overlay.states) == state_count
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_cancels_running_preload():
     overlay = FakeOverlay()
     controller, app = _make_controller(overlay=overlay)

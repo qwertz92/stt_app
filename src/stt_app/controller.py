@@ -60,6 +60,7 @@ from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHel
 class DictationController(QtCore.QObject):
     transcription_ready = QtCore.Signal(int, str)
     transcription_failed = QtCore.Signal(int, str)
+    transcription_progress = QtCore.Signal(int, str)
     transcription_partial = QtCore.Signal(str)
     stream_runtime_failed = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
@@ -137,6 +138,7 @@ class DictationController(QtCore.QObject):
 
         self.transcription_ready.connect(self._on_transcription_ready_result)
         self.transcription_failed.connect(self._on_transcription_failed_result)
+        self.transcription_progress.connect(self._on_transcription_progress_result)
         self.transcription_partial.connect(self._on_transcription_partial)
         self.stream_runtime_failed.connect(self._on_stream_runtime_failed)
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
@@ -1105,6 +1107,13 @@ class DictationController(QtCore.QObject):
         transcriber = None
         try:
             transcriber = self._get_or_create_transcriber(settings)
+            self._set_transcriber_progress_callback(
+                transcriber,
+                lambda detail: self.transcription_progress.emit(
+                    request_token,
+                    str(detail),
+                ),
+            )
         except TranscriptionError as exc:
             self.transcription_failed.emit(request_token, str(exc))
             return
@@ -1263,6 +1272,21 @@ class DictationController(QtCore.QObject):
                 )
                 self._transcriber_cache_key = cache_key
             return self._transcriber_cache
+
+    @QtCore.Slot(int, str)
+    def _on_transcription_progress_result(
+        self,
+        request_token: int,
+        detail: str,
+    ) -> None:
+        if request_token in self._canceled_request_tokens:
+            return
+        if self._active_request_token not in {None, request_token}:
+            return
+        message = str(detail or "").strip()
+        if not message:
+            return
+        self._overlay.set_state("Processing", message, compact=False)
 
     @QtCore.Slot(int, str)
     def _on_transcription_ready_result(self, request_token: int, text: str) -> None:

@@ -166,6 +166,8 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
         node_path="node",
         runner_path=runner,
     )
+    progress: list[str] = []
+    transcriber.set_progress_callback(progress.append)
 
     try:
         text = transcriber.transcribe_batch(b"RIFF")
@@ -176,6 +178,8 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert transcriber.runtime_device == "cpu"
     assert transcriber.gpu_available is False
     assert "CPU" in transcriber.runtime_warning
+    assert any("Starting ONNX runtime" in item for item in progress)
+    assert any("ONNX runtime active on CPU" in item for item in progress)
     assert commands
     assert commands[0][commands[0].index("--device") + 1] == "cpu"
     requests = [

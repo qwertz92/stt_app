@@ -19,7 +19,7 @@ from ..config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
-from .base import AudioInput, ITranscriber, TranscriptionError
+from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
 
 _BASE_DOWNLOAD_ALLOW_PATTERNS = [
     ".gitattributes",
@@ -67,6 +67,21 @@ _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
 }
 
 _ACCELERATED_DEVICES = {"webgpu", "dml", "cuda", "gpu", "webnn-gpu"}
+_RUNTIME_DEVICE_LABELS = {
+    "webgpu": "WebGPU",
+    "dml": "DirectML GPU",
+    "cuda": "CUDA GPU",
+    "gpu": "GPU",
+    "webnn-gpu": "WebNN GPU",
+    "cpu": "CPU",
+}
+_DEVICE_POLICY_LABELS = {
+    "auto": "Auto (WebGPU -> DirectML -> CPU)",
+    "gpu": "GPU only (WebGPU -> DirectML)",
+    "webgpu": "WebGPU only",
+    "dml": "DirectML only",
+    "cpu": "CPU only",
+}
 _JS_RUNTIME_READY: set[tuple[str, str]] = set()
 _JS_RUNTIME_LOCK = threading.Lock()
 
@@ -303,7 +318,7 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
         )
 
 
-class LocalOnnxWebGpuTranscriber(ITranscriber):
+class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
     """Local Cohere/Granite ASR through a persistent Transformers.js process."""
 
     def __init__(
@@ -327,6 +342,7 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
                 "Unsupported ONNX/WebGPU device policy "
                 f"'{device}'. Use one of: {', '.join(LOCAL_WEBGPU_DEVICE_POLICIES)}."
             )
+        ProgressReporter.__init__(self)
         self.model_size = model_size
         self.language_mode = language_mode
         self.device = device
@@ -354,6 +370,18 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
     @property
     def gpu_available(self) -> bool:
         return self._gpu_available
+
+    def runtime_status_text(self) -> str:
+        if not self._runtime_device:
+            policy = _DEVICE_POLICY_LABELS.get(self.device, self.device)
+            return f"ONNX runtime not loaded yet. Device policy: {policy}."
+        label = _RUNTIME_DEVICE_LABELS.get(self._runtime_device, self._runtime_device)
+        if self._runtime_device in _ACCELERATED_DEVICES:
+            return f"ONNX runtime active on {label}."
+        return (
+            "ONNX runtime active on CPU. WebGPU/DirectML GPU fallback was not "
+            "available or did not load."
+        )
 
     def _language_arg(self) -> str:
         mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
@@ -387,6 +415,18 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
                 "was found."
             )
         return snapshot
+
+    def _set_runtime_status(self, device: object, gpu_available: object) -> None:
+        self._runtime_device = str(device or "")
+        self._gpu_available = bool(gpu_available)
+        if self._runtime_device not in _ACCELERATED_DEVICES:
+            self.runtime_warning = (
+                "No WebGPU or DirectML GPU runtime was selected. This model is "
+                "running on CPU and may be much slower than the CTranslate2 "
+                "Whisper models."
+            )
+        else:
+            self.runtime_warning = ""
 
     def _node_executable(self) -> str:
         node_path = self.node_path or _default_node_path()
@@ -471,6 +511,8 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
         node_path = self._node_executable()
         runner = self._runner_file()
         _ensure_js_runtime_available(node_path, runner)
+        policy = _DEVICE_POLICY_LABELS.get(self.device, self.device)
+        self._emit_progress(f"Starting ONNX runtime for {self.model_size}: {policy}.")
         command = [
             node_path,
             str(runner),
@@ -513,16 +555,8 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
             self.close()
             raise TranscriptionError(f"ONNX/WebGPU runtime failed to load: {detail}")
 
-        self._runtime_device = str(ready.get("device") or "")
-        self._gpu_available = bool(ready.get("gpuAvailable"))
-        if self._runtime_device not in _ACCELERATED_DEVICES:
-            self.runtime_warning = (
-                "No WebGPU or DirectML GPU runtime was selected. This model is "
-                "running on CPU and may be much slower than the CTranslate2 "
-                "Whisper models."
-            )
-        else:
-            self.runtime_warning = ""
+        self._set_runtime_status(ready.get("device"), ready.get("gpuAvailable"))
+        self._emit_progress(self.runtime_status_text())
 
     def _ensure_process(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -554,6 +588,9 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
                 process = self._process
                 if process is None or process.stdin is None:
                     raise TranscriptionError("ONNX/WebGPU runtime is not available.")
+                self._emit_progress(
+                    f"Transcribing with {self.runtime_status_text()}"
+                )
 
                 self._request_id += 1
                 request_id = self._request_id
@@ -576,14 +613,13 @@ class LocalOnnxWebGpuTranscriber(ITranscriber):
                             "ONNX/WebGPU transcription failed: "
                             f"{response.get('error') or self._stderr_tail()}"
                         )
-                    self._runtime_device = str(response.get("device") or self._runtime_device)
-                    self._gpu_available = bool(response.get("gpuAvailable", self._gpu_available))
-                    if self._runtime_device not in _ACCELERATED_DEVICES:
-                        self.runtime_warning = (
-                            "No WebGPU or DirectML GPU runtime was selected. This "
-                            "model is running on CPU and may be much slower than "
-                            "the CTranslate2 Whisper models."
-                        )
+                    previous_device = self._runtime_device
+                    self._set_runtime_status(
+                        response.get("device") or self._runtime_device,
+                        response.get("gpuAvailable", self._gpu_available),
+                    )
+                    if self._runtime_device != previous_device:
+                        self._emit_progress(self.runtime_status_text())
                     return str(response.get("text") or "").strip()
         except TranscriptionError:
             raise
