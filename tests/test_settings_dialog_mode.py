@@ -469,9 +469,18 @@ def test_history_list_matches_detail_font_and_compact_item_spacing():
         app_logger=_FakeLogger(),
     )
 
-    assert dialog.history_list.font().pointSizeF() == dialog.history_detail.font().pointSizeF()
+    assert (
+        dialog.history_list.font().pointSizeF()
+        == dialog.history_detail.font().pointSizeF()
+    )
     assert dialog.history_list.uniformItemSizes() is True
-    assert "padding: 1px 4px" in dialog.history_list.styleSheet()
+    assert "padding: 0px 4px" in dialog.history_list.styleSheet()
+    assert dialog.history_list.sizePolicy().verticalPolicy() == (
+        QtWidgets.QSizePolicy.Expanding
+    )
+    assert dialog.history_detail.sizePolicy().verticalPolicy() == (
+        QtWidgets.QSizePolicy.Expanding
+    )
     _ = app
 
 
@@ -488,6 +497,20 @@ def test_combo_popups_use_single_pass_uniform_list_views():
     assert isinstance(view, QtWidgets.QListView)
     assert view.layoutMode() == QtWidgets.QListView.SinglePass
     assert view.spacing() == 0
+    _ = app
+
+
+def test_settings_dialog_precomputes_size_before_first_show():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog._initial_dialog_size_applied is True
+    assert dialog.size() == dialog._default_dialog_size
     _ = app
 
 
@@ -1106,7 +1129,7 @@ def test_local_model_lists_use_compact_item_spacing():
 
     assert dialog.local_models_list.uniformItemSizes() is True
     assert dialog.local_models_list.spacing() == 0
-    assert "padding: 1px 4px" in dialog.local_models_list.styleSheet()
+    assert "padding: 0px 4px" in dialog.local_models_list.styleSheet()
     _ = app
 
 

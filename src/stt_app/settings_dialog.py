@@ -130,7 +130,9 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
 
 _DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 720)
 _DIALOG_SCREEN_MARGIN = 48
-_COMPACT_LIST_ITEM_STYLESHEET = "QListWidget::item { padding: 1px 4px; }"
+_COMPACT_LIST_ITEM_STYLESHEET = "QListWidget::item { padding: 0px 4px; }"
+_COMPACT_LIST_ROW_EXTRA_PX = 4
+_COMPACT_TABLE_ROW_EXTRA_PX = 4
 
 _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "groq": DEFAULT_GROQ_MODEL,
@@ -281,6 +283,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._build_ui()
         self.tabs.currentChanged.connect(self._on_settings_tab_changed)
         self._populate(self._loaded_settings)
+        self._apply_initial_dialog_size()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -288,6 +291,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _build_ui(self) -> None:
         self.setStyleSheet(self._dialog_scrollbar_stylesheet())
+        self._disable_combo_popup_effects()
         # --- Engine indicator bar (always visible) ---
         self.engine_indicator = QtWidgets.QLabel()
         self.engine_indicator.setAlignment(QtCore.Qt.AlignCenter)
@@ -366,6 +370,12 @@ class SettingsDialog(QtWidgets.QDialog):
     def _restore_default_dialog_size(self) -> None:
         target_size = self._refresh_default_dialog_size()
         self.resize(target_size)
+
+    def _apply_initial_dialog_size(self) -> None:
+        if self._initial_dialog_size_applied:
+            return
+        self._initial_dialog_size_applied = True
+        self._restore_default_dialog_size()
 
     def _refresh_default_dialog_size(self) -> QtCore.QSize:
         target_size = self._preferred_dialog_size()
@@ -460,14 +470,29 @@ class SettingsDialog(QtWidgets.QDialog):
             )
 
     @staticmethod
+    def _compact_list_item_size(widget: QtWidgets.QListWidget) -> QtCore.QSize:
+        height = widget.fontMetrics().height() + _COMPACT_LIST_ROW_EXTRA_PX
+        return QtCore.QSize(0, max(height, 18))
+
+    @classmethod
+    def _apply_compact_list_item_size(
+        cls,
+        widget: QtWidgets.QListWidget,
+        item: QtWidgets.QListWidgetItem,
+    ) -> None:
+        item.setSizeHint(cls._compact_list_item_size(widget))
+
+    @staticmethod
+    def _compact_table_row_height(widget: QtWidgets.QTableWidget) -> int:
+        return max(widget.fontMetrics().height() + _COMPACT_TABLE_ROW_EXTRA_PX, 18)
+
+    @staticmethod
     def _minimum_list_height_for_rows(
         widget: QtWidgets.QListWidget,
         row_count: int,
     ) -> int:
         effective_rows = max(1, int(row_count))
-        row_height = widget.sizeHintForRow(0)
-        if row_height <= 0:
-            row_height = widget.fontMetrics().height() + 10
+        row_height = SettingsDialog._compact_list_item_size(widget).height()
         frame = widget.frameWidth() * 2
         return frame + (row_height * effective_rows) + 2
 
@@ -522,6 +547,23 @@ class SettingsDialog(QtWidgets.QDialog):
             view.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerItem)
             combo.setView(view)
             combo.setMaxVisibleItems(12)
+
+    @staticmethod
+    def _disable_combo_popup_effects() -> None:
+        app = QtWidgets.QApplication.instance()
+        if app is None:
+            return
+        ui_effect_enum = getattr(QtCore.Qt, "UIEffect", None)
+        for name in ("UI_AnimateCombo", "UI_AnimateMenu", "UI_FadeMenu"):
+            effect = getattr(QtCore.Qt, name, None)
+            if effect is None and ui_effect_enum is not None:
+                effect = getattr(ui_effect_enum, name, None)
+            if effect is None:
+                continue
+            try:
+                QtWidgets.QApplication.setEffectEnabled(effect, False)
+            except Exception:
+                pass
 
     def _create_scroll_tab(self) -> tuple[QtWidgets.QScrollArea, QtWidgets.QWidget]:
         scroll = QtWidgets.QScrollArea()
@@ -1232,6 +1274,15 @@ class SettingsDialog(QtWidgets.QDialog):
             ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
         )
         self.benchmark_results_table.verticalHeader().setVisible(False)
+        benchmark_row_height = self._compact_table_row_height(
+            self.benchmark_results_table
+        )
+        self.benchmark_results_table.verticalHeader().setMinimumSectionSize(
+            benchmark_row_height
+        )
+        self.benchmark_results_table.verticalHeader().setDefaultSectionSize(
+            benchmark_row_height
+        )
         self.benchmark_results_table.setEditTriggers(
             QtWidgets.QAbstractItemView.NoEditTriggers
         )
@@ -1430,6 +1481,10 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addLayout(history_controls)
 
         history_box = QtWidgets.QGroupBox("Transcript History")
+        history_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
         history_layout = QtWidgets.QVBoxLayout(history_box)
         history_layout.setContentsMargins(10, 10, 10, 10)
         history_layout.setSpacing(6)
@@ -1437,14 +1492,21 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_list = QtWidgets.QListWidget()
         history_font = QtGui.QFont(self.font())
         self.history_list.setFont(history_font)
-        self._configure_compact_list_widget(self.history_list)
+        self._configure_compact_list_widget(self.history_list, expand=True)
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
-        history_layout.addWidget(self.history_list)
+        history_layout.addWidget(self.history_list, 2)
 
         self.history_detail = QtWidgets.QPlainTextEdit()
         self.history_detail.setReadOnly(True)
         self.history_detail.setFont(history_font)
-        history_layout.addWidget(self.history_detail)
+        self.history_detail.setMinimumHeight(
+            self.fontMetrics().height() * 4
+        )
+        self.history_detail.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        history_layout.addWidget(self.history_detail, 1)
 
         history_buttons = QtWidgets.QHBoxLayout()
         self.history_refresh_button = QtWidgets.QPushButton("Refresh")
@@ -1460,8 +1522,7 @@ class SettingsDialog(QtWidgets.QDialog):
         history_buttons.addWidget(self.history_copy_button)
         history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
-        layout.addWidget(history_box)
-        layout.addStretch(1)
+        layout.addWidget(history_box, 1)
         self.tabs.addTab(tab, "History")
 
     def _build_import_tab(self) -> None:
@@ -1560,10 +1621,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
-        if self._initial_dialog_size_applied:
-            return
-        self._initial_dialog_size_applied = True
-        self._restore_default_dialog_size()
+        self._apply_initial_dialog_size()
 
     # ------------------------------------------------------------------
     # Model combo helpers
@@ -1727,6 +1785,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             item.setData(QtCore.Qt.UserRole, model_name)
             item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
+            self._apply_compact_list_item_size(self.local_models_list, item)
             if model_name in cached_set:
                 item.setBackground(QtGui.QColor("#e8f5e9"))
                 item.setForeground(QtGui.QColor("#1b5e20"))
@@ -1763,6 +1822,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 f"{self._model_label(model_name)}{suffix}"
             )
             item.setData(QtCore.Qt.UserRole, model_name)
+            self._apply_compact_list_item_size(self.benchmark_models_list, item)
             self.benchmark_models_list.addItem(item)
             if selected:
                 item.setSelected(model_name in selected)
@@ -3354,6 +3414,7 @@ class SettingsDialog(QtWidgets.QDialog):
             label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
             item = QtWidgets.QListWidgetItem(label)
             item.setData(QtCore.Qt.UserRole, entry)
+            self._apply_compact_list_item_size(self.history_list, item)
             self.history_list.addItem(item)
 
     def _on_history_item_selected(self) -> None:

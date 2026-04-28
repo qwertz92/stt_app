@@ -11,6 +11,8 @@ from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .settings_store import SettingsStore
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
+_COMPACT_TABLE_ROW_EXTRA_PX = 4
+
 
 class HistoryDialog(QtWidgets.QDialog):
     def __init__(
@@ -71,8 +73,13 @@ class HistoryDialog(QtWidgets.QDialog):
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
+        compact_row_height = max(
+            self.fontMetrics().height() + _COMPACT_TABLE_ROW_EXTRA_PX,
+            18,
+        )
+        self._table.verticalHeader().setMinimumSectionSize(compact_row_height)
         self._table.verticalHeader().setDefaultSectionSize(
-            self.fontMetrics().height() + 8
+            compact_row_height
         )
         self._table.horizontalHeader().setStretchLastSection(True)
         self._table.horizontalHeader().setSectionResizeMode(

@@ -188,3 +188,19 @@ def test_history_dialog_window_has_native_minimize_button(tmp_path):
     assert bool(flags & QtCore.Qt.WindowMinimizeButtonHint)
     assert bool(flags & QtCore.Qt.WindowCloseButtonHint)
     _ = app
+
+
+def test_history_dialog_uses_compact_table_rows(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    expected = max(dialog.fontMetrics().height() + 4, 18)
+    assert dialog._table.verticalHeader().defaultSectionSize() == expected
+    _ = app

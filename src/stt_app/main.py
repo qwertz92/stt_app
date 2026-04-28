@@ -199,6 +199,7 @@ def _create_tray_icon(
             dialog.showNormal()
         else:
             dialog.show()
+        dialog.setWindowState(dialog.windowState() | QtCore.Qt.WindowActive)
         dialog.raise_()
         dialog.activateWindow()
 
