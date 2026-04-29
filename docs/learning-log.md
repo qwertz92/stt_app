@@ -3,6 +3,25 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-04-29
+
+- Local/Benchmark tab model inventory refresh is now deferred briefly after tab
+  selection. This lets the tab paint immediately and then starts the background
+  availability scan, while any cached model inventory stays visible.
+- The Local tab "Download Selected" action now disables itself when every
+  selected model is already downloaded. Mixed selections still allow downloading
+  the missing models, and downloaded selections can still be deleted.
+- Transcript history retention was raised from 20 to 500 entries by default.
+  Existing settings files that still carry the old 20-entry default are migrated
+  upward so normal daily dictation does not silently prune most entries.
+- Successful transcriptions are now appended to history before text insertion.
+  If focus or paste insertion fails, the transcript remains available in history
+  and the last recording is finalized instead of being left in a transcribing
+  state.
+- History model names are covered by a snapshot regression test so entries keep
+  the model that actually produced the transcript, even if current settings
+  change before the result is handled.
+
 ## 2026-04-28
 
 - Settings density was tightened again after the tab layout grew too loose:

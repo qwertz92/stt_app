@@ -78,6 +78,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms prevents stale paste.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately and refresh in the background without silently mutating user settings.
+  Automatic Local/Benchmark tab refreshes are deferred briefly after tab
+  selection so the tab paints first; cached inventory remains visible while the
+  background verification runs.
+- **Transcript history retention**: history defaults to 500 saved entries, and
+  legacy settings that still have the old 20-entry default are migrated upward.
+  Successful transcriptions are added to history before text insertion, so a
+  paste/focus failure does not drop the transcript. The stored model name comes
+  from the transcription settings snapshot, not from later UI changes.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
