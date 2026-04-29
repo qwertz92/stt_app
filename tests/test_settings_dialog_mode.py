@@ -78,6 +78,13 @@ class _IdleThread:
         return None
 
 
+def _select_local_model_names(dialog: SettingsDialog, *model_names: str) -> None:
+    selected = set(model_names)
+    for index in range(dialog.local_models_list.count()):
+        item = dialog.local_models_list.item(index)
+        item.setSelected(str(item.data(QtCore.Qt.UserRole) or "") in selected)
+
+
 @pytest.fixture(autouse=True)
 def _close_top_level_windows_after_test():
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
@@ -549,13 +556,8 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
-    # Select the "small" model in the unified list
-    for index in range(dialog.local_models_list.count()):
-        item = dialog.local_models_list.item(index)
-        if item.data(QtCore.Qt.UserRole) == "small":
-            item.setSelected(True)
-            break
+    QtTest.QTest.qWait(250)
+    _select_local_model_names(dialog, "small")
 
     dialog._delete_selected_cached_model()
 
@@ -588,18 +590,46 @@ def test_local_tab_can_download_selected_model(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
 
-    for index in range(dialog.local_models_list.count()):
-        item = dialog.local_models_list.item(index)
-        if item.data(QtCore.Qt.UserRole) == "tiny":
-            item.setSelected(True)
-            break
+    _select_local_model_names(dialog, "tiny")
 
     dialog._download_selected_local_models()
 
     assert "Downloaded: tiny" in dialog.local_models_action_label.text()
     assert "tiny" in dialog.local_models_label.text()
+    _ = app
+
+
+def test_download_selected_is_disabled_when_selection_is_cached(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda _model_dir="": ["tiny"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(250)
+
+    _select_local_model_names(dialog, "tiny")
+
+    assert dialog.download_selected_models_button.isEnabled() is False
+    assert dialog.delete_selected_model_button.isEnabled() is True
+
+    _select_local_model_names(dialog, "tiny", "base")
+
+    assert dialog.download_selected_models_button.isEnabled() is True
+    assert dialog.delete_selected_model_button.isEnabled() is True
     _ = app
 
 
@@ -655,7 +685,7 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
     dialog._set_benchmark_audio_path(str(audio_path))
 
     assert dialog.benchmark_models_list.count() == 1
@@ -771,7 +801,7 @@ def test_settings_dialog_scans_local_models_once_after_local_tab_is_selected(mon
 
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
     assert calls == ["/tmp/models"]
     assert "small" in dialog.local_models_label.text()
     _ = app
@@ -801,7 +831,7 @@ def test_settings_dialog_defers_local_model_scan_until_tab_event_loop(monkeypatc
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     assert calls == []
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
     assert calls == ["/tmp/models"]
     _ = app
 
@@ -831,7 +861,7 @@ def test_settings_dialog_uses_session_cached_models_before_refresh(monkeypatch):
     assert "small" in dialog.local_models_label.text()
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
     assert calls == ["/tmp/models"]
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
@@ -863,7 +893,7 @@ def test_settings_dialog_uses_persistent_local_model_cache_before_refresh(monkey
     assert dialog.local_models_list.count() > 0
 
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
 
     assert calls == ["/tmp/models"]
     assert "small" in dialog.local_models_label.text()
@@ -891,7 +921,7 @@ def test_settings_dialog_shows_background_refresh_note_for_persistent_cache(monk
 
     assert "small" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
 
     assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
     assert "small" in dialog.local_models_label.text()
@@ -917,7 +947,7 @@ def test_settings_dialog_treats_empty_persistent_cache_as_valid(monkeypatch):
 
     assert "No local models found" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
 
     assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
     _ = app
@@ -940,7 +970,7 @@ def test_soft_local_model_refresh_keeps_lists_enabled(monkeypatch):
     )
 
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
 
     assert dialog.local_models_list.isEnabled() is True
     assert dialog.refresh_local_models_button.isEnabled() is True
@@ -968,7 +998,7 @@ def test_model_dir_change_triggers_single_rescan(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(100)
+    QtTest.QTest.qWait(250)
     calls.clear()
 
     dialog.model_dir_edit.setText("/tmp/other-models")

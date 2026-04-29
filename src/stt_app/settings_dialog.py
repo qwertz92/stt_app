@@ -133,6 +133,7 @@ _DIALOG_SCREEN_MARGIN = 48
 _COMPACT_LIST_ITEM_STYLESHEET = "QListWidget::item { padding: 0px 4px; }"
 _COMPACT_LIST_ROW_EXTRA_PX = 4
 _COMPACT_TABLE_ROW_EXTRA_PX = 4
+_LOCAL_MODEL_AUTO_REFRESH_DELAY_MS = 150
 
 _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "groq": DEFAULT_GROQ_MODEL,
@@ -1697,6 +1698,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._deferred_local_model_refresh_pending = False
         force = self._deferred_local_model_refresh_force
         self._deferred_local_model_refresh_force = False
+        if not self._inventory_tab_is_visible():
+            return
         model_dir = self._local_model_cache_key(self.model_dir_edit.text())
         if force and model_dir in self._local_model_auto_refresh_requested_dirs:
             return
@@ -1942,7 +1945,12 @@ class SettingsDialog(QtWidgets.QDialog):
             self._cached_local_models_available
             and cache_key == self._cached_local_models_dir
         )
-        self._set_local_model_scan_loading(preserve_current=preserve_current)
+        if delay_ms <= 0:
+            self._set_local_model_scan_loading(preserve_current=preserve_current)
+        elif preserve_current:
+            self._set_local_model_scan_status(
+                "Showing the last known local models while the cache is verified in the background."
+            )
         self._schedule_deferred_local_model_refresh(delay_ms=delay_ms, force=True)
 
     def _request_local_model_scan(self, *, force: bool = False) -> None:
@@ -2028,7 +2036,6 @@ class SettingsDialog(QtWidgets.QDialog):
             return
 
         busy = self._active_local_model_download_thread is not None
-        selected = self._selected_downloadable_model_names()
 
         # Determine missing and downloaded from selection
         missing: list[str] = []
@@ -2056,7 +2063,7 @@ class SettingsDialog(QtWidgets.QDialog):
             (not busy) and bool(selected_downloaded)
         )
         self.download_selected_models_button.setEnabled(
-            (not busy) and bool(selected)
+            (not busy) and bool(missing)
         )
         self.download_all_missing_models_button.setEnabled(
             (not busy) and any_missing
@@ -2820,7 +2827,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_import_engine_note()
 
     def _on_settings_tab_changed(self, _index: int) -> None:
-        self._schedule_local_model_auto_refresh(delay_ms=0)
+        self._schedule_local_model_auto_refresh(
+            delay_ms=_LOCAL_MODEL_AUTO_REFRESH_DELAY_MS
+        )
 
     def _on_import_model_changed(self, _index: int = 0) -> None:
         if not hasattr(self, "import_model_combo"):
