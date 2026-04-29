@@ -21,6 +21,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - History model names are covered by a snapshot regression test so entries keep
   the model that actually produced the transcript, even if current settings
   change before the result is handled.
+- Windows release docs now distinguish the local portable-bundle build script
+  from the installer build script. The GitHub Action runs both scripts and then
+  uploads the ZIP, installer, and expanded bundle as one workflow artifact.
 
 ## 2026-04-28
 

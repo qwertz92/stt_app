@@ -109,10 +109,11 @@ Candidate outputs:
 - `stt_app-win-x64-setup.exe`
 - workflow artifact containing the extracted `stt_app-win-x64\` folder
 
-Build command:
+Local build commands:
 
 ```powershell
 powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_release.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_installer.ps1 -SkipBundleBuild
 ```
 
 Output:
