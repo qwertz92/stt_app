@@ -62,6 +62,8 @@ from .config import (
 from .hotkey import parse_hotkey
 
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
+_HISTORY_RETENTION_SCHEMA_VERSION = 16
+_LEGACY_DEFAULT_HISTORY_MAX_ITEMS = 20
 
 DEFAULTS = {
     "schema_version": CURRENT_SCHEMA_VERSION,
@@ -100,6 +102,13 @@ DEFAULTS = {
     "assemblyai_model": DEFAULT_ASSEMBLYAI_MODEL,
     "elevenlabs_model": DEFAULT_ELEVENLABS_MODEL,
 }
+
+
+def _int_or_none(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 @dataclass(slots=True)
@@ -144,6 +153,7 @@ class AppSettings:
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
         merged: dict[str, Any] = dict(DEFAULTS)
         merged.update(raw)
+        raw_schema_version = _int_or_none(raw.get("schema_version")) or 0
 
         language_mode = str(merged.get("language_mode", DEFAULT_LANGUAGE_MODE)).lower()
         if language_mode not in VALID_LANGUAGE_MODES:
@@ -208,13 +218,21 @@ class AppSettings:
         except (TypeError, ValueError):
             recordings_max_count = DEFAULT_RECORDINGS_MAX_COUNT
         recordings_max_count = max(1, min(500, recordings_max_count))
-        try:
-            history_max_items = int(
-                merged.get("history_max_items", DEFAULT_HISTORY_MAX_ITEMS)
-            )
-        except (TypeError, ValueError):
+        raw_history_max_items = merged.get(
+            "history_max_items",
+            DEFAULT_HISTORY_MAX_ITEMS,
+        )
+        parsed_history_max_items = _int_or_none(raw_history_max_items)
+        if parsed_history_max_items is None:
             history_max_items = DEFAULT_HISTORY_MAX_ITEMS
+        else:
+            history_max_items = parsed_history_max_items
         history_max_items = max(0, min(HISTORY_MAX_ITEMS_MAX, history_max_items))
+        if (
+            raw_schema_version < _HISTORY_RETENTION_SCHEMA_VERSION
+            and parsed_history_max_items == _LEGACY_DEFAULT_HISTORY_MAX_ITEMS
+        ):
+            history_max_items = DEFAULT_HISTORY_MAX_ITEMS
         try:
             overlay_opacity_percent = int(
                 merged.get(

@@ -7,7 +7,7 @@ LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "stt_app"
 
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -26,7 +26,7 @@ DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_SAVE_ALL_RECORDINGS = False
 DEFAULT_RECORDINGS_DIR = ""
 DEFAULT_RECORDINGS_MAX_COUNT = 10
-DEFAULT_HISTORY_MAX_ITEMS = 20
+DEFAULT_HISTORY_MAX_ITEMS = 500
 HISTORY_MAX_ITEMS_MAX = 5_000
 DEFAULT_PASTE_MODE = "auto"
 DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = False

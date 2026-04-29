@@ -99,6 +99,34 @@ def test_load_fills_missing_values_with_defaults(tmp_path):
     assert persisted["engine"] == DEFAULT_ENGINE
 
 
+def test_legacy_default_history_limit_migrates_to_current_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"schema_version": 15, "history_max_items": 20}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.history_max_items == DEFAULT_HISTORY_MAX_ITEMS
+
+    persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert persisted["schema_version"] == CURRENT_SCHEMA_VERSION
+    assert persisted["history_max_items"] == DEFAULT_HISTORY_MAX_ITEMS
+
+
+def test_custom_legacy_history_limit_is_preserved(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"schema_version": 15, "history_max_items": 100}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.history_max_items == 100
+
+
 def test_overlay_always_on_top_roundtrip(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(

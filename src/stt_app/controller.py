@@ -679,6 +679,41 @@ class DictationController(QtCore.QObject):
             or getattr(state, "created_at", "")
         ).strip()
 
+    def _append_transcript_history(
+        self,
+        text: str,
+        settings: AppSettings,
+        mode: str,
+        *,
+        source_recording_id: str | None = None,
+    ) -> None:
+        if not text.strip():
+            return
+        try:
+            source_id = (
+                self._current_last_recording_id()
+                if source_recording_id is None
+                else source_recording_id
+            )
+            self._history_store.add_entry(
+                TranscriptHistoryEntry.new(
+                    text=text,
+                    engine=settings.engine,
+                    model=self._selected_model_name(settings),
+                    mode=mode,
+                    source_recording_id=source_id,
+                ),
+                settings.history_max_items,
+            )
+        except Exception:
+            self._logger.exception("Failed to append transcript history")
+
+    def _mark_last_recording_completed(self) -> None:
+        try:
+            self._last_recording_store.mark_completed()
+        except Exception:
+            self._logger.exception("Failed to finalize last recording state")
+
     def _promote_request_audio_for_retry(self, request_token: int) -> bool:
         payload = self._request_audio_by_token.pop(request_token, None)
         if payload is None:
@@ -1328,13 +1363,18 @@ class DictationController(QtCore.QObject):
         self._last_transcript = text
 
         if not text.strip():
-            try:
-                self._last_recording_store.mark_completed()
-            except Exception:
-                self._logger.exception("Failed to finalize last recording state")
+            self._mark_last_recording_completed()
             self._overlay.set_state("Done", "No speech detected.")
+            self._last_transcribe_settings = None
             self._reset_streaming_state()
             return
+
+        used_settings = (
+            self._last_transcribe_settings
+            or stream_settings
+            or self._settings
+        )
+        self._append_transcript_history(text, used_settings, session_mode)
 
         if session_mode == "streaming":
             final_text = self._normalize_stream_text(text)
@@ -1352,12 +1392,16 @@ class DictationController(QtCore.QObject):
                     desired_insertion,
                     restore_focus=True,
                 ):
+                    self._mark_last_recording_completed()
+                    self._last_transcribe_settings = None
                     self._reset_streaming_state()
                     return
             self._stream_live_text = self._stream_join_text(committed, desired_tail)
             self._overlay.set_state("Done", final_text)
         else:
             if not self._insert_text_at_target(text, restore_focus=True):
+                self._mark_last_recording_completed()
+                self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
 
@@ -1365,25 +1409,8 @@ class DictationController(QtCore.QObject):
 
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
-        try:
-            used = self._last_transcribe_settings or stream_settings or self._settings
-            source_recording_id = self._current_last_recording_id()
-            entry = TranscriptHistoryEntry.new(
-                text=text,
-                engine=used.engine,
-                model=self._selected_model_name(used),
-                mode=session_mode,
-                source_recording_id=source_recording_id,
-            )
-            self._history_store.add_entry(entry, used.history_max_items)
-        except Exception:
-            self._logger.exception("Failed to append transcript history")
-        try:
-            self._last_recording_store.mark_completed()
-        except Exception:
-            self._logger.exception("Failed to finalize last recording state")
-        finally:
-            self._last_transcribe_settings = None
+        self._mark_last_recording_completed()
+        self._last_transcribe_settings = None
         self._reset_streaming_state()
 
     @QtCore.Slot(int, str)
@@ -1966,15 +1993,11 @@ class DictationController(QtCore.QObject):
                     if managed_last_recording
                     else ""
                 )
-                self._history_store.add_entry(
-                    TranscriptHistoryEntry.new(
-                        text=text,
-                        engine=settings.engine,
-                        model=self._selected_model_name(settings),
-                        mode="import",
-                        source_recording_id=source_recording_id,
-                    ),
-                    settings.history_max_items,
+                self._append_transcript_history(
+                    text,
+                    settings,
+                    "import",
+                    source_recording_id=source_recording_id,
                 )
             if managed_last_recording:
                 self._last_recording_store.mark_completed()

@@ -5,6 +5,7 @@ from PySide6 import QtGui, QtWidgets
 from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
+from stt_app.transcript_history import TranscriptHistoryStore
 
 from conftest import (
     FakeCapture,
@@ -146,6 +147,69 @@ def test_controller_copies_transcript_on_insert_error(monkeypatch):
     assert fake_clipboard.text() == "copy me"
     assert overlay.states[-1][0] == "Error"
     assert "Transcript copied to clipboard." in overlay.states[-1][1]
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_records_history_when_insert_fails(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(should_fail=True),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+        history_store=history_store,
+    )
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    controller._last_transcribe_settings = settings
+    controller._on_transcription_ready("saved despite paste failure")
+
+    entries = history_store.load()
+    assert [entry.text for entry in entries] == ["saved despite paste failure"]
+    assert entries[0].model == settings.model_size
+    assert controller._last_transcribe_settings is None
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_history_uses_transcription_settings_snapshot(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    current_settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        model_size="tiny",
+        keep_transcript_in_clipboard=False,
+    )
+    transcribe_settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        model_size="base",
+        keep_transcript_in_clipboard=False,
+    )
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    controller = DictationController(
+        settings_store=FakeSettingsStore(current_settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+        history_store=history_store,
+    )
+
+    controller._last_transcribe_settings = transcribe_settings
+    controller._on_transcription_ready("model snapshot")
+
+    entries = history_store.load()
+    assert entries[0].model == "base"
 
     controller.shutdown()
     _ = app
