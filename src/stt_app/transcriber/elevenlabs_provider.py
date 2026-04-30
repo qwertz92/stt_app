@@ -10,8 +10,6 @@ Supported batch models: scribe_v1, scribe_v2.
 from __future__ import annotations
 
 import json
-import os
-import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -20,11 +18,15 @@ from pathlib import Path
 from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_ELEVENLABS_MODEL,
-    DOC_SSL_PROXY_PATH,
     ELEVENLABS_MODELS,
     VALID_LANGUAGE_MODES,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
+from ._http_utils import (
+    format_ssl_error_message,
+    multipart_form_data,
+    normalize_transcript_text,
+)
 from .base import (
     AudioInput,
     ITranscriber,
@@ -34,45 +36,6 @@ from .base import (
 )
 
 ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
-
-
-def _multipart_form_data(
-    *,
-    fields: list[tuple[str, str]],
-    file_field: tuple[str, str, bytes, str],
-) -> tuple[bytes, str]:
-    boundary = f"stt-app-{int(time.time() * 1000)}-{os.getpid()}"
-    lines: list[bytes] = []
-
-    for name, value in fields:
-        lines.extend(
-            [
-                f"--{boundary}\r\n".encode("utf-8"),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(
-                    "utf-8"
-                ),
-                f"{value}\r\n".encode("utf-8"),
-            ]
-        )
-
-    field_name, filename, data, content_type = file_field
-    lines.extend(
-        [
-            f"--{boundary}\r\n".encode("utf-8"),
-            (
-                f'Content-Disposition: form-data; name="{field_name}"; '
-                f'filename="{filename}"\r\n'
-            ).encode("utf-8"),
-            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
-            data,
-            b"\r\n",
-            f"--{boundary}--\r\n".encode("utf-8"),
-        ]
-    )
-
-    body = b"".join(lines)
-    content_type_header = f"multipart/form-data; boundary={boundary}"
-    return body, content_type_header
 
 
 class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
@@ -105,16 +68,11 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
 
     def _format_error(self, exc: Exception) -> str:
         if _is_ssl_error(exc):
-            return (
-                "ElevenLabs: SSL certificate verification failed "
-                "(likely a corporate proxy such as Zscaler). "
-                "Set SSL_CERT_FILE or REQUESTS_CA_BUNDLE to your corporate CA .pem. "
-                f"See {DOC_SSL_PROXY_PATH} for details."
-            )
+            return format_ssl_error_message("ElevenLabs")
         return str(exc)
 
     def _normalize_text(self, value: str) -> str:
-        return " ".join(str(value or "").strip().split()).strip()
+        return normalize_transcript_text(value)
 
     def _build_request(
         self,
@@ -125,7 +83,7 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
         if self._language_mode != DEFAULT_LANGUAGE_MODE:
             fields.append(("language_code", self._language_mode))
 
-        body, content_type = _multipart_form_data(
+        body, content_type = multipart_form_data(
             fields=fields,
             file_field=("file", filename, audio_bytes, "audio/wav"),
         )

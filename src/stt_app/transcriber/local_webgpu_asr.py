@@ -493,7 +493,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                     raise TranscriptionError(
                         "ONNX/WebGPU runtime exited unexpectedly."
                         + (f"\n{detail}" if detail else "")
-                    )
+                    ) from None
                 continue
             if not line:
                 continue

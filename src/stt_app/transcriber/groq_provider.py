@@ -35,7 +35,7 @@ def _default_groq():
             "The 'groq' package is not installed. "
             "Install it with: pip install groq  "
             "(or: uv add groq)"
-        )
+        ) from None
 
 
 class GroqTranscriber(ProgressReporter, ITranscriber):
@@ -90,7 +90,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         ssl_ctx = create_ssl_context()
         if ssl_ctx is not None:
             try:
-                import httpx  # noqa: F811 - runtime import
+                import httpx
 
                 http_client = httpx.Client(verify=ssl_ctx)
                 return cls(api_key=self._api_key, http_client=http_client)

@@ -43,7 +43,7 @@ def _default_assemblyai():
             "The 'assemblyai' package is not installed. "
             "Install it with: pip install assemblyai  "
             "(or: uv add assemblyai)"
-        )
+        ) from None
 
 
 class AssemblyAITranscriber(ProgressReporter, ITranscriber):

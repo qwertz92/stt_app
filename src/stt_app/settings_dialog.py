@@ -4,7 +4,7 @@ import threading
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING, Callable, ClassVar
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -1628,7 +1628,7 @@ class SettingsDialog(QtWidgets.QDialog):
     # Model combo helpers
     # ------------------------------------------------------------------
 
-    _MODEL_LABELS: dict[str, str] = {
+    _MODEL_LABELS: ClassVar[dict[str, str]] = {
         "tiny": "tiny (~75 MB)",
         "base": "base (~141 MB)",
         "small": "small (~484 MB)",
