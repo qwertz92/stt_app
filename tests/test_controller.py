@@ -11,6 +11,7 @@ from conftest import (
     FakeCapture,
     FakeHotkeyManager,
     FakeHotkeyManagerAllFail,
+    FakeLastRecordingStore,
     FakeOverlay,
     FakeSettingsStore,
     FakeStreamingTranscriber,
@@ -19,6 +20,18 @@ from conftest import (
     FailSubmitExecutor,
     ImmediateExecutor,
 )
+
+
+class DeferredExecutor:
+    def __init__(self):
+        self.calls = []
+
+    def submit(self, fn, *args, **kwargs):
+        self.calls.append((fn, args, kwargs))
+        return None
+
+    def shutdown(self, wait=False, cancel_futures=False):
+        pass
 
 
 def test_controller_falls_back_to_safe_hotkey():
@@ -210,6 +223,50 @@ def test_controller_history_uses_transcription_settings_snapshot(tmp_path):
 
     entries = history_store.load()
     assert entries[0].model == "base"
+
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_finalize_keeps_settings_snapshot_for_queued_result(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    current_settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="tiny",
+        keep_transcript_in_clipboard=False,
+    )
+    stream_settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="base",
+        keep_transcript_in_clipboard=False,
+    )
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    last_recording_store = FakeLastRecordingStore()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(current_settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+        history_store=history_store,
+        last_recording_store=last_recording_store,
+    )
+    controller._executor = DeferredExecutor()
+    controller._active_session_mode = "streaming"
+    controller._active_stream_settings = stream_settings
+
+    controller._submit_stream_finalize()
+    request_token = controller._active_request_token
+    controller._active_stream_settings = None
+    controller._on_transcription_ready("stream settings snapshot", request_token=request_token)
+
+    entries = history_store.load()
+    assert entries[0].model == "base"
+    assert last_recording_store.transcribing == [("local", "base", "streaming")]
 
     controller.shutdown()
     _ = app

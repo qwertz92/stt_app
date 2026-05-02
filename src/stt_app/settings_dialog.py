@@ -41,7 +41,6 @@ from .config import (
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     LOCAL_WEBGPU_MODEL_SIZES,
     OPENAI_MODELS,
-    STREAMING_ENGINES,
     VAD_ENERGY_THRESHOLD_MAX,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_ENGINES,
@@ -51,6 +50,7 @@ from .config import (
     VALID_OVERLAY_CORNERS,
     VALID_PASTE_MODES,
     VALID_START_BEEP_TONES,
+    supports_streaming,
 )
 from .hotkey import parse_hotkey
 from .last_recording_store import LastRecordingStore
@@ -2743,9 +2743,7 @@ class SettingsDialog(QtWidgets.QDialog):
             if hasattr(self, "model_combo")
             else ""
         )
-        supports_streaming = (
-            engine in STREAMING_ENGINES and model_name not in LOCAL_BATCH_ONLY_MODELS
-        )
+        streaming_supported = supports_streaming(engine, model_name)
         streaming_idx = self.mode_combo.findData("streaming")
 
         if streaming_idx < 0:
@@ -2755,7 +2753,7 @@ class SettingsDialog(QtWidgets.QDialog):
         model = self.mode_combo.model()
         item = model.item(streaming_idx)
         if item is not None:
-            if supports_streaming:
+            if streaming_supported:
                 item.setEnabled(True)
                 item.setToolTip("")
             else:
@@ -2773,7 +2771,7 @@ class SettingsDialog(QtWidgets.QDialog):
                     )
 
         # If streaming is selected but not supported, switch to batch.
-        if not supports_streaming and self.mode_combo.currentData() == "streaming":
+        if not streaming_supported and self.mode_combo.currentData() == "streaming":
             batch_idx = self.mode_combo.findData("batch")
             if batch_idx >= 0:
                 self.mode_combo.setCurrentIndex(batch_idx)

@@ -31,7 +31,6 @@ from .config import (
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
     STREAMING_BEEP_ON_ABORT,
-    STREAMING_ENGINES,
     STREAMING_FOCUS_POLL_MS,
     STREAMING_LIVE_INSERT_ENABLED,
     STREAMING_OVERLAY_MAX_CHARS,
@@ -44,6 +43,7 @@ from .config import (
     VALID_START_BEEP_TONES,
     VAD_MAX_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
+    supports_streaming,
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError
 from .last_recording_store import LastRecordingStore
@@ -332,15 +332,28 @@ class DictationController(QtCore.QObject):
                     f"while '{self._settings.model_size}' loads."
                 )
             # Check if the selected engine supports streaming mode.
-            if (
-                self._settings.engine not in STREAMING_ENGINES
-                and self._settings.mode == "streaming"
+            if self._settings.mode == "streaming" and not supports_streaming(
+                self._settings.engine,
+                self._settings.model_size,
             ):
+                if (
+                    self._settings.engine == DEFAULT_ENGINE
+                    and self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+                ):
+                    detail = (
+                        "Streaming is not available for the selected ONNX/WebGPU "
+                        "local model. Switch to batch mode, or choose a "
+                        "faster-whisper local model for streaming."
+                    )
+                else:
+                    detail = (
+                        "Streaming is not available for the selected provider. "
+                        "Switch to batch mode, or use local/AssemblyAI/Deepgram "
+                        "for streaming."
+                    )
                 self._overlay.set_state(
                     "Error",
-                    "Streaming is not available for the selected provider. "
-                    "Switch to batch mode, or use local/AssemblyAI/Deepgram for "
-                    "streaming.",
+                    detail,
                 )
                 return
 
@@ -780,6 +793,9 @@ class DictationController(QtCore.QObject):
         request_token = self._next_request_token()
         self._active_request_token = request_token
         settings = self._active_stream_settings or replace(self._settings)
+        self._last_transcribe_settings = replace(settings)
+        transcriber = self._active_stream_transcriber
+        self._active_stream_transcriber = None
         try:
             self._last_recording_store.mark_transcribing(
                 engine=settings.engine,
@@ -788,7 +804,7 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark streaming recording as transcribing")
-        self._executor.submit(self._finalize_stream_worker, request_token)
+        self._executor.submit(self._finalize_stream_worker, request_token, transcriber)
 
     def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
         retry_available = (
@@ -1193,9 +1209,8 @@ class DictationController(QtCore.QObject):
             if close_after_transcription and transcriber is not None:
                 self._close_cached_transcriber(transcriber)
 
-    def _finalize_stream_worker(self, request_token: int) -> None:
+    def _finalize_stream_worker(self, request_token: int, transcriber) -> None:
         try:
-            transcriber = self._active_stream_transcriber
             if transcriber is None:
                 raise TranscriptionError("Streaming session was not initialized.")
             text = transcriber.stop_stream()
@@ -1210,11 +1225,6 @@ class DictationController(QtCore.QObject):
                 request_token,
                 f"Unexpected streaming error: {exc}",
             )
-        finally:
-            self._focus_poll_timer.stop()
-            self._active_stream_transcriber = None
-            self._active_stream_settings = None
-            self._streaming_recording = False
 
     def _emit_stream_partial(self, text: str) -> None:
         self.transcription_partial.emit(text)

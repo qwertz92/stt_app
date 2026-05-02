@@ -76,6 +76,34 @@ def test_start_recording_rejects_streaming_for_remote_engine():
     _ = app
 
 
+def test_start_recording_rejects_streaming_for_batch_only_local_model(monkeypatch):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="streaming",
+        model_size="cohere-transcribe-03-2026",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("batch-only model should be rejected before creation")
+        ),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert overlay.states[-1][0] == "Error"
+    assert "ONNX/WebGPU" in overlay.states[-1][1]
+    assert "batch mode" in overlay.states[-1][1].lower()
+    controller.shutdown()
+    _ = app
+
+
 def test_start_recording_temporarily_reveals_non_pinned_overlay(monkeypatch):
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
@@ -429,8 +457,7 @@ def test_transcribe_worker_emits_unexpected_error():
 def test_finalize_stream_worker_no_transcriber_emits_error():
     overlay = FakeOverlay()
     controller, app = _make_controller(overlay=overlay)
-    controller._active_stream_transcriber = None
-    controller._finalize_stream_worker(1)
+    controller._finalize_stream_worker(1, None)
     assert overlay.states[-1][0] == "Error"
     assert "not initialized" in overlay.states[-1][1].lower()
     controller.shutdown()
@@ -440,10 +467,8 @@ def test_finalize_stream_worker_no_transcriber_emits_error():
 def test_finalize_stream_worker_exception_emits_error():
     overlay = FakeOverlay()
     controller, app = _make_controller(overlay=overlay)
-    controller._active_stream_transcriber = FakeStreamingTranscriber(
-        stop_raises=RuntimeError("boom")
-    )
-    controller._finalize_stream_worker(1)
+    transcriber = FakeStreamingTranscriber(stop_raises=RuntimeError("boom"))
+    controller._finalize_stream_worker(1, transcriber)
     assert overlay.states[-1][0] == "Error"
     assert "Unexpected" in overlay.states[-1][1]
     controller.shutdown()

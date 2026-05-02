@@ -160,6 +160,16 @@ STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support 
 VALID_MODES = ("batch", "streaming")
 VALID_PASTE_MODES = ("auto", "wm_paste", "send_input")
 
+
+def supports_streaming(engine: str, model_size: str = "") -> bool:
+    normalized_engine = str(engine or "").strip().lower()
+    normalized_model = str(model_size or "").strip()
+    if normalized_engine not in STREAMING_ENGINES:
+        return False
+    if normalized_engine == DEFAULT_ENGINE and normalized_model in LOCAL_BATCH_ONLY_MODELS:
+        return False
+    return True
+
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"
 

@@ -188,6 +188,30 @@ def test_streaming_enabled_for_assemblyai():
     _ = app
 
 
+def test_remote_streaming_ignores_batch_only_local_model_selection():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="deepgram",
+            mode="streaming",
+            model_size="cohere-transcribe-03-2026",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    streaming_idx = dialog.mode_combo.findData("streaming")
+    item = dialog.mode_combo.model().item(streaming_idx)
+
+    assert item is not None
+    assert item.isEnabled() is True
+    assert dialog.mode_combo.currentData() == "streaming"
+    _ = app
+
+
 def test_streaming_disabled_for_openai():
     """Streaming mode item is disabled for OpenAI engine."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
