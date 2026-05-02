@@ -79,7 +79,7 @@ Common settings to adjust:
 | **VAD auto-stop** | Energy-based auto stop after speech + silence | Off |
 | **Start tone** | Beep/chime before recording starts | Off |
 
-Tip: In **Settings → History**, you can now select an audio file first (or choose the last recording) and start transcription explicitly after confirmation.
+Tip: In **Settings → Import Audio**, you can select an audio file first (or choose the last recording) and then start transcription explicitly.
 
 ## 6. Stop the app
 

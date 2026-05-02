@@ -115,13 +115,15 @@ Recommended:
 
 ## 6) Models in streaming mode
 
-Local streaming uses the same model choices as batch mode:
+Local streaming supports the faster-whisper/CTranslate2 model choices:
 
 - `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
 
 Larger models in local streaming increase partial update cost.
+Experimental ONNX/WebGPU local models are batch-only in this app.
 
 AssemblyAI streaming uses AssemblyAI's real-time speech recognition engine (no model selection needed).
+Deepgram streaming uses the selected Deepgram model.
 
 ## 7) Tuning points
 

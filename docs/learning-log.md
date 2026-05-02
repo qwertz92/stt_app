@@ -3,6 +3,26 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-05-02
+
+- Streaming availability now uses a shared `config.supports_streaming()` helper
+  instead of duplicating partial checks in the settings UI and controller.
+  This fixes a case where selecting a batch-only local ONNX/WebGPU model could
+  incorrectly disable streaming for remote providers that do support it.
+- The controller now rejects invalid local ONNX/WebGPU streaming settings before
+  creating a transcriber, so corrupt or stale settings fail with a clear
+  batch-mode-only message.
+- Streaming finalization now snapshots the stream settings before submitting
+  the background stop worker. Queued final results keep the model/engine that
+  actually produced the transcript even if active stream state is cleared before
+  the Qt result signal is handled.
+- Quick-start and streaming docs were aligned with the current UI: Import Audio
+  no longer has a confirmation prompt, and ONNX/WebGPU local models are
+  documented as batch-only.
+- Release builds now fail fast when a `v*` tag does not match the version in
+  `pyproject.toml`, and tests keep `stt_app.__version__` aligned with that
+  project metadata.
+
 ## 2026-04-29
 
 - Local/Benchmark tab model inventory refresh is now deferred briefly after tab

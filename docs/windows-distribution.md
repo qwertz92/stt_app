@@ -131,6 +131,8 @@ The workflow `.github/workflows/windows-release.yml` is wired so that:
 
 - manual runs build candidate artifacts only,
 - `v*` tags build the same artifacts and attach them to a GitHub Release.
+- tag builds fail fast unless the tag matches `pyproject.toml`
+  (`v0.2.0` requires `version = "0.2.0"`).
 
 This gives you a clean separation:
 

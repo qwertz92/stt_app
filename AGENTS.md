@@ -97,7 +97,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Windows packaging**: end-user builds are layered. PyInstaller `onedir`
   is the base portable bundle; Inno Setup wraps that bundle into the
   installer; GitHub Actions builds artifacts manually on demand and publishes
-  only on version tags.
+  only on version tags. Official `v*` release tags must match
+  `pyproject.toml`'s project version.
 - **Experimental ONNX/WebGPU local ASR**: Cohere Transcribe and IBM Granite
   Speech are selectable local models through `transcriber/local_webgpu_asr.py`.
   They are batch-only, use q4 ONNX snapshots, require Node.js plus
@@ -108,6 +109,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
   Keep faster-whisper as the stable local default until real target-hardware
   benchmarks justify switching.
+- **Streaming availability**: `config.supports_streaming()` is the shared
+  source of truth for UI and controller checks. Local ONNX/WebGPU models are
+  batch-only, but that local model selection must not disable remote provider
+  streaming for AssemblyAI or Deepgram.
 - **Last recording selection**: `LastRecordingStore.selectable_path()` is the
   single selection point for "Use last recording". When an archived recordings
   directory is supplied, it chooses the newest managed/archive WAV, but
