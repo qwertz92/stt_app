@@ -3,6 +3,7 @@ import logging
 from PySide6 import QtGui, QtWidgets
 
 from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
+import stt_app.controller as controller_module
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -759,6 +760,46 @@ def test_streaming_finalize_can_remove_live_tail(monkeypatch):
         " extra",
         "",
         557,
+        settings.paste_mode,
+    )
+
+    controller.shutdown()
+    _ = app
+
+
+def test_streaming_finalize_inserts_final_text_when_live_insertion_disabled(
+    monkeypatch,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(controller_module, "STREAMING_LIVE_INSERT_ENABLED", False)
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+    )
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    controller._active_session_mode = "streaming"
+    controller._target_window_handle = focus_helper.captured
+    controller._target_focus_signature = focus_helper.capture_target_signature()
+    controller._on_transcription_partial("ignored live text")
+    controller._on_transcription_ready("final transcript")
+
+    assert fake_clipboard.text() == ""
+    assert inserter.calls[-1] == (
+        "final transcript",
+        focus_helper.captured_caret,
         settings.paste_mode,
     )
 

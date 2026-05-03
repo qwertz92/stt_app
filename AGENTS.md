@@ -49,6 +49,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | ------ | ------- |
 | `config.py` | All tunables/constants; `MODEL_REPO_MAP` (single source of truth) |
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
+| `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
 | `transcriber/local_webgpu_asr.py` | Experimental batch-only Cohere/Granite q4 ONNX runtime via Transformers.js |
@@ -113,6 +114,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   source of truth for UI and controller checks. Local ONNX/WebGPU models are
   batch-only, but that local model selection must not disable remote provider
   streaming for AssemblyAI or Deepgram.
+- **Streaming text state**: Keep provider partial-text reconciliation in
+  `streaming_text.py`. The controller may expose thin compatibility wrappers,
+  but it should only orchestrate Qt/audio/focus/insertion side effects.
 - **Last recording selection**: `LastRecordingStore.selectable_path()` is the
   single selection point for "Use last recording". When an archived recordings
   directory is supplied, it chooses the newest managed/archive WAV, but

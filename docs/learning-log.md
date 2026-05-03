@@ -8,6 +8,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Release metadata was advanced to `0.2.1` before tagging so Python package
   metadata, the app `__version__`, and the installer fallback version match the
   GitHub release tag.
+- Streaming text reconciliation moved from the controller into
+  `streaming_text.py`. The controller now keeps only the Qt/audio/focus/insertion
+  orchestration while the locked-prefix, live-tail, and finalization behavior is
+  covered by pure unit tests.
 
 ## 2026-05-02
 
