@@ -3,6 +3,12 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-05-03
+
+- Release metadata was advanced to `0.2.1` before tagging so Python package
+  metadata, the app `__version__`, and the installer fallback version match the
+  GitHub release tag.
+
 ## 2026-05-02
 
 - Streaming availability now uses a shared `config.supports_streaming()` helper
