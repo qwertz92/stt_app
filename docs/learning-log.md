@@ -12,6 +12,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
   `streaming_text.py`. The controller now keeps only the Qt/audio/focus/insertion
   orchestration while the locked-prefix, live-tail, and finalization behavior is
   covered by pure unit tests.
+- Release version handling now has an explicit helper script for bumping and
+  verifying metadata. Tag-triggered release builds also compare against existing
+  numeric release tags so older accidental releases fail before artifacts are
+  published.
 
 ## 2026-05-02
 

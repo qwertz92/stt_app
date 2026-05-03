@@ -19,6 +19,8 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -37,17 +39,7 @@ jobs:
       - name: Verify release tag matches project version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
-        run: |
-          $pyprojectText = Get-Content -Raw -Path pyproject.toml
-          $match = [regex]::Match($pyprojectText, '(?m)^version\s*=\s*"([^"]+)"')
-          if (-not $match.Success) {
-              throw "Unable to determine project version from pyproject.toml."
-          }
-          $expectedTag = "v$($match.Groups[1].Value)"
-          $actualTag = "${{ github.ref_name }}"
-          if ($actualTag -ne $expectedTag) {
-              throw "Release tag $actualTag does not match project version $expectedTag."
-          }
+        run: python .\scripts\release_version.py verify "${{ github.ref_name }}" --against-git-tags
 
       - name: Build portable Windows bundle
         shell: pwsh

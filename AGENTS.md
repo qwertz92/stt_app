@@ -99,7 +99,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   is the base portable bundle; Inno Setup wraps that bundle into the
   installer; GitHub Actions builds artifacts manually on demand and publishes
   only on version tags. Official `v*` release tags must match
-  `pyproject.toml`'s project version.
+  `pyproject.toml`'s project version and must not be older than an existing
+  numeric release tag. Use `scripts/release_version.py bump X.Y.Z` before
+  tagging to keep release metadata files aligned.
 - **Experimental ONNX/WebGPU local ASR**: Cohere Transcribe and IBM Granite
   Speech are selectable local models through `transcriber/local_webgpu_asr.py`.
   They are batch-only, use q4 ONNX snapshots, require Node.js plus

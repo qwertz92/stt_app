@@ -124,15 +124,33 @@ Output:
 
 ### Phase 2: Publish official GitHub Releases from tags
 
-When you want a public or durable release, create and push a version tag such
-as `v0.2.0`.
+When you want a public or durable release, first bump the release metadata and
+commit it:
+
+```powershell
+python .\scripts\release_version.py bump 0.2.2
+uv lock
+git add pyproject.toml uv.lock src\stt_app\__init__.py installer\windows\stt_app.iss
+git commit
+```
+
+Then create and push the matching version tag:
+
+```powershell
+git tag -a v0.2.2 -m "Release v0.2.2"
+git push origin main
+git push origin v0.2.2
+```
 
 The workflow `.github/workflows/windows-release.yml` is wired so that:
 
 - manual runs build candidate artifacts only,
 - `v*` tags build the same artifacts and attach them to a GitHub Release.
-- tag builds fail fast unless the tag matches `pyproject.toml`
-  (`v0.2.0` requires `version = "0.2.0"`).
+- tag builds fail fast unless the tag matches `pyproject.toml`,
+  `stt_app.__version__`, the installer fallback version, and `uv.lock`
+  (`v0.2.2` requires `version = "0.2.2"`).
+- tag builds fail fast when the tag is older than an existing numeric release
+  tag, so accidentally releasing `v0.2.1` after `v0.2.2` is blocked.
 
 This gives you a clean separation:
 
