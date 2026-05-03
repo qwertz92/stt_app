@@ -100,8 +100,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   installer; GitHub Actions builds artifacts manually on demand and publishes
   only on version tags. Official `v*` release tags must match
   `pyproject.toml`'s project version and must not be older than an existing
-  numeric release tag. Use `scripts/release_version.py bump X.Y.Z` before
-  tagging to keep release metadata files aligned.
+  numeric release tag. Standard releases should use
+  `python scripts/create_release.py` from a clean, up-to-date `main`; the script
+  prompts for the version, bumps metadata, runs checks, commits, pushes, tags,
+  and pushes the tag.
 - **Experimental ONNX/WebGPU local ASR**: Cohere Transcribe and IBM Granite
   Speech are selectable local models through `transcriber/local_webgpu_asr.py`.
   They are batch-only, use q4 ONNX snapshots, require Node.js plus

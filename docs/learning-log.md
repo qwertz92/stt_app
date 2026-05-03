@@ -16,6 +16,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
   verifying metadata. Tag-triggered release builds also compare against existing
   numeric release tags so older accidental releases fail before artifacts are
   published.
+- `scripts/create_release.py` is the standard guarded release entry point. It
+  runs only from clean, up-to-date `main`, prompts for the next release version,
+  requires explicit confirmation, then bumps metadata, runs checks, commits,
+  pushes, tags, and pushes the release tag.
 
 ## 2026-05-02
 

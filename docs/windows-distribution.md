@@ -124,21 +124,29 @@ Output:
 
 ### Phase 2: Publish official GitHub Releases from tags
 
-When you want a public or durable release, first bump the release metadata and
-commit it:
+When you want a public or durable release from `main`, use the guarded release
+script:
+
+```powershell
+python .\scripts\create_release.py
+```
+
+The script fetches tags, shows the latest numeric release tag, and proposes the
+next patch version by default. Press Enter to accept the default, or enter an
+explicit numeric version such as `0.3.0`. It then asks for an explicit `yes`
+confirmation before it changes files, runs `uv lock`, runs checks, creates the
+release metadata commit, pushes `main`, creates the annotated tag, and pushes
+the tag.
+
+The lower-level manual path is still available when you intentionally need it:
 
 ```powershell
 python .\scripts\release_version.py bump 0.2.2
 uv lock
 git add pyproject.toml uv.lock src\stt_app\__init__.py installer\windows\stt_app.iss
 git commit
-```
-
-Then create and push the matching version tag:
-
-```powershell
-git tag -a v0.2.2 -m "Release v0.2.2"
 git push origin main
+git tag -a v0.2.2 -m "Release v0.2.2"
 git push origin v0.2.2
 ```
 
