@@ -556,7 +556,7 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
     calls = {"delete": 0}
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda _model_dir="": ["small"],
     )
     monkeypatch.setattr(
@@ -598,7 +598,7 @@ def test_local_tab_can_download_selected_model(monkeypatch):
     cached: list[str] = []
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda _model_dir="": list(cached),
     )
     monkeypatch.setattr(
@@ -632,7 +632,7 @@ def test_download_selected_is_disabled_when_selection_is_cached(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda _model_dir="": ["tiny"],
     )
     monkeypatch.setattr(
@@ -666,7 +666,7 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     audio_path.write_bytes(b"RIFF")
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda _model_dir="": ["small"],
     )
     monkeypatch.setattr(
@@ -811,7 +811,7 @@ def test_settings_dialog_scans_local_models_once_after_local_tab_is_selected(mon
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda model_dir="": calls.append(model_dir) or ["small"],
     )
     monkeypatch.setattr(
@@ -840,7 +840,7 @@ def test_settings_dialog_defers_local_model_scan_until_tab_event_loop(monkeypatc
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda model_dir="": calls.append(model_dir) or ["small"],
     )
     monkeypatch.setattr(
@@ -871,7 +871,7 @@ def test_settings_dialog_uses_session_cached_models_without_rescan(monkeypatch):
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.add("/tmp/models")
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda model_dir="": calls.append(model_dir) or ["small"],
     )
     monkeypatch.setattr(
@@ -896,13 +896,13 @@ def test_settings_dialog_uses_session_cached_models_without_rescan(monkeypatch):
     _ = app
 
 
-def test_settings_dialog_uses_persistent_local_model_cache_without_rescan(monkeypatch):
+def test_settings_dialog_uses_persistent_cache_before_auto_rescan(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
     inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda model_dir="": calls.append(model_dir) or ["small"],
     )
     monkeypatch.setattr(
@@ -925,10 +925,10 @@ def test_settings_dialog_uses_persistent_local_model_cache_without_rescan(monkey
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     QtTest.QTest.qWait(250)
 
-    assert calls == []
-    assert "tiny" in dialog.local_models_label.text()
-    assert inventory_store.values["/tmp/models"] == ["tiny"]
-    assert "last known local models" in dialog.local_models_scan_status_label.text()
+    assert calls == ["/tmp/models"]
+    assert "small" in dialog.local_models_label.text()
+    assert inventory_store.values["/tmp/models"] == ["small"]
+    assert dialog.local_models_scan_status_label.text() == ""
     _ = app
 
 
@@ -938,7 +938,7 @@ def test_manual_refresh_updates_persistent_local_model_cache(monkeypatch):
     inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda model_dir="": calls.append(model_dir) or ["small"],
     )
     monkeypatch.setattr(
@@ -956,7 +956,8 @@ def test_manual_refresh_updates_persistent_local_model_cache(monkeypatch):
     assert "tiny" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     QtTest.QTest.qWait(250)
-    assert calls == []
+    assert calls == ["/tmp/models"]
+    calls.clear()
 
     dialog._refresh_local_model_views(force=True)
 
@@ -1022,7 +1023,7 @@ def test_model_dir_change_triggers_single_rescan(monkeypatch):
     calls: list[str] = []
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.find_cached_models",
+        "stt_app.settings_dialog._scan_cached_models",
         lambda model_dir="": calls.append(model_dir) or ["small"],
     )
     monkeypatch.setattr(

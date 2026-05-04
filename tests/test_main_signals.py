@@ -6,6 +6,7 @@ import stt_app.main as main_module
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
     _create_tray_icon,
+    _refresh_local_model_inventory_in_background,
     _install_signal_handlers,
     _prompt_recoverable_last_recording,
     _restore_overlay_after_settings_save,
@@ -120,6 +121,42 @@ class FakeLastRecordingStore:
 
     def load(self):
         return None
+
+
+class ImmediateThread:
+    def __init__(self, target, name=None, daemon=None):
+        self._target = target
+
+    def start(self):
+        self._target()
+
+
+class FakeLocalModelInventoryStore:
+    def __init__(self):
+        self.saved: list[tuple[str, list[str]]] = []
+
+    def save_cached_models(self, model_dir, cached_models):
+        self.saved.append((model_dir, list(cached_models)))
+
+
+def test_startup_local_model_inventory_refresh_saves_scan(monkeypatch):
+    calls: list[str] = []
+    inventory_store = FakeLocalModelInventoryStore()
+
+    monkeypatch.setattr(
+        main_module,
+        "scan_cached_models_out_of_process",
+        lambda model_dir: calls.append(model_dir) or ["small"],
+    )
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+
+    _refresh_local_model_inventory_in_background(
+        inventory_store,
+        " /tmp/models ",
+    )
+
+    assert calls == ["/tmp/models"]
+    assert inventory_store.saved == [("/tmp/models", ["small"])]
 
 
 def test_create_tray_icon_has_expected_menu_actions():

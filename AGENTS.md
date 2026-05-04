@@ -79,12 +79,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms prevents stale paste.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.
-  Cached inventories are trusted for initial Local/Benchmark tab rendering;
-  do not start a disk verification just because a cached inventory-backed tab
-  became visible. Use explicit Refresh, model-dir changes without a cache, and
-  download/delete completion for verification scans.
-  When no cache exists, automatic Local/Benchmark tab refreshes are deferred
-  briefly after tab selection so the tab paints first.
+  Cached inventories are used for initial Local/Benchmark tab rendering, then
+  disk verification starts automatically after the tab has had a chance to
+  paint. App startup also refreshes the persistent inventory in the background.
+  Source-tree and packaged runs isolate that scan in a subprocess so Python
+  filesystem work cannot stall the Qt UI thread.
 - **Transcript history retention**: history defaults to 500 saved entries, and
   legacy settings that still have the old 20-entry default are migrated upward.
   Successful transcriptions are added to history before text insertion, so a

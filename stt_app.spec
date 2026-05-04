@@ -17,7 +17,10 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=['stt_app.main'],
+    hiddenimports=[
+        'stt_app.main',
+        'stt_app.local_model_scan_worker',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

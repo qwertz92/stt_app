@@ -55,6 +55,7 @@ from .config import (
 from .hotkey import parse_hotkey
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
+from .local_model_scan import scan_cached_models_out_of_process as _scan_cached_models
 from .local_benchmark import (
     BenchmarkCase,
     _format_number,
@@ -70,7 +71,6 @@ from .transcript_history import TranscriptHistoryStore
 from .transcriber.local_faster_whisper import (
     delete_cached_model,
     download_model_snapshot,
-    find_cached_models,
 )
 
 if TYPE_CHECKING:
@@ -1664,7 +1664,7 @@ class SettingsDialog(QtWidgets.QDialog):
         else:
             self._local_model_inventory_loaded_from_cache_dirs.add(cache_key)
             self._set_local_model_scan_status(
-                "Showing the last known local models. Use Refresh to verify disk state."
+                "Showing the last known local models while disk state is verified in the background."
             )
         return True
 
@@ -1682,7 +1682,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._apply_local_model_scan_result(cached)
         self._local_model_inventory_loaded_from_cache_dirs.add(cache_key)
         self._set_local_model_scan_status(
-            "Showing the last known local models. Use Refresh to verify disk state."
+            "Showing the last known local models while disk state is verified in the background."
         )
         return True
 
@@ -1954,15 +1954,6 @@ class SettingsDialog(QtWidgets.QDialog):
             or cache_key in self._local_model_auto_refresh_requested_dirs
         ):
             return
-        if (
-            self._cached_local_models_available
-            and cache_key == self._cached_local_models_dir
-            and cache_key in self._local_model_inventory_loaded_from_cache_dirs
-        ):
-            self._set_local_model_scan_status(
-                "Showing the last known local models. Use Refresh to verify disk state."
-            )
-            return
         preserve_current = (
             self._cached_local_models_available
             and cache_key == self._cached_local_models_dir
@@ -2000,10 +1991,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
         def _run() -> None:
             try:
-                cached = find_cached_models(model_dir)
+                cached = _scan_cached_models(model_dir)
             except Exception:
-                cached = []
-            self.local_model_scan_finished.emit(token, model_dir, list(cached))
+                cached = None
+            self.local_model_scan_finished.emit(token, model_dir, cached)
 
         self._active_local_model_scan_thread = threading.Thread(
             target=_run,
@@ -2024,6 +2015,16 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._active_local_model_scan_thread = None
         self._local_model_auto_refresh_requested_dirs.discard(model_dir)
+        if not isinstance(payload, list):
+            self._set_local_model_scan_status(
+                "Local model verification did not finish. Showing cached inventory.",
+                "#b26a00",
+            )
+            if self._local_model_scan_pending:
+                self._local_model_scan_pending = False
+                self._request_local_model_scan(force=True)
+            return
+
         self._local_model_auto_refreshed_dirs.add(model_dir)
         cached = [value for value in payload if isinstance(value, str)]
         _LOCAL_MODEL_SCAN_SESSION_CACHE[model_dir] = list(cached)

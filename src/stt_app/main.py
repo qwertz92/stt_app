@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import signal
 import sys
+import threading
 from datetime import datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -12,6 +13,7 @@ from .controller import DictationController
 from .hotkey import HotkeyManager, QtHotkeyEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
+from .local_model_scan import scan_cached_models_out_of_process
 from .logger import AppLogger
 from .overlay_ui import OverlayUI
 from .secret_store import KeyringSecretStore
@@ -52,6 +54,10 @@ def run() -> int:
     last_recording_store = LastRecordingStore()
     local_model_inventory_store = LocalModelInventoryStore()
     startup_settings = settings_store.load()
+    _schedule_startup_local_model_inventory_refresh(
+        local_model_inventory_store,
+        startup_settings.model_dir,
+    )
 
     overlay = OverlayUI()
     overlay.set_opacity_percent(startup_settings.overlay_opacity_percent)
@@ -266,6 +272,41 @@ def _restore_overlay_after_settings_save(
     overlay.set_always_on_top(settings.overlay_always_on_top)
     overlay.move_to_corner(settings.overlay_corner)
     overlay.ensure_compact_size()
+
+
+def _schedule_startup_local_model_inventory_refresh(
+    inventory_store: LocalModelInventoryStore,
+    model_dir: str,
+) -> None:
+    QtCore.QTimer.singleShot(
+        1500,
+        lambda: _refresh_local_model_inventory_in_background(
+            inventory_store,
+            model_dir,
+        ),
+    )
+
+
+def _refresh_local_model_inventory_in_background(
+    inventory_store: LocalModelInventoryStore,
+    model_dir: str,
+) -> None:
+    normalized_dir = str(model_dir or "").strip()
+
+    def _run() -> None:
+        cached = scan_cached_models_out_of_process(normalized_dir)
+        if cached is None:
+            return
+        try:
+            inventory_store.save_cached_models(normalized_dir, cached)
+        except Exception:
+            pass
+
+    threading.Thread(
+        target=_run,
+        name="stt_app_startup_local_model_inventory",
+        daemon=True,
+    ).start()
 
 
 def _prompt_recoverable_last_recording(
