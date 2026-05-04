@@ -197,9 +197,10 @@ def _create_tray_icon(
     def present_settings_dialog(dialog: SettingsDialog) -> None:
         if dialog.isMinimized():
             dialog.showNormal()
+        elif not dialog.isVisible():
+            dialog.show()
         else:
             dialog.show()
-        dialog.setWindowState(dialog.windowState() | QtCore.Qt.WindowActive)
         dialog.raise_()
         dialog.activateWindow()
 

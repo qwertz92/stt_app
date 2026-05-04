@@ -88,16 +88,19 @@ def _select_local_model_names(dialog: SettingsDialog, *model_names: str) -> None
 @pytest.fixture(autouse=True)
 def _close_top_level_windows_after_test():
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.clear()
     yield
     app = QtWidgets.QApplication.instance()
     if app is None:
         settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+        settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.clear()
         return
     for widget in list(app.topLevelWidgets()):
         widget.close()
         widget.deleteLater()
     app.processEvents()
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.clear()
 
 
 def _combo_data(combo: QtWidgets.QComboBox) -> list[str]:
@@ -860,11 +863,12 @@ def test_settings_dialog_defers_local_model_scan_until_tab_event_loop(monkeypatc
     _ = app
 
 
-def test_settings_dialog_uses_session_cached_models_before_refresh(monkeypatch):
+def test_settings_dialog_uses_session_cached_models_without_rescan(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE["/tmp/models"] = ["small"]
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.add("/tmp/models")
 
     monkeypatch.setattr(
         "stt_app.settings_dialog.find_cached_models",
@@ -886,12 +890,13 @@ def test_settings_dialog_uses_session_cached_models_before_refresh(monkeypatch):
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     QtTest.QTest.qWait(250)
-    assert calls == ["/tmp/models"]
+    assert calls == []
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.clear()
     _ = app
 
 
-def test_settings_dialog_uses_persistent_local_model_cache_before_refresh(monkeypatch):
+def test_settings_dialog_uses_persistent_local_model_cache_without_rescan(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
     inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
@@ -915,40 +920,50 @@ def test_settings_dialog_uses_persistent_local_model_cache_before_refresh(monkey
     assert calls == []
     assert "tiny" in dialog.local_models_label.text()
     assert dialog.local_models_list.count() > 0
+    assert "last known local models" in dialog.local_models_scan_status_label.text()
 
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     QtTest.QTest.qWait(250)
 
-    assert calls == ["/tmp/models"]
-    assert "small" in dialog.local_models_label.text()
-    assert inventory_store.values["/tmp/models"] == ["small"]
-    assert dialog.local_models_scan_status_label.text() == ""
+    assert calls == []
+    assert "tiny" in dialog.local_models_label.text()
+    assert inventory_store.values["/tmp/models"] == ["tiny"]
+    assert "last known local models" in dialog.local_models_scan_status_label.text()
     _ = app
 
 
-def test_settings_dialog_shows_background_refresh_note_for_persistent_cache(monkeypatch):
+def test_manual_refresh_updates_persistent_local_model_cache(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    calls: list[str] = []
+    inventory_store = _FakeLocalModelInventoryStore({"/tmp/models": ["tiny"]})
 
     monkeypatch.setattr(
+        "stt_app.settings_dialog.find_cached_models",
+        lambda model_dir="": calls.append(model_dir) or ["small"],
+    )
+    monkeypatch.setattr(
         "stt_app.settings_dialog.threading.Thread",
-        _IdleThread,
+        _ImmediateThread,
     )
 
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings(model_dir="/tmp/models")),
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
-        local_model_inventory_store=_FakeLocalModelInventoryStore(
-            {"/tmp/models": ["small"]}
-        ),
+        local_model_inventory_store=inventory_store,
     )
 
-    assert "small" in dialog.local_models_label.text()
+    assert "tiny" in dialog.local_models_label.text()
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     QtTest.QTest.qWait(250)
+    assert calls == []
 
-    assert "Showing the last known local models" in dialog.local_models_scan_status_label.text()
+    dialog._refresh_local_model_views(force=True)
+
+    assert calls == ["/tmp/models"]
     assert "small" in dialog.local_models_label.text()
+    assert inventory_store.values["/tmp/models"] == ["small"]
+    assert dialog.local_models_scan_status_label.text() == ""
     _ = app
 
 

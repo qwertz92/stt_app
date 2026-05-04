@@ -200,6 +200,7 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
             self.show_calls = 0
             self.raise_calls = 0
             self.activate_calls = 0
+            self.set_window_state_calls = 0
             instances.append(self)
 
         def show(self):
@@ -213,6 +214,10 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
 
         def activateWindow(self):
             self.activate_calls += 1
+
+        def setWindowState(self, state):
+            self.set_window_state_calls += 1
+            super().setWindowState(state)
 
     monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
 
@@ -233,6 +238,7 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
     assert instances[0].show_calls == 1
     assert instances[0].raise_calls == 1
     assert instances[0].activate_calls == 1
+    assert instances[0].set_window_state_calls == 0
 
     tray.activated.emit(QtWidgets.QSystemTrayIcon.DoubleClick)
 

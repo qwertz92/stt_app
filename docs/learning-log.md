@@ -20,6 +20,11 @@ Agents and developers: use this as a knowledge base for past issues and solution
   runs only from clean, up-to-date `main`, prompts for the next release version,
   requires explicit confirmation, then bumps metadata, runs checks, commits,
   pushes, tags, and pushes the release tag.
+- Settings presentation no longer applies an extra active-window state after
+  showing the dialog. The Local and Benchmark tabs also trust the last-known
+  local model inventory for initial rendering and avoid automatic disk
+  verification when cached data is already available; explicit Refresh and
+  download/delete flows still verify the disk state.
 
 ## 2026-05-02
 

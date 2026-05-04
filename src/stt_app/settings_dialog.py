@@ -144,6 +144,7 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
 }
 
 _LOCAL_MODEL_SCAN_SESSION_CACHE: dict[str, list[str]] = {}
+_LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS: set[str] = set()
 
 
 def _set_transcriber_progress_callback(
@@ -200,6 +201,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._cached_local_models_available = False
         self._local_model_auto_refresh_requested_dirs: set[str] = set()
         self._local_model_auto_refreshed_dirs: set[str] = set()
+        self._local_model_inventory_loaded_from_cache_dirs: set[str] = set()
         self._local_tab_index: int | None = None
         self._benchmark_tab_index: int | None = None
         self._active_local_model_download_thread: threading.Thread | None = None
@@ -985,7 +987,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self._configure_compact_list_widget(
             self.local_models_list,
             expand=True,
-            adjust_to_contents=True,
         )
         self.local_models_list.itemSelectionChanged.connect(
             self._update_local_model_actions
@@ -1097,7 +1098,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self._configure_compact_list_widget(
             self.benchmark_models_list,
             expand=True,
-            adjust_to_contents=True,
         )
         self.benchmark_models_list.itemSelectionChanged.connect(
             self._update_benchmark_actions
@@ -1659,6 +1659,13 @@ class SettingsDialog(QtWidgets.QDialog):
         self._cached_local_models_dir = cache_key
         self._cached_local_models_available = True
         self._apply_local_model_scan_result(cached)
+        if cache_key in _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS:
+            self._local_model_auto_refreshed_dirs.add(cache_key)
+        else:
+            self._local_model_inventory_loaded_from_cache_dirs.add(cache_key)
+            self._set_local_model_scan_status(
+                "Showing the last known local models. Use Refresh to verify disk state."
+            )
         return True
 
     def _prime_local_model_views_from_persistent_cache(self) -> bool:
@@ -1673,6 +1680,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._cached_local_models_dir = cache_key
         self._cached_local_models_available = True
         self._apply_local_model_scan_result(cached)
+        self._local_model_inventory_loaded_from_cache_dirs.add(cache_key)
+        self._set_local_model_scan_status(
+            "Showing the last known local models. Use Refresh to verify disk state."
+        )
         return True
 
     def _prime_local_model_views_from_available_cache(self) -> bool:
@@ -1927,6 +1938,8 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._local_model_auto_refresh_requested_dirs.discard(cache_key)
         self._local_model_auto_refreshed_dirs.discard(cache_key)
+        self._local_model_inventory_loaded_from_cache_dirs.discard(cache_key)
+        _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.discard(cache_key)
 
     def _schedule_local_model_auto_refresh(
         self,
@@ -1940,6 +1953,15 @@ class SettingsDialog(QtWidgets.QDialog):
             cache_key in self._local_model_auto_refreshed_dirs
             or cache_key in self._local_model_auto_refresh_requested_dirs
         ):
+            return
+        if (
+            self._cached_local_models_available
+            and cache_key == self._cached_local_models_dir
+            and cache_key in self._local_model_inventory_loaded_from_cache_dirs
+        ):
+            self._set_local_model_scan_status(
+                "Showing the last known local models. Use Refresh to verify disk state."
+            )
             return
         preserve_current = (
             self._cached_local_models_available
@@ -2005,6 +2027,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._local_model_auto_refreshed_dirs.add(model_dir)
         cached = [value for value in payload if isinstance(value, str)]
         _LOCAL_MODEL_SCAN_SESSION_CACHE[model_dir] = list(cached)
+        _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS.add(model_dir)
         self._cached_local_models = cached
         self._cached_local_models_dir = model_dir
         self._cached_local_models_available = True
