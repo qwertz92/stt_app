@@ -363,3 +363,26 @@ def test_save_persists_only_supported_remote_keys():
     }
     assert dialog._loaded_settings.elevenlabs_model in {"scribe_v2", "scribe_v1"}
     _ = app
+
+
+def test_save_api_keys_only_does_not_emit_settings_changed():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    secret_store = _FakeSecretStore()
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=secret_store,
+        app_logger=_FakeLogger(),
+    )
+    changed = []
+    dialog.settings_changed.connect(lambda: changed.append(True))
+
+    dialog.openai_key_edit.setText("openai-key")
+    dialog._save_api_keys_only()
+
+    assert secret_store.set_calls == [("openai", "openai-key")]
+    assert store.saved is not None
+    assert store.saved.has_openai_key is True
+    assert dialog.openai_key_edit.text() == ""
+    assert changed == []
+    _ = app

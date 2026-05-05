@@ -11,6 +11,12 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import debug_audio_path, recordings_dir
+from .benchmark_history import (
+    BenchmarkHistoryEntry,
+    BenchmarkHistoryStore,
+    BenchmarkOptions,
+    export_benchmark_entry,
+)
 from .config import (
     APP_LOGGER_NAME,
     ASSEMBLYAI_MODELS,
@@ -61,6 +67,7 @@ from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process as _scan_cached_models
 from .local_benchmark import (
     BenchmarkCase,
+    BenchmarkCancelled,
     _format_number,
     _format_seconds,
     format_benchmark_summary,
@@ -70,6 +77,7 @@ from .local_benchmark import (
 from .logger import AppLogger
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
+from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import TranscriptHistoryStore
 from .transcriber.local_faster_whisper import (
     delete_cached_model,
@@ -146,6 +154,14 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
 }
 
+_REMOTE_API_KEY_PROVIDERS = (
+    "openai",
+    "deepgram",
+    "assemblyai",
+    "groq",
+    "elevenlabs",
+)
+
 _LOCAL_MODEL_SCAN_SESSION_CACHE: dict[str, list[str]] = {}
 _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS: set[str] = set()
 
@@ -167,6 +183,7 @@ class SettingsDialog(QtWidgets.QDialog):
     local_model_download_progress = QtCore.Signal(str)
     local_model_download_finished = QtCore.Signal(bool, str)
     benchmark_progress = QtCore.Signal(str)
+    benchmark_case_finished = QtCore.Signal(object)
     benchmark_finished = QtCore.Signal(bool, str, object)
     settings_changed = QtCore.Signal()
 
@@ -186,6 +203,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._app_logger = app_logger
         self._controller = controller
         self._history_store = TranscriptHistoryStore()
+        self._benchmark_history_store = BenchmarkHistoryStore()
         self._last_recording_store = last_recording_store or LastRecordingStore()
         self._local_model_inventory_store = local_model_inventory_store
         self._loaded_settings = self._settings_store.load()
@@ -215,6 +233,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._local_model_scan_started_at_by_token: dict[int, float] = {}
         self._active_local_model_download_thread: threading.Thread | None = None
         self._active_benchmark_thread: threading.Thread | None = None
+        self._benchmark_cancel_event: threading.Event | None = None
+        self._current_benchmark_cases: list[BenchmarkCase] = []
+        self._current_benchmark_entry: BenchmarkHistoryEntry | None = None
+        self._current_benchmark_options: BenchmarkOptions | None = None
         self._remote_model_values: dict[str, str] = {
             "groq": self._loaded_settings.groq_model,
             "openai": self._loaded_settings.openai_model,
@@ -291,6 +313,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._on_local_model_download_finished
         )
         self.benchmark_progress.connect(self._on_benchmark_progress)
+        self.benchmark_case_finished.connect(self._on_benchmark_case_finished)
         self.benchmark_finished.connect(self._on_benchmark_finished)
         phase_started_at = time.perf_counter()
         self._build_ui()
@@ -1373,12 +1396,22 @@ class SettingsDialog(QtWidgets.QDialog):
         benchmark_actions = QtWidgets.QHBoxLayout()
         self.run_benchmark_button = QtWidgets.QPushButton("Run Benchmark")
         self.run_benchmark_button.clicked.connect(self._run_local_benchmark)
+        self.cancel_benchmark_button = QtWidgets.QPushButton("Cancel Benchmark")
+        self.cancel_benchmark_button.setEnabled(False)
+        self.cancel_benchmark_button.clicked.connect(self._cancel_local_benchmark)
         self.clear_benchmark_results_button = QtWidgets.QPushButton("Clear Results")
         self.clear_benchmark_results_button.clicked.connect(
             self._clear_benchmark_results
         )
+        self.export_benchmark_results_button = QtWidgets.QPushButton("Export Results...")
+        self.export_benchmark_results_button.setEnabled(False)
+        self.export_benchmark_results_button.clicked.connect(
+            self._export_current_benchmark_results
+        )
         benchmark_actions.addWidget(self.run_benchmark_button)
+        benchmark_actions.addWidget(self.cancel_benchmark_button)
         benchmark_actions.addWidget(self.clear_benchmark_results_button)
+        benchmark_actions.addWidget(self.export_benchmark_results_button)
         benchmark_actions.addStretch(1)
         layout.addLayout(benchmark_actions)
 
@@ -1415,6 +1448,45 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_summary_text.setReadOnly(True)
         results_layout.addWidget(self.benchmark_summary_text)
         layout.addWidget(results_box, 1)
+
+        history_box = QtWidgets.QGroupBox("Benchmark History")
+        history_layout = QtWidgets.QVBoxLayout(history_box)
+        history_layout.setContentsMargins(10, 10, 10, 10)
+        history_layout.setSpacing(6)
+        self.benchmark_history_list = QtWidgets.QListWidget()
+        self._configure_compact_list_widget(self.benchmark_history_list, expand=True)
+        self.benchmark_history_list.itemSelectionChanged.connect(
+            self._update_benchmark_history_actions
+        )
+        history_layout.addWidget(self.benchmark_history_list, 1)
+
+        benchmark_history_actions = QtWidgets.QHBoxLayout()
+        self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
+        self.load_benchmark_history_button.setEnabled(False)
+        self.load_benchmark_history_button.clicked.connect(
+            self._load_selected_benchmark_history
+        )
+        self.export_benchmark_history_button = QtWidgets.QPushButton("Export Selected...")
+        self.export_benchmark_history_button.setEnabled(False)
+        self.export_benchmark_history_button.clicked.connect(
+            self._export_selected_benchmark_history
+        )
+        self.delete_benchmark_history_button = QtWidgets.QPushButton("Delete Selected")
+        self.delete_benchmark_history_button.setEnabled(False)
+        self.delete_benchmark_history_button.clicked.connect(
+            self._delete_selected_benchmark_history
+        )
+        self.clear_benchmark_history_button = QtWidgets.QPushButton("Clear History")
+        self.clear_benchmark_history_button.clicked.connect(
+            self._clear_benchmark_history
+        )
+        benchmark_history_actions.addWidget(self.load_benchmark_history_button)
+        benchmark_history_actions.addWidget(self.export_benchmark_history_button)
+        benchmark_history_actions.addStretch(1)
+        benchmark_history_actions.addWidget(self.delete_benchmark_history_button)
+        benchmark_history_actions.addWidget(self.clear_benchmark_history_button)
+        history_layout.addLayout(benchmark_history_actions)
+        layout.addWidget(history_box)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
 
@@ -1531,7 +1603,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.key_storage_status_label = QtWidgets.QLabel("")
         self.key_storage_status_label.setWordWrap(True)
         self._style_note_label(self.key_storage_status_label)
-        provider_layout.addRow(self.key_storage_status_label)
+        self.save_api_keys_button = QtWidgets.QPushButton("Save API Keys")
+        self.save_api_keys_button.setToolTip(
+            "Store entered API keys without applying all settings or refreshing the app."
+        )
+        self.save_api_keys_button.clicked.connect(self._save_api_keys_only)
+        provider_layout.addRow(self.save_api_keys_button, self.key_storage_status_label)
 
         self.test_conn_target_combo = _WheelPassthroughComboBox()
         self.test_conn_target_combo.addItem(
@@ -1633,12 +1710,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_copy_button = QtWidgets.QPushButton("Copy selected")
         self.history_copy_button.clicked.connect(self._copy_selected_history)
         self.history_copy_button.setEnabled(False)
+        self.history_edit_button = QtWidgets.QPushButton("Edit selected")
+        self.history_edit_button.clicked.connect(self._edit_selected_history)
+        self.history_edit_button.setEnabled(False)
         self.history_delete_button = QtWidgets.QPushButton("Delete selected")
         self.history_delete_button.clicked.connect(self._delete_selected_history)
         self.history_delete_button.setEnabled(False)
         history_buttons.addWidget(self.history_refresh_button)
         history_buttons.addStretch(1)
         history_buttons.addWidget(self.history_copy_button)
+        history_buttons.addWidget(self.history_edit_button)
         history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
         layout.addWidget(history_box, 1)
@@ -2457,9 +2538,21 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_warmup_checkbox.setEnabled(not busy)
         self.benchmark_vad_checkbox.setEnabled(not busy)
         self.run_benchmark_button.setEnabled((not busy) and has_audio and has_models)
+        self.cancel_benchmark_button.setEnabled(
+            busy
+            and self._benchmark_cancel_event is not None
+            and not self._benchmark_cancel_event.is_set()
+        )
         self.clear_benchmark_results_button.setEnabled(not busy)
+        self.export_benchmark_results_button.setEnabled(
+            (not busy) and self._current_benchmark_entry is not None
+        )
+        self._update_benchmark_history_actions()
 
     def _clear_benchmark_results(self) -> None:
+        self._current_benchmark_cases = []
+        self._current_benchmark_entry = None
+        self._current_benchmark_options = None
         self.benchmark_results_table.setRowCount(0)
         self.benchmark_summary_text.clear()
         self._set_benchmark_status("", "#555")
@@ -2484,6 +2577,62 @@ class SettingsDialog(QtWidgets.QDialog):
                 if case.error and column == len(values) - 1:
                     item.setToolTip(case.error)
                 self.benchmark_results_table.setItem(row, column, item)
+
+    def _benchmark_summary(
+        self,
+        cases: list[BenchmarkCase],
+        *,
+        status: str,
+        options: BenchmarkOptions | None = None,
+    ) -> str:
+        selected_options = options or self._current_benchmark_options
+        details = (
+            selected_options.summary_details(status=_benchmark_status_text(status))
+            if selected_options is not None
+            else {"Status": _benchmark_status_text(status)}
+        )
+        return format_benchmark_summary(cases, details=details)
+
+    def _benchmark_options_from_widgets(
+        self,
+        *,
+        audio_path: str,
+        model_names: list[str],
+        compute_type: str,
+        webgpu_devices: list[str],
+        run_count: int,
+        beam_size: int,
+        language_value: str,
+        use_vad: bool,
+        warmup: bool,
+        model_dir: str,
+    ) -> BenchmarkOptions:
+        audio = Path(audio_path)
+        return BenchmarkOptions(
+            audio_path=str(audio),
+            audio_name=audio.name,
+            model_names=model_names,
+            device="auto",
+            compute_type=compute_type,
+            webgpu_devices=webgpu_devices,
+            runs=run_count,
+            beam_size=beam_size,
+            language=language_value,
+            vad_filter=use_vad,
+            warmup=warmup,
+            threads=0,
+            model_dir=model_dir,
+        )
+
+    def _cancel_local_benchmark(self) -> None:
+        if self._benchmark_cancel_event is None:
+            return
+        self._benchmark_cancel_event.set()
+        self._set_benchmark_status(
+            "Canceling benchmark after the current step...",
+            "#b26a00",
+        )
+        self._update_benchmark_actions()
 
     def _run_local_benchmark(self) -> None:
         if self._active_benchmark_thread is not None:
@@ -2526,12 +2675,42 @@ class SettingsDialog(QtWidgets.QDialog):
         use_vad = self.benchmark_vad_checkbox.isChecked()
         warmup = self.benchmark_warmup_checkbox.isChecked()
         model_dir = self.model_dir_edit.text().strip()
+        options = self._benchmark_options_from_widgets(
+            audio_path=audio_path,
+            model_names=model_names,
+            compute_type=compute_type,
+            webgpu_devices=webgpu_devices,
+            run_count=run_count,
+            beam_size=beam_size,
+            language_value=language_value,
+            use_vad=use_vad,
+            warmup=warmup,
+            model_dir=model_dir,
+        )
+        self._current_benchmark_cases = []
+        self._current_benchmark_entry = None
+        self._current_benchmark_options = options
+        cancel_event = threading.Event()
+        self._benchmark_cancel_event = cancel_event
+        self.benchmark_results_table.setRowCount(0)
+        self.benchmark_summary_text.setPlainText(
+            self._benchmark_summary([], status="running", options=options)
+        )
         self._update_benchmark_actions()
 
         def _progress(text: str) -> None:
             self.benchmark_progress.emit(text)
 
         def _run() -> None:
+            completed_cases: list[BenchmarkCase] = []
+
+            def _case_finished(case: BenchmarkCase) -> None:
+                completed_cases.append(case)
+                self.benchmark_case_finished.emit(case)
+
+            def _is_canceled() -> bool:
+                return cancel_event.is_set()
+
             try:
                 cases = run_benchmark_cases(
                     audio_path=audio_path,
@@ -2547,15 +2726,38 @@ class SettingsDialog(QtWidgets.QDialog):
                     model_dir=model_dir,
                     webgpu_devices=webgpu_devices,
                     progress_callback=_progress,
+                    case_callback=_case_finished,
+                    cancel_check=_is_canceled,
                 )
+            except BenchmarkCancelled:
+                summary = self._benchmark_summary(
+                    completed_cases,
+                    status="canceled",
+                    options=options,
+                )
+                self.benchmark_finished.emit(
+                    True,
+                    summary,
+                    {
+                        "cases": completed_cases,
+                        "options": options,
+                        "status": "canceled",
+                    },
+                )
+                return
             except Exception as exc:
                 self.benchmark_finished.emit(False, str(exc), [])
                 return
 
+            status = "completed_with_errors" if any(case.error for case in cases) else "completed"
             self.benchmark_finished.emit(
                 True,
-                format_benchmark_summary(cases),
-                cases,
+                self._benchmark_summary(cases, status=status, options=options),
+                {
+                    "cases": cases,
+                    "options": options,
+                    "status": status,
+                },
             )
 
         self._active_benchmark_thread = threading.Thread(
@@ -2569,6 +2771,18 @@ class SettingsDialog(QtWidgets.QDialog):
     def _on_benchmark_progress(self, text: str) -> None:
         self._set_benchmark_status(text, "#555")
 
+    def _on_benchmark_case_finished(self, payload: object) -> None:
+        if not isinstance(payload, BenchmarkCase):
+            return
+        self._current_benchmark_cases.append(payload)
+        self._populate_benchmark_results(self._current_benchmark_cases)
+        self.benchmark_summary_text.setPlainText(
+            self._benchmark_summary(
+                self._current_benchmark_cases,
+                status="running",
+            )
+        )
+
     def _on_benchmark_finished(
         self,
         success: bool,
@@ -2576,21 +2790,217 @@ class SettingsDialog(QtWidgets.QDialog):
         payload: object,
     ) -> None:
         self._active_benchmark_thread = None
+        self._benchmark_cancel_event = None
         self._update_benchmark_actions()
         if not success:
             self._set_benchmark_status(text, "#b71c1c")
             return
 
-        cases = [case for case in payload if isinstance(case, BenchmarkCase)]
+        status = "completed"
+        options = self._current_benchmark_options
+        raw_cases: object = payload
+        if isinstance(payload, dict):
+            raw_cases = payload.get("cases", [])
+            raw_options = payload.get("options", None)
+            if isinstance(raw_options, BenchmarkOptions):
+                options = raw_options
+            status = str(payload.get("status", status))
+
+        if not isinstance(raw_cases, (list, tuple)):
+            raw_cases = []
+        cases = [case for case in raw_cases if isinstance(case, BenchmarkCase)]
+        if status == "completed" and any(case.error for case in cases):
+            status = "completed_with_errors"
+        self._current_benchmark_cases = cases
+        self._current_benchmark_options = options
         self._populate_benchmark_results(cases)
         self.benchmark_summary_text.setPlainText(text)
-        if any(case.error for case in cases):
+        history_error = ""
+
+        if cases and options is not None:
+            entry = BenchmarkHistoryEntry.new(
+                status=status,
+                summary=text,
+                options=options,
+                cases=cases,
+            )
+            self._current_benchmark_entry = entry
+            try:
+                self._benchmark_history_store.add_entry(entry)
+            except Exception as exc:
+                history_error = str(exc)
+                self._refresh_benchmark_history_list()
+            else:
+                self._refresh_benchmark_history_list(select_entry=entry)
+        else:
+            self._current_benchmark_entry = None
+            self._refresh_benchmark_history_list()
+
+        if history_error:
+            self._set_benchmark_status(
+                f"Benchmark finished, but history could not be saved: {history_error}",
+                "#b26a00",
+            )
+        elif status == "canceled":
+            if cases:
+                self._set_benchmark_status(
+                    "Benchmark canceled. Partial results were saved.",
+                    "#b26a00",
+                )
+            else:
+                self._set_benchmark_status(
+                    "Benchmark canceled before producing results.",
+                    "#b26a00",
+                )
+        elif any(case.error for case in cases):
             self._set_benchmark_status(
                 "Benchmark completed with errors. See the summary for details.",
                 "#b26a00",
             )
         else:
             self._set_benchmark_status("Benchmark finished.", "#1b5e20")
+        self._update_benchmark_actions()
+
+    def _refresh_benchmark_history_list(
+        self,
+        *,
+        select_entry: BenchmarkHistoryEntry | None = None,
+    ) -> None:
+        if not hasattr(self, "benchmark_history_list"):
+            return
+        self.benchmark_history_list.clear()
+        selected_row = -1
+        for row, entry in enumerate(self._benchmark_history_store.recent_entries(20)):
+            item = QtWidgets.QListWidgetItem(_benchmark_history_label(entry))
+            item.setData(QtCore.Qt.UserRole, entry)
+            self._apply_compact_list_item_size(self.benchmark_history_list, item)
+            self.benchmark_history_list.addItem(item)
+            if (
+                select_entry is not None
+                and entry.identity_key() == select_entry.identity_key()
+            ):
+                selected_row = row
+        if selected_row >= 0:
+            self.benchmark_history_list.setCurrentRow(selected_row)
+        self._update_benchmark_history_actions()
+
+    def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
+        if not hasattr(self, "benchmark_history_list"):
+            return None
+        items = self.benchmark_history_list.selectedItems()
+        if not items:
+            return None
+        entry = items[0].data(QtCore.Qt.UserRole)
+        return entry if isinstance(entry, BenchmarkHistoryEntry) else None
+
+    def _update_benchmark_history_actions(self) -> None:
+        if not hasattr(self, "load_benchmark_history_button"):
+            return
+        busy = self._active_benchmark_thread is not None
+        has_selection = self._selected_benchmark_history_entry() is not None
+        self.load_benchmark_history_button.setEnabled((not busy) and has_selection)
+        self.export_benchmark_history_button.setEnabled((not busy) and has_selection)
+        self.delete_benchmark_history_button.setEnabled((not busy) and has_selection)
+        self.clear_benchmark_history_button.setEnabled(
+            (not busy) and self.benchmark_history_list.count() > 0
+        )
+
+    def _load_selected_benchmark_history(self) -> None:
+        entry = self._selected_benchmark_history_entry()
+        if entry is None:
+            return
+        self._current_benchmark_entry = entry
+        self._current_benchmark_options = entry.options
+        self._current_benchmark_cases = list(entry.cases)
+        self._populate_benchmark_results(entry.cases)
+        self.benchmark_summary_text.setPlainText(entry.summary)
+        self._set_benchmark_status("Loaded benchmark history entry.", "#555")
+        self._update_benchmark_actions()
+
+    def _export_current_benchmark_results(self) -> None:
+        if self._current_benchmark_entry is None:
+            return
+        self._export_benchmark_entry(self._current_benchmark_entry)
+
+    def _export_selected_benchmark_history(self) -> None:
+        entry = self._selected_benchmark_history_entry()
+        if entry is None:
+            return
+        self._export_benchmark_entry(entry)
+
+    def _export_benchmark_entry(self, entry: BenchmarkHistoryEntry) -> None:
+        suggested = (
+            Path.home()
+            / "Documents"
+            / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        )
+        path, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
+            self,
+            "Export benchmark results",
+            str(suggested),
+            "CSV files (*.csv);;Excel workbooks (*.xlsx)",
+        )
+        if not path:
+            return
+        output_path = Path(path)
+        if output_path.suffix.lower() not in {".csv", ".xlsx"}:
+            suffix = ".xlsx" if "xlsx" in selected_filter.lower() else ".csv"
+            output_path = output_path.with_suffix(suffix)
+        try:
+            export_benchmark_entry(output_path, entry)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Export failed",
+                f"Failed to export benchmark results: {exc}",
+            )
+            return
+        self._set_benchmark_status(
+            f"Benchmark exported to {output_path}.",
+            "#1b5e20",
+        )
+
+    def _delete_selected_benchmark_history(self) -> None:
+        entry = self._selected_benchmark_history_entry()
+        if entry is None:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Delete benchmark entry",
+            "Delete the selected benchmark result from history?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        removed = self._benchmark_history_store.delete_entry(entry)
+        if removed <= 0:
+            self._set_benchmark_status("Selected benchmark entry was not found.", "#b71c1c")
+            return
+        if (
+            self._current_benchmark_entry is not None
+            and self._current_benchmark_entry.identity_key() == entry.identity_key()
+        ):
+            self._current_benchmark_entry = None
+            self._update_benchmark_actions()
+        self._refresh_benchmark_history_list()
+
+    def _clear_benchmark_history(self) -> None:
+        if self._benchmark_history_store.count() <= 0:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Clear benchmark history",
+            "Delete all stored benchmark results?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No,
+        )
+        if answer != QtWidgets.QMessageBox.Yes:
+            return
+        self._benchmark_history_store.clear()
+        self._current_benchmark_entry = None
+        self._refresh_benchmark_history_list()
+        self._update_benchmark_actions()
 
     def _remote_model_value_for_provider(self, provider: str) -> str:
         normalized = str(provider or "").strip().lower()
@@ -3173,7 +3583,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if source == "insecure":
             self._set_provider_status_badge(
                 provider,
-                "Stored insecure fallback",
+                "Stored insecurely",
                 text_color="#7a4a00",
                 background="#fff3e0",
                 border="#ffcc80",
@@ -3183,7 +3593,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if source == "insecure-disabled":
             self._set_provider_status_badge(
                 provider,
-                "Stored insecure (disabled)",
+                "Stored insecurely (disabled)",
                 text_color="#7a4a00",
                 background="#fff8e1",
                 border="#ffe082",
@@ -3604,6 +4014,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self._update_engine_indicator()
         self._refresh_history_list()
+        self._refresh_benchmark_history_list()
         self._apply_secret_store_options()
         self._refresh_provider_key_statuses()
 
@@ -3657,6 +4068,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_list.clear()
         self.history_detail.clear()
         self.history_copy_button.setEnabled(False)
+        self.history_edit_button.setEnabled(False)
         self.history_delete_button.setEnabled(False)
         entries = self._history_store.recent_entries(self.history_max_spin.value())
         for entry in entries:
@@ -3672,6 +4084,7 @@ class SettingsDialog(QtWidgets.QDialog):
         items = self.history_list.selectedItems()
         if not items:
             self.history_copy_button.setEnabled(False)
+            self.history_edit_button.setEnabled(False)
             self.history_delete_button.setEnabled(False)
             self.history_detail.clear()
             self._reset_history_copy_feedback()
@@ -3679,6 +4092,7 @@ class SettingsDialog(QtWidgets.QDialog):
         entry = items[0].data(QtCore.Qt.UserRole)
         text = str(getattr(entry, "text", "") or "")
         self.history_copy_button.setEnabled(bool(text))
+        self.history_edit_button.setEnabled(bool(text))
         self.history_delete_button.setEnabled(True)
         self.history_detail.setPlainText(text)
         self._reset_history_copy_feedback()
@@ -3697,6 +4111,24 @@ class SettingsDialog(QtWidgets.QDialog):
             "background-color: #dff5e0; border: 1px solid #89c88f;"
         )
         self._history_copy_feedback_timer.start()
+
+    def _edit_selected_history(self) -> None:
+        items = self.history_list.selectedItems()
+        if not items:
+            return
+        entry = items[0].data(QtCore.Qt.UserRole)
+        if entry is None:
+            return
+        current_text = str(getattr(entry, "text", "") or "")
+        next_text = TranscriptEditDialog.get_text(self, current_text)
+        if next_text is None or next_text == current_text:
+            return
+        updated = self._history_store.update_entry_text(entry, next_text)
+        if updated <= 0:
+            self.import_result_label.setText("Selected history entry was not found.")
+            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            return
+        self._refresh_history_list()
 
     def _delete_selected_history(self) -> None:
         items = self.history_list.selectedItems()
@@ -3949,6 +4381,97 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self._refresh_provider_key_statuses()
 
+    def _stored_provider_key_states(self) -> dict[str, bool]:
+        states: dict[str, bool] = {}
+        key_getter = getattr(self._secret_store, "get_api_key", None)
+        for provider in _REMOTE_API_KEY_PROVIDERS:
+            if not callable(key_getter):
+                states[provider] = False
+                continue
+            try:
+                states[provider] = bool(key_getter(provider))
+            except Exception:
+                states[provider] = False
+        return states
+
+    def _persist_provider_key_changes(self) -> tuple[dict[str, bool], list[str], bool]:
+        self._apply_secret_store_options()
+        errors: list[str] = []
+        changed = False
+        pending_clear = set(self._provider_pending_clear)
+
+        for provider in _REMOTE_API_KEY_PROVIDERS:
+            key_field = self._provider_key_edits.get(provider)
+            if key_field is None:
+                continue
+            label = self._provider_label(provider)
+            value = key_field.text().strip()
+            if value:
+                changed = True
+                try:
+                    self._secret_store.set_api_key(provider, value)
+                    key_field.clear()
+                    self._provider_pending_clear.discard(provider)
+                except Exception as exc:
+                    errors.append(f"{label}: {exc}")
+            elif provider in pending_clear:
+                changed = True
+                try:
+                    self._secret_store.delete_api_key(provider)
+                    self._provider_pending_clear.discard(provider)
+                except Exception as exc:
+                    errors.append(f"{label} delete: {exc}")
+
+        states = self._stored_provider_key_states()
+        self._refresh_provider_key_statuses()
+        self._update_import_engine_note()
+        return states, errors, changed
+
+    def _show_key_storage_result(self, errors: list[str], changed: bool) -> None:
+        if errors:
+            self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
+            self.key_storage_status_label.setText(
+                "Could not store some API keys in Credential Manager. "
+                "Enable insecure fallback storage or retry. "
+                + " | ".join(errors)
+            )
+            return
+        if changed:
+            self.key_storage_status_label.setStyleSheet("color: #1b5e20;")
+            self.key_storage_status_label.setText("API key storage updated.")
+        else:
+            self.key_storage_status_label.setStyleSheet("color: #555;")
+            self.key_storage_status_label.setText("No API key changes to save.")
+
+    def _save_api_keys_only(self) -> None:
+        key_states, key_storage_errors, changed = self._persist_provider_key_changes()
+        metadata_changed = (
+            self.insecure_key_storage_checkbox.isChecked()
+            != bool(getattr(self._loaded_settings, "allow_insecure_key_storage", False))
+        )
+        self._show_key_storage_result(key_storage_errors, changed or metadata_changed)
+        if key_storage_errors:
+            return
+
+        updated = replace(
+            self._loaded_settings,
+            allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
+            has_openai_key=key_states["openai"],
+            has_deepgram_key=key_states["deepgram"],
+            has_assemblyai_key=key_states["assemblyai"],
+            has_groq_key=key_states["groq"],
+            has_elevenlabs_key=key_states["elevenlabs"],
+        )
+        try:
+            self._settings_store.save(updated)
+        except Exception as exc:
+            self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
+            self.key_storage_status_label.setText(
+                f"API keys were saved, but key metadata could not be persisted: {exc}"
+            )
+            return
+        self._loaded_settings = updated
+
     def _build_current_settings(
         self,
         *,
@@ -4085,127 +4608,11 @@ class SettingsDialog(QtWidgets.QDialog):
             if answer != QtWidgets.QMessageBox.Yes:
                 return
 
-        has_openai_key = bool(self._resolve_api_key("openai", self.openai_key_edit))
-        has_deepgram_key = bool(
-            self._resolve_api_key("deepgram", self.deepgram_key_edit)
+        key_states, key_storage_errors, key_storage_changed = (
+            self._persist_provider_key_changes()
         )
-        has_assemblyai_key = bool(
-            self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
-        )
-        has_groq_key = bool(self._resolve_api_key("groq", self.groq_key_edit))
-        has_elevenlabs_key = bool(
-            self._resolve_api_key("elevenlabs", self.elevenlabs_key_edit)
-        )
-
-        self._apply_secret_store_options()
-        key_storage_errors: list[str] = []
-        pending_clear = set(self._provider_pending_clear)
-
-        openai_value = self.openai_key_edit.text().strip()
-        deepgram_value = self.deepgram_key_edit.text().strip()
-        assemblyai_value = self.assemblyai_key_edit.text().strip()
-        groq_value = self.groq_key_edit.text().strip()
-        elevenlabs_value = self.elevenlabs_key_edit.text().strip()
-
-        if openai_value:
-            try:
-                self._secret_store.set_api_key("openai", openai_value)
-                self.openai_key_edit.clear()
-                has_openai_key = bool(
-                    self._resolve_api_key("openai", self.openai_key_edit)
-                )
-            except Exception as exc:
-                key_storage_errors.append(f"OpenAI: {exc}")
-        elif "openai" in pending_clear:
-            try:
-                self._secret_store.delete_api_key("openai")
-                has_openai_key = False
-            except Exception as exc:
-                key_storage_errors.append(f"OpenAI delete: {exc}")
-        if deepgram_value:
-            try:
-                self._secret_store.set_api_key("deepgram", deepgram_value)
-                self.deepgram_key_edit.clear()
-                has_deepgram_key = bool(
-                    self._resolve_api_key("deepgram", self.deepgram_key_edit)
-                )
-            except Exception as exc:
-                key_storage_errors.append(f"Deepgram: {exc}")
-        elif "deepgram" in pending_clear:
-            try:
-                self._secret_store.delete_api_key("deepgram")
-                has_deepgram_key = False
-            except Exception as exc:
-                key_storage_errors.append(f"Deepgram delete: {exc}")
-        if assemblyai_value:
-            try:
-                self._secret_store.set_api_key("assemblyai", assemblyai_value)
-                self.assemblyai_key_edit.clear()
-                has_assemblyai_key = bool(
-                    self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
-                )
-            except Exception as exc:
-                key_storage_errors.append(f"AssemblyAI: {exc}")
-        elif "assemblyai" in pending_clear:
-            try:
-                self._secret_store.delete_api_key("assemblyai")
-                has_assemblyai_key = False
-            except Exception as exc:
-                key_storage_errors.append(f"AssemblyAI delete: {exc}")
-        if groq_value:
-            try:
-                self._secret_store.set_api_key("groq", groq_value)
-                self.groq_key_edit.clear()
-                has_groq_key = bool(
-                    self._resolve_api_key("groq", self.groq_key_edit)
-                )
-            except Exception as exc:
-                key_storage_errors.append(f"Groq: {exc}")
-        elif "groq" in pending_clear:
-            try:
-                self._secret_store.delete_api_key("groq")
-                has_groq_key = False
-            except Exception as exc:
-                key_storage_errors.append(f"Groq delete: {exc}")
-        if elevenlabs_value:
-            try:
-                self._secret_store.set_api_key("elevenlabs", elevenlabs_value)
-                self.elevenlabs_key_edit.clear()
-                has_elevenlabs_key = bool(
-                    self._resolve_api_key("elevenlabs", self.elevenlabs_key_edit)
-                )
-            except Exception as exc:
-                key_storage_errors.append(f"ElevenLabs: {exc}")
-        elif "elevenlabs" in pending_clear:
-            try:
-                self._secret_store.delete_api_key("elevenlabs")
-                has_elevenlabs_key = False
-            except Exception as exc:
-                key_storage_errors.append(f"ElevenLabs delete: {exc}")
-
-        self._provider_pending_clear.clear()
-
-        if key_storage_errors:
-            self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
-            self.key_storage_status_label.setText(
-                "Could not store some API keys in Credential Manager. "
-                "Enable insecure fallback storage or retry. "
-                + " | ".join(key_storage_errors)
-            )
-        else:
-            self.key_storage_status_label.setStyleSheet("color: #1b5e20;")
-            if any(
-                (
-                    openai_value,
-                    deepgram_value,
-                    assemblyai_value,
-                    groq_value,
-                    elevenlabs_value,
-                )
-            ) or pending_clear:
-                self.key_storage_status_label.setText("API key storage updated.")
-        self._refresh_provider_key_statuses()
-        self._update_import_engine_note()
+        if key_storage_errors or key_storage_changed:
+            self._show_key_storage_result(key_storage_errors, key_storage_changed)
 
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent
@@ -4246,11 +4653,11 @@ class SettingsDialog(QtWidgets.QDialog):
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
-            has_openai_key=has_openai_key,
-            has_deepgram_key=has_deepgram_key,
-            has_assemblyai_key=has_assemblyai_key,
-            has_groq_key=has_groq_key,
-            has_elevenlabs_key=has_elevenlabs_key,
+            has_openai_key=key_states["openai"],
+            has_deepgram_key=key_states["deepgram"],
+            has_assemblyai_key=key_states["assemblyai"],
+            has_groq_key=key_states["groq"],
+            has_elevenlabs_key=key_states["elevenlabs"],
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -4265,6 +4672,33 @@ class SettingsDialog(QtWidgets.QDialog):
         self._save_status_label.setText("\u2713 Settings saved")
         self._save_status_timer.start()
         self.settings_changed.emit()
+
+
+def _benchmark_status_text(status: str) -> str:
+    labels = {
+        "running": "Running",
+        "completed": "Completed",
+        "completed_with_errors": "Completed with errors",
+        "canceled": "Canceled",
+        "failed": "Failed",
+    }
+    return labels.get(str(status or "").strip().lower(), str(status or ""))
+
+
+def _benchmark_history_label(entry: BenchmarkHistoryEntry) -> str:
+    models = ", ".join(entry.options.model_names[:3])
+    if len(entry.options.model_names) > 3:
+        models = f"{models}, ..."
+    fastest = min(
+        (case for case in entry.cases if case.error is None and case.runs),
+        key=lambda case: case.avg_seconds,
+        default=None,
+    )
+    speed = ""
+    if fastest is not None:
+        speed = f" | fastest {fastest.model} {_format_seconds(fastest.avg_seconds)}"
+    status = _benchmark_status_text(entry.status)
+    return f"{entry.created_at} | {status} | {models or 'no models'}{speed}"
 
 
 # ======================================================================

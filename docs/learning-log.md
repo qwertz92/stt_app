@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-05-06
+
+- Benchmark runs are now persisted separately from transcript history. The
+  Settings Benchmark tab can load previous runs, export current or selected
+  runs as CSV/XLSX, cancel a benchmark between measurable steps, and update the
+  result table incrementally after each completed case.
+- Benchmark summaries now include the benchmark context, including audio file,
+  selected models, device targets, compute type, run count, beam size, language,
+  VAD, warmup, thread count, model directory, and run status. This makes
+  historical results comparable without relying on memory of the UI settings.
+- Transcript history entries can be edited in both the standalone History dialog
+  and the Settings History tab. Edits preserve the original metadata and update
+  the persisted history record in place.
+- Remote API keys have their own `Save API Keys` action so key updates can be
+  stored without applying all settings or emitting the full settings refresh
+  signal. Key badges now distinguish secure keyring storage from insecure
+  fallback storage with non-red warning colors.
+
 ## 2026-05-03
 
 - Release metadata was advanced to `0.2.1` before tagging so Python package

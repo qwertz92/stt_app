@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app.app_paths import debug_audio_path
+from stt_app.benchmark_history import BenchmarkHistoryStore
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
@@ -712,6 +713,10 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
+    dialog._benchmark_history_store = BenchmarkHistoryStore(
+        path=tmp_path / "benchmark_history.json"
+    )
+    dialog._refresh_benchmark_history_list()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     QtTest.QTest.qWait(250)
     dialog._set_benchmark_audio_path(str(audio_path))
@@ -726,7 +731,10 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     assert dialog.benchmark_results_table.item(0, 1).text() == "auto"
     assert captured_kwargs["webgpu_devices"] == ["auto"]
     assert dialog.benchmark_summary_text.toPlainText().startswith("Benchmark summary:")
+    assert "Benchmark details:" in dialog.benchmark_summary_text.toPlainText()
     assert "Benchmark finished" in dialog.benchmark_status_label.text()
+    assert dialog.benchmark_history_list.count() == 1
+    assert dialog.export_benchmark_results_button.isEnabled() is True
     _ = app
 
 
