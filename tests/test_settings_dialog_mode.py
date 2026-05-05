@@ -1,3 +1,4 @@
+import logging
 import os
 
 import pytest
@@ -1203,6 +1204,46 @@ def test_local_model_lists_use_compact_item_spacing():
     assert dialog.local_models_list.uniformItemSizes() is True
     assert dialog.local_models_list.spacing() == 0
     assert "padding: 0px 4px" in dialog.local_models_list.styleSheet()
+    assert dialog.local_models_list.sizeAdjustPolicy() == (
+        QtWidgets.QAbstractScrollArea.AdjustToContents
+    )
+    assert dialog.benchmark_models_list.sizeAdjustPolicy() == (
+        QtWidgets.QAbstractScrollArea.AdjustToContents
+    )
+    _ = app
+
+
+def test_settings_dialog_logs_local_tab_timing(caplog, monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small"]
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _IdleThread,
+    )
+    caplog.set_level(logging.INFO, logger="stt_app")
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(10)
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any(
+        "settings_timing event=tab_change" in message and "tab=Local" in message
+        for message in messages
+    )
+    assert any(
+        "settings_timing event=tab_paint" in message and "tab=Local" in message
+        for message in messages
+    )
+    settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
 
 

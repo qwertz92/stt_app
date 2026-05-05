@@ -84,6 +84,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   paint. App startup also refreshes the persistent inventory in the background.
   Source-tree and packaged runs isolate that scan in a subprocess so Python
   filesystem work cannot stall the Qt UI thread.
+  Settings dialog lifecycle, tab paint, inventory render, and inventory scan
+  timings are logged as `settings_timing` diagnostics for later troubleshooting.
+  Local/Benchmark list widgets intentionally keep `AdjustToContents`; if first
+  paint regresses again, use the timing diagnostics before changing this policy.
+  The tray schedules a hidden settings-dialog preparation after startup so the
+  first visible open and first Local tab paint avoid lazy Qt layout work. A
+  hidden prepared dialog reloads settings from disk before it is shown.
 - **Transcript history retention**: history defaults to 500 saved entries, and
   legacy settings that still have the old 20-entry default are migrated upward.
   Successful transcriptions are added to history before text insertion, so a

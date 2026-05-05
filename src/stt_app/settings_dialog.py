@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import logging
 import threading
+import time
 from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
@@ -10,6 +12,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import debug_audio_path, recordings_dir
 from .config import (
+    APP_LOGGER_NAME,
     ASSEMBLYAI_MODELS,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CANCEL_HOTKEY,
@@ -204,6 +207,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._local_model_inventory_loaded_from_cache_dirs: set[str] = set()
         self._local_tab_index: int | None = None
         self._benchmark_tab_index: int | None = None
+        self._settings_perf_logger = logging.getLogger(APP_LOGGER_NAME)
+        self._settings_perf_started_at = time.perf_counter()
+        self._settings_perf_logged_first_show = False
+        self._settings_perf_prewarmed_tab_indexes: set[int] = set()
+        self._settings_perf_painted_tabs: set[int] = set()
+        self._local_model_scan_started_at_by_token: dict[int, float] = {}
         self._active_local_model_download_thread: threading.Thread | None = None
         self._active_benchmark_thread: threading.Thread | None = None
         self._remote_model_values: dict[str, str] = {
@@ -283,10 +292,17 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self.benchmark_progress.connect(self._on_benchmark_progress)
         self.benchmark_finished.connect(self._on_benchmark_finished)
+        phase_started_at = time.perf_counter()
         self._build_ui()
+        self._log_settings_timing("build_ui", phase_started_at)
         self.tabs.currentChanged.connect(self._on_settings_tab_changed)
+        phase_started_at = time.perf_counter()
         self._populate(self._loaded_settings)
+        self._log_settings_timing("populate", phase_started_at)
+        phase_started_at = time.perf_counter()
         self._apply_initial_dialog_size()
+        self._log_settings_timing("initial_size", phase_started_at)
+        self._log_settings_timing("dialog_init", self._settings_perf_started_at)
 
     # ------------------------------------------------------------------
     # UI construction
@@ -567,6 +583,106 @@ class SettingsDialog(QtWidgets.QDialog):
                 QtWidgets.QApplication.setEffectEnabled(effect, False)
             except Exception:
                 pass
+
+    def _log_settings_timing(
+        self,
+        event: str,
+        started_at: float,
+        **fields: object,
+    ) -> None:
+        elapsed_ms = (time.perf_counter() - started_at) * 1000.0
+        parts = [f"event={event}", f"elapsed_ms={elapsed_ms:.1f}"]
+        for key, value in fields.items():
+            parts.append(f"{key}={self._settings_timing_value(value)}")
+        self._settings_perf_logger.info("settings_timing %s", " ".join(parts))
+
+    @staticmethod
+    def _settings_timing_value(value: object) -> str:
+        if isinstance(value, float):
+            return f"{value:.1f}"
+        return str(value).strip().replace(" ", "_") or "-"
+
+    def _schedule_settings_tab_prewarm(self) -> None:
+        if self._local_tab_index not in self._settings_perf_prewarmed_tab_indexes:
+            QtCore.QTimer.singleShot(
+                25,
+                lambda: self._prewarm_settings_tabs((self._local_tab_index,)),
+            )
+        if self._benchmark_tab_index not in self._settings_perf_prewarmed_tab_indexes:
+            QtCore.QTimer.singleShot(
+                800,
+                lambda: self._prewarm_settings_tabs((self._benchmark_tab_index,)),
+            )
+
+    def prepare_for_first_show(self) -> None:
+        self._prewarm_settings_tabs(
+            (self._local_tab_index,),
+            require_visible=False,
+        )
+        QtCore.QTimer.singleShot(
+            800,
+            lambda: self._prewarm_settings_tabs(
+                (self._benchmark_tab_index,),
+                require_visible=False,
+            ),
+        )
+
+    def reload_from_store(self) -> None:
+        started_at = time.perf_counter()
+        self._loaded_settings = self._settings_store.load()
+        self._populate(self._loaded_settings)
+        self._log_settings_timing("reload_from_store", started_at)
+
+    def _prewarm_settings_tabs(
+        self,
+        indexes: tuple[int | None, ...],
+        *,
+        require_visible: bool = True,
+    ) -> None:
+        if require_visible and not self.isVisible():
+            return
+        started_at = time.perf_counter()
+        warmed_tabs: list[str] = []
+        for index in indexes:
+            if index is None or index in self._settings_perf_prewarmed_tab_indexes:
+                continue
+            tab_started_at = time.perf_counter()
+            self._prewarm_tab_widget(index)
+            self._settings_perf_prewarmed_tab_indexes.add(index)
+            tab_name = self.tabs.tabText(index)
+            warmed_tabs.append(self.tabs.tabText(index))
+            self._log_settings_timing(
+                "tab_prewarm",
+                tab_started_at,
+                tab=tab_name,
+            )
+        if not warmed_tabs:
+            return
+        self._log_settings_timing(
+            "tabs_prewarm",
+            started_at,
+            tabs=",".join(warmed_tabs),
+        )
+
+    def _prewarm_tab_widget(self, index: int) -> None:
+        widget = self.tabs.widget(index)
+        if widget is None:
+            return
+        self._activate_widget_layout(widget)
+        if isinstance(widget, QtWidgets.QScrollArea):
+            inner = widget.widget()
+            if inner is not None:
+                self._activate_widget_layout(inner)
+        for list_widget in widget.findChildren(QtWidgets.QListWidget):
+            list_widget.doItemsLayout()
+            list_widget.updateGeometry()
+
+    @staticmethod
+    def _activate_widget_layout(widget: QtWidgets.QWidget) -> None:
+        widget.ensurePolished()
+        layout = widget.layout()
+        if layout is not None:
+            layout.activate()
 
     def _create_scroll_tab(self) -> tuple[QtWidgets.QScrollArea, QtWidgets.QWidget]:
         scroll = QtWidgets.QScrollArea()
@@ -987,6 +1103,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._configure_compact_list_widget(
             self.local_models_list,
             expand=True,
+            adjust_to_contents=True,
         )
         self.local_models_list.itemSelectionChanged.connect(
             self._update_local_model_actions
@@ -1098,6 +1215,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._configure_compact_list_widget(
             self.benchmark_models_list,
             expand=True,
+            adjust_to_contents=True,
         )
         self.benchmark_models_list.itemSelectionChanged.connect(
             self._update_benchmark_actions
@@ -1621,8 +1739,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.tabs.addTab(tab, "Import Audio")
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
+        started_at = time.perf_counter()
         super().showEvent(event)
         self._apply_initial_dialog_size()
+        self._log_settings_timing("show_event", started_at)
+        if not self._settings_perf_logged_first_show:
+            self._settings_perf_logged_first_show = True
+            QtCore.QTimer.singleShot(
+                0,
+                lambda started_at=started_at: self._log_settings_timing(
+                    "first_show_paint",
+                    started_at,
+                ),
+            )
+        self._schedule_settings_tab_prewarm()
 
     # ------------------------------------------------------------------
     # Model combo helpers
@@ -1651,6 +1781,7 @@ class SettingsDialog(QtWidgets.QDialog):
         return str(model_dir or "").strip()
 
     def _prime_local_model_views_from_session_cache(self) -> bool:
+        started_at = time.perf_counter()
         cache_key = self._local_model_cache_key(self.model_dir_edit.text())
         if cache_key not in _LOCAL_MODEL_SCAN_SESSION_CACHE:
             return False
@@ -1666,9 +1797,16 @@ class SettingsDialog(QtWidgets.QDialog):
             self._set_local_model_scan_status(
                 "Showing the last known local models while disk state is verified in the background."
             )
+        self._log_settings_timing(
+            "local_inventory_session_cache",
+            started_at,
+            model_dir=cache_key or "default",
+            model_count=len(cached),
+        )
         return True
 
     def _prime_local_model_views_from_persistent_cache(self) -> bool:
+        started_at = time.perf_counter()
         if self._local_model_inventory_store is None:
             return False
         cache_key = self._local_model_cache_key(self.model_dir_edit.text())
@@ -1683,6 +1821,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._local_model_inventory_loaded_from_cache_dirs.add(cache_key)
         self._set_local_model_scan_status(
             "Showing the last known local models while disk state is verified in the background."
+        )
+        self._log_settings_timing(
+            "local_inventory_persistent_cache",
+            started_at,
+            model_dir=cache_key or "default",
+            model_count=len(cached),
         )
         return True
 
@@ -1704,6 +1848,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._deferred_local_model_refresh_timer.start(max(0, int(delay_ms)))
 
     def _run_deferred_local_model_refresh(self) -> None:
+        started_at = time.perf_counter()
         if not self._deferred_local_model_refresh_pending:
             return
         self._deferred_local_model_refresh_pending = False
@@ -1717,6 +1862,12 @@ class SettingsDialog(QtWidgets.QDialog):
         if force:
             self._local_model_auto_refresh_requested_dirs.add(model_dir)
         self._request_local_model_scan(force=force)
+        self._log_settings_timing(
+            "local_inventory_refresh_deferred",
+            started_at,
+            model_dir=model_dir or "default",
+            force=force,
+        )
 
     def _refresh_model_combo(
         self,
@@ -1874,6 +2025,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
     def _show_local_model_unverified_state(self, status_text: str) -> None:
+        started_at = time.perf_counter()
         if hasattr(self, "local_models_label"):
             self.local_models_label.setTextFormat(QtCore.Qt.PlainText)
             self.local_models_label.setText(
@@ -1897,6 +2049,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_language_availability()
         self._update_local_model_actions()
         self._update_benchmark_actions()
+        self._log_settings_timing("local_inventory_render_unverified", started_at)
 
     def _set_local_model_scan_loading(self, *, preserve_current: bool = False) -> None:
         if hasattr(self, "local_models_label"):
@@ -1910,6 +2063,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 )
 
     def _apply_local_model_scan_result(self, cached: list[str]) -> None:
+        started_at = time.perf_counter()
         self._refresh_local_models_label(cached)
         self._refresh_local_models_list(cached)
         self._refresh_model_combo(cached=cached)
@@ -1923,6 +2077,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_language_availability()
         self._update_local_model_actions()
         self._update_benchmark_actions()
+        self._log_settings_timing(
+            "local_inventory_render",
+            started_at,
+            model_count=len(cached),
+        )
 
     def _inventory_tab_is_visible(self) -> bool:
         current_index = self.tabs.currentIndex() if hasattr(self, "tabs") else -1
@@ -1967,6 +2126,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._schedule_deferred_local_model_refresh(delay_ms=delay_ms, force=True)
 
     def _request_local_model_scan(self, *, force: bool = False) -> None:
+        request_started_at = time.perf_counter()
         model_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
         if (
             not force
@@ -1975,6 +2135,11 @@ class SettingsDialog(QtWidgets.QDialog):
             and model_dir == self._cached_local_models_dir
         ):
             self._apply_local_model_scan_result(self._cached_local_models)
+            self._log_settings_timing(
+                "local_inventory_scan_skipped_cached",
+                request_started_at,
+                model_dir=model_dir or "default",
+            )
             return
 
         preserve_current = (
@@ -1988,6 +2153,14 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._local_model_scan_token += 1
         token = self._local_model_scan_token
+        self._local_model_scan_started_at_by_token[token] = time.perf_counter()
+        self._log_settings_timing(
+            "local_inventory_scan_start",
+            request_started_at,
+            model_dir=model_dir or "default",
+            force=force,
+            preserve_current=preserve_current,
+        )
 
         def _run() -> None:
             try:
@@ -2012,6 +2185,17 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> None:
         if token != self._local_model_scan_token:
             return
+
+        scan_started_at = self._local_model_scan_started_at_by_token.pop(token, None)
+        if scan_started_at is not None:
+            model_count = len(payload) if isinstance(payload, list) else 0
+            self._log_settings_timing(
+                "local_inventory_scan_finish",
+                scan_started_at,
+                model_dir=model_dir or "default",
+                success=isinstance(payload, list),
+                model_count=model_count,
+            )
 
         self._active_local_model_scan_thread = None
         self._local_model_auto_refresh_requested_dirs.discard(model_dir)
@@ -2849,8 +3033,37 @@ class SettingsDialog(QtWidgets.QDialog):
         self._update_import_engine_note()
 
     def _on_settings_tab_changed(self, _index: int) -> None:
+        started_at = time.perf_counter()
+        tab_name = self.tabs.tabText(_index) if 0 <= _index < self.tabs.count() else "-"
+        first_visit = _index not in self._settings_perf_painted_tabs
+        self._log_settings_timing(
+            "tab_change",
+            started_at,
+            tab=tab_name,
+            first_visit=first_visit,
+        )
+        QtCore.QTimer.singleShot(
+            0,
+            lambda index=_index, started_at=started_at: self._log_tab_paint_timing(
+                index,
+                started_at,
+            ),
+        )
         self._schedule_local_model_auto_refresh(
             delay_ms=_LOCAL_MODEL_AUTO_REFRESH_DELAY_MS
+        )
+
+    def _log_tab_paint_timing(self, index: int, started_at: float) -> None:
+        if not hasattr(self, "tabs") or index != self.tabs.currentIndex():
+            return
+        tab_name = self.tabs.tabText(index) if 0 <= index < self.tabs.count() else "-"
+        first_visit = index not in self._settings_perf_painted_tabs
+        self._settings_perf_painted_tabs.add(index)
+        self._log_settings_timing(
+            "tab_paint",
+            started_at,
+            tab=tab_name,
+            first_visit=first_visit,
         )
 
     def _on_import_model_changed(self, _index: int = 0) -> None:

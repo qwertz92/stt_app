@@ -210,11 +210,8 @@ def _create_tray_icon(
         dialog.raise_()
         dialog.activateWindow()
 
-    def open_settings_dialog() -> SettingsDialog:
+    def create_settings_dialog() -> SettingsDialog:
         nonlocal _active_settings_dialog
-        if _active_settings_dialog is not None:
-            present_settings_dialog(_active_settings_dialog)
-            return _active_settings_dialog
         dialog = SettingsDialog(
             settings_store=settings_store,
             secret_store=secret_store,
@@ -235,8 +232,25 @@ def _create_tray_icon(
 
         dialog.finished.connect(_on_dialog_finished)
         _active_settings_dialog = dialog
-        present_settings_dialog(dialog)
         return dialog
+
+    def prepare_settings_dialog() -> None:
+        nonlocal _active_settings_dialog
+        if _active_settings_dialog is None:
+            _active_settings_dialog = create_settings_dialog()
+        if not _active_settings_dialog.isVisible():
+            _active_settings_dialog.prepare_for_first_show()
+
+    def open_settings_dialog() -> SettingsDialog:
+        nonlocal _active_settings_dialog
+        if _active_settings_dialog is None:
+            _active_settings_dialog = create_settings_dialog()
+        elif not _active_settings_dialog.isVisible():
+            reloader = getattr(_active_settings_dialog, "reload_from_store", None)
+            if callable(reloader):
+                reloader()
+        present_settings_dialog(_active_settings_dialog)
+        return _active_settings_dialog
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())
@@ -261,6 +275,7 @@ def _create_tray_icon(
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
+    QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
     return tray_icon
 
 

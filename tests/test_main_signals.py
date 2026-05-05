@@ -285,6 +285,63 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
     assert instances[0].activate_calls == 2
 
 
+def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    instances = []
+
+    class FakeSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.prepare_calls = 0
+            self.reload_calls = 0
+            self.show_calls = 0
+            instances.append(self)
+
+        def prepare_for_first_show(self):
+            self.prepare_calls += 1
+
+        def reload_from_store(self):
+            self.reload_calls += 1
+
+        def show(self):
+            self.show_calls += 1
+
+        def raise_(self):
+            return None
+
+        def activateWindow(self):
+            return None
+
+    monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
+    monkeypatch.setattr(
+        main_module.QtCore.QTimer,
+        "singleShot",
+        lambda _delay_ms, callback: callback(),
+    )
+
+    tray = _create_tray_icon(
+        app=app,
+        controller=FakeController(),
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    assert len(instances) == 1
+    assert instances[0].prepare_calls == 1
+    assert instances[0].show_calls == 0
+
+    tray._open_settings_dialog()
+
+    assert instances[0].reload_calls == 1
+    assert instances[0].show_calls == 1
+
+
 def test_restore_overlay_after_settings_save_repositions_and_compacts():
     overlay = FakeOverlay()
     store = FakeSettingsStore()

@@ -26,7 +26,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
   after the tab has had a chance to paint. App startup also refreshes the
   persistent inventory in the background. Source-tree and packaged runs perform
   that scan in a subprocess so Python filesystem work cannot stall the Qt UI
-  thread.
+  thread. Settings dialog lifecycle, tab paint, inventory render, and inventory
+  scan timings are logged as `settings_timing` diagnostics. Local/Benchmark
+  list widgets keep `AdjustToContents`; use timing diagnostics before changing
+  that policy again. The tray schedules a hidden settings-dialog preparation
+  after startup so first visible open and first Local tab paint avoid lazy Qt
+  layout work. A hidden prepared dialog reloads settings from disk before it is
+  shown.
 
 ## 2026-05-02
 
