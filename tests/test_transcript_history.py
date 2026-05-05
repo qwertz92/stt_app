@@ -182,6 +182,34 @@ def test_delete_entry_removes_selected_item(tmp_path):
     assert [item.text for item in store.load()] == ["keep"]
 
 
+def test_update_entry_text_replaces_selected_item(tmp_path):
+    path = tmp_path / "history.json"
+    store = TranscriptHistoryStore(path=path)
+    entries = [
+        TranscriptHistoryEntry.new(
+            text="original",
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+        TranscriptHistoryEntry.new(
+            text="keep",
+            engine="local",
+            model="base",
+            mode="batch",
+        ),
+    ]
+    store.save(entries)
+
+    updated = store.update_entry_text(entries[0], " corrected text ")
+
+    assert updated == 1
+    loaded = store.load()
+    assert loaded[0].text == "corrected text"
+    assert loaded[0].engine == "local"
+    assert loaded[1].text == "keep"
+
+
 def test_export_and_import_roundtrip(tmp_path):
     source = TranscriptHistoryStore(path=tmp_path / "source.json")
     source.save(

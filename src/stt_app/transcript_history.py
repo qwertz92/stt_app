@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
+from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -119,6 +120,28 @@ class TranscriptHistoryStore:
         if removed > 0:
             self.save(current)
         return removed
+
+    def update_entry_text(self, entry: TranscriptHistoryEntry, text: str) -> int:
+        next_text = str(text or "").strip()
+        if not next_text:
+            return 0
+        return self.update_entry(entry, replace(entry, text=next_text))
+
+    def update_entry(
+        self,
+        original: TranscriptHistoryEntry,
+        updated: TranscriptHistoryEntry,
+    ) -> int:
+        if not updated.text.strip():
+            return 0
+        current = self.load()
+        try:
+            index = current.index(original)
+        except ValueError:
+            return 0
+        current[index] = updated
+        self.save(current)
+        return 1
 
     def recent_entries(self, limit: int = 10) -> list[TranscriptHistoryEntry]:
         entries = self.load()

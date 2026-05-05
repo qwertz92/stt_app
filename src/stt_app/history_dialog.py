@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .settings_store import SettingsStore
+from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
 _COMPACT_TABLE_ROW_EXTRA_PX = 4
@@ -113,6 +114,10 @@ class HistoryDialog(QtWidgets.QDialog):
         self._copy_button.setEnabled(False)
         self._copy_button.clicked.connect(self._copy_selected)
 
+        self._edit_button = QtWidgets.QPushButton("Edit selected")
+        self._edit_button.setEnabled(False)
+        self._edit_button.clicked.connect(self._edit_selected)
+
         self._delete_button = QtWidgets.QPushButton("Delete selected")
         self._delete_button.setEnabled(False)
         self._delete_button.clicked.connect(self._delete_selected)
@@ -128,6 +133,7 @@ class HistoryDialog(QtWidgets.QDialog):
         buttons.addWidget(self._clear_button)
         buttons.addStretch(1)
         buttons.addWidget(self._copy_button)
+        buttons.addWidget(self._edit_button)
         buttons.addWidget(self._delete_button)
         buttons.addWidget(self._close_button)
 
@@ -164,6 +170,7 @@ class HistoryDialog(QtWidgets.QDialog):
         else:
             self._detail.clear()
             self._copy_button.setEnabled(False)
+            self._edit_button.setEnabled(False)
             self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
 
@@ -172,12 +179,14 @@ class HistoryDialog(QtWidgets.QDialog):
         if row is None:
             self._detail.clear()
             self._copy_button.setEnabled(False)
+            self._edit_button.setEnabled(False)
             self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
             return
         entry = self._entries[row]
         self._detail.setPlainText(entry.text)
         self._copy_button.setEnabled(True)
+        self._edit_button.setEnabled(True)
         self._delete_button.setEnabled(True)
         self._reset_copy_feedback()
 
@@ -203,6 +212,26 @@ class HistoryDialog(QtWidgets.QDialog):
             "background-color: #dff5e0; border: 1px solid #89c88f;"
         )
         self._copy_feedback_timer.start()
+
+    def _edit_selected(self) -> None:
+        row = self._selected_row()
+        if row is None:
+            return
+        entry = self._entries[row]
+        next_text = TranscriptEditDialog.get_text(self, entry.text)
+        if next_text is None or next_text == entry.text:
+            return
+        updated = self._history_store.update_entry_text(entry, next_text)
+        if updated <= 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Entry not found",
+                "The selected history entry could not be updated.",
+            )
+            return
+        self.reload()
+        if row < self._table.rowCount():
+            self._table.selectRow(row)
 
     def _reset_copy_feedback(self) -> None:
         self._copy_button.setText("Copy selected")
