@@ -246,40 +246,27 @@ def _write_csv(path: Path, entry: BenchmarkHistoryEntry) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["Benchmark"])
-        writer.writerow(["Created at", entry.created_at])
-        writer.writerow(["Status", entry.status])
+        writer.writerow(["Benchmark Details"])
+        writer.writerows(_detail_rows(entry))
         writer.writerow([])
-        writer.writerow(["Details"])
-        for key, value in entry.options.summary_details(status=entry.status).items():
-            writer.writerow([key, _display_value(value)])
+        writer.writerow(["Case Summary"])
+        writer.writerow(_case_summary_headers())
+        writer.writerows(_case_summary_rows(entry))
         writer.writerow([])
-        writer.writerow(["Summary"])
-        for line in entry.summary.splitlines():
-            writer.writerow([line])
-        writer.writerow([])
-        writer.writerow(_result_headers())
-        for row in _result_rows(entry):
-            writer.writerow(row)
+        writer.writerow(["Run Results"])
+        writer.writerow(_run_result_headers())
+        writer.writerows(_run_result_rows(entry))
 
 
 def _write_xlsx(path: Path, entry: BenchmarkHistoryEntry) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    summary_rows = [
-        ["Created at", entry.created_at],
-        ["Status", entry.status],
-        [],
-        ["Details"],
-    ]
-    summary_rows.extend(
-        [key, _display_value(value)]
-        for key, value in entry.options.summary_details(status=entry.status).items()
-    )
-    summary_rows.extend([[], ["Summary"]])
-    summary_rows.extend([line] for line in entry.summary.splitlines())
+    summary_rows = [["Benchmark Details"]]
+    summary_rows.extend(_detail_rows(entry))
+    summary_rows.extend([[], ["Case Summary"], _case_summary_headers()])
+    summary_rows.extend(_case_summary_rows(entry))
 
-    result_rows = [_result_headers()]
-    result_rows.extend(_result_rows(entry))
+    result_rows = [["Run Results"], _run_result_headers()]
+    result_rows.extend(_run_result_rows(entry))
 
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", _content_types_xml())
@@ -290,9 +277,57 @@ def _write_xlsx(path: Path, entry: BenchmarkHistoryEntry) -> None:
         archive.writestr("xl/worksheets/sheet2.xml", _worksheet_xml(result_rows))
 
 
-def _result_headers() -> list[str]:
+def _detail_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
+    rows = [
+        ["Created at", entry.created_at],
+        ["Status", entry.status],
+    ]
+    rows.extend(
+        [key, _display_value(value)]
+        for key, value in entry.options.summary_details().items()
+    )
+    return rows
+
+
+def _case_summary_headers() -> list[str]:
     return [
-        "row_type",
+        "model",
+        "device",
+        "compute_type",
+        "download_seconds",
+        "load_seconds",
+        "run_count",
+        "avg_seconds",
+        "stdev_seconds",
+        "avg_rtf",
+        "status",
+        "error",
+    ]
+
+
+def _case_summary_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
+    rows: list[list[Any]] = []
+    for case in entry.cases:
+        rows.append(
+            [
+                case.model,
+                case.device,
+                case.compute_type,
+                case.download_seconds,
+                case.load_seconds,
+                len(case.runs),
+                case.avg_seconds,
+                case.stdev_seconds,
+                case.avg_rtf,
+                "ok" if case.error is None else "error",
+                case.error or "",
+            ]
+        )
+    return rows
+
+
+def _run_result_headers() -> list[str]:
+    return [
         "model",
         "device",
         "compute_type",
@@ -304,24 +339,18 @@ def _result_headers() -> list[str]:
         "transcript_words",
         "detected_language",
         "language_probability",
-        "download_seconds",
-        "load_seconds",
-        "avg_seconds",
-        "stdev_seconds",
-        "avg_rtf",
         "status",
         "error",
     ]
 
 
-def _result_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
+def _run_result_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
     rows: list[list[Any]] = []
     for case in entry.cases:
         status = "ok" if case.error is None else "error"
         for run in case.runs:
             rows.append(
                 [
-                    "run",
                     case.model,
                     case.device,
                     case.compute_type,
@@ -333,38 +362,10 @@ def _result_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
                     run.transcript_words,
                     run.detected_language,
                     run.language_probability,
-                    case.download_seconds,
-                    case.load_seconds,
-                    case.avg_seconds,
-                    case.stdev_seconds,
-                    case.avg_rtf,
                     status,
                     case.error or "",
                 ]
             )
-        rows.append(
-            [
-                "summary",
-                case.model,
-                case.device,
-                case.compute_type,
-                "",
-                "",
-                "",
-                "",
-                "",
-                "",
-                case.runs[0].detected_language if case.runs else "",
-                case.runs[0].language_probability if case.runs else "",
-                case.download_seconds,
-                case.load_seconds,
-                case.avg_seconds,
-                case.stdev_seconds,
-                case.avg_rtf,
-                status,
-                case.error or "",
-            ]
-        )
     return rows
 
 

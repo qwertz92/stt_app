@@ -92,10 +92,16 @@ def test_benchmark_export_writes_csv_and_xlsx(tmp_path):
     rows = list(csv.reader(csv_path.read_text(encoding="utf-8").splitlines()))
     assert ["Status", "completed"] in rows
     assert ["Audio file", "C:/sample.wav"] in rows
-    assert any(row and row[0] == "run" for row in rows)
+    assert ["Case Summary"] in rows
+    assert ["Run Results"] in rows
+    assert any(row[:3] == ["small", "auto", "int8"] for row in rows)
+    assert not any(row == ["Summary"] for row in rows)
 
     with zipfile.ZipFile(xlsx_path) as archive:
         names = set(archive.namelist())
         assert "xl/worksheets/sheet1.xml" in names
         assert "xl/worksheets/sheet2.xml" in names
+        assert "Benchmark Details" in archive.read(
+            "xl/worksheets/sheet1.xml"
+        ).decode("utf-8")
         assert "small" in archive.read("xl/worksheets/sheet2.xml").decode("utf-8")
