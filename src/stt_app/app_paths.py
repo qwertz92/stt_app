@@ -72,5 +72,9 @@ def transcript_history_path() -> Path:
     return appdata_root() / "transcript_history.json"
 
 
+def benchmark_history_path() -> Path:
+    return appdata_root() / "benchmark_history.json"
+
+
 def insecure_keys_path() -> Path:
     return appdata_root() / "insecure_api_keys.json"

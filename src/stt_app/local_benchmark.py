@@ -11,6 +11,15 @@ from typing import Any, Callable
 from .config import LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS, LOCAL_WEBGPU_MODEL_SIZES
 
 
+class BenchmarkCancelled(RuntimeError):
+    """Raised when a benchmark run is canceled between measurable steps."""
+
+
+def _raise_if_canceled(cancel_check: Callable[[], bool] | None) -> None:
+    if cancel_check is not None and cancel_check():
+        raise BenchmarkCancelled("Benchmark canceled.")
+
+
 def _audio_duration_seconds(path: Path) -> float | None:
     try:
         import wave
@@ -145,12 +154,14 @@ def _run_case(
     model_dir: str = "",
     download_seconds: float = 0.0,
     progress_callback: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> BenchmarkCase:
     from faster_whisper import WhisperModel
 
     total_steps = runs + (1 if warmup else 0)
     step = 0
 
+    _raise_if_canceled(cancel_check)
     if progress_callback is not None:
         progress_callback("Loading model...")
     model_start = time.perf_counter()
@@ -164,12 +175,14 @@ def _run_case(
         model_kwargs["download_root"] = model_dir
     model = WhisperModel(model_name, **model_kwargs)
     load_seconds = time.perf_counter() - model_start
+    _raise_if_canceled(cancel_check)
 
     if progress_callback is not None:
         progress_callback(f"Model loaded ({_format_seconds(load_seconds)})")
 
     if warmup:
         step += 1
+        _raise_if_canceled(cancel_check)
         if progress_callback is not None:
             progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
         warm_segments, _ = model.transcribe(
@@ -185,6 +198,7 @@ def _run_case(
     all_runs: list[BenchmarkRun] = []
     for run_index in range(1, runs + 1):
         step += 1
+        _raise_if_canceled(cancel_check)
         if progress_callback is not None:
             progress_callback(
                 f"[{step}/{total_steps}] {model_name}: run {run_index}/{runs}..."
@@ -248,6 +262,7 @@ def _run_webgpu_case(
     device: str = "auto",
     model_dir: str = "",
     progress_callback: Callable[[str], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> BenchmarkCase:
     from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
@@ -255,6 +270,7 @@ def _run_webgpu_case(
     step = 0
     language_mode = language or "de"
 
+    _raise_if_canceled(cancel_check)
     if progress_callback is not None:
         progress_callback("Loading ONNX/WebGPU model...")
     model_start = time.perf_counter()
@@ -267,6 +283,7 @@ def _run_webgpu_case(
     try:
         transcriber.preload_model()
         load_seconds = time.perf_counter() - model_start
+        _raise_if_canceled(cancel_check)
         runtime_device = transcriber.runtime_device or "auto"
         final_runtime_device = runtime_device
 
@@ -277,6 +294,7 @@ def _run_webgpu_case(
 
         if warmup:
             step += 1
+            _raise_if_canceled(cancel_check)
             if progress_callback is not None:
                 progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
             transcriber.transcribe_batch(audio_path)
@@ -287,6 +305,7 @@ def _run_webgpu_case(
         all_runs: list[BenchmarkRun] = []
         for run_index in range(1, runs + 1):
             step += 1
+            _raise_if_canceled(cancel_check)
             if progress_callback is not None:
                 progress_callback(
                     f"[{step}/{total_steps}] {model_name}: run {run_index}/{runs}..."
@@ -341,6 +360,8 @@ def run_benchmark_cases(
     model_dir: str = "",
     webgpu_devices: str | list[str] | tuple[str, ...] | None = None,
     progress_callback: Callable[[str], None] | None = None,
+    case_callback: Callable[[BenchmarkCase], None] | None = None,
+    cancel_check: Callable[[], bool] | None = None,
 ) -> list[BenchmarkCase]:
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []
@@ -351,12 +372,14 @@ def run_benchmark_cases(
     )
     case_index = 0
     for model_name in model_names:
+        _raise_if_canceled(cancel_check)
         device_targets = (
             webgpu_device_targets
             if model_name in LOCAL_WEBGPU_MODEL_SIZES
             else [device]
         )
         for device_target in device_targets:
+            _raise_if_canceled(cancel_check)
             case_index += 1
             display_compute_type = (
                 "onnx-q4" if model_name in LOCAL_WEBGPU_MODEL_SIZES else compute_type
@@ -381,6 +404,7 @@ def run_benchmark_cases(
                         threads=threads,
                         model_dir=model_dir,
                         progress_callback=progress_callback,
+                        cancel_check=cancel_check,
                     )
                 else:
                     case = _run_webgpu_case(
@@ -392,7 +416,10 @@ def run_benchmark_cases(
                         device=device_target,
                         model_dir=model_dir,
                         progress_callback=progress_callback,
+                        cancel_check=cancel_check,
                     )
+            except BenchmarkCancelled:
+                raise
             except Exception as exc:
                 case = BenchmarkCase(
                     model=model_name,
@@ -404,6 +431,8 @@ def run_benchmark_cases(
                     error=str(exc),
                 )
             cases.append(case)
+            if case_callback is not None:
+                case_callback(case)
     return cases
 
 
@@ -411,11 +440,39 @@ def _successful_cases(cases: list[BenchmarkCase]) -> list[BenchmarkCase]:
     return [case for case in cases if case.error is None and case.runs]
 
 
-def format_benchmark_summary(cases: list[BenchmarkCase]) -> str:
+def _format_detail_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "yes" if value else "no"
+    if isinstance(value, (list, tuple)):
+        return ", ".join(_format_detail_value(item) for item in value)
+    if value is None or value == "":
+        return "-"
+    return str(value)
+
+
+def format_benchmark_summary(
+    cases: list[BenchmarkCase],
+    details: dict[str, Any] | None = None,
+) -> str:
     if not cases:
-        return "No benchmark results available."
+        lines = ["No benchmark results available."]
+        if details:
+            lines.extend(["", "Benchmark details:"])
+            lines.extend(
+                f"- {key}: {_format_detail_value(value)}"
+                for key, value in details.items()
+            )
+        return "\n".join(lines)
 
     lines = ["Benchmark summary:", ""]
+    if details:
+        lines.extend(["Benchmark details:"])
+        lines.extend(
+            f"- {key}: {_format_detail_value(value)}"
+            for key, value in details.items()
+        )
+        lines.append("")
+
     for case in cases:
         status = "ok" if case.error is None else f"error: {case.error}"
         lines.append(
@@ -531,6 +588,7 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
 
 __all__ = [
     "BenchmarkCase",
+    "BenchmarkCancelled",
     "BenchmarkRun",
     "_case_from_dict",
     "_format_number",

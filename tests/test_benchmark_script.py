@@ -122,6 +122,34 @@ def test_run_benchmark_cases_expands_webgpu_device_targets(monkeypatch, tmp_path
     assert [case.device for case in cases] == ["gpu", "cpu"]
 
 
+def test_run_benchmark_cases_can_cancel_between_cases(monkeypatch, tmp_path):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    completed = []
+
+    def fake_case(**kwargs):
+        return local_benchmark.BenchmarkCase(
+            model=kwargs["model_name"],
+            device=kwargs["device"],
+            compute_type=kwargs["compute_type"],
+            download_seconds=0.0,
+            load_seconds=0.1,
+            runs=[],
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_case", fake_case)
+
+    with pytest.raises(local_benchmark.BenchmarkCancelled):
+        local_benchmark.run_benchmark_cases(
+            audio_path=audio_path,
+            model_names=["tiny", "base"],
+            case_callback=completed.append,
+            cancel_check=lambda: bool(completed),
+        )
+
+    assert [case.model for case in completed] == ["tiny"]
+
+
 def test_webgpu_benchmark_case_closes_transcriber_when_preload_fails(
     monkeypatch,
     tmp_path,
