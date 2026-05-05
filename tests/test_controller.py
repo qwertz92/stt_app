@@ -326,6 +326,37 @@ def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
     _ = app
 
 
+def test_controller_edits_last_transcript_history_entry(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+        history_store=history_store,
+    )
+    monkeypatch.setattr(
+        "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+        lambda _parent, _text: "corrected text",
+    )
+
+    controller._on_transcription_ready("original text")
+    edited = controller.edit_last_transcript()
+
+    assert edited is True
+    assert controller._last_transcript == "corrected text"
+    assert [entry.text for entry in history_store.load()] == ["corrected text"]
+    assert overlay.states[-1] == ("Done", "corrected text")
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(

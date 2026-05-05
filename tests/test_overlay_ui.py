@@ -108,9 +108,23 @@ def test_overlay_clear_button_enabled_for_done_text_only():
 
     overlay.set_state("Listening", "Speak now.")
     assert overlay._clear_button.isEnabled() is False
+    assert overlay._edit_button.isEnabled() is False
 
     overlay.set_state("Done", "transcribed text")
     assert overlay._clear_button.isEnabled() is True
+    assert overlay._edit_button.isEnabled() is True
+
+
+def test_overlay_edit_button_emits_request():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted = []
+    overlay.edit_requested.connect(lambda: emitted.append(True))
+
+    overlay.set_state("Done", "transcribed text")
+    overlay._edit_button.click()
+
+    assert emitted == [True]
 
 
 def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():

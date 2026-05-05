@@ -21,6 +21,7 @@ from .config import (
 
 class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
+    edit_requested = QtCore.Signal()
     retry_requested = QtCore.Signal()
     cancel_requested = QtCore.Signal()
     opacity_changed = QtCore.Signal(int)
@@ -95,6 +96,14 @@ class OverlayUI(QtWidgets.QWidget):
         self._copy_button.setFixedWidth(64)
         self._copy_button.setFixedHeight(24)
         self._copy_button.clicked.connect(self.copy_detail_text)
+
+        self._edit_button = QtWidgets.QPushButton("Edit")
+        self._edit_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._edit_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._edit_button.setFixedWidth(58)
+        self._edit_button.setFixedHeight(24)
+        self._edit_button.setEnabled(False)
+        self._edit_button.clicked.connect(self.edit_requested.emit)
 
         self._clear_button = QtWidgets.QPushButton("Clear")
         self._clear_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -189,6 +198,7 @@ class OverlayUI(QtWidgets.QWidget):
         header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
         header.addWidget(self._clear_button, 0, QtCore.Qt.AlignRight)
+        header.addWidget(self._edit_button, 0, QtCore.Qt.AlignRight)
         header.addWidget(self._copy_button, 0, QtCore.Qt.AlignRight)
 
         self._controls_widget = QtWidgets.QWidget()
@@ -293,6 +303,7 @@ class OverlayUI(QtWidgets.QWidget):
         else:
             self._compact_mode = compact
         self._copy_button.setEnabled(has_detail)
+        self._edit_button.setEnabled(has_detail and state == "Done")
         self._clear_button.setEnabled(has_detail and state in {"Done", "Error"})
         self._retry_button.setEnabled(state == "Error")
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})

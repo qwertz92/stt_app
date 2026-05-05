@@ -114,6 +114,7 @@ def run() -> int:
         dialog.show()
 
     overlay.history_requested.connect(open_history_dialog)
+    overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
     overlay.retry_requested.connect(controller.retry_last_transcription)
     overlay.cancel_requested.connect(controller.cancel_current_action)
     overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)

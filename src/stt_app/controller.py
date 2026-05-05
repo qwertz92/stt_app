@@ -119,6 +119,7 @@ class DictationController(QtCore.QObject):
         self._target_window_handle: int | None = None
         self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
+        self._last_history_entry: TranscriptHistoryEntry | None = None
         self._last_failed_wav_bytes: bytes = b""
         self._last_transcribe_settings: AppSettings | None = None
         self._active_batch_settings: AppSettings | None = None
@@ -732,27 +733,31 @@ class DictationController(QtCore.QObject):
         mode: str,
         *,
         source_recording_id: str | None = None,
-    ) -> None:
+    ) -> TranscriptHistoryEntry | None:
         if not text.strip():
-            return
+            return None
         try:
             source_id = (
                 self._current_last_recording_id()
                 if source_recording_id is None
                 else source_recording_id
             )
+            entry = TranscriptHistoryEntry.new(
+                text=text,
+                engine=settings.engine,
+                model=self._selected_model_name(settings),
+                mode=mode,
+                source_recording_id=source_id,
+            )
             self._history_store.add_entry(
-                TranscriptHistoryEntry.new(
-                    text=text,
-                    engine=settings.engine,
-                    model=self._selected_model_name(settings),
-                    mode=mode,
-                    source_recording_id=source_id,
-                ),
+                entry,
                 settings.history_max_items,
             )
+            self._last_history_entry = entry
+            return entry
         except Exception:
             self._logger.exception("Failed to append transcript history")
+            return None
 
     def _mark_last_recording_completed(self) -> None:
         try:
@@ -1869,6 +1874,41 @@ class DictationController(QtCore.QObject):
         if not self._last_transcript.strip():
             return False
         QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
+        return True
+
+    def edit_last_transcript(self, parent=None) -> bool:
+        current_text = self._last_transcript.strip()
+        if not current_text:
+            self._overlay.set_state("Error", "No transcript available to edit.")
+            return False
+
+        from .transcript_edit_dialog import TranscriptEditDialog
+
+        next_text = TranscriptEditDialog.get_text(parent, current_text)
+        if next_text is None or next_text == current_text:
+            return False
+
+        entry = self._last_history_entry
+        if entry is None:
+            self._overlay.set_state(
+                "Error",
+                "No saved history entry is available for this transcript.",
+            )
+            return False
+
+        updated = self._history_store.update_entry_text(entry, next_text)
+        if updated <= 0:
+            self._overlay.set_state(
+                "Error",
+                "The saved history entry could not be updated.",
+            )
+            return False
+
+        self._last_history_entry = replace(entry, text=next_text.strip())
+        self._last_transcript = next_text.strip()
+        self._overlay.set_state("Done", self._last_transcript, compact=False)
+        if self._settings.keep_transcript_in_clipboard:
+            QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
         return True
 
     def retry_last_transcription(self) -> bool:
