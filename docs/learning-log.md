@@ -20,6 +20,18 @@ Agents and developers: use this as a knowledge base for past issues and solution
   stored without applying all settings or emitting the full settings refresh
   signal. Key badges now distinguish secure keyring storage from insecure
   fallback storage with non-red warning colors.
+- Controller tests previously fell back to the real `%APPDATA%\stt_app`
+  transcript history when no explicit test history store was passed. That could
+  pollute a developer's real History tab with fixture texts and provider/model
+  combinations such as Deepgram `nova-2`. The test suite now isolates `APPDATA`
+  per test by default so production history is never touched by tests.
+- The overlay now exposes transcript editing through an `Edit` button. It opens
+  the shared transcript edit dialog, updates the last saved history entry, and
+  refreshes the overlay text without making the no-activate overlay itself a
+  text editor.
+- Benchmark CSV/XLSX export was simplified to avoid duplicated details. Exports
+  now use shared row builders and contain separate Benchmark Details, Case
+  Summary, and Run Results sections.
 
 ## 2026-05-03
 

@@ -9,12 +9,18 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
+import pytest
 from PySide6 import QtWidgets
 
 from stt_app.config import DEFAULT_CANCEL_HOTKEY, FALLBACK_HOTKEY
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
+
+
+@pytest.fixture(autouse=True)
+def _isolate_appdata(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
 
 
 class FakeSettingsStore:
