@@ -29,9 +29,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
   the shared transcript edit dialog, updates the last saved history entry, and
   refreshes the overlay text without making the no-activate overlay itself a
   text editor.
-- Benchmark CSV/XLSX export was simplified to avoid duplicated details. Exports
-  now use shared row builders and contain separate Benchmark Details, Case
-  Summary, and Run Results sections.
+- Overlay buttons were rebalanced after adding transcript editing: stable
+  status/navigation buttons stay in the header, while Retry/Cancel/Edit/Reset
+  live in the action row so the overlay width does not expand just because Edit
+  exists.
+- Benchmark exports now use one flat result schema across CSV, XLSX, and
+  Markdown. Keeping the same columns in every format avoids drift between
+  spreadsheet and text exports and keeps per-run details visible everywhere.
 
 ## 2026-05-03
 

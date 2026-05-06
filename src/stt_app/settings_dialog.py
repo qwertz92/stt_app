@@ -1458,6 +1458,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_history_list.itemSelectionChanged.connect(
             self._update_benchmark_history_actions
         )
+        self.benchmark_history_list.itemDoubleClicked.connect(
+            self._load_benchmark_history_item
+        )
         history_layout.addWidget(self.benchmark_history_list, 1)
 
         benchmark_history_actions = QtWidgets.QHBoxLayout()
@@ -2909,6 +2912,14 @@ class SettingsDialog(QtWidgets.QDialog):
         entry = self._selected_benchmark_history_entry()
         if entry is None:
             return
+        self._load_benchmark_history_entry(entry)
+
+    def _load_benchmark_history_item(self, item: QtWidgets.QListWidgetItem) -> None:
+        entry = item.data(QtCore.Qt.UserRole)
+        if isinstance(entry, BenchmarkHistoryEntry):
+            self._load_benchmark_history_entry(entry)
+
+    def _load_benchmark_history_entry(self, entry: BenchmarkHistoryEntry) -> None:
         self._current_benchmark_entry = entry
         self._current_benchmark_options = entry.options
         self._current_benchmark_cases = list(entry.cases)
@@ -2938,13 +2949,18 @@ class SettingsDialog(QtWidgets.QDialog):
             self,
             "Export benchmark results",
             str(suggested),
-            "CSV files (*.csv);;Excel workbooks (*.xlsx)",
+            "CSV files (*.csv);;Excel workbooks (*.xlsx);;Markdown files (*.md)",
         )
         if not path:
             return
         output_path = Path(path)
-        if output_path.suffix.lower() not in {".csv", ".xlsx"}:
-            suffix = ".xlsx" if "xlsx" in selected_filter.lower() else ".csv"
+        if output_path.suffix.lower() not in {".csv", ".xlsx", ".md", ".markdown"}:
+            if "xlsx" in selected_filter.lower():
+                suffix = ".xlsx"
+            elif "markdown" in selected_filter.lower() or "*.md" in selected_filter.lower():
+                suffix = ".md"
+            else:
+                suffix = ".csv"
             output_path = output_path.with_suffix(suffix)
         try:
             export_benchmark_entry(output_path, entry)

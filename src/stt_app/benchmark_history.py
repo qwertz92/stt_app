@@ -239,95 +239,62 @@ def export_benchmark_entry(path: Path, entry: BenchmarkHistoryEntry) -> None:
     if suffix == ".csv":
         _write_csv(path, entry)
         return
-    raise ValueError("Benchmark export path must end in .csv or .xlsx.")
+    if suffix in {".md", ".markdown"}:
+        _write_markdown(path, entry)
+        return
+    raise ValueError("Benchmark export path must end in .csv, .xlsx, or .md.")
 
 
 def _write_csv(path: Path, entry: BenchmarkHistoryEntry) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
-        writer.writerow(["Benchmark Details"])
-        writer.writerows(_detail_rows(entry))
-        writer.writerow([])
-        writer.writerow(["Case Summary"])
-        writer.writerow(_case_summary_headers())
-        writer.writerows(_case_summary_rows(entry))
-        writer.writerow([])
-        writer.writerow(["Run Results"])
-        writer.writerow(_run_result_headers())
-        writer.writerows(_run_result_rows(entry))
+        writer.writerow(_export_headers())
+        writer.writerows(_export_rows(entry))
 
 
 def _write_xlsx(path: Path, entry: BenchmarkHistoryEntry) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    summary_rows = [["Benchmark Details"]]
-    summary_rows.extend(_detail_rows(entry))
-    summary_rows.extend([[], ["Case Summary"], _case_summary_headers()])
-    summary_rows.extend(_case_summary_rows(entry))
-
-    result_rows = [["Run Results"], _run_result_headers()]
-    result_rows.extend(_run_result_rows(entry))
+    rows = [_export_headers()]
+    rows.extend(_export_rows(entry))
 
     with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", _content_types_xml())
         archive.writestr("_rels/.rels", _root_rels_xml())
         archive.writestr("xl/workbook.xml", _workbook_xml())
         archive.writestr("xl/_rels/workbook.xml.rels", _workbook_rels_xml())
-        archive.writestr("xl/worksheets/sheet1.xml", _worksheet_xml(summary_rows))
-        archive.writestr("xl/worksheets/sheet2.xml", _worksheet_xml(result_rows))
+        archive.writestr("xl/worksheets/sheet1.xml", _worksheet_xml(rows))
 
 
-def _detail_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
-    rows = [
-        ["Created at", entry.created_at],
-        ["Status", entry.status],
+def _write_markdown(path: Path, entry: BenchmarkHistoryEntry) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    lines = [
+        "# Benchmark Results",
+        "",
+        _markdown_table(_export_headers(), _export_rows(entry)),
+        "",
     ]
-    rows.extend(
-        [key, _display_value(value)]
-        for key, value in entry.options.summary_details().items()
-    )
-    return rows
+    path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def _case_summary_headers() -> list[str]:
+def _export_headers() -> list[str]:
     return [
-        "model",
-        "device",
-        "compute_type",
-        "download_seconds",
-        "load_seconds",
-        "run_count",
-        "avg_seconds",
-        "stdev_seconds",
-        "avg_rtf",
-        "status",
-        "error",
-    ]
-
-
-def _case_summary_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
-    rows: list[list[Any]] = []
-    for case in entry.cases:
-        rows.append(
-            [
-                case.model,
-                case.device,
-                case.compute_type,
-                case.download_seconds,
-                case.load_seconds,
-                len(case.runs),
-                case.avg_seconds,
-                case.stdev_seconds,
-                case.avg_rtf,
-                "ok" if case.error is None else "error",
-                case.error or "",
-            ]
-        )
-    return rows
-
-
-def _run_result_headers() -> list[str]:
-    return [
+        "created_at",
+        "benchmark_status",
+        "audio_path",
+        "audio_name",
+        "selected_models",
+        "standard_device",
+        "benchmark_compute_type",
+        "onnx_device_targets",
+        "configured_runs",
+        "beam_size",
+        "language",
+        "vad_filter",
+        "warmup",
+        "threads",
+        "model_dir",
+        "row_type",
         "model",
         "device",
         "compute_type",
@@ -339,34 +306,80 @@ def _run_result_headers() -> list[str]:
         "transcript_words",
         "detected_language",
         "language_probability",
-        "status",
+        "download_seconds",
+        "load_seconds",
+        "case_run_count",
+        "avg_seconds",
+        "stdev_seconds",
+        "avg_rtf",
+        "case_status",
         "error",
     ]
 
 
-def _run_result_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
+def _export_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
     rows: list[list[Any]] = []
     for case in entry.cases:
         status = "ok" if case.error is None else "error"
-        for run in case.runs:
+        runs = case.runs or [None]
+        for run in runs:
             rows.append(
                 [
+                    entry.created_at,
+                    entry.status,
+                    entry.options.audio_path,
+                    entry.options.audio_name,
+                    _display_value(entry.options.model_names),
+                    entry.options.device,
+                    entry.options.compute_type,
+                    _display_value(entry.options.webgpu_devices),
+                    entry.options.runs,
+                    entry.options.beam_size,
+                    entry.options.language,
+                    entry.options.vad_filter,
+                    entry.options.warmup,
+                    entry.options.threads,
+                    entry.options.model_dir,
+                    "run" if run is not None else "case",
                     case.model,
                     case.device,
                     case.compute_type,
-                    run.run_index,
-                    run.seconds,
-                    run.audio_duration_seconds,
-                    run.real_time_factor,
-                    run.transcript_chars,
-                    run.transcript_words,
-                    run.detected_language,
-                    run.language_probability,
+                    run.run_index if run is not None else "",
+                    run.seconds if run is not None else "",
+                    run.audio_duration_seconds if run is not None else "",
+                    run.real_time_factor if run is not None else "",
+                    run.transcript_chars if run is not None else "",
+                    run.transcript_words if run is not None else "",
+                    run.detected_language if run is not None else "",
+                    run.language_probability if run is not None else "",
+                    case.download_seconds,
+                    case.load_seconds,
+                    len(case.runs),
+                    case.avg_seconds,
+                    case.stdev_seconds,
+                    case.avg_rtf,
                     status,
                     case.error or "",
                 ]
             )
     return rows
+
+
+def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
+    lines = [
+        "| " + " | ".join(_escape_markdown_cell(header) for header in headers) + " |",
+        "| " + " | ".join("---" for _header in headers) + " |",
+    ]
+    for row in rows:
+        lines.append(
+            "| " + " | ".join(_escape_markdown_cell(value) for value in row) + " |"
+        )
+    return "\n".join(lines)
+
+
+def _escape_markdown_cell(value: Any) -> str:
+    text = _display_value(value)
+    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
 
 
 def _worksheet_xml(rows: list[list[Any]]) -> str:
@@ -428,7 +441,6 @@ def _content_types_xml() -> str:
   <Default Extension="xml" ContentType="application/xml"/>
   <Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/>
   <Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
-  <Override PartName="/xl/worksheets/sheet2.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/>
 </Types>"""
 
 
@@ -444,8 +456,7 @@ def _workbook_xml() -> str:
 <workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"
   xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships">
   <sheets>
-    <sheet name="Summary" sheetId="1" r:id="rId1"/>
-    <sheet name="Results" sheetId="2" r:id="rId2"/>
+    <sheet name="Benchmark Results" sheetId="1" r:id="rId1"/>
   </sheets>
 </workbook>"""
 
@@ -454,7 +465,6 @@ def _workbook_rels_xml() -> str:
     return """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/>
-  <Relationship Id="rId2" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet2.xml"/>
 </Relationships>"""
 
 

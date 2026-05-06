@@ -6,7 +6,11 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app.app_paths import debug_audio_path
-from stt_app.benchmark_history import BenchmarkHistoryStore
+from stt_app.benchmark_history import (
+    BenchmarkHistoryEntry,
+    BenchmarkHistoryStore,
+    BenchmarkOptions,
+)
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
@@ -735,6 +739,66 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     assert "Benchmark finished" in dialog.benchmark_status_label.text()
     assert dialog.benchmark_history_list.count() == 1
     assert dialog.export_benchmark_results_button.isEnabled() is True
+    _ = app
+
+
+def test_benchmark_history_double_click_loads_entry(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    case = BenchmarkCase(
+        model="small",
+        device="auto",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=0.2,
+        runs=[
+            BenchmarkRun(
+                run_index=1,
+                seconds=1.0,
+                audio_duration_seconds=2.0,
+                real_time_factor=0.5,
+                transcript_chars=8,
+                transcript_words=2,
+                detected_language="en",
+                language_probability=0.9,
+            )
+        ],
+    )
+    entry = BenchmarkHistoryEntry.new(
+        status="completed",
+        summary="Benchmark summary:\nsmall",
+        options=BenchmarkOptions(
+            audio_path="C:/sample.wav",
+            audio_name="sample.wav",
+            model_names=["small"],
+            device="auto",
+            compute_type="int8",
+            webgpu_devices=["auto"],
+            runs=1,
+            beam_size=5,
+            language="auto",
+            vad_filter=False,
+            warmup=False,
+            threads=0,
+        ),
+        cases=[case],
+    )
+    benchmark_store = BenchmarkHistoryStore(path=tmp_path / "benchmark_history.json")
+    benchmark_store.save([entry])
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._benchmark_history_store = benchmark_store
+    dialog._refresh_benchmark_history_list()
+
+    item = dialog.benchmark_history_list.item(0)
+    dialog.benchmark_history_list.itemDoubleClicked.emit(item)
+
+    assert dialog.benchmark_results_table.rowCount() == 1
+    assert dialog.benchmark_results_table.item(0, 0).text() == "small"
+    assert dialog.benchmark_summary_text.toPlainText() == entry.summary
     _ = app
 
 
