@@ -198,7 +198,6 @@ class OverlayUI(QtWidgets.QWidget):
         header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
         header.addWidget(self._clear_button, 0, QtCore.Qt.AlignRight)
-        header.addWidget(self._edit_button, 0, QtCore.Qt.AlignRight)
         header.addWidget(self._copy_button, 0, QtCore.Qt.AlignRight)
 
         self._controls_widget = QtWidgets.QWidget()
@@ -207,6 +206,7 @@ class OverlayUI(QtWidgets.QWidget):
         controls.setSpacing(6)
         controls.addWidget(self._retry_button)
         controls.addWidget(self._cancel_button)
+        controls.addWidget(self._edit_button)
         controls.addWidget(self._reset_pos_button)
 
         self._layout.addWidget(self._header_widget)
