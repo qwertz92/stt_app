@@ -36,6 +36,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Benchmark exports now use one flat result schema across CSV, XLSX, and
   Markdown. Keeping the same columns in every format avoids drift between
   spreadsheet and text exports and keeps per-run details visible everywhere.
+- The transcript edit dialog keeps the validation label hidden until it is
+  needed. This removes the empty vertical gap between the editor and action
+  buttons while still showing the error inline when the user tries to save an
+  empty transcript.
 
 ## 2026-05-03
 

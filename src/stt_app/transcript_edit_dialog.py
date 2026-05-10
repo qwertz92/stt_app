@@ -18,9 +18,11 @@ class TranscriptEditDialog(QtWidgets.QDialog):
 
         self._editor = QtWidgets.QPlainTextEdit()
         self._editor.setPlainText(text)
+        self._editor.textChanged.connect(self._clear_error)
 
         self._error_label = QtWidgets.QLabel("")
         self._error_label.setStyleSheet("color: #b71c1c;")
+        self._error_label.setVisible(False)
 
         self._save_button = QtWidgets.QPushButton("Save Transcript")
         self._save_button.setObjectName("primaryButton")
@@ -38,7 +40,7 @@ class TranscriptEditDialog(QtWidgets.QDialog):
         buttons.addWidget(cancel_button)
 
         layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
         layout.addWidget(self._editor, 1)
         layout.addWidget(self._error_label)
@@ -51,8 +53,15 @@ class TranscriptEditDialog(QtWidgets.QDialog):
     def _accept_if_valid(self) -> None:
         if not self.text:
             self._error_label.setText("Transcript text cannot be empty.")
+            self._error_label.setVisible(True)
+            self._editor.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
             return
         self.accept()
+
+    def _clear_error(self) -> None:
+        if not self._error_label.isHidden() and self.text:
+            self._error_label.clear()
+            self._error_label.setVisible(False)
 
     @staticmethod
     def get_text(
