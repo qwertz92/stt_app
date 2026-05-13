@@ -3,13 +3,14 @@ from __future__ import annotations
 import csv
 import math
 import zipfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
 
 from .app_paths import benchmark_history_path
+from .benchmark_environment import BenchmarkEnvironment
 from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
 
@@ -84,6 +85,7 @@ class BenchmarkHistoryEntry:
     summary: str
     options: BenchmarkOptions
     cases: list[BenchmarkCase]
+    environment: BenchmarkEnvironment = field(default_factory=BenchmarkEnvironment)
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "BenchmarkHistoryEntry":
@@ -97,12 +99,16 @@ class BenchmarkHistoryEntry:
         options = BenchmarkOptions.from_dict(
             options_payload if isinstance(options_payload, dict) else {}
         )
+        environment_payload = raw.get("environment", {})
         return cls(
             created_at=str(raw.get("created_at", "")),
             status=str(raw.get("status", "")),
             summary=str(raw.get("summary", "")),
             options=options,
             cases=cases,
+            environment=BenchmarkEnvironment.from_dict(
+                environment_payload if isinstance(environment_payload, dict) else {}
+            ),
         )
 
     @classmethod
@@ -113,6 +119,7 @@ class BenchmarkHistoryEntry:
         summary: str,
         options: BenchmarkOptions,
         cases: list[BenchmarkCase],
+        environment: BenchmarkEnvironment | None = None,
     ) -> "BenchmarkHistoryEntry":
         timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
         return cls(
@@ -121,6 +128,7 @@ class BenchmarkHistoryEntry:
             summary=str(summary or ""),
             options=options,
             cases=list(cases),
+            environment=environment or BenchmarkEnvironment(),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -130,6 +138,7 @@ class BenchmarkHistoryEntry:
             "summary": self.summary,
             "options": asdict(self.options),
             "cases": [asdict(case) for case in self.cases],
+            "environment": asdict(self.environment),
         }
 
     def identity_key(self) -> tuple[str, str, str]:
@@ -271,6 +280,12 @@ def _write_markdown(path: Path, entry: BenchmarkHistoryEntry) -> None:
     lines = [
         "# Benchmark Results",
         "",
+        "## Benchmark Context",
+        "",
+        _markdown_table(["Field", "Value"], _context_rows(entry)),
+        "",
+        "## Result Rows",
+        "",
         _markdown_table(_export_headers(), _export_rows(entry)),
         "",
     ]
@@ -294,6 +309,14 @@ def _export_headers() -> list[str]:
         "warmup",
         "threads",
         "model_dir",
+        "environment_os",
+        "environment_python",
+        "environment_cpu",
+        "environment_logical_cpus",
+        "environment_memory",
+        "environment_gpus",
+        "environment_frameworks",
+        "environment_node",
         "row_type",
         "model",
         "device",
@@ -319,6 +342,7 @@ def _export_headers() -> list[str]:
 
 def _export_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
     rows: list[list[Any]] = []
+    environment_values = _environment_export_values(entry.environment)
     for case in entry.cases:
         status = "ok" if case.error is None else "error"
         runs = case.runs or [None]
@@ -340,6 +364,7 @@ def _export_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
                     entry.options.warmup,
                     entry.options.threads,
                     entry.options.model_dir,
+                    *environment_values,
                     "run" if run is not None else "case",
                     case.model,
                     case.device,
@@ -363,6 +388,48 @@ def _export_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
                 ]
             )
     return rows
+
+
+def _context_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
+    rows = [
+        ["Created at", entry.created_at],
+        ["Benchmark status", entry.status],
+        ["Audio file", entry.options.audio_path],
+        ["Audio name", entry.options.audio_name],
+        ["Selected models", entry.options.model_names],
+        ["Standard device", entry.options.device],
+        ["Compute type", entry.options.compute_type],
+        ["ONNX device targets", entry.options.webgpu_devices],
+        ["Runs per case", entry.options.runs],
+        ["Beam size", entry.options.beam_size],
+        ["Language", entry.options.language],
+        ["VAD filter", entry.options.vad_filter],
+        ["Warmup", entry.options.warmup],
+        ["Threads", entry.options.threads],
+        ["Model directory", entry.options.model_dir],
+    ]
+    rows.extend(
+        [field_name, value]
+        for field_name, value in entry.environment.summary_details().items()
+        if _display_value(value)
+    )
+    return rows
+
+
+def _environment_export_values(environment: BenchmarkEnvironment) -> list[Any]:
+    frameworks = [
+        f"{name} {version}" for name, version in environment.frameworks.items()
+    ]
+    return [
+        environment.os,
+        environment.python,
+        environment.cpu,
+        environment.logical_cpus,
+        environment.memory,
+        _display_value(environment.gpus),
+        _display_value(frameworks),
+        environment.node,
+    ]
 
 
 def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:

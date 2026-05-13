@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import importlib.util
 import sys
 from pathlib import Path
@@ -45,10 +46,14 @@ def test_benchmark_csv_writer_creates_run_and_summary_rows(tmp_path):
 
     module._write_csv(out_path, [case])
 
-    text = out_path.read_text(encoding="utf-8")
-    assert "row_type,model,device,compute_type" in text
-    assert "run,small,cpu,int8,1" in text
-    assert "summary,small,cpu,int8" in text
+    rows = list(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
+    assert rows[0]["row_type"] == "run"
+    assert rows[0]["model"] == "small"
+    assert rows[0]["device"] == "cpu"
+    assert rows[0]["compute_type"] == "int8"
+    assert rows[0]["run_index"] == "1"
+    assert rows[1]["row_type"] == "summary"
+    assert rows[1]["model"] == "small"
 
 
 def test_successful_cases_filters_errors():

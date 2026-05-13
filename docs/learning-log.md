@@ -13,6 +13,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
   selected models, device targets, compute type, run count, beam size, language,
   VAD, warmup, thread count, model directory, and run status. This makes
   historical results comparable without relying on memory of the UI settings.
+- Benchmark summaries and exports also include best-effort system context:
+  OS, CPU, logical cores, memory, GPU names on Windows, Python, Node.js, and
+  local runtime/framework versions. The same metadata is persisted in benchmark
+  history so old results remain self-contained.
 - Transcript history entries can be edited in both the standalone History dialog
   and the Settings History tab. Edits preserve the original metadata and update
   the persisted history record in place.

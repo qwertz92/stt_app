@@ -4,6 +4,7 @@ import csv
 import math
 import zipfile
 
+from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import (
     BenchmarkHistoryEntry,
     BenchmarkHistoryStore,
@@ -53,6 +54,16 @@ def _entry() -> BenchmarkHistoryEntry:
         summary="Benchmark summary:\nsmall",
         options=options,
         cases=[case],
+        environment=BenchmarkEnvironment(
+            os="Windows 11",
+            python="CPython 3.12 64bit",
+            cpu="AMD Ryzen",
+            logical_cpus=12,
+            memory="32.0 GB",
+            gpus=["Intel Arc A750"],
+            frameworks={"faster-whisper": "1.2.1", "CTranslate2": "4.6.0"},
+            node="v22.0.0",
+        ),
     )
 
 
@@ -66,6 +77,8 @@ def test_benchmark_history_roundtrip(tmp_path):
     assert len(loaded) == 1
     assert loaded[0].status == "completed"
     assert loaded[0].options.model_names == ["small"]
+    assert loaded[0].environment.cpu == "AMD Ryzen"
+    assert loaded[0].environment.gpus == ["Intel Arc A750"]
     assert loaded[0].cases[0].avg_rtf == 0.6
 
 
@@ -108,6 +121,14 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "warmup",
         "threads",
         "model_dir",
+        "environment_os",
+        "environment_python",
+        "environment_cpu",
+        "environment_logical_cpus",
+        "environment_memory",
+        "environment_gpus",
+        "environment_frameworks",
+        "environment_node",
         "row_type",
         "model",
         "device",
@@ -130,7 +151,17 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "error",
     ]
     assert rows[1][1:4] == ["completed", "C:/sample.wav", "sample.wav"]
-    assert rows[1][15:20] == ["run", "small", "auto", "int8", "1"]
+    assert rows[1][15:23] == [
+        "Windows 11",
+        "CPython 3.12 64bit",
+        "AMD Ryzen",
+        "12",
+        "32.0 GB",
+        "Intel Arc A750",
+        "faster-whisper 1.2.1, CTranslate2 4.6.0",
+        "v22.0.0",
+    ]
+    assert rows[1][23:28] == ["run", "small", "auto", "int8", "1"]
 
     with zipfile.ZipFile(xlsx_path) as archive:
         names = set(archive.namelist())
@@ -142,5 +173,7 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
 
     markdown = markdown_path.read_text(encoding="utf-8")
     assert markdown.startswith("# Benchmark Results")
+    assert "## Benchmark Context" in markdown
+    assert "| CPU | AMD Ryzen |" in markdown
+    assert "## Result Rows" in markdown
     assert "| created_at | benchmark_status | audio_path |" in markdown
-    assert "| " + rows[1][0] in markdown

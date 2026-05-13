@@ -14,6 +14,10 @@ from typing import Any
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
+from stt_app.benchmark_environment import (
+    BenchmarkEnvironment,
+    collect_benchmark_environment,
+)
 from stt_app.local_benchmark import (
     BenchmarkCase,
     BenchmarkRun,  # noqa: F401 - re-exported for script tests and JSON helpers.
@@ -415,6 +419,18 @@ def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
     )
 
 
+def _print_environment(environment: BenchmarkEnvironment) -> None:
+    print("")
+    print("System details:")
+    for key, value in environment.summary_details().items():
+        if isinstance(value, list):
+            display = ", ".join(str(item) for item in value if str(item).strip())
+        else:
+            display = str(value or "").strip()
+        if display:
+            print(f"- {key}: {display}")
+
+
 def _print_results(cases: list[BenchmarkCase]) -> None:
     print("")
     print("Benchmark summary:")
@@ -483,8 +499,12 @@ def _print_best_cases(cases: list[BenchmarkCase]) -> None:
         )
 
 
-def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
-    _shared_write_csv(path, cases)
+def _write_csv(
+    path: Path,
+    cases: list[BenchmarkCase],
+    environment: BenchmarkEnvironment | None = None,
+) -> None:
+    _shared_write_csv(path, cases, environment=environment)
 
 
 def main() -> int:
@@ -535,6 +555,8 @@ def main() -> int:
     print(f"warmup: {args.warmup}")
     print(f"threads: {args.threads if args.threads > 0 else 'default'}")
     print(f"isolated_case: {args.isolated_case}")
+    environment = collect_benchmark_environment()
+    _print_environment(environment)
 
     # Pre-download phase: ensure all models are available before timing.
     print("")
@@ -644,6 +666,7 @@ def main() -> int:
             "vad_filter": args.vad_filter,
             "warmup": args.warmup,
             "threads": args.threads,
+            "environment": asdict(environment),
             "results": [asdict(case) for case in cases],
         }
         args.json_out.parent.mkdir(parents=True, exist_ok=True)
@@ -651,7 +674,7 @@ def main() -> int:
         print(f"Saved JSON report to: {args.json_out.resolve()}")
 
     if args.csv_out is not None:
-        _write_csv(args.csv_out, cases)
+        _write_csv(args.csv_out, cases, environment=environment)
         print(f"Saved CSV report to: {args.csv_out.resolve()}")
 
     if interrupted:

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .benchmark_environment import BenchmarkEnvironment
 from .config import LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS, LOCAL_WEBGPU_MODEL_SIZES
 
 
@@ -453,6 +454,7 @@ def _format_detail_value(value: Any) -> str:
 def format_benchmark_summary(
     cases: list[BenchmarkCase],
     details: dict[str, Any] | None = None,
+    environment: BenchmarkEnvironment | None = None,
 ) -> str:
     if not cases:
         lines = ["No benchmark results available."]
@@ -462,6 +464,13 @@ def format_benchmark_summary(
                 f"- {key}: {_format_detail_value(value)}"
                 for key, value in details.items()
             )
+        if environment is not None:
+            lines.extend(["", "System details:"])
+            lines.extend(
+                f"- {key}: {_format_detail_value(value)}"
+                for key, value in environment.summary_details().items()
+                if _format_detail_value(value) != "-"
+            )
         return "\n".join(lines)
 
     lines = ["Benchmark summary:", ""]
@@ -470,6 +479,14 @@ def format_benchmark_summary(
         lines.extend(
             f"- {key}: {_format_detail_value(value)}"
             for key, value in details.items()
+        )
+        lines.append("")
+    if environment is not None:
+        lines.extend(["System details:"])
+        lines.extend(
+            f"- {key}: {_format_detail_value(value)}"
+            for key, value in environment.summary_details().items()
+            if _format_detail_value(value) != "-"
         )
         lines.append("")
 
@@ -501,12 +518,24 @@ def format_benchmark_summary(
     return "\n".join(lines)
 
 
-def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
+def _write_csv(
+    path: Path,
+    cases: list[BenchmarkCase],
+    environment: BenchmarkEnvironment | None = None,
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(
             handle,
             fieldnames=[
+                "environment_os",
+                "environment_python",
+                "environment_cpu",
+                "environment_logical_cpus",
+                "environment_memory",
+                "environment_gpus",
+                "environment_frameworks",
+                "environment_node",
                 "row_type",
                 "model",
                 "device",
@@ -530,11 +559,13 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
         )
         writer.writeheader()
 
+        environment_row = _environment_csv_values(environment)
         for case in cases:
             status = "ok" if case.error is None else "error"
             for run in case.runs:
                 writer.writerow(
                     {
+                        **environment_row,
                         "row_type": "run",
                         "model": case.model,
                         "device": case.device,
@@ -559,6 +590,7 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
 
             writer.writerow(
                 {
+                    **environment_row,
                     "row_type": "summary",
                     "model": case.model,
                     "device": case.device,
@@ -584,6 +616,35 @@ def _write_csv(path: Path, cases: list[BenchmarkCase]) -> None:
                     "error": case.error or "",
                 }
             )
+
+
+def _environment_csv_values(
+    environment: BenchmarkEnvironment | None,
+) -> dict[str, Any]:
+    if environment is None:
+        return {
+            "environment_os": "",
+            "environment_python": "",
+            "environment_cpu": "",
+            "environment_logical_cpus": "",
+            "environment_memory": "",
+            "environment_gpus": "",
+            "environment_frameworks": "",
+            "environment_node": "",
+        }
+    frameworks = [
+        f"{name} {version}" for name, version in environment.frameworks.items()
+    ]
+    return {
+        "environment_os": environment.os,
+        "environment_python": environment.python,
+        "environment_cpu": environment.cpu,
+        "environment_logical_cpus": environment.logical_cpus,
+        "environment_memory": environment.memory,
+        "environment_gpus": ", ".join(environment.gpus),
+        "environment_frameworks": ", ".join(frameworks),
+        "environment_node": environment.node,
+    }
 
 
 __all__ = [

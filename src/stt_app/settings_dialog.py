@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Callable, ClassVar
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import debug_audio_path, recordings_dir
+from .benchmark_environment import BenchmarkEnvironment, collect_benchmark_environment
 from .benchmark_history import (
     BenchmarkHistoryEntry,
     BenchmarkHistoryStore,
@@ -237,6 +238,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._current_benchmark_cases: list[BenchmarkCase] = []
         self._current_benchmark_entry: BenchmarkHistoryEntry | None = None
         self._current_benchmark_options: BenchmarkOptions | None = None
+        self._current_benchmark_environment: BenchmarkEnvironment | None = None
         self._remote_model_values: dict[str, str] = {
             "groq": self._loaded_settings.groq_model,
             "openai": self._loaded_settings.openai_model,
@@ -2556,6 +2558,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
         self._current_benchmark_options = None
+        self._current_benchmark_environment = None
         self.benchmark_results_table.setRowCount(0)
         self.benchmark_summary_text.clear()
         self._set_benchmark_status("", "#555")
@@ -2587,14 +2590,20 @@ class SettingsDialog(QtWidgets.QDialog):
         *,
         status: str,
         options: BenchmarkOptions | None = None,
+        environment: BenchmarkEnvironment | None = None,
     ) -> str:
         selected_options = options or self._current_benchmark_options
+        selected_environment = environment or self._current_benchmark_environment
         details = (
             selected_options.summary_details(status=_benchmark_status_text(status))
             if selected_options is not None
             else {"Status": _benchmark_status_text(status)}
         )
-        return format_benchmark_summary(cases, details=details)
+        return format_benchmark_summary(
+            cases,
+            details=details,
+            environment=selected_environment,
+        )
 
     def _benchmark_options_from_widgets(
         self,
@@ -2693,6 +2702,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._current_benchmark_cases = []
         self._current_benchmark_entry = None
         self._current_benchmark_options = options
+        self._current_benchmark_environment = None
         cancel_event = threading.Event()
         self._benchmark_cancel_event = cancel_event
         self.benchmark_results_table.setRowCount(0)
@@ -2706,6 +2716,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
         def _run() -> None:
             completed_cases: list[BenchmarkCase] = []
+            environment = collect_benchmark_environment()
+            self._current_benchmark_environment = environment
 
             def _case_finished(case: BenchmarkCase) -> None:
                 completed_cases.append(case)
@@ -2737,6 +2749,7 @@ class SettingsDialog(QtWidgets.QDialog):
                     completed_cases,
                     status="canceled",
                     options=options,
+                    environment=environment,
                 )
                 self.benchmark_finished.emit(
                     True,
@@ -2745,6 +2758,7 @@ class SettingsDialog(QtWidgets.QDialog):
                         "cases": completed_cases,
                         "options": options,
                         "status": "canceled",
+                        "environment": environment,
                     },
                 )
                 return
@@ -2755,11 +2769,17 @@ class SettingsDialog(QtWidgets.QDialog):
             status = "completed_with_errors" if any(case.error for case in cases) else "completed"
             self.benchmark_finished.emit(
                 True,
-                self._benchmark_summary(cases, status=status, options=options),
+                self._benchmark_summary(
+                    cases,
+                    status=status,
+                    options=options,
+                    environment=environment,
+                ),
                 {
                     "cases": cases,
                     "options": options,
                     "status": status,
+                    "environment": environment,
                 },
             )
 
@@ -2807,6 +2827,9 @@ class SettingsDialog(QtWidgets.QDialog):
             raw_options = payload.get("options", None)
             if isinstance(raw_options, BenchmarkOptions):
                 options = raw_options
+            raw_environment = payload.get("environment", None)
+            if isinstance(raw_environment, BenchmarkEnvironment):
+                self._current_benchmark_environment = raw_environment
             status = str(payload.get("status", status))
 
         if not isinstance(raw_cases, (list, tuple)):
@@ -2826,6 +2849,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 summary=text,
                 options=options,
                 cases=cases,
+                environment=self._current_benchmark_environment,
             )
             self._current_benchmark_entry = entry
             try:
@@ -2922,6 +2946,7 @@ class SettingsDialog(QtWidgets.QDialog):
     def _load_benchmark_history_entry(self, entry: BenchmarkHistoryEntry) -> None:
         self._current_benchmark_entry = entry
         self._current_benchmark_options = entry.options
+        self._current_benchmark_environment = entry.environment
         self._current_benchmark_cases = list(entry.cases)
         self._populate_benchmark_results(entry.cases)
         self.benchmark_summary_text.setPlainText(entry.summary)

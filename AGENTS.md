@@ -70,6 +70,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
 | `window_focus.py` | Win32 foreground/focus/caret window tracking for text insertion |
 | `hotkey.py` | Global hotkey registration via Win32 RegisterHotKey |
+| `benchmark_environment.py` | Best-effort benchmark system metadata |
 | `scripts/import_model.py` | Import manually downloaded models; validates for Git LFS pointers |
 | `scripts/download_model.py` | Automated model download for offline/corporate use |
 
@@ -135,6 +136,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   directory is supplied, it chooses the newest managed/archive WAV, but
   recoverable managed recordings still win so retry/recovery state remains
   intact.
+- **Benchmark environment metadata**: benchmark summaries and exports include a
+  best-effort system context from `benchmark_environment.py`. Keep hardware,
+  OS, Python, Node.js, and local runtime/framework version collection there so
+  Settings, history exports, and the CLI benchmark do not drift.
 
 ## Core flow
 

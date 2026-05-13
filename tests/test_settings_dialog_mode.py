@@ -736,6 +736,7 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     assert captured_kwargs["webgpu_devices"] == ["auto"]
     assert dialog.benchmark_summary_text.toPlainText().startswith("Benchmark summary:")
     assert "Benchmark details:" in dialog.benchmark_summary_text.toPlainText()
+    assert "System details:" in dialog.benchmark_summary_text.toPlainText()
     assert "Benchmark finished" in dialog.benchmark_status_label.text()
     assert dialog.benchmark_history_list.count() == 1
     assert dialog.export_benchmark_results_button.isEnabled() is True
