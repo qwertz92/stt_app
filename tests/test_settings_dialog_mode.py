@@ -833,6 +833,67 @@ def test_benchmark_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
     _ = app
 
 
+def test_import_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    recordings_path = tmp_path / "recordings"
+    captured: dict[str, str] = {}
+
+    def fake_get_open_file_name(parent, title, directory, file_filter):
+        captured["directory"] = directory
+        return "", ""
+
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        fake_get_open_file_name,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(
+            AppSettings(recordings_dir=str(recordings_path))
+        ),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    dialog._choose_import_file()
+
+    assert captured["directory"] == str(recordings_path)
+    assert recordings_path.is_dir()
+    _ = app
+
+
+def test_import_audio_picker_reuses_selected_file_directory(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    selected_dir = tmp_path / "selected"
+    selected_dir.mkdir()
+    selected_path = selected_dir / "sample.wav"
+    selected_path.write_bytes(b"RIFF")
+    captured: dict[str, str] = {}
+
+    def fake_get_open_file_name(parent, title, directory, file_filter):
+        captured["directory"] = directory
+        return "", ""
+
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        fake_get_open_file_name,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._set_selected_import_file(str(selected_path))
+
+    dialog._choose_import_file()
+
+    assert captured["directory"] == str(selected_dir)
+    _ = app
+
+
 def test_clear_benchmark_results_restores_initial_dialog_size():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
@@ -1591,7 +1652,7 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
     _ = app
 
 
-def test_import_start_transcribes_without_confirmation(monkeypatch):
+def test_import_start_transcribes_without_confirmation(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
     monkeypatch.setattr(
@@ -1615,12 +1676,30 @@ def test_import_start_transcribes_without_confirmation(monkeypatch):
         app_logger=_FakeLogger(),
         controller=_Controller(),
     )
-    dialog._set_selected_import_file("dummy.wav")
+    import_path = tmp_path / "dummy.wav"
+    import_path.write_bytes(b"RIFF")
+    dialog._set_selected_import_file(str(import_path))
 
     dialog._transcribe_selected_import_file()
 
     assert dialog.import_result_label.text() == "Transcription finished."
     assert dialog.import_result_text.toPlainText() == "imported text"
+    _ = app
+
+
+def test_import_start_rejects_missing_selected_file():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(engine="local")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._set_selected_import_file("missing.wav")
+
+    dialog._transcribe_selected_import_file()
+
+    assert "no longer exists" in dialog.import_result_label.text()
+    assert dialog.import_start_button.isEnabled() is False
     _ = app
 
 

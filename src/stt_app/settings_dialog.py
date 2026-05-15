@@ -4100,6 +4100,14 @@ class SettingsDialog(QtWidgets.QDialog):
             return str(recordings_dir())
         return target
 
+    def _import_file_dialog_dir(self) -> str:
+        selected = str(self._selected_import_file_path or "").strip()
+        if selected:
+            parent = Path(selected).parent
+            if parent.is_dir():
+                return str(parent)
+        return self._recordings_file_dialog_dir()
+
     def _archived_recordings_dir_for_selection(self) -> str | None:
         if not self.save_all_recordings_checkbox.isChecked():
             return None
@@ -4201,10 +4209,16 @@ class SettingsDialog(QtWidgets.QDialog):
     def _set_selected_import_file(self, path: str) -> None:
         selected = str(path or "").strip()
         self._selected_import_file_path = selected
-        if selected:
+        if selected and Path(selected).is_file():
             self.import_selected_file_label.setText(f"Selected: {selected}")
             self.import_selected_file_label.setStyleSheet("color: #1b5e20;")
             self.import_start_button.setEnabled(True)
+        elif selected:
+            self.import_selected_file_label.setText(
+                f"Selected file does not exist: {selected}"
+            )
+            self.import_selected_file_label.setStyleSheet("color: #b71c1c;")
+            self.import_start_button.setEnabled(False)
         else:
             self.import_selected_file_label.setText("No file selected.")
             self.import_selected_file_label.setStyleSheet("color: #555;")
@@ -4214,7 +4228,7 @@ class SettingsDialog(QtWidgets.QDialog):
         path, _filter = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Select audio file",
-            "",
+            self._import_file_dialog_dir(),
             "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.webm);;All files (*)",
         )
         if not path:
@@ -4250,6 +4264,13 @@ class SettingsDialog(QtWidgets.QDialog):
         if not path:
             self.import_result_label.setText("Select a file first.")
             self.import_result_label.setStyleSheet("color: #b71c1c;")
+            return
+        if not Path(path).is_file():
+            self.import_result_label.setText(
+                f"Selected file no longer exists: {path}"
+            )
+            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            self.import_start_button.setEnabled(False)
             return
         self._start_import_transcription(path)
 
