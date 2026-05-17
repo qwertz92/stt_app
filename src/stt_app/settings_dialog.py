@@ -773,7 +773,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.engine_combo = _WheelPassthroughComboBox()
         engine_labels = {
-            "local": "Local (faster-whisper)",
+            "local": "Local (faster-whisper / ONNX)",
             "assemblyai": "Remote (AssemblyAI)",
             "groq": "Remote (Groq)",
             "openai": "Remote (OpenAI)",
@@ -784,7 +784,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.engine_combo.addItem(engine_labels.get(value, value), value)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_hint = QtWidgets.QLabel(
-            "Local keeps audio on your machine. Remote providers need internet and an API key."
+            "Local keeps audio on your machine. Local models can use either "
+            "faster-whisper or the experimental ONNX/WebGPU runtime."
         )
         engine_hint.setWordWrap(True)
         self._style_note_label(engine_hint)
@@ -833,13 +834,13 @@ class SettingsDialog(QtWidgets.QDialog):
         for value in VALID_MODES:
             self.mode_combo.addItem(mode_labels.get(value, value), value)
         self.mode_combo.setToolTip(
-            "Streaming is experimental: live insertion while speaking, "
-            "auto-abort on focus change. Batch remains the recommended default."
+            "Streaming inserts only stable append-only text while speaking and "
+            "auto-aborts on focus change. Batch remains the recommended default."
         )
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_hint = QtWidgets.QLabel(
-            "Batch inserts text after recording stops. Streaming writes while you speak, "
-            "but is more sensitive to focus changes and provider differences."
+            "Batch inserts text after recording stops. Streaming can append stable "
+            "text while you speak, but it never rewrites already inserted text."
         )
         mode_hint.setWordWrap(True)
         self._style_note_label(mode_hint)
@@ -866,18 +867,22 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self.paste_mode_combo.setToolTip(
             "Auto tries SendInput first and falls back to WM_PASTE. "
-            "WM_PASTE only sends the window message directly. "
-            "SendInput only simulates Ctrl+V."
+            "SendInput simulates the real Ctrl+V keyboard shortcut. "
+            "WM_PASTE sends a paste message directly to the focused edit control; "
+            "some modern apps ignore it."
         )
-        paste_mode_hint = QtWidgets.QLabel(
-            "Paste Mode controls how the paste command is delivered to the target app. "
-            "It does not decide what stays in your clipboard afterwards."
+        self.paste_mode_hint_label = QtWidgets.QLabel(
+            "Paste Mode controls how the paste command reaches the target app. "
+            "SendInput behaves like pressing Ctrl+V and works in most apps; "
+            "WM_PASTE bypasses keyboard simulation and can help when simulated "
+            "keys are blocked, but some modern apps ignore that message. "
+            "Auto tries SendInput first, then WM_PASTE."
         )
-        paste_mode_hint.setWordWrap(True)
-        self._style_note_label(paste_mode_hint)
+        self.paste_mode_hint_label.setWordWrap(True)
+        self._style_note_label(self.paste_mode_hint_label)
         paste_form.addRow(
             "Paste Mode",
-            self._field_with_hint(self.paste_mode_combo, paste_mode_hint),
+            self._field_with_hint(self.paste_mode_combo, self.paste_mode_hint_label),
         )
 
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(
@@ -1749,7 +1754,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.import_engine_combo = _WheelPassthroughComboBox()
         import_engine_labels = {
-            "local": "Local (faster-whisper)",
+            "local": "Local (faster-whisper / ONNX)",
             "assemblyai": "Remote (AssemblyAI)",
             "groq": "Remote (Groq)",
             "openai": "Remote (OpenAI)",
@@ -3146,7 +3151,9 @@ class SettingsDialog(QtWidgets.QDialog):
             self.remote_model_combo.addItem("Not applicable for local engine", "")
             self.remote_model_combo.setEnabled(False)
             self.remote_model_note_label.setText(
-                "Local transcription uses the faster-whisper model selected on the Local tab."
+                "Local transcription uses the model selected on the Local tab. "
+                "faster-whisper models support streaming; experimental ONNX/WebGPU "
+                "models are batch-only."
             )
             self.remote_model_combo.blockSignals(False)
             return

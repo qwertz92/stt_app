@@ -1,8 +1,9 @@
 from stt_app.config import STREAMING_REVISION_WORD_WINDOW, STREAMING_STABLE_WORD_GUARD
 from stt_app.streaming_text import (
     StreamingTextState,
-    best_stream_finalize_tail,
-    compute_stream_live_delta,
+    append_only_stream_extension_tail,
+    append_only_stream_finalize_tail,
+    append_only_stream_partial_candidate,
     normalize_stream_text,
     stream_insertion_text,
 )
@@ -18,76 +19,101 @@ def test_stream_insertion_text_omits_space_before_punctuation():
     assert stream_insertion_text("", "hello") == "hello"
 
 
-def test_stream_live_delta_keeps_first_partial_revisable():
-    delta, committed = compute_stream_live_delta(
-        "",
-        "",
-        "hello world",
-        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
-        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
-    )
-    assert delta == "hello world"
-    assert committed == ""
-
-    delta, committed = compute_stream_live_delta(
-        "",
-        "hello world now",
-        "hello world now again",
-        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
-        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
-    )
-    assert delta == "world now again"
-    assert committed == "hello"
+def test_append_only_extension_never_rewrites_committed_prefix():
+    assert append_only_stream_extension_tail("hello", "hello world") == "world"
+    assert append_only_stream_extension_tail("hello world", "hello there") == ""
+    assert append_only_stream_extension_tail("hello world", "world again") == ""
 
 
-def test_stream_live_delta_extends_locked_prefix_consistently():
-    delta, committed = compute_stream_live_delta(
-        "hello",
-        "hello there foo bar",
-        "hello there foo bar baz",
-        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
-        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
-    )
-    assert delta == "foo bar baz"
-    assert committed == "hello there"
-
-
-def test_stream_finalize_tail_uses_last_partial_when_final_diverges():
-    tail = best_stream_finalize_tail(
-        "hello world",
-        "hello word",
-        "hello world plus",
+def test_append_only_partial_candidate_handles_rolling_audio_window():
+    assert (
+        append_only_stream_partial_candidate(
+            "hello world this is",
+            "world this is working",
+        )
+        == "hello world this is working"
     )
 
-    assert tail == "plus"
+
+def test_append_only_partial_candidate_keeps_revisions_revisable():
+    assert (
+        append_only_stream_partial_candidate(
+            "hello word",
+            "hello world this",
+        )
+        == "hello world this"
+    )
+    assert append_only_stream_partial_candidate("hello world", "world again") == (
+        "world again"
+    )
 
 
-def test_streaming_text_state_tracks_revisions_and_finalize_tail():
+def test_append_only_finalize_uses_only_safe_extensions():
+    assert (
+        append_only_stream_finalize_tail(
+            "hello",
+            "hello final",
+            "hello partial",
+        )
+        == "final"
+    )
+    assert append_only_stream_finalize_tail("hello world", "hello there", "") == ""
+    assert (
+        append_only_stream_finalize_tail(
+            "hello world",
+            "hello world",
+            "hello world stale",
+        )
+        == ""
+    )
+    assert append_only_stream_finalize_tail("hello", "", "hello fallback") == "fallback"
+
+
+def test_streaming_text_state_append_only_inserts_stable_prefix_only():
     state = StreamingTextState(
         stable_word_guard=STREAMING_STABLE_WORD_GUARD,
         revision_word_window=STREAMING_REVISION_WORD_WINDOW,
     )
 
-    first = state.apply_partial("hello world")
-    assert first.current_insertion == ""
-    assert first.desired_insertion == "hello world"
+    first = state.apply_partial_append_only("hello world")
+    assert first.insertion == ""
     assert state.committed_text == ""
-    assert state.live_text == "hello world"
 
-    second = state.apply_partial("hello world now")
-    assert second.current_insertion == "hello world"
-    assert second.desired_insertion == "hello world now"
+    second = state.apply_partial_append_only("hello world this is")
+    assert second.insertion == ""
     assert state.committed_text == ""
-    assert state.live_text == "hello world now"
 
-    third = state.apply_partial("hello world now again")
-    assert third.current_insertion == " world now"
-    assert third.desired_insertion == " world now again"
-    assert state.committed_text == "hello"
-    assert state.live_text == "hello world now again"
+    third = state.apply_partial_append_only("hello world this is final")
+    assert third.insertion == "hello world"
+    assert state.committed_text == "hello world"
 
-    replacement, final_text = state.finalize("hello world now again")
-    assert final_text == "hello world now again"
-    assert replacement.current_insertion == " world now again"
-    assert replacement.desired_insertion == " world now again"
-    assert state.live_text == "hello world now again"
+    revision = state.apply_partial_append_only("hello there this is")
+    assert revision.insertion == ""
+    assert state.committed_text == "hello world"
+
+    final_insertion, final_text = state.finalize_append_only(
+        "hello world this is final"
+    )
+    assert final_text == "hello world this is final"
+    assert final_insertion == " this is final"
+
+
+def test_streaming_text_state_accumulates_rolling_partials_append_only():
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+
+    first = state.apply_partial_append_only("hello world this is")
+    assert first.insertion == ""
+    assert state.live_text == "hello world this is"
+
+    second = state.apply_partial_append_only("world this is working now")
+    assert second.insertion == "hello world"
+    assert state.committed_text == "hello world"
+    assert state.live_text == "hello world this is working now"
+
+    third = state.apply_partial_append_only("this is working now today")
+    assert third.insertion == " this is"
+    assert state.committed_text == "hello world this is"
+    assert state.live_text == "hello world this is working now today"

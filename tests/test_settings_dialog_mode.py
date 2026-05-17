@@ -1590,9 +1590,31 @@ def test_general_tab_explains_paste_mode_and_clipboard_retention_separately():
     )
 
     assert "WM_PASTE" in dialog.paste_mode_combo.toolTip()
+    assert "SendInput simulates the real Ctrl+V" in dialog.paste_mode_combo.toolTip()
+    assert "some modern apps ignore" in dialog.paste_mode_combo.toolTip()
+    assert "SendInput behaves like pressing Ctrl+V" in (
+        dialog.paste_mode_hint_label.text()
+    )
+    assert "WM_PASTE bypasses keyboard simulation" in (
+        dialog.paste_mode_hint_label.text()
+    )
     assert "previous clipboard contents are restored" in (
         dialog.keep_clipboard_checkbox.toolTip()
     )
+    _ = app
+
+
+def test_general_tab_local_engine_mentions_faster_whisper_and_onnx():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(engine="local")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.engine_combo.currentText() == "Local (faster-whisper / ONNX)"
+    assert "faster-whisper" in dialog.remote_model_note_label.text()
+    assert "ONNX/WebGPU" in dialog.remote_model_note_label.text()
     _ = app
 
 

@@ -32,9 +32,10 @@ Flow:
 1. Start stream session in transcriber.
 2. Audio callback pushes PCM chunks continuously.
 3. Transcriber periodically re-transcribes only a trailing audio window and emits partial text.
-4. Controller inserts incremental text deltas at the current caret during streaming.
-5. On stop hotkey, stream is finalized and only the remaining tail (if any) is inserted.
-6. If target focus changes during streaming, session auto-aborts and plays a short alert beep.
+4. Streaming text state reconciles rolling windows by safe word overlap.
+5. Controller inserts only stable append-only text deltas at the current caret.
+6. On stop hotkey, stream is finalized and only a safe remaining tail is appended.
+7. If target focus changes during streaming, session auto-aborts and plays a short alert beep.
 
 Implementation detail:
 
@@ -44,9 +45,10 @@ Implementation detail:
 
 Characteristics:
 
-- live partial feedback and live insertion during dictation,
+- live partial feedback and append-only live insertion during dictation,
 - higher CPU usage than batch (periodic re-transcription),
-- partial text can be revised as more context arrives.
+- partial text can be revised in the overlay, but already inserted text is not
+  rewritten.
 
 ## 3) Technical architecture in this repo
 
@@ -54,10 +56,17 @@ Characteristics:
 
 - `DictationController.start_recording()` branches by `settings.mode`.
 - For `streaming`, it calls `transcriber.start_stream(...)` and starts capture with a chunk callback.
-- Partial updates are emitted via `transcription_partial` Qt signal, shown in overlay, and incrementally inserted at caret.
+- Partial updates are emitted via `transcription_partial` Qt signal, shown in
+  overlay, and appended at caret only after text is stable enough.
+- Local faster-whisper partials can come from a rolling audio window. The pure
+  streaming text state only merges those windows when a safe word overlap is
+  present, and still exposes only append-only insertions to the controller.
 - Runtime stream/provider errors now fail fast: the controller stops capture, aborts the active stream, preserves the current recording for retry, and surfaces an error immediately instead of waiting for the user to press Stop.
-- Live insertion now keeps a locked prefix plus a revisable tail: the tail is replaced in-place as partials evolve, while older text is only locked after the stable-prefix guard and revision window are satisfied.
-- Stop action triggers `transcriber.stop_stream()` in background worker and only inserts remaining text delta.
+- Live insertion is append-only. The controller may delay insertion until a
+  stable prefix is observed, but it must not select, replace, or delete text
+  already inserted into the target application.
+- Stop action triggers `transcriber.stop_stream()` in background worker and
+  only appends a remaining safe text delta.
 - Focus-signature guard aborts streaming when target focus/cursor changes.
 - Abort path uses fast stream cancellation (no heavy final re-transcription) to keep abort beep low-latency.
 
@@ -98,9 +107,10 @@ Characteristics:
 
 Streaming does not necessarily mean lower final quality, but in this implementation:
 
-- partial text may be less stable (revisions happen),
-- recent live text can now be revised in place, but older locked text is intentionally not rewritten again,
-- finalize tail uses last partial as fallback when final pass diverges from already committed live text,
+- partial text may be less stable in the overlay,
+- inserted text is append-only and is not revised in place,
+- finalization uses the final transcript as source of truth when present and
+  never deletes previously inserted target text,
 - CPU contention on slower machines can indirectly affect responsiveness,
 - final text quality is typically close to batch for the same model when enough context is captured.
 

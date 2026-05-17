@@ -58,12 +58,6 @@ class Win32ClipboardBackend:
     def send_ctrl_v(self) -> None:
         _send_ctrl_v_input()
 
-    def select_left(self, count: int) -> None:
-        _send_shift_left_input(max(0, int(count or 0)))
-
-    def delete_selection(self) -> None:
-        _send_backspace_input(1)
-
     def send_paste(self, target_hwnd: int | None = None) -> str:
         return self.send_paste_with_mode("auto", target_hwnd=target_hwnd)
 
@@ -253,62 +247,10 @@ class TextInserter:
             paste_mode=paste_mode,
         )
 
-    def replace_recent_text_with_options(
-        self,
-        previous_text: str,
-        new_text: str,
-        target_hwnd: int | None = None,
-        paste_mode: str = "auto",
-    ) -> bool:
-        previous = str(previous_text or "")
-        replacement = str(new_text or "")
-        if previous == replacement:
-            return False
-        if not previous:
-            if not replacement:
-                return False
-            return self.insert_text_with_options(
-                replacement,
-                target_hwnd=target_hwnd,
-                paste_mode=paste_mode,
-            )
-
-        selector = getattr(self._backend, "select_left", None)
-        if not callable(selector):
-            raise TextInsertionError("Backend does not support text replacement.")
-        try:
-            selector(len(previous))
-        except Exception as exc:
-            raise TextInsertionError(
-                f"Failed to select previously inserted text: {exc}"
-            ) from exc
-
-        if replacement:
-            return self._paste_text_with_options(
-                replacement,
-                target_hwnd=target_hwnd,
-                paste_mode=paste_mode,
-            )
-
-        deleter = getattr(self._backend, "delete_selection", None)
-        if not callable(deleter):
-            raise TextInsertionError("Backend does not support text deletion.")
-        try:
-            deleter()
-        except Exception as exc:
-            raise TextInsertionError(
-                f"Failed to delete previously inserted text: {exc}"
-            ) from exc
-        return True
-
-
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
 VK_CONTROL = 0x11
-VK_SHIFT = 0x10
 VK_V = 0x56
-VK_LEFT = 0x25
-VK_BACK = 0x08
 WIN_WORD = ctypes.c_uint16
 WIN_DWORD = ctypes.c_uint32
 WIN_LONG = ctypes.c_int32
@@ -423,27 +365,8 @@ def _modified_key_inputs(modifier_vk: int, key_vk: int) -> list[INPUT]:
     ]
 
 
-def _repeat_key_inputs(vk: int, count: int) -> list[INPUT]:
-    events: list[INPUT] = []
-    for _ in range(max(0, int(count or 0))):
-        events.append(_keyboard_input(vk, keyup=False))
-        events.append(_keyboard_input(vk, keyup=True))
-    return events
-
-
 def _send_ctrl_v_input() -> None:
     _send_input_batch(_modified_key_inputs(VK_CONTROL, VK_V))
-
-
-def _send_shift_left_input(count: int) -> None:
-    events: list[INPUT] = []
-    for _ in range(max(0, int(count or 0))):
-        events.extend(_modified_key_inputs(VK_SHIFT, VK_LEFT))
-    _send_input_batch(events)
-
-
-def _send_backspace_input(count: int) -> None:
-    _send_input_batch(_repeat_key_inputs(VK_BACK, count))
 
 
 def _format_sendinput_failure(sent: int, expected: int, error_code: int) -> str:

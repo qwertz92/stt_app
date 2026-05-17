@@ -6,9 +6,9 @@ _NO_SPACE_BEFORE = {".", ",", ";", ":", "!", "?", ")", "]", "}"}
 
 
 @dataclass(frozen=True, slots=True)
-class StreamingTextReplacement:
-    current_insertion: str
-    desired_insertion: str
+class StreamingTextAppend:
+    insertion: str
+    display_text: str
 
 
 @dataclass(slots=True)
@@ -24,50 +24,46 @@ class StreamingTextState:
         self.live_text = ""
         self.last_partial_text = ""
 
-    def apply_partial(self, partial_text: str) -> StreamingTextReplacement:
+    def apply_partial_append_only(self, partial_text: str) -> StreamingTextAppend:
         text = normalize_stream_text(partial_text)
-        previous_partial = self.last_partial_text
-        next_committed = compute_stream_locked_prefix(
-            self.committed_text,
-            previous_partial,
+        candidate_text = append_only_stream_partial_candidate(
+            self.last_partial_text,
             text,
+            min_overlap_words=max(
+                2,
+                self.stable_word_guard + self.revision_word_window,
+            ),
+        )
+        previous_partial = self.last_partial_text
+        previous_committed = self.committed_text
+        next_committed = compute_stream_locked_prefix(
+            previous_committed,
+            previous_partial,
+            candidate_text,
             stable_word_guard=self.stable_word_guard,
             revision_word_window=self.revision_word_window,
         )
-        current_tail = best_stream_extension_tail(next_committed, self.live_text)
-        desired_tail = best_stream_extension_tail(next_committed, text)
-        replacement = StreamingTextReplacement(
-            current_insertion=stream_insertion_text(next_committed, current_tail),
-            desired_insertion=stream_insertion_text(next_committed, desired_tail),
-        )
-        self.last_partial_text = text
+        tail = append_only_stream_extension_tail(previous_committed, next_committed)
+        insertion = stream_insertion_text(previous_committed, tail)
+        self.last_partial_text = candidate_text
         self.committed_text = next_committed
-        self.live_text = stream_join_text(next_committed, desired_tail)
-        return replacement
-
-    def finalize(self, final_text: str) -> tuple[StreamingTextReplacement, str]:
-        normalized_final = normalize_stream_text(final_text)
-        current_tail = best_stream_extension_tail(
-            self.committed_text,
-            self.live_text,
+        self.live_text = candidate_text
+        return StreamingTextAppend(
+            insertion=insertion,
+            display_text=candidate_text,
         )
-        desired_tail = best_stream_finalize_tail(
+
+    def finalize_append_only(self, final_text: str) -> tuple[str, str]:
+        normalized_final = normalize_stream_text(final_text)
+        tail = append_only_stream_finalize_tail(
             self.committed_text,
             normalized_final,
             self.last_partial_text,
         )
-        replacement = StreamingTextReplacement(
-            current_insertion=stream_insertion_text(
-                self.committed_text,
-                current_tail,
-            ),
-            desired_insertion=stream_insertion_text(
-                self.committed_text,
-                desired_tail,
-            ),
-        )
-        self.live_text = stream_join_text(self.committed_text, desired_tail)
-        return replacement, normalized_final
+        insertion = stream_insertion_text(self.committed_text, tail)
+        self.live_text = stream_join_text(self.committed_text, tail)
+        self.committed_text = self.live_text
+        return insertion, normalized_final
 
 
 def normalize_stream_text(text: str) -> str:
@@ -108,17 +104,27 @@ def common_prefix_len(left: list[str], right: list[str]) -> int:
     return size
 
 
-def suffix_prefix_overlap_len(left: list[str], right: list[str]) -> int:
-    if not left or not right:
-        return 0
-    max_size = min(len(left), len(right))
-    overlap = 0
-    for size in range(1, max_size + 1):
-        if [token.lower() for token in left[-size:]] == [
-            token.lower() for token in right[:size]
-        ]:
-            overlap = size
-    return overlap
+def append_only_stream_partial_candidate(
+    previous_text: str,
+    current_text: str,
+    *,
+    min_overlap_words: int = 2,
+) -> str:
+    previous = normalize_stream_text(previous_text)
+    current = normalize_stream_text(current_text)
+    if not previous or not current:
+        return current
+
+    previous_words = split_stream_words(previous)
+    current_words = split_stream_words(current)
+    if common_prefix_len(previous_words, current_words) == len(previous_words):
+        return current
+
+    overlap = _suffix_prefix_overlap_len(previous_words, current_words)
+    if overlap >= max(1, int(min_overlap_words)):
+        merged = previous_words + current_words[overlap:]
+        return " ".join(merged).strip()
+    return current
 
 
 def compute_stream_locked_prefix(
@@ -148,58 +154,43 @@ def compute_stream_locked_prefix(
     return " ".join(candidate_words).strip()
 
 
-def best_stream_extension_tail(committed: str, candidate: str) -> str:
+def append_only_stream_extension_tail(committed: str, candidate: str) -> str:
     committed_words = split_stream_words(committed)
     candidate_words = split_stream_words(candidate)
     if not candidate_words:
         return ""
+    if not committed_words:
+        return " ".join(candidate_words).strip()
     prefix_len = common_prefix_len(committed_words, candidate_words)
-    candidate_tail = candidate_words[prefix_len:]
-    committed_tail = committed_words[prefix_len:]
-    overlap_len = suffix_prefix_overlap_len(committed_tail, candidate_tail)
-    delta_words = candidate_tail[overlap_len:]
-    return " ".join(delta_words).strip()
+    if prefix_len < len(committed_words):
+        return ""
+    return " ".join(candidate_words[prefix_len:]).strip()
 
 
-def compute_stream_live_delta(
-    committed: str,
-    previous_partial: str,
-    current_partial: str,
-    *,
-    stable_word_guard: int,
-    revision_word_window: int,
-) -> tuple[str, str]:
-    next_committed = compute_stream_locked_prefix(
-        committed,
-        previous_partial,
-        current_partial,
-        stable_word_guard=stable_word_guard,
-        revision_word_window=revision_word_window,
-    )
-    return best_stream_extension_tail(next_committed, current_partial), next_committed
-
-
-def best_stream_finalize_tail(
+def append_only_stream_finalize_tail(
     committed: str,
     final_text: str,
     last_partial_text: str,
 ) -> str:
-    committed_words = split_stream_words(committed)
-    best_tail = ""
-    best_score = -1
-    for candidate in (final_text, last_partial_text):
-        candidate_words = split_stream_words(candidate)
-        if not candidate_words:
-            continue
-        prefix_len = common_prefix_len(committed_words, candidate_words)
-        candidate_tail = candidate_words[prefix_len:]
-        committed_tail = committed_words[prefix_len:]
-        overlap_len = suffix_prefix_overlap_len(committed_tail, candidate_tail)
-        delta_words = candidate_tail[overlap_len:]
-        score = prefix_len + overlap_len
-        if prefix_len < len(committed_words) and overlap_len == 0:
-            score -= 1
-        if score > best_score:
-            best_score = score
-            best_tail = " ".join(delta_words).strip()
-    return best_tail
+    normalized_final = normalize_stream_text(final_text)
+    if normalized_final:
+        return append_only_stream_extension_tail(committed, normalized_final)
+    return append_only_stream_extension_tail(committed, last_partial_text)
+
+
+def _suffix_prefix_overlap_len(left: list[str], right: list[str]) -> int:
+    max_size = min(len(left), len(right))
+    for size in range(max_size, 0, -1):
+        left_tail = left[-size:]
+        right_head = right[:size]
+        if all(_stream_words_match(a, b) for a, b in zip(left_tail, right_head)):
+            return size
+    return 0
+
+
+def _stream_words_match(left: str, right: str) -> bool:
+    return _stream_word_key(left) == _stream_word_key(right)
+
+
+def _stream_word_key(word: str) -> str:
+    return word.strip().strip(".,;:!?)]}").lower()

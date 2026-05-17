@@ -748,6 +748,23 @@ Agents and developers: use this as a knowledge base for past issues and solution
     rewrites the ending.
   - Added regression coverage for shrinking partials, tail deletion on
     finalize, and the new replacement path in `text_inserter.py`.
+- **Streaming live insertion reverted to append-only for safety:**
+  - Root cause: local faster-whisper partials are based on a rolling audio
+    window, and provider partials are inherently revisable. Treating them as a
+    mutable target-text tail meant the app could select/delete text in the
+    target editor if the caret moved, an app changed selection behavior, or a
+    partial shrank.
+  - Controller streaming insertion now only appends stable text. It never calls
+    the replacement/delete path for live partials or finalization.
+  - Rolling local faster-whisper windows are reconciled by safe word overlap so
+    the live text can keep growing without treating the rolling window as a
+    full mutable transcript.
+  - Removed the unused text replacement wrapper/API so the controller cannot
+    accidentally reintroduce Shift+Left/Backspace-based live correction.
+  - Finalization uses the final transcript when present and does not re-append
+    stale `last_partial` text when final is shorter.
+  - General-tab copy now explains local faster-whisper versus ONNX/WebGPU and
+    clarifies SendInput versus WM_PASTE behavior.
 - **Win32 input structs are now defined with fixed Windows-width ctypes:**
   - Replaced platform-dependent `ctypes.wintypes` fields in `INPUT`-related
     structures with explicit 16/32/64-bit Windows types.

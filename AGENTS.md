@@ -129,8 +129,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   batch-only, but that local model selection must not disable remote provider
   streaming for AssemblyAI or Deepgram.
 - **Streaming text state**: Keep provider partial-text reconciliation in
-  `streaming_text.py`. The controller may expose thin compatibility wrappers,
-  but it should only orchestrate Qt/audio/focus/insertion side effects.
+  `streaming_text.py`; the controller should only orchestrate
+  Qt/audio/focus/insertion side effects.
+  Streaming insertion is append-only: do not use live partial revisions to
+  select/delete previously inserted text.
+  Local rolling-window partials may be merged by safe word overlap, but only to
+  append new text.
 - **Last recording selection**: `LastRecordingStore.selectable_path()` is the
   single selection point for "Use last recording". When an archived recordings
   directory is supplied, it chooses the newest managed/archive WAV, but
@@ -146,7 +150,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 1. Global hotkey toggles recording.
 2. Overlay: `Idle → Listening → Processing → Done/Error`.
 3. Batch mode: recorded WAV transcribed on stop.
-4. Streaming mode (local, AssemblyAI, Deepgram): live chunks with partial text and incremental insertion.
+4. Streaming mode (local, AssemblyAI, Deepgram): live chunks with partial text and append-only stable insertion.
 5. Text inserted at caret via clipboard-safe paste; clipboard restored.
 
 ## Engines
@@ -163,7 +167,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Known limitations
 
-- Streaming: recent live tail is revisable, but older locked text is not rewritten; focus-change abort remains best-effort.
+- Streaming: inserted text is append-only and never rewritten; focus-change
+  abort remains best-effort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - NVIDIA Parakeet is intentionally not implemented through NeMo; see
