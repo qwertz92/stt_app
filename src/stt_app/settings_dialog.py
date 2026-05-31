@@ -48,6 +48,7 @@ from .config import (
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
+    LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     LOCAL_WEBGPU_MODEL_SIZES,
     OPENAI_MODELS,
@@ -1120,7 +1121,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         download_hint = QtWidgets.QLabel(
             "Select models to download or delete. Green entries are already cached locally. "
-            "Cohere and Granite use the experimental ONNX/WebGPU runtime."
+            "Cohere and Granite use the experimental ONNX runtime."
         )
         download_hint.setWordWrap(True)
         self._style_note_label(download_hint)
@@ -1187,8 +1188,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         intro = QtWidgets.QLabel(
             "Benchmark installed local models against one audio file. "
-            "Cohere and Granite use fixed q4 ONNX weights and can be run on "
-            "Auto, GPU-only, CPU-only, DirectML, or WebGPU targets."
+            "Cohere and Granite 4.0 use q4 ONNX weights; Granite 4.1 uses "
+            "INT8 ONNX weights. Test Auto, GPU-only, CPU-only, DirectML, or "
+            "WebGPU targets on this machine."
         )
         intro.setWordWrap(True)
         self._style_note_label(intro)
@@ -2035,7 +2037,11 @@ class SettingsDialog(QtWidgets.QDialog):
             if model_name in LOCAL_ENGLISH_ONLY_MODELS:
                 status = f"{status}, English only"
             if model_name in LOCAL_WEBGPU_MODEL_SIZES:
-                status = f"{status}, ONNX/WebGPU, batch only"
+                runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
+                    model_name,
+                    "ONNX/WebGPU",
+                )
+                status = f"{status}, {runtime}, batch only"
             item = QtWidgets.QListWidgetItem(
                 f"{self._model_label(model_name)} - {status}"
             )
@@ -3362,11 +3368,12 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             self.local_model_runtime_warning_label.setText(
-                "Experimental ONNX model: the app tries WebGPU, then DirectML "
-                "on Windows, and falls back to CPU if no compatible "
-                "Intel/AMD/NVIDIA GPU runtime loads. CPU fallback can be much "
-                "slower than large-v3-turbo. Batch mode only. Benchmark WebGPU, "
-                "DirectML, and CPU on this machine before choosing a default."
+                "Experimental ONNX model: Batch mode only. The app tries the "
+                "available ONNX GPU target first; CPU fallback is used when "
+                "a compatible GPU runtime is unavailable. Granite 4.1 uses "
+                "INT8 raw ONNX graphs, not q4; in that path WebGPU and CPU "
+                "are supported, while DirectML may be unavailable. Benchmark "
+                "this machine before choosing it as your daily model."
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return
@@ -3386,7 +3393,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 if hasattr(self, "model_combo")
                 else ""
             )
-            runtime = "ONNX/WebGPU" if model in LOCAL_WEBGPU_MODEL_SIZES else "faster-whisper"
+            runtime = (
+                LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(model, "ONNX/WebGPU")
+                if model in LOCAL_WEBGPU_MODEL_SIZES
+                else "faster-whisper"
+            )
             label = f"Engine: LOCAL ({runtime})"
             self.engine_indicator.setText(label)
             self.engine_indicator.setStyleSheet(

@@ -222,6 +222,19 @@ def test_webgpu_local_model_is_valid(tmp_path):
     assert settings.model_size == "cohere-transcribe-03-2026"
 
 
+def test_granite_4_1_int8_local_model_is_valid(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"engine": "local", "model_size": "granite-speech-4.1-2b-nar"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.engine == "local"
+    assert settings.model_size == "granite-speech-4.1-2b-nar"
+
+
 def test_elevenlabs_engine_is_valid(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(

@@ -3,6 +3,18 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-05-31
+
+- Granite Speech 4.1 ONNX exports are selectable local models. The public 4.1
+  exports currently provide INT8/fp16w/fp32 raw ONNX graph bundles rather than
+  q4/int4 Transformers.js packages, so the app uses the INT8 tier by default
+  and labels it separately from q4 Cohere/Granite 4.0.
+- `local_webgpu_asr.py` now keeps layout-aware download and required-file
+  metadata for selectable Cohere q4, Granite 4.0 q4, Granite 4.1 AR INT8, and
+  Granite 4.1 NAR INT8. The Node helper has separate raw-ONNX runtime paths for
+  4.1 AR and NAR because their graph contracts are different. Granite 4.0
+  remains selectable as the smaller q4 Granite option.
+
 ## 2026-05-06
 
 - Benchmark runs are now persisted separately from transcript history. The

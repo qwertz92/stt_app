@@ -9,61 +9,160 @@ import sys
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
 from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
 
-_BASE_DOWNLOAD_ALLOW_PATTERNS = [
+@dataclass(frozen=True)
+class _OnnxModelLayout:
+    name: str
+    precision: str
+    allow_patterns: tuple[str, ...]
+    required_files: tuple[str, ...]
+
+
+_BASE_DOWNLOAD_ALLOW_PATTERNS = (
     ".gitattributes",
     "README.md",
     "chat_template.jinja",
     "config.json",
     "generation_config.json",
+    "LICENSE",
     "preprocessor_config.json",
     "processor_config.json",
+    "special_tokens_map.json",
     "tokenizer.json",
     "tokenizer_config.json",
-]
+)
 
-_Q4_DOWNLOAD_ALLOW_PATTERNS = [
+_Q4_DOWNLOAD_ALLOW_PATTERNS = (
     *_BASE_DOWNLOAD_ALLOW_PATTERNS,
     "onnx/*_q4.onnx",
     "onnx/*_q4.onnx_data",
     "onnx/*_q4.onnx_data_*",
-]
+)
 
+_GRANITE_4_1_INT8_BASE_DOWNLOAD_ALLOW_PATTERNS = (
+    ".gitattributes",
+    "README.md",
+    "LICENSE",
+    "granite_export_metadata.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "special_tokens_map.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "test_fixtures/*",
+    "int8/*.onnx",
+    "int8/*.onnx_data",
+)
+
+_GRANITE_4_1_AR_INT8_DOWNLOAD_ALLOW_PATTERNS = (
+    *_GRANITE_4_1_INT8_BASE_DOWNLOAD_ALLOW_PATTERNS,
+    "chat_template.jinja",
+)
+
+_COHERE_Q4_REQUIRED_FILES = (
+    "config.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "tokenizer.json",
+    "onnx/encoder_model_q4.onnx",
+    "onnx/encoder_model_q4.onnx_data",
+    "onnx/decoder_model_merged_q4.onnx",
+    "onnx/decoder_model_merged_q4.onnx_data",
+)
+
+_GRANITE_4_0_Q4_REQUIRED_FILES = (
+    "chat_template.jinja",
+    "config.json",
+    "preprocessor_config.json",
+    "processor_config.json",
+    "tokenizer.json",
+    "onnx/audio_encoder_q4.onnx",
+    "onnx/audio_encoder_q4.onnx_data",
+    "onnx/embed_tokens_q4.onnx",
+    "onnx/embed_tokens_q4.onnx_data",
+    "onnx/decoder_model_merged_q4.onnx",
+    "onnx/decoder_model_merged_q4.onnx_data",
+)
+
+_GRANITE_4_1_AR_INT8_REQUIRED_FILES = (
+    "chat_template.jinja",
+    "granite_export_metadata.json",
+    "preprocessor_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "int8/encoder.onnx",
+    "int8/encoder.onnx_data",
+    "int8/embed_tokens.onnx",
+    "int8/embed_tokens.onnx_data",
+    "int8/prompt_encode.onnx",
+    "int8/prompt_encode.onnx_data",
+    "int8/decode_step.onnx",
+    "int8/decode_step.onnx_data",
+)
+
+_GRANITE_4_1_NAR_INT8_REQUIRED_FILES = (
+    "granite_export_metadata.json",
+    "preprocessor_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "int8/encoder.onnx",
+    "int8/encoder.onnx_data",
+    "int8/embed_tokens.onnx",
+    "int8/embed_tokens.onnx_data",
+    "int8/editor.onnx",
+    "int8/editor.onnx_data",
+)
+
+_COHERE_Q4_LAYOUT = _OnnxModelLayout(
+    name="cohere_q4",
+    precision="q4",
+    allow_patterns=_Q4_DOWNLOAD_ALLOW_PATTERNS,
+    required_files=_COHERE_Q4_REQUIRED_FILES,
+)
+
+_GRANITE_4_0_Q4_LAYOUT = _OnnxModelLayout(
+    name="granite_4_0_q4",
+    precision="q4",
+    allow_patterns=_Q4_DOWNLOAD_ALLOW_PATTERNS,
+    required_files=_GRANITE_4_0_Q4_REQUIRED_FILES,
+)
+
+_GRANITE_4_1_AR_INT8_LAYOUT = _OnnxModelLayout(
+    name="granite_4_1_ar_int8",
+    precision="int8",
+    allow_patterns=_GRANITE_4_1_AR_INT8_DOWNLOAD_ALLOW_PATTERNS,
+    required_files=_GRANITE_4_1_AR_INT8_REQUIRED_FILES,
+)
+
+_GRANITE_4_1_NAR_INT8_LAYOUT = _OnnxModelLayout(
+    name="granite_4_1_nar_int8",
+    precision="int8",
+    allow_patterns=_GRANITE_4_1_INT8_BASE_DOWNLOAD_ALLOW_PATTERNS,
+    required_files=_GRANITE_4_1_NAR_INT8_REQUIRED_FILES,
+)
+
+_MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
+    "cohere-transcribe-03-2026": _COHERE_Q4_LAYOUT,
+    "granite-4.0-1b-speech": _GRANITE_4_0_Q4_LAYOUT,
+    "granite-speech-4.1-2b": _GRANITE_4_1_AR_INT8_LAYOUT,
+    "granite-speech-4.1-2b-plus": _GRANITE_4_1_AR_INT8_LAYOUT,
+    "granite-speech-4.1-2b-nar": _GRANITE_4_1_NAR_INT8_LAYOUT,
+}
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
-    "cohere-transcribe-03-2026": (
-        "config.json",
-        "preprocessor_config.json",
-        "processor_config.json",
-        "tokenizer.json",
-        "onnx/encoder_model_q4.onnx",
-        "onnx/encoder_model_q4.onnx_data",
-        "onnx/decoder_model_merged_q4.onnx",
-        "onnx/decoder_model_merged_q4.onnx_data",
-    ),
-    "granite-4.0-1b-speech": (
-        "chat_template.jinja",
-        "config.json",
-        "preprocessor_config.json",
-        "processor_config.json",
-        "tokenizer.json",
-        "onnx/audio_encoder_q4.onnx",
-        "onnx/audio_encoder_q4.onnx_data",
-        "onnx/embed_tokens_q4.onnx",
-        "onnx/embed_tokens_q4.onnx_data",
-        "onnx/decoder_model_merged_q4.onnx",
-        "onnx/decoder_model_merged_q4.onnx_data",
-    ),
+    model_name: layout.required_files for model_name, layout in _MODEL_LAYOUTS.items()
 }
 
 _ACCELERATED_DEVICES = {"webgpu", "dml", "cuda", "gpu", "webnn-gpu"}
@@ -96,8 +195,12 @@ def _default_hf_cache_dir() -> str:
     return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
 
 
+def _repo_id_for_model(model_name: str) -> str | None:
+    return MODEL_REPO_MAP.get(model_name)
+
+
 def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
-    repo_id = MODEL_REPO_MAP.get(model_name)
+    repo_id = _repo_id_for_model(model_name)
     if repo_id is None:
         return []
 
@@ -128,11 +231,11 @@ def _has_required_files(directory: Path, required_files: tuple[str, ...]) -> boo
 
 
 def _valid_snapshot_path(model_name: str, cache_dir: Path) -> Path | None:
-    required_files = _REQUIRED_FILES.get(model_name)
-    if required_files is None:
+    layout = _MODEL_LAYOUTS.get(model_name)
+    if layout is None:
         return None
 
-    if _has_required_files(cache_dir, required_files):
+    if _has_required_files(cache_dir, layout.required_files):
         return cache_dir
 
     snapshots_dir = cache_dir / "snapshots"
@@ -149,7 +252,7 @@ def _valid_snapshot_path(model_name: str, cache_dir: Path) -> Path | None:
         return None
 
     for snapshot in snapshots:
-        if _has_required_files(snapshot, required_files):
+        if _has_required_files(snapshot, layout.required_files):
             return snapshot
     return None
 
@@ -178,16 +281,21 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
             "huggingface_hub is not installed. Install dependencies and try again."
         ) from exc
 
-    repo_id = MODEL_REPO_MAP.get(model_name)
-    if repo_id is None or model_name not in LOCAL_WEBGPU_MODEL_SIZES:
+    repo_id = _repo_id_for_model(model_name)
+    layout = _MODEL_LAYOUTS.get(model_name)
+    if repo_id is None or layout is None:
         raise ValueError(f"Unknown ONNX/WebGPU model '{model_name}'.")
 
-    base_dir = Path(model_dir.strip()) if model_dir and model_dir.strip() else Path(_default_hf_cache_dir())
+    base_dir = (
+        Path(model_dir.strip())
+        if model_dir and model_dir.strip()
+        else Path(_default_hf_cache_dir())
+    )
     repo_basename = repo_id.rsplit("/", 1)[-1]
     local_dir = base_dir / repo_basename
 
     kwargs: dict[str, object] = {
-        "allow_patterns": _Q4_DOWNLOAD_ALLOW_PATTERNS,
+        "allow_patterns": layout.allow_patterns,
         # Use a real local folder instead of the Hugging Face blob/snapshot
         # cache for these large ONNX models. The normal cache relies on
         # symlinks, which can fail on Windows without Developer Mode/admin
@@ -245,7 +353,11 @@ def _run_transformers_import_probe(
             node_path,
             "--input-type=module",
             "-e",
-            "await import('@huggingface/transformers')",
+            (
+                "await import('@huggingface/transformers'); "
+                "await import('@huggingface/tokenizers'); "
+                "await import('onnxruntime-node')"
+            ),
         ],
         cwd=str(cwd),
         text=True,
@@ -319,14 +431,14 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
 
 
 class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
-    """Local Cohere/Granite ASR through a persistent Transformers.js process."""
+    """Selectable local ONNX ASR through a persistent Transformers.js process."""
 
     def __init__(
         self,
         model_size: str,
         language_mode: str = DEFAULT_LANGUAGE_MODE,
         device: str = "auto",
-        dtype: str = "q4",
+        dtype: str = "",
         offline_mode: bool = False,
         model_dir: str = "",
         node_path: str | None = None,
@@ -346,7 +458,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self.model_size = model_size
         self.language_mode = language_mode
         self.device = device
-        self.dtype = dtype
+        self.dtype = str(dtype or LOCAL_ONNX_MODEL_PRECISION.get(model_size) or "q4")
         self.offline_mode = offline_mode
         self.model_dir = (model_dir or "").strip()
         self.node_path = node_path
@@ -410,8 +522,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             ) from exc
         snapshot = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
         if snapshot is None:
+            layout = _MODEL_LAYOUTS.get(self.model_size)
+            precision = layout.precision if layout is not None else "required"
             raise TranscriptionError(
-                f"Downloaded '{self.model_size}', but no complete q4 ONNX snapshot "
+                f"Downloaded '{self.model_size}', but no complete {precision} "
+                "ONNX snapshot "
                 "was found."
             )
         return snapshot

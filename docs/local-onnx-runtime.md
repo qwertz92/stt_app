@@ -1,6 +1,6 @@
 # Local ONNX Runtime Guide
 
-Date: 2026-04-18
+Date: 2026-05-31
 
 This document explains the experimental local ONNX path used for Cohere
 Transcribe and IBM Granite Speech in `stt_app`.
@@ -14,14 +14,22 @@ runtime.
 The experimental Cohere and Granite models use a separate out-of-process stack:
 
 1. Python/PySide starts a controlled Node.js helper process.
-2. The helper loads `@huggingface/transformers`.
-3. Transformers.js loads q4 ONNX model files from the local Hugging Face cache.
-4. Inference runs on WebGPU, DirectML, or CPU depending on the selected target
-   and runtime support.
-5. Python sends WAV paths over stdin and receives JSON results over stdout.
+2. The helper loads the JavaScript ONNX runtime dependencies.
+3. Cohere and Granite 4.0 load q4 Transformers.js ONNX packages from the local
+   Hugging Face cache.
+4. Granite 4.1 loads raw INT8 ONNX Runtime graph files from the local Hugging
+   Face cache.
+5. Inference runs on the selected ONNX target when supported, with CPU fallback
+   for normal `auto` use.
+6. Python sends WAV paths over stdin and receives JSON results over stdout.
 
 The helper is a child process by design. If the JavaScript runtime crashes, the
 main app can report the error and continue instead of taking down the UI.
+
+Granite Speech 4.1 is part of this runtime stack and is user-selectable. The
+public 4.1 ONNX repos currently ship raw INT8/fp16w/fp32 graph bundles instead
+of q4/int4 Transformers.js packages, so the app defaults to the INT8 tier and
+labels it separately from q4 Cohere/Granite 4.0.
 
 ## Runtime Formats
 
@@ -53,6 +61,11 @@ architecture.
 | `webgpu` | Force Transformers.js WebGPU | Best current target on the Intel test machine |
 | `dml` | Force ONNX Runtime DirectML | Diagnostic only for current Cohere/Granite |
 | `cpu` | Force CPU | Most compatible, usually slowest |
+
+For Granite Speech 4.1 raw ONNX graphs, the Node helper uses direct
+`onnxruntime-node` sessions. In the current package, WebGPU and CPU are the
+supported raw-graph targets; DirectML is skipped for 4.1 and normal `auto`
+falls through to CPU if WebGPU cannot load.
 
 `wasm` is not a valid device for the Node runtime used here. In browser-oriented
 ONNX stacks, WASM can mean CPU execution through WebAssembly. In this app's
@@ -167,6 +180,9 @@ Approximate current downloads:
 | `large-v3-turbo` | CTranslate2 | 809 MB |
 | `cohere-transcribe-03-2026` | q4 ONNX | 2.13 GB |
 | `granite-4.0-1b-speech` | q4 ONNX | 1.84 GB |
+| `granite-speech-4.1-2b` | AR INT8 raw ONNX graphs | 4.0 GB |
+| `granite-speech-4.1-2b-plus` | AR INT8 raw ONNX graphs | 4.1 GB |
+| `granite-speech-4.1-2b-nar` | NAR INT8 raw ONNX graphs | 2.5 GB |
 
 Runtime memory can be higher than these values. For exact values on a target
 machine, use Task Manager while running a fixed benchmark and check that the
@@ -187,6 +203,11 @@ Examples from currently evaluated candidates:
 - Cohere's ONNX package is q4 and 2B parameters, so a raw 4-bit weight lower
   bound is already about 1 GB before unquantized tensors, model graph overhead,
   external data files, tokenizer assets, and runtime buffers are counted.
+- Granite Speech 4.1 INT8 exports are larger than Granite 4.0 q4 and are not a
+  drop-in replacement. The autoregressive variants use separate encoder,
+  embedding, prompt-encode, and decode-step graph orchestration with a KV-cache
+  loop. The NAR variant uses a separate encoder/editor contract with CTC draft
+  decoding and insertion slots.
 
 ## Long Audio Behavior
 
@@ -233,6 +254,11 @@ This means `Auto` is not identical across local model families. If a transcript
 quality issue appears on Cohere, explicitly selecting German or English is the
 first thing to test.
 
+Granite Speech 4.1 ONNX exports are tagged and documented primarily for English
+ASR. German dictation quality is not yet proven in this app, so explicit German
+mode is available for daily use but should be benchmarked before replacing a
+Whisper model.
+
 ## Best Current Practice
 
 For the current Windows Intel GPU test machine:
@@ -263,3 +289,9 @@ For the current Windows Intel GPU test machine:
   <https://huggingface.co/CohereLabs/cohere-transcribe-03-2026>
 - Granite ONNX/WebGPU model card:
   <https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX>
+- Granite Speech 4.1 2B ONNX export:
+  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-onnx>
+- Granite Speech 4.1 2B Plus ONNX export:
+  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx>
+- Granite Speech 4.1 2B NAR ONNX export:
+  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx>

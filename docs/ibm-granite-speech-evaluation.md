@@ -10,9 +10,12 @@ comparison lives in:
 
 ## Current Decision
 
-- **Status:** Implemented as an experimental batch-only local model.
-- **Model:** `granite-4.0-1b-speech`
-- **Runtime:** q4 ONNX through the Transformers.js helper process.
+- **Status:** Implemented as experimental batch-only local models.
+- **Models:** `granite-4.0-1b-speech`, `granite-speech-4.1-2b`,
+  `granite-speech-4.1-2b-plus`, `granite-speech-4.1-2b-nar`
+- **Runtime:** Granite 4.0 uses q4 ONNX through the Transformers.js helper
+  process. Granite 4.1 uses raw INT8 ONNX Runtime graphs through the same Node
+  helper process.
 - **Best target on the tested Intel Windows machine:** WebGPU.
 
 Granite should remain experimental. It is useful to benchmark because it is
@@ -49,6 +52,12 @@ The q4 ONNX download is about 1.84 GB. Runtime RAM/VRAM can be higher because
 the model includes an audio encoder, decoder, tokenizer assets, activation
 buffers, and GPU driver allocations.
 
+Granite Speech 4.1 INT8 downloads are larger: about 4.0 GB for
+`granite-speech-4.1-2b`, 4.1 GB for `granite-speech-4.1-2b-plus`, and 2.5 GB
+for `granite-speech-4.1-2b-nar`. The AR models use a KV-cache decode loop; the
+NAR model uses a separate encoder/editor path and should not be treated as the
+same runtime flag.
+
 The app chunks Granite audio at quiet boundaries with a maximum chunk size of
 30 seconds before generation. This bounds prompt/audio-token growth for long
 recordings, but Granite should still be treated as a dictation model rather
@@ -74,3 +83,9 @@ Keep Granite in the benchmark set next to Cohere:
   <https://huggingface.co/ibm-granite/granite-4.0-1b-speech>
 - Granite ONNX/WebGPU model card:
   <https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX>
+- Granite Speech 4.1 2B ONNX export:
+  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-onnx>
+- Granite Speech 4.1 2B Plus ONNX export:
+  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx>
+- Granite Speech 4.1 2B NAR ONNX export:
+  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx>

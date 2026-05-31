@@ -20,8 +20,9 @@ Usage examples:
 
 After downloading, the models are ready for offline use.  Set "Offline mode"
 in the app settings, and optionally set "Model Dir" to the --output-dir path.
-faster-whisper models use CTranslate2. Cohere and Granite use the experimental
-q4 ONNX/WebGPU runtime and require the JavaScript runtime from package.json.
+faster-whisper models use CTranslate2. Cohere and Granite 4.0 use q4
+ONNX/WebGPU snapshots. Granite Speech 4.1 uses the smallest currently published
+INT8 ONNX tier and requires the JavaScript runtime from package.json.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from stt_app.config import (  # noqa: E402
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
+    LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
@@ -146,7 +148,8 @@ def main() -> None:
         print("Available models:")
         for name, repo_id in MODELS.items():
             if name in LOCAL_WEBGPU_MODEL_SIZES:
-                note = " (multilingual, q4 ONNX/WebGPU, batch only)"
+                precision = LOCAL_ONNX_MODEL_PRECISION.get(name, "q4")
+                note = f" (multilingual, {precision} ONNX, batch only)"
             elif "distil" in name:
                 note = " (English only)"
             else:

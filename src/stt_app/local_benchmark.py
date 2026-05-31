@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .benchmark_environment import BenchmarkEnvironment
-from .config import LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS, LOCAL_WEBGPU_MODEL_SIZES
+from .config import (
+    LOCAL_ONNX_MODEL_PRECISION,
+    LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
+    LOCAL_WEBGPU_MODEL_SIZES,
+)
 
 
 class BenchmarkCancelled(RuntimeError):
@@ -339,7 +343,7 @@ def _run_webgpu_case(
     return BenchmarkCase(
         model=model_name,
         device=final_runtime_device,
-        compute_type="onnx-q4",
+        compute_type=f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}",
         download_seconds=0.0,
         load_seconds=load_seconds,
         runs=all_runs,
@@ -383,7 +387,9 @@ def run_benchmark_cases(
             _raise_if_canceled(cancel_check)
             case_index += 1
             display_compute_type = (
-                "onnx-q4" if model_name in LOCAL_WEBGPU_MODEL_SIZES else compute_type
+                f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
+                if model_name in LOCAL_WEBGPU_MODEL_SIZES
+                else compute_type
             )
             if progress_callback is not None:
                 progress_callback(

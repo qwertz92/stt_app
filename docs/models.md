@@ -7,7 +7,11 @@ Everything about model choices, downloading, and configuring models for offline 
 The app has two local runtime families:
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models in CTranslate2 format.
-- Experimental q4 ONNX/WebGPU models through `@huggingface/transformers`.
+- Experimental ONNX models through a Node.js helper.
+
+Granite Speech 4.1 is selectable and uses the smallest currently published
+INT8 ONNX tier by default. It is not q4/int4. Granite 4.0 q4 remains available
+as the smaller Granite option until real app benchmarks justify removing it.
 
 For deeper background on WebGPU, DirectML, CPU fallback, memory behavior, and
 language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
@@ -23,6 +27,9 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | Multilingual, explicit `de`/`en` in the app | Experimental quality trial, batch mode only |
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Multilingual, explicit `de`/`en` in the app | Experimental compact speech-LM trial, batch mode only |
+| `granite-speech-4.1-2b` | ONNX INT8 AR | ~4.0 GB INT8 | Primarily English-documented; explicit `de`/`en` in the app | Experimental Granite 4.1 daily-use trial, batch mode only |
+| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Primarily English-documented; explicit `de`/`en` in the app | Experimental Plus variant trial, batch mode only |
+| `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Primarily English-documented; explicit `de`/`en` in the app | Smaller Granite 4.1 NAR daily-use trial, batch mode only |
 
 ### Which model should I use?
 
@@ -33,7 +40,9 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | Best possible quality, NVIDIA GPU available | `large-v3` |
 | English only, maximum speed | `distil-large-v3.5` |
 | Highest experimental local ASR quality trial | `cohere-transcribe-03-2026` |
-| Speech-LM comparison trial | `granite-4.0-1b-speech` |
+| Speech-LM q4 comparison trial | `granite-4.0-1b-speech` |
+| Granite 4.1 daily-use trial with smaller download | `granite-speech-4.1-2b-nar` |
+| Granite 4.1 autoregressive trial | `granite-speech-4.1-2b` |
 | Testing / very limited resources | `tiny` |
 
 ### Accuracy reference (Word Error Rate)
@@ -65,20 +74,28 @@ Lower is better. These are published benchmark values — your results depend on
 
 Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benchmarks](https://github.com/SYSTRAN/faster-whisper).
 
-### Experimental ONNX/WebGPU local models
+### Experimental ONNX local models
 
 Cohere Transcribe and IBM Granite Speech are selectable under the normal local
-model list, but they are not CTranslate2 models. They use a separate
-Transformers.js q4 ONNX runtime and run in **batch mode only**. The helper
-process is kept alive only while a transcription or benchmark case is active, so
-the app does not keep a large ONNX runtime idling after normal dictation.
+model list, but they are not CTranslate2 models. They use a separate Node.js
+ONNX runtime and run in **batch mode only**. Cohere and Granite 4.0 use
+Transformers.js q4 ONNX packages. Granite Speech 4.1 uses raw ONNX Runtime
+graphs at INT8 precision by default. The helper process is kept alive only while
+a transcription or benchmark case is active, so the app does not keep a large
+ONNX runtime idling after normal dictation.
 
-The runtime automatically tries WebGPU first, then DirectML on Windows, and
-falls back to CPU if no compatible GPU runtime loads. It attempts WebGPU even
-when Node's `navigator.gpu` probe is unavailable, because the Transformers.js
-runtime can still expose a working WebGPU backend on some machines. The app
-shows a red warning under the model selector because pure CPU fallback can be
-much slower than the CTranslate2 Whisper models.
+The two Granite 4.1 autoregressive exports use encoder, token embedding,
+prompt-encode, and decode-step graphs plus a host-side audio-token splice and
+KV-cache loop. The NAR export uses encoder, token embedding, and editor graphs
+with CTC draft decoding and insertion slots. They are separate runtime paths,
+not one shared flag.
+
+The runtime automatically tries an ONNX GPU target first and falls back to CPU
+if no compatible GPU runtime loads. Cohere and Granite 4.0 try WebGPU, then
+DirectML on Windows. Granite 4.1 raw ONNX graphs currently use WebGPU or CPU in
+the direct `onnxruntime-node` path. The app shows a red warning under the model
+selector because pure CPU fallback can be much slower than the CTranslate2
+Whisper models.
 
 The app also falls back from DirectML/WebGPU to CPU during transcription when a
 model loads on a GPU runtime but the first generation call fails because an ONNX
@@ -136,7 +153,8 @@ On first use, the app downloads the selected model automatically from HuggingFac
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 
 For Cohere and Granite, source checkouts use the system Node.js executable. If
-`@huggingface/transformers` is missing, the app attempts `npm install`
+`@huggingface/transformers`, `@huggingface/tokenizers`, or `onnxruntime-node`
+is missing, the app attempts `npm install`
 automatically from the repository root on first ONNX use. The packaged Windows
 release includes the JavaScript dependency tree when `node_modules` is present
 at build time, but it still needs a Node.js executable unless the distribution
@@ -231,9 +249,9 @@ uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
 ```
 
 The import script is intentionally CTranslate2-only. For Cohere and Granite,
-use `scripts/download_model.py`; it downloads only the q4 ONNX files required by
-the app and stores them in a real local folder to avoid Windows symlink
-privilege errors.
+use `scripts/download_model.py`; it downloads only the ONNX precision tier
+required by the app (q4 for Cohere/Granite 4.0, INT8 for Granite 4.1) and
+stores it in a real local folder to avoid Windows symlink privilege errors.
 
 <details>
 <summary>All model repositories</summary>
@@ -249,6 +267,9 @@ git clone https://huggingface.co/mobiuslabsgmbh/faster-whisper-large-v3-turbo
 git clone https://huggingface.co/distil-whisper/distil-large-v3.5-ct2
 git clone https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX
 git clone https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX
+git clone https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-onnx
+git clone https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx
+git clone https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx
 ```
 
 </details>

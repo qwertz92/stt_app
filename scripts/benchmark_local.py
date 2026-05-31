@@ -31,6 +31,7 @@ from stt_app.local_benchmark import (
     _write_csv as _shared_write_csv,
 )
 from stt_app.config import (
+    LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_ESTIMATED_SIZE_MB,
     MODEL_REPO_MAP,
@@ -221,7 +222,11 @@ def _print_model_table(show_sizes: bool) -> None:
     print("-" * len(header))
     for model in VALID_MODEL_SIZES:
         repo = MODEL_REPO_MAP[model]
-        runtime = "ONNX q4" if model in LOCAL_WEBGPU_MODEL_SIZES else "CTranslate2"
+        runtime = (
+            f"ONNX {LOCAL_ONNX_MODEL_PRECISION.get(model, 'q4')}"
+            if model in LOCAL_WEBGPU_MODEL_SIZES
+            else "CTranslate2"
+        )
         size_human = "-"
         if show_sizes:
             size_human = _bytes_to_human(_resolve_model_size_bytes(model))
@@ -581,7 +586,9 @@ def main() -> int:
                         "audio_path": audio_path,
                         "model_name": model_name,
                         "device": args.device,
-                        "compute_type": "onnx-q4",
+                        "compute_type": (
+                            f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
+                        ),
                         "runs": args.runs,
                         "beam_size": args.beam_size,
                         "language": args.language,

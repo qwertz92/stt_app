@@ -87,7 +87,38 @@ FASTER_WHISPER_MODEL_SIZES = (
 LOCAL_WEBGPU_MODEL_SIZES = (
     "cohere-transcribe-03-2026",
     "granite-4.0-1b-speech",
+    "granite-speech-4.1-2b",
+    "granite-speech-4.1-2b-plus",
+    "granite-speech-4.1-2b-nar",
 )
+
+GRANITE_4_1_MODEL_SIZES = (
+    "granite-speech-4.1-2b",
+    "granite-speech-4.1-2b-plus",
+    "granite-speech-4.1-2b-nar",
+)
+
+LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
+    "cohere-transcribe-03-2026": "q4",
+    "granite-4.0-1b-speech": "q4",
+    "granite-speech-4.1-2b": "int8",
+    "granite-speech-4.1-2b-plus": "int8",
+    "granite-speech-4.1-2b-nar": "int8",
+}
+
+LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
+    "cohere-transcribe-03-2026": "ONNX/WebGPU q4",
+    "granite-4.0-1b-speech": "ONNX/WebGPU q4",
+    "granite-speech-4.1-2b": "ONNX INT8 AR",
+    "granite-speech-4.1-2b-plus": "ONNX INT8 AR",
+    "granite-speech-4.1-2b-nar": "ONNX INT8 NAR",
+}
+
+GRANITE_4_1_REPO_MAP: dict[str, str] = {
+    "granite-speech-4.1-2b": "smcleod/ibm-granite-speech-4.1-2b-onnx",
+    "granite-speech-4.1-2b-plus": "smcleod/ibm-granite-speech-4.1-2b-plus-onnx",
+    "granite-speech-4.1-2b-nar": "smcleod/ibm-granite-speech-4.1-2b-nar-onnx",
+}
 
 LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
 
@@ -115,6 +146,7 @@ MODEL_REPO_MAP: dict[str, str] = {
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
     "cohere-transcribe-03-2026": "onnx-community/cohere-transcribe-03-2026-ONNX",
     "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
+    **GRANITE_4_1_REPO_MAP,
 }
 
 LOCAL_MODEL_RUNTIME: dict[str, str] = {
@@ -132,9 +164,13 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "large-v3": 3_000,
     "large-v3-turbo": 809,
     "distil-large-v3.5": 756,
-    # q4 ONNX/WebGPU downloads only. Full precision variants are much larger.
+    # Selectable local ONNX downloads. Cohere/Granite 4.0 are q4; Granite 4.1
+    # uses the smallest currently published INT8 tier.
     "cohere-transcribe-03-2026": 2_128,
     "granite-4.0-1b-speech": 1_843,
+    "granite-speech-4.1-2b": 4_000,
+    "granite-speech-4.1-2b-plus": 4_100,
+    "granite-speech-4.1-2b-nar": 2_500,
 }
 
 VALID_LANGUAGE_MODES = ("auto", "de", "en")

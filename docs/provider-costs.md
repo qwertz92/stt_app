@@ -12,7 +12,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Engine | App mode(s) | Model(s) in app | Public price | Normalized cost |
 |--------|-------------|-----------------|--------------|-----------------|
 | Local (`faster-whisper`) | Batch + Streaming | `tiny`..`distil-large-v3.5` | No API fee | $0 API cost (hardware/power only) |
-| Local experimental ONNX/WebGPU | Batch | `cohere-transcribe-03-2026`, `granite-4.0-1b-speech` | No API fee | $0 API cost (hardware/power only) |
+| Local experimental ONNX | Batch | `cohere-transcribe-03-2026`, `granite-4.0-1b-speech`, Granite Speech 4.1 variants | No API fee | $0 API cost (hardware/power only) |
 | AssemblyAI | Batch | Universal-3 Pro (primary), Universal-2 fallback | U3 Pro: $0.21/hour, U2: $0.15/hour | $0.15-$0.21/hour |
 | AssemblyAI | Streaming | Universal Streaming | $0.15/hour | $0.15/hour |
 | OpenAI | Batch | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | Mini: est. $0.003/min, 4o: est. $0.006/min, Whisper: $0.006/min | $0.18/hour, $0.36/hour, $0.36/hour |
@@ -109,22 +109,22 @@ Recommendation:
 
 ---
 
-## 6) Researched but not integrated
+## 6) Hosted candidates not integrated
 
-The table above only covers providers currently implemented in `stt_app`.
-The following candidate is tracked separately because it is interesting, but not
-ready enough to present as a supported engine.
+The table above only covers remote providers currently implemented in
+`stt_app`. Local ONNX models are documented in `docs/models.md`; Cohere
+Transcribe is available there as a local model, but the hosted Cohere API is not
+implemented as a remote engine.
 
 | Candidate | Public access signal | Pricing clarity | Local/offline fit | Current status |
 |-----------|----------------------|-----------------|-------------------|----------------|
-| Cohere Transcribe (`cohere-transcribe-03-2026`) | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Open weights and local runtimes exist now, but they are separate from the app's CTranslate2 local engine and need a WebGPU/ONNX benchmark before product integration | Not integrated; see `docs/local-asr-model-candidates-2026.md` |
+| Cohere hosted Transcribe API | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Local/offline usage is covered by the integrated ONNX model, not by the hosted API | Hosted provider not integrated |
 
 Recommendation:
 
-- Treat Cohere as a watched candidate, not a current option.
 - Revisit the hosted path if Cohere publishes explicit STT pricing and quotas.
-- Revisit the local path through an isolated ONNX/WebGPU benchmark on the
-  target Intel GPU before adding app integration.
+- Benchmark the local ONNX path on the target machine before making it the
+  default local model.
 
 ---
 

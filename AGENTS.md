@@ -52,7 +52,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
-| `transcriber/local_webgpu_asr.py` | Experimental batch-only Cohere/Granite q4 ONNX runtime via Transformers.js |
+| `transcriber/local_webgpu_asr.py` | Experimental batch-only Cohere/Granite ONNX runtime via Node.js; Cohere/Granite 4.0 use Transformers.js q4, Granite 4.1 uses raw INT8 ONNX graphs |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
@@ -114,16 +114,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `python scripts/create_release.py` from a clean, up-to-date `main`; the script
   prompts for the version, bumps metadata, runs checks, commits, pushes, tags,
   and pushes the tag.
-- **Experimental ONNX/WebGPU local ASR**: Cohere Transcribe and IBM Granite
-  Speech are selectable local models through `transcriber/local_webgpu_asr.py`.
-  They are batch-only, use q4 ONNX snapshots, require Node.js plus
-  `@huggingface/transformers`, and try WebGPU, then Windows DirectML, then CPU.
+- **Experimental ONNX local ASR**: Cohere Transcribe, IBM Granite Speech 4.0,
+  and IBM Granite Speech 4.1 are selectable local models through
+  `transcriber/local_webgpu_asr.py`. They are batch-only and require Node.js.
+  Cohere and Granite 4.0 use q4 ONNX snapshots through Transformers.js.
+  Granite 4.1 uses the smallest currently published INT8 raw ONNX graph tier
+  through explicit `onnxruntime-node` sessions.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.
   The resolved runtime device is reported through transcriber progress messages
   so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
   Keep faster-whisper as the stable local default until real target-hardware
   benchmarks justify switching.
+  Granite 4.1 AR (`granite-speech-4.1-2b`,
+  `granite-speech-4.1-2b-plus`) and NAR (`granite-speech-4.1-2b-nar`) must stay
+  separate runtime paths because their ONNX graph contracts differ. Keep
+  `granite-4.0-1b-speech` selectable as a smaller q4 option until real
+  benchmarks justify removing it.
 - **Streaming availability**: `config.supports_streaming()` is the shared
   source of truth for UI and controller checks. Local ONNX/WebGPU models are
   batch-only, but that local model selection must not disable remote provider

@@ -4,7 +4,10 @@ import {
   env,
   pipeline,
 } from "@huggingface/transformers";
+import { Tokenizer } from "@huggingface/tokenizers";
+import * as ort from "onnxruntime-node";
 import { readFileSync } from "node:fs";
+import { join } from "node:path";
 
 env.allowLocalModels = true;
 env.allowRemoteModels = false;
@@ -15,6 +18,18 @@ const TARGET_SAMPLE_RATE = 16000;
 const GRANITE_MAX_CHUNK_SECONDS = 30;
 const GRANITE_BOUNDARY_CONTEXT_SECONDS = 5;
 const GRANITE_MIN_ENERGY_WINDOW_SAMPLES = 1600;
+const GRANITE_4_1_AUDIO_TOKEN_ID = 100352;
+const GRANITE_4_1_EOS_TOKEN_ID = 100257;
+const GRANITE_4_1_HIDDEN_SIZE = 2048;
+const GRANITE_4_1_NUM_LAYERS = 40;
+const GRANITE_4_1_NAR_EMBEDDING_MULTIPLIER = 12;
+const ORT_NEG_INF = -3.4028234663852886e38;
+
+const GRANITE_4_1_MODEL_LAYOUTS = new Map([
+  ["granite-speech-4.1-2b", "granite_4_1_ar"],
+  ["granite-speech-4.1-2b-plus", "granite_4_1_ar"],
+  ["granite-speech-4.1-2b-nar", "granite_4_1_nar"],
+]);
 
 function parseArgs(argv) {
   const args = {
@@ -248,6 +263,277 @@ function splitAudioAtQuietBoundaries(audio, sampleRate, maxChunkSeconds) {
   return chunks;
 }
 
+function readJson(relativeRoot, relativePath) {
+  return JSON.parse(readFileSync(join(relativeRoot, relativePath), "utf8"));
+}
+
+function int64Tensor(data, dims) {
+  return new ort.Tensor(
+    "int64",
+    BigInt64Array.from(data, (value) => BigInt(value)),
+    dims,
+  );
+}
+
+function float32Tensor(data, dims) {
+  return new ort.Tensor("float32", data, dims);
+}
+
+function argmax(data, offset, length) {
+  let bestIndex = 0;
+  let bestValue = -Infinity;
+  for (let index = 0; index < length; index += 1) {
+    const value = data[offset + index];
+    if (value > bestValue) {
+      bestValue = value;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
+}
+
+function uniqueConsecutiveWithout(ids, filteredId) {
+  const result = [];
+  let previous = null;
+  for (const id of ids) {
+    if (id === previous) {
+      continue;
+    }
+    previous = id;
+    if (id !== filteredId) {
+      result.push(id);
+    }
+  }
+  return result;
+}
+
+function hertzToMel(freq) {
+  return 2595.0 * Math.log10(1.0 + freq / 700.0);
+}
+
+function melToHertz(mel) {
+  return 700.0 * (10.0 ** (mel / 2595.0) - 1.0);
+}
+
+function linspace(start, end, count) {
+  const output = new Float64Array(count);
+  if (count === 1) {
+    output[0] = start;
+    return output;
+  }
+  const step = (end - start) / (count - 1);
+  for (let index = 0; index < count; index += 1) {
+    output[index] = start + index * step;
+  }
+  return output;
+}
+
+function buildMelFilterBank(nFft, nMels, sampleRate) {
+  const frequencyBins = Math.floor(nFft / 2) + 1;
+  const fftFreqs = linspace(0, Math.floor(sampleRate / 2), frequencyBins);
+  const melFreqs = linspace(
+    hertzToMel(0),
+    hertzToMel(sampleRate / 2),
+    nMels + 2,
+  );
+  const filterFreqs = Float64Array.from(melFreqs, melToHertz);
+  const filters = Array.from(
+    { length: nMels },
+    () => new Float32Array(frequencyBins),
+  );
+
+  for (let mel = 0; mel < nMels; mel += 1) {
+    const left = filterFreqs[mel];
+    const center = filterFreqs[mel + 1];
+    const right = filterFreqs[mel + 2];
+    for (let bin = 0; bin < frequencyBins; bin += 1) {
+      const freq = fftFreqs[bin];
+      const down = (freq - left) / (center - left);
+      const up = (right - freq) / (right - center);
+      filters[mel][bin] = Math.max(0, Math.min(down, up));
+    }
+  }
+  return filters;
+}
+
+function buildGraniteWindow(nFft, winLength) {
+  const window = new Float64Array(nFft);
+  const offset = Math.floor((nFft - winLength) / 2);
+  for (let index = 0; index < winLength; index += 1) {
+    // Periodic Hann, matching torch/Transformers.js window_function().
+    window[offset + index] = 0.5 - 0.5 * Math.cos((2 * Math.PI * index) / winLength);
+  }
+  return window;
+}
+
+function reflectOffset(index, width) {
+  return Math.abs(((index + width) % (2 * width)) - width);
+}
+
+function reflectPad(audio, left, right) {
+  if (audio.length < 2) {
+    const padded = new Float32Array(audio.length + left + right);
+    padded.set(audio, left);
+    return padded;
+  }
+  const padded = new Float32Array(audio.length + left + right);
+  const width = audio.length - 1;
+  padded.set(audio, left);
+  for (let index = 1; index <= left; index += 1) {
+    padded[left - index] = audio[reflectOffset(index, width)];
+  }
+  for (let index = 1; index <= right; index += 1) {
+    padded[width + left + index] = audio[reflectOffset(width - index, width)];
+  }
+  return padded;
+}
+
+class Radix2Fft {
+  constructor(size) {
+    this.size = size;
+  }
+
+  transform(real, imag) {
+    const n = this.size;
+    let reverse = 0;
+    for (let index = 1; index < n; index += 1) {
+      let bit = n >> 1;
+      while (reverse & bit) {
+        reverse ^= bit;
+        bit >>= 1;
+      }
+      reverse ^= bit;
+      if (index < reverse) {
+        const realValue = real[index];
+        real[index] = real[reverse];
+        real[reverse] = realValue;
+        const imagValue = imag[index];
+        imag[index] = imag[reverse];
+        imag[reverse] = imagValue;
+      }
+    }
+
+    for (let length = 2; length <= n; length <<= 1) {
+      const angle = (-2 * Math.PI) / length;
+      const stepReal = Math.cos(angle);
+      const stepImag = Math.sin(angle);
+      const half = length >> 1;
+      for (let start = 0; start < n; start += length) {
+        let wr = 1;
+        let wi = 0;
+        for (let offset = 0; offset < half; offset += 1) {
+          const even = start + offset;
+          const odd = even + half;
+          const tr = wr * real[odd] - wi * imag[odd];
+          const ti = wr * imag[odd] + wi * real[odd];
+          real[odd] = real[even] - tr;
+          imag[odd] = imag[even] - ti;
+          real[even] += tr;
+          imag[even] += ti;
+          const nextWr = wr * stepReal - wi * stepImag;
+          wi = wr * stepImag + wi * stepReal;
+          wr = nextWr;
+        }
+      }
+    }
+  }
+}
+
+class Granite41AudioFrontend {
+  constructor(config) {
+    const melspec = config?.melspec_kwargs || config || {};
+    this.nFft = Number(melspec.n_fft || 512);
+    this.hopLength = Number(melspec.hop_length || 160);
+    this.winLength = Number(melspec.win_length || 400);
+    this.nMels = Number(melspec.n_mels || 80);
+    this.sampleRate = Number(melspec.sample_rate || config?.sampling_rate || 16000);
+    this.window = buildGraniteWindow(this.nFft, this.winLength);
+    this.melFilters = buildMelFilterBank(this.nFft, this.nMels, this.sampleRate);
+    this.fft = new Radix2Fft(this.nFft);
+    this.real = new Float64Array(this.nFft);
+    this.imag = new Float64Array(this.nFft);
+    this.power = new Float64Array(Math.floor(this.nFft / 2) + 1);
+  }
+
+  extract(audio) {
+    const rawFrames = Math.max(0, 1 + Math.floor((audio.length - 1) / this.hopLength));
+    const maxFrames = rawFrames - (rawFrames % 2);
+    if (maxFrames < 2) {
+      throw new Error("Audio is too short for Granite 4.1 preprocessing.");
+    }
+
+    const padded = reflectPad(
+      audio,
+      Math.floor(this.nFft / 2),
+      Math.floor(this.nFft / 2),
+    );
+    const availableFrames = Math.max(
+      0,
+      1 + Math.floor((padded.length - this.nFft) / this.hopLength),
+    );
+    const frameCount = Math.min(maxFrames, availableFrames);
+    const evenFrameCount = frameCount - (frameCount % 2);
+    if (evenFrameCount < 2) {
+      throw new Error("Audio is too short for Granite 4.1 preprocessing.");
+    }
+
+    const mel = new Float32Array(evenFrameCount * this.nMels);
+    let maxLogMel = -Infinity;
+
+    for (let frame = 0; frame < evenFrameCount; frame += 1) {
+      const audioOffset = frame * this.hopLength;
+      this.real.fill(0);
+      this.imag.fill(0);
+      for (let index = 0; index < this.nFft; index += 1) {
+        this.real[index] = (padded[audioOffset + index] || 0) * this.window[index];
+      }
+      this.fft.transform(this.real, this.imag);
+
+      for (let bin = 0; bin < this.power.length; bin += 1) {
+        this.power[bin] = this.real[bin] ** 2 + this.imag[bin] ** 2;
+      }
+
+      const melOffset = frame * this.nMels;
+      for (let melIndex = 0; melIndex < this.nMels; melIndex += 1) {
+        const filter = this.melFilters[melIndex];
+        let value = 0;
+        for (let bin = 0; bin < this.power.length; bin += 1) {
+          value += filter[bin] * this.power[bin];
+        }
+        const logValue = Math.log10(Math.max(1e-10, value));
+        mel[melOffset + melIndex] = logValue;
+        if (logValue > maxLogMel) {
+          maxLogMel = logValue;
+        }
+      }
+    }
+
+    const logThreshold = maxLogMel - 8.0;
+    for (let index = 0; index < mel.length; index += 1) {
+      mel[index] = (Math.max(mel[index], logThreshold) + 4.0) / 4.0;
+    }
+
+    const featureFrames = evenFrameCount / 2;
+    const features = new Float32Array(featureFrames * this.nMels * 2);
+    for (let frame = 0; frame < featureFrames; frame += 1) {
+      const first = (2 * frame) * this.nMels;
+      const second = first + this.nMels;
+      const output = frame * this.nMels * 2;
+      features.set(mel.subarray(first, first + this.nMels), output);
+      features.set(mel.subarray(second, second + this.nMels), output + this.nMels);
+    }
+
+    return {
+      inputFeatures: features,
+      featureFrames,
+      attentionMask: BigInt64Array.from(
+        { length: featureFrames },
+        () => 1n,
+      ),
+    };
+  }
+}
+
 async function hasWebGpuAdapter() {
   const gpu = globalThis.navigator?.gpu;
   if (!gpu) {
@@ -318,6 +604,400 @@ function joinTranscriptChunks(texts) {
     .filter(Boolean)
     .join(" ")
     .replace(/\s+([,.;:!?])/g, "$1");
+}
+
+function granite41Prompt(language) {
+  if (language === "de") {
+    return "<|audio|>transcribe the German speech into a written format.";
+  }
+  if (language === "en") {
+    return "<|audio|>transcribe the English speech into a written format.";
+  }
+  return "<|audio|>can you transcribe the speech into a written format?";
+}
+
+function renderGranite41ChatPrompt(language) {
+  return `USER: ${granite41Prompt(language || "")}\n ASSISTANT:`;
+}
+
+function loadTokenizer(modelPath) {
+  return new Tokenizer(
+    readJson(modelPath, "tokenizer.json"),
+    readJson(modelPath, "tokenizer_config.json"),
+  );
+}
+
+function cleanDecodedText(tokenizer, tokenIds) {
+  return tokenizer
+    .decode(tokenIds, {
+      skip_special_tokens: true,
+      clean_up_tokenization_spaces: false,
+    })
+    .replace(/\s+([,.;:!?])/g, "$1")
+    .trim();
+}
+
+function ortExecutionProviders(device) {
+  if (device === "webgpu") {
+    return ["webgpu"];
+  }
+  if (device === "cpu") {
+    return ["cpu"];
+  }
+  if (device === "dml") {
+    throw new Error(
+      "DirectML is not exposed by onnxruntime-node for raw Granite 4.1 graphs. Use WebGPU or CPU.",
+    );
+  }
+  return ["cpu"];
+}
+
+async function createOrtSession(modelPath, relativePath, device) {
+  return await ort.InferenceSession.create(join(modelPath, relativePath), {
+    executionProviders: ortExecutionProviders(device),
+  });
+}
+
+function causalMask4d(queryLength, keyLength, pastLength) {
+  const mask = new Float32Array(queryLength * keyLength);
+  for (let query = 0; query < queryLength; query += 1) {
+    const allowedThrough = query + pastLength;
+    for (let key = allowedThrough + 1; key < keyLength; key += 1) {
+      mask[query * keyLength + key] = ORT_NEG_INF;
+    }
+  }
+  return mask;
+}
+
+function sequentialPositionIds(length, offset = 0) {
+  return BigInt64Array.from({ length }, (_, index) => BigInt(offset + index));
+}
+
+function spliceAudioEmbeddings(textIds, textEmbeds, audioEmbeds, audioLength) {
+  const audioPositions = [];
+  for (let index = 0; index < textIds.length; index += 1) {
+    if (textIds[index] === GRANITE_4_1_AUDIO_TOKEN_ID) {
+      audioPositions.push(index);
+    }
+  }
+  if (audioPositions.length === 0) {
+    throw new Error("Granite 4.1 prompt did not contain the <|audio|> token.");
+  }
+  if (audioPositions.length !== 1 && audioPositions.length !== audioLength) {
+    throw new Error(
+      `Granite 4.1 prompt has ${audioPositions.length} audio tokens, but encoder produced ${audioLength} audio embeddings.`,
+    );
+  }
+
+  if (audioPositions.length === audioLength) {
+    const output = new Float32Array(textIds.length * GRANITE_4_1_HIDDEN_SIZE);
+    output.set(textEmbeds);
+    for (let index = 0; index < audioLength; index += 1) {
+      const tokenPosition = audioPositions[index];
+      output.set(
+        audioEmbeds.subarray(
+          index * GRANITE_4_1_HIDDEN_SIZE,
+          (index + 1) * GRANITE_4_1_HIDDEN_SIZE,
+        ),
+        tokenPosition * GRANITE_4_1_HIDDEN_SIZE,
+      );
+    }
+    return { data: output, length: textIds.length };
+  }
+
+  const audioPosition = audioPositions[0];
+  const outputLength = textIds.length - 1 + audioLength;
+  const output = new Float32Array(outputLength * GRANITE_4_1_HIDDEN_SIZE);
+  const prefixValues = audioPosition * GRANITE_4_1_HIDDEN_SIZE;
+  output.set(textEmbeds.subarray(0, prefixValues), 0);
+  output.set(audioEmbeds.subarray(0, audioLength * GRANITE_4_1_HIDDEN_SIZE), prefixValues);
+  const suffixStart = (audioPosition + 1) * GRANITE_4_1_HIDDEN_SIZE;
+  output.set(
+    textEmbeds.subarray(suffixStart),
+    (audioPosition + audioLength) * GRANITE_4_1_HIDDEN_SIZE,
+  );
+  return { data: output, length: outputLength };
+}
+
+function presentKvFromOutputs(outputs) {
+  const past = [];
+  for (let layer = 0; layer < GRANITE_4_1_NUM_LAYERS; layer += 1) {
+    past.push(outputs[`present.${layer}.key`]);
+    past.push(outputs[`present.${layer}.value`]);
+  }
+  return past;
+}
+
+function addPastKvFeeds(feeds, pastKv) {
+  for (let layer = 0; layer < GRANITE_4_1_NUM_LAYERS; layer += 1) {
+    feeds[`past_key_values.${layer}.key`] = pastKv[2 * layer];
+    feeds[`past_key_values.${layer}.value`] = pastKv[2 * layer + 1];
+  }
+}
+
+async function loadGranite41ArRuntime(options, device, webgpuAvailable) {
+  const modelPath = modelPathForTransformers(options.modelPath);
+  const precision = options.dtype || "int8";
+  const graphRoot = precision === "int8" ? "int8" : precision;
+  const accelerated = device === "webgpu";
+  const frontend = new Granite41AudioFrontend(
+    readJson(modelPath, "preprocessor_config.json"),
+  );
+  const tokenizer = loadTokenizer(modelPath);
+  const encoder = await createOrtSession(modelPath, `${graphRoot}/encoder.onnx`, device);
+  const embedTokens = await createOrtSession(
+    modelPath,
+    `${graphRoot}/embed_tokens.onnx`,
+    device,
+  );
+  const promptEncode = await createOrtSession(
+    modelPath,
+    `${graphRoot}/prompt_encode.onnx`,
+    device,
+  );
+  const decodeStep = await createOrtSession(
+    modelPath,
+    `${graphRoot}/decode_step.onnx`,
+    device,
+  );
+
+  async function transcribeChunk(audio, language, maxNewTokens) {
+    const features = frontend.extract(audio);
+    const encoderOutputs = await encoder.run({
+      input_features: float32Tensor(
+        features.inputFeatures,
+        [1, features.featureFrames, 160],
+      ),
+    });
+    const audioEmbedsTensor = encoderOutputs.audio_embeds;
+    const audioSizeTensor = encoderOutputs.audio_embed_sizes;
+    const audioLength = Math.min(
+      Number(audioSizeTensor.data[0]),
+      Number(audioEmbedsTensor.dims[1]),
+    );
+
+    const prompt = renderGranite41ChatPrompt(language);
+    const textIds = tokenizer.encode(prompt, { add_special_tokens: true }).ids;
+    const textEmbeds = await embedTokens.run({
+      input_ids: int64Tensor(textIds, [1, textIds.length]),
+    });
+    const spliced = spliceAudioEmbeddings(
+      textIds,
+      textEmbeds.inputs_embeds.data,
+      audioEmbedsTensor.data,
+      audioLength,
+    );
+    const positionIds = sequentialPositionIds(spliced.length);
+    const promptOutputs = await promptEncode.run({
+      inputs_embeds: float32Tensor(
+        spliced.data,
+        [1, spliced.length, GRANITE_4_1_HIDDEN_SIZE],
+      ),
+      position_ids: new ort.Tensor("int64", positionIds, [1, spliced.length]),
+      attention_mask: float32Tensor(
+        causalMask4d(spliced.length, spliced.length, 0),
+        [1, 1, spliced.length, spliced.length],
+      ),
+    });
+
+    const generated = [];
+    const promptLogits = promptOutputs.logits;
+    const vocabSize = Number(promptLogits.dims[2]);
+    generated.push(argmax(promptLogits.data, (spliced.length - 1) * vocabSize, vocabSize));
+    let pastKv = presentKvFromOutputs(promptOutputs);
+
+    for (let step = 1; step < (maxNewTokens || 1024); step += 1) {
+      const previousToken = generated[generated.length - 1];
+      if (previousToken === GRANITE_4_1_EOS_TOKEN_ID) {
+        break;
+      }
+      const nextEmbeds = await embedTokens.run({
+        input_ids: int64Tensor([previousToken], [1, 1]),
+      });
+      const pastLength = spliced.length + step - 1;
+      const totalLength = pastLength + 1;
+      const feeds = {
+        inputs_embeds: nextEmbeds.inputs_embeds,
+        position_ids: int64Tensor([pastLength], [1, 1]),
+        attention_mask: float32Tensor(
+          causalMask4d(1, totalLength, pastLength),
+          [1, 1, 1, totalLength],
+        ),
+      };
+      addPastKvFeeds(feeds, pastKv);
+      const stepOutputs = await decodeStep.run(feeds);
+      const stepLogits = stepOutputs.logits;
+      const stepVocabSize = Number(stepLogits.dims[2]);
+      generated.push(argmax(stepLogits.data, 0, stepVocabSize));
+      pastKv = presentKvFromOutputs(stepOutputs);
+    }
+
+    return cleanDecodedText(tokenizer, generated);
+  }
+
+  return {
+    device,
+    gpuAvailable: accelerated,
+    webgpuAvailable: webgpuAvailable || device === "webgpu",
+    async transcribe(request) {
+      const audioChunks = splitAudioAtQuietBoundaries(
+        request.audio,
+        TARGET_SAMPLE_RATE,
+        GRANITE_MAX_CHUNK_SECONDS,
+      );
+      const chunkTexts = [];
+      for (const chunk of audioChunks) {
+        chunkTexts.push(
+          await transcribeChunk(
+            chunk,
+            request.language || "",
+            request.maxNewTokens,
+          ),
+        );
+      }
+      return joinTranscriptChunks(chunkTexts);
+    },
+  };
+}
+
+function ctcDraftTokenIds(tokenizer, bpeLogits, bpeMask) {
+  const [, timesteps, vocabSize] = bpeLogits.dims.map(Number);
+  const raw = [];
+  for (let timestep = 0; timestep < timesteps; timestep += 1) {
+    if (!bpeMask.data[timestep]) {
+      continue;
+    }
+    raw.push(argmax(bpeLogits.data, timestep * vocabSize, vocabSize));
+  }
+  const collapsed = uniqueConsecutiveWithout(raw, GRANITE_4_1_EOS_TOKEN_ID);
+  if (collapsed.length === 0) {
+    return [];
+  }
+  const draftText = cleanDecodedText(tokenizer, collapsed);
+  if (!draftText) {
+    return [];
+  }
+  return tokenizer.encode(draftText, { add_special_tokens: false }).ids;
+}
+
+function insertionSlotIds(tokenIds) {
+  const outputLength = Math.max(2 * tokenIds.length + 1, 8);
+  const output = new Array(outputLength).fill(GRANITE_4_1_EOS_TOKEN_ID);
+  for (let index = 0; index < tokenIds.length; index += 1) {
+    output[2 * index + 1] = tokenIds[index];
+  }
+  return output;
+}
+
+function buildNarInputs(audioEmbeds, audioLength, textEmbeds, textLength) {
+  const totalLength = audioLength + textLength;
+  const output = new Float32Array(totalLength * GRANITE_4_1_HIDDEN_SIZE);
+  for (let index = 0; index < audioLength * GRANITE_4_1_HIDDEN_SIZE; index += 1) {
+    output[index] = audioEmbeds[index] / GRANITE_4_1_NAR_EMBEDDING_MULTIPLIER;
+  }
+  output.set(
+    textEmbeds.subarray(0, textLength * GRANITE_4_1_HIDDEN_SIZE),
+    audioLength * GRANITE_4_1_HIDDEN_SIZE,
+  );
+  return output;
+}
+
+async function loadGranite41NarRuntime(options, device, webgpuAvailable) {
+  const modelPath = modelPathForTransformers(options.modelPath);
+  const precision = options.dtype || "int8";
+  const graphRoot = precision === "int8" ? "int8" : precision;
+  const accelerated = device === "webgpu";
+  const frontend = new Granite41AudioFrontend(
+    readJson(modelPath, "preprocessor_config.json"),
+  );
+  const tokenizer = loadTokenizer(modelPath);
+  const encoder = await createOrtSession(modelPath, `${graphRoot}/encoder.onnx`, device);
+  const embedTokens = await createOrtSession(
+    modelPath,
+    `${graphRoot}/embed_tokens.onnx`,
+    device,
+  );
+  const editor = await createOrtSession(modelPath, `${graphRoot}/editor.onnx`, device);
+
+  async function transcribeChunk(audio) {
+    const features = frontend.extract(audio);
+    const encoderOutputs = await encoder.run({
+      input_features: float32Tensor(
+        features.inputFeatures,
+        [1, features.featureFrames, 160],
+      ),
+      attention_mask: new ort.Tensor(
+        "int64",
+        features.attentionMask,
+        [1, features.featureFrames],
+      ),
+    });
+    const draftIds = ctcDraftTokenIds(
+      tokenizer,
+      encoderOutputs.bpe_logits_dense,
+      encoderOutputs.bpe_mask,
+    );
+    const slotIds = insertionSlotIds(draftIds);
+    const textEmbeds = await embedTokens.run({
+      input_ids: int64Tensor(slotIds, [1, slotIds.length]),
+    });
+    const audioLength = Math.min(
+      Number(encoderOutputs.audio_lengths.data[0]),
+      Number(encoderOutputs.audio_embeds.dims[1]),
+    );
+    const inputsEmbeds = buildNarInputs(
+      encoderOutputs.audio_embeds.data,
+      audioLength,
+      textEmbeds.inputs_embeds.data,
+      slotIds.length,
+    );
+    const totalLength = audioLength + slotIds.length;
+    const editorOutputs = await editor.run({
+      inputs_embeds: float32Tensor(
+        inputsEmbeds,
+        [1, totalLength, GRANITE_4_1_HIDDEN_SIZE],
+      ),
+      position_ids: new ort.Tensor(
+        "int64",
+        sequentialPositionIds(totalLength),
+        [1, totalLength],
+      ),
+      attention_mask: float32Tensor(
+        new Float32Array(totalLength * totalLength),
+        [1, 1, totalLength, totalLength],
+      ),
+    });
+    const logits = editorOutputs.logits;
+    const vocabSize = Number(logits.dims[2]);
+    const predicted = [];
+    for (let index = 0; index < slotIds.length; index += 1) {
+      predicted.push(
+        argmax(logits.data, (audioLength + index) * vocabSize, vocabSize),
+      );
+    }
+    return cleanDecodedText(
+      tokenizer,
+      uniqueConsecutiveWithout(predicted, GRANITE_4_1_EOS_TOKEN_ID),
+    );
+  }
+
+  return {
+    device,
+    gpuAvailable: accelerated,
+    webgpuAvailable: webgpuAvailable || device === "webgpu",
+    async transcribe(request) {
+      const audioChunks = splitAudioAtQuietBoundaries(
+        request.audio,
+        TARGET_SAMPLE_RATE,
+        GRANITE_MAX_CHUNK_SECONDS,
+      );
+      const chunkTexts = [];
+      for (const chunk of audioChunks) {
+        chunkTexts.push(await transcribeChunk(chunk));
+      }
+      return joinTranscriptChunks(chunkTexts);
+    },
+  };
 }
 
 async function transcribeGraniteChunk(processor, model, audio, language, maxNewTokens) {
@@ -402,6 +1082,14 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
         return joinTranscriptChunks(chunkTexts);
       },
     };
+  }
+
+  const granite41Layout = GRANITE_4_1_MODEL_LAYOUTS.get(options.model);
+  if (granite41Layout === "granite_4_1_ar") {
+    return await loadGranite41ArRuntime(options, device, webgpuAvailable);
+  }
+  if (granite41Layout === "granite_4_1_nar") {
+    return await loadGranite41NarRuntime(options, device, webgpuAvailable);
   }
 
   throw new Error(`Unsupported model: ${options.model}`);

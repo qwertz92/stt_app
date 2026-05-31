@@ -14,7 +14,9 @@ production local default yet.
 Status after the 2026-04-18 implementation pass:
 
 - Cohere Transcribe and IBM Granite Speech are available as experimental
-  selectable local models through the q4 ONNX/WebGPU runtime.
+  selectable local models through the ONNX helper runtime. Cohere and Granite
+  4.0 use q4 ONNX/WebGPU packages; Granite Speech 4.1 uses the published INT8
+  raw ONNX graph tier.
 - They are batch-only, require the JavaScript runtime, and show a CPU fallback
   warning in Settings.
 - NVIDIA Parakeet remains unimplemented because the official NeMo path is still

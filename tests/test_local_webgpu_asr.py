@@ -8,7 +8,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from stt_app.config import MODEL_REPO_MAP
+from stt_app.config import (
+    GRANITE_4_1_MODEL_SIZES,
+    LOCAL_ONNX_MODEL_PRECISION,
+    LOCAL_WEBGPU_MODEL_SIZES,
+    MODEL_REPO_MAP,
+)
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.local_webgpu_asr import (
     LocalOnnxWebGpuTranscriber,
@@ -19,7 +24,8 @@ from stt_app.transcriber.local_webgpu_asr import (
 
 
 def _write_required_snapshot(base: Path, model_name: str, snapshot_id: str = "abc123"):
-    repo_id = MODEL_REPO_MAP[model_name]
+    repo_id = local_webgpu_asr._repo_id_for_model(model_name)
+    assert repo_id is not None
     snapshot = (
         base
         / f"models--{repo_id.replace('/', '--')}"
@@ -69,6 +75,16 @@ def test_find_cached_webgpu_models_detects_complete_q4_snapshots(tmp_path):
     assert find_cached_webgpu_models(str(tmp_path)) == ["cohere-transcribe-03-2026"]
 
 
+def test_selectable_webgpu_models_include_granite_4_1_int8_and_keep_4_0_q4():
+    assert "granite-4.0-1b-speech" in LOCAL_WEBGPU_MODEL_SIZES
+    assert "granite-4.0-1b-speech" in MODEL_REPO_MAP
+    assert LOCAL_ONNX_MODEL_PRECISION["granite-4.0-1b-speech"] == "q4"
+    for model_name in GRANITE_4_1_MODEL_SIZES:
+        assert model_name in LOCAL_WEBGPU_MODEL_SIZES
+        assert model_name in MODEL_REPO_MAP
+        assert LOCAL_ONNX_MODEL_PRECISION[model_name] == "int8"
+
+
 def test_download_webgpu_model_snapshot_uses_q4_allow_patterns(monkeypatch, tmp_path):
     calls = []
 
@@ -96,6 +112,103 @@ def test_download_webgpu_model_snapshot_uses_q4_allow_patterns(monkeypatch, tmp_
     assert "onnx/*_q4.onnx_data" in kwargs["allow_patterns"]
 
 
+def test_download_webgpu_model_snapshot_uses_granite_4_1_ar_int8_patterns(
+    monkeypatch,
+    tmp_path,
+):
+    calls = []
+
+    def fake_snapshot_download(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    result = download_webgpu_model_snapshot(
+        "granite-speech-4.1-2b",
+        str(tmp_path),
+    )
+
+    assert result == str(tmp_path / "snapshot")
+    repo_id, kwargs = calls[0]
+    assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b"]
+    assert kwargs["local_dir"] == str(
+        tmp_path / "ibm-granite-speech-4.1-2b-onnx"
+    )
+    assert kwargs["max_workers"] == 2
+    assert "int8/*.onnx" in kwargs["allow_patterns"]
+    assert "int8/*.onnx_data" in kwargs["allow_patterns"]
+    assert "chat_template.jinja" in kwargs["allow_patterns"]
+    assert "granite_export_metadata.json" in kwargs["allow_patterns"]
+    assert "test_fixtures/*" in kwargs["allow_patterns"]
+    assert "onnx/*_q4.onnx" not in kwargs["allow_patterns"]
+
+
+def test_download_webgpu_model_snapshot_uses_granite_4_1_nar_int8_patterns(
+    monkeypatch,
+    tmp_path,
+):
+    calls = []
+
+    def fake_snapshot_download(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    download_webgpu_model_snapshot("granite-speech-4.1-2b-nar", str(tmp_path))
+
+    repo_id, kwargs = calls[0]
+    assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b-nar"]
+    assert kwargs["local_dir"] == str(
+        tmp_path / "ibm-granite-speech-4.1-2b-nar-onnx"
+    )
+    assert "int8/editor.onnx" not in kwargs["allow_patterns"]
+    assert "int8/*.onnx" in kwargs["allow_patterns"]
+    assert "int8/*.onnx_data" in kwargs["allow_patterns"]
+    assert "chat_template.jinja" not in kwargs["allow_patterns"]
+    assert "test_fixtures/*" in kwargs["allow_patterns"]
+    assert "onnx/*_q4.onnx" not in kwargs["allow_patterns"]
+
+
+def test_required_file_validation_accepts_granite_4_1_ar_int8_snapshot(tmp_path):
+    snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
+
+    assert (
+        resolve_cached_webgpu_model_path("granite-speech-4.1-2b", str(tmp_path))
+        == snapshot
+    )
+    assert find_cached_webgpu_models(str(tmp_path)) == ["granite-speech-4.1-2b"]
+
+
+def test_required_file_validation_accepts_granite_4_1_nar_int8_snapshot(tmp_path):
+    snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b-nar")
+
+    assert (
+        resolve_cached_webgpu_model_path("granite-speech-4.1-2b-nar", str(tmp_path))
+        == snapshot
+    )
+    assert find_cached_webgpu_models(str(tmp_path)) == ["granite-speech-4.1-2b-nar"]
+
+
+def test_required_file_validation_rejects_incomplete_granite_4_1_snapshot(tmp_path):
+    snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
+    (snapshot / "int8/decode_step.onnx_data").unlink()
+
+    assert resolve_cached_webgpu_model_path(
+        "granite-speech-4.1-2b",
+        str(tmp_path),
+    ) is None
+
+
 def test_webgpu_transcriber_defaults_auto_language_to_german():
     transcriber = LocalOnnxWebGpuTranscriber(
         model_size="cohere-transcribe-03-2026",
@@ -112,6 +225,15 @@ def test_granite_webgpu_transcriber_allows_auto_language():
     )
 
     assert transcriber._language_arg() == ""
+
+
+def test_granite_4_1_transcriber_defaults_to_int8_dtype():
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b-nar",
+        language_mode="en",
+    )
+
+    assert transcriber.dtype == "int8"
 
 
 def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
@@ -182,6 +304,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert any("ONNX runtime active on CPU" in item for item in progress)
     assert commands
     assert commands[0][commands[0].index("--device") + 1] == "cpu"
+    assert commands[0][commands[0].index("--dtype") + 1] == "q4"
     requests = [
         json.loads(line)
         for line in fake_process.stdin.getvalue().splitlines()
@@ -191,6 +314,60 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert requests[0]["language"] == "en"
     assert Path(requests[0]["audioPath"]).exists() is False
     assert requests[-1]["command"] == "shutdown"
+
+
+def test_granite_4_1_transcriber_passes_int8_precision_to_node(
+    monkeypatch,
+    tmp_path,
+):
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    fake_process = _FakeProcess()
+    commands = []
+    messages = [
+        {"ok": True, "device": "cpu", "gpuAvailable": False},
+    ]
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_ensure_snapshot",
+        lambda self: tmp_path,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_start_reader_threads",
+        lambda self, process: None,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, timeout_s: messages.pop(0),
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner: None,
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess,
+        "Popen",
+        lambda command, **kwargs: commands.append(command) or fake_process,
+    )
+
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b",
+        language_mode="en",
+        device="cpu",
+        node_path="node",
+        runner_path=runner,
+    )
+    try:
+        transcriber.preload_model()
+    finally:
+        transcriber.close()
+
+    assert commands
+    assert commands[0][commands[0].index("--dtype") + 1] == "int8"
 
 
 def test_webgpu_transcriber_closes_process_when_startup_response_fails(
