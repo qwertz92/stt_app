@@ -13,7 +13,7 @@ import tempfile
 from pathlib import Path
 
 from ..app_paths import temp_audio_dir
-from ..config import DEFAULT_GROQ_MODEL, DOC_SSL_PROXY_PATH
+from ..config import DEFAULT_GROQ_MODEL, DOC_SSL_PROXY_PATH, language_modes_for_selection
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import (
     AudioInput,
@@ -71,7 +71,13 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         self._api_key = api_key
         self._language_mode = (language_mode or "auto").strip().lower()
         self._model = model or DEFAULT_GROQ_MODEL
+        if self._language_mode not in language_modes_for_selection(
+            "groq",
+            self._model,
+        ):
+            self._language_mode = "auto"
         self._groq_class = groq_client_class  # None → lazy import on first use
+        self._client = None
 
     def _get_groq_class(self):
         if self._groq_class is None:
@@ -98,12 +104,24 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
                 pass  # httpx not installed; fall through to default client
         return cls(api_key=self._api_key)
 
+    def _get_client(self):
+        if self._client is None:
+            self._client = self._build_client()
+        return self._client
+
+    def close(self) -> None:
+        client = self._client
+        self._client = None
+        closer = getattr(client, "close", None)
+        if callable(closer):
+            closer()
+
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via Groq batch API.
 
         Accepts WAV bytes, a file path, or a Path object.
         """
-        client = self._build_client()
+        client = self._get_client()
 
         temp_path: Path | None = None
         try:
@@ -192,7 +210,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         key is accepted by the Groq API.
         """
         try:
-            client = self._build_client()
+            client = self._get_client()
             # List available models to verify key.
             models = client.models.list()
             model_ids = [m.id for m in models.data] if hasattr(models, "data") else []

@@ -115,6 +115,16 @@ class TestGroqTranscriberInit:
         )
         assert t._model == "whisper-large-v3"
 
+    def test_non_whisper_language_falls_back_to_auto(self):
+        cls = _make_fake_groq_class()
+        t = GroqTranscriber(
+            api_key="key",
+            language_mode="ast",
+            groq_client_class=cls,
+        )
+
+        assert t._language_mode == "auto"
+
 
 # ---------------------------------------------------------------------------
 # Tests: batch transcription
@@ -122,6 +132,21 @@ class TestGroqTranscriberInit:
 
 
 class TestGroqTranscribeBatch:
+    def test_reuses_client_across_transcriptions(self):
+        created = []
+        base_class = _make_fake_groq_class(text="hello")
+
+        def factory(**kwargs):
+            client = base_class(**kwargs)
+            created.append(client)
+            return client
+
+        t = GroqTranscriber(api_key="test-key", groq_client_class=factory)
+
+        assert t.transcribe_batch(b"RIFF first") == "hello"
+        assert t.transcribe_batch(b"RIFF second") == "hello"
+        assert len(created) == 1
+
     def test_transcribe_file_path(self, tmp_path):
         """Transcription with a file path passes through correctly."""
         cls = _make_fake_groq_class(text="Hallo Welt")

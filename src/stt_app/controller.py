@@ -1186,14 +1186,20 @@ class DictationController(QtCore.QObject):
         wav_bytes: bytes,
         settings: AppSettings,
     ) -> None:
+        worker_started_at = time.perf_counter()
+        init_started_at = worker_started_at
         close_after_transcription = (
             settings.engine == DEFAULT_ENGINE
             and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
             and not bool(getattr(settings, "keep_onnx_model_loaded", False))
         )
         transcriber = None
+        init_elapsed_ms = 0
         try:
             transcriber = self._get_or_create_transcriber(settings)
+            init_elapsed_ms = round(
+                (time.perf_counter() - init_started_at) * 1000
+            )
             self._set_transcriber_progress_callback(
                 transcriber,
                 lambda detail: self.transcription_progress.emit(
@@ -1212,14 +1218,19 @@ class DictationController(QtCore.QObject):
             )
             return
 
+        transcribe_started_at = time.perf_counter()
+        outcome = "success"
         try:
             text = transcriber.transcribe_batch(wav_bytes)
             self.transcription_ready.emit(request_token, text)
         except NotImplementedError as exc:
+            outcome = "not_implemented"
             self.transcription_failed.emit(request_token, str(exc))
         except TranscriptionError as exc:
+            outcome = "provider_error"
             self.transcription_failed.emit(request_token, str(exc))
         except FileNotFoundError as exc:
+            outcome = "missing_file"
             self._logger.exception("Transcription failed due to missing file path")
             self.transcription_failed.emit(
                 request_token,
@@ -1228,12 +1239,30 @@ class DictationController(QtCore.QObject):
                 f"({exc})"
             )
         except Exception as exc:
+            outcome = "unexpected_error"
             self._logger.exception("Unexpected transcription failure")
             self.transcription_failed.emit(
                 request_token,
                 f"Unexpected transcription error: {exc}",
             )
         finally:
+            transcribe_elapsed_ms = round(
+                (time.perf_counter() - transcribe_started_at) * 1000
+            )
+            total_elapsed_ms = round(
+                (time.perf_counter() - worker_started_at) * 1000
+            )
+            self._logger.info(
+                "transcription_timing engine=%s model=%s init_ms=%d "
+                "transcribe_ms=%d total_ms=%d audio_bytes=%d outcome=%s",
+                settings.engine,
+                self._selected_model_name(settings),
+                init_elapsed_ms,
+                transcribe_elapsed_ms,
+                total_elapsed_ms,
+                len(wav_bytes),
+                outcome,
+            )
             if close_after_transcription and transcriber is not None:
                 self._close_cached_transcriber(transcriber)
 
