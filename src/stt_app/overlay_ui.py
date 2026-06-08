@@ -50,6 +50,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._drag_offset = QtCore.QPoint(0, 0)
         self._initial_position: QtCore.QPoint | None = None
         self._initial_corner: str | None = None
+        self._initial_compact_size: QtCore.QSize | None = None
         self._compact_mode = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
         self._manual_positioned = False
@@ -220,6 +221,7 @@ class OverlayUI(QtWidgets.QWidget):
 
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
+        self._initial_compact_size = QtCore.QSize(self.size())
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
         self._sync_always_on_top_button()
 
@@ -254,6 +256,7 @@ class OverlayUI(QtWidgets.QWidget):
                 self.raise_()
         if sys.platform == "win32":
             self._apply_noactivate_style()
+            self._apply_native_z_order()
 
     def _on_always_on_top_clicked(self, checked: bool) -> None:
         self.set_always_on_top(checked, emit_signal=True)
@@ -278,13 +281,15 @@ class OverlayUI(QtWidgets.QWidget):
             self.always_on_top_changed.emit(normalized)
 
     def reveal_temporarily(self, duration_ms: int = 1800) -> None:
-        if self._always_on_top:
-            self.show()
-            self.raise_()
-            return
-        self._temporary_foreground_active = True
+        if not self._always_on_top:
+            self._temporary_foreground_active = True
+            self._temporary_foreground_timer.start(max(1, int(duration_ms)))
         self._apply_window_flags(raise_window=True)
-        self._temporary_foreground_timer.start(max(1, int(duration_ms)))
+        self._reposition_within_current_screen()
+
+    def restore_visibility(self) -> None:
+        """Restore overlay visibility and native z-order after a system resume."""
+        self.reveal_temporarily()
 
     def _clear_temporary_foreground(self) -> None:
         if self._always_on_top or not self._temporary_foreground_active:
@@ -508,6 +513,28 @@ class OverlayUI(QtWidgets.QWidget):
         except Exception:
             pass
 
+    def _apply_native_z_order(self) -> None:
+        """Reassert topmost state without activating the overlay on Windows."""
+        try:
+            import ctypes
+
+            hwnd = int(self.winId())
+            insert_after = -1 if (
+                self._always_on_top or self._temporary_foreground_active
+            ) else -2
+            flags = 0x0001 | 0x0002 | 0x0010 | 0x0040
+            ctypes.windll.user32.SetWindowPos(
+                hwnd,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                flags,
+            )
+        except Exception:
+            pass
+
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
         self._update_detail_height()
@@ -627,6 +654,8 @@ class OverlayUI(QtWidgets.QWidget):
         )
 
     def _compact_target_size(self) -> QtCore.QSize:
+        if self._initial_compact_size is not None:
+            return QtCore.QSize(self._initial_compact_size)
         return QtCore.QSize(
             self._target_window_width(),
             self._compact_window_height(),
@@ -758,3 +787,4 @@ class OverlayUI(QtWidgets.QWidget):
             return
         self.set_state("Idle", self._idle_default_detail, compact=True)
         self.ensure_compact_size()
+        QtCore.QTimer.singleShot(0, self.ensure_compact_size)

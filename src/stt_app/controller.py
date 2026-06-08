@@ -292,8 +292,7 @@ class DictationController(QtCore.QObject):
         self._recording_start_in_progress = True
         try:
             self._supersede_active_request_result()
-            if not bool(getattr(self._settings, "overlay_always_on_top", True)):
-                self._overlay.reveal_temporarily()
+            self._overlay.reveal_temporarily()
             self._overlay.set_state(
                 "Listening",
                 "Starting recording...",
@@ -2123,3 +2122,10 @@ class DictationController(QtCore.QObject):
                 f"Use another key combo (default: {DEFAULT_CANCEL_HOTKEY})."
             )
             return False
+
+    def refresh_hotkey_registration(self) -> None:
+        """Re-register global hotkeys after Windows resumes or opens Explorer."""
+        self._hotkey_registration_ok = self._register_hotkey_with_fallback()
+        self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
+        if not self._hotkey_registration_ok or not self._cancel_hotkey_registration_ok:
+            self._logger.warning("Global hotkey refresh did not fully succeed.")

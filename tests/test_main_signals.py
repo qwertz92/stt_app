@@ -9,6 +9,7 @@ from stt_app.main import (
     _refresh_local_model_inventory_in_background,
     _install_signal_handlers,
     _prompt_recoverable_last_recording,
+    _restore_after_system_resume,
     _restore_overlay_after_settings_save,
 )
 from stt_app.settings_store import AppSettings
@@ -46,6 +47,7 @@ class FakeController:
         self._overlay = type("obj", (object,), {"set_state": lambda *a: None})()
         self._last_transcript = ""
         self.settings_changed_calls = 0
+        self.hotkey_refresh_calls = 0
 
     def toggle_recording(self):
         self.toggle_calls += 1
@@ -61,6 +63,9 @@ class FakeController:
 
     def on_settings_changed(self):
         self.settings_changed_calls += 1
+
+    def refresh_hotkey_registration(self):
+        self.hotkey_refresh_calls += 1
 
     def retry_last_transcription(self):
         return True
@@ -101,6 +106,7 @@ class FakeOverlay:
         self.moved_to = None
         self.compact_calls = 0
         self.always_on_top_values = []
+        self.restore_visibility_calls = 0
 
     def move_to_corner(self, corner):
         self.moved_to = corner
@@ -110,6 +116,9 @@ class FakeOverlay:
 
     def ensure_compact_size(self):
         self.compact_calls += 1
+
+    def restore_visibility(self):
+        self.restore_visibility_calls += 1
 
 
 class FakeLastRecordingStore:
@@ -351,6 +360,16 @@ def test_restore_overlay_after_settings_save_repositions_and_compacts():
     assert overlay.moved_to == "top-right"
     assert overlay.always_on_top_values == [True]
     assert overlay.compact_calls == 1
+
+
+def test_restore_after_system_resume_refreshes_hotkeys_and_overlay():
+    controller = FakeController()
+    overlay = FakeOverlay()
+
+    _restore_after_system_resume(controller, overlay)
+
+    assert controller.hotkey_refresh_calls == 1
+    assert overlay.restore_visibility_calls == 1
 
 
 def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path):

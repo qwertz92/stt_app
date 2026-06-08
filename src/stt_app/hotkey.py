@@ -11,6 +11,9 @@ MOD_SHIFT = 0x0004
 MOD_WIN = 0x0008
 MOD_NOREPEAT = 0x4000
 WM_HOTKEY = 0x0312
+WM_POWERBROADCAST = 0x0218
+PBT_APMRESUMESUSPEND = 0x0007
+PBT_APMRESUMEAUTOMATIC = 0x0012
 VK_RMENU = 0xA5
 KEY_STATE_DOWN_MASK = 0x8000
 
@@ -224,11 +227,50 @@ if QtCore is not None:
 
             return False, 0
 
+
+    class QtPowerResumeEventFilter(QtCore.QAbstractNativeEventFilter):
+        def __init__(self, callback) -> None:
+            super().__init__()
+            self._callback = callback
+
+        def nativeEventFilter(self, event_type, message):
+            event_name = (
+                event_type.decode("utf-8", errors="ignore")
+                if isinstance(event_type, (bytes, bytearray))
+                else str(event_type)
+            )
+            if "windows" not in event_name.lower():
+                return False, 0
+
+            try:
+                msg = ctypes.wintypes.MSG.from_address(int(message))
+            except Exception:
+                return False, 0
+
+            if (
+                msg.message == WM_POWERBROADCAST
+                and int(msg.wParam) in {
+                    PBT_APMRESUMESUSPEND,
+                    PBT_APMRESUMEAUTOMATIC,
+                }
+            ):
+                self._callback()
+
+            return False, 0
+
 else:
 
     class QtHotkeyEventFilter:  # pragma: no cover - fallback outside Qt runtime
         def __init__(self, hotkey_manager: HotkeyManager, callback) -> None:
             self._hotkey_manager = hotkey_manager
+            self._callback = callback
+
+        def nativeEventFilter(self, event_type, message):
+            return False, 0
+
+
+    class QtPowerResumeEventFilter:  # pragma: no cover - fallback outside Qt runtime
+        def __init__(self, callback) -> None:
             self._callback = callback
 
         def nativeEventFilter(self, event_type, message):

@@ -1,3 +1,5 @@
+import ctypes
+
 import pytest
 
 from stt_app.hotkey import (
@@ -5,10 +7,13 @@ from stt_app.hotkey import (
     MOD_CONTROL,
     MOD_NOREPEAT,
     MOD_WIN,
+    PBT_APMRESUMEAUTOMATIC,
     VK_RMENU,
     WM_HOTKEY,
+    WM_POWERBROADCAST,
     HotkeyManager,
     HotkeyRegistrationError,
+    QtPowerResumeEventFilter,
     parse_hotkey,
 )
 
@@ -121,3 +126,20 @@ def test_non_ctrl_alt_hotkey_does_not_check_altgr():
     manager.register("Ctrl+Shift+Space")
 
     assert manager.matches_message(WM_HOTKEY, 42) is True
+
+
+def test_power_resume_event_filter_calls_callback():
+    calls = []
+    event_filter = QtPowerResumeEventFilter(lambda: calls.append(True))
+    message = ctypes.wintypes.MSG()
+    message.message = WM_POWERBROADCAST
+    message.wParam = PBT_APMRESUMEAUTOMATIC
+
+    handled, result = event_filter.nativeEventFilter(
+        b"windows_generic_MSG",
+        ctypes.addressof(message),
+    )
+
+    assert handled is False
+    assert result == 0
+    assert calls == [True]

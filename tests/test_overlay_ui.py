@@ -137,6 +137,7 @@ def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     assert large_height <= OVERLAY_MAX_HEIGHT
 
     overlay._clear_button.click()
+    QtTest.QTest.qWait(1)
 
     assert overlay._state_label.text() == "Idle"
     assert overlay._detail_label.text() == OVERLAY_INITIAL_DETAIL
@@ -145,6 +146,20 @@ def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     assert overlay.height() == initial_height
     assert overlay.width() == initial_width
     assert overlay.height() < large_height
+
+
+def test_overlay_restore_visibility_reasserts_foreground_mode():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    overlay.set_always_on_top(False)
+
+    overlay.hide()
+    overlay.restore_visibility()
+
+    assert overlay.isVisible() is True
+    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
 
 def test_overlay_clear_button_restores_last_idle_detail_text():

@@ -4107,6 +4107,9 @@ class SettingsDialog(QtWidgets.QDialog):
         target = self._effective_recordings_dir()
         Path(target).mkdir(parents=True, exist_ok=True)
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
+        refresher = getattr(self._controller, "refresh_hotkey_registration", None)
+        if callable(refresher):
+            QtCore.QTimer.singleShot(500, refresher)
 
     def _effective_recordings_dir(self) -> str:
         text = self.recordings_dir_edit.text().strip()

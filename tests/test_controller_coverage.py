@@ -125,6 +125,27 @@ def test_start_recording_temporarily_reveals_non_pinned_overlay(monkeypatch):
     _ = app
 
 
+def test_start_recording_reasserts_pinned_overlay_foreground(monkeypatch):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="batch",
+        overlay_always_on_top=True,
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert overlay.reveal_calls == 1
+    controller.shutdown()
+    _ = app
+
+
 class _RunningFuture:
     def done(self):
         return False

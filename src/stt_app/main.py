@@ -10,7 +10,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .config import APP_DISPLAY_NAME, APP_LOGGER_NAME, DEFAULT_CANCEL_HOTKEY_ID
 from .history_dialog import HistoryDialog
 from .controller import DictationController
-from .hotkey import HotkeyManager, QtHotkeyEventFilter
+from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process
@@ -88,6 +88,14 @@ def run() -> int:
     )
     app.installNativeEventFilter(event_filter)
     app.installNativeEventFilter(cancel_event_filter)
+    power_resume_timer = QtCore.QTimer(app)
+    power_resume_timer.setSingleShot(True)
+    power_resume_timer.setInterval(750)
+    power_resume_timer.timeout.connect(
+        lambda: _restore_after_system_resume(controller, overlay)
+    )
+    power_resume_filter = QtPowerResumeEventFilter(power_resume_timer.start)
+    app.installNativeEventFilter(power_resume_filter)
 
     _active_history_dialog: HistoryDialog | None = None
 
@@ -155,6 +163,8 @@ def run() -> int:
         "overlay": overlay,
         "event_filter": event_filter,
         "cancel_event_filter": cancel_event_filter,
+        "power_resume_filter": power_resume_filter,
+        "power_resume_timer": power_resume_timer,
         "tray_icon": tray_icon,
         "signal_timer": signal_timer,
         "instance_lock": instance_lock,
@@ -288,6 +298,14 @@ def _restore_overlay_after_settings_save(
     overlay.set_always_on_top(settings.overlay_always_on_top)
     overlay.move_to_corner(settings.overlay_corner)
     overlay.ensure_compact_size()
+
+
+def _restore_after_system_resume(
+    controller: DictationController,
+    overlay: OverlayUI,
+) -> None:
+    controller.refresh_hotkey_registration()
+    overlay.restore_visibility()
 
 
 def _schedule_startup_local_model_inventory_refresh(

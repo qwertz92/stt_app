@@ -1,5 +1,6 @@
 import logging
 import os
+from pathlib import Path
 
 import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
@@ -920,6 +921,46 @@ def test_import_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
 
     assert captured["directory"] == str(recordings_path)
     assert recordings_path.is_dir()
+    _ = app
+
+
+def test_open_recordings_dir_refreshes_global_hotkeys(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    recordings_path = tmp_path / "recordings"
+
+    class FakeController:
+        def __init__(self):
+            self.refresh_calls = 0
+
+        def refresh_hotkey_registration(self):
+            self.refresh_calls += 1
+
+    controller = FakeController()
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(
+            AppSettings(recordings_dir=str(recordings_path))
+        ),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=controller,
+    )
+    opened = []
+    monkeypatch.setattr(
+        QtGui.QDesktopServices,
+        "openUrl",
+        lambda url: opened.append(url.toLocalFile()) or True,
+    )
+    monkeypatch.setattr(
+        QtCore.QTimer,
+        "singleShot",
+        lambda _delay, callback: callback(),
+    )
+
+    dialog._open_recordings_dir()
+
+    assert [Path(path) for path in opened] == [recordings_path]
+    assert recordings_path.is_dir()
+    assert controller.refresh_calls == 1
     _ = app
 
 
