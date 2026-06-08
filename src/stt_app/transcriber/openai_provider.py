@@ -12,7 +12,7 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_OPENAI_MODEL,
     OPENAI_MODELS,
-    VALID_LANGUAGE_MODES,
+    language_modes_for_selection,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from ._http_utils import (
@@ -46,10 +46,13 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> Remote Provider API Keys."
             )
         self._api_key = api_key
-        self._language_mode = (language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        if self._language_mode not in VALID_LANGUAGE_MODES:
-            self._language_mode = DEFAULT_LANGUAGE_MODE
         self._model = model if model in OPENAI_MODELS else DEFAULT_OPENAI_MODEL
+        self._language_mode = (language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
+        if self._language_mode not in language_modes_for_selection(
+            "openai",
+            self._model,
+        ):
+            self._language_mode = DEFAULT_LANGUAGE_MODE
         self._request_timeout_s = max(5, int(request_timeout_s))
 
     def _auth_header(self) -> str:

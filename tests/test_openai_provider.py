@@ -43,6 +43,10 @@ class TestOpenAIProviderInit:
         t = OpenAITranscriber(api_key="k", language_mode="zz")
         assert t._language_mode == "auto"
 
+    def test_language_outside_openai_documented_list_falls_back_to_auto(self):
+        t = OpenAITranscriber(api_key="k", language_mode="am")
+        assert t._language_mode == "auto"
+
 
 class TestOpenAIBatchTranscription:
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")

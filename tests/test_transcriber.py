@@ -83,6 +83,15 @@ def test_local_transcriber_sets_language_when_explicit():
     assert model.calls[0]["language"] == "de"
 
 
+def test_local_transcriber_rejects_non_whisper_language_hint():
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="ast",
+    )
+
+    assert transcriber._language_arg() is None
+
+
 def test_local_transcriber_wraps_model_errors():
     transcriber = LocalFasterWhisperTranscriber(
         model_size="small",

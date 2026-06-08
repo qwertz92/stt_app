@@ -179,7 +179,7 @@ def test_invalid_enum_values_fall_back_to_defaults(tmp_path):
                 "model_size": "xxl",
                 "engine": "unknown-provider",
                 "mode": "live",
-                "language_mode": "fr",
+                "language_mode": "zz",
                 "paste_mode": "invalid",
                 "start_beep_tone": "ring",
                 "overlay_corner": "middle",
@@ -197,6 +197,18 @@ def test_invalid_enum_values_fall_back_to_defaults(tmp_path):
     assert settings.paste_mode == DEFAULT_PASTE_MODE
     assert settings.start_beep_tone == DEFAULT_START_BEEP_TONE
     assert settings.overlay_corner == DEFAULT_OVERLAY_CORNER
+
+
+def test_supported_multilingual_language_is_preserved(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"language_mode": "fr"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.language_mode == "fr"
 
 
 def test_openai_engine_is_valid(tmp_path):

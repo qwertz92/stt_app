@@ -20,6 +20,7 @@ from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
     DOC_SSL_PROXY_PATH,
+    language_modes_for_selection,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import (
@@ -108,18 +109,12 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         if self._language_mode == "auto":
             kwargs["language_detection"] = True
         else:
-            # Map short codes to AssemblyAI language codes.
-            _LANG_MAP = {
-                "de": "de",
-                "en": "en",
-                "es": "es",
-                "fr": "fr",
-                "pt": "pt",
-                "it": "it",
-            }
-            lang_code = _LANG_MAP.get(self._language_mode)
-            if lang_code:
-                kwargs["language_code"] = lang_code
+            supported_modes = language_modes_for_selection(
+                "assemblyai",
+                self._model,
+            )
+            if self._language_mode in supported_modes:
+                kwargs["language_code"] = self._language_mode
                 kwargs["language_detection"] = False
             else:
                 # Unknown language code → fall back to auto detection.

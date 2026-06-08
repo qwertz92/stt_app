@@ -296,7 +296,7 @@ class TestAssemblyAILanguageConfig:
         """Unknown language code falls back to auto detection."""
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(
-            api_key="key", language_mode="zh", aai_module=fake_aai
+            api_key="key", language_mode="ast", aai_module=fake_aai
         )
         config = t._build_config()
         assert config.kwargs.get("language_detection") is True

@@ -18,7 +18,12 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
-from ..config import AUDIO_SAMPLE_RATE, DEFAULT_DEEPGRAM_MODEL, DOC_SSL_PROXY_PATH
+from ..config import (
+    AUDIO_SAMPLE_RATE,
+    DEFAULT_DEEPGRAM_MODEL,
+    DOC_SSL_PROXY_PATH,
+    language_modes_for_selection,
+)
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import (
     AudioInput,
@@ -61,6 +66,11 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._api_key = api_key
         self._language_mode = (language_mode or "auto").strip().lower()
         self._model = model or DEFAULT_DEEPGRAM_MODEL
+        if self._language_mode not in language_modes_for_selection(
+            "deepgram",
+            self._model,
+        ):
+            self._language_mode = "auto"
         self._stream_lock = threading.Lock()
         self._stream_ws = None
         self._stream_thread: threading.Thread | None = None

@@ -588,12 +588,19 @@ function graniteDtype(dtype) {
   };
 }
 
+const GRANITE_LANGUAGE_NAMES = {
+  de: "German",
+  en: "English",
+  es: "Spanish",
+  fr: "French",
+  ja: "Japanese",
+  pt: "Portuguese",
+};
+
 function granitePrompt(language) {
-  if (language === "de") {
-    return "<|audio|>transcribe the German speech into a written format.";
-  }
-  if (language === "en") {
-    return "<|audio|>transcribe the English speech into a written format.";
+  const languageName = GRANITE_LANGUAGE_NAMES[language];
+  if (languageName) {
+    return `<|audio|>transcribe the ${languageName} speech into a written format.`;
   }
   return "<|audio|>can you transcribe the speech into a written format?";
 }
@@ -607,11 +614,9 @@ function joinTranscriptChunks(texts) {
 }
 
 function granite41Prompt(language) {
-  if (language === "de") {
-    return "<|audio|>transcribe the German speech into a written format.";
-  }
-  if (language === "en") {
-    return "<|audio|>transcribe the English speech into a written format.";
+  const languageName = GRANITE_LANGUAGE_NAMES[language];
+  if (languageName) {
+    return `<|audio|>transcribe the ${languageName} speech into a written format.`;
   }
   return "<|audio|>can you transcribe the speech into a written format?";
 }

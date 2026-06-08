@@ -41,7 +41,6 @@ from .config import (
     DOC_MODELS_PATH,
     DEEPGRAM_MODELS,
     ELEVENLABS_MODELS,
-    ENGINE_LANGUAGE_MODES,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     LANGUAGE_MODE_LABELS,
@@ -61,6 +60,7 @@ from .config import (
     VALID_OVERLAY_CORNERS,
     VALID_PASTE_MODES,
     VALID_START_BEEP_TONES,
+    language_modes_for_selection,
     supports_streaming,
 )
 from .hotkey import parse_hotkey
@@ -1702,7 +1702,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_list.setFont(history_font)
         self._configure_compact_list_widget(self.history_list, expand=True)
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
-        history_layout.addWidget(self.history_list, 2)
 
         self.history_detail = QtWidgets.QPlainTextEdit()
         self.history_detail.setReadOnly(True)
@@ -1714,7 +1713,15 @@ class SettingsDialog(QtWidgets.QDialog):
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
-        history_layout.addWidget(self.history_detail, 1)
+
+        self.history_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.history_splitter.setChildrenCollapsible(False)
+        self.history_splitter.addWidget(self.history_list)
+        self.history_splitter.addWidget(self.history_detail)
+        self.history_splitter.setStretchFactor(0, 2)
+        self.history_splitter.setStretchFactor(1, 1)
+        self.history_splitter.setSizes([400, 200])
+        history_layout.addWidget(self.history_splitter, 1)
 
         history_buttons = QtWidgets.QHBoxLayout()
         self.history_refresh_button = QtWidgets.QPushButton("Refresh")
@@ -3264,32 +3271,19 @@ class SettingsDialog(QtWidgets.QDialog):
     def _language_modes_for_current_selection(self) -> tuple[str, ...]:
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         mode = str(self.mode_combo.currentData() or DEFAULT_MODE)
-        model = (
-            str(self.model_combo.currentData() or "")
-            if hasattr(self, "model_combo")
-            else ""
-        )
-
-        if engine == "assemblyai" and mode == "streaming":
-            # AssemblyAI realtime streaming path does language detection automatically.
-            return ("auto",)
-
-        if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
-            return ("auto", "en")
-
-        if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
-            return ("de", "en")
-
-        return ENGINE_LANGUAGE_MODES.get(engine, VALID_LANGUAGE_MODES)
+        if engine == DEFAULT_ENGINE:
+            model = str(self.model_combo.currentData() or "")
+        else:
+            model = self._remote_model_value_for_provider(engine)
+        return language_modes_for_selection(engine, model, mode)
 
     def _language_constraint_note(self) -> str:
         engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         mode = str(self.mode_combo.currentData() or DEFAULT_MODE)
-        model = (
-            str(self.model_combo.currentData() or "")
-            if hasattr(self, "model_combo")
-            else ""
-        )
+        if engine == DEFAULT_ENGINE:
+            model = str(self.model_combo.currentData() or "")
+        else:
+            model = self._remote_model_value_for_provider(engine)
 
         if engine == "assemblyai" and mode == "streaming":
             return (
@@ -3300,25 +3294,40 @@ class SettingsDialog(QtWidgets.QDialog):
         if engine == "local" and model in LOCAL_ENGLISH_ONLY_MODELS:
             return (
                 "distil-large-v3.5 is an English-only model "
-                "(German is disabled for this model)."
+                "(only Auto and English are available)."
+            )
+
+        if engine == "local" and model == "cohere-transcribe-03-2026":
+            return (
+                "Cohere supports 14 explicit languages and does not provide "
+                "automatic language detection."
             )
 
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
             return (
-                "Cohere and Granite require an explicit language in this app; "
-                "Auto is disabled for these experimental local models."
+                "Granite supports Auto plus the languages documented for the "
+                "selected experimental model."
             )
 
         if engine == "groq":
             return (
                 "Groq Whisper models are multilingual. 'Auto' lets the model detect "
-                "language; selecting German/English sends a language hint."
+                "language; selecting a language sends a recognition hint."
             )
 
         if engine == "elevenlabs":
             return (
                 "ElevenLabs Scribe models are multilingual. 'Auto' lets the provider "
-                "detect language; selecting German/English sends a language hint."
+                "detect language; selecting a language sends a language hint."
+            )
+
+        if engine == "deepgram":
+            return "Available languages follow the selected Deepgram Nova model."
+
+        if engine == "assemblyai":
+            return (
+                "Batch requests use Universal-3 Pro with Universal-2 fallback, "
+                "providing the broad Universal-2 language list."
             )
 
         return ""
@@ -3330,18 +3339,12 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
         self.language_combo.blockSignals(True)
-        combo_model = self.language_combo.model()
-        for idx in range(self.language_combo.count()):
-            value = str(self.language_combo.itemData(idx) or "")
-            item = combo_model.item(idx)
-            if item is None:
-                continue
-            is_supported = value in supported_modes
-            item.setEnabled(is_supported)
-            if is_supported:
-                item.setToolTip("")
-            else:
-                item.setToolTip("Not available for the current engine/mode/model.")
+        self.language_combo.clear()
+        for value in supported_modes:
+            self.language_combo.addItem(
+                LANGUAGE_MODE_LABELS.get(value, value),
+                value,
+            )
 
         target_mode = (
             selected_mode if selected_mode in supported_modes else supported_modes[0]
@@ -3496,6 +3499,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if not value:
             value = _REMOTE_MODEL_DEFAULTS.get(provider, "")
         self._remote_model_values[provider] = value
+        self._update_language_availability()
 
     def _on_import_engine_changed(self, _index: int = 0) -> None:
         self._update_import_model_selector()

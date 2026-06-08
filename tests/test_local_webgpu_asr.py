@@ -227,6 +227,20 @@ def test_granite_webgpu_transcriber_allows_auto_language():
     assert transcriber._language_arg() == ""
 
 
+def test_granite_4_1_transcriber_allows_auto_and_french_language():
+    auto_transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b",
+        language_mode="auto",
+    )
+    french_transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b",
+        language_mode="fr",
+    )
+
+    assert auto_transcriber._language_arg() == ""
+    assert french_transcriber._language_arg() == "fr"
+
+
 def test_granite_4_1_transcriber_defaults_to_int8_dtype():
     transcriber = LocalOnnxWebGpuTranscriber(
         model_size="granite-speech-4.1-2b-nar",

@@ -20,6 +20,7 @@ from ..config import (
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
+    language_modes_for_selection,
 )
 from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
 
@@ -497,9 +498,10 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
     def _language_arg(self) -> str:
         mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        if mode in {"de", "en"}:
+        supported_modes = language_modes_for_selection("local", self.model_size)
+        if mode in supported_modes and mode != DEFAULT_LANGUAGE_MODE:
             return mode
-        if self.model_size == "granite-4.0-1b-speech":
+        if self.model_size != "cohere-transcribe-03-2026":
             return ""
         # Cohere requires an explicit language. German is the safer default for
         # this app's primary user workflow when Auto reaches this provider.

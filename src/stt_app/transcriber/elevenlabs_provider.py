@@ -19,7 +19,7 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_ELEVENLABS_MODEL,
     ELEVENLABS_MODELS,
-    VALID_LANGUAGE_MODES,
+    language_modes_for_selection,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from ._http_utils import (
@@ -37,6 +37,126 @@ from .base import (
 
 ELEVENLABS_API_BASE = "https://api.elevenlabs.io/v1"
 
+_ELEVENLABS_LANGUAGE_CODES = {
+    "af": "afr",
+    "am": "amh",
+    "ar": "ara",
+    "as": "asm",
+    "ast": "ast",
+    "hy": "hye",
+    "az": "aze",
+    "ba": "bak",
+    "be": "bel",
+    "bn": "ben",
+    "bo": "bod",
+    "br": "bre",
+    "bs": "bos",
+    "bg": "bul",
+    "ca": "cat",
+    "yue": "yue",
+    "ceb": "ceb",
+    "ny": "nya",
+    "zh": "zho",
+    "hr": "hrv",
+    "cs": "ces",
+    "da": "dan",
+    "nl": "nld",
+    "en": "eng",
+    "et": "est",
+    "eu": "eus",
+    "fi": "fin",
+    "fo": "fao",
+    "fr": "fra",
+    "ff": "ful",
+    "lg": "lug",
+    "gl": "glg",
+    "gu": "guj",
+    "de": "deu",
+    "el": "ell",
+    "he": "heb",
+    "ha": "hau",
+    "haw": "haw",
+    "hi": "hin",
+    "ht": "hat",
+    "hu": "hun",
+    "is": "isl",
+    "id": "ind",
+    "ig": "ibo",
+    "ga": "gle",
+    "it": "ita",
+    "ja": "jpn",
+    "jw": "jav",
+    "ka": "kat",
+    "kn": "kan",
+    "kk": "kaz",
+    "kea": "kea",
+    "km": "khm",
+    "ko": "kor",
+    "ku": "kur",
+    "ky": "kir",
+    "la": "lat",
+    "lb": "ltz",
+    "ln": "lin",
+    "lo": "lao",
+    "luo": "luo",
+    "lv": "lav",
+    "lt": "lit",
+    "mk": "mkd",
+    "ms": "msa",
+    "mg": "mlg",
+    "ml": "mal",
+    "mn": "mon",
+    "mr": "mar",
+    "mi": "mri",
+    "mt": "mlt",
+    "my": "mya",
+    "ne": "nep",
+    "nso": "nso",
+    "nn": "nno",
+    "no": "nor",
+    "oc": "oci",
+    "or": "ori",
+    "pa": "pan",
+    "fa": "fas",
+    "pl": "pol",
+    "ps": "pus",
+    "pt": "por",
+    "ro": "ron",
+    "ru": "rus",
+    "sa": "san",
+    "sd": "snd",
+    "sr": "srp",
+    "si": "sin",
+    "sk": "slk",
+    "sl": "slv",
+    "sn": "sna",
+    "so": "som",
+    "sq": "sqi",
+    "es": "spa",
+    "su": "sun",
+    "sw": "swa",
+    "sv": "swe",
+    "tl": "fil",
+    "ta": "tam",
+    "te": "tel",
+    "tg": "tgk",
+    "th": "tha",
+    "tk": "tuk",
+    "tr": "tur",
+    "tt": "tat",
+    "uk": "ukr",
+    "umb": "umb",
+    "ur": "urd",
+    "uz": "uzb",
+    "vi": "vie",
+    "cy": "cym",
+    "wo": "wol",
+    "xh": "xho",
+    "yi": "yid",
+    "yo": "yor",
+    "zu": "zul",
+}
+
 
 class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
     def __init__(
@@ -53,14 +173,17 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> Remote Provider API Keys."
             )
         self._api_key = api_key
-        self._language_mode = (
-            (language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        )
-        if self._language_mode not in VALID_LANGUAGE_MODES:
-            self._language_mode = DEFAULT_LANGUAGE_MODE
         self._model = (
             model if model in ELEVENLABS_MODELS else DEFAULT_ELEVENLABS_MODEL
         )
+        self._language_mode = (
+            (language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
+        )
+        if self._language_mode not in language_modes_for_selection(
+            "elevenlabs",
+            self._model,
+        ):
+            self._language_mode = DEFAULT_LANGUAGE_MODE
         self._request_timeout_s = max(5, int(request_timeout_s))
 
     def _auth_header(self) -> str:
@@ -81,7 +204,15 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
     ) -> urllib.request.Request:
         fields: list[tuple[str, str]] = [("model_id", self._model)]
         if self._language_mode != DEFAULT_LANGUAGE_MODE:
-            fields.append(("language_code", self._language_mode))
+            fields.append(
+                (
+                    "language_code",
+                    _ELEVENLABS_LANGUAGE_CODES.get(
+                        self._language_mode,
+                        self._language_mode,
+                    ),
+                )
+            )
 
         body, content_type = multipart_form_data(
             fields=fields,

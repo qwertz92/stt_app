@@ -53,6 +53,14 @@ class TestElevenLabsInit:
         t = ElevenLabsTranscriber(api_key="key", language_mode="zz")
         assert t._language_mode == "auto"
 
+    def test_scribe_specific_language_is_preserved(self):
+        t = ElevenLabsTranscriber(api_key="key", language_mode="ast")
+        assert t._language_mode == "ast"
+
+    def test_language_outside_scribe_list_falls_back_to_auto(self):
+        t = ElevenLabsTranscriber(api_key="key", language_mode="ba")
+        assert t._language_mode == "auto"
+
 
 class TestElevenLabsBatchTranscription:
     @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
@@ -76,7 +84,7 @@ class TestElevenLabsBatchTranscription:
         assert 'name="model_id"' in body
         assert "scribe_v1" in body
         assert 'name="language_code"' in body
-        assert "de" in body
+        assert "deu" in body
 
     @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
     def test_transcribe_plain_text_fallback(self, mock_urlopen):

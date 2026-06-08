@@ -24,6 +24,7 @@ from ..config import (
     STREAMING_PARTIAL_MIN_AUDIO_S,
     STREAMING_PARTIAL_WINDOW_S,
     VALID_MODEL_SIZES,
+    language_modes_for_selection,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import (
@@ -338,7 +339,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
     def _language_arg(self) -> str | None:
         mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        if mode == DEFAULT_LANGUAGE_MODE:
+        supported_modes = language_modes_for_selection("local", self.model_size)
+        if mode == DEFAULT_LANGUAGE_MODE or mode not in supported_modes:
             return None
         return mode
 

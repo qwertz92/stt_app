@@ -291,7 +291,7 @@ def test_assemblyai_streaming_locks_language_to_auto():
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
+    assert _combo_data(dialog.language_combo) == ["auto"]
     assert dialog.language_combo.currentData() == "auto"
     assert dialog.language_combo.isEnabled() is False
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
@@ -317,7 +317,7 @@ def test_local_distil_model_limits_language_to_auto_and_english():
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
+    assert _combo_data(dialog.language_combo) == ["auto", "en"]
     assert dialog.language_combo.currentData() == "auto"
     assert dialog.language_combo.isEnabled() is True
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
@@ -351,7 +351,11 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     assert _combo_item_enabled(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "de") is True
     assert _combo_item_enabled(dialog.language_combo, "en") is True
-    assert "Auto is disabled" in dialog.language_note_label.text()
+    assert _combo_item_enabled(dialog.language_combo, "fr") is True
+    assert _combo_item_enabled(dialog.language_combo, "ja") is True
+    assert "does not provide automatic language detection" in (
+        dialog.language_note_label.text()
+    )
     assert "ONNX/WebGPU" in dialog.engine_indicator.text()
     assert "DirectML" in dialog.local_model_runtime_warning_label.text()
     assert "CPU fallback" in dialog.local_model_runtime_warning_label.text()
@@ -373,7 +377,7 @@ def test_switching_assemblyai_mode_updates_language_options():
 
     streaming_idx = dialog.mode_combo.findData("streaming")
     dialog.mode_combo.setCurrentIndex(streaming_idx)
-    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
+    assert _combo_data(dialog.language_combo) == ["auto"]
     assert dialog.language_combo.isEnabled() is False
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
     assert _combo_item_enabled(dialog.language_combo, "de") is False
@@ -381,11 +385,12 @@ def test_switching_assemblyai_mode_updates_language_options():
 
     batch_idx = dialog.mode_combo.findData("batch")
     dialog.mode_combo.setCurrentIndex(batch_idx)
-    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
+    assert _combo_data(dialog.language_combo)[:3] == ["auto", "de", "en"]
     assert dialog.language_combo.isEnabled() is True
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
     assert _combo_item_enabled(dialog.language_combo, "de") is True
     assert _combo_item_enabled(dialog.language_combo, "en") is True
+    assert _combo_item_enabled(dialog.language_combo, "ja") is True
     _ = app
 
 
@@ -464,9 +469,11 @@ def test_groq_language_note_explains_auto_and_hints():
         app_logger=_FakeLogger(),
     )
 
-    assert _combo_data(dialog.language_combo) == ["auto", "de", "en"]
+    assert _combo_data(dialog.language_combo)[:3] == ["auto", "de", "en"]
+    assert _combo_item_enabled(dialog.language_combo, "fr") is True
+    assert _combo_item_enabled(dialog.language_combo, "ja") is True
     assert dialog.language_note_label.isVisibleTo(dialog) is True
-    assert "language hint" in dialog.language_note_label.text()
+    assert "recognition hint" in dialog.language_note_label.text()
     _ = app
 
 
@@ -524,6 +531,59 @@ def test_history_list_matches_detail_font_and_compact_item_spacing():
     assert dialog.history_detail.sizePolicy().verticalPolicy() == (
         QtWidgets.QSizePolicy.Expanding
     )
+    assert dialog.history_splitter.orientation() == QtCore.Qt.Vertical
+    assert dialog.history_splitter.childrenCollapsible() is False
+    _ = app
+
+
+def test_granite_language_options_follow_selected_variant():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="local",
+            model_size="granite-speech-4.1-2b",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert _combo_data(dialog.language_combo) == [
+        "auto",
+        "de",
+        "en",
+        "fr",
+        "es",
+        "pt",
+        "ja",
+    ]
+
+    plus_index = dialog.model_combo.findData("granite-speech-4.1-2b-plus")
+    dialog.model_combo.setCurrentIndex(plus_index)
+
+    assert _combo_item_enabled(dialog.language_combo, "auto") is True
+    assert _combo_item_enabled(dialog.language_combo, "pt") is True
+    assert _combo_item_enabled(dialog.language_combo, "ja") is False
+    _ = app
+
+
+def test_deepgram_language_options_follow_selected_model():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(engine="deepgram", deepgram_model="nova-3"))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert _combo_item_enabled(dialog.language_combo, "ar") is True
+    nova_2_index = dialog.remote_model_combo.findData("nova-2")
+    dialog.remote_model_combo.setCurrentIndex(nova_2_index)
+
+    assert _combo_item_enabled(dialog.language_combo, "ar") is False
+    assert _combo_item_enabled(dialog.language_combo, "fr") is True
     _ = app
 
 

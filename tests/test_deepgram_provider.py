@@ -93,6 +93,15 @@ class TestDeepgramTranscriberInit:
         t = DeepgramTranscriber(api_key="key", language_mode="de")
         assert t._language_mode == "de"
 
+    def test_language_not_supported_by_selected_model_falls_back_to_auto(self):
+        t = DeepgramTranscriber(
+            api_key="key",
+            language_mode="ar",
+            model="nova-2",
+        )
+
+        assert t._language_mode == "auto"
+
 
 # ---------------------------------------------------------------------------
 # Tests: batch transcription
