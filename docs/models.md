@@ -10,8 +10,10 @@ The app has two local runtime families:
 - Experimental ONNX models through a Node.js helper.
 
 Granite Speech 4.1 is selectable and uses the smallest currently published
-INT8 ONNX tier by default. It is not q4/int4. Granite 4.0 q4 remains available
-as the smaller Granite option until real app benchmarks justify removing it.
+INT8 ONNX tier by default. A Q4_K GGUF now exists for a separate CrispASR/GGUF
+runtime, but there is still no compatible q4/int4 tier in the selectable ONNX
+repositories. Granite 4.0 q4 remains available as the smaller Granite option
+until real app benchmarks justify removing it.
 
 For deeper background on WebGPU, DirectML, CPU fallback, memory behavior, and
 language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
@@ -25,11 +27,11 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `large-v3` | CTranslate2 | ~3.1 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
 | `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
 | `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
-| `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | Multilingual, explicit `de`/`en` in the app | Experimental quality trial, batch mode only |
-| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Multilingual, explicit `de`/`en` in the app | Experimental compact speech-LM trial, batch mode only |
-| `granite-speech-4.1-2b` | ONNX INT8 AR | ~4.0 GB INT8 | Primarily English-documented; explicit `de`/`en` in the app | Experimental Granite 4.1 daily-use trial, batch mode only |
-| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Primarily English-documented; explicit `de`/`en` in the app | Experimental Plus variant trial, batch mode only |
-| `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Primarily English-documented; explicit `de`/`en` in the app | Smaller Granite 4.1 NAR daily-use trial, batch mode only |
+| `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | Experimental quality trial, batch mode only |
+| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Experimental compact speech-LM trial, batch mode only |
+| `granite-speech-4.1-2b` | ONNX INT8 AR | ~4.0 GB INT8 | Auto + `de/en/fr/es/pt/ja` | Experimental Granite 4.1 daily-use trial, batch mode only |
+| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Experimental Plus variant trial, batch mode only |
+| `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Smaller Granite 4.1 NAR daily-use trial, batch mode only |
 
 ### Which model should I use?
 
@@ -89,6 +91,32 @@ prompt-encode, and decode-step graphs plus a host-side audio-token splice and
 KV-cache loop. The NAR export uses encoder, token embedding, and editor graphs
 with CTC draft decoding and insertion slots. They are separate runtime paths,
 not one shared flag.
+
+As of June 8, 2026, a community
+[Granite Speech 4.1 2B Q4_K GGUF](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF)
+is available. It is built for the CrispASR/GGUF runtime and cannot be loaded by
+the app's raw ONNX Runtime graph path. The current
+[AR](https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-onnx),
+[Plus](https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx),
+and [NAR](https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx)
+ONNX repositories still use INT8 as their smallest compatible tier.
+
+### Language selection
+
+Settings -> General rebuilds the language list for the selected engine and
+model. Auto is selected by default when supported. The app keeps one canonical
+language code and adapts it where a provider requires a different code format,
+such as ElevenLabs Scribe's three-letter codes.
+
+The model-aware lists are based on the current primary documentation:
+
+- [OpenAI speech-to-text languages](https://platform.openai.com/docs/guides/speech-to-text#supported-languages)
+- [Groq speech-to-text](https://console.groq.com/docs/speech-to-text)
+- [Deepgram model/language overview](https://developers.deepgram.com/docs/models-languages-overview)
+- [AssemblyAI models](https://www.assemblyai.com/docs/getting-started/models)
+- [ElevenLabs Scribe](https://elevenlabs.io/docs/models#scribe-v2)
+- [Cohere Transcribe model card](https://huggingface.co/CohereLabs/transcribe-03-2026)
+- [Granite Speech 4.1 model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b)
 
 The runtime automatically tries an ONNX GPU target first and falls back to CPU
 if no compatible GPU runtime loads. Cohere and Granite 4.0 try WebGPU, then

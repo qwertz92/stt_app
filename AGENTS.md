@@ -104,6 +104,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.
+- **Overlay visibility after activity/resume**: every recording start
+  re-presents the overlay without activation and reasserts native Windows
+  topmost z-order. `WM_POWERBROADCAST` resume events also restore overlay
+  visibility and refresh both global hotkey registrations after display/session
+  state has stabilized.
+- **Model-aware language selection**: `config.language_modes_for_selection()`
+  is the shared source of truth for the General-tab language list and provider
+  validation. Auto remains the persisted default where supported; experimental
+  Cohere requires an explicit language.
+- **Remote first-request diagnostics**: transcription workers log
+  `transcription_timing` with initialization, transcription, and total
+  durations. Groq reuses its SDK/HTTP client for the lifetime of the cached
+  transcriber so later requests can reuse connections.
 - **Line endings**: Repository text files are normalized to LF via `.gitattributes`; `.editorconfig` mirrors that policy so Windows/WSL edits do not create CRLF-only diffs.
 - **Windows packaging**: end-user builds are layered. PyInstaller `onedir`
   is the base portable bundle; Inno Setup wraps that bundle into the
@@ -120,6 +133,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Cohere and Granite 4.0 use q4 ONNX snapshots through Transformers.js.
   Granite 4.1 uses the smallest currently published INT8 raw ONNX graph tier
   through explicit `onnxruntime-node` sessions.
+  A Granite Speech 4.1 2B Q4_K GGUF exists for a separate CrispASR/GGUF
+  runtime, but the selectable Granite 4.1 ONNX exports still have no compatible
+  q4/int4 graph tier. Do not replace the current INT8 ONNX path with that GGUF
+  without a separate runtime evaluation and quality benchmark.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.
   The resolved runtime device is reported through transcriber progress messages

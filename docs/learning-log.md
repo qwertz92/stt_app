@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-08
+
+- Overlay visibility and compact sizing were hardened. `Clear` restores the
+  cached startup size again after the button event completes, every recording
+  start re-presents the overlay regardless of pinned/floating mode, and Windows
+  resume events reassert native z-order, visibility, screen bounds, and global
+  hotkey registrations.
+- Opening the recordings folder now schedules a global hotkey refresh. Explorer
+  still becomes the foreground target, so recording works but text cannot be
+  meaningfully inserted into the Explorer folder view.
+- The embedded Settings History tab now uses a vertical splitter between the
+  transcript list and selected transcript text while preserving the previous
+  2:1 initial layout.
+- General-tab language choices are rebuilt from centralized model-aware
+  metadata. Whisper families expose the full Whisper language set; OpenAI,
+  AssemblyAI, Deepgram, Cohere, and Granite use their documented subsets; Auto
+  remains the default where the runtime supports it. ElevenLabs converts the
+  app's canonical language codes to its documented Scribe codes.
+- Groq now reuses its cached SDK/HTTP client instead of creating one for every
+  transcription. Transcription workers log `transcription_timing` phase data so
+  first-request delays can be separated into app initialization versus the
+  provider/network request.
+- A Granite Speech 4.1 2B Q4_K GGUF is now public, but it targets a separate
+  CrispASR/GGUF runtime. The current Granite 4.1 ONNX repositories still expose
+  INT8 as their smallest compatible graph tier, so the app remains on INT8.
+
 ## 2026-05-31
 
 - Granite Speech 4.1 ONNX exports are selectable local models. The public 4.1

@@ -72,6 +72,33 @@ python -m pip install --index-url https://your-artifactory.corp/pypi/simple -r r
 
 ---
 
+## First remote transcription is slower
+
+The first remote transcription after app startup can be slower even when later
+requests to the same provider are fast. Typical one-time costs are:
+
+- lazy Python SDK import and provider-client construction,
+- first keyring/Credential Manager access,
+- DNS lookup, TCP connection, TLS negotiation, and proxy authentication,
+- Zscaler or another corporate inspection proxy establishing and caching the
+  first inspected TLS route.
+
+The app does not probe unrelated providers before sending a Groq request.
+Groq's cached transcriber now also reuses one SDK/HTTP client, so later requests
+can reuse its connection pool instead of creating a new client each time.
+
+Diagnostics include a line like:
+
+```text
+transcription_timing engine=groq model=whisper-large-v3-turbo init_ms=8 transcribe_ms=920 total_ms=928 audio_bytes=123456 outcome=success
+```
+
+Compare the first and later calls. A large `init_ms` points to local app/keyring
+setup. A large `transcribe_ms` with fast later calls points to network,
+TLS/proxy/Zscaler warmup, upload, or provider latency.
+
+---
+
 ## Packaging as EXE / Installer
 
 The project includes a PyInstaller spec file `stt_app.spec` and a release build
