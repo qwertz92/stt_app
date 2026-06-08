@@ -47,6 +47,10 @@ from .config import (
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError
 from .last_recording_store import LastRecordingStore
+from .model_download_progress import (
+    format_model_download_progress,
+    measure_model_download_progress,
+)
 from .overlay_ui import OverlayUI
 from .settings_store import AppSettings, SettingsStore
 from .streaming_text import (
@@ -898,12 +902,6 @@ class DictationController(QtCore.QObject):
         )
         self._preload_progress_timer.start()
 
-    @staticmethod
-    def _format_progress_bar(progress: float, width: int = 18) -> str:
-        clamped = max(0.0, min(1.0, float(progress)))
-        filled = int(round(clamped * width))
-        return f"[{'#' * filled}{'.' * (width - filled)}]"
-
     def _select_cached_fallback_model(
         self,
         selected_model: str,
@@ -977,39 +975,25 @@ class DictationController(QtCore.QObject):
         from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
         model_name = self._preload_target_model or self._settings.model_size
-        estimated_mb = MODEL_ESTIMATED_SIZE_MB.get(model_name)
-        total_bytes = int(estimated_mb * 1_000_000) if estimated_mb else 0
         downloaded_bytes = estimate_cached_model_bytes(
             model_name,
             getattr(self._settings, "model_dir", ""),
         )
 
         now = time.monotonic()
-        speed_bps = 0.0
-        if self._preload_last_poll_at > 0.0 and now > self._preload_last_poll_at:
-            delta_bytes = max(0, downloaded_bytes - self._preload_last_bytes)
-            delta_s = now - self._preload_last_poll_at
-            if delta_s > 0:
-                speed_bps = delta_bytes / delta_s
+        progress = measure_model_download_progress(
+            model_name,
+            downloaded_bytes,
+            previous_bytes=self._preload_last_bytes,
+            previous_at=self._preload_last_poll_at,
+            now=now,
+        )
         self._preload_last_poll_at = now
         self._preload_last_bytes = downloaded_bytes
-
-        downloaded_mb = downloaded_bytes / 1_000_000.0
-        speed_mb_s = speed_bps / 1_000_000.0
-
-        if total_bytes > 0:
-            progress = max(0.0, min(1.0, downloaded_bytes / float(total_bytes)))
-            percent = int(round(progress * 100))
-            bar = self._format_progress_bar(progress)
-            detail = (
-                f"Downloading '{model_name}' {percent}% {bar} "
-                f"({downloaded_mb:.0f}/{estimated_mb:.0f} MB, {speed_mb_s:.1f} MB/s)."
-            )
-        else:
-            detail = (
-                f"Downloading '{model_name}'... "
-                f"{downloaded_mb:.0f} MB cached, {speed_mb_s:.1f} MB/s."
-            )
+        detail = format_model_download_progress(
+            progress,
+            include_progress_bar=True,
+        )
 
         if include_fallback_hint:
             detail = (

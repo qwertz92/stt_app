@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from pathlib import Path
 
 import pytest
@@ -723,6 +724,98 @@ def test_local_tab_can_download_selected_model(monkeypatch):
 
     assert "Downloaded: tiny" in dialog.local_models_action_label.text()
     assert "tiny" in dialog.local_models_label.text()
+    _ = app
+
+
+def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    first_started = threading.Event()
+    release_first = threading.Event()
+    calls: list[str] = []
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda _model_dir="": list(calls),
+    )
+
+    def _download(model_name: str, _model_dir: str = "") -> str:
+        calls.append(model_name)
+        if model_name == "tiny":
+            first_started.set()
+            release_first.wait(timeout=3.0)
+        return f"/tmp/{model_name}"
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.download_model_snapshot",
+        _download,
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    QtTest.QTest.qWait(250)
+
+    dialog._start_local_model_download(["tiny"])
+    worker = dialog._active_local_model_download_thread
+    assert worker is not None
+    assert first_started.wait(timeout=1.0)
+    app.processEvents()
+
+    _select_local_model_names(dialog, "base")
+    assert dialog.download_selected_models_button.isEnabled() is True
+    assert dialog.model_dir_edit.isEnabled() is False
+
+    dialog._download_selected_local_models()
+    dialog._start_local_model_download(["base"])
+
+    active, queued, running = dialog._local_model_download_snapshot()
+    assert active is not None and active[0] == "tiny"
+    assert [name for name, _model_dir in queued] == ["base"]
+    assert running is True
+
+    release_first.set()
+    worker.join(timeout=3.0)
+    QtTest.QTest.qWait(50)
+
+    assert worker.is_alive() is False
+    assert calls == ["tiny", "base"]
+    assert "Downloaded: tiny, base" in dialog.local_models_action_label.text()
+    _ = app
+
+
+def test_local_model_download_progress_shows_percent_speed_and_queue(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    with dialog._local_model_download_lock:
+        dialog._local_model_download_active = ("small", "")
+        dialog._local_model_download_queue = [("base", "")]
+        dialog._local_model_download_worker_running = True
+    dialog._local_model_download_progress_model = "small"
+    dialog._local_model_download_last_bytes = 142_000_000
+    dialog._local_model_download_last_poll_at = 10.0
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.estimate_cached_model_bytes",
+        lambda _model_name, _model_dir="": 242_000_000,
+    )
+    monkeypatch.setattr("stt_app.settings_dialog.time.monotonic", lambda: 12.0)
+
+    dialog._refresh_local_model_download_progress()
+
+    assert dialog.local_model_download_progress_bar.isHidden() is False
+    assert dialog.local_model_download_progress_bar.value() == 50
+    assert "approx. 50%" in dialog.local_models_action_label.text()
+    assert "50.0 MB/s" in dialog.local_models_action_label.text()
+    assert "400.0 Mbit/s" in dialog.local_models_action_label.text()
+    assert "1 model queued" in dialog.local_models_action_label.text()
     _ = app
 
 

@@ -79,6 +79,10 @@ from .local_benchmark import (
     run_benchmark_cases,
 )
 from .logger import AppLogger
+from .model_download_progress import (
+    format_model_download_progress,
+    measure_model_download_progress,
+)
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
@@ -86,6 +90,7 @@ from .transcript_history import TranscriptHistoryStore
 from .transcriber.local_faster_whisper import (
     delete_cached_model,
     download_model_snapshot,
+    estimate_cached_model_bytes,
 )
 
 if TYPE_CHECKING:
@@ -184,8 +189,8 @@ class SettingsDialog(QtWidgets.QDialog):
     import_transcription_finished = QtCore.Signal(bool, str)
     import_transcription_progress = QtCore.Signal(str)
     local_model_scan_finished = QtCore.Signal(int, str, object)
-    local_model_download_progress = QtCore.Signal(str)
-    local_model_download_finished = QtCore.Signal(bool, str)
+    local_model_download_progress = QtCore.Signal(int, str)
+    local_model_download_finished = QtCore.Signal(int, bool, str)
     benchmark_progress = QtCore.Signal(str)
     benchmark_case_finished = QtCore.Signal(object)
     benchmark_finished = QtCore.Signal(bool, str, object)
@@ -236,6 +241,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self._settings_perf_painted_tabs: set[int] = set()
         self._local_model_scan_started_at_by_token: dict[int, float] = {}
         self._active_local_model_download_thread: threading.Thread | None = None
+        self._local_model_download_lock = threading.Lock()
+        self._local_model_download_queue: list[tuple[str, str]] = []
+        self._local_model_download_active: tuple[str, str] | None = None
+        self._local_model_download_completed_names: set[str] = set()
+        self._local_model_download_worker_running = False
+        self._local_model_download_worker_token = 0
+        self._local_model_download_progress_model = ""
+        self._local_model_download_last_bytes = 0
+        self._local_model_download_last_poll_at = 0.0
+        self._local_model_download_progress_timer = QtCore.QTimer(self)
+        self._local_model_download_progress_timer.setInterval(500)
+        self._local_model_download_progress_timer.timeout.connect(
+            self._refresh_local_model_download_progress
+        )
         self._active_benchmark_thread: threading.Thread | None = None
         self._benchmark_cancel_event: threading.Event | None = None
         self._current_benchmark_cases: list[BenchmarkCase] = []
@@ -1123,8 +1142,10 @@ class SettingsDialog(QtWidgets.QDialog):
         local_models_layout.addWidget(self.local_models_scan_status_label)
 
         download_hint = QtWidgets.QLabel(
-            "Select models to download or delete. Green entries are already cached locally. "
-            "Cohere and Granite use the experimental ONNX runtime."
+            "Select models to download or delete. Downloads run one at a time; "
+            "you can add more models to the queue while one is active. Green "
+            "entries are already cached locally. Cohere and Granite use the "
+            "experimental ONNX runtime."
         )
         download_hint.setWordWrap(True)
         self._style_note_label(download_hint)
@@ -1150,13 +1171,13 @@ class SettingsDialog(QtWidgets.QDialog):
             self._refresh_local_model_views
         )
         self.download_selected_models_button = QtWidgets.QPushButton(
-            "Download Selected"
+            "Download / Queue Selected"
         )
         self.download_selected_models_button.clicked.connect(
             self._download_selected_local_models
         )
         self.download_all_missing_models_button = QtWidgets.QPushButton(
-            "Download All Missing"
+            "Download / Queue All Missing"
         )
         self.download_all_missing_models_button.clicked.connect(
             self._download_all_missing_local_models
@@ -1176,6 +1197,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_models_action_label = QtWidgets.QLabel("")
         self.local_models_action_label.setWordWrap(True)
         local_models_layout.addWidget(self.local_models_action_label)
+
+        self.local_model_download_progress_bar = QtWidgets.QProgressBar()
+        self.local_model_download_progress_bar.setRange(0, 100)
+        self.local_model_download_progress_bar.setTextVisible(True)
+        self.local_model_download_progress_bar.setVisible(False)
+        local_models_layout.addWidget(self.local_model_download_progress_bar)
         self._show_local_model_unverified_state(
             "Open this tab to verify local model availability in the background."
         )
@@ -2043,10 +2070,18 @@ class SettingsDialog(QtWidgets.QDialog):
             for item in self.local_models_list.selectedItems()
         }
         cached_set = set(cached)
+        with self._local_model_download_lock:
+            cached_set.update(self._local_model_download_completed_names)
 
         self.local_models_list.clear()
         for model_name in VALID_MODEL_SIZES:
-            status = "Downloaded" if model_name in cached_set else "Not downloaded"
+            download_state = self._local_model_download_state(model_name)
+            if download_state == "active":
+                status = "Downloading"
+            elif download_state == "queued":
+                status = "Queued"
+            else:
+                status = "Downloaded" if model_name in cached_set else "Not downloaded"
             if model_name in LOCAL_ENGLISH_ONLY_MODELS:
                 status = f"{status}, English only"
             if model_name in LOCAL_WEBGPU_MODEL_SIZES:
@@ -2070,6 +2105,12 @@ class SettingsDialog(QtWidgets.QDialog):
             if model_name in cached_set:
                 item.setBackground(QtGui.QColor("#e8f5e9"))
                 item.setForeground(QtGui.QColor("#1b5e20"))
+            elif download_state == "active":
+                item.setBackground(QtGui.QColor("#e3f2fd"))
+                item.setForeground(QtGui.QColor("#0d47a1"))
+            elif download_state == "queued":
+                item.setBackground(QtGui.QColor("#fff8e1"))
+                item.setForeground(QtGui.QColor("#8d6e00"))
             self.local_models_list.addItem(item)
             if model_name in selected:
                 item.setSelected(True)
@@ -2159,7 +2200,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self._refresh_model_combo(cached=[])
         if hasattr(self, "refresh_local_models_button"):
             self.refresh_local_models_button.setEnabled(
-                self._active_local_model_download_thread is None
+                not self._local_model_download_is_running()
             )
         self._set_local_model_scan_status(status_text)
         self._update_language_availability()
@@ -2180,6 +2221,8 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _apply_local_model_scan_result(self, cached: list[str]) -> None:
         started_at = time.perf_counter()
+        with self._local_model_download_lock:
+            self._local_model_download_completed_names.difference_update(cached)
         self._refresh_local_models_label(cached)
         self._refresh_local_models_list(cached)
         self._refresh_model_combo(cached=cached)
@@ -2188,7 +2231,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_models_list.setEnabled(True)
         self.benchmark_models_list.setEnabled(True)
         self.refresh_local_models_button.setEnabled(
-            self._active_local_model_download_thread is None
+            not self._local_model_download_is_running()
         )
         self._update_language_availability()
         self._update_local_model_actions()
@@ -2355,11 +2398,44 @@ class SettingsDialog(QtWidgets.QDialog):
             if str(item.data(QtCore.Qt.UserRole) or "").strip()
         ]
 
+    def _local_model_download_snapshot(
+        self,
+    ) -> tuple[tuple[str, str] | None, list[tuple[str, str]], bool]:
+        with self._local_model_download_lock:
+            return (
+                self._local_model_download_active,
+                list(self._local_model_download_queue),
+                self._local_model_download_worker_running,
+            )
+
+    def _local_model_download_is_running(self) -> bool:
+        _active, _queued, running = self._local_model_download_snapshot()
+        return running
+
+    def _local_model_download_state(self, model_name: str) -> str:
+        active, queued, _running = self._local_model_download_snapshot()
+        if active is not None and active[0] == model_name:
+            return "active"
+        if any(name == model_name for name, _model_dir in queued):
+            return "queued"
+        return ""
+
+    def _local_model_download_pending_names(self) -> set[str]:
+        active, queued, _running = self._local_model_download_snapshot()
+        pending = {name for name, _model_dir in queued}
+        if active is not None:
+            pending.add(active[0])
+        return pending
+
     def _update_local_model_actions(self) -> None:
         if not hasattr(self, "download_selected_models_button"):
             return
 
-        busy = self._active_local_model_download_thread is not None
+        busy = self._local_model_download_is_running()
+        pending = self._local_model_download_pending_names()
+        with self._local_model_download_lock:
+            completed = set(self._local_model_download_completed_names)
+        pending.update(completed)
 
         # Determine missing and downloaded from selection
         missing: list[str] = []
@@ -2369,7 +2445,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 name = str(item.data(QtCore.Qt.UserRole) or "")
                 if bool(item.data(QtCore.Qt.UserRole + 1)):
                     selected_downloaded.append(name)
-                else:
+                elif name not in pending:
                     missing.append(name)
 
         # Any missing models at all (for "Download All Missing")?
@@ -2377,21 +2453,24 @@ class SettingsDialog(QtWidgets.QDialog):
         if hasattr(self, "local_models_list"):
             for index in range(self.local_models_list.count()):
                 item = self.local_models_list.item(index)
-                if not bool(item.data(QtCore.Qt.UserRole + 1)):
+                name = str(item.data(QtCore.Qt.UserRole) or "")
+                if not bool(item.data(QtCore.Qt.UserRole + 1)) and name not in pending:
                     any_missing = True
                     break
 
-        self.local_models_list.setEnabled(not busy)
+        self.local_models_list.setEnabled(True)
         self.refresh_local_models_button.setEnabled(not busy)
         self.delete_selected_model_button.setEnabled(
             (not busy) and bool(selected_downloaded)
         )
         self.download_selected_models_button.setEnabled(
-            (not busy) and bool(missing)
+            bool(missing)
         )
         self.download_all_missing_models_button.setEnabled(
-            (not busy) and any_missing
+            any_missing
         )
+        self.model_dir_edit.setEnabled(not busy)
+        self.model_dir_browse.setEnabled(not busy)
 
     def _download_selected_local_models(self) -> None:
         selected = self._selected_downloadable_model_names()
@@ -2401,7 +2480,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if not missing:
             self.local_models_action_label.setStyleSheet("color: #555;")
             self.local_models_action_label.setText(
-                "All selected models are already downloaded."
+                "All selected models are already downloaded or queued."
             )
             return
         self._start_local_model_download(missing)
@@ -2411,7 +2490,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if not missing:
             self.local_models_action_label.setStyleSheet("color: #555;")
             self.local_models_action_label.setText(
-                "All available local models are already downloaded."
+                "All available local models are already downloaded or queued."
             )
             return
         self._start_local_model_download(missing)
@@ -2424,74 +2503,184 @@ class SettingsDialog(QtWidgets.QDialog):
             str(self.local_models_list.item(index).data(QtCore.Qt.UserRole) or "")
             for index in range(self.local_models_list.count())
         ])
+        pending = self._local_model_download_pending_names()
+        with self._local_model_download_lock:
+            pending.update(self._local_model_download_completed_names)
         missing: list[str] = []
         for index in range(self.local_models_list.count()):
             item = self.local_models_list.item(index)
             model_name = str(item.data(QtCore.Qt.UserRole) or "")
             if model_name not in wanted:
                 continue
-            if not bool(item.data(QtCore.Qt.UserRole + 1)):
+            if (
+                not bool(item.data(QtCore.Qt.UserRole + 1))
+                and model_name not in pending
+            ):
                 missing.append(model_name)
         return missing
 
     def _start_local_model_download(self, model_names: list[str]) -> None:
-        if not model_names or self._active_local_model_download_thread is not None:
+        if not model_names:
+            return
+
+        model_dir = self.model_dir_edit.text().strip()
+        start_worker = False
+        added: list[str] = []
+        with self._local_model_download_lock:
+            pending = {name for name, _model_dir in self._local_model_download_queue}
+            if self._local_model_download_active is not None:
+                pending.add(self._local_model_download_active[0])
+            pending.update(self._local_model_download_completed_names)
+            for model_name in model_names:
+                if model_name in pending:
+                    continue
+                self._local_model_download_queue.append((model_name, model_dir))
+                pending.add(model_name)
+                added.append(model_name)
+            if added and not self._local_model_download_worker_running:
+                self._local_model_download_worker_running = True
+                self._local_model_download_worker_token += 1
+                worker_token = self._local_model_download_worker_token
+                start_worker = True
+
+        if not added:
+            self.local_models_action_label.setStyleSheet("color: #555;")
+            self.local_models_action_label.setText(
+                "The selected models are already downloaded or queued."
+            )
+            self._update_local_model_actions()
             return
 
         self.local_models_action_label.setStyleSheet("color: #555;")
         self.local_models_action_label.setText(
-            f"Preparing download for: {', '.join(model_names)}"
+            f"Queued for download: {', '.join(added)}"
         )
+        self._refresh_local_models_list()
         self._update_local_model_actions()
+        self._local_model_download_progress_timer.start()
 
-        model_dir = self.model_dir_edit.text().strip()
+        if not start_worker:
+            self._refresh_local_model_download_progress()
+            return
 
-        def _run() -> None:
-            successes: list[str] = []
-            failures: list[str] = []
-            total = len(model_names)
-            for index, model_name in enumerate(model_names, start=1):
-                self.local_model_download_progress.emit(
-                    f"Downloading {index}/{total}: {model_name}..."
-                )
-                try:
-                    download_model_snapshot(model_name, model_dir)
-                    successes.append(model_name)
-                except Exception as exc:
-                    failures.append(f"{model_name}: {exc}")
-
-            if failures and successes:
-                message = (
-                    f"Completed with errors. Downloaded: {', '.join(successes)}. "
-                    f"Failed: {' | '.join(failures)}"
-                )
-                self.local_model_download_finished.emit(False, message)
-                return
-            if failures:
-                self.local_model_download_finished.emit(
-                    False,
-                    f"Download failed: {' | '.join(failures)}",
-                )
-                return
-            self.local_model_download_finished.emit(
-                True,
-                f"Downloaded: {', '.join(successes)}",
-            )
-
-        self._active_local_model_download_thread = threading.Thread(
-            target=_run,
+        thread = threading.Thread(
+            target=lambda: self._run_local_model_download_queue(worker_token),
             name="stt_app_local_model_download",
             daemon=True,
         )
-        self._active_local_model_download_thread.start()
+        self._active_local_model_download_thread = thread
+        thread.start()
         self._update_local_model_actions()
 
-    def _on_local_model_download_progress(self, text: str) -> None:
+    def _run_local_model_download_queue(self, worker_token: int) -> None:
+        successes: list[str] = []
+        failures: list[str] = []
+        while True:
+            with self._local_model_download_lock:
+                if not self._local_model_download_queue:
+                    self._local_model_download_active = None
+                    self._local_model_download_worker_running = False
+                    break
+                model_name, model_dir = self._local_model_download_queue.pop(0)
+                self._local_model_download_active = (model_name, model_dir)
+                queued_count = len(self._local_model_download_queue)
+
+            self.local_model_download_progress.emit(
+                worker_token,
+                f"Starting '{model_name}'. {queued_count} queued."
+            )
+            try:
+                download_model_snapshot(model_name, model_dir)
+                successes.append(model_name)
+                with self._local_model_download_lock:
+                    self._local_model_download_completed_names.add(model_name)
+            except Exception as exc:
+                failures.append(f"{model_name}: {exc}")
+
+        if failures and successes:
+            message = (
+                f"Completed with errors. Downloaded: {', '.join(successes)}. "
+                f"Failed: {' | '.join(failures)}"
+            )
+            self.local_model_download_finished.emit(worker_token, False, message)
+            return
+        if failures:
+            self.local_model_download_finished.emit(
+                worker_token,
+                False,
+                f"Download failed: {' | '.join(failures)}",
+            )
+            return
+        self.local_model_download_finished.emit(
+            worker_token,
+            True,
+            f"Downloaded: {', '.join(successes)}",
+        )
+
+    def _on_local_model_download_progress(self, worker_token: int, text: str) -> None:
+        if worker_token != self._local_model_download_worker_token:
+            return
         self.local_models_action_label.setStyleSheet("color: #555;")
         self.local_models_action_label.setText(text)
+        self._refresh_local_models_list()
+        self._refresh_local_model_download_progress()
+        self._local_model_download_progress_timer.start()
+        self._update_local_model_actions()
 
-    def _on_local_model_download_finished(self, success: bool, text: str) -> None:
+    def _refresh_local_model_download_progress(self) -> None:
+        if not hasattr(self, "local_model_download_progress_bar"):
+            return
+        active, queued, running = self._local_model_download_snapshot()
+        if not running or active is None:
+            return
+
+        model_name, model_dir = active
+        downloaded_bytes = estimate_cached_model_bytes(model_name, model_dir)
+        now = time.monotonic()
+        if model_name != self._local_model_download_progress_model:
+            self._local_model_download_progress_model = model_name
+            self._local_model_download_last_bytes = downloaded_bytes
+            self._local_model_download_last_poll_at = now
+
+        progress = measure_model_download_progress(
+            model_name,
+            downloaded_bytes,
+            previous_bytes=self._local_model_download_last_bytes,
+            previous_at=self._local_model_download_last_poll_at,
+            now=now,
+        )
+        self._local_model_download_last_bytes = downloaded_bytes
+        self._local_model_download_last_poll_at = now
+
+        self.local_models_action_label.setStyleSheet("color: #0d47a1;")
+        self.local_models_action_label.setText(
+            format_model_download_progress(progress, queued_count=len(queued))
+        )
+        if progress.percent is None:
+            self.local_model_download_progress_bar.setRange(0, 0)
+        else:
+            self.local_model_download_progress_bar.setRange(0, 100)
+            self.local_model_download_progress_bar.setValue(progress.percent)
+            self.local_model_download_progress_bar.setFormat(
+                f"{model_name}: approx. %p%"
+            )
+        self.local_model_download_progress_bar.setVisible(True)
+
+    def _on_local_model_download_finished(
+        self,
+        worker_token: int,
+        success: bool,
+        text: str,
+    ) -> None:
+        if (
+            worker_token != self._local_model_download_worker_token
+            or self._local_model_download_is_running()
+        ):
+            return
         self._active_local_model_download_thread = None
+        self._local_model_download_progress_timer.stop()
+        self._local_model_download_progress_model = ""
+        self.local_model_download_progress_bar.setVisible(False)
         if success:
             self.local_models_action_label.setStyleSheet("color: #1b5e20;")
         elif text.startswith("Completed with errors"):
