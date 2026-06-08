@@ -217,6 +217,13 @@ On first use, the app downloads the selected model automatically from HuggingFac
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 
+The Settings **Local** tab downloads models one at a time. You can select and
+queue more models while the current download continues. The active and queued
+models are marked in the list, and the tab shows approximate percentage,
+downloaded size, MB/s, and Mbit/s. Percentage and speed are estimated from
+on-disk cache growth, so short pauses or jumps can occur while Hugging Face
+finalizes files.
+
 For Cohere and Granite, source checkouts use the system Node.js executable. If
 `@huggingface/transformers`, `@huggingface/tokenizers`, or `onnxruntime-node`
 is missing, the app attempts `npm install`

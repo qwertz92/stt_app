@@ -41,6 +41,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
   because its required `onnxruntime-directml>=1.26.0` wheel is unpublished.
 - A real Ryzen 5 7600X run loaded Nemotron in 0.81 seconds and transcribed the
   repository benchmark sample at 0.229 RTF in automatic-language CPU mode.
+- Local-model downloads started from Settings now use a serial, deduplicated
+  queue. The model list remains selectable during an active download so more
+  models can be queued, while cache refresh, deletion, and model-directory
+  changes stay disabled until the queue finishes.
+- Settings model downloads now show active/queued states plus an approximate
+  progress bar and transfer rate in MB/s and Mbit/s. The shared progress helper
+  also keeps startup preload reporting consistent; values are estimated from
+  cache growth and `MODEL_ESTIMATED_SIZE_MB`.
 
 ## 2026-05-31
 
