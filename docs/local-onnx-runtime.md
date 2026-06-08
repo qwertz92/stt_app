@@ -2,8 +2,8 @@
 
 Date: 2026-05-31
 
-This document explains the experimental local ONNX path used for Cohere
-Transcribe and IBM Granite Speech in `stt_app`.
+This document explains the experimental local ONNX paths used for Cohere
+Transcribe, IBM Granite Speech, and NVIDIA Nemotron 3.5 in `stt_app`.
 
 ## Runtime Stack
 
@@ -25,6 +25,10 @@ The experimental Cohere and Granite models use a separate out-of-process stack:
 
 The helper is a child process by design. If the JavaScript runtime crashes, the
 main app can report the error and continue instead of taking down the UI.
+
+Nemotron uses a separate in-process Python path through ONNX Runtime GenAI. It
+does not use the Node helper. ORT GenAI owns the cache-aware FastConformer/RNNT
+streaming state and emits tokens incrementally for each new 560 ms audio chunk.
 
 Granite Speech 4.1 is part of this runtime stack and is user-selectable. The
 public 4.1 ONNX repos currently ship raw INT8/fp16w/fp32 graph bundles instead
@@ -66,6 +70,11 @@ For Granite Speech 4.1 raw ONNX graphs, the Node helper uses direct
 `onnxruntime-node` sessions. In the current package, WebGPU and CPU are the
 supported raw-graph targets; DirectML is skipped for 4.1 and normal `auto`
 falls through to CPU if WebGPU cannot load.
+
+Nemotron attempts DirectML and then CPU through ORT GenAI. The normal dependency
+lock currently installs the CPU package because the published
+`onnxruntime-genai-directml` package requires an `onnxruntime-directml>=1.26.0`
+wheel that is not yet available from PyPI.
 
 `wasm` is not a valid device for the Node runtime used here. In browser-oriented
 ONNX stacks, WASM can mean CPU execution through WebAssembly. In this app's
@@ -121,17 +130,22 @@ machines, the benchmark tab is the source of truth.
 
 ## Memory Lifecycle
 
-By default, the app does not keep experimental ONNX models loaded after normal
-dictation. The Node helper process is closed after the transcription finishes.
-This avoids surprise RAM/VRAM use and avoids idle CPU load.
+By default, the app does not keep Cohere and Granite ONNX models loaded after
+normal dictation. The Node helper process is closed after the transcription
+finishes. This avoids surprise RAM/VRAM use and avoids idle CPU load.
 
 The Local tab has an expert option:
 
-`Keep experimental ONNX model loaded after dictation`
+`Keep Cohere/Granite ONNX model loaded after dictation`
 
-When enabled, the last selected ONNX model remains loaded until settings change
-or the app exits. This removes the next transcription's model-load latency, but
-keeps the model's RAM/VRAM allocation alive.
+When enabled, the last selected Cohere or Granite model remains loaded until
+settings change or the app exits. This removes the next transcription's
+model-load latency, but keeps the model's RAM/VRAM allocation alive.
+
+Nemotron remains preloaded and cached like faster-whisper because loading it
+when the recording hotkey is pressed would block the start of a true-streaming
+session. It is smaller than the Cohere and Granite ONNX models, but its memory
+allocation still remains active until settings change or the app exits.
 
 Important details:
 
@@ -183,6 +197,7 @@ Approximate current downloads:
 | `granite-speech-4.1-2b` | AR INT8 raw ONNX graphs | 4.0 GB |
 | `granite-speech-4.1-2b-plus` | AR INT8 raw ONNX graphs | 4.1 GB |
 | `granite-speech-4.1-2b-nar` | NAR INT8 raw ONNX graphs | 2.5 GB |
+| `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | 793 MB |
 
 Runtime memory can be higher than these values. For exact values on a target
 machine, use Task Manager while running a fixed benchmark and check that the
@@ -249,6 +264,10 @@ The experimental ONNX models are model-specific:
 - Granite can use a generic transcription prompt. In this app, `Auto` keeps the
   generic prompt, while explicit German or English uses language-specific
   prompts.
+- Nemotron supports automatic language detection and language-ID conditioning.
+  The UI exposes the transcription-ready and broad-coverage languages from the
+  official ORT GenAI example's language-ID mapping. It omits adaptation-ready
+  languages because the model card says they require fine-tuning.
 
 This means `Auto` is not identical across local model families. If a transcript
 quality issue appears on Cohere, explicitly selecting German or English is the
@@ -270,6 +289,9 @@ For the current Windows Intel GPU test machine:
 4. Enable keep-loaded only if the faster warm latency is worth the RAM/VRAM use.
 5. Keep `large-v3-turbo` as the practical fallback until enough real dictation
    samples prove that an ONNX model is better.
+6. Treat Nemotron as the first true-streaming local candidate; its measured CPU
+   RTF on the Ryzen 5 7600X test machine is 0.229, but Intel GPU validation must
+   wait for a reproducibly installable DirectML package.
 
 ## Sources
 
@@ -295,3 +317,9 @@ For the current Windows Intel GPU test machine:
   <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx>
 - Granite Speech 4.1 2B NAR ONNX export:
   <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx>
+- Nemotron 3.5 multilingual INT4 ONNX export:
+  <https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4>
+- Official ORT GenAI Nemotron Python example and language-ID mapping:
+  <https://github.com/microsoft/onnxruntime-genai/blob/main/examples/python/nemotron_speech.py>
+- ONNX Runtime GenAI:
+  <https://github.com/microsoft/onnxruntime-genai>

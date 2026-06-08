@@ -4,10 +4,11 @@ Everything about model choices, downloading, and configuring models for offline 
 
 ## Available models
 
-The app has two local runtime families:
+The app has three local runtime families:
 
 - [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models in CTranslate2 format.
-- Experimental ONNX models through a Node.js helper.
+- Experimental Cohere/Granite ONNX models through a Node.js helper.
+- NVIDIA Nemotron 3.5 INT4 through ONNX Runtime GenAI.
 
 Granite Speech 4.1 is selectable and uses the smallest currently published
 INT8 ONNX tier by default. A Q4_K GGUF now exists for a separate CrispASR/GGUF
@@ -32,6 +33,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `granite-speech-4.1-2b` | ONNX INT8 AR | ~4.0 GB INT8 | Auto + `de/en/fr/es/pt/ja` | Experimental Granite 4.1 daily-use trial, batch mode only |
 | `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Experimental Plus variant trial, batch mode only |
 | `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Smaller Granite 4.1 NAR daily-use trial, batch mode only |
+| `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 
 ### Which model should I use?
 
@@ -45,6 +47,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | Speech-LM q4 comparison trial | `granite-4.0-1b-speech` |
 | Granite 4.1 daily-use trial with smaller download | `granite-speech-4.1-2b-nar` |
 | Granite 4.1 autoregressive trial | `granite-speech-4.1-2b` |
+| Lowest-latency true local streaming trial | `nemotron-3.5-asr-streaming-0.6b-int4` |
 | Testing / very limited resources | `tiny` |
 
 ### Accuracy reference (Word Error Rate)
@@ -101,6 +104,33 @@ the app's raw ONNX Runtime graph path. The current
 and [NAR](https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx)
 ONNX repositories still use INT8 as their smallest compatible tier.
 
+### Nemotron 3.5 cache-aware streaming
+
+`nemotron-3.5-asr-streaming-0.6b-int4` is a separate local runtime path, not a
+Node/WebGPU or faster-whisper model. It uses Microsoft's ONNX Runtime GenAI
+`StreamingProcessor` and preserves the model's encoder/RNNT state between new
+audio chunks. That avoids the repeated rolling-window transcription used by the
+current faster-whisper streaming implementation.
+
+The published multilingual INT4 ONNX export is approximately 793 MB and is
+optimized for a fixed 560 ms chunk. NVIDIA's original NeMo model supports
+80/160/320/560/1120 ms profiles, but changing the app setting cannot change the
+fixed graph contract. Additional latency choices should be exposed only when
+compatible ONNX exports exist.
+
+The installable app dependency currently provides CPU execution. The runtime
+tries DirectML first and falls back to CPU, but as of June 8, 2026 Microsoft's
+`onnxruntime-genai-directml` package depends on an
+`onnxruntime-directml>=1.26.0` wheel that is not yet published on PyPI. On the
+test Ryzen 5 7600X, the repository benchmark sample measured:
+
+- cold model load: 0.81 seconds,
+- transcription RTF: 0.229 on CPU,
+- automatic language mode and the DML-to-CPU fallback both loaded correctly.
+
+That CPU result is comfortably faster than real time on the test desktop, but
+laptop performance and German dictation quality still need real user samples.
+
 ### Language selection
 
 Settings -> General rebuilds the language list for the selected engine and
@@ -117,6 +147,8 @@ The model-aware lists are based on the current primary documentation:
 - [ElevenLabs Scribe](https://elevenlabs.io/docs/models#scribe-v2)
 - [Cohere Transcribe model card](https://huggingface.co/CohereLabs/transcribe-03-2026)
 - [Granite Speech 4.1 model card](https://huggingface.co/ibm-granite/granite-speech-4.1-2b)
+- [Nemotron 3.5 INT4 ONNX model card](https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4)
+- [Official ORT GenAI Nemotron example and language-ID mapping](https://github.com/microsoft/onnxruntime-genai/blob/main/examples/python/nemotron_speech.py)
 
 The runtime automatically tries an ONNX GPU target first and falls back to CPU
 if no compatible GPU runtime loads. Cohere and Granite 4.0 try WebGPU, then
@@ -143,11 +175,11 @@ maximum chunk size of 30 seconds before generation. This keeps long recordings
 from being sent as one very large prompt/audio feature block, but it is still
 not a replacement for a dedicated long-form transcription pipeline.
 
-Unlike faster-whisper models, Cohere and Granite are not preloaded when the app
-starts. This avoids expensive background CPU model loading before the user
-actually starts an experimental transcription. The Local tab has an expert
-setting to keep the last experimental ONNX model loaded after dictation when
-warm latency matters more than RAM/VRAM use.
+Unlike faster-whisper and Nemotron, Cohere and Granite are not preloaded when
+the app starts. This avoids expensive background CPU model loading before the
+user actually starts an experimental transcription. The Local tab has an
+expert setting to keep the last Cohere or Granite ONNX model loaded after
+dictation when warm latency matters more than RAM/VRAM use.
 
 `wasm` is not a valid device in the Transformers.js Node runtime used by this
 app. It appears in the browser/web ONNX bundle, but the app process uses the
@@ -171,6 +203,11 @@ The experimental ONNX/WebGPU runtime is designed to be vendor-neutral when
 WebGPU or DirectML is available, so Intel, AMD, and NVIDIA GPUs are all valid
 targets. If neither GPU runtime can be selected by the JavaScript runtime, the
 model uses CPU and will likely be slower than `large-v3-turbo`.
+
+Nemotron currently ships with the reproducibly installable CPU ORT GenAI
+runtime. Its DirectML path is already attempted by the app, but cannot be part
+of the normal dependency lock until Microsoft publishes the matching DirectML
+runtime wheel.
 
 ---
 
@@ -206,6 +243,9 @@ uv run python scripts/download_model.py --model large-v3-turbo
 
 # Download an experimental ONNX/WebGPU model:
 uv run python scripts/download_model.py --model cohere-transcribe-03-2026
+
+# Download true-streaming Nemotron INT4:
+uv run python scripts/download_model.py --model nemotron-3.5-asr-streaming-0.6b-int4
 
 # Download into a custom directory (USB stick, network share):
 uv run python scripts/download_model.py --model small --output-dir C:\whisper-models

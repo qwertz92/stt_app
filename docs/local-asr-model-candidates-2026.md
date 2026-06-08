@@ -26,6 +26,22 @@ Status after the 2026-04-18 implementation pass:
   available community ONNX/GGUF packages require custom runtime code rather
   than the shared Transformers.js ASR pipeline used for Cohere and Granite.
 
+Status update on 2026-06-08:
+
+- NVIDIA Nemotron 3.5 ASR Streaming 0.6B is implemented separately from the
+  older Parakeet/NeMo decision through the official multilingual INT4 ONNX
+  Runtime GenAI export.
+- It provides true cache-aware streaming at the export's fixed 560 ms chunk,
+  supports Auto plus the transcription-ready and broad-coverage languages in
+  the official ORT GenAI mapping, and measured 0.229 CPU RTF with a 0.81 second
+  cold load on the Ryzen 5 7600X test machine.
+- The app attempts DirectML before CPU, but Microsoft's current DirectML GenAI
+  package depends on an unpublished `onnxruntime-directml>=1.26.0`. The normal
+  dependency lock therefore ships the reproducibly installable CPU runtime.
+- The original NeMo model supports 80/160/320/560/1120 ms profiles. Only the
+  560 ms multilingual INT4 ONNX graph is currently published in a directly
+  compatible form, so the app does not expose fake latency choices.
+
 The next step is an on-device benchmark on the target Intel GPU. That benchmark
 should compare:
 

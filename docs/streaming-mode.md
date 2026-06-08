@@ -5,7 +5,9 @@ This document explains how streaming mode is implemented in this project, how it
 ## 1) Current implementation status
 
 - `Batch` mode: stable default.
-- `Streaming` mode: implemented for local provider (`faster-whisper`), AssemblyAI (`RealtimeTranscriber`), and Deepgram (WebSocket API).
+- `Streaming` mode: implemented for local provider (`faster-whisper` and
+  Nemotron 3.5), AssemblyAI (`RealtimeTranscriber`), and Deepgram (WebSocket
+  API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - OpenAI and Groq are batch-only in this app. ElevenLabs offers real-time STT publicly, but the current integration is still batch-only.
 
@@ -87,6 +89,16 @@ Characteristics:
   - periodic partial re-transcription,
   - final transcription on stop.
 
+`LocalNemotronTranscriber` uses a different local streaming contract:
+
+- ONNX Runtime GenAI keeps the FastConformer/RNNT encoder state between chunks,
+- each published INT4 ONNX chunk contains 8,960 samples, or 560 ms at 16 kHz,
+- audio callback work remains lightweight because inference runs on a queue
+  worker,
+- tokens are emitted incrementally without repeatedly transcribing an older
+  rolling audio window,
+- the same cache-aware core processes imported/batch WAV files.
+
 ### AssemblyAI transcriber
 
 - `AssemblyAITranscriber` implements streaming via `aai.RealtimeTranscriber` (WebSocket).
@@ -125,12 +137,17 @@ Recommended:
 
 ## 6) Models in streaming mode
 
-Local streaming supports the faster-whisper/CTranslate2 model choices:
+Local rolling-window streaming supports the faster-whisper/CTranslate2 model choices:
 
 - `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
 
 Larger models in local streaming increase partial update cost.
 Experimental ONNX/WebGPU local models are batch-only in this app.
+
+Nemotron `nemotron-3.5-asr-streaming-0.6b-int4` provides true cache-aware local
+streaming. Its current ONNX export is fixed to 560 ms latency. The app's normal
+dependency lock currently provides CPU execution; DirectML is attempted when a
+compatible runtime becomes available.
 
 AssemblyAI streaming uses AssemblyAI's real-time speech recognition engine (no model selection needed).
 Deepgram streaming uses the selected Deepgram model.

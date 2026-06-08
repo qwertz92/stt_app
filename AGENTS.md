@@ -37,6 +37,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Win32 RegisterHotKey + SendInput (Windows 11 only; Linux/WSL for dev tooling)
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
+- ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
 - Remote providers: AssemblyAI (SDK), OpenAI (REST API), Groq (SDK),
   Deepgram (REST + WebSocket), ElevenLabs (REST API)
 - keyring for secret storage
@@ -52,7 +53,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
-| `transcriber/local_webgpu_asr.py` | Experimental batch-only Cohere/Granite ONNX runtime via Node.js; Cohere/Granite 4.0 use Transformers.js q4, Granite 4.1 uses raw INT8 ONNX graphs |
+| `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
+| `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the experimental batch-only Cohere/Granite Node.js runtime |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
@@ -148,10 +150,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   separate runtime paths because their ONNX graph contracts differ. Keep
   `granite-4.0-1b-speech` selectable as a smaller q4 option until real
   benchmarks justify removing it.
+- **Nemotron 3.5 true streaming**:
+  `nemotron-3.5-asr-streaming-0.6b-int4` uses the published 793 MB multilingual
+  ONNX Runtime GenAI export through `transcriber/local_nemotron.py`. It reuses
+  the model's encoder cache and emits incremental RNNT tokens every fixed
+  560 ms chunk instead of re-transcribing a rolling window. The published ONNX
+  graph is fixed to 560 ms even though the original NeMo model supports other
+  latency profiles. The app ships the installable CPU ORT GenAI package and
+  tries DirectML first when a compatible DirectML runtime is present. As of
+  2026-06-08, Microsoft's DirectML GenAI package depends on an unpublished
+  `onnxruntime-directml>=1.26.0`, so reproducible installs fall back to CPU.
+  A Ryzen 5 7600X benchmark measured 0.229 RTF and 0.81 s cold load on the
+  repository sample. Nemotron stays preloaded and cached like faster-whisper so
+  pressing the recording hotkey does not block on model loading. Its internal
+  runtime VAD follows the app's VAD setting. The language UI exposes only the
+  transcription-ready and broad-coverage official prompt IDs.
 - **Streaming availability**: `config.supports_streaming()` is the shared
-  source of truth for UI and controller checks. Local ONNX/WebGPU models are
-  batch-only, but that local model selection must not disable remote provider
-  streaming for AssemblyAI or Deepgram.
+  source of truth for UI and controller checks. Cohere/Granite ONNX/WebGPU
+  models are batch-only; Nemotron is true streaming. A local model selection
+  must not disable remote provider streaming for AssemblyAI or Deepgram.
 - **Streaming text state**: Keep provider partial-text reconciliation in
   `streaming_text.py`; the controller should only orchestrate
   Qt/audio/focus/insertion side effects.
@@ -174,7 +191,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 1. Global hotkey toggles recording.
 2. Overlay: `Idle → Listening → Processing → Done/Error`.
 3. Batch mode: recorded WAV transcribed on stop.
-4. Streaming mode (local, AssemblyAI, Deepgram): live chunks with partial text and append-only stable insertion.
+4. Streaming mode (local, AssemblyAI, Deepgram): live chunks with partial text
+   and append-only stable insertion. Nemotron local streaming is cache-aware;
+   faster-whisper local streaming uses rolling windows.
 5. Text inserted at caret via clipboard-safe paste; clipboard restored.
 
 ## Engines
@@ -195,5 +214,6 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   abort remains best-effort.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
-- NVIDIA Parakeet is intentionally not implemented through NeMo; see
+- NVIDIA Parakeet remains intentionally unimplemented through NeMo; Nemotron
+  uses the separate ONNX Runtime GenAI path. See
   `docs/local-asr-model-candidates-2026.md` for rationale.

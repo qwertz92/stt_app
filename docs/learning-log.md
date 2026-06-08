@@ -28,6 +28,19 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - A Granite Speech 4.1 2B Q4_K GGUF is now public, but it targets a separate
   CrispASR/GGUF runtime. The current Granite 4.1 ONNX repositories still expose
   INT8 as their smallest compatible graph tier, so the app remains on INT8.
+- NVIDIA Nemotron 3.5 ASR Streaming 0.6B is selectable through its official
+  multilingual INT4 ONNX Runtime GenAI export. Unlike faster-whisper rolling
+  windows, it keeps cache-aware FastConformer/RNNT state and emits incremental
+  tokens for each fixed 560 ms chunk.
+- The Nemotron language list uses Microsoft's official prompt-ID mapping and
+  exposes only transcription-ready and broad-coverage languages.
+  Adaptation-ready languages remain hidden because the model card requires
+  fine-tuning.
+- The app ships the installable CPU ORT GenAI package and attempts DirectML
+  before CPU. Microsoft's current DirectML GenAI package cannot yet be locked
+  because its required `onnxruntime-directml>=1.26.0` wheel is unpublished.
+- A real Ryzen 5 7600X run loaded Nemotron in 0.81 seconds and transcribed the
+  repository benchmark sample at 0.229 RTF in automatic-language CPU mode.
 
 ## 2026-05-31
 
