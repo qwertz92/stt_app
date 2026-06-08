@@ -1045,6 +1045,7 @@ class DictationController(QtCore.QObject):
             LocalFasterWhisperTranscriber,
             find_cached_models,
         )
+        from .transcriber.local_nemotron import LocalNemotronTranscriber
         from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
         settings = self._settings
@@ -1061,7 +1062,11 @@ class DictationController(QtCore.QObject):
             transcriber = self._get_or_create_transcriber(settings)
             if isinstance(
                 transcriber,
-                (LocalFasterWhisperTranscriber, LocalOnnxWebGpuTranscriber),
+                (
+                    LocalFasterWhisperTranscriber,
+                    LocalNemotronTranscriber,
+                    LocalOnnxWebGpuTranscriber,
+                ),
             ):
                 transcriber.preload_model()
             self.model_preload_done.emit(True, f"Model loaded: {settings.model_size}")
@@ -1095,7 +1100,11 @@ class DictationController(QtCore.QObject):
                 transcriber = self._get_or_create_transcriber(fallback_settings)
                 if isinstance(
                     transcriber,
-                    (LocalFasterWhisperTranscriber, LocalOnnxWebGpuTranscriber),
+                    (
+                        LocalFasterWhisperTranscriber,
+                        LocalNemotronTranscriber,
+                        LocalOnnxWebGpuTranscriber,
+                    ),
                 ):
                     transcriber.preload_model()
                 self._settings = fallback_settings

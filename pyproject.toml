@@ -9,6 +9,7 @@ dependencies = [
     "sounddevice==0.5.5",
     "numpy==2.4.3",
     "faster-whisper==1.2.1",
+    "onnxruntime-genai==0.14.1; platform_system == 'Windows'",
     "keyring==25.7.0",
     "pywin32==311; platform_system == 'Windows'",
     "assemblyai==0.59.0",

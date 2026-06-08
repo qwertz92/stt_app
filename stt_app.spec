@@ -2,8 +2,22 @@
 
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_all
+
 
 datas = [('src/stt_app/webgpu_asr_runner.mjs', 'stt_app')]
+binaries = []
+hiddenimports = [
+    'stt_app.main',
+    'stt_app.local_model_scan_worker',
+    'onnxruntime_genai',
+]
+ort_genai_datas, ort_genai_binaries, ort_genai_hiddenimports = collect_all(
+    'onnxruntime_genai'
+)
+datas.extend(ort_genai_datas)
+binaries.extend(ort_genai_binaries)
+hiddenimports.extend(ort_genai_hiddenimports)
 for source, target in (
     ('package.json', '.'),
     ('package-lock.json', '.'),
@@ -15,12 +29,9 @@ for source, target in (
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
-    hiddenimports=[
-        'stt_app.main',
-        'stt_app.local_model_scan_worker',
-    ],
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

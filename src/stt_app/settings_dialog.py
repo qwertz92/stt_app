@@ -47,7 +47,9 @@ from .config import (
     LOCAL_BATCH_ONLY_MODELS,
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
+    LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
+    LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     LOCAL_WEBGPU_MODEL_SIZES,
     OPENAI_MODELS,
@@ -786,7 +788,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_hint = QtWidgets.QLabel(
             "Local keeps audio on your machine. Local models can use either "
-            "faster-whisper or the experimental ONNX/WebGPU runtime."
+            "faster-whisper, ONNX/WebGPU, or ORT GenAI."
         )
         engine_hint.setWordWrap(True)
         self._style_note_label(engine_hint)
@@ -1079,7 +1081,7 @@ class SettingsDialog(QtWidgets.QDialog):
         form.addRow("", self.offline_mode_checkbox)
 
         self.keep_onnx_model_loaded_checkbox = QtWidgets.QCheckBox(
-            "Keep experimental ONNX model loaded after dictation"
+            "Keep Cohere/Granite ONNX model loaded after dictation"
         )
         self.keep_onnx_model_loaded_checkbox.setToolTip(
             "Expert option for Cohere and Granite. Keeps the last ONNX runtime "
@@ -1087,8 +1089,9 @@ class SettingsDialog(QtWidgets.QDialog):
             "Disable it if RAM or GPU memory pressure matters more."
         )
         keep_onnx_note = QtWidgets.QLabel(
-            "ONNX models can use several GB of RAM/VRAM while loaded. Benchmarks "
-            "always close each case after measuring it."
+            "Cohere and Granite can use several GB of RAM/VRAM while loaded. "
+            "Nemotron stays warm like faster-whisper so streaming starts promptly. "
+            "Benchmarks always close each case after measuring it."
         )
         keep_onnx_note.setWordWrap(True)
         self._style_note_label(keep_onnx_note)
@@ -1872,6 +1875,9 @@ class SettingsDialog(QtWidgets.QDialog):
         "granite-4.0-1b-speech": (
             "IBM Granite 4.0 1B Speech (~1.84 GB q4, ONNX/WebGPU)"
         ),
+        "nemotron-3.5-asr-streaming-0.6b-int4": (
+            "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB INT4, true 560 ms streaming)"
+        ),
     }
 
     def _model_label(self, model_name: str) -> str:
@@ -2049,6 +2055,12 @@ class SettingsDialog(QtWidgets.QDialog):
                     "ONNX/WebGPU",
                 )
                 status = f"{status}, {runtime}, batch only"
+            elif model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+                runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
+                    model_name,
+                    "ORT GenAI INT4",
+                )
+                status = f"{status}, {runtime}, batch and true streaming"
             item = QtWidgets.QListWidgetItem(
                 f"{self._model_label(model_name)} - {status}"
             )
@@ -3165,8 +3177,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.remote_model_combo.setEnabled(False)
             self.remote_model_note_label.setText(
                 "Local transcription uses the model selected on the Local tab. "
-                "faster-whisper models support streaming; experimental ONNX/WebGPU "
-                "models are batch-only."
+                "faster-whisper and Nemotron support streaming; Cohere and Granite "
+                "ONNX/WebGPU models are batch-only."
             )
             self.remote_model_combo.blockSignals(False)
             return
@@ -3309,6 +3321,13 @@ class SettingsDialog(QtWidgets.QDialog):
                 "selected experimental model."
             )
 
+        if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
+            return (
+                "Nemotron supports automatic language detection plus the "
+                "transcription-ready and broad-coverage languages in the "
+                "official ORT GenAI language-ID mapping."
+            )
+
         if engine == "groq":
             return (
                 "Groq Whisper models are multilingual. 'Auto' lets the model detect "
@@ -3380,6 +3399,17 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return
+        if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            self.local_model_runtime_warning_label.setText(
+                "Experimental Nemotron INT4 model: true cache-aware streaming with "
+                "a fixed 560 ms ONNX chunk. The app tries DirectML first when a "
+                "compatible ORT GenAI DirectML runtime is installed, then falls back "
+                "to the bundled CPU runtime. Microsoft's current DirectML dependency "
+                "is not yet available from PyPI. The published ONNX graph does not "
+                "currently expose the model's other latency profiles."
+            )
+            self.local_model_runtime_warning_label.setVisible(True)
+            return
         self.local_model_runtime_warning_label.setText(" ")
         self.local_model_runtime_warning_label.setVisible(False)
 
@@ -3397,8 +3427,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 else ""
             )
             runtime = (
-                LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(model, "ONNX/WebGPU")
-                if model in LOCAL_WEBGPU_MODEL_SIZES
+                LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(model, "ONNX")
+                if model in LOCAL_ONNX_MODEL_SIZES
                 else "faster-whisper"
             )
             label = f"Engine: LOCAL ({runtime})"

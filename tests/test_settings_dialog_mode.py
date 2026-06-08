@@ -365,6 +365,37 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     _ = app
 
 
+def test_nemotron_model_enables_true_streaming_and_directml_fallback_note():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="local",
+            mode="streaming",
+            model_size="nemotron-3.5-asr-streaming-0.6b-int4",
+            language_mode="auto",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.mode_combo.currentData() == "streaming"
+    assert _combo_item_enabled(dialog.mode_combo, "streaming") is True
+    assert dialog.language_combo.currentData() == "auto"
+    assert _combo_item_enabled(dialog.language_combo, "de") is True
+    assert _combo_item_enabled(dialog.language_combo, "bg") is True
+    assert _combo_item_enabled(dialog.language_combo, "vi") is True
+    assert _combo_item_enabled(dialog.language_combo, "et") is True
+    assert _combo_item_enabled(dialog.language_combo, "el") is False
+    assert "automatic language detection" in dialog.language_note_label.text()
+    assert "560 ms streaming" in dialog.engine_indicator.text()
+    assert "DirectML" in dialog.local_model_runtime_warning_label.text()
+    assert "fixed 560 ms" in dialog.local_model_runtime_warning_label.text()
+    _ = app
+
+
 def test_switching_assemblyai_mode_updates_language_options():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(

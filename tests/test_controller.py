@@ -859,6 +859,33 @@ def test_controller_initialize_skips_preload_for_webgpu_local_model():
     _ = app
 
 
+def test_controller_initialize_preloads_nemotron_for_prompt_streaming_start():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="nemotron-3.5-asr-streaming-0.6b-int4",
+        hotkey=FALLBACK_HOTKEY,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+
+    preload_called = []
+    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller.initialize()
+
+    assert preload_called == [True]
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_initialize_preloads_webgpu_when_keep_loaded_enabled():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(

@@ -10,7 +10,9 @@ import pytest
 
 from stt_app.config import (
     GRANITE_4_1_MODEL_SIZES,
+    LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
+    LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
@@ -83,6 +85,50 @@ def test_selectable_webgpu_models_include_granite_4_1_int8_and_keep_4_0_q4():
         assert model_name in LOCAL_WEBGPU_MODEL_SIZES
         assert model_name in MODEL_REPO_MAP
         assert LOCAL_ONNX_MODEL_PRECISION[model_name] == "int8"
+
+
+def test_selectable_local_onnx_models_include_nemotron_int4():
+    model_name = "nemotron-3.5-asr-streaming-0.6b-int4"
+
+    assert model_name in LOCAL_NEMOTRON_MODEL_SIZES
+    assert model_name in LOCAL_ONNX_MODEL_SIZES
+    assert model_name in MODEL_REPO_MAP
+    assert LOCAL_ONNX_MODEL_PRECISION[model_name] == "int4"
+
+
+def test_nemotron_snapshot_is_discovered_by_shared_onnx_inventory(tmp_path):
+    model_name = "nemotron-3.5-asr-streaming-0.6b-int4"
+    snapshot = _write_required_snapshot(tmp_path, model_name)
+
+    assert resolve_cached_webgpu_model_path(model_name, str(tmp_path)) == snapshot
+    assert find_cached_webgpu_models(str(tmp_path)) == [model_name]
+
+
+def test_download_nemotron_snapshot_uses_root_int4_graph_patterns(
+    monkeypatch,
+    tmp_path,
+):
+    calls = []
+
+    def fake_snapshot_download(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    download_webgpu_model_snapshot(
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+        str(tmp_path),
+    )
+
+    _repo_id, kwargs = calls[0]
+    assert "*.onnx" in kwargs["allow_patterns"]
+    assert "*.onnx.data" in kwargs["allow_patterns"]
+    assert "*.json" in kwargs["allow_patterns"]
 
 
 def test_download_webgpu_model_snapshot_uses_q4_allow_patterns(monkeypatch, tmp_path):

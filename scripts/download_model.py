@@ -22,7 +22,8 @@ After downloading, the models are ready for offline use.  Set "Offline mode"
 in the app settings, and optionally set "Model Dir" to the --output-dir path.
 faster-whisper models use CTranslate2. Cohere and Granite 4.0 use q4
 ONNX/WebGPU snapshots. Granite Speech 4.1 uses the smallest currently published
-INT8 ONNX tier and requires the JavaScript runtime from package.json.
+INT8 ONNX tier and requires the JavaScript runtime from package.json. Nemotron
+3.5 uses the INT4 ONNX Runtime GenAI streaming export.
 """
 
 from __future__ import annotations
@@ -37,8 +38,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from stt_app.config import (  # noqa: E402
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
+    LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
-    LOCAL_WEBGPU_MODEL_SIZES,
+    LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
 from stt_app.transcriber.local_faster_whisper import download_model_snapshot  # noqa: E402
@@ -147,9 +149,14 @@ def main() -> None:
     if args.list:
         print("Available models:")
         for name, repo_id in MODELS.items():
-            if name in LOCAL_WEBGPU_MODEL_SIZES:
+            if name in LOCAL_ONNX_MODEL_SIZES:
                 precision = LOCAL_ONNX_MODEL_PRECISION.get(name, "q4")
-                note = f" (multilingual, {precision} ONNX, batch only)"
+                mode = (
+                    "batch and true streaming"
+                    if name in LOCAL_NEMOTRON_MODEL_SIZES
+                    else "batch only"
+                )
+                note = f" (multilingual, {precision} ONNX, {mode})"
             elif "distil" in name:
                 note = " (English only)"
             else:

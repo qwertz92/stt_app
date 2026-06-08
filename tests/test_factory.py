@@ -8,6 +8,7 @@ from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscrib
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
+from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
 
@@ -21,6 +22,19 @@ def test_factory_local_webgpu_model_returns_onnx_webgpu_transcriber():
     settings = AppSettings(engine="local", model_size="cohere-transcribe-03-2026")
     t = create_transcriber(settings)
     assert isinstance(t, LocalOnnxWebGpuTranscriber)
+
+
+def test_factory_local_nemotron_model_returns_nemotron_transcriber():
+    settings = AppSettings(
+        engine="local",
+        model_size="nemotron-3.5-asr-streaming-0.6b-int4",
+        vad_enabled=True,
+    )
+
+    transcriber = create_transcriber(settings)
+
+    assert isinstance(transcriber, LocalNemotronTranscriber)
+    assert transcriber.use_runtime_vad is True
 
 
 def test_factory_assemblyai_returns_assemblyai_transcriber():
@@ -76,3 +90,14 @@ def test_factory_unknown_engine_with_webgpu_model_preserves_webgpu_runtime():
     )
     t = create_transcriber(settings)
     assert isinstance(t, LocalOnnxWebGpuTranscriber)
+
+
+def test_factory_unknown_engine_with_nemotron_preserves_nemotron_runtime():
+    settings = AppSettings(
+        engine="unknown_provider_xyz",
+        model_size="nemotron-3.5-asr-streaming-0.6b-int4",
+    )
+
+    transcriber = create_transcriber(settings)
+
+    assert isinstance(transcriber, LocalNemotronTranscriber)

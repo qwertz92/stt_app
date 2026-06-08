@@ -1,6 +1,11 @@
 from __future__ import annotations
 
-from ..config import DEFAULT_ELEVENLABS_MODEL, DEFAULT_ENGINE, LOCAL_WEBGPU_MODEL_SIZES
+from ..config import (
+    DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_ENGINE,
+    LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_WEBGPU_MODEL_SIZES,
+)
 from ..settings_store import AppSettings
 from .assemblyai_provider import AssemblyAITranscriber
 from .deepgram_provider import DeepgramTranscriber
@@ -8,6 +13,7 @@ from .base import ITranscriber
 from .elevenlabs_provider import ElevenLabsTranscriber
 from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
+from .local_nemotron import LocalNemotronTranscriber
 from .local_webgpu_asr import LocalOnnxWebGpuTranscriber
 from .openai_provider import OpenAITranscriber
 
@@ -17,6 +23,14 @@ def create_transcriber(
     secret_store=None,
 ) -> ITranscriber:
     if settings.engine == DEFAULT_ENGINE:
+        if settings.model_size in LOCAL_NEMOTRON_MODEL_SIZES:
+            return LocalNemotronTranscriber(
+                model_size=settings.model_size,
+                language_mode=settings.language_mode,
+                offline_mode=settings.offline_mode,
+                model_dir=settings.model_dir,
+                use_runtime_vad=settings.vad_enabled,
+            )
         if settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
             return LocalOnnxWebGpuTranscriber(
                 model_size=settings.model_size,
@@ -78,6 +92,14 @@ def create_transcriber(
         )
 
     # Unknown engine — fall back to local provider.
+    if settings.model_size in LOCAL_NEMOTRON_MODEL_SIZES:
+        return LocalNemotronTranscriber(
+            model_size=settings.model_size,
+            language_mode=settings.language_mode,
+            offline_mode=settings.offline_mode,
+            model_dir=settings.model_dir,
+            use_runtime_vad=settings.vad_enabled,
+        )
     if settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
         return LocalOnnxWebGpuTranscriber(
             model_size=settings.model_size,

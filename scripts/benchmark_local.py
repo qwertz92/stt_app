@@ -32,6 +32,7 @@ from stt_app.local_benchmark import (
 )
 from stt_app.config import (
     LOCAL_ONNX_MODEL_PRECISION,
+    LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_ESTIMATED_SIZE_MB,
     MODEL_REPO_MAP,
@@ -122,7 +123,10 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--device",
         default="auto",
-        help="Device passed to faster-whisper models (e.g. auto, cpu, cuda).",
+        help=(
+            "Device passed to faster-whisper and Nemotron models "
+            "(e.g. auto, cpu, cuda, dml)."
+        ),
     )
     parser.add_argument(
         "--webgpu-devices",
@@ -224,7 +228,7 @@ def _print_model_table(show_sizes: bool) -> None:
         repo = MODEL_REPO_MAP[model]
         runtime = (
             f"ONNX {LOCAL_ONNX_MODEL_PRECISION.get(model, 'q4')}"
-            if model in LOCAL_WEBGPU_MODEL_SIZES
+            if model in LOCAL_ONNX_MODEL_SIZES
             else "CTranslate2"
         )
         size_human = "-"
@@ -599,6 +603,26 @@ def main() -> int:
                         "download_seconds": download_times.get(model_name, 0.0),
                     }
                 )
+            continue
+        if model_name in LOCAL_ONNX_MODEL_SIZES:
+            case_params.append(
+                {
+                    "audio_path": audio_path,
+                    "model_name": model_name,
+                    "device": args.device,
+                    "compute_type": (
+                        f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'int4')}"
+                    ),
+                    "runs": args.runs,
+                    "beam_size": args.beam_size,
+                    "language": args.language,
+                    "vad_filter": args.vad_filter,
+                    "warmup": args.warmup,
+                    "threads": args.threads,
+                    "webgpu_device": "auto",
+                    "download_seconds": download_times.get(model_name, 0.0),
+                }
+            )
             continue
         for compute_type in compute_types:
             case_params.append(

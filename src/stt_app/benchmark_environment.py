@@ -194,6 +194,7 @@ def _framework_versions() -> dict[str, str]:
     names = {
         "faster-whisper": "faster-whisper",
         "CTranslate2": "ctranslate2",
+        "ORT GenAI": "onnxruntime-genai",
         "PySide6": "PySide6",
         "NumPy": "numpy",
     }

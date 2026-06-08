@@ -17,7 +17,7 @@ from ..config import (
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
     FASTER_WHISPER_MODEL_SIZES,
-    LOCAL_WEBGPU_MODEL_SIZES,
+    LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
@@ -152,7 +152,7 @@ def format_model_download_error(model_name: str, exc: Exception) -> str:
 
 
 def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
-    if model_name in LOCAL_WEBGPU_MODEL_SIZES:
+    if model_name in LOCAL_ONNX_MODEL_SIZES:
         from .local_webgpu_asr import download_webgpu_model_snapshot
 
         return download_webgpu_model_snapshot(model_name, model_dir)

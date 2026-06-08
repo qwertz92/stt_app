@@ -127,6 +127,78 @@ def test_run_benchmark_cases_expands_webgpu_device_targets(monkeypatch, tmp_path
     assert [case.device for case in cases] == ["gpu", "cpu"]
 
 
+def test_run_benchmark_cases_routes_nemotron_to_onnx_runtime(monkeypatch, tmp_path):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    calls = []
+
+    def fake_onnx_case(**kwargs):
+        calls.append(kwargs)
+        return local_benchmark.BenchmarkCase(
+            model=kwargs["model_name"],
+            device=kwargs["device"],
+            compute_type="onnx-int4",
+            download_seconds=0.0,
+            load_seconds=0.1,
+            runs=[],
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_onnx_case", fake_onnx_case)
+
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio_path,
+        model_names=["nemotron-3.5-asr-streaming-0.6b-int4"],
+        device="dml",
+        webgpu_devices="all",
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["device"] == "dml"
+    assert [case.compute_type for case in cases] == ["onnx-int4"]
+
+
+def test_nemotron_benchmark_defaults_to_auto_and_can_force_dml(monkeypatch, tmp_path):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    instances = []
+
+    class FakeNemotronTranscriber:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.runtime_device = "dml"
+            instances.append(self)
+
+        def preload_model(self):
+            pass
+
+        def transcribe_batch(self, _audio_path):
+            return "hello"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_nemotron.LocalNemotronTranscriber",
+        FakeNemotronTranscriber,
+    )
+    monkeypatch.setattr(local_benchmark, "_audio_duration_seconds", lambda _path: 1.0)
+
+    case = local_benchmark._run_onnx_case(
+        audio_path=audio_path,
+        model_name="nemotron-3.5-asr-streaming-0.6b-int4",
+        runs=1,
+        language=None,
+        warmup=False,
+        device="dml",
+        vad_filter=True,
+    )
+
+    assert instances[0].kwargs["language_mode"] == "auto"
+    assert instances[0].kwargs["provider_order"] == ("dml",)
+    assert instances[0].kwargs["use_runtime_vad"] is True
+    assert case.runs[0].detected_language == "auto"
+
+
 def test_run_benchmark_cases_can_cancel_between_cases(monkeypatch, tmp_path):
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")

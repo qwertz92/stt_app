@@ -10,7 +10,9 @@ from typing import Any, Callable
 
 from .benchmark_environment import BenchmarkEnvironment
 from .config import (
+    LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
+    LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     LOCAL_WEBGPU_MODEL_SIZES,
 )
@@ -257,7 +259,7 @@ def _run_case(
     )
 
 
-def _run_webgpu_case(
+def _run_onnx_case(
     *,
     audio_path: Path,
     model_name: str,
@@ -265,26 +267,43 @@ def _run_webgpu_case(
     language: str | None,
     warmup: bool,
     device: str = "auto",
+    vad_filter: bool = False,
     model_dir: str = "",
     progress_callback: Callable[[str], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> BenchmarkCase:
+    from .transcriber.local_nemotron import LocalNemotronTranscriber
     from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
     total_steps = runs + (1 if warmup else 0)
     step = 0
-    language_mode = language or "de"
+    language_mode = language or (
+        "auto" if model_name in LOCAL_NEMOTRON_MODEL_SIZES else "de"
+    )
 
     _raise_if_canceled(cancel_check)
     if progress_callback is not None:
-        progress_callback("Loading ONNX/WebGPU model...")
+        progress_callback("Loading local ONNX model...")
     model_start = time.perf_counter()
-    transcriber = LocalOnnxWebGpuTranscriber(
-        model_size=model_name,
-        language_mode=language_mode,
-        device=device,
-        model_dir=model_dir,
-    )
+    if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+        provider_order = {
+            "cpu": ("cpu",),
+            "dml": ("dml",),
+        }.get(device, ("dml", "cpu"))
+        transcriber = LocalNemotronTranscriber(
+            model_size=model_name,
+            language_mode=language_mode,
+            provider_order=provider_order,
+            use_runtime_vad=vad_filter,
+            model_dir=model_dir,
+        )
+    else:
+        transcriber = LocalOnnxWebGpuTranscriber(
+            model_size=model_name,
+            language_mode=language_mode,
+            device=device,
+            model_dir=model_dir,
+        )
     try:
         transcriber.preload_model()
         load_seconds = time.perf_counter() - model_start
@@ -350,6 +369,11 @@ def _run_webgpu_case(
     )
 
 
+def _run_webgpu_case(**kwargs) -> BenchmarkCase:
+    """Compatibility entry point for existing WebGPU benchmark callers."""
+    return _run_onnx_case(**kwargs)
+
+
 def run_benchmark_cases(
     *,
     audio_path: str | Path,
@@ -388,7 +412,7 @@ def run_benchmark_cases(
             case_index += 1
             display_compute_type = (
                 f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
-                if model_name in LOCAL_WEBGPU_MODEL_SIZES
+                if model_name in LOCAL_ONNX_MODEL_SIZES
                 else compute_type
             )
             if progress_callback is not None:
@@ -397,7 +421,7 @@ def run_benchmark_cases(
                     f"{model_name} ({device_target}/{display_compute_type})"
                 )
             try:
-                if model_name not in LOCAL_WEBGPU_MODEL_SIZES:
+                if model_name not in LOCAL_ONNX_MODEL_SIZES:
                     case = _run_case(
                         audio_path=path,
                         model_name=model_name,
@@ -413,7 +437,7 @@ def run_benchmark_cases(
                         progress_callback=progress_callback,
                         cancel_check=cancel_check,
                     )
-                else:
+                elif model_name in LOCAL_WEBGPU_MODEL_SIZES:
                     case = _run_webgpu_case(
                         audio_path=path,
                         model_name=model_name,
@@ -421,6 +445,20 @@ def run_benchmark_cases(
                         language=language,
                         warmup=warmup,
                         device=device_target,
+                        vad_filter=vad_filter,
+                        model_dir=model_dir,
+                        progress_callback=progress_callback,
+                        cancel_check=cancel_check,
+                    )
+                else:
+                    case = _run_onnx_case(
+                        audio_path=path,
+                        model_name=model_name,
+                        runs=runs,
+                        language=language,
+                        warmup=warmup,
+                        device=device_target,
+                        vad_filter=vad_filter,
                         model_dir=model_dir,
                         progress_callback=progress_callback,
                         cancel_check=cancel_check,

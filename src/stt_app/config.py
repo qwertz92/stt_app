@@ -92,6 +92,10 @@ LOCAL_WEBGPU_MODEL_SIZES = (
     "granite-speech-4.1-2b-nar",
 )
 
+NEMOTRON_MODEL_SIZE = "nemotron-3.5-asr-streaming-0.6b-int4"
+LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
+LOCAL_ONNX_MODEL_SIZES = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES
+
 GRANITE_4_1_MODEL_SIZES = (
     "granite-speech-4.1-2b",
     "granite-speech-4.1-2b-plus",
@@ -104,6 +108,7 @@ LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "granite-speech-4.1-2b": "int8",
     "granite-speech-4.1-2b-plus": "int8",
     "granite-speech-4.1-2b-nar": "int8",
+    NEMOTRON_MODEL_SIZE: "int4",
 }
 
 LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
@@ -112,6 +117,7 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b": "ONNX INT8 AR",
     "granite-speech-4.1-2b-plus": "ONNX INT8 AR",
     "granite-speech-4.1-2b-nar": "ONNX INT8 NAR",
+    NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
 }
 
 GRANITE_4_1_REPO_MAP: dict[str, str] = {
@@ -132,7 +138,7 @@ LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
     "all": ("webgpu", "dml", "cpu"),
 }
 
-VALID_MODEL_SIZES = FASTER_WHISPER_MODEL_SIZES + LOCAL_WEBGPU_MODEL_SIZES
+VALID_MODEL_SIZES = FASTER_WHISPER_MODEL_SIZES + LOCAL_ONNX_MODEL_SIZES
 
 # Short model name → HuggingFace repo ID.
 # Single source of truth used by local transcribers, download script, and settings.
@@ -146,12 +152,16 @@ MODEL_REPO_MAP: dict[str, str] = {
     "distil-large-v3.5": "distil-whisper/distil-large-v3.5-ct2",
     "cohere-transcribe-03-2026": "onnx-community/cohere-transcribe-03-2026-ONNX",
     "granite-4.0-1b-speech": "onnx-community/granite-4.0-1b-speech-ONNX",
+    NEMOTRON_MODEL_SIZE: (
+        "onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"
+    ),
     **GRANITE_4_1_REPO_MAP,
 }
 
 LOCAL_MODEL_RUNTIME: dict[str, str] = {
     **{name: "faster-whisper" for name in FASTER_WHISPER_MODEL_SIZES},
     **{name: "onnx-webgpu" for name in LOCAL_WEBGPU_MODEL_SIZES},
+    **{name: "onnxruntime-genai" for name in LOCAL_NEMOTRON_MODEL_SIZES},
 }
 
 # Approximate model sizes for UI progress estimation.
@@ -171,6 +181,7 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "granite-speech-4.1-2b": 4_000,
     "granite-speech-4.1-2b-plus": 4_100,
     "granite-speech-4.1-2b-nar": 2_500,
+    NEMOTRON_MODEL_SIZE: 793,
 }
 
 LANGUAGE_MODE_LABELS: dict[str, str] = {
@@ -501,6 +512,40 @@ COHERE_LANGUAGE_MODES = (
 )
 GRANITE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt", "ja")
 GRANITE_NO_JAPANESE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt")
+# Bare app language codes for Nemotron's transcription-ready and broad-coverage
+# locales. "no" maps to the official Norwegian Bokmal prompt ID.
+NEMOTRON_LANGUAGE_IDS: dict[str, int] = {
+    "auto": 101,
+    "de": 9,
+    "en": 0,
+    "es": 3,
+    "fr": 8,
+    "it": 15,
+    "pt": 13,
+    "nl": 16,
+    "tr": 18,
+    "ru": 11,
+    "ar": 7,
+    "hi": 6,
+    "ja": 10,
+    "ko": 14,
+    "uk": 19,
+    "pl": 17,
+    "sv": 24,
+    "cs": 22,
+    "no": 103,
+    "da": 25,
+    "bg": 30,
+    "fi": 26,
+    "hr": 29,
+    "sk": 28,
+    "zh": 4,
+    "hu": 23,
+    "ro": 20,
+    "vi": 33,
+    "et": 60,
+}
+NEMOTRON_LANGUAGE_MODES = tuple(NEMOTRON_LANGUAGE_IDS)
 ASSEMBLYAI_UNIVERSAL_3_LANGUAGE_MODES = WHISPER_LANGUAGE_MODES
 DEEPGRAM_NOVA_3_LANGUAGE_MODES = (
     "auto",
@@ -610,6 +655,7 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "granite-speech-4.1-2b"): GRANITE_LANGUAGE_MODES,
     ("local", "granite-speech-4.1-2b-plus"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
     ("local", "granite-speech-4.1-2b-nar"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
+    ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
     ("assemblyai", "universal-3-pro"): ASSEMBLYAI_UNIVERSAL_3_LANGUAGE_MODES,
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,

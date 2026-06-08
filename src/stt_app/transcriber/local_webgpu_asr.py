@@ -17,6 +17,7 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
     LOCAL_ONNX_MODEL_PRECISION,
+    LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
@@ -73,6 +74,14 @@ _GRANITE_4_1_AR_INT8_DOWNLOAD_ALLOW_PATTERNS = (
     "chat_template.jinja",
 )
 
+_NEMOTRON_INT4_DOWNLOAD_ALLOW_PATTERNS = (
+    ".gitattributes",
+    "README.md",
+    "*.json",
+    "*.onnx",
+    "*.onnx.data",
+)
+
 _COHERE_Q4_REQUIRED_FILES = (
     "config.json",
     "preprocessor_config.json",
@@ -127,6 +136,19 @@ _GRANITE_4_1_NAR_INT8_REQUIRED_FILES = (
     "int8/editor.onnx_data",
 )
 
+_NEMOTRON_INT4_REQUIRED_FILES = (
+    "genai_config.json",
+    "tokenizer.json",
+    "tokenizer_config.json",
+    "encoder.onnx",
+    "encoder.onnx.data",
+    "decoder.onnx",
+    "decoder.onnx.data",
+    "joint.onnx",
+    "joint.onnx.data",
+    "silero_vad.onnx",
+)
+
 _COHERE_Q4_LAYOUT = _OnnxModelLayout(
     name="cohere_q4",
     precision="q4",
@@ -155,12 +177,20 @@ _GRANITE_4_1_NAR_INT8_LAYOUT = _OnnxModelLayout(
     required_files=_GRANITE_4_1_NAR_INT8_REQUIRED_FILES,
 )
 
+_NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
+    name="nemotron_int4",
+    precision="int4",
+    allow_patterns=_NEMOTRON_INT4_DOWNLOAD_ALLOW_PATTERNS,
+    required_files=_NEMOTRON_INT4_REQUIRED_FILES,
+)
+
 _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "cohere-transcribe-03-2026": _COHERE_Q4_LAYOUT,
     "granite-4.0-1b-speech": _GRANITE_4_0_Q4_LAYOUT,
     "granite-speech-4.1-2b": _GRANITE_4_1_AR_INT8_LAYOUT,
     "granite-speech-4.1-2b-plus": _GRANITE_4_1_AR_INT8_LAYOUT,
     "granite-speech-4.1-2b-nar": _GRANITE_4_1_NAR_INT8_LAYOUT,
+    "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
 }
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     model_name: layout.required_files for model_name, layout in _MODEL_LAYOUTS.items()
@@ -268,10 +298,10 @@ def resolve_cached_webgpu_model_path(model_name: str, model_dir: str = "") -> Pa
 
 def find_cached_webgpu_models(model_dir: str = "") -> list[str]:
     found: set[str] = set()
-    for model_name in LOCAL_WEBGPU_MODEL_SIZES:
+    for model_name in LOCAL_ONNX_MODEL_SIZES:
         if resolve_cached_webgpu_model_path(model_name, model_dir) is not None:
             found.add(model_name)
-    return [model_name for model_name in LOCAL_WEBGPU_MODEL_SIZES if model_name in found]
+    return [model_name for model_name in LOCAL_ONNX_MODEL_SIZES if model_name in found]
 
 
 def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
@@ -285,7 +315,7 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
     repo_id = _repo_id_for_model(model_name)
     layout = _MODEL_LAYOUTS.get(model_name)
     if repo_id is None or layout is None:
-        raise ValueError(f"Unknown ONNX/WebGPU model '{model_name}'.")
+        raise ValueError(f"Unknown local ONNX model '{model_name}'.")
 
     base_dir = (
         Path(model_dir.strip())
