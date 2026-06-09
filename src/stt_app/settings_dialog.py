@@ -1161,8 +1161,8 @@ class SettingsDialog(QtWidgets.QDialog):
         download_hint = QtWidgets.QLabel(
             "Select models to download or delete. Downloads run one at a time; "
             "you can add more models to the queue while one is active. Green "
-            "entries are already cached locally. Cohere and Granite use the "
-            "experimental ONNX runtime."
+            "entries are already cached locally. ONNX models use experimental "
+            "local runtimes."
         )
         download_hint.setWordWrap(True)
         self._style_note_label(download_hint)
