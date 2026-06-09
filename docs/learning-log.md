@@ -20,6 +20,8 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - The Windows release workflow uses Node.js 24-compatible major versions of
   checkout, setup-python, setup-uv, and upload-artifact after GitHub announced
   that hosted runners will force Node.js 24 for actions on 2026-06-16.
+  setup-uv v8.1.0 is pinned to its published commit because its moving `v8`
+  major tag is not currently resolvable by GitHub Actions.
 - Local benchmark routing now uses `LOCAL_MODEL_RUNTIME` instead of treating
   every non-WebGPU model as faster-whisper. This prevents a newly added local
   runtime from reaching `WhisperModel` and failing with an invalid model-size
