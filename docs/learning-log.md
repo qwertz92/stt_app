@@ -17,6 +17,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
   now include the Nemotron `onnxruntime-genai` runtime.
 - Background model scan/download workers no longer emit Qt signals after a
   Settings dialog has already been deleted.
+- The Windows release workflow uses Node.js 24-compatible major versions of
+  checkout, setup-python, setup-uv, and upload-artifact after GitHub announced
+  that hosted runners will force Node.js 24 for actions on 2026-06-16.
 - Local benchmark routing now uses `LOCAL_MODEL_RUNTIME` instead of treating
   every non-WebGPU model as faster-whisper. This prevents a newly added local
   runtime from reaching `WhisperModel` and failing with an invalid model-size
