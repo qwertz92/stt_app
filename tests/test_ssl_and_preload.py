@@ -21,6 +21,7 @@ from stt_app.transcriber.local_faster_whisper import (
     LocalFasterWhisperTranscriber,
     _is_ssl_error,
     cached_model_paths,
+    cleanup_incomplete_model_download,
     delete_cached_model,
     estimate_cached_model_bytes,
     find_cached_models,
@@ -431,6 +432,25 @@ class TestDeleteCachedModel:
             removed = delete_cached_model("small")
         assert removed >= 1
         assert model_root.exists() is False
+
+    def test_cleanup_incomplete_download_preserves_complete_files(self, tmp_path):
+        cache_root = tmp_path / "models--Systran--faster-whisper-small"
+        incomplete = cache_root / "blobs" / "model.incomplete"
+        complete = cache_root / "blobs" / "config"
+        incomplete.parent.mkdir(parents=True)
+        incomplete.write_bytes(b"partial")
+        complete.write_bytes(b"complete")
+
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
+            return_value=[cache_root],
+        ):
+            removed_files, removed_bytes = cleanup_incomplete_model_download("small")
+
+        assert removed_files == 1
+        assert removed_bytes == len(b"partial")
+        assert incomplete.exists() is False
+        assert complete.read_bytes() == b"complete"
 
 
 # ---------------------------------------------------------------------------

@@ -140,6 +140,48 @@ def delete_cached_model(model_name: str, model_dir: str = "") -> int:
     return removed
 
 
+def cleanup_incomplete_model_download(
+    model_name: str,
+    model_dir: str = "",
+) -> tuple[int, int]:
+    """Remove unusable partial files left by an interrupted model download."""
+    removed_files = 0
+    removed_bytes = 0
+    for root in _model_cache_dirs(model_name, model_dir):
+        if not root.is_dir():
+            continue
+        try:
+            incomplete_paths = list(root.rglob("*.incomplete"))
+        except OSError:
+            continue
+        for path in incomplete_paths:
+            if not path.is_file():
+                continue
+            try:
+                removed_bytes += path.stat().st_size
+                path.unlink()
+                removed_files += 1
+            except FileNotFoundError:
+                continue
+            except OSError:
+                continue
+
+        try:
+            directories = sorted(
+                (path for path in root.rglob("*") if path.is_dir()),
+                key=lambda path: len(path.parts),
+                reverse=True,
+            )
+        except OSError:
+            directories = []
+        for directory in [*directories, root]:
+            try:
+                directory.rmdir()
+            except OSError:
+                continue
+    return removed_files, removed_bytes
+
+
 def format_model_download_error(model_name: str, exc: Exception) -> str:
     if _is_ssl_error(exc):
         return (

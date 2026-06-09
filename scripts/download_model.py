@@ -43,7 +43,10 @@ from stt_app.config import (  # noqa: E402
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
-from stt_app.transcriber.local_faster_whisper import download_model_snapshot  # noqa: E402
+from stt_app.transcriber.local_faster_whisper import (  # noqa: E402
+    cleanup_incomplete_model_download,
+    download_model_snapshot,
+)
 
 # Re-export under the name used throughout this script.
 MODELS = MODEL_REPO_MAP
@@ -103,6 +106,18 @@ def download_model(name: str, output_dir: str | None = None) -> str:
 
     try:
         path = download_model_snapshot(name, output_dir or "")
+    except KeyboardInterrupt:
+        removed_files, removed_bytes = cleanup_incomplete_model_download(
+            name,
+            output_dir or "",
+        )
+        removed_mb = removed_bytes / 1_000_000.0
+        print(
+            f"\nDownload canceled. Removed {removed_files} incomplete file"
+            f"{'s' if removed_files != 1 else ''} ({removed_mb:.1f} MB).",
+            file=sys.stderr,
+        )
+        raise SystemExit(130)
     except Exception as exc:
         if "SSL certificate verification failed" in str(exc):
             _print_ssl_help(name)

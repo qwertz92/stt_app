@@ -4,7 +4,6 @@ import concurrent.futures
 import logging
 import os
 import subprocess
-import sys
 import threading
 import time
 from datetime import datetime
@@ -47,6 +46,11 @@ from .config import (
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError
 from .last_recording_store import LastRecordingStore
+from .local_model_download import (
+    model_download_process_error,
+    start_model_download_process,
+    terminate_model_download_process,
+)
 from .model_download_progress import (
     ModelDownloadSpeedTracker,
     format_model_download_progress,
@@ -2021,16 +2025,7 @@ class DictationController(QtCore.QObject):
 
         if process is None:
             return
-        if process.poll() is not None:
-            return
-        try:
-            process.terminate()
-            process.wait(timeout=2.0)
-        except Exception:
-            try:
-                process.kill()
-            except Exception:
-                pass
+        terminate_model_download_process(process)
 
     def _download_model_for_preload(self, settings: AppSettings) -> None:
         from .transcriber.local_faster_whisper import find_cached_models
@@ -2046,23 +2041,8 @@ class DictationController(QtCore.QObject):
         if model_name in cached:
             return
 
-        script_path = Path(__file__).resolve().parents[2] / "scripts" / "download_model.py"
-        if not script_path.is_file():
-            raise RuntimeError(
-                "Model is not cached and download helper is missing. "
-                "Use scripts/download_model.py manually."
-            )
-
-        command = [sys.executable, str(script_path), "--model", model_name]
-        if model_dir:
-            command.extend(["--output-dir", model_dir])
-
         try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            process = start_model_download_process(model_name, model_dir)
         except Exception as exc:
             raise RuntimeError(f"Failed to start model download: {exc}") from exc
 
@@ -2071,13 +2051,21 @@ class DictationController(QtCore.QObject):
             while True:
                 if self._preload_cancel_requested:
                     self._terminate_preload_download_process()
+                    from .transcriber.local_faster_whisper import (
+                        cleanup_incomplete_model_download,
+                    )
+
+                    cleanup_incomplete_model_download(model_name, model_dir)
                     raise RuntimeError("Model download canceled.")
                 returncode = process.poll()
                 if returncode is not None:
                     if returncode != 0:
+                        detail = model_download_process_error(process)
+                        suffix = f": {detail}" if detail else "."
                         raise RuntimeError(
-                            f"Model download failed for '{model_name}'."
+                            f"Model download failed for '{model_name}'{suffix}"
                         )
+                    model_download_process_error(process)
                     return
                 time.sleep(0.2)
         finally:

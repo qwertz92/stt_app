@@ -1043,6 +1043,38 @@ def test_download_model_for_preload_can_be_canceled():
     _ = app
 
 
+def test_download_model_for_preload_uses_cancellable_worker(monkeypatch):
+    controller, app = _make_controller()
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    calls: list[tuple[str, str]] = []
+
+    class _Process:
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+        def communicate(self):
+            return "", ""
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": [],
+    )
+    monkeypatch.setattr(
+        "stt_app.controller.start_model_download_process",
+        lambda model_name, model_dir="": (
+            calls.append((model_name, model_dir)) or _Process()
+        ),
+    )
+
+    controller._download_model_for_preload(settings)
+
+    assert calls == [("small", "")]
+    controller.shutdown()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # Cancel hotkey registration
 # ---------------------------------------------------------------------------

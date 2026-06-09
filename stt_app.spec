@@ -9,6 +9,7 @@ datas = [('src/stt_app/webgpu_asr_runner.mjs', 'stt_app')]
 binaries = []
 hiddenimports = [
     'stt_app.main',
+    'stt_app.local_model_download_worker',
     'stt_app.local_model_scan_worker',
     'onnxruntime_genai',
 ]

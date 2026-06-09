@@ -67,6 +67,11 @@ from .config import (
 )
 from .hotkey import parse_hotkey
 from .last_recording_store import LastRecordingStore
+from .local_model_download import (
+    model_download_process_error,
+    start_model_download_process,
+    terminate_model_download_process,
+)
 from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process as _scan_cached_models
 from .local_benchmark import (
@@ -88,13 +93,25 @@ from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import TranscriptHistoryStore
 from .transcriber.local_faster_whisper import (
+    cleanup_incomplete_model_download,
     delete_cached_model,
-    download_model_snapshot,
     estimate_cached_model_bytes,
 )
 
 if TYPE_CHECKING:
     from .controller import DictationController
+
+
+def _emit_background_signal(
+    owner: QtCore.QObject,
+    signal_name: str,
+    *args: object,
+) -> bool:
+    try:
+        getattr(owner, signal_name).emit(*args)
+    except RuntimeError:
+        return False
+    return True
 
 
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):
@@ -247,6 +264,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._local_model_download_completed_names: set[str] = set()
         self._local_model_download_worker_running = False
         self._local_model_download_worker_token = 0
+        self._local_model_download_cancel_event = threading.Event()
+        self._local_model_download_process = None
         self._local_model_download_speed_tracker = ModelDownloadSpeedTracker()
         self._local_model_download_progress_timer = QtCore.QTimer(self)
         self._local_model_download_progress_timer.setInterval(500)
@@ -1180,6 +1199,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self.download_all_missing_models_button.clicked.connect(
             self._download_all_missing_local_models
         )
+        self.cancel_model_downloads_button = QtWidgets.QPushButton("Cancel Downloads")
+        self.cancel_model_downloads_button.setEnabled(False)
+        self.cancel_model_downloads_button.clicked.connect(
+            self._cancel_local_model_downloads
+        )
         self.delete_selected_model_button = QtWidgets.QPushButton("Delete Selected")
         self.delete_selected_model_button.setEnabled(False)
         self.delete_selected_model_button.clicked.connect(
@@ -1188,6 +1212,7 @@ class SettingsDialog(QtWidgets.QDialog):
         manage_buttons.addWidget(self.refresh_local_models_button)
         manage_buttons.addWidget(self.download_selected_models_button)
         manage_buttons.addWidget(self.download_all_missing_models_button)
+        manage_buttons.addWidget(self.cancel_model_downloads_button)
         manage_buttons.addStretch(1)
         manage_buttons.addWidget(self.delete_selected_model_button)
         local_models_layout.addLayout(manage_buttons)
@@ -2324,7 +2349,13 @@ class SettingsDialog(QtWidgets.QDialog):
                 cached = _scan_cached_models(model_dir)
             except Exception:
                 cached = None
-            self.local_model_scan_finished.emit(token, model_dir, cached)
+            _emit_background_signal(
+                self,
+                "local_model_scan_finished",
+                token,
+                model_dir,
+                cached,
+            )
 
         self._active_local_model_scan_thread = threading.Thread(
             target=_run,
@@ -2467,6 +2498,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.download_all_missing_models_button.setEnabled(
             any_missing
         )
+        self.cancel_model_downloads_button.setEnabled(busy)
         self.model_dir_edit.setEnabled(not busy)
         self.model_dir_browse.setEnabled(not busy)
 
@@ -2539,6 +2571,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._local_model_download_worker_running = True
                 self._local_model_download_worker_token += 1
                 worker_token = self._local_model_download_worker_token
+                self._local_model_download_cancel_event.clear()
                 start_worker = True
 
         if not added:
@@ -2570,12 +2603,79 @@ class SettingsDialog(QtWidgets.QDialog):
         thread.start()
         self._update_local_model_actions()
 
+    def _cancel_local_model_downloads(self) -> None:
+        with self._local_model_download_lock:
+            if not self._local_model_download_worker_running:
+                return
+            self._local_model_download_cancel_event.set()
+            queued_count = len(self._local_model_download_queue)
+            self._local_model_download_queue.clear()
+            process = self._local_model_download_process
+
+        terminate_model_download_process(process)
+        self.local_models_action_label.setStyleSheet("color: #b26a00;")
+        suffix = (
+            f" Removed {queued_count} queued model"
+            f"{'s' if queued_count != 1 else ''}."
+            if queued_count
+            else ""
+        )
+        self.local_models_action_label.setText(
+            f"Canceling active model download.{suffix}"
+        )
+        self._update_local_model_actions()
+
+    def _download_local_model_in_subprocess(
+        self,
+        model_name: str,
+        model_dir: str,
+    ) -> tuple[str, str, int, int]:
+        try:
+            process = start_model_download_process(model_name, model_dir)
+        except Exception as exc:
+            return "failed", str(exc), 0, 0
+
+        with self._local_model_download_lock:
+            self._local_model_download_process = process
+        try:
+            while process.poll() is None:
+                if self._local_model_download_cancel_event.wait(timeout=0.1):
+                    terminate_model_download_process(process)
+                    model_download_process_error(process)
+                    removed_files, removed_bytes = cleanup_incomplete_model_download(
+                        model_name,
+                        model_dir,
+                    )
+                    return "canceled", "", removed_files, removed_bytes
+
+            detail = model_download_process_error(process)
+            if process.returncode == 0:
+                return "success", "", 0, 0
+            if self._local_model_download_cancel_event.is_set():
+                removed_files, removed_bytes = cleanup_incomplete_model_download(
+                    model_name,
+                    model_dir,
+                )
+                return "canceled", "", removed_files, removed_bytes
+            return "failed", detail or "Download worker failed.", 0, 0
+        finally:
+            with self._local_model_download_lock:
+                if self._local_model_download_process is process:
+                    self._local_model_download_process = None
+
     def _run_local_model_download_queue(self, worker_token: int) -> None:
         successes: list[str] = []
         failures: list[str] = []
+        canceled = False
+        cleaned_files = 0
+        cleaned_bytes = 0
         while True:
             with self._local_model_download_lock:
-                if not self._local_model_download_queue:
+                if (
+                    self._local_model_download_cancel_event.is_set()
+                    or not self._local_model_download_queue
+                ):
+                    canceled = self._local_model_download_cancel_event.is_set()
                     self._local_model_download_active = None
                     self._local_model_download_worker_running = False
                     break
@@ -2583,33 +2683,78 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._local_model_download_active = (model_name, model_dir)
                 queued_count = len(self._local_model_download_queue)
 
-            self.local_model_download_progress.emit(
+            _emit_background_signal(
+                self,
+                "local_model_download_progress",
                 worker_token,
-                f"Starting '{model_name}'. {queued_count} queued."
+                f"Starting '{model_name}'. {queued_count} queued.",
             )
-            try:
-                download_model_snapshot(model_name, model_dir)
+            status, detail, removed_files, removed_bytes = (
+                self._download_local_model_in_subprocess(model_name, model_dir)
+            )
+            cleaned_files += removed_files
+            cleaned_bytes += removed_bytes
+            if status == "success":
                 successes.append(model_name)
                 with self._local_model_download_lock:
                     self._local_model_download_completed_names.add(model_name)
-            except Exception as exc:
-                failures.append(f"{model_name}: {exc}")
+            elif status == "canceled":
+                canceled = True
+                with self._local_model_download_lock:
+                    self._local_model_download_queue.clear()
+                    self._local_model_download_active = None
+                    self._local_model_download_worker_running = False
+                break
+            else:
+                failures.append(f"{model_name}: {detail}")
+
+        if canceled:
+            cleanup_mb = cleaned_bytes / 1_000_000.0
+            cleanup_detail = (
+                f" Removed {cleaned_files} incomplete file"
+                f"{'s' if cleaned_files != 1 else ''} ({cleanup_mb:.1f} MB)."
+                if cleaned_files
+                else " No incomplete files remained."
+            )
+            success_detail = (
+                f" Completed before cancellation: {', '.join(successes)}."
+                if successes
+                else ""
+            )
+            _emit_background_signal(
+                self,
+                "local_model_download_finished",
+                worker_token,
+                False,
+                f"Download canceled.{cleanup_detail}{success_detail}",
+            )
+            return
 
         if failures and successes:
             message = (
                 f"Completed with errors. Downloaded: {', '.join(successes)}. "
                 f"Failed: {' | '.join(failures)}"
             )
-            self.local_model_download_finished.emit(worker_token, False, message)
+            _emit_background_signal(
+                self,
+                "local_model_download_finished",
+                worker_token,
+                False,
+                message,
+            )
             return
         if failures:
-            self.local_model_download_finished.emit(
+            _emit_background_signal(
+                self,
+                "local_model_download_finished",
                 worker_token,
                 False,
                 f"Download failed: {' | '.join(failures)}",
             )
             return
-        self.local_model_download_finished.emit(
+        _emit_background_signal(
+            self,
+            "local_model_download_finished",
             worker_token,
             True,
             f"Downloaded: {', '.join(successes)}",
@@ -2671,6 +2816,8 @@ class SettingsDialog(QtWidgets.QDialog):
         if success:
             self.local_models_action_label.setStyleSheet("color: #1b5e20;")
         elif text.startswith("Completed with errors"):
+            self.local_models_action_label.setStyleSheet("color: #b26a00;")
+        elif text.startswith("Download canceled"):
             self.local_models_action_label.setStyleSheet("color: #b26a00;")
         else:
             self.local_models_action_label.setStyleSheet("color: #b71c1c;")

@@ -86,6 +86,43 @@ class _IdleThread:
         return None
 
 
+class _CompletedDownloadProcess:
+    returncode = 0
+
+    def poll(self):
+        return self.returncode
+
+    def communicate(self):
+        return "", ""
+
+
+class _BlockingDownloadProcess:
+    def __init__(self, release_event: threading.Event):
+        self._release_event = release_event
+        self.returncode: int | None = None
+        self.terminated = False
+
+    def poll(self):
+        if self.returncode is None and self._release_event.is_set():
+            self.returncode = 0
+        return self.returncode
+
+    def terminate(self):
+        self.terminated = True
+        self.returncode = -15
+        self._release_event.set()
+
+    def wait(self, timeout=None):
+        self._release_event.wait(timeout=timeout)
+        return self.returncode
+
+    def kill(self):
+        self.terminate()
+
+    def communicate(self):
+        return "", ""
+
+
 def _select_local_model_names(dialog: SettingsDialog, *model_names: str) -> None:
     selected = set(model_names)
     for index in range(dialog.local_models_list.count()):
@@ -701,8 +738,10 @@ def test_local_tab_can_download_selected_model(monkeypatch):
         lambda _model_dir="": list(cached),
     )
     monkeypatch.setattr(
-        "stt_app.settings_dialog.download_model_snapshot",
-        lambda model_name, _model_dir="": cached.append(model_name) or f"/tmp/{model_name}",
+        "stt_app.settings_dialog.start_model_download_process",
+        lambda model_name, _model_dir="": (
+            cached.append(model_name) or _CompletedDownloadProcess()
+        ),
     )
     monkeypatch.setattr(
         "stt_app.settings_dialog.threading.Thread",
@@ -738,16 +777,16 @@ def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
         lambda _model_dir="": list(calls),
     )
 
-    def _download(model_name: str, _model_dir: str = "") -> str:
+    def _start_download(model_name: str, _model_dir: str = ""):
         calls.append(model_name)
         if model_name == "tiny":
             first_started.set()
-            release_first.wait(timeout=3.0)
-        return f"/tmp/{model_name}"
+            return _BlockingDownloadProcess(release_first)
+        return _CompletedDownloadProcess()
 
     monkeypatch.setattr(
-        "stt_app.settings_dialog.download_model_snapshot",
-        _download,
+        "stt_app.settings_dialog.start_model_download_process",
+        _start_download,
     )
 
     dialog = SettingsDialog(
@@ -783,6 +822,49 @@ def test_local_tab_queues_another_download_while_one_is_active(monkeypatch):
     assert worker.is_alive() is False
     assert calls == ["tiny", "base"]
     assert "Downloaded: tiny, base" in dialog.local_models_action_label.text()
+    _ = app
+
+
+def test_local_tab_can_cancel_active_and_queued_downloads(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    started = threading.Event()
+    release = threading.Event()
+    process = _BlockingDownloadProcess(release)
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.start_model_download_process",
+        lambda _model_name, _model_dir="": started.set() or process,
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.cleanup_incomplete_model_download",
+        lambda _model_name, _model_dir="": (1, 2_000_000),
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._start_local_model_download(["tiny", "base"])
+    worker = dialog._active_local_model_download_thread
+    assert worker is not None
+    assert started.wait(timeout=1.0)
+    app.processEvents()
+
+    assert dialog.cancel_model_downloads_button.isEnabled() is True
+    dialog._cancel_local_model_downloads()
+    worker.join(timeout=3.0)
+    QtTest.QTest.qWait(50)
+
+    assert process.terminated is True
+    assert dialog.cancel_model_downloads_button.isEnabled() is False
+    assert "Download canceled" in dialog.local_models_action_label.text()
+    assert "1 incomplete file" in dialog.local_models_action_label.text()
+    assert "2.0 MB" in dialog.local_models_action_label.text()
+    active, queued, running = dialog._local_model_download_snapshot()
+    assert active is None
+    assert queued == []
+    assert running is False
     _ = app
 
 
