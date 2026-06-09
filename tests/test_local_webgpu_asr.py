@@ -305,13 +305,25 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     fake_process = _FakeProcess()
     commands = []
     messages = [
-        {"ok": True, "device": "cpu", "gpuAvailable": False},
+        {
+            "ok": True,
+            "device": "cpu",
+            "gpuAvailable": False,
+            "fallbackErrors": [
+                "webgpu: Failed to create WebGPU session",
+                "dml: DirectML is unavailable",
+            ],
+        },
         {
             "id": 1,
             "ok": True,
             "text": "hello world",
             "device": "cpu",
             "gpuAvailable": False,
+            "fallbackErrors": [
+                "webgpu: Failed to create WebGPU session",
+                "dml: DirectML is unavailable",
+            ],
         },
     ]
 
@@ -360,6 +372,8 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     assert transcriber.runtime_device == "cpu"
     assert transcriber.gpu_available is False
     assert "CPU" in transcriber.runtime_warning
+    assert "webgpu: Failed to create WebGPU session" in transcriber.runtime_details_text
+    assert "DirectML is unavailable" in transcriber.runtime_warning
     assert any("Starting ONNX runtime" in item for item in progress)
     assert any("ONNX runtime active on CPU" in item for item in progress)
     assert commands

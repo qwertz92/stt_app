@@ -10,11 +10,10 @@ from typing import Any, Callable
 
 from .benchmark_environment import BenchmarkEnvironment
 from .config import (
+    LOCAL_MODEL_RUNTIME,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
-    LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
-    LOCAL_WEBGPU_MODEL_SIZES,
 )
 
 
@@ -113,6 +112,7 @@ class BenchmarkCase:
     load_seconds: float
     runs: list[BenchmarkRun]
     error: str | None = None
+    runtime_details: str = ""
 
     @property
     def avg_seconds(self) -> float:
@@ -143,6 +143,7 @@ def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
         load_seconds=_safe_float(data.get("load_seconds"), default=math.nan),
         runs=runs,
         error=data.get("error"),
+        runtime_details=str(data.get("runtime_details", "")),
     )
 
 
@@ -310,6 +311,9 @@ def _run_onnx_case(
         _raise_if_canceled(cancel_check)
         runtime_device = transcriber.runtime_device or "auto"
         final_runtime_device = runtime_device
+        runtime_details = str(
+            getattr(transcriber, "runtime_details_text", "") or ""
+        )
 
         if progress_callback is not None:
             progress_callback(
@@ -323,6 +327,9 @@ def _run_onnx_case(
                 progress_callback(f"[{step}/{total_steps}] Warmup transcription...")
             transcriber.transcribe_batch(audio_path)
             final_runtime_device = transcriber.runtime_device or final_runtime_device
+            runtime_details = str(
+                getattr(transcriber, "runtime_details_text", "") or runtime_details
+            )
 
         duration_hint = _audio_duration_seconds(audio_path) or math.nan
 
@@ -338,6 +345,9 @@ def _run_onnx_case(
             transcript = transcriber.transcribe_batch(audio_path)
             elapsed = time.perf_counter() - started
             final_runtime_device = transcriber.runtime_device or final_runtime_device
+            runtime_details = str(
+                getattr(transcriber, "runtime_details_text", "") or runtime_details
+            )
 
             transcript_words = len(
                 [piece for piece in transcript.split(" ") if piece]
@@ -366,6 +376,7 @@ def _run_onnx_case(
         download_seconds=0.0,
         load_seconds=load_seconds,
         runs=all_runs,
+        runtime_details=runtime_details,
     )
 
 
@@ -396,15 +407,18 @@ def run_benchmark_cases(
     cases: list[BenchmarkCase] = []
     webgpu_device_targets = normalize_webgpu_benchmark_devices(webgpu_devices)
     total_cases = sum(
-        len(webgpu_device_targets) if model_name in LOCAL_WEBGPU_MODEL_SIZES else 1
+        len(webgpu_device_targets)
+        if LOCAL_MODEL_RUNTIME.get(model_name) == "onnx-webgpu"
+        else 1
         for model_name in model_names
     )
     case_index = 0
     for model_name in model_names:
         _raise_if_canceled(cancel_check)
+        runtime = LOCAL_MODEL_RUNTIME.get(model_name, "")
         device_targets = (
             webgpu_device_targets
-            if model_name in LOCAL_WEBGPU_MODEL_SIZES
+            if runtime == "onnx-webgpu"
             else [device]
         )
         for device_target in device_targets:
@@ -412,7 +426,7 @@ def run_benchmark_cases(
             case_index += 1
             display_compute_type = (
                 f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
-                if model_name in LOCAL_ONNX_MODEL_SIZES
+                if runtime in {"onnx-webgpu", "onnxruntime-genai"}
                 else compute_type
             )
             if progress_callback is not None:
@@ -421,7 +435,7 @@ def run_benchmark_cases(
                     f"{model_name} ({device_target}/{display_compute_type})"
                 )
             try:
-                if model_name not in LOCAL_ONNX_MODEL_SIZES:
+                if runtime == "faster-whisper":
                     case = _run_case(
                         audio_path=path,
                         model_name=model_name,
@@ -437,7 +451,7 @@ def run_benchmark_cases(
                         progress_callback=progress_callback,
                         cancel_check=cancel_check,
                     )
-                elif model_name in LOCAL_WEBGPU_MODEL_SIZES:
+                elif runtime == "onnx-webgpu":
                     case = _run_webgpu_case(
                         audio_path=path,
                         model_name=model_name,
@@ -450,7 +464,7 @@ def run_benchmark_cases(
                         progress_callback=progress_callback,
                         cancel_check=cancel_check,
                     )
-                else:
+                elif runtime == "onnxruntime-genai":
                     case = _run_onnx_case(
                         audio_path=path,
                         model_name=model_name,
@@ -462,6 +476,12 @@ def run_benchmark_cases(
                         model_dir=model_dir,
                         progress_callback=progress_callback,
                         cancel_check=cancel_check,
+                    )
+                else:
+                    raise ValueError(
+                        f"Benchmark runtime for '{model_name}' is unknown. "
+                        "Restart the app after updating, then refresh the local "
+                        "model inventory."
                     )
             except BenchmarkCancelled:
                 raise
@@ -536,6 +556,8 @@ def format_benchmark_summary(
 
     for case in cases:
         status = "ok" if case.error is None else f"error: {case.error}"
+        if case.runtime_details:
+            status = f"{status}; runtime: {case.runtime_details}"
         lines.append(
             f"- {case.model} ({case.device}/{case.compute_type}): "
             f"load={_format_seconds(case.load_seconds)}, "
@@ -598,6 +620,7 @@ def _write_csv(
                 "stdev_seconds",
                 "avg_rtf",
                 "status",
+                "runtime_details",
                 "error",
             ],
         )
@@ -628,6 +651,7 @@ def _write_csv(
                         "stdev_seconds": case.stdev_seconds,
                         "avg_rtf": case.avg_rtf,
                         "status": status,
+                        "runtime_details": case.runtime_details,
                         "error": case.error or "",
                     }
                 )
@@ -657,6 +681,7 @@ def _write_csv(
                     "stdev_seconds": case.stdev_seconds,
                     "avg_rtf": case.avg_rtf,
                     "status": status,
+                    "runtime_details": case.runtime_details,
                     "error": case.error or "",
                 }
             )

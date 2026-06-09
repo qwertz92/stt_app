@@ -154,6 +154,7 @@ def test_batch_transcription_uses_dml_then_cpu_fallback(monkeypatch, tmp_path):
 
     assert text == "hello world"
     assert transcriber.runtime_device == "cpu"
+    assert transcriber.runtime_details_text == "Fallback attempts: dml: DML unavailable"
     assert [config.providers for config in runtime.configs] == [["dml"], []]
     assert runtime.generators[0].runtime_options["lang_id"] == "9"
 

@@ -336,6 +336,7 @@ def _export_headers() -> list[str]:
         "stdev_seconds",
         "avg_rtf",
         "case_status",
+        "runtime_details",
         "error",
     ]
 
@@ -384,6 +385,7 @@ def _export_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
                     case.stdev_seconds,
                     case.avg_rtf,
                     status,
+                    case.runtime_details,
                     case.error or "",
                 ]
             )

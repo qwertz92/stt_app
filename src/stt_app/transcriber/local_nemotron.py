@@ -86,6 +86,7 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         self._model = None
         self._runtime = None
         self._runtime_device = ""
+        self._runtime_fallback_details: list[str] = []
         self._sample_rate = AUDIO_SAMPLE_RATE
         self._chunk_samples = _DEFAULT_CHUNK_SAMPLES
 
@@ -106,6 +107,12 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
     @property
     def is_model_loaded(self) -> bool:
         return self._model is not None
+
+    @property
+    def runtime_details_text(self) -> str:
+        if not self._runtime_fallback_details:
+            return ""
+        return "Fallback attempts: " + "; ".join(self._runtime_fallback_details)
 
     def runtime_status_text(self) -> str:
         if self._runtime_device == "dml":
@@ -181,6 +188,7 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
                 self._runtime = runtime
                 self._model = model
                 self._runtime_device = provider
+                self._runtime_fallback_details = failures
                 self._emit_progress(self.runtime_status_text())
                 return model
 

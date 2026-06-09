@@ -504,6 +504,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self._request_id = 0
         self._runtime_device = ""
         self._gpu_available = False
+        self._runtime_fallback_details: list[str] = []
         self.runtime_warning = ""
 
     @property
@@ -513,6 +514,12 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
     @property
     def gpu_available(self) -> bool:
         return self._gpu_available
+
+    @property
+    def runtime_details_text(self) -> str:
+        if not self._runtime_fallback_details:
+            return ""
+        return "Fallback attempts: " + "; ".join(self._runtime_fallback_details)
 
     def runtime_status_text(self) -> str:
         if not self._runtime_device:
@@ -563,15 +570,30 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             )
         return snapshot
 
-    def _set_runtime_status(self, device: object, gpu_available: object) -> None:
+    def _set_runtime_status(
+        self,
+        device: object,
+        gpu_available: object,
+        fallback_details: object = None,
+    ) -> None:
         self._runtime_device = str(device or "")
         self._gpu_available = bool(gpu_available)
+        if isinstance(fallback_details, list):
+            self._runtime_fallback_details = [
+                str(detail).strip()
+                for detail in fallback_details
+                if str(detail).strip()
+            ]
         if self._runtime_device not in _ACCELERATED_DEVICES:
             self.runtime_warning = (
                 "No WebGPU or DirectML GPU runtime was selected. This model is "
                 "running on CPU and may be much slower than the CTranslate2 "
                 "Whisper models."
             )
+            if self.runtime_details_text:
+                self.runtime_warning = (
+                    f"{self.runtime_warning} {self.runtime_details_text}"
+                )
         else:
             self.runtime_warning = ""
 
@@ -702,7 +724,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             self.close()
             raise TranscriptionError(f"ONNX/WebGPU runtime failed to load: {detail}")
 
-        self._set_runtime_status(ready.get("device"), ready.get("gpuAvailable"))
+        self._set_runtime_status(
+            ready.get("device"),
+            ready.get("gpuAvailable"),
+            ready.get("fallbackErrors"),
+        )
         self._emit_progress(self.runtime_status_text())
 
     def _ensure_process(self) -> None:
@@ -764,6 +790,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                     self._set_runtime_status(
                         response.get("device") or self._runtime_device,
                         response.get("gpuAvailable", self._gpu_available),
+                        response.get("fallbackErrors"),
                     )
                     if self._runtime_device != previous_device:
                         self._emit_progress(self.runtime_status_text())

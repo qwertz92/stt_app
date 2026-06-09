@@ -33,6 +33,7 @@ def _entry() -> BenchmarkHistoryEntry:
                 language_probability=0.98,
             )
         ],
+        runtime_details="Fallback attempts: webgpu: unsupported",
     )
     options = BenchmarkOptions(
         audio_path="C:/sample.wav",
@@ -80,6 +81,7 @@ def test_benchmark_history_roundtrip(tmp_path):
     assert loaded[0].environment.cpu == "AMD Ryzen"
     assert loaded[0].environment.gpus == ["Intel Arc A750"]
     assert loaded[0].cases[0].avg_rtf == 0.6
+    assert loaded[0].cases[0].runtime_details == "Fallback attempts: webgpu: unsupported"
 
 
 def test_benchmark_history_delete_handles_nan_case_values(tmp_path):
@@ -148,6 +150,7 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "stdev_seconds",
         "avg_rtf",
         "case_status",
+        "runtime_details",
         "error",
     ]
     assert rows[1][1:4] == ["completed", "C:/sample.wav", "sample.wav"]

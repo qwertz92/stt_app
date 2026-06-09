@@ -2799,8 +2799,10 @@ class SettingsDialog(QtWidgets.QDialog):
             ]
             for column, value in enumerate(values):
                 item = QtWidgets.QTableWidgetItem(value)
-                if case.error and column == len(values) - 1:
-                    item.setToolTip(case.error)
+                if column == len(values) - 1:
+                    detail = case.error or case.runtime_details
+                    if detail:
+                        item.setToolTip(detail)
                 self.benchmark_results_table.setItem(row, column, item)
 
     def _benchmark_summary(

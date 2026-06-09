@@ -157,6 +157,29 @@ def test_run_benchmark_cases_routes_nemotron_to_onnx_runtime(monkeypatch, tmp_pa
     assert [case.compute_type for case in cases] == ["onnx-int4"]
 
 
+def test_run_benchmark_cases_does_not_route_unknown_model_to_faster_whisper(
+    monkeypatch,
+    tmp_path,
+):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    faster_calls = []
+    monkeypatch.setattr(
+        local_benchmark,
+        "_run_case",
+        lambda **kwargs: faster_calls.append(kwargs),
+    )
+
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio_path,
+        model_names=["future-local-model"],
+    )
+
+    assert faster_calls == []
+    assert "Benchmark runtime" in str(cases[0].error)
+    assert "Restart the app" in str(cases[0].error)
+
+
 def test_nemotron_benchmark_defaults_to_auto_and_can_force_dml(monkeypatch, tmp_path):
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")
@@ -166,6 +189,7 @@ def test_nemotron_benchmark_defaults_to_auto_and_can_force_dml(monkeypatch, tmp_
         def __init__(self, **kwargs):
             self.kwargs = kwargs
             self.runtime_device = "dml"
+            self.runtime_details_text = "Fallback attempts: webgpu: unsupported"
             instances.append(self)
 
         def preload_model(self):
@@ -197,6 +221,23 @@ def test_nemotron_benchmark_defaults_to_auto_and_can_force_dml(monkeypatch, tmp_
     assert instances[0].kwargs["provider_order"] == ("dml",)
     assert instances[0].kwargs["use_runtime_vad"] is True
     assert case.runs[0].detected_language == "auto"
+    assert case.runtime_details == "Fallback attempts: webgpu: unsupported"
+
+
+def test_benchmark_summary_includes_runtime_fallback_details():
+    case = local_benchmark.BenchmarkCase(
+        model="granite-speech-4.1-2b",
+        device="cpu",
+        compute_type="onnx-int8",
+        download_seconds=0.0,
+        load_seconds=1.0,
+        runs=[],
+        runtime_details="Fallback attempts: webgpu: operator unsupported",
+    )
+
+    summary = local_benchmark.format_benchmark_summary([case])
+
+    assert "runtime: Fallback attempts: webgpu: operator unsupported" in summary
 
 
 def test_run_benchmark_cases_can_cancel_between_cases(monkeypatch, tmp_path):

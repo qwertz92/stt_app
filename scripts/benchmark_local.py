@@ -466,6 +466,8 @@ def _print_results(cases: list[BenchmarkCase]) -> None:
             f"{_format_number(case.avg_rtf):<8} "
             f"{language:<8} {status:<10}"
         )
+        if case.runtime_details:
+            print(f"  runtime: {case.runtime_details}")
         if case.error:
             print(f"  error: {case.error}")
 

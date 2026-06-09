@@ -82,6 +82,14 @@ function formatError(error) {
   return String(error);
 }
 
+function conciseError(error) {
+  const firstLine = formatError(error)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean);
+  return String(firstLine || error || "unknown error").slice(0, 600);
+}
+
 function modelPathForTransformers(modelPath) {
   return String(modelPath || "").replaceAll("\\", "/");
 }
@@ -1112,9 +1120,10 @@ async function loadRuntime(options) {
         candidateDevices,
         index,
         webgpuAvailable,
+        fallbackErrors: errors,
       };
     } catch (error) {
-      errors.push(`${device}: ${formatError(error)}`);
+      errors.push(`${device}: ${conciseError(error)}`);
     }
   }
   throw new Error(
@@ -1127,12 +1136,14 @@ async function runServer(options) {
   let candidateDevices = [];
   let runtimeIndex = -1;
   let webgpuAvailable = false;
+  let fallbackErrors = [];
   try {
     const loaded = await loadRuntime(options);
     runtime = loaded.runtime;
     candidateDevices = loaded.candidateDevices;
     runtimeIndex = loaded.index;
     webgpuAvailable = loaded.webgpuAvailable;
+    fallbackErrors = loaded.fallbackErrors;
     writeJson({
       type: "ready",
       ok: true,
@@ -1140,6 +1151,7 @@ async function runServer(options) {
       device: runtime.device,
       gpuAvailable: runtime.gpuAvailable,
       webgpuAvailable: runtime.webgpuAvailable,
+      fallbackErrors,
     });
   } catch (error) {
     writeJson({ type: "ready", ok: false, error: formatError(error) });
@@ -1151,20 +1163,27 @@ async function runServer(options) {
     const audio = decodeWavFile(request.audioPath, TARGET_SAMPLE_RATE);
     const preparedRequest = { ...request, audio };
     try {
-      return await runtime.transcribe(preparedRequest);
+      return {
+        text: await runtime.transcribe(preparedRequest),
+        fallbackErrors,
+      };
     } catch (error) {
       if (!["auto", "gpu"].includes(options.device)) {
         throw error;
       }
-      const errors = [`${runtime.device}: ${formatError(error)}`];
+      const errors = [`${runtime.device}: ${conciseError(error)}`];
       for (let index = runtimeIndex + 1; index < candidateDevices.length; index += 1) {
         const nextDevice = candidateDevices[index];
         try {
           runtime = await loadRuntimeForDevice(options, nextDevice, webgpuAvailable);
           runtimeIndex = index;
-          return await runtime.transcribe(preparedRequest);
+          fallbackErrors = [...fallbackErrors, ...errors];
+          return {
+            text: await runtime.transcribe(preparedRequest),
+            fallbackErrors,
+          };
         } catch (nextError) {
-          errors.push(`${nextDevice}: ${formatError(nextError)}`);
+          errors.push(`${nextDevice}: ${conciseError(nextError)}`);
         }
       }
       throw new Error(
@@ -1208,14 +1227,15 @@ async function runServer(options) {
       }
 
       try {
-        const text = await transcribeWithFallback(request);
+        const result = await transcribeWithFallback(request);
         writeJson({
           id: request.id,
           ok: true,
-          text,
+          text: result.text,
           device: runtime.device,
           gpuAvailable: runtime.gpuAvailable,
           webgpuAvailable: runtime.webgpuAvailable,
+          fallbackErrors: result.fallbackErrors,
         });
       } catch (error) {
         writeJson({ id: request.id, ok: false, error: formatError(error) });
