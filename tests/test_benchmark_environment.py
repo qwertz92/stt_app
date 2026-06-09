@@ -1,11 +1,12 @@
 from importlib import metadata
 
+from stt_app import __version__
 import stt_app.benchmark_environment as benchmark_environment
 
 
 def test_framework_versions_include_python_node_and_source_runtimes(monkeypatch):
     python_versions = {
-        "stt-app": "0.3.0",
+        "stt-app": __version__,
         "onnxruntime": "1.26.0",
         "onnxruntime-genai": "0.14.1",
     }
@@ -36,7 +37,7 @@ def test_framework_versions_include_python_node_and_source_runtimes(monkeypatch)
 
     versions = benchmark_environment._framework_versions()
 
-    assert versions["stt_app"] == "0.3.0"
+    assert versions["stt_app"] == __version__
     assert "stt_app installed metadata" not in versions
     assert versions["stt_app source"] == "abc123"
     assert versions["ONNX Runtime"] == "1.26.0"
