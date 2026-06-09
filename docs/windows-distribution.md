@@ -133,7 +133,7 @@ python .\scripts\create_release.py
 
 The script fetches tags, shows the latest numeric release tag, and proposes the
 next patch version by default. Press Enter to accept the default, or enter an
-explicit numeric version such as `0.3.0`. It then asks for an explicit `yes`
+explicit numeric version such as `0.3.1`. It then asks for an explicit `yes`
 confirmation before it changes files, runs `uv lock`, runs checks, creates the
 release metadata commit, pushes `main`, creates the annotated tag, and pushes
 the tag.
@@ -141,13 +141,13 @@ the tag.
 The lower-level manual path is still available when you intentionally need it:
 
 ```powershell
-python .\scripts\release_version.py bump 0.2.2
+python .\scripts\release_version.py bump 0.3.1
 uv lock
 git add pyproject.toml uv.lock src\stt_app\__init__.py installer\windows\stt_app.iss
 git commit
 git push origin main
-git tag -a v0.2.2 -m "Release v0.2.2"
-git push origin v0.2.2
+git tag -a v0.3.1 -m "Release v0.3.1"
+git push origin v0.3.1
 ```
 
 The workflow `.github/workflows/windows-release.yml` is wired so that:
@@ -156,9 +156,9 @@ The workflow `.github/workflows/windows-release.yml` is wired so that:
 - `v*` tags build the same artifacts and attach them to a GitHub Release.
 - tag builds fail fast unless the tag matches `pyproject.toml`,
   `stt_app.__version__`, the installer fallback version, and `uv.lock`
-  (`v0.2.2` requires `version = "0.2.2"`).
+  (`v0.3.1` requires `version = "0.3.1"`).
 - tag builds fail fast when the tag is older than an existing numeric release
-  tag, so accidentally releasing `v0.2.1` after `v0.2.2` is blocked.
+  tag, so accidentally releasing `v0.3.0` after `v0.3.1` is blocked.
 
 This gives you a clean separation:
 

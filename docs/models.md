@@ -224,8 +224,14 @@ The Settings **Local** tab downloads models one at a time. You can select and
 queue more models while the current download continues. The active and queued
 models are marked in the list, and the tab shows approximate percentage,
 downloaded size, MB/s, and Mbit/s. Percentage and speed are estimated from
-on-disk cache growth, so short pauses or jumps can occur while Hugging Face
-finalizes files.
+on-disk cache growth. The speed uses a short rolling window so bursty cache
+writes do not immediately display `0.0`, but short pauses or jumps can still
+occur while Hugging Face finalizes files.
+
+**Cancel Downloads** stops the active worker and clears the remaining queue.
+The app removes unusable `*.incomplete` files left by the interrupted transfer
+but preserves files that finished downloading so a later retry can reuse them.
+The command-line download script applies the same cleanup after `Ctrl+C`.
 
 For Cohere and Granite, source checkouts use the system Node.js executable. If
 `@huggingface/transformers`, `@huggingface/tokenizers`, or `onnxruntime-node`

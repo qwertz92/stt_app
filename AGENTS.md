@@ -65,6 +65,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
+| `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
@@ -96,10 +97,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   first visible open and first Local tab paint avoid lazy Qt layout work. A
   hidden prepared dialog reloads settings from disk before it is shown.
 - **Local model download queue**: Settings downloads run serially through one
-  worker so Hugging Face cache writes and network usage remain predictable.
-  Additional models can be queued while a download is active. Progress and
-  transfer rate are approximate because they are derived from cache growth and
-  the estimated total sizes in `MODEL_ESTIMATED_SIZE_MB`.
+  worker process so Hugging Face cache writes and network usage remain
+  predictable and the active download can be terminated safely. Additional
+  models can be queued while a download is active. Cancel clears the queue and
+  removes unusable `*.incomplete` files while preserving completed files for a
+  later resume. Progress and its rolling transfer rate are approximate because
+  they are derived from cache growth and the estimated total sizes in
+  `MODEL_ESTIMATED_SIZE_MB`.
 - **Transcript history retention**: history defaults to 500 saved entries, and
   legacy settings that still have the old 20-entry default are migrated upward.
   Successful transcriptions are added to history before text insertion, so a

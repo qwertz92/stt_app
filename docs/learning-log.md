@@ -5,6 +5,18 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-09
 
+- Download transfer rates now use a short rolling cache-growth window instead
+  of one poll interval, so bursty Hugging Face writes no longer make the UI
+  flash immediately between a real rate and `0.0`.
+- Settings and startup model downloads use a cancellable worker process that
+  works in source and packaged runs. Canceling clears queued downloads and
+  removes unusable `*.incomplete` files while preserving completed files for a
+  later retry. The command-line downloader applies the same cleanup on
+  `Ctrl+C`.
+- The non-`uv` Windows requirements are checked against `pyproject.toml` and
+  now include the Nemotron `onnxruntime-genai` runtime.
+- Background model scan/download workers no longer emit Qt signals after a
+  Settings dialog has already been deleted.
 - Local benchmark routing now uses `LOCAL_MODEL_RUNTIME` instead of treating
   every non-WebGPU model as faster-whisper. This prevents a newly added local
   runtime from reaching `WhisperModel` and failing with an invalid model-size
