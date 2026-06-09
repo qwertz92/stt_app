@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 from dataclasses import dataclass, field
@@ -183,7 +184,8 @@ def _gpu_labels() -> list[str]:
             "powershell",
             "-NoProfile",
             "-Command",
-            "Get-CimInstance Win32_VideoController | ForEach-Object { $_.Name }",
+            'Get-CimInstance Win32_VideoController | ForEach-Object { '
+            '"$($_.Name) (driver $($_.DriverVersion))" }',
         ],
         timeout=4.0,
     )
@@ -194,7 +196,12 @@ def _framework_versions() -> dict[str, str]:
     names = {
         "faster-whisper": "faster-whisper",
         "CTranslate2": "ctranslate2",
+        "ONNX Runtime": "onnxruntime",
+        "ONNX Runtime DirectML": "onnxruntime-directml",
+        "ONNX Runtime GPU": "onnxruntime-gpu",
         "ORT GenAI": "onnxruntime-genai",
+        "ORT GenAI DirectML": "onnxruntime-genai-directml",
+        "ORT GenAI CUDA": "onnxruntime-genai-cuda",
         "PySide6": "PySide6",
         "NumPy": "numpy",
     }
@@ -205,21 +212,67 @@ def _framework_versions() -> dict[str, str]:
         except metadata.PackageNotFoundError:
             continue
 
-    transformers_js = _transformers_js_version()
-    if transformers_js:
-        versions["Transformers.js"] = transformers_js
+    if "ORT GenAI DirectML" in versions:
+        versions["Nemotron providers"] = "DirectML"
+    elif "ORT GenAI CUDA" in versions:
+        versions["Nemotron providers"] = "CUDA"
+    elif "ORT GenAI" in versions:
+        versions["Nemotron providers"] = "CPU only"
+
+    try:
+        from . import __version__
+
+        versions["stt_app"] = __version__
+        installed_version = metadata.version("stt-app")
+        if installed_version != __version__:
+            versions["stt_app installed metadata"] = installed_version
+    except metadata.PackageNotFoundError:
+        pass
+    except Exception:
+        pass
+
+    source_revision = _source_revision()
+    if source_revision:
+        versions["stt_app source"] = source_revision
+
+    node_packages = {
+        "Transformers.js": "@huggingface/transformers",
+        "Tokenizers.js": "@huggingface/tokenizers",
+        "ONNX Runtime Node": "onnxruntime-node",
+        "ONNX Runtime Web": "onnxruntime-web",
+    }
+    for label, package_name in node_packages.items():
+        version = _node_package_version(package_name)
+        if version:
+            versions[label] = version
+
+    versions.update(_cuda_versions())
     return versions
 
 
-def _transformers_js_version() -> str:
-    root = Path(__file__).resolve().parents[2]
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _node_package_version(package_name: str) -> str:
+    root = _project_root()
+    installed_path = root / "node_modules" / Path(package_name) / "package.json"
+    if installed_path.exists():
+        try:
+            payload = json.loads(installed_path.read_text(encoding="utf-8"))
+            version = str(payload.get("version", "")).strip()
+            if version:
+                return version
+        except (OSError, ValueError):
+            pass
+
     lock_path = root / "package-lock.json"
     if lock_path.exists():
         try:
             payload = json.loads(lock_path.read_text(encoding="utf-8"))
             packages = payload.get("packages", {})
             if isinstance(packages, dict):
-                package = packages.get("node_modules/@huggingface/transformers", {})
+                package = packages.get(f"node_modules/{package_name}", {})
                 if isinstance(package, dict):
                     version = str(package.get("version", "")).strip()
                     if version:
@@ -233,12 +286,43 @@ def _transformers_js_version() -> str:
             payload = json.loads(package_path.read_text(encoding="utf-8"))
             dependencies = payload.get("dependencies", {})
             if isinstance(dependencies, dict):
-                version = str(dependencies.get("@huggingface/transformers", "")).strip()
+                version = str(dependencies.get(package_name, "")).strip()
                 if version:
                     return version
         except (OSError, ValueError):
             pass
     return ""
+
+
+def _source_revision() -> str:
+    return _first_command_line(
+        [
+            "git",
+            "-C",
+            str(_project_root()),
+            "rev-parse",
+            "--short=12",
+            "HEAD",
+        ]
+    )
+
+
+def _cuda_versions() -> dict[str, str]:
+    versions: dict[str, str] = {}
+    nvidia_smi = "\n".join(_command_lines(["nvidia-smi"]))
+    match = re.search(r"CUDA Version:\s*([0-9.]+)", nvidia_smi)
+    if match:
+        versions["CUDA driver API"] = match.group(1)
+
+    nvcc_lines = _command_lines(["nvcc", "--version"])
+    for line in nvcc_lines:
+        match = re.search(r"release\s+([0-9.]+)", line)
+        if match:
+            versions["CUDA Toolkit"] = match.group(1)
+            break
+    if not versions:
+        versions["CUDA"] = "not detected"
+    return versions
 
 
 def _node_version() -> str:
