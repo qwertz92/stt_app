@@ -389,7 +389,7 @@ Benchmark time is dominated by model loading, not audio length. Larger models ta
 |-----------|-------------|
 | `audio_path` | Input audio file |
 | `--models` | Comma-separated model IDs |
-| `--device` | `auto`, `cpu`, or `cuda`; Nemotron also supports `dml`, while `auto` tries DirectML then CPU |
+| `--device` | `auto`, `cpu`, or `cuda` for faster-whisper; Nemotron supports `auto`, `cpu`, or `dml`, while `auto` tries DirectML then CPU |
 | `--webgpu-devices` | ONNX targets for Cohere/Granite: `auto`, `gpu`, `cpu`, `gpu,cpu`, `dml`, `webgpu`, or `all` |
 | `--compute-types` | Precision: `int8`, `float32`, `float16` |
 | `--runs` | Number of measured runs per case |
@@ -400,6 +400,12 @@ Benchmark time is dominated by model loading, not audio length. Larger models ta
 | `--csv-out` | Export results as CSV |
 | `--json-out` | Export results as JSON |
 | `--isolated-case` / `--no-isolated-case` | Per-case subprocess isolation (default: on) |
+
+Benchmark system details include the app/source revision, GPU driver, Python and
+Node ONNX Runtime versions, ORT GenAI provider capability, and detected CUDA
+driver/toolkit versions. Nemotron currently uses DirectML or CPU, not CUDA. If
+a newly added model is incorrectly reported as an invalid faster-whisper model,
+restart the app so the updated runtime catalog is loaded.
 
 ### Sample audio
 

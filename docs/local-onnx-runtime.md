@@ -62,14 +62,14 @@ architecture.
 | --- | --- | --- |
 | `auto` | Try WebGPU, then DirectML on Windows, then CPU | Default for normal use |
 | `gpu` | Try GPU targets only, currently WebGPU then DirectML | Diagnostic benchmark target |
-| `webgpu` | Force Transformers.js WebGPU | Best current target on the Intel test machine |
+| `webgpu` | Force Transformers.js WebGPU | Best current target for Cohere/Granite 4.0 on the Intel test machine; Granite 4.1 compatibility varies |
 | `dml` | Force ONNX Runtime DirectML | Diagnostic only for current Cohere/Granite |
 | `cpu` | Force CPU | Most compatible, usually slowest |
 
 For Granite Speech 4.1 raw ONNX graphs, the Node helper uses direct
 `onnxruntime-node` sessions. In the current package, WebGPU and CPU are the
 supported raw-graph targets; DirectML is skipped for 4.1 and normal `auto`
-falls through to CPU if WebGPU cannot load.
+falls through to CPU if WebGPU cannot load or fails during inference.
 
 Nemotron attempts DirectML and then CPU through ORT GenAI. The normal dependency
 lock currently installs the CPU package because the published
@@ -115,13 +115,23 @@ Runtime's DirectML execution provider is broad and useful, but it has operator
 and shape constraints. A model can load on DirectML and still fail when the
 first unsupported graph operation is executed.
 
-Observed on the target Windows/Intel machine:
+Observed on the target Windows/Intel Arc A750 machine:
 
-- WebGPU works for Cohere and Granite.
+- WebGPU works for Cohere and Granite 4.0.
+- Granite Speech 4.1 INT8 loads on WebGPU, but its first inference fails while
+  ONNX Runtime Web creates the `Einsum` compute pipeline because the generated
+  shader module is invalid.
 - DirectML loads both models but fails during inference:
   - Cohere fails in `MultiHeadAttention`.
-  - Granite fails in `Reshape`.
-- CPU works for both, but is materially slower than WebGPU.
+  - Granite 4.0 fails in `Reshape`.
+- DirectML is not exposed by `onnxruntime-node` for the raw Granite 4.1 graph
+  sessions.
+- CPU works for all current ONNX models, but is materially slower than WebGPU
+  where WebGPU is compatible.
+
+Benchmark summaries retain concise fallback reasons. A result such as
+`cpu/onnx-int8` should therefore also explain why WebGPU and DirectML were not
+used.
 
 There is no universal "GPU is always faster" rule. Integrated GPUs in notebooks
 share memory with the CPU, may throttle thermally, and may have weaker drivers.

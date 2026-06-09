@@ -3,6 +3,29 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-09
+
+- Local benchmark routing now uses `LOCAL_MODEL_RUNTIME` instead of treating
+  every non-WebGPU model as faster-whisper. This prevents a newly added local
+  runtime from reaching `WhisperModel` and failing with an invalid model-size
+  error. A running app must still be restarted after its source files change.
+- ONNX benchmark cases now retain concise provider fallback reasons in
+  summaries, history, CLI output, and exports. CPU results therefore explain
+  which WebGPU or DirectML attempt failed.
+- A real Intel Arc A750 benchmark showed that Granite Speech 4.1 INT8 can load
+  on WebGPU but fails on its first inference because ONNX Runtime Web cannot
+  create the `Einsum` shader pipeline. Granite 4.0 q4 remains functional on
+  WebGPU because it uses a different graph/runtime path. Granite 4.1 `auto`
+  correctly falls back to CPU because DirectML is not exposed for its raw
+  `onnxruntime-node` graph sessions.
+- Nemotron benchmark routing was verified on current `main`: the repository
+  sample ran on CPU at 0.224 RTF. DirectML fallback reported that the installed
+  ORT GenAI package was not built with DML support.
+- Benchmark system details now include app/source revision, GPU driver, Python
+  ONNX Runtime variants, ORT GenAI provider capability, Transformers.js,
+  Tokenizers.js, ONNX Runtime Node/Web, and detected CUDA driver/toolkit
+  versions.
+
 ## 2026-06-08
 
 - Overlay visibility and compact sizing were hardened. `Clear` restores the

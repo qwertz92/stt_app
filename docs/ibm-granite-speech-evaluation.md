@@ -16,7 +16,8 @@ comparison lives in:
 - **Runtime:** Granite 4.0 uses q4 ONNX through the Transformers.js helper
   process. Granite 4.1 uses raw INT8 ONNX Runtime graphs through the same Node
   helper process.
-- **Best target on the tested Intel Windows machine:** WebGPU.
+- **Best target on the tested Intel Windows machine:** WebGPU for Granite 4.0;
+  CPU for the current Granite 4.1 raw INT8 graphs.
 
 Granite should remain experimental. It is useful to benchmark because it is
 close to Cohere on public English ASR quality signals and is notably faster than
@@ -25,7 +26,7 @@ until real German and English dictation samples show a consistent quality win.
 
 ## Runtime Findings
 
-The app can run Granite through:
+The app can run Granite 4.0 through:
 
 - `webgpu`: works on the tested Intel GPU and is materially faster than CPU.
 - `cpu`: works and is the reliable fallback.
@@ -34,6 +35,13 @@ The app can run Granite through:
 
 The DirectML failure means this model is not currently a good DirectML target in
 the app, even though DirectML is a vendor-neutral Windows GPU API.
+
+Granite Speech 4.1 uses a different raw-graph runtime. On the tested Intel Arc
+A750, its AR INT8 graph loads on WebGPU but fails at first inference because
+ONNX Runtime Web cannot create a valid shader module for the encoder's `Einsum`
+operator. DirectML is not exposed for these raw `onnxruntime-node` sessions, so
+`auto` falls back to CPU. This does not contradict Granite 4.0 working on the
+same GPU; the graph formats and execution paths differ.
 
 ## Language Behavior
 
@@ -71,7 +79,8 @@ warm after dictation to avoid the next load cost.
 
 Keep Granite in the benchmark set next to Cohere:
 
-1. Benchmark WebGPU against CPU on the target machine.
+1. Benchmark WebGPU against CPU on the target machine; expect Granite 4.1 to
+   require CPU until its WebGPU `Einsum` path is fixed.
 2. Ignore DirectML unless a future ONNX Runtime/Transformers.js release fixes
    the observed DirectML `Reshape` failure.
 3. Compare transcript usefulness, not only speed. Granite may behave more like a

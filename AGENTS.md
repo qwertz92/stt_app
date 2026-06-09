@@ -190,7 +190,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Benchmark environment metadata**: benchmark summaries and exports include a
   best-effort system context from `benchmark_environment.py`. Keep hardware,
   OS, Python, Node.js, and local runtime/framework version collection there so
-  Settings, history exports, and the CLI benchmark do not drift.
+  Settings, history exports, and the CLI benchmark do not drift. ONNX benchmark
+  cases also persist concise runtime fallback details so a CPU result explains
+  why WebGPU or DirectML was rejected.
 
 ## Core flow
 

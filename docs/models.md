@@ -161,7 +161,10 @@ The app also falls back from DirectML/WebGPU to CPU during transcription when a
 model loads on a GPU runtime but the first generation call fails because an ONNX
 operator is not supported by that provider. Benchmark `GPU only` may move
 between WebGPU and DirectML, but intentionally does not use CPU fallback, so GPU
-provider failures remain visible.
+provider failures remain visible. Benchmark summaries and exports retain the
+concise fallback reason. On the tested Intel Arc A750, Granite 4.1 loads on
+WebGPU but fails at first inference while creating its `Einsum` shader, so
+`auto` falls back to CPU; Granite 4.0 uses a different graph and works on WebGPU.
 
 Node.js cannot decode arbitrary audio files through `AudioContext`. The ONNX
 runner decodes WAV input itself and passes Float32 audio directly to
