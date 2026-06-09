@@ -1,4 +1,5 @@
 from stt_app.model_download_progress import (
+    ModelDownloadSpeedTracker,
     format_model_download_progress,
     measure_model_download_progress,
 )
@@ -24,6 +25,36 @@ def test_measure_model_download_progress_clamps_estimated_percent():
     )
 
     assert progress.percent == 100
+
+
+def test_speed_tracker_keeps_rate_between_bursty_cache_updates():
+    tracker = ModelDownloadSpeedTracker(window_seconds=5.0)
+    tracker.reset("small", 100_000_000, now=10.0)
+
+    first_growth = tracker.measure("small", 120_000_000, now=11.0)
+    between_writes = tracker.measure("small", 120_000_000, now=12.0)
+
+    assert first_growth.speed_bytes_per_second == 20_000_000
+    assert between_writes.speed_bytes_per_second == 10_000_000
+
+
+def test_speed_tracker_stops_reporting_stale_rate():
+    tracker = ModelDownloadSpeedTracker(window_seconds=3.0)
+    tracker.reset("small", 100_000_000, now=10.0)
+    tracker.measure("small", 120_000_000, now=11.0)
+
+    stale = tracker.measure("small", 120_000_000, now=15.0)
+
+    assert stale.speed_bytes_per_second is None
+
+
+def test_speed_tracker_resets_when_cache_size_decreases():
+    tracker = ModelDownloadSpeedTracker()
+    tracker.reset("small", 100_000_000, now=10.0)
+
+    progress = tracker.measure("small", 50_000_000, now=11.0)
+
+    assert progress.speed_bytes_per_second is None
 
 
 def test_format_model_download_progress_includes_rate_and_queue():

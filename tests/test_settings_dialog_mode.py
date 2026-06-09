@@ -798,9 +798,11 @@ def test_local_model_download_progress_shows_percent_speed_and_queue(monkeypatch
         dialog._local_model_download_active = ("small", "")
         dialog._local_model_download_queue = [("base", "")]
         dialog._local_model_download_worker_running = True
-    dialog._local_model_download_progress_model = "small"
-    dialog._local_model_download_last_bytes = 142_000_000
-    dialog._local_model_download_last_poll_at = 10.0
+    dialog._local_model_download_speed_tracker.reset(
+        "small",
+        142_000_000,
+        now=10.0,
+    )
 
     monkeypatch.setattr(
         "stt_app.settings_dialog.estimate_cached_model_bytes",

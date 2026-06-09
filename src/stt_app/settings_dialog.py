@@ -80,8 +80,8 @@ from .local_benchmark import (
 )
 from .logger import AppLogger
 from .model_download_progress import (
+    ModelDownloadSpeedTracker,
     format_model_download_progress,
-    measure_model_download_progress,
 )
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
@@ -247,9 +247,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._local_model_download_completed_names: set[str] = set()
         self._local_model_download_worker_running = False
         self._local_model_download_worker_token = 0
-        self._local_model_download_progress_model = ""
-        self._local_model_download_last_bytes = 0
-        self._local_model_download_last_poll_at = 0.0
+        self._local_model_download_speed_tracker = ModelDownloadSpeedTracker()
         self._local_model_download_progress_timer = QtCore.QTimer(self)
         self._local_model_download_progress_timer.setInterval(500)
         self._local_model_download_progress_timer.timeout.connect(
@@ -2636,21 +2634,10 @@ class SettingsDialog(QtWidgets.QDialog):
 
         model_name, model_dir = active
         downloaded_bytes = estimate_cached_model_bytes(model_name, model_dir)
-        now = time.monotonic()
-        if model_name != self._local_model_download_progress_model:
-            self._local_model_download_progress_model = model_name
-            self._local_model_download_last_bytes = downloaded_bytes
-            self._local_model_download_last_poll_at = now
-
-        progress = measure_model_download_progress(
+        progress = self._local_model_download_speed_tracker.measure(
             model_name,
             downloaded_bytes,
-            previous_bytes=self._local_model_download_last_bytes,
-            previous_at=self._local_model_download_last_poll_at,
-            now=now,
         )
-        self._local_model_download_last_bytes = downloaded_bytes
-        self._local_model_download_last_poll_at = now
 
         self.local_models_action_label.setStyleSheet("color: #0d47a1;")
         self.local_models_action_label.setText(
@@ -2679,7 +2666,7 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         self._active_local_model_download_thread = None
         self._local_model_download_progress_timer.stop()
-        self._local_model_download_progress_model = ""
+        self._local_model_download_speed_tracker.reset()
         self.local_model_download_progress_bar.setVisible(False)
         if success:
             self.local_models_action_label.setStyleSheet("color: #1b5e20;")

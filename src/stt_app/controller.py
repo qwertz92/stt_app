@@ -48,8 +48,8 @@ from .config import (
 from .hotkey import HotkeyManager, HotkeyRegistrationError
 from .last_recording_store import LastRecordingStore
 from .model_download_progress import (
+    ModelDownloadSpeedTracker,
     format_model_download_progress,
-    measure_model_download_progress,
 )
 from .overlay_ui import OverlayUI
 from .settings_store import AppSettings, SettingsStore
@@ -136,8 +136,7 @@ class DictationController(QtCore.QObject):
         self._preload_progress_timer.setInterval(600)
         self._preload_progress_timer.timeout.connect(self._on_preload_progress_poll)
         self._preload_target_model: str | None = None
-        self._preload_last_bytes: int = 0
-        self._preload_last_poll_at: float = 0.0
+        self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
         self._preload_download_process: subprocess.Popen | None = None
         self._preload_download_lock = threading.Lock()
@@ -890,13 +889,16 @@ class DictationController(QtCore.QObject):
         try:
             from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
-            self._preload_last_bytes = estimate_cached_model_bytes(
+            preload_cached_bytes = estimate_cached_model_bytes(
                 self._preload_target_model,
                 getattr(self._settings, "model_dir", ""),
             )
         except Exception:
-            self._preload_last_bytes = 0
-        self._preload_last_poll_at = time.monotonic()
+            preload_cached_bytes = 0
+        self._preload_speed_tracker.reset(
+            self._preload_target_model,
+            preload_cached_bytes,
+        )
         self._preload_future = self._preload_executor.submit(
             self._preload_model_worker
         )
@@ -980,16 +982,10 @@ class DictationController(QtCore.QObject):
             getattr(self._settings, "model_dir", ""),
         )
 
-        now = time.monotonic()
-        progress = measure_model_download_progress(
+        progress = self._preload_speed_tracker.measure(
             model_name,
             downloaded_bytes,
-            previous_bytes=self._preload_last_bytes,
-            previous_at=self._preload_last_poll_at,
-            now=now,
         )
-        self._preload_last_poll_at = now
-        self._preload_last_bytes = downloaded_bytes
         detail = format_model_download_progress(
             progress,
             include_progress_bar=True,

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import time
+from collections import deque
 from dataclasses import dataclass
 
 from .config import MODEL_ESTIMATED_SIZE_MB
+
+_DEFAULT_SPEED_WINDOW_SECONDS = 5.0
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,6 +29,74 @@ class ModelDownloadProgress:
     def percent(self) -> int | None:
         fraction = self.fraction
         return None if fraction is None else int(round(fraction * 100))
+
+
+class ModelDownloadSpeedTracker:
+    """Estimate transfer speed across bursty on-disk cache updates."""
+
+    def __init__(self, *, window_seconds: float = _DEFAULT_SPEED_WINDOW_SECONDS):
+        self._window_seconds = max(0.1, float(window_seconds))
+        self._model_name = ""
+        self._samples: deque[tuple[float, int]] = deque()
+
+    def reset(
+        self,
+        model_name: str = "",
+        downloaded_bytes: int = 0,
+        *,
+        now: float | None = None,
+    ) -> None:
+        self._model_name = str(model_name or "")
+        self._samples.clear()
+        if self._model_name:
+            measured_at = time.monotonic() if now is None else float(now)
+            self._samples.append((measured_at, max(0, int(downloaded_bytes))))
+
+    def measure(
+        self,
+        model_name: str,
+        downloaded_bytes: int,
+        *,
+        now: float | None = None,
+    ) -> ModelDownloadProgress:
+        measured_at = time.monotonic() if now is None else float(now)
+        normalized_bytes = max(0, int(downloaded_bytes))
+        if (
+            model_name != self._model_name
+            or (
+                self._samples
+                and normalized_bytes < self._samples[-1][1]
+            )
+        ):
+            self.reset(model_name, normalized_bytes, now=measured_at)
+            return measure_model_download_progress(model_name, normalized_bytes)
+
+        if not self._samples:
+            self.reset(model_name, normalized_bytes, now=measured_at)
+            return measure_model_download_progress(model_name, normalized_bytes)
+
+        self._samples.append((measured_at, normalized_bytes))
+        cutoff = measured_at - self._window_seconds
+        while len(self._samples) > 1 and self._samples[0][0] < cutoff:
+            self._samples.popleft()
+
+        previous = next(
+            (
+                sample
+                for sample in self._samples
+                if sample[0] < measured_at and sample[1] < normalized_bytes
+            ),
+            None,
+        )
+        if previous is None:
+            return measure_model_download_progress(model_name, normalized_bytes)
+        return measure_model_download_progress(
+            model_name,
+            normalized_bytes,
+            previous_bytes=previous[1],
+            previous_at=previous[0],
+            now=measured_at,
+        )
 
 
 def measure_model_download_progress(
