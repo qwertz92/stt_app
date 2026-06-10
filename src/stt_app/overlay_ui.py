@@ -493,7 +493,6 @@ class OverlayUI(QtWidgets.QWidget):
             self.ensure_compact_size()
         else:
             self._update_detail_height()
-        self._reposition_within_current_screen()
         if sys.platform == "win32":
             self._apply_noactivate_style()
         self._reposition_within_current_screen()
