@@ -1,6 +1,7 @@
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -128,6 +129,35 @@ def _select_local_model_names(dialog: SettingsDialog, *model_names: str) -> None
     for index in range(dialog.local_models_list.count()):
         item = dialog.local_models_list.item(index)
         item.setSelected(str(item.data(QtCore.Qt.UserRole) or "") in selected)
+
+
+def _wait_for_local_models(
+    dialog: SettingsDialog,
+    *model_names: str,
+    cached: bool | None = None,
+    timeout_ms: int = 3000,
+) -> None:
+    """Wait until the deferred inventory render lists the given models.
+
+    With ``cached`` set, also wait until the items carry that cached flag,
+    which only the verified inventory scan provides.
+    """
+    expected = set(model_names)
+    deadline = time.monotonic() + timeout_ms / 1000
+    while time.monotonic() < deadline:
+        states: dict[str, bool] = {}
+        for index in range(dialog.local_models_list.count()):
+            item = dialog.local_models_list.item(index)
+            if item is None:
+                continue
+            name = str(item.data(QtCore.Qt.UserRole) or "")
+            states[name] = bool(item.data(QtCore.Qt.UserRole + 1))
+        if expected.issubset(states) and (
+            cached is None or all(states[name] == cached for name in expected)
+        ):
+            return
+        QtTest.QTest.qWait(25)
+    raise AssertionError(f"Local models {sorted(expected)} were not rendered in time.")
 
 
 @pytest.fixture(autouse=True)
@@ -719,7 +749,7 @@ def test_delete_selected_cached_model_updates_feedback(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_local_models(dialog, "small", cached=True)
     _select_local_model_names(dialog, "small")
 
     dialog._delete_selected_cached_model()
@@ -755,7 +785,7 @@ def test_local_tab_can_download_selected_model(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_local_models(dialog, "tiny")
 
     _select_local_model_names(dialog, "tiny")
 
@@ -921,7 +951,7 @@ def test_download_selected_is_disabled_when_selection_is_cached(monkeypatch):
         app_logger=_FakeLogger(),
     )
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    _wait_for_local_models(dialog, "tiny", cached=True)
 
     _select_local_model_names(dialog, "tiny")
 
