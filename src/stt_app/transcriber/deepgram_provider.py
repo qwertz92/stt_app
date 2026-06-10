@@ -274,7 +274,10 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             "smart_format": "true",
         }
         if self._language_mode == "auto":
-            params["detect_language"] = "true"
+            # The live API rejects detect_language; multilingual
+            # code-switching ("multi") is the streaming equivalent on
+            # nova-2/nova-3.
+            params["language"] = "multi"
         else:
             params["language"] = self._language_mode
 

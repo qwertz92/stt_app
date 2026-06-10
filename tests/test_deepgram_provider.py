@@ -469,6 +469,28 @@ class TestDeepgramStreaming:
         with pytest.raises(TranscriptionError, match="not active"):
             t.push_audio_chunk(b"data")
 
+    def test_auto_language_streams_with_multi(self, monkeypatch):
+        """Streaming auto mode uses language=multi, not detect_language."""
+        _FakeWebSocketApp.instances = []
+        t = DeepgramTranscriber(api_key="key", language_mode="auto")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        t.start_stream()
+        ws = _FakeWebSocketApp.instances[-1]
+        assert "language=multi" in ws.url
+        assert "detect_language" not in ws.url
+        t.abort_stream()
+
+    def test_explicit_language_streams_with_language_param(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        t = DeepgramTranscriber(api_key="key", language_mode="de")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        t.start_stream()
+        ws = _FakeWebSocketApp.instances[-1]
+        assert "language=de" in ws.url
+        t.abort_stream()
+
     def test_streaming_lifecycle(self, monkeypatch):
         _FakeWebSocketApp.instances = []
         _FakeWebSocketApp.finalize_message = None
