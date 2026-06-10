@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -61,56 +62,73 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
         api_key = ""
         base_url = ""
 
-    # Real-time streaming types
-    class FakeRealtimeFinalTranscript:
-        """Represents a finalized transcript segment."""
-
-        def __init__(self, text=""):
-            self.text = text
-
-    class FakeRealtimePartialTranscript:
-        """Represents an in-progress partial transcript."""
-
-        def __init__(self, text=""):
-            self.text = text
-
-    class FakeRealtimeTranscriber:
-        """Fake RealtimeTranscriber for testing streaming."""
-
-        instances: list = []
-
-        def __init__(self, *, sample_rate=16000, on_data=None, on_error=None):
-            self.sample_rate = sample_rate
-            self.on_data = on_data
-            self.on_error = on_error
-            self.connected = False
-            self.closed = False
-            self.streamed_chunks: list[bytes] = []
-            FakeRealtimeTranscriber.instances.append(self)
-
-        def connect(self):
-            self.connected = True
-
-        def stream(self, chunk: bytes):
-            self.streamed_chunks.append(chunk)
-
-        def close(self):
-            self.closed = True
-            self.connected = False
-
     aai.TranscriptStatus = FakeTranscriptStatus
     aai.TranscriptionConfig = FakeTranscriptionConfig
     aai.Transcriber = FakeTranscriber
     aai.settings = FakeSettings()
-    aai.RealtimeFinalTranscript = FakeRealtimeFinalTranscript
-    aai.RealtimePartialTranscript = FakeRealtimePartialTranscript
-    aai.RealtimeTranscriber = FakeRealtimeTranscriber
 
     # Reset call tracking
     FakeTranscriber.calls = []
-    FakeRealtimeTranscriber.instances = []
 
     return aai
+
+
+class FakeStreamingClient:
+    """Fake Universal-Streaming (v3) client for testing streaming."""
+
+    def __init__(self, api_key=""):
+        self.api_key = api_key
+        self.handlers: dict = {}
+        self.connect_params = None
+        self.connected = False
+        self.terminated = False
+        self.streamed_chunks: list[bytes] = []
+
+    def on(self, event, handler):
+        self.handlers[getattr(event, "value", event)] = handler
+
+    def connect(self, params):
+        self.connect_params = params
+        self.connected = True
+
+    def stream(self, chunk: bytes):
+        self.streamed_chunks.append(chunk)
+
+    def disconnect(self, terminate=False):
+        self.terminated = bool(terminate)
+        self.connected = False
+
+    # -- test helpers -------------------------------------------------------
+
+    def emit_turn(self, transcript, turn_order=0, end_of_turn=False, formatted=False):
+        event = SimpleNamespace(
+            type="Turn",
+            transcript=transcript,
+            turn_order=turn_order,
+            end_of_turn=end_of_turn,
+            turn_is_formatted=formatted,
+        )
+        self.handlers["Turn"](self, event)
+
+    def emit_error(self, error):
+        self.handlers["Error"](self, error)
+
+
+def _make_streaming_transcriber(api_key="key"):
+    fake_aai = _make_fake_aai()
+    clients: list[FakeStreamingClient] = []
+
+    def factory(key):
+        client = FakeStreamingClient(api_key=key)
+        clients.append(client)
+        return client
+
+    transcriber = AssemblyAITranscriber(
+        api_key=api_key,
+        aai_module=fake_aai,
+        streaming_client_factory=factory,
+    )
+    return transcriber, clients
 
 
 # ---------------------------------------------------------------------------
@@ -364,84 +382,86 @@ class TestAssemblyAILanguageConfig:
 
 class TestAssemblyAIStreaming:
     def test_start_stream_connects(self):
-        """start_stream creates a RealtimeTranscriber and connects."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        """start_stream creates a v3 streaming client and connects."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream(on_partial=lambda text: None)
-        assert len(fake_aai.RealtimeTranscriber.instances) == 1
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        assert rt.connected is True
-        assert rt.sample_rate == 16000
+        assert len(clients) == 1
+        client = clients[0]
+        assert client.connected is True
+        assert client.api_key == "key"
+        params = client.connect_params
+        assert params.sample_rate == 16000
+        assert str(params.encoding) == "pcm_s16le"
+        assert str(params.speech_model) == "universal-streaming-multilingual"
+        assert params.language_detection is True
+        assert params.format_turns is True
         t.abort_stream()
 
     def test_push_audio_chunk_forwards_data(self):
-        """push_audio_chunk sends data to the real-time transcriber."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        """push_audio_chunk sends data to the streaming client."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
         t.push_audio_chunk(b"\x01\x00" * 160)
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        assert len(rt.streamed_chunks) == 1
-        assert rt.streamed_chunks[0] == b"\x01\x00" * 160
+        client = clients[0]
+        assert len(client.streamed_chunks) == 1
+        assert client.streamed_chunks[0] == b"\x01\x00" * 160
         t.abort_stream()
 
     def test_stop_stream_returns_accumulated_text(self):
-        """stop_stream returns all finalized text joined."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        """stop_stream returns all completed turns joined in order."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        # Simulate final transcripts arriving via on_data callback.
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello world."))
-        rt.on_data(fake_aai.RealtimeFinalTranscript("How are you?"))
+        client = clients[0]
+        client.emit_turn("Hello world.", turn_order=0, end_of_turn=True)
+        client.emit_turn("How are you?", turn_order=1, end_of_turn=True)
 
         result = t.stop_stream()
         assert result == "Hello world. How are you?"
+        assert client.terminated is True
 
-    def test_stop_stream_includes_current_partial(self):
-        """stop_stream includes the last partial if no final followed."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+    def test_stop_stream_includes_current_turn(self):
+        """stop_stream includes the in-progress turn text."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello."))
-        # Simulate a partial transcript (not yet finalized).
-        rt.on_data(fake_aai.RealtimePartialTranscript("How are"))
+        client = clients[0]
+        client.emit_turn("Hello.", turn_order=0, end_of_turn=True)
+        client.emit_turn("How are", turn_order=1)
 
         result = t.stop_stream()
         assert result == "Hello. How are"
 
-    def test_partial_replaced_by_next_partial(self):
-        """Each partial transcript replaces the previous one."""
-        fake_aai = _make_fake_aai()
+    def test_growing_turn_replaces_previous_text(self):
+        """Growing transcripts of one turn replace the previous text."""
+        t, clients = _make_streaming_transcriber()
         partials = []
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
         t.start_stream(on_partial=lambda text: partials.append(text))
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimePartialTranscript("Hel"))
-        rt.on_data(fake_aai.RealtimePartialTranscript("Hello wor"))
-        rt.on_data(fake_aai.RealtimePartialTranscript("Hello world"))
+        client = clients[0]
+        client.emit_turn("Hel", turn_order=0)
+        client.emit_turn("Hello wor", turn_order=0)
+        client.emit_turn("Hello world", turn_order=0)
 
-        # Each partial replaces the previous, so callback gets growing text.
         assert len(partials) == 3
         assert partials[-1] == "Hello world"
 
         result = t.stop_stream()
-        # Only the last partial is included (no finals sent).
         assert result == "Hello world"
 
-    def test_final_clears_partial(self):
-        """A FinalTranscript clears the current partial."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+    def test_formatted_turn_replaces_unformatted_text(self):
+        """The formatted end-of-turn transcript replaces the raw turn text."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimePartialTranscript("Hello world"))
-        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello world."))
+        client = clients[0]
+        client.emit_turn("hello world", turn_order=0, end_of_turn=True)
+        client.emit_turn(
+            "Hello world.",
+            turn_order=0,
+            end_of_turn=True,
+            formatted=True,
+        )
 
         result = t.stop_stream()
         # Should NOT duplicate: "Hello world." only once.
@@ -449,72 +469,63 @@ class TestAssemblyAIStreaming:
 
     def test_abort_stream_discards_text(self):
         """abort_stream closes the connection and discards all text."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimeFinalTranscript("Some text"))
+        client = clients[0]
+        client.emit_turn("Some text", turn_order=0, end_of_turn=True)
         t.abort_stream()
 
-        assert rt.closed is True
-        # After abort, stop_stream should return empty.
-        # (In practice, abort replaces stop_stream — but the state is cleared.)
-        assert t._stream_finals == []
-        assert t._stream_current_partial == ""
+        assert client.connected is False
+        assert t._stream_turns == {}
 
     def test_on_partial_callback_receives_combined_text(self):
-        """on_partial callback receives finals + current partial combined."""
-        fake_aai = _make_fake_aai()
+        """on_partial callback receives completed turns + current turn."""
+        t, clients = _make_streaming_transcriber()
         received = []
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
         t.start_stream(on_partial=lambda text: received.append(text))
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimeFinalTranscript("First sentence."))
-        rt.on_data(fake_aai.RealtimePartialTranscript("Second"))
+        client = clients[0]
+        client.emit_turn("First sentence.", turn_order=0, end_of_turn=True)
+        client.emit_turn("Second", turn_order=1)
 
         assert len(received) == 2
         assert received[0] == "First sentence."
         assert received[1] == "First sentence. Second"
         t.abort_stream()
 
-    def test_stop_stream_closes_connection(self):
-        """stop_stream closes the WebSocket connection."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+    def test_stop_stream_terminates_session(self):
+        """stop_stream terminates the streaming session."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
-        rt = fake_aai.RealtimeTranscriber.instances[0]
+        client = clients[0]
         t.stop_stream()
-        assert rt.closed is True
+        assert client.terminated is True
+        assert client.connected is False
 
     def test_push_chunk_without_start_is_noop(self):
         """push_audio_chunk before start_stream fails clearly."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t, _clients = _make_streaming_transcriber()
         with pytest.raises(TranscriptionError, match="not active"):
             t.push_audio_chunk(b"\x00\x00" * 160)
 
     def test_on_error_callback_receives_runtime_error(self):
-        fake_aai = _make_fake_aai()
+        t, clients = _make_streaming_transcriber()
         errors = []
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
         t.start_stream(on_error=errors.append)
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_error(RuntimeError("WebSocket disconnected"))
+        client = clients[0]
+        client.emit_error(RuntimeError("WebSocket disconnected"))
 
         assert errors == ["AssemblyAI streaming failed: WebSocket disconnected"]
         t.abort_stream()
 
     def test_on_error_stores_error(self):
-        """on_error callback stores the error for later reporting."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        """A streaming error is stored for later reporting."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_error(RuntimeError("WebSocket disconnected"))
+        clients[0].emit_error(RuntimeError("WebSocket disconnected"))
 
         # If no text was received, stop_stream should raise with the error.
         with pytest.raises(TranscriptionError, match="WebSocket disconnected"):
@@ -522,27 +533,25 @@ class TestAssemblyAIStreaming:
 
     def test_on_error_with_text_returns_text(self):
         """If text was received before an error, stop_stream returns it."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello."))
-        rt.on_error(RuntimeError("late error"))
+        client = clients[0]
+        client.emit_turn("Hello.", turn_order=0, end_of_turn=True)
+        client.emit_error(RuntimeError("late error"))
 
         # Text was collected before the error → return it.
         result = t.stop_stream()
         assert result == "Hello."
 
-    def test_empty_final_transcript_ignored(self):
-        """Empty FinalTranscript text is not appended to finals."""
-        fake_aai = _make_fake_aai()
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+    def test_empty_turn_transcript_ignored(self):
+        """Empty turn transcripts are not recorded."""
+        t, clients = _make_streaming_transcriber()
         t.start_stream()
 
-        rt = fake_aai.RealtimeTranscriber.instances[0]
-        rt.on_data(fake_aai.RealtimeFinalTranscript(""))
-        rt.on_data(fake_aai.RealtimeFinalTranscript("Hello."))
+        client = clients[0]
+        client.emit_turn("", turn_order=0, end_of_turn=True)
+        client.emit_turn("Hello.", turn_order=1, end_of_turn=True)
 
         result = t.stop_stream()
         assert result == "Hello."
@@ -551,18 +560,35 @@ class TestAssemblyAIStreaming:
         """Connection failure raises TranscriptionError."""
         fake_aai = _make_fake_aai()
 
-        class FailingRT:
-            def __init__(self, **kwargs):
-                pass
-
-            def connect(self):
+        class FailingClient(FakeStreamingClient):
+            def connect(self, params):
                 raise ConnectionError("WebSocket refused")
 
-        fake_aai.RealtimeTranscriber = FailingRT
-
-        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        t = AssemblyAITranscriber(
+            api_key="key",
+            aai_module=fake_aai,
+            streaming_client_factory=lambda key: FailingClient(api_key=key),
+        )
         with pytest.raises(TranscriptionError, match="failed to connect"):
             t.start_stream()
+        assert t._stream_client is None
+
+    def test_connect_error_via_handler_raises(self):
+        """Errors reported through the error handler during connect raise."""
+        fake_aai = _make_fake_aai()
+
+        class HandlerErrorClient(FakeStreamingClient):
+            def connect(self, params):
+                self.handlers["Error"](self, RuntimeError("Not Authorized"))
+
+        t = AssemblyAITranscriber(
+            api_key="key",
+            aai_module=fake_aai,
+            streaming_client_factory=lambda key: HandlerErrorClient(api_key=key),
+        )
+        with pytest.raises(TranscriptionError, match="Not Authorized"):
+            t.start_stream()
+        assert t._stream_client is None
 
 
 # ---------------------------------------------------------------------------

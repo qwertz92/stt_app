@@ -3523,8 +3523,9 @@ class SettingsDialog(QtWidgets.QDialog):
         if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
             self.remote_model_combo.setEnabled(False)
             note = (
-                "AssemblyAI streaming currently uses the SDK realtime default. "
-                "The selected model applies to batch transcription and imports."
+                "AssemblyAI streaming uses the Universal-Streaming multilingual "
+                "model. The selected model applies to batch transcription and "
+                "imports."
             )
         elif provider == "deepgram":
             note = "Deepgram uses the selected model for batch and streaming transcription."

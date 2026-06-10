@@ -1,7 +1,9 @@
 """AssemblyAI remote transcription provider.
 
 Batch transcription via the AssemblyAI Python SDK.
-Real-time streaming via AssemblyAI's WebSocket API (RealtimeTranscriber).
+Real-time streaming via AssemblyAI's Universal-Streaming (v3) WebSocket API
+(``assemblyai.streaming.v3.StreamingClient``); the legacy v2
+``RealtimeTranscriber`` API has been retired by AssemblyAI.
 Requires: pip install assemblyai
 API key stored via keyring (settings_dialog / secret_store).
 
@@ -68,6 +70,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         model: str = DEFAULT_ASSEMBLYAI_MODEL,
         *,
         aai_module=None,
+        streaming_client_factory=None,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -79,12 +82,12 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         self._language_mode = (language_mode or "auto").strip().lower()
         self._model = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
         self._aai = aai_module  # None → lazy import on first use
+        self._streaming_client_factory = streaming_client_factory
         self._stream_lock = threading.Lock()
-        self._rt_transcriber = None
+        self._stream_client = None
         self._stream_on_partial: StreamingCallback | None = None
         self._stream_on_error: StreamingErrorCallback | None = None
-        self._stream_finals: list[str] = []
-        self._stream_current_partial = ""
+        self._stream_turns: dict[int, str] = {}
         self._stream_error: Exception | None = None
         self._stream_error_reported = False
 
@@ -242,7 +245,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
 
         return False, "Unexpected response from AssemblyAI API."
 
-    # -- Streaming via RealtimeTranscriber --------------------------------------
+    # -- Streaming via Universal-Streaming (v3) --------------------------------
 
     def _format_stream_error(self, error: Exception) -> str:
         if _is_ssl_error(error):
@@ -264,45 +267,90 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         except Exception:
             pass
 
+    def _stream_combined_text_locked(self) -> str:
+        parts = [self._stream_turns[order] for order in sorted(self._stream_turns)]
+        return " ".join(p for p in parts if p).strip()
+
+    def _reset_stream_state_locked(self) -> None:
+        self._stream_client = None
+        self._stream_on_partial = None
+        self._stream_on_error = None
+        self._stream_turns = {}
+        self._stream_error = None
+        self._stream_error_reported = False
+
+    @staticmethod
+    def _shutdown_streaming_client(client, *, join_timeout_s: float) -> None:
+        """Terminate the session on a helper thread.
+
+        ``StreamingClient.disconnect`` joins the SDK's reader/writer threads,
+        which can hang on a dead connection, so the join is bounded here.
+        """
+
+        def _disconnect() -> None:
+            try:
+                client.disconnect(terminate=True)
+            except Exception:
+                pass
+
+        worker = threading.Thread(
+            target=_disconnect,
+            name="stt_app_assemblyai_disconnect",
+            daemon=True,
+        )
+        worker.start()
+        worker.join(timeout=join_timeout_s)
+
     def start_stream(
         self,
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        """Start a real-time streaming session via AssemblyAI WebSocket API.
+        """Start a Universal-Streaming (v3) session.
 
         The ``on_partial`` callback receives the accumulated transcript text
-        (all finalized sentences + current partial) each time an update
-        arrives from the server.
+        (all completed turns + the current turn) each time an update arrives
+        from the server.
         """
-        self._configure()
-        aai = self._get_aai()
+        from assemblyai.streaming.v3 import (
+            Encoding,
+            SpeechModel,
+            StreamingClient,
+            StreamingClientOptions,
+            StreamingEvents,
+            StreamingParameters,
+        )
 
         with self._stream_lock:
-            if self._rt_transcriber is not None:
+            if self._stream_client is not None:
                 raise TranscriptionError("Streaming session already active.")
             self._stream_on_partial = on_partial
             self._stream_on_error = on_error
-            self._stream_finals = []
-            self._stream_current_partial = ""
+            self._stream_turns = {}
             self._stream_error = None
             self._stream_error_reported = False
 
         try:
-            rt = aai.RealtimeTranscriber(
-                sample_rate=AUDIO_SAMPLE_RATE,
-                on_data=self._on_rt_data,
-                on_error=self._on_rt_error,
+            if self._streaming_client_factory is not None:
+                client = self._streaming_client_factory(self._api_key)
+            else:
+                client = StreamingClient(
+                    StreamingClientOptions(api_key=self._api_key)
+                )
+            client.on(StreamingEvents.Turn, self._on_turn_event)
+            client.on(StreamingEvents.Error, self._on_stream_error_event)
+            client.connect(
+                StreamingParameters(
+                    sample_rate=AUDIO_SAMPLE_RATE,
+                    encoding=Encoding.pcm_s16le,
+                    speech_model=SpeechModel.universal_streaming_multilingual,
+                    language_detection=True,
+                    format_turns=True,
+                )
             )
-            rt.connect()
         except Exception as exc:
             with self._stream_lock:
-                self._stream_on_partial = None
-                self._stream_on_error = None
-                self._stream_finals = []
-                self._stream_current_partial = ""
-                self._stream_error = None
-                self._stream_error_reported = False
+                self._reset_stream_state_locked()
             if _is_ssl_error(exc):
                 raise TranscriptionError(
                     "AssemblyAI streaming: SSL certificate verification failed "
@@ -312,17 +360,35 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 f"AssemblyAI streaming: failed to connect: {exc}"
             ) from exc
 
+        # The SDK reports some connect failures through the error handler
+        # instead of raising, so check for a recorded error before going live.
         with self._stream_lock:
-            self._rt_transcriber = rt
+            connect_error = self._stream_error
+            if connect_error is None:
+                self._stream_client = client
+        if connect_error is not None:
+            self._shutdown_streaming_client(client, join_timeout_s=1.0)
+            with self._stream_lock:
+                self._reset_stream_state_locked()
+            raise TranscriptionError(
+                self._format_stream_error(connect_error)
+            ) from connect_error
 
     def push_audio_chunk(self, chunk: bytes) -> None:
-        """Send a raw PCM16 audio chunk to the real-time session."""
+        """Queue a raw PCM16 audio chunk for the streaming session.
+
+        ``StreamingClient.stream`` only enqueues the chunk for the SDK's
+        writer thread, so this is safe to call from the audio callback.
+        """
+        payload = bytes(chunk or b"")
+        if not payload:
+            return
         with self._stream_lock:
-            rt = self._rt_transcriber
-        if rt is None:
+            client = self._stream_client
+        if client is None:
             raise TranscriptionError("Streaming session is not active.")
         try:
-            rt.stream(chunk)
+            client.stream(payload)
         except Exception as exc:
             raise TranscriptionError(
                 f"AssemblyAI streaming: failed to send audio: {exc}"
@@ -331,85 +397,69 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
     def stop_stream(self) -> str:
         """Finalize the streaming session and return accumulated text."""
         with self._stream_lock:
-            rt = self._rt_transcriber
-            self._rt_transcriber = None
-            if rt is None:
+            client = self._stream_client
+            self._stream_client = None
+            # Drop the error callback first; close events after a normal
+            # stop must not surface as runtime failures.
+            self._stream_on_error = None
+            if client is None:
                 raise TranscriptionError("Streaming session is not active.")
-        if rt is not None:
-            try:
-                rt.close()
-            except Exception:
-                pass
+
+        self._shutdown_streaming_client(client, join_timeout_s=5.0)
 
         with self._stream_lock:
-            parts = list(self._stream_finals)
-            if self._stream_current_partial:
-                parts.append(self._stream_current_partial)
-            self._stream_finals = []
-            self._stream_current_partial = ""
+            text = self._stream_combined_text_locked()
             error = self._stream_error
-            self._stream_on_partial = None
-            self._stream_on_error = None
-            self._stream_error = None
-            self._stream_error_reported = False
-
-        text = " ".join(p for p in parts if p).strip()
+            self._reset_stream_state_locked()
 
         if error and not text:
-            raise TranscriptionError(
-                f"AssemblyAI streaming failed: {error}"
-            )
+            raise TranscriptionError(self._format_stream_error(error))
 
         return text
 
     def abort_stream(self) -> None:
         """Abort the streaming session immediately, discarding all text."""
         with self._stream_lock:
-            rt = self._rt_transcriber
-            self._rt_transcriber = None
-        if rt is not None:
+            client = self._stream_client
+            self._stream_client = None
+            self._stream_on_partial = None
+            self._stream_on_error = None
+        if client is not None:
+            self._shutdown_streaming_client(client, join_timeout_s=0.5)
+
+        with self._stream_lock:
+            self._reset_stream_state_locked()
+
+    # -- Streaming callbacks (called from the SDK reader thread) ---------------
+
+    def _on_turn_event(self, _client, event) -> None:
+        """Handle a Turn event.
+
+        ``transcript`` holds the finalized words of one turn and grows as the
+        turn progresses; with ``format_turns`` a formatted version of the
+        same turn arrives last, so the text is keyed by ``turn_order``.
+        """
+        text = str(getattr(event, "transcript", "") or "").strip()
+        if not text:
+            return
+        turn_order = int(getattr(event, "turn_order", 0) or 0)
+
+        with self._stream_lock:
+            self._stream_turns[turn_order] = text
+            callback = self._stream_on_partial
+            combined = self._stream_combined_text_locked()
+
+        if callback is not None and combined:
             try:
-                rt.close()
+                callback(combined)
             except Exception:
                 pass
 
-        with self._stream_lock:
-            self._stream_finals = []
-            self._stream_current_partial = ""
-            self._stream_on_partial = None
-            self._stream_on_error = None
-            self._stream_error = None
-            self._stream_error_reported = False
-
-    # -- Real-time callbacks (called from WebSocket thread) -------------------
-
-    def _on_rt_data(self, transcript) -> None:
-        """Handle incoming transcript data from the WebSocket."""
-        aai = self._get_aai()
-        text = getattr(transcript, "text", "") or ""
-
-        with self._stream_lock:
-            if isinstance(transcript, aai.RealtimeFinalTranscript):
-                if text:
-                    self._stream_finals.append(text)
-                self._stream_current_partial = ""
-            else:
-                self._stream_current_partial = text
-
-            # Build full accumulated text for the callback.
-            parts = list(self._stream_finals)
-            if self._stream_current_partial:
-                parts.append(self._stream_current_partial)
-            combined = " ".join(p for p in parts if p).strip()
-
-        callback = self._stream_on_partial
-        if callback and combined:
-            callback(combined)
-
-    def _on_rt_error(self, error) -> None:
-        """Handle errors from the WebSocket."""
+    def _on_stream_error_event(self, _client, error) -> None:
+        """Handle errors from the streaming session."""
         if not isinstance(error, Exception):
             error = RuntimeError(str(error))
         with self._stream_lock:
-            self._stream_error = error
+            if self._stream_error is None:
+                self._stream_error = error
         self._notify_stream_error(error)
