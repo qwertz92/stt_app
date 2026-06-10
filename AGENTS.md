@@ -38,8 +38,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
-- Remote providers: AssemblyAI (SDK), OpenAI (REST API), Groq (SDK),
-  Deepgram (REST + WebSocket), ElevenLabs (REST API)
+- Remote providers: AssemblyAI (SDK batch + Universal-Streaming v3),
+  OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
+  ElevenLabs (REST API)
 - keyring for secret storage
 
 ## Architecture
@@ -113,6 +114,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
   current default in settings persistence and are not shown in the UI.
+- **AssemblyAI streaming (Universal-Streaming v3)**: the legacy v2 realtime
+  API is retired and must not be reintroduced. Streaming uses
+  `assemblyai.streaming.v3.StreamingClient` with the
+  `universal-streaming-multilingual` model, language detection, and formatted
+  turns; the batch model selection does not apply to streaming. Turn text is
+  keyed by `turn_order` because the formatted end-of-turn transcript arrives
+  as a second event for the same turn. Bound SDK `disconnect` joins with a
+  helper thread; they can hang on dead connections.
+- **Streaming provider sends must not block the audio callback**:
+  `push_audio_chunk` runs on the PortAudio callback thread. Providers must
+  only enqueue there (Deepgram has a dedicated sender thread; the AssemblyAI
+  SDK and local transcribers queue internally) and never perform blocking
+  socket I/O.
+- **Deepgram streaming language**: the live WebSocket API rejects
+  `detect_language`; auto maps to `language=multi` (nova-2/nova-3
+  multilingual code-switching). Batch keeps `detect_language=true`.
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.

@@ -3,6 +3,30 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-10
+
+- Deepgram streaming with the default auto language never connected: the
+  live WebSocket API rejects `detect_language` (HTTP 400 during the
+  handshake), unlike the pre-recorded API. Streaming auto now sends
+  `language=multi`, which nova-2 and nova-3 support for live multilingual
+  code-switching; batch keeps `detect_language=true`.
+- Deepgram streaming previously called `ws.send` directly from the PortAudio
+  callback thread. Blocking socket writes there can stall real-time capture,
+  so chunks are now queued and sent by a dedicated sender thread that drains
+  before Finalize on stop and reports send failures via the error callback.
+- AssemblyAI retired the legacy v2 realtime API (`RealtimeTranscriber`);
+  sessions fail with a model-deprecated error. Streaming now uses the
+  Universal-Streaming v3 `StreamingClient` with the
+  `universal-streaming-multilingual` model, language detection, and formatted
+  turns. Transcript text is keyed by `turn_order` because the formatted
+  end-of-turn transcript arrives as a second event for the same turn. SDK
+  `disconnect` joins are bounded by a helper thread because they can hang on
+  dead connections.
+- Local-tab settings tests that select models after `qWait(250)` were flaky
+  under full-suite load because the verified inventory scan had not flagged
+  items as cached yet; they now poll for the expected models and cached
+  state with a bounded helper.
+
 ## 2026-06-09
 
 - Download transfer rates now use a short rolling cache-growth window instead
