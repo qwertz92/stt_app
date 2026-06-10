@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 from unittest.mock import patch
 
@@ -463,6 +464,15 @@ class _FakeWebSocketModule:
     WebSocketApp = _FakeWebSocketApp
 
 
+def _wait_for(condition, timeout_s: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout_s
+    while time.monotonic() < deadline:
+        if condition():
+            return
+        time.sleep(0.01)
+    raise AssertionError("Condition was not met within timeout.")
+
+
 class TestDeepgramStreaming:
     def test_push_without_start_raises(self):
         t = DeepgramTranscriber(api_key="key")
@@ -505,6 +515,7 @@ class TestDeepgramStreaming:
         assert ws is not None
 
         t.push_audio_chunk(b"abcd")
+        _wait_for(lambda: ws.send_calls)
         assert ws.send_calls[-1][0] == b"abcd"
         assert ws.send_calls[-1][1] == _FakeABNF.OPCODE_BINARY
 

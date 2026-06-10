@@ -11,6 +11,7 @@ No Deepgram SDK required; streaming needs `websocket-client`.
 from __future__ import annotations
 
 import json
+import queue
 import threading
 import time
 import urllib.error
@@ -35,6 +36,8 @@ from .base import (
 )
 
 DEEPGRAM_API_BASE = "https://api.deepgram.com/v1"
+
+_STREAM_SEND_SENTINEL = object()
 
 
 class DeepgramTranscriber(ProgressReporter, ITranscriber):
@@ -74,6 +77,8 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._stream_lock = threading.Lock()
         self._stream_ws = None
         self._stream_thread: threading.Thread | None = None
+        self._stream_send_queue: queue.Queue | None = None
+        self._stream_send_thread: threading.Thread | None = None
         self._stream_ws_module = None
         self._stream_connected = threading.Event()
         self._stream_closed = threading.Event()
@@ -322,18 +327,30 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             name="stt_app_deepgram_stream",
             daemon=True,
         )
+        send_queue: queue.Queue = queue.Queue()
+        send_thread = threading.Thread(
+            target=self._stream_send_worker,
+            args=(send_queue,),
+            name="stt_app_deepgram_send",
+            daemon=True,
+        )
         with self._stream_lock:
             self._stream_ws = ws
             self._stream_thread = thread
+            self._stream_send_queue = send_queue
+            self._stream_send_thread = send_thread
         thread.start()
 
         if self._stream_connected.wait(timeout=8.0):
+            send_thread.start()
             return
 
         with self._stream_lock:
             active_ws = self._stream_ws
             self._stream_ws = None
             self._stream_thread = None
+            self._stream_send_queue = None
+            self._stream_send_thread = None
         if active_ws is not None:
             try:
                 active_ws.close()
@@ -352,21 +369,51 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         raise TranscriptionError("Deepgram streaming failed to connect (timeout).")
 
     def push_audio_chunk(self, chunk: bytes) -> None:
+        """Queue a PCM16 chunk for the sender thread.
+
+        Called from the PortAudio callback thread, so this must never block
+        on socket I/O; the actual ``ws.send`` happens on the sender thread.
+        """
         payload = bytes(chunk or b"")
         if not payload:
             return
         with self._stream_lock:
-            ws = self._stream_ws
-        if ws is None:
+            active = self._stream_ws is not None
+            send_queue = self._stream_send_queue
+        if not active or send_queue is None:
             raise TranscriptionError("Streaming session is not active.")
+        send_queue.put(payload)
 
+    def _stream_send_worker(self, send_queue: queue.Queue) -> None:
         websocket = self._get_websocket_module()
-        try:
-            ws.send(payload, opcode=websocket.ABNF.OPCODE_BINARY)
-        except Exception as exc:
-            raise TranscriptionError(
-                f"Deepgram streaming: failed to send audio: {exc}"
-            ) from exc
+        while True:
+            item = send_queue.get()
+            if item is _STREAM_SEND_SENTINEL:
+                return
+            with self._stream_lock:
+                ws = self._stream_ws
+            if ws is None:
+                return
+            try:
+                ws.send(item, opcode=websocket.ABNF.OPCODE_BINARY)
+            except Exception as exc:
+                with self._stream_lock:
+                    if self._stream_error is None:
+                        self._stream_error = exc
+                self._notify_stream_error(exc)
+                return
+
+    def _shutdown_stream_sender(
+        self,
+        send_queue: queue.Queue | None,
+        send_thread: threading.Thread | None,
+        *,
+        join_timeout_s: float,
+    ) -> None:
+        if send_queue is not None:
+            send_queue.put(_STREAM_SEND_SENTINEL)
+        if send_thread is not None and send_thread.is_alive():
+            send_thread.join(timeout=join_timeout_s)
 
     def _wait_for_finalize_drain(self) -> None:
         quiet_period_s = 0.25
@@ -388,11 +435,20 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         with self._stream_lock:
             ws = self._stream_ws
             thread = self._stream_thread
-            self._stream_ws = None
-            self._stream_thread = None
+            send_queue = self._stream_send_queue
+            send_thread = self._stream_send_thread
+            self._stream_send_queue = None
+            self._stream_send_thread = None
 
         if ws is None or thread is None:
             raise TranscriptionError("Streaming session is not active.")
+
+        # Flush queued audio before finalizing; the sender exits on the
+        # sentinel after sending everything queued ahead of it.
+        self._shutdown_stream_sender(send_queue, send_thread, join_timeout_s=2.0)
+        with self._stream_lock:
+            self._stream_ws = None
+            self._stream_thread = None
 
         try:
             ws.send(json.dumps({"type": "Finalize"}))
@@ -426,8 +482,13 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         with self._stream_lock:
             ws = self._stream_ws
             thread = self._stream_thread
+            send_queue = self._stream_send_queue
+            send_thread = self._stream_send_thread
             self._stream_ws = None
             self._stream_thread = None
+            self._stream_send_queue = None
+            self._stream_send_thread = None
+        self._shutdown_stream_sender(send_queue, send_thread, join_timeout_s=0.2)
         if ws is not None:
             try:
                 ws.close()
