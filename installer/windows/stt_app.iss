@@ -40,6 +40,7 @@ WizardStyle=modern
 OutputDir={#MyOutputDir}
 OutputBaseFilename={#MyOutputBaseFilename}
 UninstallDisplayIcon={app}\{#MyAppExeName}
+SetupIconFile=..\..\src\stt_app\assets\app_icon.ico
 SetupLogging=yes
 ChangesAssociations=no
 ChangesEnvironment=no

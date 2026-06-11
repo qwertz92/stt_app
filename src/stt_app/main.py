@@ -4,6 +4,7 @@ import signal
 import sys
 import threading
 from datetime import datetime
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -33,6 +34,7 @@ def run() -> int:
 
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName(APP_DISPLAY_NAME)
+    app.setWindowIcon(_load_app_icon(app))
     app.setQuitOnLastWindowClosed(False)
 
     instance_lock = QtCore.QLockFile(str(appdata_root() / "stt_app.lock"))
@@ -173,6 +175,24 @@ def run() -> int:
     return app.exec()
 
 
+def _app_icon_path() -> Path:
+    bundled_root = getattr(sys, "_MEIPASS", "")
+    if bundled_root:
+        bundled = Path(str(bundled_root)) / "stt_app" / "assets" / "app_icon.ico"
+        if bundled.is_file():
+            return bundled
+    return Path(__file__).resolve().parent / "assets" / "app_icon.ico"
+
+
+def _load_app_icon(app: QtWidgets.QApplication) -> QtGui.QIcon:
+    path = _app_icon_path()
+    if path.is_file():
+        icon = QtGui.QIcon(str(path))
+        if not icon.isNull():
+            return icon
+    return app.style().standardIcon(QtWidgets.QStyle.SP_MediaVolume)
+
+
 def _create_tray_icon(
     app: QtWidgets.QApplication,
     controller: DictationController,
@@ -184,10 +204,7 @@ def _create_tray_icon(
     open_history_dialog,
     local_model_inventory_store: LocalModelInventoryStore | None = None,
 ) -> QtWidgets.QSystemTrayIcon:
-    style = app.style()
-    icon = style.standardIcon(QtWidgets.QStyle.SP_MediaVolume)
-
-    tray_icon = QtWidgets.QSystemTrayIcon(icon, app)
+    tray_icon = QtWidgets.QSystemTrayIcon(_load_app_icon(app), app)
     if sys.platform != "win32":
         tray_icon.setToolTip(APP_DISPLAY_NAME)
 

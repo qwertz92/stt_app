@@ -434,3 +434,13 @@ def test_prompt_recoverable_last_recording_skips_completed_history_match(
     assert asked == []
     assert store.has_recoverable_recording() is False
     _ = app
+
+
+def test_load_app_icon_uses_bundled_asset():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    assert main_module._app_icon_path().is_file()
+    icon = main_module._load_app_icon(app)
+
+    assert icon.isNull() is False
+    assert icon.availableSizes()

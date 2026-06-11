@@ -5,7 +5,10 @@ from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
 
-datas = [('src/stt_app/webgpu_asr_runner.mjs', 'stt_app')]
+datas = [
+    ('src/stt_app/webgpu_asr_runner.mjs', 'stt_app'),
+    ('src/stt_app/assets/app_icon.ico', 'stt_app/assets'),
+]
 binaries = []
 hiddenimports = [
     'stt_app.main',
@@ -48,6 +51,7 @@ exe = EXE(
     [],
     exclude_binaries=True,
     name='stt_app',
+    icon='src/stt_app/assets/app_icon.ico',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
