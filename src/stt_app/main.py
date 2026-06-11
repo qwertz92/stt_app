@@ -296,7 +296,7 @@ def _restore_overlay_after_settings_save(
 ) -> None:
     settings = settings_store.load()
     overlay.set_always_on_top(settings.overlay_always_on_top)
-    overlay.move_to_corner(settings.overlay_corner)
+    overlay.apply_corner_setting(settings.overlay_corner)
     overlay.ensure_compact_size()
 
 

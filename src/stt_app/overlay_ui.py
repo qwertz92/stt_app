@@ -418,6 +418,18 @@ class OverlayUI(QtWidgets.QWidget):
         self._initial_corner = normalized
         self._manual_positioned = False
 
+    def apply_corner_setting(self, corner: str) -> None:
+        """Apply the configured corner without discarding a dragged position.
+
+        Moves the overlay only when the configured corner actually changed;
+        re-applying an unchanged setting (e.g. saving unrelated settings)
+        must not reset a manually dragged overlay.
+        """
+        normalized = str(corner or "top-right").strip().lower()
+        if normalized == self._initial_corner:
+            return
+        self.move_to_corner(normalized)
+
     def set_initial_position(self, point: QtCore.QPoint) -> None:
         self._initial_position = QtCore.QPoint(point)
         self._initial_corner = None

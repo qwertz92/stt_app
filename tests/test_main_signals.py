@@ -108,7 +108,7 @@ class FakeOverlay:
         self.always_on_top_values = []
         self.restore_visibility_calls = 0
 
-    def move_to_corner(self, corner):
+    def apply_corner_setting(self, corner):
         self.moved_to = corner
 
     def set_always_on_top(self, value):
@@ -351,7 +351,7 @@ def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
     assert instances[0].show_calls == 1
 
 
-def test_restore_overlay_after_settings_save_repositions_and_compacts():
+def test_restore_overlay_after_settings_save_applies_corner_and_compacts():
     overlay = FakeOverlay()
     store = FakeSettingsStore()
 

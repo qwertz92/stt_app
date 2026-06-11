@@ -382,6 +382,39 @@ def test_overlay_reset_position_uses_current_screen_corner(monkeypatch):
     assert overlay.pos() == QtCore.QPoint(expected_x, expected_y)
 
 
+def test_overlay_apply_corner_setting_keeps_dragged_position(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 800, 600))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.move_to_corner("top-right", screen=screen)
+    dragged = QtCore.QPoint(120, 220)
+    overlay.move(dragged)
+    overlay._manual_positioned = True
+
+    overlay.apply_corner_setting("top-right")
+
+    assert overlay.pos() == dragged
+
+
+def test_overlay_apply_corner_setting_moves_when_corner_changes(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 800, 600))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.move_to_corner("top-right", screen=screen)
+    overlay.move(120, 220)
+    overlay._manual_positioned = True
+
+    overlay.apply_corner_setting("top-left")
+
+    expected = QtCore.QPoint(
+        screen.availableGeometry().left() + OVERLAY_MARGIN_X,
+        screen.availableGeometry().top() + OVERLAY_MARGIN_Y,
+    )
+    assert overlay.pos() == expected
+
+
 def test_overlay_bottom_corner_resize_stays_within_current_screen(monkeypatch):
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
