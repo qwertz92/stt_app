@@ -165,7 +165,7 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 720)
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 860)
 _DIALOG_SCREEN_MARGIN = 48
 _COMPACT_LIST_ITEM_STYLESHEET = "QListWidget::item { padding: 0px 4px; }"
 _COMPACT_LIST_ROW_EXTRA_PX = 4
