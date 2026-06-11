@@ -6,8 +6,8 @@ This document explains how streaming mode is implemented in this project, how it
 
 - `Batch` mode: stable default.
 - `Streaming` mode: implemented for local provider (`faster-whisper` and
-  Nemotron 3.5), AssemblyAI (`RealtimeTranscriber`), and Deepgram (WebSocket
-  API).
+  Nemotron 3.5), AssemblyAI (Universal-Streaming v3 `StreamingClient`), and
+  Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - OpenAI and Groq are batch-only in this app. ElevenLabs offers real-time STT publicly, but the current integration is still batch-only.
 
@@ -87,7 +87,11 @@ Characteristics:
   - queue + worker thread for stream chunk handling,
   - in-memory PCM16 buffer,
   - periodic partial re-transcription,
-  - final transcription on stop.
+  - finalization on stop: by default only the trailing partial window is
+    transcribed and merged into the accumulated live text; the full
+    re-transcription of the whole recording is opt-in via the
+    `streaming_full_final_transcript` setting (slower stop, highest-quality
+    history entry).
 
 `LocalNemotronTranscriber` uses a different local streaming contract:
 
@@ -101,19 +105,31 @@ Characteristics:
 
 ### AssemblyAI transcriber
 
-- `AssemblyAITranscriber` implements streaming via `aai.RealtimeTranscriber` (WebSocket).
-- `start_stream()` creates a WebSocket connection with `on_data` and `on_error` callbacks.
-- `push_audio_chunk()` forwards raw PCM16 to the WebSocket via `rt.stream()`.
-- `on_data` callback receives `RealtimeFinalTranscript` (finalized sentence) and `RealtimePartialTranscript` (in-progress).
-- Accumulated text = all finalized segments + current partial, combined for the `on_partial` callback.
-- `stop_stream()` closes the WebSocket and returns the full accumulated text.
-- `abort_stream()` closes the WebSocket and discards all text.
+- `AssemblyAITranscriber` implements streaming via the Universal-Streaming v3
+  `assemblyai.streaming.v3.StreamingClient`; the legacy v2 realtime API was
+  retired by AssemblyAI.
+- `start_stream()` connects with the `universal-streaming-multilingual`
+  model, language detection, and formatted turns.
+- `push_audio_chunk()` enqueues raw PCM16 through `client.stream()` (the SDK
+  sends from its own writer thread).
+- Turn events carry the finalized words of one turn; text is keyed by
+  `turn_order` because the formatted end-of-turn transcript arrives as a
+  second event for the same turn.
+- Accumulated text = all turns joined in order, delivered to `on_partial`.
+- `stop_stream()` terminates the session (bounded join) and returns the full
+  accumulated text; `abort_stream()` terminates and discards all text.
 
 ### Deepgram transcriber
 
 - `DeepgramTranscriber` supports streaming via Deepgram's WebSocket `listen` endpoint.
-- Audio chunks are sent as binary `linear16`; incoming partial/final messages are merged into one accumulated transcript for callback delivery.
-- On stop, the client now sends `Finalize` and gives the socket a short quiet-period drain window before closing, reducing cases where the last final transcript tokens are lost.
+- Audio chunks are queued by `push_audio_chunk` and sent as binary
+  `linear16` from a dedicated sender thread, so the PortAudio callback never
+  blocks on socket writes.
+- With language `auto`, streaming uses `language=multi` (multilingual
+  code-switching); the live API does not support `detect_language`.
+- On stop, the sender queue is drained first, then the client sends
+  `Finalize` and gives the socket a short quiet-period drain window before
+  closing, reducing cases where the last final transcript tokens are lost.
 
 ## 4) Quality impact
 
@@ -149,7 +165,8 @@ streaming. Its current ONNX export is fixed to 560 ms latency. The app's normal
 dependency lock currently provides CPU execution; DirectML is attempted when a
 compatible runtime becomes available.
 
-AssemblyAI streaming uses AssemblyAI's real-time speech recognition engine (no model selection needed).
+AssemblyAI streaming uses the Universal-Streaming multilingual model (the
+batch model selection does not apply to streaming).
 Deepgram streaming uses the selected Deepgram model.
 
 ## 7) Tuning points
