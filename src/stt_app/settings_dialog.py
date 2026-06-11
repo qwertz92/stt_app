@@ -884,6 +884,30 @@ class SettingsDialog(QtWidgets.QDialog):
         mode_hint.setWordWrap(True)
         self._style_note_label(mode_hint)
         engine_form.addRow("Mode", self._field_with_hint(self.mode_combo, mode_hint))
+
+        self.streaming_full_final_check = QtWidgets.QCheckBox(
+            "Re-transcribe full recording after streaming"
+        )
+        self.streaming_full_final_check.setToolTip(
+            "After a local faster-whisper streaming session ends, transcribe "
+            "the whole recording once more so the saved history entry uses "
+            "the highest-quality pass. Stopping takes noticeably longer on "
+            "long dictations. Inserted text is unaffected either way."
+        )
+        streaming_full_final_hint = QtWidgets.QLabel(
+            "Applies to local faster-whisper streaming only. When disabled, "
+            "the history entry uses the live streaming text and stopping "
+            "finishes faster."
+        )
+        streaming_full_final_hint.setWordWrap(True)
+        self._style_note_label(streaming_full_final_hint)
+        engine_form.addRow(
+            "",
+            self._field_with_hint(
+                self.streaming_full_final_check,
+                streaming_full_final_hint,
+            ),
+        )
         layout.addWidget(engine_box)
 
         # --- Text Insertion section ---
@@ -4373,6 +4397,9 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
+        self.streaming_full_final_check.setChecked(
+            bool(getattr(settings, "streaming_full_final_transcript", False))
+        )
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
         self._update_local_model_runtime_warning()
@@ -4962,6 +4989,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
             ),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
+            streaming_full_final_transcript=(
+                self.streaming_full_final_check.isChecked()
+            ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
@@ -5093,6 +5123,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.engine_combo.currentData() or DEFAULT_ENGINE
             ),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
+            streaming_full_final_transcript=(
+                self.streaming_full_final_check.isChecked()
+            ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),

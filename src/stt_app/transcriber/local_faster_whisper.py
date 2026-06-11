@@ -27,6 +27,7 @@ from ..config import (
     language_modes_for_selection,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ..streaming_text import append_only_stream_partial_candidate
 from .base import (
     AudioInput,
     ITranscriber,
@@ -319,6 +320,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         stream_partial_interval_s: float = STREAMING_PARTIAL_INTERVAL_S,
         stream_partial_min_audio_s: float = STREAMING_PARTIAL_MIN_AUDIO_S,
         stream_partial_window_s: float = STREAMING_PARTIAL_WINDOW_S,
+        stream_final_full_pass: bool = True,
         model_factory=None,
         offline_mode: bool = False,
         model_dir: str = "",
@@ -332,6 +334,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self.stream_partial_interval_s = max(0.0, float(stream_partial_interval_s))
         self.stream_partial_min_audio_s = max(0.0, float(stream_partial_min_audio_s))
         self.stream_partial_window_s = max(0.0, float(stream_partial_window_s))
+        self.stream_final_full_pass = bool(stream_final_full_pass)
         self._model_factory = model_factory or _default_model_factory
         self._model = None
         self._model_lock = threading.Lock()
@@ -347,7 +350,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_pcm_buffer = bytearray()
         self._stream_error: Exception | None = None
         self._stream_final_text: str = ""
-        self._stream_latest_text: str = ""
+        self._stream_merged_text: str = ""
         self._stream_last_partial_at = 0.0
         self._stream_last_partial_size = 0
         self._stream_abort_requested = False
@@ -479,7 +482,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             self._stream_pcm_buffer = bytearray()
             self._stream_error = None
             self._stream_final_text = ""
-            self._stream_latest_text = ""
+            self._stream_merged_text = ""
             self._stream_last_partial_at = time.monotonic()
             self._stream_last_partial_size = 0
             self._stream_abort_requested = False
@@ -558,7 +561,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_pcm_buffer = bytearray()
         self._stream_error = None
         self._stream_final_text = ""
-        self._stream_latest_text = ""
+        self._stream_merged_text = ""
         self._stream_last_partial_size = 0
         self._stream_last_partial_at = 0.0
         self._stream_abort_requested = False
@@ -606,11 +609,24 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 # Fields may already be reset by abort_stream(); write
                 # only if the session is still ours to finalize.
                 if self._stream_final_text == "":
-                    self._stream_final_text = self._stream_latest_text
+                    self._stream_final_text = self._stream_merged_text
             return
 
         try:
-            final_text = self._transcribe_current_stream_buffer()
+            if self.stream_final_full_pass:
+                final_text = self._transcribe_current_stream_buffer()
+            else:
+                # Fast finalization: transcribe only the trailing window to
+                # cover audio after the last partial, then merge it into the
+                # accumulated live text instead of re-transcribing everything.
+                tail_text = self._transcribe_current_stream_buffer(
+                    max_window_seconds=self.stream_partial_window_s
+                )
+                with self._stream_lock:
+                    final_text = append_only_stream_partial_candidate(
+                        self._stream_merged_text,
+                        tail_text,
+                    )
         except Exception as exc:
             with self._stream_lock:
                 self._stream_error = exc
@@ -656,7 +672,10 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             if self._stream_abort_requested:
                 return
             callback = self._stream_on_partial
-            self._stream_latest_text = text
+            self._stream_merged_text = append_only_stream_partial_candidate(
+                self._stream_merged_text,
+                text,
+            )
 
         if callback is not None and text.strip():
             try:

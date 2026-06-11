@@ -383,3 +383,22 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
 def test_keep_transcript_in_clipboard_defaults_to_false():
     """Clipboard should NOT keep transcript by default (opt-in, not opt-out)."""
     assert DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD is False
+
+
+def test_streaming_full_final_transcript_defaults_to_false(tmp_path):
+    """The streaming history re-transcription pass is opt-in."""
+    settings = SettingsStore(tmp_path / "settings.json").load()
+
+    assert settings.streaming_full_final_transcript is False
+
+
+def test_streaming_full_final_transcript_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"streaming_full_final_transcript": True}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.streaming_full_final_transcript is True

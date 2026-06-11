@@ -250,6 +250,64 @@ def test_stream_partial_uses_configured_window(monkeypatch):
     assert None in calls
 
 
+def test_local_streaming_fast_finalize_merges_live_text(monkeypatch):
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_partial_window_s=2.5,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    calls = []
+    responses = iter(["hello there my", "there my friend"])
+
+    def fake_transcribe(max_window_seconds=None):
+        calls.append(max_window_seconds)
+        return next(responses)
+
+    monkeypatch.setattr(
+        transcriber,
+        "_transcribe_current_stream_buffer",
+        fake_transcribe,
+    )
+
+    transcriber.start_stream(on_partial=lambda _text: None)
+    transcriber.push_audio_chunk(_build_pcm16_chunk(1_600))
+    text = transcriber.stop_stream()
+
+    # The trailing window is merged into the accumulated live text by word
+    # overlap instead of re-transcribing the whole recording.
+    assert text == "hello there my friend"
+    assert calls == [2.5, 2.5]
+
+
+def test_local_streaming_fast_finalize_without_partials_uses_tail(monkeypatch):
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=10.0,
+        stream_partial_min_audio_s=10.0,
+        stream_partial_window_s=2.5,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+
+    def fake_transcribe(max_window_seconds=None):
+        return "short note"
+
+    monkeypatch.setattr(
+        transcriber,
+        "_transcribe_current_stream_buffer",
+        fake_transcribe,
+    )
+
+    transcriber.start_stream(on_partial=lambda _text: None)
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+    text = transcriber.stop_stream()
+
+    assert text == "short note"
+
+
 def test_transcribe_current_stream_buffer_trims_to_window_size(monkeypatch):
     transcriber = LocalFasterWhisperTranscriber(
         model_size="small",

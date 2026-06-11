@@ -1357,6 +1357,7 @@ class DictationController(QtCore.QObject):
             getattr(settings, "assemblyai_model", ""),
             getattr(settings, "elevenlabs_model", ""),
             bool(getattr(settings, "keep_onnx_model_loaded", False)),
+            bool(getattr(settings, "streaming_full_final_transcript", False)),
         )
         if (
             settings.engine == DEFAULT_ENGINE

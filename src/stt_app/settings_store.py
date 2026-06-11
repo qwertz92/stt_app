@@ -38,6 +38,7 @@ from .config import (
     DEFAULT_SAVE_ALL_RECORDINGS,
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_START_BEEP_ENABLED,
+    DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DEFAULT_VAD_ENABLED,
@@ -82,6 +83,7 @@ DEFAULTS = {
     "overlay_always_on_top": DEFAULT_OVERLAY_ALWAYS_ON_TOP,
     "engine": DEFAULT_ENGINE,
     "mode": DEFAULT_MODE,
+    "streaming_full_final_transcript": DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     "paste_mode": DEFAULT_PASTE_MODE,
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "allow_insecure_key_storage": DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
@@ -129,6 +131,7 @@ class AppSettings:
     overlay_always_on_top: bool = DEFAULT_OVERLAY_ALWAYS_ON_TOP
     engine: str = DEFAULT_ENGINE
     mode: str = DEFAULT_MODE
+    streaming_full_final_transcript: bool = DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT
     paste_mode: str = DEFAULT_PASTE_MODE
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     allow_insecure_key_storage: bool = DEFAULT_ALLOW_INSECURE_KEY_STORAGE
@@ -283,6 +286,12 @@ class AppSettings:
             ),
             engine=engine,
             mode=mode,
+            streaming_full_final_transcript=bool(
+                merged.get(
+                    "streaming_full_final_transcript",
+                    DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
+                )
+            ),
             paste_mode=paste_mode,
             keep_transcript_in_clipboard=bool(
                 merged.get(

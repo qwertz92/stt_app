@@ -42,6 +42,7 @@ def create_transcriber(
             model_size=settings.model_size,
             language_mode=settings.language_mode,
             vad_filter=settings.vad_enabled,
+            stream_final_full_pass=settings.streaming_full_final_transcript,
             offline_mode=settings.offline_mode,
             model_dir=settings.model_dir,
         )
@@ -111,6 +112,7 @@ def create_transcriber(
         model_size=settings.model_size,
         language_mode=settings.language_mode,
         vad_filter=settings.vad_enabled,
+        stream_final_full_pass=settings.streaming_full_final_transcript,
         offline_mode=settings.offline_mode,
         model_dir=settings.model_dir,
     )

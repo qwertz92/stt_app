@@ -101,3 +101,13 @@ def test_factory_unknown_engine_with_nemotron_preserves_nemotron_runtime():
     transcriber = create_transcriber(settings)
 
     assert isinstance(transcriber, LocalNemotronTranscriber)
+
+
+def test_factory_local_passes_stream_final_full_pass():
+    settings = AppSettings(engine="local", streaming_full_final_transcript=True)
+    t = create_transcriber(settings)
+    assert t.stream_final_full_pass is True
+
+    settings = AppSettings(engine="local")
+    t = create_transcriber(settings)
+    assert t.stream_final_full_pass is False
