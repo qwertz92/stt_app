@@ -228,7 +228,7 @@ class BenchmarkHistoryStore:
             return []
         payload, source = load_json_with_backup(path, expected_type=list)
         if payload is None:
-            quarantine_corrupt_file(path)
+            quarantine_corrupt_file(path, include_backup=True)
             return []
         try:
             entries = cls._entries_from_payload(payload)

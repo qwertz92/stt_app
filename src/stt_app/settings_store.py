@@ -353,7 +353,7 @@ class SettingsStore:
 
         payload, source = load_json_with_backup(self._path, expected_type=dict)
         if payload is None:
-            quarantine_corrupt_file(self._path)
+            quarantine_corrupt_file(self._path, include_backup=True)
             settings = AppSettings()
             return settings
 

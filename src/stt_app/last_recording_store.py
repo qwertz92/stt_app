@@ -92,8 +92,7 @@ class LastRecordingStore:
             return self._orphaned_audio_state()
         payload, _source = load_json_with_backup(self._state_path, expected_type=dict)
         if payload is None:
-            if self._state_path.exists():
-                quarantine_corrupt_file(self._state_path)
+            quarantine_corrupt_file(self._state_path, include_backup=True)
             return self._orphaned_audio_state()
         state = LastRecordingState.from_dict(payload)
         if not state.audio_path:

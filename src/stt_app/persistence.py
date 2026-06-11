@@ -14,7 +14,24 @@ def backup_path(path: Path) -> Path:
     return path.with_name(f"{path.name}{_BACKUP_SUFFIX}")
 
 
-def quarantine_corrupt_file(path: Path) -> Path | None:
+def quarantine_corrupt_file(
+    path: Path,
+    *,
+    include_backup: bool = False,
+) -> Path | None:
+    """Move an unusable persisted file out of the way.
+
+    With ``include_backup`` the ``.bak`` sibling is quarantined too. Use it
+    only when the backup is known to be unusable as well (e.g. after
+    ``load_json_with_backup`` returned no payload); otherwise the backup must
+    stay available for recovery on the next load.
+    """
+    if include_backup:
+        _quarantine_single_file(backup_path(path))
+    return _quarantine_single_file(path)
+
+
+def _quarantine_single_file(path: Path) -> Path | None:
     if not path.exists():
         return None
 
@@ -68,7 +85,12 @@ def atomic_write_json(
     text = json.dumps(payload, indent=2, ensure_ascii=ensure_ascii)
     atomic_write_text(path, text)
     if keep_backup:
-        atomic_write_text(backup_path(path), text)
+        # The backup is redundancy only; a failed backup write must not turn
+        # an already successful primary write into an error.
+        try:
+            atomic_write_text(backup_path(path), text)
+        except OSError:
+            pass
 
 
 def load_json_with_backup(

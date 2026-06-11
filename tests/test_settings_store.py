@@ -23,7 +23,7 @@ from stt_app.config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
 )
 from stt_app.persistence import backup_path
-from stt_app.settings_store import CURRENT_SCHEMA_VERSION, SettingsStore
+from stt_app.settings_store import AppSettings, CURRENT_SCHEMA_VERSION, SettingsStore
 
 
 def test_load_defaults_creates_file(tmp_path):
@@ -402,3 +402,39 @@ def test_streaming_full_final_transcript_roundtrip(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.streaming_full_final_transcript is True
+
+
+def test_corrupt_primary_and_backup_are_both_quarantined(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    backup_path = tmp_path / "settings.json.bak"
+    settings_path.write_text("{not-json", encoding="utf-8")
+    backup_path.write_text("{also-not-json", encoding="utf-8")
+
+    SettingsStore(settings_path).load()
+
+    assert settings_path.exists() is False
+    assert backup_path.exists() is False
+    assert list(tmp_path.glob("settings.json.corrupt.*"))
+    assert list(tmp_path.glob("settings.json.bak.corrupt.*"))
+
+
+def test_save_succeeds_when_backup_write_fails(tmp_path, monkeypatch):
+    import stt_app.persistence as persistence_module
+    from stt_app.persistence import atomic_write_text as real_atomic_write_text
+
+    settings_path = tmp_path / "settings.json"
+
+    def failing_backup_write(path, text, **kwargs):
+        if path.name.endswith(".bak"):
+            raise OSError("backup volume unavailable")
+        real_atomic_write_text(path, text, **kwargs)
+
+    monkeypatch.setattr(
+        persistence_module,
+        "atomic_write_text",
+        failing_backup_write,
+    )
+
+    SettingsStore(settings_path).save(AppSettings())
+
+    assert settings_path.exists() is True
