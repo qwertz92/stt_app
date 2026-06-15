@@ -3,6 +3,26 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-15
+
+- Bumped to 0.4.0 (minor): the work since 0.3.1 includes new features (opt-in
+  streaming finalize, app icon, larger settings dialog, DirectML GPU path for
+  Granite 4.1) beyond pure bugfixes, so a minor bump fits the project's 0.x
+  scheme. The 0.3.2 metadata commit was superseded; tag v0.4.0 from a normal
+  clone (this environment cannot push tags).
+- Granite 4.1 raw ONNX graphs can now use the GPU: `onnxruntime-node` ships the
+  DirectML execution provider on Windows, so `ortExecutionProviders` returns
+  `dml` instead of throwing, and auto/gpu mode tries WebGPU -> DirectML -> CPU.
+  This only affects the raw-graph Granite 4.1 path, not the Cohere/Granite 4.0
+  Transformers.js pipeline. Needs verification on real Windows GPU hardware.
+- No public q4/int4 ONNX export for Granite Speech 4.1 was found (HF is not in
+  this environment's network allowlist, so the check used web search only;
+  community ONNX repos still ship INT8 as the smallest tier). Granite 4.0 has
+  q4; Granite 4.1 stays INT8 until a verified q4/int4 export appears.
+- Removed "experimental" framing from the local ONNX models (Cohere/Granite)
+  in UI labels and user-facing model docs; they are supported daily-use models.
+  Streaming mode keeps its experimental label.
+
 ## 2026-06-11
 
 - Released v0.3.2 with the streaming provider fixes. Note: the remote
