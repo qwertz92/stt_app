@@ -28,10 +28,10 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `large-v3` | CTranslate2 | ~3.1 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
 | `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
 | `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
-| `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | Experimental quality trial, batch mode only |
-| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Experimental compact speech-LM trial, batch mode only |
-| `granite-speech-4.1-2b` | ONNX INT8 AR | ~4.0 GB INT8 | Auto + `de/en/fr/es/pt/ja` | Experimental Granite 4.1 daily-use trial, batch mode only |
-| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Experimental Plus variant trial, batch mode only |
+| `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
+| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Compact speech-LM, batch mode only |
+| `granite-speech-4.1-2b` | ONNX INT8 AR | ~4.0 GB INT8 | Auto + `de/en/fr/es/pt/ja` | Granite 4.1 AR, batch mode only |
+| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 Plus AR, batch mode only |
 | `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Smaller Granite 4.1 NAR daily-use trial, batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 
@@ -79,7 +79,7 @@ Lower is better. These are published benchmark values — your results depend on
 
 Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benchmarks](https://github.com/SYSTRAN/faster-whisper).
 
-### Experimental ONNX local models
+### ONNX local models
 
 Cohere Transcribe and IBM Granite Speech are selectable under the normal local
 model list, but they are not CTranslate2 models. They use a separate Node.js
@@ -94,6 +94,13 @@ prompt-encode, and decode-step graphs plus a host-side audio-token splice and
 KV-cache loop. The NAR export uses encoder, token embedding, and editor graphs
 with CTC draft decoding and insertion slots. They are separate runtime paths,
 not one shared flag.
+
+The raw Granite 4.1 ONNX graphs run through `onnxruntime-node` execution
+providers. In `auto`/`gpu` mode the app now tries WebGPU first, then DirectML,
+then CPU; on Windows the DirectML execution provider ships with
+`onnxruntime-node`, so a compatible GPU can accelerate these graphs. Nodes that
+the GPU provider cannot run fall back to CPU within the same session. The active
+device is reported through the runtime status.
 
 As of June 8, 2026, a community
 [Granite Speech 4.1 2B Q4_K GGUF](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF)

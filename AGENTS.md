@@ -156,16 +156,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `python scripts/create_release.py` from a clean, up-to-date `main`; the script
   prompts for the version, bumps metadata, runs checks, commits, pushes, tags,
   and pushes the tag.
-- **Experimental ONNX local ASR**: Cohere Transcribe, IBM Granite Speech 4.0,
+- **Local ONNX ASR**: Cohere Transcribe, IBM Granite Speech 4.0,
   and IBM Granite Speech 4.1 are selectable local models through
   `transcriber/local_webgpu_asr.py`. They are batch-only and require Node.js.
+  These are supported daily-use models, not experimental trials; do not
+  reintroduce "experimental" framing in UI labels or user-facing model docs.
   Cohere and Granite 4.0 use q4 ONNX snapshots through Transformers.js.
   Granite 4.1 uses the smallest currently published INT8 raw ONNX graph tier
   through explicit `onnxruntime-node` sessions.
   A Granite Speech 4.1 2B Q4_K GGUF exists for a separate CrispASR/GGUF
   runtime, but the selectable Granite 4.1 ONNX exports still have no compatible
-  q4/int4 graph tier. Do not replace the current INT8 ONNX path with that GGUF
-  without a separate runtime evaluation and quality benchmark.
+  q4/int4 graph tier (re-check periodically). Do not replace the current INT8
+  ONNX path with that GGUF without a separate runtime evaluation and quality
+  benchmark.
+  Granite 4.1 raw graphs run through `onnxruntime-node` execution providers:
+  `webgpu_asr_runner.mjs` `ortExecutionProviders` returns `webgpu`/`dml`/`cpu`,
+  so `auto`/`gpu` mode tries WebGPU, then DirectML, then CPU. DirectML ships
+  with `onnxruntime-node` on Windows; unsupported nodes fall back to CPU within
+  the session. This is GPU-path plumbing only — it cannot affect the Cohere /
+  Granite 4.0 Transformers.js pipeline path. GPU acceleration of the raw
+  Granite 4.1 graphs must be verified on real Windows GPU hardware; the active
+  device is reported in the runtime status.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.
   The resolved runtime device is reported through transcriber progress messages

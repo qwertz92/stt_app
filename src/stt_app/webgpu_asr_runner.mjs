@@ -654,13 +654,15 @@ function ortExecutionProviders(device) {
   if (device === "webgpu") {
     return ["webgpu"];
   }
+  if (device === "dml") {
+    // onnxruntime-node ships the DirectML execution provider on Windows.
+    // Nodes that DirectML cannot run fall back to CPU within the same
+    // session, so this preserves correctness while using the GPU where it
+    // can.
+    return ["dml"];
+  }
   if (device === "cpu") {
     return ["cpu"];
-  }
-  if (device === "dml") {
-    throw new Error(
-      "DirectML is not exposed by onnxruntime-node for raw Granite 4.1 graphs. Use WebGPU or CPU.",
-    );
   }
   return ["cpu"];
 }
@@ -752,7 +754,7 @@ async function loadGranite41ArRuntime(options, device, webgpuAvailable) {
   const modelPath = modelPathForTransformers(options.modelPath);
   const precision = options.dtype || "int8";
   const graphRoot = precision === "int8" ? "int8" : precision;
-  const accelerated = device === "webgpu";
+  const accelerated = device === "webgpu" || device === "dml";
   const frontend = new Granite41AudioFrontend(
     readJson(modelPath, "preprocessor_config.json"),
   );
@@ -919,7 +921,7 @@ async function loadGranite41NarRuntime(options, device, webgpuAvailable) {
   const modelPath = modelPathForTransformers(options.modelPath);
   const precision = options.dtype || "int8";
   const graphRoot = precision === "int8" ? "int8" : precision;
-  const accelerated = device === "webgpu";
+  const accelerated = device === "webgpu" || device === "dml";
   const frontend = new Granite41AudioFrontend(
     readJson(modelPath, "preprocessor_config.json"),
   );
