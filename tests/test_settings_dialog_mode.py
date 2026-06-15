@@ -427,7 +427,7 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     )
     assert "ONNX/WebGPU" in dialog.engine_indicator.text()
     assert "DirectML" in dialog.local_model_runtime_warning_label.text()
-    assert "CPU fallback" in dialog.local_model_runtime_warning_label.text()
+    assert "falls back to CPU" in dialog.local_model_runtime_warning_label.text()
     assert "Batch mode only" in dialog.local_model_runtime_warning_label.text()
     assert dialog.keep_onnx_model_loaded_checkbox.isChecked() is False
     _ = app

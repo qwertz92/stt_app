@@ -1185,8 +1185,8 @@ class SettingsDialog(QtWidgets.QDialog):
         download_hint = QtWidgets.QLabel(
             "Select models to download or delete. Downloads run one at a time; "
             "you can add more models to the queue while one is active. Green "
-            "entries are already cached locally. ONNX models use experimental "
-            "local runtimes."
+            "entries are already cached locally. ONNX models use a Node.js "
+            "local runtime."
         )
         download_hint.setWordWrap(True)
         self._style_note_label(download_hint)
@@ -3668,7 +3668,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
             return (
                 "Granite supports Auto plus the languages documented for the "
-                "selected experimental model."
+                "selected model."
             )
 
         if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
@@ -3740,18 +3740,17 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             self.local_model_runtime_warning_label.setText(
-                "Experimental ONNX model: Batch mode only. The app tries the "
-                "available ONNX GPU target first; CPU fallback is used when "
-                "a compatible GPU runtime is unavailable. Granite 4.1 uses "
-                "INT8 raw ONNX graphs, not q4; in that path WebGPU and CPU "
-                "are supported, while DirectML may be unavailable. Benchmark "
-                "this machine before choosing it as your daily model."
+                "ONNX model: Batch mode only. The app tries the available ONNX "
+                "GPU target first (WebGPU, then DirectML) and falls back to CPU "
+                "when no compatible GPU runtime is available. Granite 4.1 uses "
+                "INT8 raw ONNX graphs (no q4 export is published yet). The "
+                "active runtime device is shown in the overlay/import status."
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self.local_model_runtime_warning_label.setText(
-                "Experimental Nemotron INT4 model: true cache-aware streaming with "
+                "Nemotron INT4 model: true cache-aware streaming with "
                 "a fixed 560 ms ONNX chunk. The app tries DirectML first when a "
                 "compatible ORT GenAI DirectML runtime is installed, then falls back "
                 "to the bundled CPU runtime. Microsoft's current DirectML dependency "
