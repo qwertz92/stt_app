@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-16
+
+- Re-checked HuggingFace for a Transformers.js-packaged Granite Speech 4.1
+  export (q4/ONNX-web layout like `onnx-community/granite-4.0-1b-ONNX-web`).
+  None exists yet: only raw multi-graph INT8 community exports (`smcleod/*`)
+  and an `onnx-internal-testing/tiny-random-GraniteSpeechForConditionalGeneration`
+  CI fixture. `GraniteSpeechForConditionalGeneration` is supported by
+  Transformers.js (the app already uses it for Granite 4.0), so a proper q4
+  ONNX-web export of 4.1 should load through the same pipeline path and is the
+  cleaner GPU route than the hand-written raw-graph runtime. Producing it needs
+  an Optimum/Transformers.js ONNX export + quantization run on a machine that
+  can load the 2B model; it cannot be done in this repo's sandbox (HF is not in
+  the network allowlist, no GPU).
+- Reconciled the docs with the lifted DirectML block: `models.md` and
+  `local-onnx-runtime.md` now state honestly that Granite 4.1 GPU is
+  unverified and often still runs on CPU (WebGPU `Einsum` shader bug, DirectML
+  operator gaps), rather than implying GPU acceleration works.
+
 ## 2026-06-15
 
 - Bumped to 0.4.0 (minor): the work since 0.3.1 includes new features (opt-in

@@ -67,9 +67,13 @@ architecture.
 | `cpu` | Force CPU | Most compatible, usually slowest |
 
 For Granite Speech 4.1 raw ONNX graphs, the Node helper uses direct
-`onnxruntime-node` sessions. In the current package, WebGPU and CPU are the
-supported raw-graph targets; DirectML is skipped for 4.1 and normal `auto`
-falls through to CPU if WebGPU cannot load or fails during inference.
+`onnxruntime-node` sessions. `auto`/`gpu` mode now attempts WebGPU, then
+DirectML (the DirectML execution provider ships with `onnxruntime-node` on
+Windows), then CPU. Removing the previous hard DirectML block lets a compatible
+GPU be attempted, but GPU acceleration of these raw graphs is **not verified**
+and frequently still falls back to CPU because of the upstream issues recorded
+below. Treat GPU for Granite 4.1 as hardware-dependent and confirm the active
+device in the runtime status.
 
 Nemotron attempts DirectML and then CPU through ORT GenAI. The normal dependency
 lock currently installs the CPU package because the published
@@ -124,8 +128,11 @@ Observed on the target Windows/Intel Arc A750 machine:
 - DirectML loads both models but fails during inference:
   - Cohere fails in `MultiHeadAttention`.
   - Granite 4.0 fails in `Reshape`.
-- DirectML is not exposed by `onnxruntime-node` for the raw Granite 4.1 graph
-  sessions.
+- For the raw Granite 4.1 graph sessions, DirectML used to be hard-blocked in
+  the runner. The block was removed because `onnxruntime-node` ships the
+  DirectML execution provider on Windows, so `auto` now attempts it; given the
+  DirectML inference failures seen for Cohere/Granite 4.0 above, expect Granite
+  4.1 to also fall back to CPU until this is verified on real hardware.
 - CPU works for all current ONNX models, but is materially slower than WebGPU
   where WebGPU is compatible.
 

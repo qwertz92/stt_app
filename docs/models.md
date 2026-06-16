@@ -96,11 +96,15 @@ with CTC draft decoding and insertion slots. They are separate runtime paths,
 not one shared flag.
 
 The raw Granite 4.1 ONNX graphs run through `onnxruntime-node` execution
-providers. In `auto`/`gpu` mode the app now tries WebGPU first, then DirectML,
-then CPU; on Windows the DirectML execution provider ships with
-`onnxruntime-node`, so a compatible GPU can accelerate these graphs. Nodes that
-the GPU provider cannot run fall back to CPU within the same session. The active
-device is reported through the runtime status.
+providers. In `auto`/`gpu` mode the app attempts WebGPU first, then DirectML,
+then CPU (the DirectML execution provider ships with `onnxruntime-node` on
+Windows). In practice these raw graphs **often still run on CPU**: real
+hardware testing showed WebGPU failing on an invalid `Einsum` shader in ONNX
+Runtime Web and DirectML failing on unsupported operators. The DirectML attempt
+is therefore unverified for Granite 4.1 and may not accelerate it. The active
+device is reported through the runtime status, so confirm it there. A
+Transformers.js-packaged q4 export (like Granite 4.0) would be the cleaner GPU
+path if one becomes available; see `docs/local-onnx-runtime.md`.
 
 As of June 8, 2026, a community
 [Granite Speech 4.1 2B Q4_K GGUF](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF)
