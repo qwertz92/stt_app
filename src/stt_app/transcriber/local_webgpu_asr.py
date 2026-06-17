@@ -163,6 +163,15 @@ _GRANITE_4_0_Q4_LAYOUT = _OnnxModelLayout(
     required_files=_GRANITE_4_0_Q4_REQUIRED_FILES,
 )
 
+# Granite Speech 4.1 2B (AR) ships as a Transformers.js q4 package with the same
+# component layout as Granite 4.0, so it reuses the 4.0 q4 required-file set.
+_GRANITE_4_1_AR_Q4_LAYOUT = _OnnxModelLayout(
+    name="granite_4_1_ar_q4",
+    precision="q4",
+    allow_patterns=_Q4_DOWNLOAD_ALLOW_PATTERNS,
+    required_files=_GRANITE_4_0_Q4_REQUIRED_FILES,
+)
+
 _GRANITE_4_1_AR_INT8_LAYOUT = _OnnxModelLayout(
     name="granite_4_1_ar_int8",
     precision="int8",
@@ -187,7 +196,7 @@ _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
 _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "cohere-transcribe-03-2026": _COHERE_Q4_LAYOUT,
     "granite-4.0-1b-speech": _GRANITE_4_0_Q4_LAYOUT,
-    "granite-speech-4.1-2b": _GRANITE_4_1_AR_INT8_LAYOUT,
+    "granite-speech-4.1-2b": _GRANITE_4_1_AR_Q4_LAYOUT,
     "granite-speech-4.1-2b-plus": _GRANITE_4_1_AR_INT8_LAYOUT,
     "granite-speech-4.1-2b-nar": _GRANITE_4_1_NAR_INT8_LAYOUT,
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,

@@ -15,10 +15,10 @@ The experimental Cohere and Granite models use a separate out-of-process stack:
 
 1. Python/PySide starts a controlled Node.js helper process.
 2. The helper loads the JavaScript ONNX runtime dependencies.
-3. Cohere and Granite 4.0 load q4 Transformers.js ONNX packages from the local
+3. Cohere, Granite 4.0, and Granite 4.1 2B load q4 Transformers.js ONNX packages
+   from the local Hugging Face cache.
+4. Granite 4.1 Plus and NAR load raw INT8 ONNX Runtime graph files from the local
    Hugging Face cache.
-4. Granite 4.1 loads raw INT8 ONNX Runtime graph files from the local Hugging
-   Face cache.
 5. Inference runs on the selected ONNX target when supported, with CPU fallback
    for normal `auto` use.
 6. Python sends WAV paths over stdin and receives JSON results over stdout.
@@ -31,9 +31,12 @@ does not use the Node helper. ORT GenAI owns the cache-aware FastConformer/RNNT
 streaming state and emits tokens incrementally for each new 560 ms audio chunk.
 
 Granite Speech 4.1 is part of this runtime stack and is user-selectable. The
-public 4.1 ONNX repos currently ship raw INT8/fp16w/fp32 graph bundles instead
-of q4/int4 Transformers.js packages, so the app defaults to the INT8 tier and
-labels it separately from q4 Cohere/Granite 4.0.
+base 2B model now loads as a q4 Transformers.js package
+(`onnx-community/granite-speech-4.1-2b-ONNX`) through the same pipeline as
+Granite 4.0. The Plus and NAR variants are different architectures with no
+faithful q4 package yet, so they stay on the raw INT8 graph path and are labelled
+separately; see
+[granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.md).
 
 ## Runtime Formats
 
@@ -62,18 +65,18 @@ architecture.
 | --- | --- | --- |
 | `auto` | Try WebGPU, then DirectML on Windows, then CPU | Default for normal use |
 | `gpu` | Try GPU targets only, currently WebGPU then DirectML | Diagnostic benchmark target |
-| `webgpu` | Force Transformers.js WebGPU | Best current target for Cohere/Granite 4.0 on the Intel test machine; Granite 4.1 compatibility varies |
+| `webgpu` | Force Transformers.js WebGPU | Works for Cohere, Granite 4.0, and Granite 4.1 2B on the Intel test machine; the raw Granite 4.1 Plus/NAR graphs do not |
 | `dml` | Force ONNX Runtime DirectML | Diagnostic only for current Cohere/Granite |
 | `cpu` | Force CPU | Most compatible, usually slowest |
 
-For Granite Speech 4.1 raw ONNX graphs, the Node helper uses direct
-`onnxruntime-node` sessions. `auto`/`gpu` mode now attempts WebGPU, then
+Granite 4.1 2B uses the high-level Transformers.js pipeline (verified on WebGPU,
+see below). For the Granite 4.1 **Plus and NAR** raw ONNX graphs, the Node helper
+uses direct `onnxruntime-node` sessions. `auto`/`gpu` mode attempts WebGPU, then
 DirectML (the DirectML execution provider ships with `onnxruntime-node` on
-Windows), then CPU. Removing the previous hard DirectML block lets a compatible
-GPU be attempted, but GPU acceleration of these raw graphs is **not verified**
-and frequently still falls back to CPU because of the upstream issues recorded
-below. Treat GPU for Granite 4.1 as hardware-dependent and confirm the active
-device in the runtime status.
+Windows), then CPU. GPU acceleration of these raw graphs is **not verified** and
+frequently still falls back to CPU because of the upstream issues recorded below.
+Treat GPU for the raw Granite 4.1 Plus/NAR graphs as hardware-dependent and
+confirm the active device in the runtime status.
 
 Nemotron attempts DirectML and then CPU through ORT GenAI. The normal dependency
 lock currently installs the CPU package because the published
@@ -121,18 +124,21 @@ first unsupported graph operation is executed.
 
 Observed on the target Windows/Intel Arc A750 machine:
 
-- WebGPU works for Cohere and Granite 4.0.
-- Granite Speech 4.1 INT8 loads on WebGPU, but its first inference fails while
-  ONNX Runtime Web creates the `Einsum` compute pipeline because the generated
-  shader module is invalid.
-- DirectML loads both models but fails during inference:
+- WebGPU works for Cohere, Granite 4.0, and Granite 4.1 2B. The Granite 4.1 2B
+  q4 pipeline package was verified on WebGPU on 2026-06-17 (correct German,
+  English, and French transcription; ~0.13–0.19 real-time factor).
+- The raw Granite 4.1 **Plus/NAR** INT8 graphs load on WebGPU, but their first
+  inference fails while ONNX Runtime Web creates the `Einsum` compute pipeline
+  because the generated shader module is invalid. This is why those variants stay
+  effectively CPU-bound and why a Transformers.js q4 package (as used for 2B) is
+  the cleaner GPU route.
+- DirectML loads the models but fails during inference:
   - Cohere fails in `MultiHeadAttention`.
   - Granite 4.0 fails in `Reshape`.
-- For the raw Granite 4.1 graph sessions, DirectML used to be hard-blocked in
-  the runner. The block was removed because `onnxruntime-node` ships the
-  DirectML execution provider on Windows, so `auto` now attempts it; given the
-  DirectML inference failures seen for Cohere/Granite 4.0 above, expect Granite
-  4.1 to also fall back to CPU until this is verified on real hardware.
+- For the raw Granite 4.1 Plus/NAR graph sessions, DirectML is attempted in
+  `auto`/`gpu` mode (`onnxruntime-node` ships the DirectML execution provider on
+  Windows), but given the DirectML inference failures above, expect a CPU
+  fallback until verified on real hardware.
 - CPU works for all current ONNX models, but is materially slower than WebGPU
   where WebGPU is compatible.
 
@@ -211,7 +217,7 @@ Approximate current downloads:
 | `large-v3-turbo` | CTranslate2 | 809 MB |
 | `cohere-transcribe-03-2026` | q4 ONNX | 2.13 GB |
 | `granite-4.0-1b-speech` | q4 ONNX | 1.84 GB |
-| `granite-speech-4.1-2b` | AR INT8 raw ONNX graphs | 4.0 GB |
+| `granite-speech-4.1-2b` | q4 Transformers.js ONNX | 1.84 GB |
 | `granite-speech-4.1-2b-plus` | AR INT8 raw ONNX graphs | 4.1 GB |
 | `granite-speech-4.1-2b-nar` | NAR INT8 raw ONNX graphs | 2.5 GB |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | 793 MB |
@@ -235,11 +241,11 @@ Examples from currently evaluated candidates:
 - Cohere's ONNX package is q4 and 2B parameters, so a raw 4-bit weight lower
   bound is already about 1 GB before unquantized tensors, model graph overhead,
   external data files, tokenizer assets, and runtime buffers are counted.
-- Granite Speech 4.1 INT8 exports are larger than Granite 4.0 q4 and are not a
-  drop-in replacement. The autoregressive variants use separate encoder,
-  embedding, prompt-encode, and decode-step graph orchestration with a KV-cache
-  loop. The NAR variant uses a separate encoder/editor contract with CTC draft
-  decoding and insertion slots.
+- Granite Speech 4.1 2B uses a q4 Transformers.js package, the same size class as
+  Granite 4.0 q4. The Plus INT8 export is larger and is not a drop-in pipeline
+  replacement: it uses separate encoder, embedding, prompt-encode, and
+  decode-step graph orchestration with a KV-cache loop. The NAR variant uses a
+  separate encoder/editor contract with CTC draft decoding and insertion slots.
 
 ## Long Audio Behavior
 
@@ -290,10 +296,11 @@ This means `Auto` is not identical across local model families. If a transcript
 quality issue appears on Cohere, explicitly selecting German or English is the
 first thing to test.
 
-Granite Speech 4.1 ONNX exports are tagged and documented primarily for English
-ASR. German dictation quality is not yet proven in this app, so explicit German
-mode is available for daily use but should be benchmarked before replacing a
-Whisper model.
+Granite Speech 4.1 is documented for en/fr/de/es/pt/ja. The 2B q4 package was
+spot-checked on 2026-06-17 and produced correct German, English, and French
+output through the WebGPU pipeline, so German is usable for daily dictation. A
+formal Word Error Rate benchmark against the Whisper models is still recommended
+before switching the default.
 
 ## Best Current Practice
 
@@ -328,11 +335,11 @@ For the current Windows Intel GPU test machine:
   <https://huggingface.co/CohereLabs/cohere-transcribe-03-2026>
 - Granite ONNX/WebGPU model card:
   <https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX>
-- Granite Speech 4.1 2B ONNX export:
-  <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-onnx>
-- Granite Speech 4.1 2B Plus ONNX export:
+- Granite Speech 4.1 2B q4 ONNX-web export (used by the app):
+  <https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX>
+- Granite Speech 4.1 2B Plus ONNX export (raw INT8):
   <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx>
-- Granite Speech 4.1 2B NAR ONNX export:
+- Granite Speech 4.1 2B NAR ONNX export (raw INT8):
   <https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx>
 - Nemotron 3.5 multilingual INT4 ONNX export:
   <https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4>

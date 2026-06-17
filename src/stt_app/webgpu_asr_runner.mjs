@@ -25,8 +25,17 @@ const GRANITE_4_1_NUM_LAYERS = 40;
 const GRANITE_4_1_NAR_EMBEDDING_MULTIPLIER = 12;
 const ORT_NEG_INF = -3.4028234663852886e38;
 
+// Models that load through the high-level Transformers.js
+// GraniteSpeechForConditionalGeneration pipeline (q4 packages). Granite 4.1 2B
+// shares Granite 4.0's component layout, so it uses the same path.
+const GRANITE_PIPELINE_MODELS = new Set([
+  "granite-4.0-1b-speech",
+  "granite-speech-4.1-2b",
+]);
+
+// Granite 4.1 variants that still run through explicit onnxruntime-node graph
+// sessions because no Transformers.js q4 package exists for them yet.
 const GRANITE_4_1_MODEL_LAYOUTS = new Map([
-  ["granite-speech-4.1-2b", "granite_4_1_ar"],
   ["granite-speech-4.1-2b-plus", "granite_4_1_ar"],
   ["granite-speech-4.1-2b-nar", "granite_4_1_nar"],
 ]);
@@ -1065,7 +1074,7 @@ async function loadRuntimeForDevice(options, device, webgpuAvailable) {
     };
   }
 
-  if (options.model === "granite-4.0-1b-speech") {
+  if (GRANITE_PIPELINE_MODELS.has(options.model)) {
     const processor = await AutoProcessor.from_pretrained(modelPath);
     const model = await GraniteSpeechForConditionalGeneration.from_pretrained(
       modelPath,

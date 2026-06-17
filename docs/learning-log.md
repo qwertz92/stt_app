@@ -3,6 +3,42 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-17
+
+- **Granite Speech 4.1 2B moved to the q4 WebGPU pipeline path.** A faithful q4
+  Transformers.js package now exists at
+  `onnx-community/granite-speech-4.1-2b-ONNX` (created 2026-05-13), in the exact
+  Granite 4.0 layout (`audio_encoder`/`embed_tokens`/`decoder_model_merged` q4).
+  This supersedes the 2026-06-16 note below that "none exists yet": that check ran
+  in a sandbox without Hugging Face access and used web search only. The base 2B
+  config is dimension-for-dimension identical to Granite 4.0, so it loads through
+  the same `GraniteSpeechForConditionalGeneration` pipeline.
+  - Verified on the Windows / Intel Arc A750 dev machine: loads on **WebGPU**
+    with no `Einsum` shader crash, transcribes German, English, and French
+    correctly, ~0.13–0.19 real-time factor — materially faster than the raw CPU
+    path. German was spot-checked with a Windows SAPI (Hedda) TTS clip.
+  - Code: `config.py` points `granite-speech-4.1-2b` at the onnx-community repo,
+    precision `q4`, label `ONNX/WebGPU q4`, size ~1.84 GB; `local_webgpu_asr.py`
+    adds `_GRANITE_4_1_AR_Q4_LAYOUT` (reuses the 4.0 q4 required-file set);
+    `webgpu_asr_runner.mjs` adds a `GRANITE_PIPELINE_MODELS` set so 2B routes
+    through the same branch as Granite 4.0. Tests updated in
+    `tests/test_local_webgpu_asr.py`.
+- **Plus and NAR deliberately NOT moved to the pipeline path.** Investigated and
+  documented in the new `docs/granite-speech-4.1-onnx-variants.md`. Summary:
+  Plus is `granite_speech_plus` (distinct projector that consumes intermediate
+  encoder hidden states, plus speaker/timestamp features); the only public q4
+  build (valoomba) is a base-architecture mis-export and produces broken English
+  (`<unk>` spam / empty), Transformers.js has no `granite_speech_plus` class, and
+  optimum has no `granite_speech`/`granite_speech_plus` ONNX export config. NAR is
+  `granite_speech_nar` (non-autoregressive; no JS class, no q4). Both stay on the
+  raw INT8 `onnxruntime-node` path. The doc records exactly what would have to
+  change to enable them and the scope of a custom conversion.
+- **Added `docs/local-onnx-q4-conversion.md`** — a neutral, user-friendly
+  explainer of ONNX export + q4 quantization (what q4 is, q4 vs int4, why
+  downloads are ~2 GB, why the conversion is deterministic so re-converting adds
+  no value), with a glossary. `models.md` and `local-onnx-runtime.md` updated for
+  the 2B q4/WebGPU status.
+
 ## 2026-06-16
 
 - Re-checked HuggingFace for a Transformers.js-packaged Granite Speech 4.1

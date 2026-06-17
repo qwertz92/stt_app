@@ -106,7 +106,7 @@ GRANITE_4_1_MODEL_SIZES = (
 LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "cohere-transcribe-03-2026": "q4",
     "granite-4.0-1b-speech": "q4",
-    "granite-speech-4.1-2b": "int8",
+    "granite-speech-4.1-2b": "q4",
     "granite-speech-4.1-2b-plus": "int8",
     "granite-speech-4.1-2b-nar": "int8",
     NEMOTRON_MODEL_SIZE: "int4",
@@ -115,14 +115,14 @@ LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
 LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     "cohere-transcribe-03-2026": "ONNX/WebGPU q4",
     "granite-4.0-1b-speech": "ONNX/WebGPU q4",
-    "granite-speech-4.1-2b": "ONNX INT8 AR",
+    "granite-speech-4.1-2b": "ONNX/WebGPU q4",
     "granite-speech-4.1-2b-plus": "ONNX INT8 AR",
     "granite-speech-4.1-2b-nar": "ONNX INT8 NAR",
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
 }
 
 GRANITE_4_1_REPO_MAP: dict[str, str] = {
-    "granite-speech-4.1-2b": "smcleod/ibm-granite-speech-4.1-2b-onnx",
+    "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
     "granite-speech-4.1-2b-plus": "smcleod/ibm-granite-speech-4.1-2b-plus-onnx",
     "granite-speech-4.1-2b-nar": "smcleod/ibm-granite-speech-4.1-2b-nar-onnx",
 }
@@ -175,11 +175,12 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "large-v3": 3_000,
     "large-v3-turbo": 809,
     "distil-large-v3.5": 756,
-    # Selectable local ONNX downloads. Cohere/Granite 4.0 are q4; Granite 4.1
-    # uses the smallest currently published INT8 tier.
+    # Selectable local ONNX downloads. Cohere, Granite 4.0, and Granite 4.1 2B
+    # are q4 Transformers.js packages; Granite 4.1 Plus/NAR use the smallest
+    # currently published INT8 tier.
     "cohere-transcribe-03-2026": 2_128,
     "granite-4.0-1b-speech": 1_843,
-    "granite-speech-4.1-2b": 4_000,
+    "granite-speech-4.1-2b": 1_843,
     "granite-speech-4.1-2b-plus": 4_100,
     "granite-speech-4.1-2b-nar": 2_500,
     NEMOTRON_MODEL_SIZE: 793,

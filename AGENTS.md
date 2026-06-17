@@ -161,31 +161,33 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `transcriber/local_webgpu_asr.py`. They are batch-only and require Node.js.
   These are supported daily-use models, not experimental trials; do not
   reintroduce "experimental" framing in UI labels or user-facing model docs.
-  Cohere and Granite 4.0 use q4 ONNX snapshots through Transformers.js.
-  Granite 4.1 uses the smallest currently published INT8 raw ONNX graph tier
-  through explicit `onnxruntime-node` sessions.
-  A Granite Speech 4.1 2B Q4_K GGUF exists for a separate CrispASR/GGUF
-  runtime, but the selectable Granite 4.1 ONNX exports still have no compatible
-  q4/int4 graph tier (re-check periodically). Do not replace the current INT8
-  ONNX path with that GGUF without a separate runtime evaluation and quality
-  benchmark.
-  Granite 4.1 raw graphs run through `onnxruntime-node` execution providers:
-  `webgpu_asr_runner.mjs` `ortExecutionProviders` returns `webgpu`/`dml`/`cpu`,
-  so `auto`/`gpu` mode tries WebGPU, then DirectML, then CPU. DirectML ships
-  with `onnxruntime-node` on Windows; unsupported nodes fall back to CPU within
-  the session. This is GPU-path plumbing only — it cannot affect the Cohere /
-  Granite 4.0 Transformers.js pipeline path. GPU acceleration of the raw
-  Granite 4.1 graphs must be verified on real Windows GPU hardware; the active
-  device is reported in the runtime status.
+  Cohere, Granite 4.0, and Granite 4.1 2B use q4 ONNX snapshots through the
+  high-level Transformers.js `GraniteSpeechForConditionalGeneration` pipeline.
+  Granite 4.1 2B points at `onnx-community/granite-speech-4.1-2b-ONNX` (verified
+  on WebGPU / Arc A750 on 2026-06-17: correct de/en/fr, no `Einsum` crash).
+  Granite 4.1 **Plus** and **NAR** stay on raw INT8 `onnxruntime-node` graph
+  sessions because they are different architectures (`granite_speech_plus` /
+  `granite_speech_nar`) with no faithful q4 Transformers.js package — see
+  `docs/granite-speech-4.1-onnx-variants.md` for the full status, the three
+  blockers, and what would change that. Do not relabel a Plus build as base
+  `granite_speech` to force it onto the pipeline path: that produces broken
+  English (verified with the valoomba build).
+  The raw Granite 4.1 Plus/NAR graphs run through `onnxruntime-node` execution
+  providers: `webgpu_asr_runner.mjs` `ortExecutionProviders` returns
+  `webgpu`/`dml`/`cpu`, so `auto`/`gpu` mode tries WebGPU, then DirectML, then
+  CPU. DirectML ships with `onnxruntime-node` on Windows. GPU acceleration of
+  these raw graphs is unverified (WebGPU `Einsum` shader bug, DirectML operator
+  gaps) and they usually run on CPU; the active device is reported in the runtime
+  status. This raw path is separate from the Cohere / Granite 4.0 / Granite 4.1
+  2B Transformers.js pipeline path.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.
   The resolved runtime device is reported through transcriber progress messages
   so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
   Keep faster-whisper as the stable local default until real target-hardware
   benchmarks justify switching.
-  Granite 4.1 AR (`granite-speech-4.1-2b`,
-  `granite-speech-4.1-2b-plus`) and NAR (`granite-speech-4.1-2b-nar`) must stay
-  separate runtime paths because their ONNX graph contracts differ. Keep
+  The Granite 4.1 Plus (AR) and NAR raw paths must stay separate from each other
+  and from the pipeline path because their ONNX graph contracts differ. Keep
   `granite-4.0-1b-speech` selectable as a smaller q4 option until real
   benchmarks justify removing it.
 - **Nemotron 3.5 true streaming**:
