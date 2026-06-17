@@ -29,6 +29,7 @@ from .config import (
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
     DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_FUNASR_MODEL,
     DEFAULT_GROQ_MODEL,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
@@ -44,6 +45,7 @@ from .config import (
     DOC_MODELS_PATH,
     DEEPGRAM_MODELS,
     ELEVENLABS_MODELS,
+    FUNASR_MODELS,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     LANGUAGE_MODE_LABELS,
@@ -150,6 +152,7 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "scribe_v1": "scribe_v1 (legacy batch model)",
     "mai-transcribe-1.5": "mai-transcribe-1.5 (current default, 42 languages)",
     "mai-transcribe-1": "mai-transcribe-1 (first generation, fewer languages)",
+    "fun-asr-realtime": "fun-asr-realtime (31 languages; no German)",
 }
 
 _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
@@ -172,6 +175,10 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
         (value, _REMOTE_MODEL_LABELS.get(value, value))
         for value in AZURE_SPEECH_MODELS
     ),
+    "funasr": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value))
+        for value in FUNASR_MODELS
+    ),
 }
 
 _DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 860)
@@ -188,6 +195,7 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "assemblyai": DEFAULT_ASSEMBLYAI_MODEL,
     "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
     "azure": DEFAULT_AZURE_SPEECH_MODEL,
+    "funasr": DEFAULT_FUNASR_MODEL,
 }
 
 _REMOTE_API_KEY_PROVIDERS = (
@@ -197,6 +205,7 @@ _REMOTE_API_KEY_PROVIDERS = (
     "groq",
     "elevenlabs",
     "azure",
+    "funasr",
 )
 
 _LOCAL_MODEL_SCAN_SESSION_CACHE: dict[str, list[str]] = {}
@@ -312,6 +321,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 "azure_speech_model",
                 DEFAULT_AZURE_SPEECH_MODEL,
             ),
+            "funasr": getattr(
+                self._loaded_settings,
+                "funasr_model",
+                DEFAULT_FUNASR_MODEL,
+            ),
         }
         self._import_model_values: dict[str, str] = {
             "local": self._loaded_settings.model_size,
@@ -321,6 +335,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "assemblyai": self._remote_model_values["assemblyai"],
             "elevenlabs": self._remote_model_values["elevenlabs"],
             "azure": self._remote_model_values["azure"],
+            "funasr": self._remote_model_values["funasr"],
         }
         self._active_connection_test_thread: threading.Thread | None = None
         self._import_progress_message = ""
@@ -836,6 +851,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "deepgram": "Remote (Deepgram)",
             "elevenlabs": "Remote (ElevenLabs)",
             "azure": "Remote (Azure LLM Speech)",
+            "funasr": "Remote (Fun-ASR / Alibaba)",
         }
         for value in VALID_ENGINES:
             self.engine_combo.addItem(engine_labels.get(value, value), value)
@@ -1622,6 +1638,7 @@ class SettingsDialog(QtWidgets.QDialog):
             ("deepgram", "Deepgram"),
             ("elevenlabs", "ElevenLabs"),
             ("azure", "Azure"),
+            ("funasr", "Fun-ASR"),
         )
         provider_intro = QtWidgets.QLabel(
             "Enter a key only when you want to replace the stored one. The status badge shows whether the app already has a usable key."
@@ -1691,6 +1708,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.deepgram_key_edit = self._provider_key_edits["deepgram"]
         self.elevenlabs_key_edit = self._provider_key_edits["elevenlabs"]
         self.azure_key_edit = self._provider_key_edits["azure"]
+        self.funasr_key_edit = self._provider_key_edits["funasr"]
 
         # Azure additionally needs a per-resource endpoint (no other provider
         # does), so it gets a dedicated, non-secret text field here.
@@ -1750,6 +1768,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.test_conn_target_combo.addItem("Deepgram only", "deepgram")
         self.test_conn_target_combo.addItem("ElevenLabs only", "elevenlabs")
         self.test_conn_target_combo.addItem("Azure only", "azure")
+        self.test_conn_target_combo.addItem("Fun-ASR only", "funasr")
         self.test_conn_target_combo.setToolTip(
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
@@ -1888,6 +1907,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "deepgram": "Remote (Deepgram)",
             "elevenlabs": "Remote (ElevenLabs)",
             "azure": "Remote (Azure LLM Speech)",
+            "funasr": "Remote (Fun-ASR / Alibaba)",
         }
         for value in VALID_ENGINES:
             self.import_engine_combo.addItem(
@@ -3552,6 +3572,8 @@ class SettingsDialog(QtWidgets.QDialog):
             return replace(settings, elevenlabs_model=selected_model)
         if normalized_engine == "azure" and selected_model:
             return replace(settings, azure_speech_model=selected_model)
+        if normalized_engine == "funasr" and selected_model:
+            return replace(settings, funasr_model=selected_model)
         return settings
 
     def _update_remote_model_selector(self) -> None:
@@ -3608,6 +3630,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 "Azure LLM Speech (MAI-Transcribe) is a cloud, batch-only service. "
                 "Set the Azure Endpoint and key under Remote Provider API Keys. "
                 "mai-transcribe-1.5 covers the most languages."
+            )
+        elif provider == "funasr":
+            note = (
+                "Fun-ASR (Alibaba/DashScope) is a cloud, batch-only service used "
+                "here for its 31-language coverage (Chinese + East/SE-Asian). "
+                "It does NOT support German; use Azure or local for German."
             )
 
         self.remote_model_note_label.setText(note)
@@ -3754,6 +3782,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 "Azure LLM Speech (MAI-Transcribe) is multilingual. 'Auto' lets "
                 "the model detect language; selecting one sends a locale hint. "
                 "Available languages follow the selected MAI-Transcribe model."
+            )
+
+        if engine == "funasr":
+            return (
+                "Fun-ASR is multilingual across 31 languages but does NOT support "
+                "German. 'Auto' auto-detects; selecting one sends a language hint."
             )
 
         return ""
@@ -4000,6 +4034,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "deepgram": "Deepgram",
             "elevenlabs": "ElevenLabs",
             "azure": "Azure LLM Speech",
+            "funasr": "Fun-ASR (Alibaba)",
         }
         return labels.get(provider, provider)
 
@@ -4222,6 +4257,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "deepgram",
             "elevenlabs",
             "azure",
+            "funasr",
         )
         if normalized == "all-configured":
             configured: list[str] = []
@@ -4350,6 +4386,25 @@ class SettingsDialog(QtWidgets.QDialog):
                 return None, str(exc)
             return transcriber.test_connection, None
 
+        if engine == "funasr":
+            api_key = self._resolve_api_key("funasr", self.funasr_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+
+            from .transcriber.funasr_provider import FunAsrTranscriber
+
+            transcriber = FunAsrTranscriber(
+                api_key=api_key,
+                language_mode=str(
+                    self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+                ),
+                model=self._remote_model_value_for_provider("funasr"),
+            )
+            return transcriber.test_connection, None
+
         return None, None
 
     def _resolve_api_key(self, provider: str, key_field: QtWidgets.QLineEdit) -> str:
@@ -4442,6 +4497,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 "deepgram",
                 "elevenlabs",
                 "azure",
+                "funasr",
             ):
                 if provider not in details:
                     continue
@@ -4536,6 +4592,11 @@ class SettingsDialog(QtWidgets.QDialog):
                     "azure_speech_model",
                     DEFAULT_AZURE_SPEECH_MODEL,
                 ),
+                "funasr": getattr(
+                    settings,
+                    "funasr_model",
+                    DEFAULT_FUNASR_MODEL,
+                ),
             }
         )
         self._import_model_values.update(
@@ -4562,6 +4623,11 @@ class SettingsDialog(QtWidgets.QDialog):
                     settings,
                     "azure_speech_model",
                     DEFAULT_AZURE_SPEECH_MODEL,
+                ),
+                "funasr": getattr(
+                    settings,
+                    "funasr_model",
+                    DEFAULT_FUNASR_MODEL,
                 ),
             }
         )
@@ -5056,6 +5122,7 @@ class SettingsDialog(QtWidgets.QDialog):
             has_groq_key=key_states["groq"],
             has_elevenlabs_key=key_states["elevenlabs"],
             has_azure_key=key_states["azure"],
+            has_funasr_key=key_states["funasr"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
         )
         try:
@@ -5127,6 +5194,7 @@ class SettingsDialog(QtWidgets.QDialog):
             has_groq_key=self._loaded_settings.has_groq_key,
             has_elevenlabs_key=getattr(self._loaded_settings, "has_elevenlabs_key", False),
             has_azure_key=getattr(self._loaded_settings, "has_azure_key", False),
+            has_funasr_key=getattr(self._loaded_settings, "has_funasr_key", False),
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -5134,6 +5202,7 @@ class SettingsDialog(QtWidgets.QDialog):
             elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
             azure_speech_model=self._remote_model_value_for_provider("azure"),
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
+            funasr_model=self._remote_model_value_for_provider("funasr"),
         )
         effective_engine = str(
             engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
@@ -5264,6 +5333,7 @@ class SettingsDialog(QtWidgets.QDialog):
             has_groq_key=key_states["groq"],
             has_elevenlabs_key=key_states["elevenlabs"],
             has_azure_key=key_states["azure"],
+            has_funasr_key=key_states["funasr"],
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -5271,6 +5341,7 @@ class SettingsDialog(QtWidgets.QDialog):
             elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
             azure_speech_model=self._remote_model_value_for_provider("azure"),
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
+            funasr_model=self._remote_model_value_for_provider("funasr"),
         )
 
         if history_limit_changed and requested_history_limit > 0:

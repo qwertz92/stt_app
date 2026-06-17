@@ -5,6 +5,7 @@ from ..config import (
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ENGINE,
+    DEFAULT_FUNASR_MODEL,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
 )
@@ -14,6 +15,7 @@ from .azure_provider import AzureLlmSpeechTranscriber
 from .deepgram_provider import DeepgramTranscriber
 from .base import ITranscriber
 from .elevenlabs_provider import ElevenLabsTranscriber
+from .funasr_provider import FunAsrTranscriber
 from .groq_provider import GroqTranscriber
 from .local_faster_whisper import LocalFasterWhisperTranscriber
 from .local_nemotron import LocalNemotronTranscriber
@@ -103,6 +105,15 @@ def create_transcriber(
             endpoint=getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT),
             language_mode=settings.language_mode,
             model=getattr(settings, "azure_speech_model", DEFAULT_AZURE_SPEECH_MODEL),
+        )
+    if settings.engine == "funasr":
+        api_key = ""
+        if secret_store is not None:
+            api_key = secret_store.get_api_key("funasr") or ""
+        return FunAsrTranscriber(
+            api_key=api_key,
+            language_mode=settings.language_mode,
+            model=getattr(settings, "funasr_model", DEFAULT_FUNASR_MODEL),
         )
 
     # Unknown engine — fall back to local provider.

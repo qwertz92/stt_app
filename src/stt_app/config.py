@@ -716,6 +716,47 @@ AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES = (
 AZURE_LANGUAGE_MODES = AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES
 # App language code -> Azure locale code, where they differ.
 AZURE_LOCALE_OVERRIDES: dict[str, str] = {"no": "nb"}
+# Alibaba Fun-ASR (DashScope Model Studio) covers 31 languages. Notably it does
+# NOT document German support; its strength is Chinese (incl. dialects) and
+# East/Southeast-Asian languages. "auto" uses multilingual mode; a specific
+# language is sent as a language_hints entry.
+FUNASR_LANGUAGE_MODES = (
+    "auto",
+    "en",
+    "zh",
+    "yue",
+    "ja",
+    "ko",
+    "vi",
+    "id",
+    "th",
+    "ms",
+    "tl",
+    "ar",
+    "hi",
+    "bg",
+    "hr",
+    "cs",
+    "da",
+    "nl",
+    "et",
+    "fi",
+    "el",
+    "hu",
+    "ga",
+    "lv",
+    "lt",
+    "mt",
+    "pl",
+    "pt",
+    "ro",
+    "sk",
+    "sl",
+    "sv",
+)
+# App language code -> Fun-ASR language_hints code, where they differ.
+# Most are identical bare codes; this maps only the exceptions.
+FUNASR_LANGUAGE_HINTS: dict[str, str] = {}
 # Only providers with implemented runtime paths should be user-selectable.
 VALID_ENGINES = (
     "local",
@@ -725,6 +766,7 @@ VALID_ENGINES = (
     "deepgram",
     "elevenlabs",
     "azure",
+    "funasr",
 )
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
@@ -734,6 +776,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "deepgram": VALID_LANGUAGE_MODES,
     "elevenlabs": ELEVENLABS_LANGUAGE_MODES,
     "azure": AZURE_LANGUAGE_MODES,
+    "funasr": FUNASR_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
 LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES
@@ -751,6 +794,7 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
     ("azure", "mai-transcribe-1.5"): AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
     ("azure", "mai-transcribe-1"): AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
+    ("funasr", "fun-asr-realtime"): FUNASR_LANGUAGE_MODES,
 }
 STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
@@ -828,6 +872,15 @@ AZURE_SPEECH_API_VERSION = "2025-10-15"
 # Per-resource endpoint, e.g. "https://<resource>.cognitiveservices.azure.com".
 # Empty until the user configures it in Settings.
 DEFAULT_AZURE_ENDPOINT = ""
+
+# Alibaba Fun-ASR (DashScope Model Studio). Remote, cloud-only; driven over the
+# real-time WebSocket API in a batch fashion. Needs only a DashScope API key.
+FUNASR_MODELS = (
+    "fun-asr-realtime",
+)
+DEFAULT_FUNASR_MODEL = "fun-asr-realtime"
+# International (Singapore) DashScope inference WebSocket endpoint.
+FUNASR_WS_URL_INTL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/"
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

@@ -21,6 +21,7 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Deepgram | Streaming | `nova-3` | Mono: $0.0077/min, Multi: $0.0092/min | $0.462/hour, $0.552/hour |
 | ElevenLabs | Batch | `scribe_v2`, `scribe_v1` | Scribe v1/v2: $0.22/hour | $0.22/hour |
 | Azure LLM Speech | Batch | `mai-transcribe-1.5`, `mai-transcribe-1` | Fast transcription: $0.36/hour | $0.36/hour |
+| Fun-ASR (Alibaba) | Batch | `fun-asr-realtime` | DashScope pay-as-you-go (per-second; see Model Studio pricing) | Pay-as-you-go after free trial |
 
 Notes:
 
@@ -28,6 +29,7 @@ Notes:
 - In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate whether your account bills this as multilingual.
 - ElevenLabs also offers `scribe_v2_realtime` publicly at $0.39/hour, but the current app integration remains batch-only.
 - Azure LLM Speech (enhanced mode, backed by the MAI-Transcribe models) is a synchronous file/"fast transcription" API and is **batch-only** in this app. It is in **public preview** (no SLA). It needs both a resource key *and* a per-resource endpoint, and the resource region must support LLM Speech.
+- Fun-ASR (Alibaba) is driven over the DashScope **real-time WebSocket** API in a batch fashion (the batch file API requires an OSS public URL). Key-only (Singapore region). **No German support.** Confirm the current per-second rate on the Model Studio pricing page.
 
 ---
 
@@ -42,6 +44,7 @@ Notes:
 | Deepgram | Yes | $200 free credit, no credit card required |
 | ElevenLabs | Yes | Free plan includes 2 hours 30 minutes of Speech to Text usage |
 | Azure LLM Speech | Yes | Free (F0) tier: **5 audio hours/month** for speech to text (hard cap, not adjustable) |
+| Fun-ASR (Alibaba) | Yes | DashScope free trial quota for new accounts (Singapore region; ~1M tokens per model, ~90 days), then pay-as-you-go |
 
 OpenAI caveat:
 
@@ -61,6 +64,7 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 | Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup | Good signal for Nova-3; vendor-run benchmark |
 | ElevenLabs | `scribe_v2`, `scribe_v1` | ElevenLabs positions Scribe v2 as its most accurate STT model and shows a vendor-run realtime comparison where Scribe v2 Realtime outperforms Gemini Flash 2.5, GPT-4o Mini, and Deepgram Nova 3 | Useful directional signal, but still vendor-run and not a published WER table |
 | Azure LLM Speech | `mai-transcribe-1.5`, `mai-transcribe-1` | Microsoft reports MAI-Transcribe-1.5 at **2.4% WER** on Artificial Analysis (ranked #3 there, behind Alibaba Fun-Realtime-ASR and ElevenLabs Scribe v2) and **best-in-class FLEURS** accuracy across 42-43 languages, "leading the accuracy-speed Pareto frontier" | Top-tier accuracy with strong multilingual coverage. Note: it is *not* currently the #1 entry on the Hugging Face Open ASR Leaderboard (which is led by open models such as Granite Speech / Canary-Qwen / Cohere Transcribe). Parameter count is **not disclosed** by Microsoft |
+| Fun-ASR (Alibaba) | `fun-asr-realtime` | The hosted **Fun-Realtime-ASR-preview** currently **tops the Artificial Analysis leaderboard at ~1.7% WER** (ahead of ElevenLabs Scribe v2 and MAI-Transcribe-1.5) | Best published accuracy of the integrated providers, but **no German**; strongest fit is Chinese (incl. dialects) and East/SE-Asian languages. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
 
 ---
 
@@ -133,7 +137,7 @@ implemented as a remote engine.
 | Candidate | Public access signal | Pricing clarity | Local/offline fit | Current status |
 |-----------|----------------------|-----------------|-------------------|----------------|
 | Cohere hosted Transcribe API | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Local/offline usage is covered by the integrated ONNX model, not by the hosted API | Hosted provider not integrated |
-| Alibaba Fun-ASR (hosted + open) | Hosted `fun-asr-realtime` on Model Studio (Singapore endpoint, free trial); open weights Apache-2.0 on HF/ModelScope | Pay-as-you-go on DashScope; #1 on Artificial Analysis (~1.7% WER) for the hosted realtime preview | Open weights are 7.7B (too big) or 0.8B nano (no ONNX export, different runtime) | Deferred — **no documented German support** + Alibaba onboarding + async task API. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
+| Alibaba Fun-ASR — **local** weights | Open weights Apache-2.0 on HF/ModelScope | n/a (self-hosted) | 7.7B (too big) or 0.8B nano (no ONNX export, different runtime) | Local path not integrated; the **hosted** Fun-ASR is integrated as a remote engine. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
 
 Recommendation:
 

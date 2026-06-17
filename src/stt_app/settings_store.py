@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
     DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_FUNASR_MODEL,
     DEFAULT_GROQ_MODEL,
     DEFAULT_HOTKEY,
     DEEPGRAM_MODELS,
@@ -46,6 +47,7 @@ from .config import (
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DEFAULT_VAD_ENABLED,
     ELEVENLABS_MODELS,
+    FUNASR_MODELS,
     GROQ_MODELS,
     HISTORY_MAX_ITEMS_MAX,
     DEFAULT_OPENAI_MODEL,
@@ -102,6 +104,7 @@ DEFAULTS = {
     "has_groq_key": False,
     "has_elevenlabs_key": False,
     "has_azure_key": False,
+    "has_funasr_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
@@ -109,6 +112,7 @@ DEFAULTS = {
     "elevenlabs_model": DEFAULT_ELEVENLABS_MODEL,
     "azure_speech_model": DEFAULT_AZURE_SPEECH_MODEL,
     "azure_endpoint": DEFAULT_AZURE_ENDPOINT,
+    "funasr_model": DEFAULT_FUNASR_MODEL,
 }
 
 
@@ -153,6 +157,7 @@ class AppSettings:
     has_groq_key: bool = False
     has_elevenlabs_key: bool = False
     has_azure_key: bool = False
+    has_funasr_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
@@ -160,6 +165,7 @@ class AppSettings:
     elevenlabs_model: str = DEFAULT_ELEVENLABS_MODEL
     azure_speech_model: str = DEFAULT_AZURE_SPEECH_MODEL
     azure_endpoint: str = DEFAULT_AZURE_ENDPOINT
+    funasr_model: str = DEFAULT_FUNASR_MODEL
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
@@ -221,6 +227,9 @@ class AppSettings:
         azure_endpoint = str(
             merged.get("azure_endpoint", DEFAULT_AZURE_ENDPOINT)
         ).strip()
+        funasr_model = str(merged.get("funasr_model", DEFAULT_FUNASR_MODEL))
+        if funasr_model not in FUNASR_MODELS:
+            funasr_model = DEFAULT_FUNASR_MODEL
         start_beep_tone = str(
             merged.get("start_beep_tone", DEFAULT_START_BEEP_TONE)
         ).strip().lower()
@@ -341,6 +350,7 @@ class AppSettings:
             has_groq_key=bool(merged.get("has_groq_key", False)),
             has_elevenlabs_key=bool(merged.get("has_elevenlabs_key", False)),
             has_azure_key=bool(merged.get("has_azure_key", False)),
+            has_funasr_key=bool(merged.get("has_funasr_key", False)),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
@@ -348,6 +358,7 @@ class AppSettings:
             elevenlabs_model=elevenlabs_model,
             azure_speech_model=azure_speech_model,
             azure_endpoint=azure_endpoint,
+            funasr_model=funasr_model,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -395,6 +406,7 @@ class SettingsStore:
             "groq_api_key",
             "elevenlabs_api_key",
             "azure_api_key",
+            "funasr_api_key",
         ):
             payload.pop(secret_key, None)
 
