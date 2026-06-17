@@ -708,6 +708,8 @@ class DictationController(QtCore.QObject):
             return getattr(settings, "assemblyai_model", "")
         if settings.engine == "elevenlabs":
             return getattr(settings, "elevenlabs_model", "")
+        if settings.engine == "azure":
+            return getattr(settings, "azure_speech_model", "")
         return settings.model_size
 
     def _current_last_recording_id(self) -> str:
@@ -1356,6 +1358,8 @@ class DictationController(QtCore.QObject):
             getattr(settings, "deepgram_model", ""),
             getattr(settings, "assemblyai_model", ""),
             getattr(settings, "elevenlabs_model", ""),
+            getattr(settings, "azure_speech_model", ""),
+            getattr(settings, "azure_endpoint", ""),
             bool(getattr(settings, "keep_onnx_model_loaded", False)),
             bool(getattr(settings, "streaming_full_final_transcript", False)),
         )

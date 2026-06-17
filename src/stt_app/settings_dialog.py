@@ -21,7 +21,10 @@ from .benchmark_history import (
 from .config import (
     APP_LOGGER_NAME,
     ASSEMBLYAI_MODELS,
+    AZURE_SPEECH_MODELS,
     DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_AZURE_ENDPOINT,
+    DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
@@ -145,6 +148,8 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "universal-2": "universal-2 (fast, broad language coverage)",
     "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
     "scribe_v1": "scribe_v1 (legacy batch model)",
+    "mai-transcribe-1.5": "mai-transcribe-1.5 (current default, 42 languages)",
+    "mai-transcribe-1": "mai-transcribe-1 (first generation, fewer languages)",
 }
 
 _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
@@ -163,6 +168,10 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
         (value, _REMOTE_MODEL_LABELS.get(value, value))
         for value in ELEVENLABS_MODELS
     ),
+    "azure": tuple(
+        (value, _REMOTE_MODEL_LABELS.get(value, value))
+        for value in AZURE_SPEECH_MODELS
+    ),
 }
 
 _DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 860)
@@ -178,6 +187,7 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "deepgram": DEFAULT_DEEPGRAM_MODEL,
     "assemblyai": DEFAULT_ASSEMBLYAI_MODEL,
     "elevenlabs": DEFAULT_ELEVENLABS_MODEL,
+    "azure": DEFAULT_AZURE_SPEECH_MODEL,
 }
 
 _REMOTE_API_KEY_PROVIDERS = (
@@ -186,6 +196,7 @@ _REMOTE_API_KEY_PROVIDERS = (
     "assemblyai",
     "groq",
     "elevenlabs",
+    "azure",
 )
 
 _LOCAL_MODEL_SCAN_SESSION_CACHE: dict[str, list[str]] = {}
@@ -296,6 +307,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 "elevenlabs_model",
                 DEFAULT_ELEVENLABS_MODEL,
             ),
+            "azure": getattr(
+                self._loaded_settings,
+                "azure_speech_model",
+                DEFAULT_AZURE_SPEECH_MODEL,
+            ),
         }
         self._import_model_values: dict[str, str] = {
             "local": self._loaded_settings.model_size,
@@ -304,6 +320,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "deepgram": self._remote_model_values["deepgram"],
             "assemblyai": self._remote_model_values["assemblyai"],
             "elevenlabs": self._remote_model_values["elevenlabs"],
+            "azure": self._remote_model_values["azure"],
         }
         self._active_connection_test_thread: threading.Thread | None = None
         self._import_progress_message = ""
@@ -818,6 +835,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "openai": "Remote (OpenAI)",
             "deepgram": "Remote (Deepgram)",
             "elevenlabs": "Remote (ElevenLabs)",
+            "azure": "Remote (Azure LLM Speech)",
         }
         for value in VALID_ENGINES:
             self.engine_combo.addItem(engine_labels.get(value, value), value)
@@ -1603,6 +1621,7 @@ class SettingsDialog(QtWidgets.QDialog):
             ("openai", "OpenAI"),
             ("deepgram", "Deepgram"),
             ("elevenlabs", "ElevenLabs"),
+            ("azure", "Azure"),
         )
         provider_intro = QtWidgets.QLabel(
             "Enter a key only when you want to replace the stored one. The status badge shows whether the app already has a usable key."
@@ -1671,6 +1690,27 @@ class SettingsDialog(QtWidgets.QDialog):
         self.openai_key_edit = self._provider_key_edits["openai"]
         self.deepgram_key_edit = self._provider_key_edits["deepgram"]
         self.elevenlabs_key_edit = self._provider_key_edits["elevenlabs"]
+        self.azure_key_edit = self._provider_key_edits["azure"]
+
+        # Azure additionally needs a per-resource endpoint (no other provider
+        # does), so it gets a dedicated, non-secret text field here.
+        self.azure_endpoint_edit = QtWidgets.QLineEdit()
+        self.azure_endpoint_edit.setPlaceholderText(
+            "https://<resource>.cognitiveservices.azure.com"
+        )
+        self.azure_endpoint_edit.setMinimumWidth(180)
+        azure_endpoint_hint = QtWidgets.QLabel(
+            "Required for Azure LLM Speech. Copy the endpoint from your Azure "
+            "Speech / Foundry resource (Keys and Endpoint). The region must "
+            "support LLM Speech."
+        )
+        azure_endpoint_hint.setWordWrap(True)
+        self._style_note_label(azure_endpoint_hint)
+        provider_layout.addRow(
+            "Azure Endpoint",
+            self._field_with_hint(self.azure_endpoint_edit, azure_endpoint_hint),
+        )
+
         provider_note = QtWidgets.QLabel(
             "Status badges show where each key is currently sourced from."
         )
@@ -1709,6 +1749,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.test_conn_target_combo.addItem("OpenAI only", "openai")
         self.test_conn_target_combo.addItem("Deepgram only", "deepgram")
         self.test_conn_target_combo.addItem("ElevenLabs only", "elevenlabs")
+        self.test_conn_target_combo.addItem("Azure only", "azure")
         self.test_conn_target_combo.setToolTip(
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
@@ -1846,6 +1887,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "openai": "Remote (OpenAI)",
             "deepgram": "Remote (Deepgram)",
             "elevenlabs": "Remote (ElevenLabs)",
+            "azure": "Remote (Azure LLM Speech)",
         }
         for value in VALID_ENGINES:
             self.import_engine_combo.addItem(
@@ -3508,6 +3550,8 @@ class SettingsDialog(QtWidgets.QDialog):
             return replace(settings, assemblyai_model=selected_model)
         if normalized_engine == "elevenlabs" and selected_model:
             return replace(settings, elevenlabs_model=selected_model)
+        if normalized_engine == "azure" and selected_model:
+            return replace(settings, azure_speech_model=selected_model)
         return settings
 
     def _update_remote_model_selector(self) -> None:
@@ -3558,6 +3602,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 "ElevenLabs currently uses the selected model for batch transcription "
                 "and imports. Realtime Scribe is documented, but not yet wired into "
                 "this app's streaming mode."
+            )
+        elif provider == "azure":
+            note = (
+                "Azure LLM Speech (MAI-Transcribe) is a cloud, batch-only service. "
+                "Set the Azure Endpoint and key under Remote Provider API Keys. "
+                "mai-transcribe-1.5 covers the most languages."
             )
 
         self.remote_model_note_label.setText(note)
@@ -3697,6 +3747,13 @@ class SettingsDialog(QtWidgets.QDialog):
             return (
                 "Batch requests use Universal-3 Pro with Universal-2 fallback, "
                 "providing the broad Universal-2 language list."
+            )
+
+        if engine == "azure":
+            return (
+                "Azure LLM Speech (MAI-Transcribe) is multilingual. 'Auto' lets "
+                "the model detect language; selecting one sends a locale hint. "
+                "Available languages follow the selected MAI-Transcribe model."
             )
 
         return ""
@@ -3942,6 +3999,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "openai": "OpenAI",
             "deepgram": "Deepgram",
             "elevenlabs": "ElevenLabs",
+            "azure": "Azure LLM Speech",
         }
         return labels.get(provider, provider)
 
@@ -4157,7 +4215,14 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _providers_for_connection_target(self, target: str) -> list[str]:
         normalized = str(target or "").strip().lower()
-        remote_providers = ("assemblyai", "groq", "openai", "deepgram", "elevenlabs")
+        remote_providers = (
+            "assemblyai",
+            "groq",
+            "openai",
+            "deepgram",
+            "elevenlabs",
+            "azure",
+        )
         if normalized == "all-configured":
             configured: list[str] = []
             for provider in remote_providers:
@@ -4255,6 +4320,36 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             return transcriber.test_connection, None
 
+        if engine == "azure":
+            api_key = self._resolve_api_key("azure", self.azure_key_edit)
+            if not api_key:
+                return (
+                    None,
+                    "No API key entered. Enter a key above first.",
+                )
+            endpoint = self._resolve_azure_endpoint()
+            if not endpoint:
+                return (
+                    None,
+                    "No Azure endpoint entered. "
+                    "Enter the resource endpoint above first.",
+                )
+
+            from .transcriber.azure_provider import AzureLlmSpeechTranscriber
+
+            try:
+                transcriber = AzureLlmSpeechTranscriber(
+                    api_key=api_key,
+                    endpoint=endpoint,
+                    language_mode=str(
+                        self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+                    ),
+                    model=self._remote_model_value_for_provider("azure"),
+                )
+            except Exception as exc:
+                return None, str(exc)
+            return transcriber.test_connection, None
+
         return None, None
 
     def _resolve_api_key(self, provider: str, key_field: QtWidgets.QLineEdit) -> str:
@@ -4268,6 +4363,13 @@ class SettingsDialog(QtWidgets.QDialog):
             return str(key_getter(provider) or "")
         except Exception:
             return ""
+
+    def _resolve_azure_endpoint(self) -> str:
+        """Return the typed Azure endpoint, or the stored one as fallback."""
+        typed = self.azure_endpoint_edit.text().strip()
+        if typed:
+            return typed
+        return str(getattr(self._loaded_settings, "azure_endpoint", "") or "").strip()
 
     def _run_connection_test_worker(
         self,
@@ -4333,7 +4435,14 @@ class SettingsDialog(QtWidgets.QDialog):
 
         if len(details) > 1:
             parts = []
-            for provider in ("assemblyai", "groq", "openai", "deepgram", "elevenlabs"):
+            for provider in (
+                "assemblyai",
+                "groq",
+                "openai",
+                "deepgram",
+                "elevenlabs",
+                "azure",
+            ):
                 if provider not in details:
                     continue
                 provider_ok, _provider_msg = details[provider]
@@ -4422,6 +4531,11 @@ class SettingsDialog(QtWidgets.QDialog):
                     "elevenlabs_model",
                     DEFAULT_ELEVENLABS_MODEL,
                 ),
+                "azure": getattr(
+                    settings,
+                    "azure_speech_model",
+                    DEFAULT_AZURE_SPEECH_MODEL,
+                ),
             }
         )
         self._import_model_values.update(
@@ -4444,8 +4558,19 @@ class SettingsDialog(QtWidgets.QDialog):
                     "elevenlabs_model",
                     DEFAULT_ELEVENLABS_MODEL,
                 ),
+                "azure": getattr(
+                    settings,
+                    "azure_speech_model",
+                    DEFAULT_AZURE_SPEECH_MODEL,
+                ),
             }
         )
+        if hasattr(self, "azure_endpoint_edit"):
+            blocker = QtCore.QSignalBlocker(self.azure_endpoint_edit)
+            self.azure_endpoint_edit.setText(
+                getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT) or ""
+            )
+            del blocker
         self._update_remote_model_selector()
         self._select_combo_data(self.test_conn_target_combo, "all-configured")
         if hasattr(self, "import_engine_combo"):
@@ -4930,6 +5055,8 @@ class SettingsDialog(QtWidgets.QDialog):
             has_assemblyai_key=key_states["assemblyai"],
             has_groq_key=key_states["groq"],
             has_elevenlabs_key=key_states["elevenlabs"],
+            has_azure_key=key_states["azure"],
+            azure_endpoint=self.azure_endpoint_edit.text().strip(),
         )
         try:
             self._settings_store.save(updated)
@@ -4999,11 +5126,14 @@ class SettingsDialog(QtWidgets.QDialog):
             has_assemblyai_key=self._loaded_settings.has_assemblyai_key,
             has_groq_key=self._loaded_settings.has_groq_key,
             has_elevenlabs_key=getattr(self._loaded_settings, "has_elevenlabs_key", False),
+            has_azure_key=getattr(self._loaded_settings, "has_azure_key", False),
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
             assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
             elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
+            azure_speech_model=self._remote_model_value_for_provider("azure"),
+            azure_endpoint=self.azure_endpoint_edit.text().strip(),
         )
         effective_engine = str(
             engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
@@ -5133,11 +5263,14 @@ class SettingsDialog(QtWidgets.QDialog):
             has_assemblyai_key=key_states["assemblyai"],
             has_groq_key=key_states["groq"],
             has_elevenlabs_key=key_states["elevenlabs"],
+            has_azure_key=key_states["azure"],
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
             assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
             elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
+            azure_speech_model=self._remote_model_value_for_provider("azure"),
+            azure_endpoint=self.azure_endpoint_edit.text().strip(),
         )
 
         if history_limit_changed and requested_history_limit > 0:

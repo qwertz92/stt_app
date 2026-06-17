@@ -7,7 +7,7 @@ LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "stt_app"
 
-SCHEMA_VERSION = 16
+SCHEMA_VERSION = 17
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -638,8 +638,94 @@ DEEPGRAM_NOVA_2_LANGUAGE_MODES = (
     "uk",
     "vi",
 )
+# Azure LLM Speech (MAI-Transcribe). "auto" uses the model's default
+# multilingual mode; selecting a language sends a `locales` hint.
+# MAI-Transcribe-1.5 covers 42 languages; MAI-Transcribe-1 a smaller subset.
+AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES = (
+    "auto",
+    "de",
+    "en",
+    "ar",
+    "as",
+    "bg",
+    "bn",
+    "ca",
+    "cs",
+    "da",
+    "el",
+    "es",
+    "et",
+    "fi",
+    "fr",
+    "gu",
+    "hi",
+    "hu",
+    "id",
+    "it",
+    "ja",
+    "kn",
+    "ko",
+    "lt",
+    "ml",
+    "mr",
+    "nl",
+    "no",
+    "or",
+    "pa",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sk",
+    "sl",
+    "sv",
+    "ta",
+    "te",
+    "th",
+    "tr",
+    "uk",
+    "vi",
+)
+AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES = (
+    "auto",
+    "de",
+    "en",
+    "ar",
+    "cs",
+    "da",
+    "es",
+    "fi",
+    "fr",
+    "hi",
+    "hu",
+    "id",
+    "it",
+    "ja",
+    "ko",
+    "nl",
+    "no",
+    "pl",
+    "pt",
+    "ro",
+    "ru",
+    "sv",
+    "th",
+    "tr",
+    "vi",
+)
+AZURE_LANGUAGE_MODES = AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES
+# App language code -> Azure locale code, where they differ.
+AZURE_LOCALE_OVERRIDES: dict[str, str] = {"no": "nb"}
 # Only providers with implemented runtime paths should be user-selectable.
-VALID_ENGINES = ("local", "assemblyai", "groq", "openai", "deepgram", "elevenlabs")
+VALID_ENGINES = (
+    "local",
+    "assemblyai",
+    "groq",
+    "openai",
+    "deepgram",
+    "elevenlabs",
+    "azure",
+)
 ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "local": WHISPER_LANGUAGE_MODES,
     "assemblyai": WHISPER_LANGUAGE_MODES,
@@ -647,6 +733,7 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "openai": OPENAI_LANGUAGE_MODES,
     "deepgram": VALID_LANGUAGE_MODES,
     "elevenlabs": ELEVENLABS_LANGUAGE_MODES,
+    "azure": AZURE_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
 LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES
@@ -662,6 +749,8 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
+    ("azure", "mai-transcribe-1.5"): AZURE_MAI_TRANSCRIBE_1_5_LANGUAGE_MODES,
+    ("azure", "mai-transcribe-1"): AZURE_MAI_TRANSCRIBE_1_LANGUAGE_MODES,
 }
 STREAMING_ENGINES = ("local", "assemblyai", "deepgram")  # engines that support streaming mode
 VALID_MODES = ("batch", "streaming")
@@ -726,6 +815,19 @@ ELEVENLABS_MODELS = (
     "scribe_v1",
 )
 DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
+
+# Azure LLM Speech (Microsoft Foundry) enhanced-mode models.
+# These are remote, cloud-only models from the Microsoft AI (MAI) team.
+AZURE_SPEECH_MODELS = (
+    "mai-transcribe-1.5",
+    "mai-transcribe-1",
+)
+DEFAULT_AZURE_SPEECH_MODEL = "mai-transcribe-1.5"
+# REST API version for the fast-transcription `:transcribe` endpoint.
+AZURE_SPEECH_API_VERSION = "2025-10-15"
+# Per-resource endpoint, e.g. "https://<resource>.cognitiveservices.azure.com".
+# Empty until the user configures it in Settings.
+DEFAULT_AZURE_ENDPOINT = ""
 
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1

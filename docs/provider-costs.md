@@ -2,7 +2,7 @@
 
 This document compares pricing, free-tier availability, and quality signals for providers currently available in `stt_app`.
 
-- Last verified: **2026-03-29**
+- Last verified: **2026-06-17**
 - Prices and limits can change at any time. Confirm on official pricing pages before production use.
 
 ---
@@ -20,12 +20,14 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min | $0.258/hour, $0.312/hour |
 | Deepgram | Streaming | `nova-3` | Mono: $0.0077/min, Multi: $0.0092/min | $0.462/hour, $0.552/hour |
 | ElevenLabs | Batch | `scribe_v2`, `scribe_v1` | Scribe v1/v2: $0.22/hour | $0.22/hour |
+| Azure LLM Speech | Batch | `mai-transcribe-1.5`, `mai-transcribe-1` | Fast transcription: $0.36/hour | $0.36/hour |
 
 Notes:
 
 - OpenAI `gpt-4o*` transcription is token-priced; minute values above are OpenAI estimates.
 - In this app, Deepgram with `language_mode="auto"` uses `detect_language=true`; validate whether your account bills this as multilingual.
 - ElevenLabs also offers `scribe_v2_realtime` publicly at $0.39/hour, but the current app integration remains batch-only.
+- Azure LLM Speech (enhanced mode, backed by the MAI-Transcribe models) is a synchronous file/"fast transcription" API and is **batch-only** in this app. It is in **public preview** (no SLA). It needs both a resource key *and* a per-resource endpoint, and the resource region must support LLM Speech.
 
 ---
 
@@ -39,6 +41,7 @@ Notes:
 | Groq | Yes | Free plan with no card; speech model rate limits (for `whisper-large-v3` and `-turbo`) include 20 RPM, 2,000 requests/day, 7,200 audio-seconds/hour, 28,800 audio-seconds/day |
 | Deepgram | Yes | $200 free credit, no credit card required |
 | ElevenLabs | Yes | Free plan includes 2 hours 30 minutes of Speech to Text usage |
+| Azure LLM Speech | Yes | Free (F0) tier: **5 audio hours/month** for speech to text (hard cap, not adjustable) |
 
 OpenAI caveat:
 
@@ -57,6 +60,7 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 | Groq | `whisper-large-v3`, `whisper-large-v3-turbo` | Groq speech docs list WER: **10.3%** (v3) and **12%** (v3-turbo) | Useful baseline; values come from Groq model table |
 | Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup | Good signal for Nova-3; vendor-run benchmark |
 | ElevenLabs | `scribe_v2`, `scribe_v1` | ElevenLabs positions Scribe v2 as its most accurate STT model and shows a vendor-run realtime comparison where Scribe v2 Realtime outperforms Gemini Flash 2.5, GPT-4o Mini, and Deepgram Nova 3 | Useful directional signal, but still vendor-run and not a published WER table |
+| Azure LLM Speech | `mai-transcribe-1.5`, `mai-transcribe-1` | Microsoft reports MAI-Transcribe-1.5 at **2.4% WER** on Artificial Analysis (ranked #3 there, behind Alibaba Fun-Realtime-ASR and ElevenLabs Scribe v2) and **best-in-class FLEURS** accuracy across 42-43 languages, "leading the accuracy-speed Pareto frontier" | Top-tier accuracy with strong multilingual coverage. Note: it is *not* currently the #1 entry on the Hugging Face Open ASR Leaderboard (which is led by open models such as Granite Speech / Canary-Qwen / Cohere Transcribe). Parameter count is **not disclosed** by Microsoft |
 
 ---
 
@@ -107,6 +111,16 @@ Recommendation:
 - `scribe_v2_realtime` is priced separately from batch transcription.
 - Keyterm prompting adds `20%` cost, and entity detection adds `30%` cost.
 
+### Azure LLM Speech (MAI-Transcribe)
+
+- Currently in **public preview** — no SLA; behavior and pricing can change.
+- Requires a Speech / Foundry resource in a region that supports LLM Speech,
+  plus the per-resource endpoint (not just a key).
+- The F0 free tier's 5 audio hours/month is a hard monthly cap that cannot be
+  raised; beyond that, pay-as-you-go (Standard, S0) billing applies.
+- This is a cloud-only model. There is **no local / ONNX runtime** for it, and
+  Microsoft does not publish the model size (parameter count).
+
 ---
 
 ## 6) Hosted candidates not integrated
@@ -151,4 +165,9 @@ Recommendation:
 - ElevenLabs model reference: <https://elevenlabs.io/docs/overview/models>
 - ElevenLabs STT API reference: <https://elevenlabs.io/docs/api-reference/speech-to-text/convert>
 - ElevenLabs API pricing: <https://elevenlabs.io/pricing/api/>
+- Azure LLM Speech API: <https://learn.microsoft.com/azure/ai-services/speech-service/llm-speech>
+- Azure MAI-Transcribe model: <https://learn.microsoft.com/azure/ai-services/speech-service/mai-transcribe>
+- Azure Speech pricing: <https://azure.microsoft.com/pricing/details/speech/>
+- MAI-Transcribe-1.5 announcement: <https://microsoft.ai/news/mai-transcribe-1-5more-accurate-context-aware-and-built-for-production/>
+- Artificial Analysis speech-to-text leaderboard: <https://artificialanalysis.ai/speech-to-text>
 - Voice Writer STT leaderboard: <https://voicewriter.io/speech-to-text-api-leaderboard/>

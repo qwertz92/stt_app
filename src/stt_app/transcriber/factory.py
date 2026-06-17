@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from ..config import (
+    DEFAULT_AZURE_ENDPOINT,
+    DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ENGINE,
     LOCAL_NEMOTRON_MODEL_SIZES,
@@ -8,6 +10,7 @@ from ..config import (
 )
 from ..settings_store import AppSettings
 from .assemblyai_provider import AssemblyAITranscriber
+from .azure_provider import AzureLlmSpeechTranscriber
 from .deepgram_provider import DeepgramTranscriber
 from .base import ITranscriber
 from .elevenlabs_provider import ElevenLabsTranscriber
@@ -90,6 +93,16 @@ def create_transcriber(
             api_key=api_key,
             language_mode=settings.language_mode,
             model=getattr(settings, "elevenlabs_model", DEFAULT_ELEVENLABS_MODEL),
+        )
+    if settings.engine == "azure":
+        api_key = ""
+        if secret_store is not None:
+            api_key = secret_store.get_api_key("azure") or ""
+        return AzureLlmSpeechTranscriber(
+            api_key=api_key,
+            endpoint=getattr(settings, "azure_endpoint", DEFAULT_AZURE_ENDPOINT),
+            language_mode=settings.language_mode,
+            model=getattr(settings, "azure_speech_model", DEFAULT_AZURE_SPEECH_MODEL),
         )
 
     # Unknown engine — fall back to local provider.

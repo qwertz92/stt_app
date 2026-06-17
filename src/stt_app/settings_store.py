@@ -12,8 +12,11 @@ from .persistence import (
 )
 from .config import (
     ASSEMBLYAI_MODELS,
+    AZURE_SPEECH_MODELS,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
+    DEFAULT_AZURE_ENDPOINT,
+    DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
@@ -98,11 +101,14 @@ DEFAULTS = {
     "has_assemblyai_key": False,
     "has_groq_key": False,
     "has_elevenlabs_key": False,
+    "has_azure_key": False,
     "groq_model": DEFAULT_GROQ_MODEL,
     "openai_model": DEFAULT_OPENAI_MODEL,
     "deepgram_model": DEFAULT_DEEPGRAM_MODEL,
     "assemblyai_model": DEFAULT_ASSEMBLYAI_MODEL,
     "elevenlabs_model": DEFAULT_ELEVENLABS_MODEL,
+    "azure_speech_model": DEFAULT_AZURE_SPEECH_MODEL,
+    "azure_endpoint": DEFAULT_AZURE_ENDPOINT,
 }
 
 
@@ -146,11 +152,14 @@ class AppSettings:
     has_assemblyai_key: bool = False
     has_groq_key: bool = False
     has_elevenlabs_key: bool = False
+    has_azure_key: bool = False
     groq_model: str = DEFAULT_GROQ_MODEL
     openai_model: str = DEFAULT_OPENAI_MODEL
     deepgram_model: str = DEFAULT_DEEPGRAM_MODEL
     assemblyai_model: str = DEFAULT_ASSEMBLYAI_MODEL
     elevenlabs_model: str = DEFAULT_ELEVENLABS_MODEL
+    azure_speech_model: str = DEFAULT_AZURE_SPEECH_MODEL
+    azure_endpoint: str = DEFAULT_AZURE_ENDPOINT
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "AppSettings":
@@ -204,6 +213,14 @@ class AppSettings:
         )
         if elevenlabs_model not in ELEVENLABS_MODELS:
             elevenlabs_model = DEFAULT_ELEVENLABS_MODEL
+        azure_speech_model = str(
+            merged.get("azure_speech_model", DEFAULT_AZURE_SPEECH_MODEL)
+        )
+        if azure_speech_model not in AZURE_SPEECH_MODELS:
+            azure_speech_model = DEFAULT_AZURE_SPEECH_MODEL
+        azure_endpoint = str(
+            merged.get("azure_endpoint", DEFAULT_AZURE_ENDPOINT)
+        ).strip()
         start_beep_tone = str(
             merged.get("start_beep_tone", DEFAULT_START_BEEP_TONE)
         ).strip().lower()
@@ -323,11 +340,14 @@ class AppSettings:
             has_assemblyai_key=bool(merged.get("has_assemblyai_key", False)),
             has_groq_key=bool(merged.get("has_groq_key", False)),
             has_elevenlabs_key=bool(merged.get("has_elevenlabs_key", False)),
+            has_azure_key=bool(merged.get("has_azure_key", False)),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,
             assemblyai_model=assemblyai_model,
             elevenlabs_model=elevenlabs_model,
+            azure_speech_model=azure_speech_model,
+            azure_endpoint=azure_endpoint,
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -374,6 +394,7 @@ class SettingsStore:
             "assemblyai_api_key",
             "groq_api_key",
             "elevenlabs_api_key",
+            "azure_api_key",
         ):
             payload.pop(secret_key, None)
 
