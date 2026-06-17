@@ -148,7 +148,6 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings -> Remote Provider API Keys."
             )
         # Validate eagerly so a misconfigured endpoint fails fast and clearly.
-        self._endpoint = endpoint or ""
         self._transcribe_url = build_transcribe_url(endpoint)
         self._api_key = api_key
         self._model = (
