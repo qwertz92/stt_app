@@ -5,6 +5,21 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-17
 
+- **Evaluated FLEURS and Alibaba Fun-ASR; deferred both (decision record in
+  `docs/funasr-and-fleurs-evaluation.md`).** FLEURS is a **benchmark dataset**
+  (102 languages), not a model — it cannot be implemented as a transcription
+  engine; "leads on FLEURS" is a property of a model measured against it.
+  Fun-ASR (Alibaba/Tongyi) is a real ASR family (7.7B full / 0.8B nano,
+  Apache-2.0 open weights + hosted `fun-asr-realtime` on Model Studio) and its
+  hosted preview currently tops the Artificial Analysis leaderboard (~1.7% WER).
+  It is **deferred for this German/English dictation app** because: (1) **German
+  is not in its documented 31-language list** (confirmed in the technical report
+  and the GitHub card) — a footgun for a German-first app; (2) the SOTA result
+  is the hosted Alibaba Cloud preview (Singapore onboarding + data residency);
+  (3) open weights are 7.7B (too big) or 0.8B nano (no ONNX export, different
+  runtime); (4) the file API is async submit/poll, unlike the synchronous remote
+  providers. Documented as a deferral (not a hard no) with a remote-provider
+  sketch for if the language fit or user need changes.
 - **Added Azure LLM Speech (MAI-Transcribe) as a remote batch provider.**
   Research finding first: the Azure "LLM Speech" / "Speech 05 2026" model is a
   **remote, cloud-only** service (Microsoft Foundry), not a local/ONNX model.

@@ -133,6 +133,7 @@ implemented as a remote engine.
 | Candidate | Public access signal | Pricing clarity | Local/offline fit | Current status |
 |-----------|----------------------|-----------------|-------------------|----------------|
 | Cohere hosted Transcribe API | Trial API access is publicly documented as available via normal Cohere account signup | Public transcription pricing is not explicit enough yet for a trustworthy cost comparison | Local/offline usage is covered by the integrated ONNX model, not by the hosted API | Hosted provider not integrated |
+| Alibaba Fun-ASR (hosted + open) | Hosted `fun-asr-realtime` on Model Studio (Singapore endpoint, free trial); open weights Apache-2.0 on HF/ModelScope | Pay-as-you-go on DashScope; #1 on Artificial Analysis (~1.7% WER) for the hosted realtime preview | Open weights are 7.7B (too big) or 0.8B nano (no ONNX export, different runtime) | Deferred — **no documented German support** + Alibaba onboarding + async task API. See [funasr-and-fleurs-evaluation.md](funasr-and-fleurs-evaluation.md) |
 
 Recommendation:
 
