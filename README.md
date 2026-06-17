@@ -109,6 +109,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Local Benchmark Results](docs/benchmarks/README.md) | Users / maintainers | Measured local transcription results for specific hardware |
 | [Windows Distribution](docs/windows-distribution.md) | Maintainers | Recommended release path for end-user Windows builds |
 | [Provider Costs](docs/provider-costs.md) | Product / Ops | Cost comparison across providers and models used by this app |
+| [Azure LLM Speech Setup](docs/azure-llm-speech.md) | All users | How to configure the Azure LLM Speech (MAI-Transcribe) engine: endpoint + key |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |
 | [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Decision record: why Cohere Transcribe is deferred as both a local and hosted option |

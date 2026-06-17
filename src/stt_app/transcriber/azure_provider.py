@@ -101,8 +101,12 @@ def _content_type_for(filename: str) -> str:
     return _CONTENT_TYPE_BY_SUFFIX.get(suffix, "audio/wav")
 
 
-def _silent_wav_bytes(duration_s: float = 0.2) -> bytes:
-    """Return a tiny mono PCM16 WAV of silence for connection testing."""
+def _silent_wav_bytes(duration_s: float = 1.0) -> bytes:
+    """Return a tiny mono PCM16 WAV of silence for connection testing.
+
+    Kept at ~1 second so the service does not reject it as too short, while
+    still consuming a negligible amount of quota.
+    """
     frame_count = max(1, int(AUDIO_SAMPLE_RATE * duration_s))
     buffer = io.BytesIO()
     with wave.open(buffer, "wb") as wav:
