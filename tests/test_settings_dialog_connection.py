@@ -80,11 +80,13 @@ def _make_dialog(settings: AppSettings, secret_values: dict[str, str] | None = N
     return dialog, app, secret_store
 
 
-def test_engine_combo_hides_unimplemented_providers():
+def test_engine_combo_lists_implemented_providers():
     dialog, app, _secret_store = _make_dialog(AppSettings())
     assert dialog.engine_combo.findData("openai") >= 0
     assert dialog.engine_combo.findData("elevenlabs") >= 0
-    assert dialog.engine_combo.findData("azure") == -1
+    assert dialog.engine_combo.findData("azure") >= 0
+    # Engines not wired up must stay hidden from the selector.
+    assert dialog.engine_combo.findData("not-a-real-engine") == -1
     _ = app
 
 

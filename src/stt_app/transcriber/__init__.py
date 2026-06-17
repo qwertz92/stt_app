@@ -1,4 +1,5 @@
 from .assemblyai_provider import AssemblyAITranscriber
+from .azure_provider import AzureLlmSpeechTranscriber
 from .base import ITranscriber, TranscriptionError
 from .deepgram_provider import DeepgramTranscriber
 from .elevenlabs_provider import ElevenLabsTranscriber
@@ -12,6 +13,7 @@ from .openai_provider import OpenAITranscriber
 
 __all__ = [
     "AssemblyAITranscriber",
+    "AzureLlmSpeechTranscriber",
     "DeepgramTranscriber",
     "ElevenLabsTranscriber",
     "GroqTranscriber",

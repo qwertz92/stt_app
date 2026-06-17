@@ -8,7 +8,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
-- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, or ElevenLabs when you prefer managed transcription
+- **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, or Azure LLM Speech when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
 - **Streaming** (experimental) — see partial results while you speak
@@ -67,7 +67,7 @@ Right-click the **system tray icon** → **Settings**.
 | Setting | What it does | Default |
 |---------|-------------|---------|
 | Model size | Larger = more accurate, slower | `small` |
-| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs | Local |
+| Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech | Local |
 | Mode | Batch (after stop) or Streaming (live, experimental) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
 | Paste mode | How text is inserted (Auto, WM_PASTE, SendInput) | Auto |
@@ -109,6 +109,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Local Benchmark Results](docs/benchmarks/README.md) | Users / maintainers | Measured local transcription results for specific hardware |
 | [Windows Distribution](docs/windows-distribution.md) | Maintainers | Recommended release path for end-user Windows builds |
 | [Provider Costs](docs/provider-costs.md) | Product / Ops | Cost comparison across providers and models used by this app |
+| [Azure LLM Speech Setup](docs/azure-llm-speech.md) | All users | How to configure the Azure LLM Speech (MAI-Transcribe) engine: endpoint + key |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |
 | [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Decision record: why Cohere Transcribe is deferred as both a local and hosted option |
@@ -142,6 +143,7 @@ uv run python -m pytest
 | Deepgram cloud transcription (batch) | Stable |
 | Deepgram streaming | Experimental |
 | ElevenLabs cloud transcription (batch) | Stable |
+| Azure LLM Speech / MAI-Transcribe (batch) | Stable (model in public preview) |
 
 ## License
 

@@ -5,6 +5,40 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-17
 
+- **Added Azure LLM Speech (MAI-Transcribe) as a remote batch provider.**
+  Research finding first: the Azure "LLM Speech" / "Speech 05 2026" model is a
+  **remote, cloud-only** service (Microsoft Foundry), not a local/ONNX model.
+  Enhanced mode is backed by the Microsoft AI (MAI) team's `mai-transcribe-1.5`
+  / `mai-transcribe-1` models. Microsoft does **not** publish the parameter
+  count. Pricing is ~$0.36/hour pay-as-you-go with a Free (F0) tier of 5 audio
+  hours/month (hard cap). Quality: 2.4% WER on Artificial Analysis (#3 there)
+  and best-in-class FLEURS multilingual; it is *not* the current #1 on the
+  Hugging Face Open ASR Leaderboard (that is led by open models). The model is
+  in public preview (no SLA). Because it is cloud-only, the "run via ONNX
+  runtime" option does not apply.
+  - Implemented `transcriber/azure_provider.py` as a batch-only REST provider on
+    the `:transcribe` fast-transcription endpoint with `enhancedMode` enabled,
+    mirroring the ElevenLabs/Deepgram pattern (urllib + shared `_http_utils`
+    multipart helper). It posts `audio` + a `definition` JSON and reads
+    `combinedPhrases[].text`.
+  - Unlike every other provider, Azure needs **two** inputs: the resource key
+    (stored in the secret store under `azure`) *and* a per-resource endpoint.
+    Added a dedicated, non-secret `azure_endpoint` setting plus a text field in
+    the Settings "Remote Provider API Keys" box. `normalize_azure_endpoint`
+    accepts a full URL, bare host, or resource name.
+  - Connection test posts a tiny in-memory silent WAV to validate
+    endpoint + key + region support without needing a list endpoint.
+  - Wiring: `config.py` (engine, models, API version, 42/24-language maps,
+    `nb` locale override for app code `no`), `settings_store.py`
+    (`has_azure_key`, `azure_speech_model`, `azure_endpoint`; schema 16 -> 17),
+    `factory.py`, `controller.py` (model-name display + transcriber cache key),
+    and `settings_dialog.py` (engine/import combos, model selector, language
+    hints, connection target, key states, settings build). Tests in
+    `tests/test_azure_provider.py`; updated `tests/test_factory.py` and
+    `tests/test_settings_dialog_connection.py` which had encoded "azure not
+    implemented". Costs/quality captured in `docs/provider-costs.md`.
+  - Validation: `QT_QPA_PLATFORM=offscreen uv run --extra dev pytest -q` (all
+    green) and `uv run --extra dev ruff check` (clean).
 - **Granite Speech 4.1 2B moved to the q4 WebGPU pipeline path.** A faithful q4
   Transformers.js package now exists at
   `onnx-community/granite-speech-4.1-2b-ONNX` (created 2026-05-13), in the exact

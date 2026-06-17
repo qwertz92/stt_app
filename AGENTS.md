@@ -40,7 +40,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
 - Remote providers: AssemblyAI (SDK batch + Universal-Streaming v3),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
-  ElevenLabs (REST API)
+  ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only)
 - keyring for secret storage
 
 ## Architecture
@@ -60,6 +60,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
 | `transcriber/deepgram_provider.py` | Batch via REST + streaming via WebSocket |
+| `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
+| `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
@@ -255,8 +257,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Engines
 
-- **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs
+- **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs, azure
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
+- **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
+  `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
+  secret store. Model select picks `mai-transcribe-1.5` / `mai-transcribe-1`.
 - All engine/model constants defined in `config.py`
 
 ## Tests

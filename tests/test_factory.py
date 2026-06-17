@@ -6,6 +6,7 @@ from stt_app.settings_store import AppSettings
 from stt_app.transcriber.factory import create_transcriber
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
+from stt_app.transcriber.azure_provider import AzureLlmSpeechTranscriber
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
@@ -59,10 +60,20 @@ def test_factory_openai_returns_openai_transcriber():
     assert isinstance(t, OpenAITranscriber)
 
 
-def test_factory_azure_falls_back_to_local():
-    settings = AppSettings(engine="azure")
-    t = create_transcriber(settings)
-    assert isinstance(t, LocalFasterWhisperTranscriber)
+def test_factory_azure_returns_azure_transcriber():
+    settings = AppSettings(
+        engine="azure",
+        azure_speech_model="mai-transcribe-1.5",
+        azure_endpoint="https://my-res.cognitiveservices.azure.com",
+    )
+
+    class FakeSecretStore:
+        def get_api_key(self, name):
+            return "azure-test-key" if name == "azure" else None
+
+    t = create_transcriber(settings, secret_store=FakeSecretStore())
+    assert isinstance(t, AzureLlmSpeechTranscriber)
+    assert t._model == "mai-transcribe-1.5"
 
 
 def test_factory_deepgram_returns_deepgram_transcriber():
