@@ -113,6 +113,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |
 | [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Decision record: why Cohere Transcribe is deferred as both a local and hosted option |
+| [FLEURS & Fun-ASR Evaluation](docs/funasr-and-fleurs-evaluation.md) | Developers | Decision record: FLEURS is a benchmark (not a model); why Alibaba Fun-ASR is deferred |
 
 ## Troubleshooting
 
