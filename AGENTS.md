@@ -158,8 +158,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `pyproject.toml`'s project version and must not be older than an existing
   numeric release tag. Standard releases should use
   `python scripts/create_release.py` from a clean, up-to-date `main`; the script
-  prompts for the version, bumps metadata, runs checks, commits, pushes, tags,
-  and pushes the tag.
+  prompts for the version, bumps metadata, runs checks, commits when metadata
+  changed, pushes, tags, and pushes the tag.
 - **Local ONNX ASR**: Cohere Transcribe, IBM Granite Speech 4.0,
   and IBM Granite Speech 4.1 are selectable local models through
   `transcriber/local_webgpu_asr.py`. They are batch-only and require Node.js.
@@ -235,6 +235,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Qt window/tray icons (with a standard-icon fallback), the wheel, the
   PyInstaller bundle/EXE, and the Inno Setup installer. Rerun the script only
   when the design changes.
+- **Release script behavior**: `scripts/create_release.py` can tag an already
+  bumped current project version when it is newer than the latest numeric
+  release tag. It commits release metadata only when files actually changed, so
+  a pre-bumped `0.4.0` main can still be released as `v0.4.0` without a dummy
+  bump commit.
 - **Last recording selection**: `LastRecordingStore.selectable_path()` is the
   single selection point for "Use last recording". When an archived recordings
   directory is supplied, it chooses the newest managed/archive WAV, but

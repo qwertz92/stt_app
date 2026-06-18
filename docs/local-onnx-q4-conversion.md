@@ -17,8 +17,9 @@ day-to-day use see [models.md](models.md).
 - **q4** means the model's large weight matrices are stored using only **4 bits**
   per value (plus a small scale factor per block of values). This is roughly 8×
   smaller than the original 32-bit form.
-- A q4 speech model is still around 1.5–2 GB on disk because not every part is
-  4-bit, and the package includes several graph files plus the tokenizer.
+- A q4 package for the current 1B/2B speech models is still around 1.5–2 GB on
+  disk because not every part is 4-bit, and the package includes several graph
+  files plus the tokenizer.
 - The conversion is **deterministic** for the default method: converting the same
   source model with the same settings produces an equivalent model every time.
   Doing it again locally yields the same quality — it does not improve anything —
@@ -101,10 +102,11 @@ approximately as `integer × scale`. In ONNX this is carried out by the
 16-bit instead of 32-bit values — slightly smaller and often faster on a GPU, at
 a small additional accuracy cost.
 
-### Why a q4 speech model is still ~2 GB
+### Why a 1B/2B q4 speech model is still ~2 GB
 
-The lower bound "parameters × bits ÷ 8" only covers the weights that are actually
-quantized. Real packages are larger because:
+For the 1B/2B-class q4 speech models used by this app, the lower bound
+"parameters × bits ÷ 8" only covers the weights that are actually quantized. Real
+packages are larger because:
 
 - not every tensor is 4-bit (embeddings and some layers are kept higher);
 - the model is split across several graph files, sometimes with separate external

@@ -126,7 +126,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Azure LLM Speech Setup](docs/azure-llm-speech.md) | All users | How to configure the Azure LLM Speech (MAI-Transcribe) engine: endpoint + key |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Local ONNX Runtime Guide](docs/local-onnx-runtime.md) | Developers | How the GPU/ONNX local models run (WebGPU, DirectML, CPU, memory) |
-| [How q4 Conversion Works](docs/local-onnx-q4-conversion.md) | Curious users | What q4 means, q4 vs int4, why local model downloads are ~2 GB |
+| [How q4 Conversion Works](docs/local-onnx-q4-conversion.md) | Curious users | What q4 means, q4 vs int4, why 1B/2B local model downloads are ~2 GB |
 | [Granite 4.1 ONNX Variants](docs/granite-speech-4.1-onnx-variants.md) | Developers | Status of the 4.1 2B / Plus / NAR variants and what would enable them |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |
 | [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Notes on the Cohere Transcribe local model |

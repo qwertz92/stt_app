@@ -45,13 +45,23 @@ def next_patch_version(version: ReleaseVersion) -> ReleaseVersion:
     return ReleaseVersion(version.major, version.minor, version.patch + 1)
 
 
+def default_release_version(
+    *,
+    latest: ReleaseVersion | None,
+    current: ReleaseVersion,
+) -> ReleaseVersion:
+    if latest is None or current > latest:
+        return current
+    return next_patch_version(latest)
+
+
 def select_release_version(
     raw_value: str,
     *,
     latest: ReleaseVersion | None,
     current: ReleaseVersion,
 ) -> ReleaseVersion:
-    default_version = next_patch_version(latest or current)
+    default_version = default_release_version(latest=latest, current=current)
     value = raw_value.strip()
     if not value:
         return default_version
@@ -63,6 +73,7 @@ def validate_new_release_version(
     *,
     existing_tags: Sequence[str],
     latest: ReleaseVersion | None,
+    current: ReleaseVersion | None = None,
 ) -> None:
     if version.tag in existing_tags:
         raise CreateReleaseError(f"Release tag {version.tag} already exists.")
@@ -70,6 +81,11 @@ def validate_new_release_version(
         raise CreateReleaseError(
             f"Release version {version.text} must be higher than latest tag "
             f"{latest.tag}."
+        )
+    if current is not None and version < current:
+        raise CreateReleaseError(
+            f"Release version {version.text} must not be lower than current "
+            f"project version {current.text}."
         )
 
 
@@ -106,8 +122,13 @@ def create_release(
         _run([sys.executable, "-m", "pytest", "-q"], root=root)
 
     _run(["git", "add", *RELEASE_METADATA_PATHS], root=root)
-    _ensure_staged_release_changes(version=version, root=root)
-    _commit_release(version=version, root=root)
+    if _has_staged_changes(root=root):
+        _commit_release(version=version, root=root)
+    else:
+        print(
+            f"==> Release metadata already matches {version.text}; tagging current main.",
+            flush=True,
+        )
     _run(["git", "push", remote, "main"], root=root)
     _run(["git", "tag", "-a", version.tag, "-m", f"Release {version.tag}"], root=root)
     _run(["git", "push", remote, version.tag], root=root)
@@ -140,16 +161,18 @@ def _ensure_no_tracked_changes(*, root: Path) -> None:
         )
 
 
-def _ensure_staged_release_changes(*, version: ReleaseVersion, root: Path) -> None:
+def _has_staged_changes(*, root: Path) -> bool:
     result = subprocess.run(
         ["git", "diff", "--cached", "--quiet"],
         cwd=root,
         check=False,
     )
-    if result.returncode == 0:
+    if result.returncode not in (0, 1):
         raise CreateReleaseError(
-            f"No release metadata changes were staged for {version.tag}."
+            f"Unable to inspect staged release changes; git diff exited "
+            f"{result.returncode}."
         )
+    return result.returncode != 0
 
 
 def _commit_release(*, version: ReleaseVersion, root: Path) -> None:
@@ -192,7 +215,7 @@ def _prompt_for_version(
     latest: ReleaseVersion | None,
     current: ReleaseVersion,
 ) -> ReleaseVersion:
-    default_version = next_patch_version(latest or current)
+    default_version = default_release_version(latest=latest, current=current)
     latest_label = latest.tag if latest is not None else "none"
     print(f"Latest release tag: {latest_label}")
     print(f"Current project version: {current.text}")
@@ -251,7 +274,12 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Selected release version: {version.text}")
         else:
             version = _prompt_for_version(latest=latest, current=current)
-        validate_new_release_version(version, existing_tags=tags, latest=latest)
+        validate_new_release_version(
+            version,
+            existing_tags=tags,
+            latest=latest,
+            current=current,
+        )
         if not args.yes:
             _confirm_release(version)
         create_release(

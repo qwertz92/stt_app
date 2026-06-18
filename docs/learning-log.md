@@ -3,6 +3,19 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-18
+
+- **Tightened the 0.4 release path and final docs drift.** Clarified that the
+  current q4 `~2 GB` explanation applies to 1B/2B-class speech models, not every
+  possible quantized model size. Fixed stale Granite 4.1 wording in
+  `scripts/download_model.py`, the Settings streaming tooltip, and `models.md`
+  so DirectML fallback is described consistently with `webgpu_asr_runner.mjs`.
+  GitHub release notes now explain the installer vs portable ZIP and warn that
+  GitHub's automatic source archives are developer snapshots, not app builds.
+  `scripts/create_release.py` now proposes the already-bumped current project
+  version when it is newer than the latest release tag and can tag that state
+  without creating a dummy release-metadata commit.
+
 ## 2026-06-17
 
 - **Documentation refresh across the docs set.** Reframed the model docs so the

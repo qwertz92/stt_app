@@ -13,11 +13,12 @@ recommended over the Whisper models for quality and speed. The zero-setup `small
 Whisper model stays the default only because it needs no GPU or Node.js. NVIDIA
 Parakeet is not implemented (its official path is the heavyweight NeMo runtime).
 
-Status after the 2026-04-18 implementation pass:
+Initial status after the 2026-04-18 implementation pass, superseded by the
+updates below:
 
-- Cohere Transcribe and IBM Granite Speech are available as experimental
-  selectable local models through the ONNX helper runtime. Cohere and Granite
-  4.0 use q4 ONNX/WebGPU packages; Granite Speech 4.1 uses the published INT8
+- Cohere Transcribe and IBM Granite Speech were first added as selectable local
+  models through the ONNX helper runtime. Cohere and Granite 4.0 used q4
+  ONNX/WebGPU packages; Granite Speech 4.1 initially used the published INT8
   raw ONNX graph tier.
 - They are batch-only, require the JavaScript runtime, and show a CPU fallback
   warning in Settings.

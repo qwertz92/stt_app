@@ -69,15 +69,20 @@ jobs:
           $tag = "${{ github.ref_name }}"
           $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
           @"
-          Windows release assets for stt_app.
+          Windows release assets for stt_app:
 
-          Assets:
-          - stt_app-win-x64.zip: portable onedir bundle
-          - stt_app-win-x64-setup.exe: Inno Setup installer
+          - stt_app-win-x64-setup.exe: recommended for most users. Runs a normal
+            Windows installer and creates Start-menu shortcuts.
+          - stt_app-win-x64.zip: portable bundle. Extract it anywhere and run
+            stt_app.exe from the extracted folder.
+
+          GitHub also shows automatic "Source code" archives. Those are for
+          developers and are not installable app builds.
           "@ | Set-Content -Encoding UTF8 $notesPath
 
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
+              gh release edit $tag --notes-file $notesPath
               gh release upload $tag `
                   "release\stt_app-win-x64.zip" `
                   "release\installer\stt_app-win-x64-setup.exe" `

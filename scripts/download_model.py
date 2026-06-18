@@ -20,10 +20,10 @@ Usage examples:
 
 After downloading, the models are ready for offline use.  Set "Offline mode"
 in the app settings, and optionally set "Model Dir" to the --output-dir path.
-faster-whisper models use CTranslate2. Cohere and Granite 4.0 use q4
-ONNX/WebGPU snapshots. Granite Speech 4.1 uses the smallest currently published
-INT8 ONNX tier and requires the JavaScript runtime from package.json. Nemotron
-3.5 uses the INT4 ONNX Runtime GenAI streaming export.
+faster-whisper models use CTranslate2. Cohere, Granite 4.0, and Granite Speech
+4.1 2B use q4 ONNX/WebGPU snapshots. Granite Speech 4.1 Plus/NAR use the
+published INT8 raw ONNX tiers and require the JavaScript runtime from
+package.json. Nemotron 3.5 uses the INT4 ONNX Runtime GenAI streaming export.
 """
 
 from __future__ import annotations

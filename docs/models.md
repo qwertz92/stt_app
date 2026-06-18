@@ -202,10 +202,11 @@ The model-aware lists are based on the current primary documentation:
 
 The runtime automatically tries an ONNX GPU target first and falls back to CPU
 if no compatible GPU runtime loads. Cohere, Granite 4.0, and Granite 4.1 2B try
-WebGPU, then DirectML on Windows. The Granite 4.1 Plus/NAR raw ONNX graphs
-currently use WebGPU or CPU in the direct `onnxruntime-node` path. The app shows
-a red warning under the model selector because pure CPU fallback can be much
-slower than the CTranslate2 Whisper models.
+WebGPU, then DirectML on Windows. The Granite 4.1 Plus/NAR raw ONNX graphs use
+the same device policy in the direct `onnxruntime-node` path: WebGPU, then
+DirectML on Windows, then CPU. The app shows a red warning under the model
+selector because pure CPU fallback can be much slower than the CTranslate2
+Whisper models.
 
 The app also falls back from DirectML/WebGPU to CPU during transcription when a
 model loads on a GPU runtime but the first generation call fails because an ONNX

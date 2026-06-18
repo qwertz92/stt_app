@@ -3910,8 +3910,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 item.setEnabled(False)
                 if engine == "local" and model_name in LOCAL_BATCH_ONLY_MODELS:
                     item.setToolTip(
-                        "Streaming is not supported by the experimental "
-                        "ONNX/WebGPU local models. Use batch mode."
+                        "Streaming is not supported by the selected ONNX/WebGPU "
+                        "local model. Use batch mode."
                     )
                 else:
                     item.setToolTip(

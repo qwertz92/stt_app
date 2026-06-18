@@ -42,6 +42,16 @@ def test_select_release_version_defaults_to_next_patch_after_latest():
     assert selected.tag == "v0.2.2"
 
 
+def test_select_release_version_defaults_to_unreleased_current_version():
+    module = _load_create_release_module()
+    latest = module.ReleaseVersion.parse("v0.3.1")
+    current = module.ReleaseVersion.parse("0.4.0")
+
+    selected = module.select_release_version("", latest=latest, current=current)
+
+    assert selected.tag == "v0.4.0"
+
+
 def test_select_release_version_accepts_explicit_v_prefixed_value():
     module = _load_create_release_module()
     latest = module.ReleaseVersion.parse("v0.2.1")
@@ -75,6 +85,21 @@ def test_validate_new_release_version_rejects_lower_version():
             version,
             existing_tags=["v0.3.0"],
             latest=latest,
+        )
+
+
+def test_validate_new_release_version_rejects_current_version_downgrade():
+    module = _load_create_release_module()
+    version = module.ReleaseVersion.parse("v0.3.2")
+    latest = module.ReleaseVersion.parse("v0.3.1")
+    current = module.ReleaseVersion.parse("0.4.0")
+
+    with pytest.raises(module.CreateReleaseError, match="lower than current"):
+        module.validate_new_release_version(
+            version,
+            existing_tags=["v0.3.1"],
+            latest=latest,
+            current=current,
         )
 
 

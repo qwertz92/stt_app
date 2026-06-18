@@ -200,7 +200,7 @@ That estimate is only useful when the parameter count and quantized tensor set
 are known. It does not mean every file in a package is 4-bit, and it does not
 include metadata, runtime buffers, activations, or duplicate graph structures.
 
-Why the current q4 ONNX downloads are still around 2 GB:
+Why the current 1B/2B-class q4 ONNX downloads are still around 2 GB:
 
 - Not every tensor is quantized to 4 bits.
 - ONNX models often split encoder, decoder, embeddings, and external data into
