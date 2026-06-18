@@ -275,6 +275,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                     f"Fun-ASR: unexpected first event '{event or 'none'}'."
                 )
 
+            # Stream the whole recording, then read results. This is sized for
+            # dictation-length clips; a multi-minute file could in theory back
+            # up the socket buffers (the streaming path would need a sender
+            # thread, as Deepgram does).
             for offset in range(0, len(pcm), _AUDIO_CHUNK_BYTES):
                 ws.send_binary(pcm[offset : offset + _AUDIO_CHUNK_BYTES])
 
