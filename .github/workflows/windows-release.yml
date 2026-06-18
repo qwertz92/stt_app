@@ -71,13 +71,14 @@ jobs:
           @"
           Windows release assets for stt_app:
 
-          - stt_app-win-x64-setup.exe: recommended for most users. Runs a normal
-            Windows installer and creates Start-menu shortcuts.
-          - stt_app-win-x64.zip: portable bundle. Extract it anywhere and run
-            stt_app.exe from the extracted folder.
+          - `stt_app-win-x64-setup.exe`
+            Recommended for most users. Runs a normal Windows installer and creates Start-menu shortcuts.
 
-          GitHub also shows automatic "Source code" archives. Those are for
-          developers and are not installable app builds.
+          - `stt_app-win-x64.zip`
+            Portable bundle. Extract it anywhere and run `stt_app.exe` from the extracted folder.
+
+          - `Source code (zip/tar.gz)`
+            GitHub adds these archives automatically. They contain the repository source for developers, not the built Windows app.
           "@ | Set-Content -Encoding UTF8 $notesPath
 
           gh release view $tag *> $null
