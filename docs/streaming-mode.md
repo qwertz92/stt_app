@@ -158,7 +158,7 @@ Local rolling-window streaming supports the faster-whisper/CTranslate2 model cho
 - `tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`, `distil-large-v3.5`
 
 Larger models in local streaming increase partial update cost.
-Experimental ONNX/WebGPU local models are batch-only in this app.
+The Cohere/Granite ONNX/WebGPU local models are batch-only in this app.
 
 Nemotron `nemotron-3.5-asr-streaming-0.6b-int4` provides true cache-aware local
 streaming. Its current ONNX export is fixed to 560 ms latency. The app's normal

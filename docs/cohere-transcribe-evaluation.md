@@ -7,13 +7,14 @@ The current canonical evaluation is:
 
 - [Local ASR Model Candidates - 2026 Re-evaluation](local-asr-model-candidates-2026.md)
 
-## Current decision
+## Summary
 
-- **Status:** Implemented as experimental batch-only local model.
-- **Decision:** Cohere Transcribe is available only as an experimental local
-  ONNX/WebGPU model, not as the stable/default local engine.
-- **Best next step:** Benchmark `cohere-transcribe-03-2026` on the target Intel
-  GPU against the current CTranslate2 `faster-whisper` models.
+- `cohere-transcribe-03-2026` is a selectable local ONNX/WebGPU model and one of
+  the recommended high-quality options. Batch mode only.
+- The default model stays `small` because it needs no GPU or Node.js.
+- On the tested Ryzen 7600X + Arc A750 it runs at RTF 0.071 on WebGPU (0.137 on
+  CPU) — faster than `small` or `large-v3-turbo`. See
+  [Local Benchmark Results](benchmarks/README.md).
 
 ## Why this is not a drop-in local model
 
@@ -28,6 +29,8 @@ packaging hooks.
 
 ## Short recommendation
 
-Treat Cohere as the first model to benchmark in an experimental ONNX/WebGPU
-runner. Do not recommend it over `large-v3-turbo` or `large-v3` until it proves
-better for German and English dictation on the user's actual Intel GPU machine.
+On a machine with a working GPU, prefer Cohere (or Granite Speech 4.1) over the
+Whisper models for quality and speed — it is a far newer system than the
+multi-year-old Whisper models. Confirm German/English quality on your own audio
+with the [benchmark](advanced-setup.md#benchmarking), which is the per-machine
+source of truth.

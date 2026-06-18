@@ -56,7 +56,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
-| `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the experimental batch-only Cohere/Granite Node.js runtime |
+| `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models) |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
@@ -144,8 +144,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   state has stabilized.
 - **Model-aware language selection**: `config.language_modes_for_selection()`
   is the shared source of truth for the General-tab language list and provider
-  validation. Auto remains the persisted default where supported; experimental
-  Cohere requires an explicit language.
+  validation. Auto remains the persisted default where supported; Cohere
+  requires an explicit language.
 - **Remote first-request diagnostics**: transcription workers log
   `transcription_timing` with initialization, transcription, and total
   durations. Groq reuses its SDK/HTTP client for the lifetime of the cached

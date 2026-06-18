@@ -2,8 +2,9 @@
 
 Date: 2026-05-31
 
-This document explains the experimental local ONNX paths used for Cohere
-Transcribe, IBM Granite Speech, and NVIDIA Nemotron 3.5 in `stt_app`.
+This document explains the local ONNX paths used for Cohere Transcribe, IBM
+Granite Speech, and NVIDIA Nemotron 3.5 in `stt_app`. These are supported,
+daily-use local models — not experimental trials.
 
 ## Runtime Stack
 
@@ -11,7 +12,7 @@ The production local baseline is still `faster-whisper` through CTranslate2.
 That path is CPU-first in this app and remains the most predictable local
 runtime.
 
-The experimental Cohere and Granite models use a separate out-of-process stack:
+The Cohere and Granite models use a separate out-of-process stack:
 
 1. Python/PySide starts a controlled Node.js helper process.
 2. The helper loads the JavaScript ONNX runtime dependencies.
@@ -128,10 +129,14 @@ Observed on the target Windows/Intel Arc A750 machine:
   q4 pipeline package was verified on WebGPU on 2026-06-17 (correct German,
   English, and French transcription; ~0.13–0.19 real-time factor).
 - The raw Granite 4.1 **Plus/NAR** INT8 graphs load on WebGPU, but their first
-  inference fails while ONNX Runtime Web creates the `Einsum` compute pipeline
-  because the generated shader module is invalid. This is why those variants stay
-  effectively CPU-bound and why a Transformers.js q4 package (as used for 2B) is
-  the cleaner GPU route.
+  inference fails while ONNX Runtime Web compiles the `Einsum` compute pipeline:
+  the generated GPU shader is invalid. (`Einsum`, short for *Einstein summation*,
+  is a general tensor-contraction operator — a flexible matrix-multiply used here
+  inside the audio encoder. ONNX Runtime Web cannot generate a valid WebGPU shader
+  for the specific `Einsum` these raw graphs use, so GPU inference crashes the
+  first time that operator runs.) This is why those variants stay effectively
+  CPU-bound, and why a Transformers.js q4 package — which exports a different graph
+  that avoids the bug, as the 2B model does — is the cleaner GPU route.
 - DirectML loads the models but fails during inference:
   - Cohere fails in `MultiHeadAttention`.
   - Granite 4.0 fails in `Reshape`.
@@ -279,7 +284,7 @@ segmentation/VAD workflow is still the safer product direction.
 `faster-whisper` can use automatic language detection. That is why the local
 Whisper models support `Auto`.
 
-The experimental ONNX models are model-specific:
+The ONNX models are model-specific:
 
 - Cohere requires an explicit language. In this app, `Auto` maps to German for
   Cohere because German is the primary local workflow and it is safer than
@@ -306,7 +311,7 @@ before switching the default.
 
 For the current Windows Intel GPU test machine:
 
-1. Use `auto` for normal experimental ONNX dictation.
+1. Use `auto` for normal ONNX dictation.
 2. Use the Benchmark tab to compare `webgpu`, `dml`, and `cpu`.
 3. Treat DirectML failures as provider/operator compatibility issues, not model
    download problems.

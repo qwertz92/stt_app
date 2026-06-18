@@ -44,7 +44,7 @@ transcribe German, English, and French correctly at roughly 0.13–0.19 real-tim
 factor on the Arc A750. The app therefore points `granite-speech-4.1-2b` at this
 repo and routes it through the pipeline path.
 
-## Plus — deferred (and why)
+## Plus — why it stays on the raw INT8 path
 
 ### What "Plus" is
 
@@ -162,7 +162,7 @@ capitalization. The base 2B already transcribes de/en/fr well on WebGPU. Plus is
 therefore low priority unless its specific rich-transcription features become a
 product requirement.
 
-## NAR — deferred (and why)
+## NAR — why it stays on the raw INT8 path
 
 `granite-speech-4.1-2b-nar` has `model_type: granite_speech_nar` (architecture is
 non-autoregressive, with a CTC draft + an "editor" pass and insertion slots, and

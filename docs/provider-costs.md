@@ -12,7 +12,8 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Engine | App mode(s) | Model(s) in app | Public price | Normalized cost |
 |--------|-------------|-----------------|--------------|-----------------|
 | Local (`faster-whisper`) | Batch + Streaming | `tiny`..`distil-large-v3.5` | No API fee | $0 API cost (hardware/power only) |
-| Local experimental ONNX | Batch | `cohere-transcribe-03-2026`, `granite-4.0-1b-speech`, Granite Speech 4.1 variants | No API fee | $0 API cost (hardware/power only) |
+| Local GPU/ONNX | Batch | `cohere-transcribe-03-2026`, `granite-4.0-1b-speech`, Granite Speech 4.1 variants | No API fee | $0 API cost (hardware/power only) |
+| Local (Nemotron 3.5) | Batch + Streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | No API fee | $0 API cost (hardware/power only) |
 | AssemblyAI | Batch | Universal-3 Pro (primary), Universal-2 fallback | U3 Pro: $0.21/hour, U2: $0.15/hour | $0.15-$0.21/hour |
 | AssemblyAI | Streaming | Universal Streaming | $0.15/hour | $0.15/hour |
 | OpenAI | Batch | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | Mini: est. $0.003/min, 4o: est. $0.006/min, Whisper: $0.006/min | $0.18/hour, $0.36/hour, $0.36/hour |

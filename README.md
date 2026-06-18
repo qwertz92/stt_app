@@ -8,6 +8,7 @@ Press a hotkey, speak, and the transcribed text appears at your cursor — in an
 
 - **Global hotkey** — press `Ctrl+Alt+Space` anywhere to start/stop dictation
 - **Works offline** — transcription runs locally on your machine (no internet needed after first model download)
+- **GPU-accelerated models** — optional Cohere and IBM Granite Speech models run on your GPU (WebGPU); Granite Speech 4.1 2B currently tops the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard) for accuracy
 - **Cloud options** — use AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, or Fun-ASR (Alibaba) when you prefer managed transcription
 - **Any text field** — inserts text at the cursor in Notepad, Word, browsers, email, chat apps, etc.
 - **Visual feedback** — a small overlay shows the current state (idle, listening, processing, done)
@@ -75,15 +76,28 @@ Right-click the **system tray icon** → **Settings**.
 
 ## Model recommendations
 
-| Use case | Recommended model | Size |
-|----------|-------------------|------|
-| General use (German + English) | `small` (default) | ~484 MB |
-| Better quality, still fast | `large-v3-turbo` | ~809 MB |
-| Best quality with GPU | `large-v3` | ~3.09 GB |
-| English only, fastest | `distil-large-v3.5` | ~756 MB |
-| Quick testing / low resources | `tiny` | ~75 MB |
+There are two local families. **GPU-accelerated ONNX models** (Cohere, IBM Granite)
+deliver the highest accuracy and, on a machine with a working GPU, are usually
+*both* faster and more accurate than Whisper — they run on the GPU via WebGPU,
+need Node.js, and are batch-only. **Whisper models** (CTranslate2) need no extra
+setup, run on the CPU, and also support streaming.
 
-On first use, the selected model downloads automatically (~1 min for `small`). After that, it loads from cache in seconds.
+| Use case | Recommended model | Runtime | Size |
+|----------|-------------------|---------|------|
+| Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` | ONNX/WebGPU q4 | ~1.84 GB |
+| High accuracy, fastest on GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
+| Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI int4 | ~793 MB |
+| Zero-setup default (CPU, multilingual) | `small` (default) | CTranslate2 | ~484 MB |
+| Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~809 MB |
+| English only, fastest Whisper | `distil-large-v3.5` | CTranslate2 | ~756 MB |
+| Quick testing / low resources | `tiny` | CTranslate2 | ~75 MB |
+
+The default is `small` because it runs anywhere with no extra setup. If you have a
+GPU and Node.js, prefer `granite-speech-4.1-2b` or `cohere-transcribe-03-2026` for
+quality, then run the [benchmark](docs/advanced-setup.md#benchmarking) to find the
+best model for *your* hardware. See [Models & Offline Setup](docs/models.md) for
+details. On first use, the selected model downloads automatically; after that it
+loads from cache.
 
 ## Offline / corporate networks
 
@@ -111,9 +125,12 @@ Right-click the **system tray icon** → **Quit**.
 | [Provider Costs](docs/provider-costs.md) | Product / Ops | Cost comparison across providers and models used by this app |
 | [Azure LLM Speech Setup](docs/azure-llm-speech.md) | All users | How to configure the Azure LLM Speech (MAI-Transcribe) engine: endpoint + key |
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
+| [Local ONNX Runtime Guide](docs/local-onnx-runtime.md) | Developers | How the GPU/ONNX local models run (WebGPU, DirectML, CPU, memory) |
+| [How q4 Conversion Works](docs/local-onnx-q4-conversion.md) | Curious users | What q4 means, q4 vs int4, why local model downloads are ~2 GB |
+| [Granite 4.1 ONNX Variants](docs/granite-speech-4.1-onnx-variants.md) | Developers | Status of the 4.1 2B / Plus / NAR variants and what would enable them |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why NVIDIA Parakeet is not implemented |
-| [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Decision record: why Cohere Transcribe is deferred as both a local and hosted option |
-| [FLEURS & Fun-ASR Evaluation](docs/funasr-and-fleurs-evaluation.md) | Developers | Decision record: FLEURS is a benchmark (not a model); why Alibaba Fun-ASR is deferred |
+| [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Notes on the Cohere Transcribe local model |
+| [FLEURS & Fun-ASR Evaluation](docs/funasr-and-fleurs-evaluation.md) | Developers | Background on the FLEURS benchmark and the Alibaba Fun-ASR engine |
 
 ## Troubleshooting
 
@@ -135,8 +152,10 @@ uv run python -m pytest
 
 | Feature | Status |
 |---------|--------|
-| Local batch transcription (faster-whisper) | Stable |
-| Local streaming mode | Experimental |
+| Local batch transcription (faster-whisper, CPU) | Stable |
+| Local GPU transcription (Cohere / IBM Granite ONNX via WebGPU) | Stable |
+| Local cache-aware streaming (Nemotron 3.5) | Stable |
+| Local streaming mode (faster-whisper rolling window) | Experimental |
 | AssemblyAI cloud transcription (batch) | Stable |
 | AssemblyAI streaming | Experimental |
 | OpenAI cloud transcription (batch) | Stable |

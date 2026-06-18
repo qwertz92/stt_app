@@ -6,17 +6,25 @@ Everything about model choices, downloading, and configuring models for offline 
 
 The app has three local runtime families:
 
-- [faster-whisper](https://github.com/SYSTRAN/faster-whisper) models in CTranslate2 format.
-- Experimental Cohere/Granite ONNX models through a Node.js helper.
-- NVIDIA Nemotron 3.5 INT4 through ONNX Runtime GenAI.
+- **GPU-accelerated ONNX models** — Cohere Transcribe and IBM Granite Speech, run
+  on the GPU through WebGPU via a Node.js helper. These are the highest-accuracy
+  local models and, on a machine with a working GPU, usually faster than the
+  Whisper models too. Batch mode only.
+- **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
+  streaming model; also supports batch.
+- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
+  CPU-based, no extra setup, the broad-compatibility baseline; also supports the
+  experimental rolling-window streaming mode.
 
 Granite Speech 4.1 2B (the base autoregressive model) runs as a q4
-Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0.
-The Plus and NAR variants are different architectures with no faithful q4
-package yet, so they stay on the raw INT8 ONNX path; see
+Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0, and
+currently tops the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
+for accuracy. The Plus and NAR variants are different architectures with no
+faithful q4 package yet, so they stay on the raw INT8 ONNX path; see
 [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md) for the
-full status and what would change that. Granite 4.0 q4 remains available as the
-smaller Granite option until real app benchmarks justify removing it.
+full status and what would change that. Granite 4.0 q4 remains as a smaller GPU
+fallback and may be retired once Granite 4.1 is established on real hardware,
+since 4.1 supersedes it on accuracy.
 
 For deeper background on WebGPU, DirectML, CPU fallback, memory behavior, and
 language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
@@ -31,26 +39,38 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
 | `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
-| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Compact speech-LM, batch mode only |
-| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Granite 4.1 AR (q4, WebGPU), batch mode only |
-| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 Plus AR, batch mode only |
-| `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Smaller Granite 4.1 NAR daily-use trial, batch mode only |
+| `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
+| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** — Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
+| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 Plus, speaker tags/timestamps (raw INT8, CPU-bound), batch mode only |
+| `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 NAR, non-autoregressive (raw INT8, CPU-bound), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 
 ### Which model should I use?
 
+If you have a GPU and Node.js, start with the GPU/ONNX models: on a machine with a
+working GPU they are usually *both* more accurate and faster than the Whisper
+models. The Whisper models remain a solid, zero-setup CPU baseline. The surest way
+to choose is to run the [benchmark](advanced-setup.md#benchmarking) on your own
+hardware.
+
 | Situation | Recommendation |
 |-----------|---------------|
-| German + English, normal laptop | `small` (default) |
-| Better quality, still reasonable speed | `large-v3-turbo` |
-| Best possible quality, NVIDIA GPU available | `large-v3` |
+| Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` (GPU) |
+| High accuracy, fastest on GPU | `cohere-transcribe-03-2026` (GPU) |
+| Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` |
+| No GPU / zero setup, German + English | `small` (default, CPU) |
+| Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, maximum speed | `distil-large-v3.5` |
-| Highest experimental local ASR quality trial | `cohere-transcribe-03-2026` |
-| Speech-LM q4 comparison trial | `granite-4.0-1b-speech` |
-| Granite 4.1 on WebGPU (q4 pipeline, recommended 4.1) | `granite-speech-4.1-2b` |
-| Granite 4.1 NAR trial (raw INT8, CPU-bound) | `granite-speech-4.1-2b-nar` |
-| Lowest-latency true local streaming trial | `nemotron-3.5-asr-streaming-0.6b-int4` |
+| Smaller GPU model / Granite 4.0 fallback | `granite-4.0-1b-speech` |
 | Testing / very limited resources | `tiny` |
+
+> **Real-time factor (RTF)** measures speed: processing time ÷ audio length.
+> RTF 0.1 means a 10-second clip transcribes in ~1 second — lower is faster, and
+> anything below 1.0 is faster than real time. On the tested Ryzen 7600X + Arc
+> A750, `granite-4.0-1b-speech` runs at RTF 0.059 on WebGPU vs 0.381 on CPU, and
+> `cohere-transcribe-03-2026` at 0.071 on WebGPU — both faster than `small`
+> (0.151) or `large-v3-turbo` (0.355). See
+> [Local Benchmark Results](benchmarks/README.md).
 
 ### Accuracy reference (Word Error Rate)
 
@@ -81,6 +101,14 @@ Lower is better. These are published benchmark values — your results depend on
 
 Sources: [Whisper paper](https://arxiv.org/abs/2212.04356), [faster-whisper benchmarks](https://github.com/SYSTRAN/faster-whisper).
 
+**GPU/ONNX models (Open ASR Leaderboard):** Cohere and Granite are newer
+Conformer-encoder + LLM-decoder systems and generally beat the older Whisper
+models on the public
+[Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard).
+`granite-speech-4.1-2b` currently tops it (~5.3% mean English WER). Real-world and
+German quality still depend on your microphone and audio, so benchmark on your own
+samples before changing the default.
+
 ### ONNX local models
 
 Cohere Transcribe and IBM Granite Speech are selectable under the normal local
@@ -110,8 +138,10 @@ These raw Granite 4.1 graphs run through `onnxruntime-node` execution providers.
 In `auto`/`gpu` mode the app attempts WebGPU first, then DirectML, then CPU (the
 DirectML execution provider ships with `onnxruntime-node` on Windows). In
 practice they **often still run on CPU**: real hardware testing showed WebGPU
-failing on an invalid `Einsum` shader in ONNX Runtime Web and DirectML failing
-on unsupported operators. The active device is reported through the runtime
+failing to compile a valid GPU shader for the encoder's `Einsum` operator (a
+tensor-contraction op; explained in the
+[Local ONNX Runtime Guide](local-onnx-runtime.md)) and DirectML failing on
+unsupported operators. The active device is reported through the runtime
 status, so confirm it there. Plus and NAR have no faithful q4 Transformers.js
 package, so they cannot yet use the cleaner WebGPU pipeline path; see
 [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md).
@@ -201,7 +231,7 @@ not a replacement for a dedicated long-form transcription pipeline.
 
 Unlike faster-whisper and Nemotron, Cohere and Granite are not preloaded when
 the app starts. This avoids expensive background CPU model loading before the
-user actually starts an experimental transcription. The Local tab has an
+user actually starts a local ONNX transcription. The Local tab has an
 expert setting to keep the last Cohere or Granite ONNX model loaded after
 dictation when warm latency matters more than RAM/VRAM use.
 
@@ -223,7 +253,7 @@ The CTranslate2/faster-whisper runtime works on **CPU** (default) and
 - **NVIDIA GPU**: much faster. Set device to `auto` or `cuda` in the benchmark script.
 - **Intel iGPU / AMD GPU**: not supported by the CTranslate2 backend. Use CPU.
 
-The experimental ONNX/WebGPU runtime is designed to be vendor-neutral when
+The ONNX/WebGPU runtime is designed to be vendor-neutral when
 WebGPU or DirectML is available, so Intel, AMD, and NVIDIA GPUs are all valid
 targets. If neither GPU runtime can be selected by the JavaScript runtime, the
 model uses CPU and will likely be slower than `large-v3-turbo`.
@@ -278,7 +308,7 @@ uv run python scripts/download_model.py
 # Download a specific model:
 uv run python scripts/download_model.py --model large-v3-turbo
 
-# Download an experimental ONNX/WebGPU model:
+# Download a GPU ONNX/WebGPU model:
 uv run python scripts/download_model.py --model cohere-transcribe-03-2026
 
 # Download true-streaming Nemotron INT4:

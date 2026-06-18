@@ -87,7 +87,12 @@ Right-click the **system tray icon** → **Quit**.
 
 ## Next steps
 
-- **Better accuracy?** Try `large-v3-turbo` (multilingual, ~809 MB) or `distil-large-v3.5` (English-only, fastest).
+- **Best accuracy with a GPU?** If you have a GPU and Node.js, try
+  `granite-speech-4.1-2b` or `cohere-transcribe-03-2026` (ONNX/WebGPU). On a
+  machine with a working GPU these are usually *both* faster and more accurate
+  than the Whisper models. See [Models & Offline Setup](models.md).
+- **Better Whisper quality (CPU)?** Try `large-v3-turbo` (multilingual, ~809 MB) or `distil-large-v3.5` (English-only, fastest).
+- **Find the best model for your hardware?** Run the [benchmark](advanced-setup.md#benchmarking) to compare speed (real-time factor) across models and devices.
 - **Cloud transcription?** Switch Engine to `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, or `Fun-ASR` in Settings and enter your API key. Azure also needs the per-resource **endpoint** (entered next to the keys); Fun-ASR (Alibaba) needs a Singapore-region DashScope key and does not support German.
 - **Corporate/offline setup?** See [Models & Offline Setup](models.md) or [Advanced Setup](advanced-setup.md).
 - **Full documentation:** See [README.md](../README.md).

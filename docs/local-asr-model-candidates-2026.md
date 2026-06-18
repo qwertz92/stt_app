@@ -8,8 +8,10 @@ Parakeet notes and adds IBM Granite plus adjacent 2026 candidates.
 
 ## Decision
 
-Do not promote Cohere Transcribe, NVIDIA Parakeet, or IBM Granite Speech as the
-production local default yet.
+On a machine with a working GPU, Cohere Transcribe and IBM Granite Speech are
+recommended over the Whisper models for quality and speed. The zero-setup `small`
+Whisper model stays the default only because it needs no GPU or Node.js. NVIDIA
+Parakeet is not implemented (its official path is the heavyweight NeMo runtime).
 
 Status after the 2026-04-18 implementation pass:
 
@@ -42,8 +44,23 @@ Status update on 2026-06-08:
   560 ms multilingual INT4 ONNX graph is currently published in a directly
   compatible form, so the app does not expose fake latency choices.
 
-The next step is an on-device benchmark on the target Intel GPU. That benchmark
-should compare:
+Status update on 2026-06-17:
+
+- The on-device benchmark has been run on a Ryzen 7600X + Arc A750. The GPU/ONNX
+  models are materially faster than the CPU Whisper models there:
+  `granite-4.0-1b-speech` at RTF 0.059 on WebGPU (vs 0.381 on CPU) and
+  `cohere-transcribe-03-2026` at 0.071, both faster than `small` (0.151). See
+  [Local Benchmark Results](benchmarks/README.md).
+- Cohere, Granite 4.0, and Granite 4.1 2B are selectable local GPU models, now
+  recommended over the Whisper models on a machine with a working GPU. The
+  zero-setup `small` default remains for machines without a GPU or Node.js.
+- Granite Speech 4.1 2B now uses a q4 Transformers.js package
+  (`onnx-community/granite-speech-4.1-2b-ONNX`) on the same WebGPU pipeline as
+  Granite 4.0 and currently tops the Open ASR Leaderboard. Granite 4.1 Plus and
+  NAR remain on the raw INT8 path; see
+  [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md).
+
+The on-device benchmark plan (now completed) compared:
 
 - current `faster-whisper` models through CTranslate2 on CPU,
 - `CohereLabs/cohere-transcribe-03-2026` through ONNX/WebGPU,
@@ -51,7 +68,7 @@ should compare:
 - optionally Parakeet or Qwen3-ASR through a separate community runtime
   experiment if the ONNX/WebGPU candidates do not win clearly.
 
-Only promote a candidate from experimental to recommended/default if it wins on
+Only make a candidate the zero-setup production default if it wins on
 the user's real Windows hardware in warm latency, total dictation latency,
 quality for German and English dictation, memory use, and packaging reliability.
 
@@ -150,7 +167,7 @@ It is still a new runtime family for `stt_app`:
 - new packaging/offline-deployment work,
 - new tests around process boundaries and model cache handling.
 
-This is the runtime family used by the experimental Cohere/Granite integration.
+This is the runtime family used by the Cohere/Granite integration.
 It still needs a real target-hardware benchmark before it should become the
 recommended local path.
 
@@ -159,10 +176,10 @@ recommended local path.
 | Candidate | Quality signal | Runtime fit | Intel/AMD/NVIDIA GPU fit | App recommendation |
 | --- | --- | --- | --- | --- |
 | Current `faster-whisper` | Known and already integrated | Excellent | CPU and NVIDIA only in current runtime | Keep as production local engine |
-| Cohere Transcribe | Best English Open ASR mean WER in current public data | Medium as WebGPU, poor as native PyTorch production | Plausible via WebGPU only | Experimental selectable model; benchmark before recommending |
+| Cohere Transcribe | Best English Open ASR mean WER in current public data | Medium as WebGPU, poor as native PyTorch production | Plausible via WebGPU only | Selectable local GPU model; recommended on a working GPU |
 | NVIDIA Parakeet v3 | Excellent speed and good WER on supported hardware | Poor as NeMo production path | NVIDIA-only for official path | Do not implement official NeMo path |
 | Parakeet community ONNX | Potentially useful | Medium-low, community maintained | Plausible via ONNX/WebGPU only | Optional benchmark, not first priority |
-| IBM Granite 4.0 1B Speech | Very close to Cohere on English Open ASR | Medium as WebGPU | Plausible via WebGPU | Experimental selectable model; benchmark alongside Cohere |
+| IBM Granite 4.0 1B Speech | Very close to Cohere on English Open ASR | Medium as WebGPU | Plausible via WebGPU | Selectable local GPU model (smaller fallback; Granite 4.1 2B is the higher-accuracy option) |
 | Qwen3-ASR 0.6B / 1.7B | Strong official ASR family, but not ahead of Cohere/Granite on English Open ASR average | Poor for current WebGPU path; possible future GGUF/custom ONNX experiment | Runtime-specific | Watch; do not add without a separate runtime decision |
 | Canary / Voxtral / Kyutai | Interesting but less compelling for this app | Unproven | Runtime-specific | Watch only |
 
@@ -540,8 +557,10 @@ operator or WebGPU runtime issue can change the estimate materially.
 
 ## Final recommendation
 
-Keep Cohere Transcribe and IBM Granite Speech as experimental selectable local
-models, not as the production default.
+Cohere Transcribe and IBM Granite Speech are selectable local GPU models,
+recommended over the Whisper models on a machine with a working GPU. The
+zero-setup `small` Whisper model remains the default for machines without a GPU
+or Node.js.
 
 The highest-value validation order is:
 

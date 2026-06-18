@@ -5,6 +5,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-17
 
+- **Documentation refresh across the docs set.** Reframed the model docs so the
+  GPU/ONNX models (Cohere, Granite, Nemotron) read as first-class, recommended
+  options instead of Whisper-centric afterthoughts: README and `models.md` lead
+  with them, cite the Open ASR Leaderboard (Granite 4.1 2B is #1) and the Arc
+  A750 benchmark RTF numbers, and explain real-time factor. Removed leftover
+  "experimental" wording for the shipped local models (kept only for streaming
+  and the AGENTS policy note), described what the WebGPU `Einsum` shader bug is,
+  and brought the Cohere / Granite / local-candidates evaluation docs to the
+  current state. Standard: describe what each model is now, consistently, without
+  status labels that other models don't get.
 - **Added Alibaba Fun-ASR as a remote batch provider (`funasr`).** Decided to
   implement the hosted path after all: the app is general-purpose, and Fun-ASR
   adds SOTA accuracy for Chinese (incl. dialects) and East/SE-Asian languages
