@@ -1,6 +1,6 @@
 # FLEURS and Fun-ASR — Evaluation for stt_app
 
-This note records the research and decision behind two names that came up while
+This note records the research and decisions behind two names that came up while
 evaluating Azure LLM Speech: **FLEURS** and **Fun-ASR** (Alibaba). It follows
 the same decision-record style as
 [parakeet-evaluation.md](parakeet-evaluation.md) and
@@ -11,7 +11,8 @@ the same decision-record style as
 | Name | What it actually is | Decision |
 |------|---------------------|----------|
 | **FLEURS** | A **benchmark dataset**, not a model | Cannot be "implemented" as an engine. Documented here so nobody tries. |
-| **Fun-ASR** | A real ASR model family (Alibaba), open + hosted | **Deferred** — poor fit for this German/English dictation app today. Feasible later as a remote engine if the fit improves. |
+| **Fun-ASR** (hosted) | Alibaba's ASR family, top of the Artificial Analysis leaderboard | **Implemented** as a remote, batch-only engine (`funasr`) for its broad non-German coverage. |
+| **Fun-ASR** (local weights) | Open weights, 7.7B / 0.8B nano | **Not** implemented — too big / wrong runtime / no German. |
 
 ---
 
@@ -38,75 +39,76 @@ idea, not a provider, and it is out of scope here.
 
 ---
 
-## 2) Fun-ASR (Alibaba / Tongyi) — deferred
+## 2) Fun-ASR (Alibaba / Tongyi) — implemented as a remote engine
 
 ### What it is
 
 Fun-ASR is Alibaba's end-to-end, LLM-based speech-recognition family
-(FunAudioLLM / Tongyi Fun team), the successor line to the older FunASR /
-Paraformer toolkit.
+(FunAudioLLM / Tongyi Fun team).
 
 - **Architecture / size:** full model = 0.7B audio encoder + 7B LLM decoder
   (~7.7B params); `Fun-ASR-nano` ≈ 0.8B.
-- **Open weights:** yes, on Hugging Face and ModelScope, **Apache-2.0** (e.g.
-  `Fun-ASR-Nano-2512`, `Fun-ASR-MLT-Nano-2512`).
-- **Hosted:** `fun-asr-realtime` / `fun-asr-flash-*` on **Alibaba Cloud Model
-  Studio (DashScope)**, with an international (Singapore) endpoint and a free
-  trial quota.
+- **Open weights:** yes, on Hugging Face / ModelScope, **Apache-2.0**.
+- **Hosted:** `fun-asr-realtime` on **Alibaba Cloud Model Studio (DashScope)**,
+  with an international (Singapore) endpoint and a free trial quota.
 - **Benchmark standing:** the hosted **Fun-Realtime-ASR-preview** currently tops
   the *Artificial Analysis* speech-to-text leaderboard at **~1.7% WER** — ahead
-  of ElevenLabs Scribe v2 and Microsoft MAI-Transcribe-1.5. This is what made it
-  worth evaluating.
-- **Languages:** **31 languages**, including Chinese (+ 7 dialects), English,
-  Japanese, Korean, Vietnamese, Thai, plus a set of European languages
-  (Dutch, Danish, Swedish, Polish, Portuguese, Czech, …).
+  of ElevenLabs Scribe v2 and Microsoft MAI-Transcribe-1.5.
+- **Languages:** **31 languages**, including Chinese (+ 7 dialects), Cantonese,
+  English, Japanese, Korean, Vietnamese, Thai, Indonesian, plus a set of
+  European languages — but **not German**.
 
-### Why it is deferred for this app
+### Why we implemented the hosted path
 
-1. **German is not a documented supported language.** Both the Fun-ASR technical
-   report and the GitHub model card list 31 languages and **do not include
-   German**. This app's primary use case is **German + English** dictation, so a
-   headline engine that (per its own docs) cannot do German is a footgun: a user
-   would select it, dictate German, and get poor or wrong output.
-2. **The benchmark-winning model is hosted-only.** The 1.7% WER result is the
-   hosted `fun-asr-realtime` *preview* on Alibaba Cloud Model Studio. Using it
-   means an Alibaba Cloud account, a Singapore-region API key, and data
-   processed on Alibaba infrastructure — meaningfully more onboarding friction
-   than the providers already integrated, and a data-residency consideration.
-3. **The open weights don't fit the local runtime.** The full model is ~7.7B
-   (too large for this app's local path), and the 0.8B `nano` has **no published
-   ONNX export** and uses an LLM-decoder runtime distinct from the app's existing
-   Transformers.js/WebGPU and ORT-GenAI paths. Integrating it would be a new
-   runtime, not a drop-in — and nano likely lacks German too.
-4. **The file API shape differs.** Model Studio's batch "recording file
-   recognition" is an **asynchronous task API** (submit job → poll for result),
-   unlike the single synchronous POST used by the other remote providers and by
-   Azure LLM Speech.
+This app is general-purpose dictation. Fun-ASR adds **SOTA accuracy for Chinese
+(incl. dialects) and East/Southeast-Asian languages** that the existing engines
+do not cover as well, letting those language communities use the app. The added
+effort is bounded — one more remote provider — so excluding those languages had
+no good justification.
 
-### What would change the decision
+### How it is implemented
 
-- Official, tested **German** support in a Fun-ASR model.
-- An **ONNX export** of `Fun-ASR-nano` (or a small variant) that includes German
-  and fits the existing local runtime.
-- A user who primarily dictates **English or East/Southeast-Asian languages**
-  and is fine with Alibaba Cloud onboarding — in that case the hosted remote
-  path below is worth adding.
+Fun-ASR's **batch "recording file recognition" API does not fit a local
+dictation app**: it is asynchronous and requires a publicly reachable file URL
+(OSS upload); it rejects local files and base64. So the integration instead
+drives the **real-time WebSocket API in a batch fashion** (`funasr_provider.py`):
 
-### If we do add it later (remote sketch)
+- Connect to the Singapore endpoint
+  (`wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/`),
+  auth `Authorization: bearer <key>`.
+- `run-task` → `task-started` → stream the recorded PCM as binary frames →
+  `finish-task` → collect `result-generated` sentences → `task-finished`.
+- Key-only (no per-resource endpoint). Batch mode only (not wired into the
+  app's live streaming mode, even though the underlying API is realtime).
 
-The lowest-effort path is a **remote batch provider** mirroring
-`azure_provider.py`:
+### Setup
 
-- Endpoint: Alibaba Cloud Model Studio (DashScope), **Singapore/international**
-  base URL; key from a Singapore-region API key.
-- Use the async recording-file-recognition task API: submit the audio (or a
-  URL), poll the task until it completes, read the transcript.
-- Wire it in exactly like Azure (`config.py` engine + models + languages,
-  `settings_store.py` key/endpoint, `factory.py`, `settings_dialog.py`),
-  defaulting language coverage to the documented 31 (no `de`).
+1. Create an **Alibaba Cloud Model Studio (DashScope)** account and an
+   **API key in the Singapore region**.
+2. In **Settings → Remote Provider API Keys**, paste the key into the **Fun-ASR**
+   field and **Save API Keys**.
+3. Set **Connection Target → Fun-ASR only** and **Run Connection Test**.
+4. Set **Engine → Remote (Fun-ASR / Alibaba)** and pick a language (or `Auto`).
+   German is intentionally absent from the language list.
 
-This stays a **deferral, not a hard no**: the remote path is feasible whenever
-the language fit or user need justifies the Alibaba onboarding.
+### Caveats
+
+- **No German.** Use Azure LLM Speech or a local model for German.
+- Cloud-only; audio is processed on Alibaba infrastructure (Singapore region).
+- Implemented against the documented DashScope protocol; validate with a real
+  key, since this repo's CI mocks the WebSocket.
+
+### Why the local Fun-ASR weights are NOT implemented
+
+- The full model is **~7.7B** — far too large for this app's local path.
+- `Fun-ASR-nano` (0.8B) has **no published ONNX export** and uses an
+  LLM-decoder runtime distinct from the app's Transformers.js/WebGPU and
+  ORT-GenAI paths — a new runtime, not a drop-in — and likely lacks German too.
+- The hosted realtime preview (not the open weights) is the benchmark winner, so
+  a local build would not deliver the headline accuracy anyway.
+
+This matches the user's call: skip local unless the small model were
+extraordinarily good; it is not the SOTA variant, so there is no such case.
 
 ---
 
@@ -114,10 +116,9 @@ the language fit or user need justifies the Alibaba onboarding.
 
 - Fun-ASR (FunAudioLLM): <https://github.com/FunAudioLLM/Fun-ASR>
 - Fun-ASR technical report: <https://arxiv.org/abs/2509.12508>
-- FunASR toolkit: <https://github.com/modelscope/FunASR>
-- Alibaba Cloud Model Studio — real-time speech recognition (Fun-ASR):
+- Model Studio — real-time speech recognition (Fun-ASR):
   <https://www.alibabacloud.com/help/en/model-studio/real-time-speech-recognition>
-- Alibaba Cloud Model Studio — recording file recognition (Fun-ASR/Paraformer):
+- Model Studio — recording file recognition (Fun-ASR/Paraformer):
   <https://www.alibabacloud.com/help/en/model-studio/recording-file-recognition>
 - Artificial Analysis speech-to-text leaderboard:
   <https://artificialanalysis.ai/speech-to-text>

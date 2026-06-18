@@ -40,7 +40,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
 - Remote providers: AssemblyAI (SDK batch + Universal-Streaming v3),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
-  ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only)
+  ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
+  Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German)
 - keyring for secret storage
 
 ## Architecture
@@ -62,6 +63,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/deepgram_provider.py` | Batch via REST + streaming via WebSocket |
 | `transcriber/elevenlabs_provider.py` | Batch via ElevenLabs REST API |
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
+| `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
@@ -257,11 +259,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Engines
 
-- **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs, azure
+- **VALID_ENGINES**: local, assemblyai, openai, groq, deepgram, elevenlabs,
+  azure, funasr
 - **STREAMING_ENGINES**: local, assemblyai, deepgram (others are batch-only)
 - **Azure LLM Speech** needs two settings: `azure_endpoint` (per-resource, e.g.
   `https://<resource>.cognitiveservices.azure.com`) and the `azure` key in the
   secret store. Model select picks `mai-transcribe-1.5` / `mai-transcribe-1`.
+- **Fun-ASR (Alibaba)** is key-only (`funasr` key, Singapore-region DashScope),
+  driven over the realtime WebSocket in batch mode. It covers 31 languages but
+  **not German** (`FUNASR_LANGUAGE_MODES` excludes `de`).
 - All engine/model constants defined in `config.py`
 
 ## Tests

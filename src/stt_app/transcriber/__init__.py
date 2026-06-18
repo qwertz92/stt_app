@@ -4,6 +4,7 @@ from .base import ITranscriber, TranscriptionError
 from .deepgram_provider import DeepgramTranscriber
 from .elevenlabs_provider import ElevenLabsTranscriber
 from .factory import create_transcriber
+from .funasr_provider import FunAsrTranscriber
 from .groq_provider import GroqTranscriber
 from .local_faster_whisper import (
     LocalFasterWhisperTranscriber,
@@ -16,6 +17,7 @@ __all__ = [
     "AzureLlmSpeechTranscriber",
     "DeepgramTranscriber",
     "ElevenLabsTranscriber",
+    "FunAsrTranscriber",
     "GroqTranscriber",
     "ITranscriber",
     "LocalFasterWhisperTranscriber",
