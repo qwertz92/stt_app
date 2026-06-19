@@ -22,7 +22,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
   no-op saves and avoids emitting `settings_changed`, preventing unnecessary
   controller reloads/model preloads. Remote provider connection test results are
   persisted in a separate diagnostic JSON store and restored when Settings is
-  reopened.
+  reopened. Saving a replacement key or deleting a provider key now invalidates
+  that provider's saved connection-test result so the Remote tab cannot show a
+  stale "OK" for a missing or changed credential.
 - **Settings and overlay UI polish before 0.4.1.** The Settings dialog now opens
   larger by default, keeps one stable size while switching tabs, and ignores
   scroll-area size-hint changes that previously caused small resize jitter. The

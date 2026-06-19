@@ -94,6 +94,15 @@ class ProviderConnectionTestStore:
         )
         self._save(results)
 
+    def clear_result(self, provider: str) -> None:
+        normalized_provider = _normalize_provider(provider)
+        if not normalized_provider:
+            return
+        results = self.load_all()
+        if results.pop(normalized_provider, None) is None:
+            return
+        self._save(results)
+
     def _save(self, results: dict[str, ProviderConnectionTestResult]) -> None:
         payload = {
             "schema_version": _CURRENT_SCHEMA_VERSION,

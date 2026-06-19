@@ -357,11 +357,23 @@ def test_provider_badge_shows_insecure_storage_source():
     _ = app
 
 
-def test_save_can_clear_stored_provider_key():
+def test_save_can_clear_stored_provider_key(tmp_path):
+    connection_store = ProviderConnectionTestStore(
+        tmp_path / "provider_connection_tests.json"
+    )
     dialog, app, secret_store = _make_dialog(
         AppSettings(),
         {"openai": "stored-key"},
+        connection_test_store=connection_store,
     )
+    connection_store.save_result(
+        "openai",
+        ok=True,
+        message="OpenAI OK",
+        checked_at="2026-06-19 17:30:00",
+    )
+    dialog._restore_provider_connection_test_labels()
+    assert "OpenAI OK" in dialog._provider_last_test_labels["openai"].text()
 
     dialog._mark_provider_key_for_clear("openai")
     assert dialog._provider_status_labels["openai"].text() == "Will clear on Save"
@@ -371,6 +383,34 @@ def test_save_can_clear_stored_provider_key():
     assert secret_store.delete_calls == ["openai"]
     assert secret_store.get_api_key("openai") is None
     assert dialog._provider_status_labels["openai"].text() == "Not configured"
+    assert dialog._provider_last_test_labels["openai"].text() == "Last test: never."
+    assert connection_store.load_all() == {}
+    _ = app
+
+
+def test_save_new_provider_key_clears_previous_connection_test(tmp_path):
+    connection_store = ProviderConnectionTestStore(
+        tmp_path / "provider_connection_tests.json"
+    )
+    dialog, app, secret_store = _make_dialog(
+        AppSettings(),
+        {"openai": "old-key"},
+        connection_test_store=connection_store,
+    )
+    connection_store.save_result(
+        "openai",
+        ok=True,
+        message="OpenAI OK",
+        checked_at="2026-06-19 17:30:00",
+    )
+    dialog._restore_provider_connection_test_labels()
+
+    dialog.openai_key_edit.setText("new-key")
+    dialog._save()
+
+    assert secret_store.set_calls == [("openai", "new-key")]
+    assert dialog._provider_last_test_labels["openai"].text() == "Last test: never."
+    assert connection_store.load_all() == {}
     _ = app
 
 

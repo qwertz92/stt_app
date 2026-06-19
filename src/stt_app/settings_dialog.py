@@ -4921,6 +4921,16 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         self._apply_provider_connection_test_label(provider)
 
+    def _clear_provider_connection_test(self, provider: str) -> None:
+        self._provider_test_history.pop(provider, None)
+        try:
+            self._provider_connection_test_store.clear_result(provider)
+        except Exception:
+            self._settings_perf_logger.exception(
+                "Failed to clear %s connection test result", provider
+            )
+        self._apply_provider_connection_test_label(provider)
+
     def _restore_provider_connection_test_labels(self) -> None:
         try:
             results = self._provider_connection_test_store.load_all()
@@ -5617,6 +5627,7 @@ class SettingsDialog(QtWidgets.QDialog):
                     self._secret_store.set_api_key(provider, value)
                     key_field.clear()
                     self._provider_pending_clear.discard(provider)
+                    self._clear_provider_connection_test(provider)
                 except Exception as exc:
                     errors.append(f"{label}: {exc}")
             elif provider in pending_clear:
@@ -5624,6 +5635,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 try:
                     self._secret_store.delete_api_key(provider)
                     self._provider_pending_clear.discard(provider)
+                    self._clear_provider_connection_test(provider)
                 except Exception as exc:
                     errors.append(f"{label} delete: {exc}")
 

@@ -33,3 +33,17 @@ def test_provider_connection_test_store_ignores_unknown_providers(tmp_path):
     )
 
     assert store.load_all() == {}
+
+
+def test_provider_connection_test_store_clears_result(tmp_path):
+    store = ProviderConnectionTestStore(tmp_path / "provider_connection_tests.json")
+    store.save_result(
+        "openai",
+        ok=True,
+        message="OpenAI OK",
+        checked_at="2026-06-19 17:30:00",
+    )
+
+    store.clear_result("openai")
+
+    assert store.load_all() == {}

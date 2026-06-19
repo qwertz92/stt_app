@@ -120,7 +120,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Remote connection test persistence**: last-known provider connection test
   results live in `provider_connection_tests.json`, not `settings.json`, because
   they are diagnostic UI state rather than configuration. The Remote tab should
-  restore these labels on open and overwrite only the providers tested.
+  restore these labels on open and overwrite only the providers tested. Saving a
+  new provider key or deleting a provider key must clear that provider's stored
+  test result because the old result no longer describes the active credential.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional
