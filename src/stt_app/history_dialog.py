@@ -29,6 +29,7 @@ class HistoryDialog(QtWidgets.QDialog):
         settings_store: SettingsStore,
         on_history_limit_changed: Callable[[int], None] | None = None,
         parent: QtWidgets.QWidget | None = None,
+        autoload: bool = True,
     ) -> None:
         super().__init__(parent)
         self._history_store = history_store
@@ -79,7 +80,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._table = QtWidgets.QTableWidget(0, 4)
         self._table.setHorizontalHeaderLabels(["Time", "Engine", "Model", "Text"])
         self._table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
-        self._table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
+        self._table.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self._table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
@@ -135,10 +136,6 @@ class HistoryDialog(QtWidgets.QDialog):
         self._copy_button = QtWidgets.QPushButton("Copy selected")
         self._copy_button.setEnabled(False)
         self._copy_button.clicked.connect(self._copy_selected)
-        reserve_button_width_for_texts(
-            self._copy_button,
-            ("Copy selected", "Copied"),
-        )
 
         self._edit_button = QtWidgets.QPushButton("Edit selected")
         self._edit_button.setEnabled(False)
@@ -174,20 +171,17 @@ class HistoryDialog(QtWidgets.QDialog):
             ("Copy selected", "Copied"),
         )
 
-        self.reload()
+        if autoload:
+            self.reload()
 
     def reload(self) -> None:
-        previous_selected_row = self._selected_row()
-        previous_selected_entry = (
-            self._entries[previous_selected_row]
-            if previous_selected_row is not None
-            else None
-        )
+        previous_selected_rows = self._selected_rows()
+        previous_selected_entries = self._selected_entries()
         previous_scroll_value = self._table.verticalScrollBar().value()
         self._entries, total = self._history_store.recent_entries_with_count(
             limit=self._history_limit
         )
-        restored_selected_row: int | None = None
+        restored_selected_rows: list[int] = []
         self._table.setUpdatesEnabled(False)
         self._table.blockSignals(True)
         try:
@@ -204,8 +198,8 @@ class HistoryDialog(QtWidgets.QDialog):
                     3,
                     QtWidgets.QTableWidgetItem(_preview_text(entry.text)),
                 )
-                if previous_selected_entry is not None and entry == previous_selected_entry:
-                    restored_selected_row = row
+                if any(entry == selected for selected in previous_selected_entries):
+                    restored_selected_rows.append(row)
         finally:
             self._table.blockSignals(False)
             self._table.setUpdatesEnabled(True)
@@ -213,14 +207,15 @@ class HistoryDialog(QtWidgets.QDialog):
         self._last_total_entries = total
         self._update_history_count_label(total)
         if self._entries:
-            fallback_row = previous_selected_row if previous_selected_row is not None else 0
-            row_to_select = (
-                restored_selected_row
-                if restored_selected_row is not None
-                else min(fallback_row, len(self._entries) - 1)
+            fallback_row = previous_selected_rows[0] if previous_selected_rows else 0
+            rows_to_select = (
+                restored_selected_rows
+                if restored_selected_rows
+                else [min(fallback_row, len(self._entries) - 1)]
             )
-            self._table.selectRow(row_to_select)
+            self._select_rows(rows_to_select)
             restore_vertical_scrollbar(self._table, previous_scroll_value)
+            self._on_selection_changed()
         else:
             self._detail.clear()
             self._copy_button.setEnabled(False)
@@ -229,38 +224,70 @@ class HistoryDialog(QtWidgets.QDialog):
             self._reset_copy_feedback()
 
     def _on_selection_changed(self) -> None:
-        row = self._selected_row()
-        if row is None:
+        entries = self._selected_entries()
+        if not entries:
             self._detail.clear()
             self._copy_button.setEnabled(False)
             self._edit_button.setEnabled(False)
             self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
             return
-        entry = self._entries[row]
-        self._detail.setPlainText(entry.text)
-        self._copy_button.setEnabled(True)
-        self._edit_button.setEnabled(True)
+        if len(entries) == 1:
+            self._detail.setPlainText(entries[0].text)
+            self._copy_button.setEnabled(bool(entries[0].text))
+            self._edit_button.setEnabled(bool(entries[0].text))
+        else:
+            self._detail.setPlainText(f"{len(entries)} entries selected.")
+            self._copy_button.setEnabled(
+                any(bool(entry.text) for entry in entries)
+            )
+            self._edit_button.setEnabled(False)
         self._delete_button.setEnabled(True)
         self._reset_copy_feedback()
 
-    def _selected_row(self) -> int | None:
+    def _selected_rows(self) -> list[int]:
         selected = self._table.selectionModel().selectedRows()
-        if not selected:
+        rows = sorted({index.row() for index in selected})
+        return [row for row in rows if 0 <= row < len(self._entries)]
+
+    def _selected_entries(self) -> list[TranscriptHistoryEntry]:
+        return [self._entries[row] for row in self._selected_rows()]
+
+    def _selected_row(self) -> int | None:
+        rows = self._selected_rows()
+        if len(rows) != 1:
             return None
-        row = selected[0].row()
-        if row < 0 or row >= len(self._entries):
-            return None
-        return row
+        return rows[0]
+
+    def _select_rows(self, rows: list[int]) -> None:
+        selection_model = self._table.selectionModel()
+        if selection_model is None:
+            return
+        selection_model.clearSelection()
+        model = self._table.model()
+        for row in rows:
+            if row < 0 or row >= self._table.rowCount():
+                continue
+            top_left = model.index(row, 0)
+            bottom_right = model.index(row, self._table.columnCount() - 1)
+            selection = QtCore.QItemSelection(top_left, bottom_right)
+            selection_model.select(
+                selection,
+                QtCore.QItemSelectionModel.Select
+                | QtCore.QItemSelectionModel.Rows,
+            )
+        if rows:
+            current_row = min(max(rows[0], 0), self._table.rowCount() - 1)
+            selection_model.setCurrentIndex(
+                model.index(current_row, 0),
+                QtCore.QItemSelectionModel.NoUpdate,
+            )
 
     def _copy_selected(self) -> None:
-        row = self._selected_row()
-        if row is None:
+        texts = [entry.text for entry in self._selected_entries() if entry.text]
+        if not texts:
             return
-        text = self._entries[row].text
-        if not text:
-            return
-        QtGui.QGuiApplication.clipboard().setText(text)
+        QtGui.QGuiApplication.clipboard().setText("\n\n".join(texts))
         self._copy_button.setText("Copied")
         set_button_feedback_state(self._copy_button, "success")
         self._copy_feedback_timer.start()
@@ -336,25 +363,30 @@ class HistoryDialog(QtWidgets.QDialog):
         )
 
     def _delete_selected(self) -> None:
-        row = self._selected_row()
-        if row is None:
+        entries = self._selected_entries()
+        if not entries:
             return
-        entry = self._entries[row]
+        count = len(entries)
+        prompt = (
+            "Delete the selected transcription from history?"
+            if count == 1
+            else f"Delete {count} selected transcriptions from history?"
+        )
         answer = QtWidgets.QMessageBox.question(
             self,
-            "Delete history entry",
-            "Delete the selected transcription from history?",
+            "Delete history entry" if count == 1 else "Delete history entries",
+            prompt,
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        removed = self._history_store.delete_entry(entry)
+        removed = self._history_store.delete_entries(entries)
         if removed <= 0:
             QtWidgets.QMessageBox.information(
                 self,
                 "Entry not found",
-                "The selected history entry could not be removed.",
+                "The selected history entries could not be removed.",
             )
             return
         self.reload()

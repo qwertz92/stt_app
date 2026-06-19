@@ -5,6 +5,7 @@ from PySide6 import QtCore, QtWidgets
 import stt_app.main as main_module
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
+    _HistoryDialogPresenter,
     _create_tray_icon,
     _refresh_local_model_inventory_in_background,
     _install_signal_handlers,
@@ -349,6 +350,70 @@ def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
 
     assert instances[0].reload_calls == 1
     assert instances[0].show_calls == 1
+
+
+def test_history_presenter_reuses_open_dialog_without_repeat_reload(
+    monkeypatch,
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    instances = []
+    callbacks = []
+
+    class FakeHistoryDialog(QtWidgets.QDialog):
+        def __init__(self, *args, autoload=True, **kwargs):
+            super().__init__()
+            self.autoload = autoload
+            self.reload_calls = 0
+            self.show_calls = 0
+            self.raise_calls = 0
+            self.activate_calls = 0
+            instances.append(self)
+
+        def reload(self):
+            self.reload_calls += 1
+
+        def show(self):
+            self.show_calls += 1
+            super().show()
+
+        def raise_(self):
+            self.raise_calls += 1
+
+        def activateWindow(self):
+            self.activate_calls += 1
+
+    monkeypatch.setattr(main_module, "HistoryDialog", FakeHistoryDialog)
+    monkeypatch.setattr(
+        main_module.QtCore.QTimer,
+        "singleShot",
+        lambda _delay_ms, callback: callbacks.append(callback),
+    )
+
+    presenter = _HistoryDialogPresenter(
+        history_store=TranscriptHistoryStore(tmp_path / "history.json"),
+        settings_store=FakeSettingsStore(),
+        on_history_limit_changed=lambda _value: None,
+    )
+
+    first = presenter.open()
+    second = presenter.open()
+
+    assert first is second
+    assert len(instances) == 1
+    assert instances[0].autoload is False
+    assert instances[0].show_calls == 2
+    assert instances[0].raise_calls == 2
+    assert instances[0].activate_calls == 2
+    assert instances[0].reload_calls == 0
+    assert len(callbacks) == 1
+
+    callbacks[0]()
+    presenter.open()
+
+    assert instances[0].reload_calls == 1
+    assert len(callbacks) == 1
+    _ = app
 
 
 def test_restore_overlay_after_settings_save_applies_corner_and_compacts():

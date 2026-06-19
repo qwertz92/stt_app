@@ -92,6 +92,73 @@ def test_delete_selected_button_removes_entry(monkeypatch, tmp_path):
     _ = app
 
 
+def test_multiselect_copy_joins_selected_entries(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta"), _entry("gamma")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    clipboard = _FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._select_rows([0, 1])
+
+    assert dialog._detail.toPlainText() == "2 entries selected."
+    assert dialog._edit_button.isEnabled() is False
+
+    dialog._copy_button.click()
+
+    assert clipboard.text() == "gamma\n\nbeta"
+    assert dialog._copy_button.text() == "Copied"
+    _ = app
+
+
+def test_multiselect_delete_removes_selected_entries(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta"), _entry("gamma")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._select_rows([0, 1])
+    dialog._delete_button.click()
+
+    assert [entry.text for entry in history_store.load()] == ["alpha"]
+    _ = app
+
+
+def test_history_dialog_can_defer_initial_reload(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+        autoload=False,
+    )
+
+    assert dialog._table.rowCount() == 0
+    dialog.reload()
+    assert dialog._table.rowCount() == 1
+    _ = app
+
+
 def test_reducing_limit_confirms_and_trims(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")

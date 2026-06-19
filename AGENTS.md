@@ -121,11 +121,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Successful transcriptions are added to history before text insertion, so a
   paste/focus failure does not drop the transcript. The stored model name comes
   from the transcription settings snapshot, not from later UI changes.
-  Settings History supports multi-select copy/delete for bulk cleanup; editing
-  remains single-entry only. History-limit spin boxes disable keyboard tracking:
-  typed intermediate values are not applied until the edit is committed, so
-  increasing a limit such as `224` to `300` never prompts to trim at the
-  temporary `3` value.
+  Settings History and the overlay History dialog both support multi-select
+  copy/delete for bulk cleanup; editing remains single-entry only. History-limit
+  spin boxes disable keyboard tracking: typed intermediate values are not
+  applied until the edit is committed, so increasing a limit such as `224` to
+  `300` never prompts to trim at the temporary `3` value. Re-clicking History
+  while the dialog is open should present the existing window only; it must not
+  reload repeatedly or create another dialog.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
@@ -253,8 +255,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the job is not aborting — `_new_recording_active()` intentionally excludes
   `_streaming_recording` because a pending streaming finalize keeps that flag
   True. Background results are delivered via `_handle_background_transcription_ready`
-  per `background_delivery` (streaming finalize is always history-only). Never
-  reset foreground session state from a background result handler.
+  per `background_delivery` (streaming finalize is always history-only).
+  Progress, ready, and failed signals must all use the same foreground check;
+  background or aborting job progress must not switch the overlay back to
+  Processing. Never reset foreground session state from a background result
+  handler.
   Explicit cancel — the overlay per-row ✕, Clear queue, and the Cancel button —
   goes through `_request_job_stop` (delivery `history`): it sets `aborting` (so a
   not-yet-started worker skips and a cooperative transcriber stops) and cancels

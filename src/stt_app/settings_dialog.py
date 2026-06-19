@@ -1931,10 +1931,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_copy_button = QtWidgets.QPushButton("Copy selected")
         self.history_copy_button.clicked.connect(self._copy_selected_history)
         self.history_copy_button.setEnabled(False)
-        reserve_button_width_for_texts(
-            self.history_copy_button,
-            ("Copy selected", "Copied"),
-        )
         self.history_edit_button = QtWidgets.QPushButton("Edit selected")
         self.history_edit_button.clicked.connect(self._edit_selected_history)
         self.history_edit_button.setEnabled(False)
@@ -1947,10 +1943,6 @@ class SettingsDialog(QtWidgets.QDialog):
         history_buttons.addWidget(self.history_edit_button)
         history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
-        reserve_button_width_for_texts(
-            self.history_copy_button,
-            ("Copy selected", "Copied"),
-        )
         layout.addWidget(history_box, 1)
         self.tabs.addTab(tab, "History")
 
@@ -2054,10 +2046,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_copy_button = QtWidgets.QPushButton("Copy result")
         self.import_copy_button.setEnabled(False)
         self.import_copy_button.clicked.connect(self._copy_import_result)
-        reserve_button_width_for_texts(
-            self.import_copy_button,
-            ("Copy result", "Copied"),
-        )
         import_result_header.addWidget(self.import_copy_button)
         import_result_layout.addLayout(import_result_header)
 
@@ -2089,10 +2077,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self._selected_import_file_path = ""
 
         layout.addWidget(import_box, 1)
-        reserve_button_width_for_texts(
-            self.import_copy_button,
-            ("Copy result", "Copied"),
-        )
         self.tabs.addTab(tab, "Import Audio")
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:

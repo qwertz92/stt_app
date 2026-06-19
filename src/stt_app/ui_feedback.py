@@ -54,6 +54,7 @@ def reserve_button_width_for_texts(
             width = max(width, button.sizeHint().width())
     finally:
         button.setText(current_text)
+    width = max(width, button.sizeHint().width())
     button.setMinimumWidth(width)
 
 

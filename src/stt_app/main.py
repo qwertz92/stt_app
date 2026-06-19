@@ -99,29 +99,12 @@ def run() -> int:
     power_resume_filter = QtPowerResumeEventFilter(power_resume_timer.start)
     app.installNativeEventFilter(power_resume_filter)
 
-    _active_history_dialog: HistoryDialog | None = None
-
-    def open_history_dialog() -> None:
-        nonlocal _active_history_dialog
-        if _active_history_dialog is not None:
-            _active_history_dialog.reload()
-            _active_history_dialog.raise_()
-            _active_history_dialog.activateWindow()
-            return
-        dialog = HistoryDialog(
-            history_store=history_store,
-            settings_store=settings_store,
-            on_history_limit_changed=controller.set_history_max_items,
-        )
-        dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
-
-        def _on_history_finished():
-            nonlocal _active_history_dialog
-            _active_history_dialog = None
-
-        dialog.finished.connect(_on_history_finished)
-        _active_history_dialog = dialog
-        dialog.show()
+    history_dialog_presenter = _HistoryDialogPresenter(
+        history_store=history_store,
+        settings_store=settings_store,
+        on_history_limit_changed=controller.set_history_max_items,
+    )
+    open_history_dialog = history_dialog_presenter.open
 
     overlay.history_requested.connect(open_history_dialog)
     overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
@@ -170,6 +153,7 @@ def run() -> int:
         "power_resume_filter": power_resume_filter,
         "power_resume_timer": power_resume_timer,
         "tray_icon": tray_icon,
+        "history_dialog_presenter": history_dialog_presenter,
         "signal_timer": signal_timer,
         "instance_lock": instance_lock,
     }
@@ -231,14 +215,7 @@ def _create_tray_icon(
     _active_settings_dialog: SettingsDialog | None = None
 
     def present_settings_dialog(dialog: SettingsDialog) -> None:
-        if dialog.isMinimized():
-            dialog.showNormal()
-        elif not dialog.isVisible():
-            dialog.show()
-        else:
-            dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
+        _present_dialog(dialog)
 
     def create_settings_dialog() -> SettingsDialog:
         nonlocal _active_settings_dialog
@@ -307,6 +284,61 @@ def _create_tray_icon(
     tray_icon._open_settings_dialog = open_settings_dialog
     QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
     return tray_icon
+
+
+class _HistoryDialogPresenter:
+    def __init__(
+        self,
+        *,
+        history_store: TranscriptHistoryStore,
+        settings_store: SettingsStore,
+        on_history_limit_changed,
+    ) -> None:
+        self._history_store = history_store
+        self._settings_store = settings_store
+        self._on_history_limit_changed = on_history_limit_changed
+        self._active_dialog: HistoryDialog | None = None
+
+    def open(self) -> HistoryDialog:
+        if self._active_dialog is not None:
+            _present_dialog(self._active_dialog)
+            return self._active_dialog
+
+        dialog = HistoryDialog(
+            history_store=self._history_store,
+            settings_store=self._settings_store,
+            on_history_limit_changed=self._on_history_limit_changed,
+            autoload=False,
+        )
+        dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
+        dialog.finished.connect(lambda: self._clear_dialog(dialog))
+        self._active_dialog = dialog
+        _present_dialog(dialog)
+        QtCore.QTimer.singleShot(0, lambda: _reload_history_dialog(dialog))
+        return dialog
+
+    def _clear_dialog(self, dialog: HistoryDialog) -> None:
+        if self._active_dialog is dialog:
+            self._active_dialog = None
+
+
+def _present_dialog(dialog: QtWidgets.QDialog) -> None:
+    if dialog.isMinimized():
+        dialog.showNormal()
+    elif not dialog.isVisible():
+        dialog.show()
+    else:
+        dialog.show()
+    dialog.raise_()
+    dialog.activateWindow()
+
+
+def _reload_history_dialog(dialog: HistoryDialog) -> None:
+    try:
+        if dialog.isVisible():
+            dialog.reload()
+    except RuntimeError:
+        return
 
 
 def _restore_overlay_after_settings_save(

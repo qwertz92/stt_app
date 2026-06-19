@@ -146,6 +146,26 @@ def test_cancel_mode_aborts_old_job_but_keeps_completed_in_history(
     _ = app
 
 
+def test_background_progress_does_not_override_new_recording_overlay(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    prior_state_count = len(overlay.states)
+
+    controller._on_transcription_progress_result(token_a, "old job still working")
+
+    assert len(overlay.states) == prior_state_count
+    assert overlay.states[-1][0] == "Listening"
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_queued_transcription_keeps_completed_result_in_history(
     monkeypatch, tmp_path
 ):
@@ -166,6 +186,26 @@ def test_cancel_queued_transcription_keeps_completed_result_in_history(
     controller._on_transcription_ready("late A", request_token=token_a)
     assert [e.text for e in history.load()] == ["late A"]
     assert inserter.calls == []
+    controller.shutdown()
+    _ = app
+
+
+def test_canceled_job_progress_does_not_restore_processing_overlay(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.cancel_queued_transcription(token_a)
+    prior_state_count = len(overlay.states)
+
+    controller._on_transcription_progress_result(token_a, "canceling old job")
+
+    assert len(overlay.states) == prior_state_count
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
     controller.shutdown()
     _ = app
 

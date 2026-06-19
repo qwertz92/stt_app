@@ -828,6 +828,28 @@ class DictationController(QtCore.QObject):
             or self._recording_start_in_progress
         )
 
+    def _is_foreground_transcription(
+        self,
+        request_token: int | None,
+        job: _TranscriptionJob | None = None,
+    ) -> bool:
+        """Whether a worker result/progress belongs to the live overlay session."""
+        if request_token is None:
+            return True
+        if job is None:
+            job = self._jobs.get(request_token)
+        if (
+            job is None
+            and self._active_request_token is None
+            and not self._new_recording_active()
+        ):
+            return True
+        return (
+            self._active_request_token == request_token
+            and not self._new_recording_active()
+            and not (job is not None and job.aborting)
+        )
+
     def _register_transcription_job(
         self,
         request_token: int,
@@ -1580,7 +1602,7 @@ class DictationController(QtCore.QObject):
         request_token: int,
         detail: str,
     ) -> None:
-        if self._active_request_token not in {None, request_token}:
+        if not self._is_foreground_transcription(request_token):
             return
         message = str(detail or "").strip()
         if not message:
@@ -1600,12 +1622,7 @@ class DictationController(QtCore.QObject):
         job: _TranscriptionJob | None = None
         if request_token is not None:
             job = self._jobs.get(request_token)
-            is_foreground = (
-                self._active_request_token in {None, request_token}
-                and not self._new_recording_active()
-                and not (job is not None and job.aborting)
-            )
-            if not is_foreground:
+            if not self._is_foreground_transcription(request_token, job):
                 # A newer recording owns the live session, or this job was asked
                 # to stop. Keep the live session untouched and deliver this
                 # queued result on its own (history and/or its own window).
@@ -1745,12 +1762,7 @@ class DictationController(QtCore.QObject):
         preserved_audio = bool(self._last_failed_wav_bytes)
         if request_token is not None:
             job = self._jobs.get(request_token)
-            is_foreground = (
-                self._active_request_token in {None, request_token}
-                and not self._new_recording_active()
-                and not (job is not None and job.aborting)
-            )
-            if not is_foreground:
+            if not self._is_foreground_transcription(request_token, job):
                 # A queued/canceled transcription failed while a newer session
                 # is active. Drop it quietly without disturbing the live session;
                 # keep its audio available for a manual retry.

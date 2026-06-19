@@ -13,6 +13,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
   layout before measuring height, can temporarily grow beyond the normal
   transcript-text height cap when the queue needs room, and returns to the normal
   non-queue size as soon as the queue is empty.
+- **Review hardening for queued transcription progress.** Progress events now
+  use the same foreground-job check as ready/failed results, so a background or
+  aborting transcription cannot switch the overlay back to Processing while a
+  newer recording owns the live UI or after the user canceled the job.
+- **Standalone History now matches Settings History.** The overlay History
+  dialog now supports multi-select copy/delete with single-entry-only editing.
+  Its first load can be deferred until after the window is shown, and repeated
+  History clicks now present the existing window instead of stacking reloads.
 - **Settings import and history refresh polish.** The Import Audio tab now has a
   copy button for transcription results and uses a vertical splitter so long
   transcripts can take more space without hiding provider controls. Dialog copy
