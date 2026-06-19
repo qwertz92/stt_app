@@ -46,12 +46,13 @@ class HistoryDialog(QtWidgets.QDialog):
         self._history_limit = _normalize_history_limit(settings.history_max_items)
 
         self.setWindowTitle("Recent Transcriptions")
-        self.resize(820, 500)
-        self.setMinimumSize(600, 400)
+        self.resize(1040, 660)
+        self.setMinimumSize(700, 460)
         self.setModal(False)
         self.setWindowFlag(QtCore.Qt.Window, True)
         self.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)
         self.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
+        self.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
         self.setWindowFlag(QtCore.Qt.WindowContextHelpButtonHint, False)
 
@@ -119,7 +120,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._splitter.addWidget(self._detail)
         self._splitter.setStretchFactor(0, 2)
         self._splitter.setStretchFactor(1, 1)
-        self._splitter.setSizes([360, 180])
+        self._splitter.setSizes([460, 220])
 
         self._refresh_button = QtWidgets.QPushButton("Refresh")
         self._refresh_button.clicked.connect(self.reload)

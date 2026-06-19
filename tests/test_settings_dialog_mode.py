@@ -946,7 +946,62 @@ def test_settings_dialog_size_stays_stable_when_switching_tabs(monkeypatch):
     _ = app
 
 
-def test_remote_provider_key_fields_start_before_form_fields():
+def test_settings_tab_widths_stay_stable_when_selection_changes():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    tab_bar = dialog.tabs.tabBar()
+    initial_widths = [
+        tab_bar.tabRect(index).width()
+        for index in range(dialog.tabs.count())
+    ]
+    for index in range(dialog.tabs.count()):
+        dialog.tabs.setCurrentIndex(index)
+        app.processEvents()
+        assert [
+            tab_bar.tabRect(inner_index).width()
+            for inner_index in range(dialog.tabs.count())
+        ] == initial_widths
+    _ = app
+
+
+def test_general_tab_uses_shared_label_column_width():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    general_tab = dialog.tabs.widget(0)
+    labels_by_text = {
+        label.text(): label
+        for label in general_tab.findChildren(QtWidgets.QLabel)
+    }
+    labels = [
+        labels_by_text["Hotkey"],
+        labels_by_text["Engine"],
+        labels_by_text["Paste Mode"],
+        labels_by_text["VAD Threshold"],
+        labels_by_text["Recordings Folder"],
+        labels_by_text["Overlay Corner"],
+    ]
+
+    widths = {label.minimumWidth() for label in labels}
+    assert len(widths) == 1
+    assert next(iter(widths)) > 0
+    _ = app
+
+
+def test_remote_provider_key_fields_align_with_azure_endpoint():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -963,8 +1018,38 @@ def test_remote_provider_key_fields_start_before_form_fields():
     app.processEvents()
 
     key_x = dialog.assemblyai_key_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
-    form_x = dialog.azure_endpoint_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
-    assert key_x < form_x
+    endpoint_x = dialog.azure_endpoint_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+    assert abs(key_x - endpoint_x) <= 2
+    _ = app
+
+
+def test_remote_provider_labels_align_with_key_field_center():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    remote_index = next(
+        index
+        for index in range(dialog.tabs.count())
+        if dialog.tabs.tabText(index) == "Remote"
+    )
+    dialog.tabs.setCurrentIndex(remote_index)
+    dialog.show()
+    app.processEvents()
+
+    provider_label = next(
+        label
+        for label in dialog.findChildren(QtWidgets.QLabel)
+        if label.text() == "AssemblyAI"
+    )
+    provider_center = provider_label.mapTo(dialog, provider_label.rect().center()).y()
+    key_center = dialog.assemblyai_key_edit.mapTo(
+        dialog,
+        dialog.assemblyai_key_edit.rect().center(),
+    ).y()
+    assert abs(provider_center - key_center) <= 2
     _ = app
 
 
@@ -977,7 +1062,12 @@ def test_remote_provider_status_badges_use_calculated_fixed_width():
     )
 
     expected_width = dialog._provider_status_badge_width()
-    assert expected_width < 230
+    longest_status = max(
+        settings_dialog_module._PROVIDER_STATUS_BADGE_TEXTS,
+        key=dialog.fontMetrics().horizontalAdvance,
+    )
+    assert longest_status == "Will clear on Save"
+    assert expected_width < 150
     for badge in dialog._provider_status_labels.values():
         assert badge.minimumWidth() == expected_width
         assert badge.maximumWidth() == expected_width
@@ -2175,6 +2265,8 @@ def test_settings_dialog_has_tab_stylesheet():
     stylesheet = dialog.tabs.styleSheet()
     assert "QTabBar::tab:selected" in stylesheet
     assert "QTabBar::tab:hover" in stylesheet
+    assert "border-bottom: 2px solid #bbb" in stylesheet
+    assert "font-weight: bold" not in stylesheet
     _ = app
 
 

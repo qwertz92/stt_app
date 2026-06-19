@@ -302,6 +302,9 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
     assert "Deepgram: OK" in dialog.test_conn_result.text()
     assert "Last test (" in dialog._provider_last_test_labels["openai"].text()
     assert "Last test (" in dialog._provider_last_test_labels["deepgram"].text()
+    assert "padding: 0 0 6px 0" in (
+        dialog._provider_last_test_labels["openai"].styleSheet()
+    )
     _ = app
 
 

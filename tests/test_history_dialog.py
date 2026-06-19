@@ -293,7 +293,26 @@ def test_history_dialog_window_has_native_minimize_button(tmp_path):
     assert bool(flags & QtCore.Qt.Window)
     assert bool(flags & QtCore.Qt.WindowSystemMenuHint)
     assert bool(flags & QtCore.Qt.WindowMinimizeButtonHint)
+    assert bool(flags & QtCore.Qt.WindowMaximizeButtonHint)
     assert bool(flags & QtCore.Qt.WindowCloseButtonHint)
+    _ = app
+
+
+def test_history_dialog_opens_with_roomier_default_size(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    assert dialog.size().width() >= 1040
+    assert dialog.size().height() >= 660
+    assert dialog.minimumSize().width() >= 700
+    assert dialog.minimumSize().height() >= 460
     _ = app
 
 

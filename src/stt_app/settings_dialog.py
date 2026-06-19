@@ -201,11 +201,14 @@ _PROVIDER_STATUS_BADGE_TEXTS = (
     "Unsaved input",
     "Will clear on Save",
     "Stored securely",
-    "Stored securely (legacy)",
+    "Secure (legacy)",
     "Stored insecurely",
-    "Stored insecurely (disabled)",
+    "Insecure disabled",
 )
-_PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX = 18
+_PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX = 16
+_REMOTE_PROVIDER_LABEL_EXTRA_PX = 18
+_REMOTE_PROVIDER_GRID_SPACING_PX = 12
+_GENERAL_FORM_LABEL_EXTRA_PX = 12
 _ACTION_ROW_SPACING_PX = 8
 _INLINE_FIELD_BUTTON_SPACING_PX = 6
 
@@ -451,15 +454,15 @@ class SettingsDialog(QtWidgets.QDialog):
                 padding: 6px 18px;
                 margin-right: 2px;
                 border: 1px solid #bbb;
-                border-bottom: none;
+                border-bottom: 2px solid #bbb;
                 border-top-left-radius: 4px;
                 border-top-right-radius: 4px;
                 background: #e8e8e8;
             }
             QTabBar::tab:selected {
                 background: #ffffff;
-                border-bottom: 2px solid #1a73e8;
-                font-weight: bold;
+                border-bottom-color: #1a73e8;
+                color: #0d47a1;
             }
             QTabBar::tab:hover:!selected {
                 background: #d6e4f0;
@@ -587,6 +590,50 @@ class SettingsDialog(QtWidgets.QDialog):
             for text in _PROVIDER_STATUS_BADGE_TEXTS
         )
         return text_width + _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX
+
+    def _remote_provider_label_width(
+        self,
+        provider_rows: tuple[tuple[str, str], ...],
+    ) -> int:
+        candidates = [title for _provider, title in provider_rows]
+        candidates.extend(
+            (
+                "Azure Endpoint",
+                "Connection Target",
+            )
+        )
+        text_width = max(self.fontMetrics().horizontalAdvance(text) for text in candidates)
+        return text_width + _REMOTE_PROVIDER_LABEL_EXTRA_PX
+
+    def _apply_shared_form_label_width(
+        self,
+        forms: tuple[QtWidgets.QFormLayout, ...],
+    ) -> None:
+        label_widgets: list[QtWidgets.QLabel] = []
+        for form in forms:
+            for row in range(form.rowCount()):
+                item = form.itemAt(row, QtWidgets.QFormLayout.LabelRole)
+                widget = item.widget() if item is not None else None
+                if isinstance(widget, QtWidgets.QLabel):
+                    label_widgets.append(widget)
+        measured_labels = [label for label in label_widgets if label.text().strip()]
+        if not measured_labels:
+            return
+        width = (
+            max(label.sizeHint().width() for label in measured_labels)
+            + _GENERAL_FORM_LABEL_EXTRA_PX
+        )
+        for label in label_widgets:
+            label.setMinimumWidth(width)
+            label.setAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+    def _style_provider_last_test_label(
+        self,
+        label: QtWidgets.QLabel,
+        *,
+        color: str = "#555",
+    ) -> None:
+        label.setStyleSheet(f"color: {color}; font-size: 11px; padding: 0 0 6px 0;")
 
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
         style = "color: #555; font-size: 11px; padding: 0 0 6px 0;"
@@ -1235,6 +1282,16 @@ class SettingsDialog(QtWidgets.QDialog):
         appearance_form.addRow("Overlay Corner", self.overlay_corner_combo)
         layout.addWidget(appearance_box)
 
+        self._apply_shared_form_label_width(
+            (
+                hotkey_form,
+                engine_form,
+                paste_form,
+                audio_form,
+                recordings_form,
+                appearance_form,
+            )
+        )
         layout.addStretch(1)
         self.tabs.addTab(tab, "General")
 
@@ -1781,19 +1838,19 @@ class SettingsDialog(QtWidgets.QDialog):
         self._style_note_label(provider_intro)
         provider_layout.addWidget(provider_intro)
 
-        provider_label_width = max(
-            self.fontMetrics().horizontalAdvance(title)
-            for _provider, title in provider_rows
-        ) + 6
+        provider_label_width = self._remote_provider_label_width(provider_rows)
         status_badge_width = self._provider_status_badge_width()
-        provider_key_rows = QtWidgets.QWidget()
-        provider_key_layout = QtWidgets.QGridLayout(provider_key_rows)
-        provider_key_layout.setContentsMargins(0, 0, 0, 0)
-        provider_key_layout.setHorizontalSpacing(6)
-        provider_key_layout.setVerticalSpacing(3)
-        provider_key_layout.setColumnMinimumWidth(0, provider_label_width)
-        provider_key_layout.setColumnStretch(1, 1)
-        for row_index, (provider, title) in enumerate(provider_rows):
+        provider_grid = QtWidgets.QGridLayout()
+        provider_grid.setContentsMargins(0, 0, 0, 0)
+        provider_grid.setHorizontalSpacing(_REMOTE_PROVIDER_GRID_SPACING_PX)
+        provider_grid.setVerticalSpacing(3)
+        provider_grid.setColumnMinimumWidth(0, provider_label_width)
+        provider_grid.setColumnStretch(1, 1)
+        provider_grid.setColumnStretch(2, 0)
+        provider_grid.setColumnStretch(3, 0)
+
+        grid_row = 0
+        for provider, title in provider_rows:
             key_field = QtWidgets.QLineEdit()
             key_field.setEchoMode(QtWidgets.QLineEdit.Password)
             key_field.setPlaceholderText(
@@ -1822,52 +1879,36 @@ class SettingsDialog(QtWidgets.QDialog):
                 QtWidgets.QSizePolicy.Fixed,
             )
             status_badge.setStyleSheet(
-                "padding: 2px 6px; border: 1px solid #bbb; border-radius: 9px;"
+                "padding: 2px 8px; border: 1px solid #bbb; border-radius: 9px;"
                 " color: #555; background: #f2f2f2;"
             )
 
             title_label = QtWidgets.QLabel(title)
             title_label.setFixedWidth(provider_label_width)
-            title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
-
-            field_row_widget = QtWidgets.QWidget()
-            field_row = QtWidgets.QHBoxLayout(field_row_widget)
-            field_row.setContentsMargins(0, 0, 0, 0)
-            field_row.setSpacing(6)
-            field_row.addWidget(key_field, 1)
-            field_row.addWidget(clear_button, 0)
-            field_row.addWidget(status_badge, 0)
+            title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
 
             last_test_label = QtWidgets.QLabel("Last test: never.")
             last_test_label.setWordWrap(True)
-            self._style_note_label(last_test_label)
-            layout_row = row_index * 2
-            provider_key_layout.addWidget(
+            self._style_provider_last_test_label(last_test_label)
+            provider_grid.addWidget(
                 title_label,
-                layout_row,
+                grid_row,
                 0,
-                QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop,
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
             )
-            provider_key_layout.addWidget(field_row_widget, layout_row, 1)
-            provider_key_layout.addWidget(last_test_label, layout_row + 1, 1)
-            provider_key_layout.setRowMinimumHeight(
-                layout_row + 1,
+            provider_grid.addWidget(key_field, grid_row, 1)
+            provider_grid.addWidget(clear_button, grid_row, 2)
+            provider_grid.addWidget(status_badge, grid_row, 3)
+            provider_grid.addWidget(last_test_label, grid_row + 1, 1, 1, 3)
+            provider_grid.setRowMinimumHeight(
+                grid_row + 1,
                 max(1, self.fontMetrics().height()),
             )
+            grid_row += 2
 
             self._provider_key_edits[provider] = key_field
             self._provider_status_labels[provider] = status_badge
             self._provider_last_test_labels[provider] = last_test_label
-        provider_layout.addWidget(provider_key_rows)
-
-        provider_form = QtWidgets.QFormLayout()
-        provider_form.setContentsMargins(0, 0, 0, 0)
-        provider_form.setHorizontalSpacing(8)
-        provider_form.setVerticalSpacing(6)
-        provider_form.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        provider_form.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.AllNonFixedFieldsGrow
-        )
 
         self.assemblyai_key_edit = self._provider_key_edits["assemblyai"]
         self.groq_key_edit = self._provider_key_edits["groq"]
@@ -1891,16 +1932,27 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         azure_endpoint_hint.setWordWrap(True)
         self._style_note_label(azure_endpoint_hint)
-        provider_form.addRow(
-            "Azure Endpoint",
-            self._field_with_hint(self.azure_endpoint_edit, azure_endpoint_hint),
+        azure_endpoint_label = QtWidgets.QLabel("Azure Endpoint")
+        azure_endpoint_label.setFixedWidth(provider_label_width)
+        azure_endpoint_label.setAlignment(
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
         )
+        provider_grid.addWidget(
+            azure_endpoint_label,
+            grid_row,
+            0,
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        )
+        provider_grid.addWidget(self.azure_endpoint_edit, grid_row, 1, 1, 3)
+        provider_grid.addWidget(azure_endpoint_hint, grid_row + 1, 1, 1, 3)
+        grid_row += 2
 
         provider_note = QtWidgets.QLabel(
             "Status badges show where each key is currently sourced from."
         )
         self._style_note_label(provider_note)
-        provider_form.addRow("", provider_note)
+        provider_grid.addWidget(provider_note, grid_row, 1, 1, 3)
+        grid_row += 1
 
         self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
             "Allow insecure local API key fallback (plain text)"
@@ -1912,7 +1964,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.insecure_key_storage_checkbox.toggled.connect(
             lambda _checked: self._apply_secret_store_options()
         )
-        provider_form.addRow("", self.insecure_key_storage_checkbox)
+        provider_grid.addWidget(self.insecure_key_storage_checkbox, grid_row, 1, 1, 3)
+        grid_row += 1
 
         self.key_storage_status_label = QtWidgets.QLabel("")
         self.key_storage_status_label.setWordWrap(True)
@@ -1922,7 +1975,14 @@ class SettingsDialog(QtWidgets.QDialog):
             "Store entered API keys without applying all settings or refreshing the app."
         )
         self.save_api_keys_button.clicked.connect(self._save_api_keys_only)
-        provider_form.addRow(self.save_api_keys_button, self.key_storage_status_label)
+        provider_grid.addWidget(
+            self.save_api_keys_button,
+            grid_row,
+            0,
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        )
+        provider_grid.addWidget(self.key_storage_status_label, grid_row, 1, 1, 3)
+        grid_row += 1
 
         self.test_conn_target_combo = _WheelPassthroughComboBox()
         self.test_conn_target_combo.addItem(
@@ -1940,7 +2000,19 @@ class SettingsDialog(QtWidgets.QDialog):
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
         )
-        provider_form.addRow("Connection Target", self.test_conn_target_combo)
+        connection_target_label = QtWidgets.QLabel("Connection Target")
+        connection_target_label.setFixedWidth(provider_label_width)
+        connection_target_label.setAlignment(
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter
+        )
+        provider_grid.addWidget(
+            connection_target_label,
+            grid_row,
+            0,
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        )
+        provider_grid.addWidget(self.test_conn_target_combo, grid_row, 1, 1, 3)
+        grid_row += 1
 
         # Test connection
         self.test_conn_button = QtWidgets.QPushButton("Run Connection Test")
@@ -1951,8 +2023,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.test_conn_button.clicked.connect(self._test_connection)
         self.test_conn_result = QtWidgets.QLabel("")
         self.test_conn_result.setWordWrap(True)
-        provider_form.addRow(self.test_conn_button, self.test_conn_result)
-        provider_layout.addLayout(provider_form)
+        provider_grid.addWidget(
+            self.test_conn_button,
+            grid_row,
+            0,
+            QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter,
+        )
+        provider_grid.addWidget(self.test_conn_result, grid_row, 1, 1, 3)
+        provider_layout.addLayout(provider_grid)
 
         self._refresh_provider_key_statuses()
 
@@ -4345,11 +4423,13 @@ class SettingsDialog(QtWidgets.QDialog):
         text_color: str,
         background: str,
         border: str,
+        tooltip: str = "",
     ) -> None:
         badge = self._provider_status_labels.get(provider)
         if badge is None:
             return
         badge.setText(text)
+        badge.setToolTip(tooltip)
         badge.setStyleSheet(
             "padding: 2px 8px; border-radius: 9px; "
             f"border: 1px solid {border}; "
@@ -4370,6 +4450,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 text_color="#0d47a1",
                 background="#e3f2fd",
                 border="#90caf9",
+                tooltip="A new key is typed here and will be stored on Save.",
             )
             return
 
@@ -4380,20 +4461,24 @@ class SettingsDialog(QtWidgets.QDialog):
                 text_color="#b26a00",
                 background="#fff3e0",
                 border="#ffcc80",
+                tooltip="The stored key will be deleted when settings are saved.",
             )
             return
 
         source = self._stored_key_source(provider)
         if source in {"keyring", "legacy-keyring"}:
             label = "Stored securely"
+            tooltip = "Stored securely in Windows Credential Manager."
             if source == "legacy-keyring":
-                label = "Stored securely (legacy)"
+                label = "Secure (legacy)"
+                tooltip = "Stored securely under the legacy keyring entry."
             self._set_provider_status_badge(
                 provider,
                 label,
                 text_color="#1b5e20",
                 background="#e8f5e9",
                 border="#a5d6a7",
+                tooltip=tooltip,
             )
             return
 
@@ -4404,16 +4489,21 @@ class SettingsDialog(QtWidgets.QDialog):
                 text_color="#7a4a00",
                 background="#fff3e0",
                 border="#ffcc80",
+                tooltip="Stored in the plain-text fallback file.",
             )
             return
 
         if source == "insecure-disabled":
             self._set_provider_status_badge(
                 provider,
-                "Stored insecurely (disabled)",
+                "Insecure disabled",
                 text_color="#7a4a00",
                 background="#fff8e1",
                 border="#ffe082",
+                tooltip=(
+                    "A plain-text fallback key exists, but insecure fallback "
+                    "storage is currently disabled."
+                ),
             )
             return
 
@@ -4423,6 +4513,7 @@ class SettingsDialog(QtWidgets.QDialog):
             text_color="#555",
             background="#f2f2f2",
             border="#bbb",
+            tooltip="No stored key is configured for this provider.",
         )
 
     def _refresh_provider_key_statuses(self) -> None:
@@ -4765,7 +4856,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 continue
             marker = "\u2713" if provider_ok else "\u2717"
             color = "#1b5e20" if provider_ok else "#b71c1c"
-            last_label.setStyleSheet(f"color: {color};")
+            self._style_provider_last_test_label(last_label, color=color)
             last_label.setText(
                 f"Last test ({timestamp}): {marker} {provider_msg}"
             )

@@ -110,7 +110,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the user's place. Settings tabs use a session-stable default dialog size and
   `QScrollArea` `AdjustIgnored` to avoid small tab-switch resize jitter. Inline
   field buttons match the corresponding input height; action rows keep explicit
-  spacing rather than relying on platform defaults.
+  spacing rather than relying on platform defaults. Settings tab selection must
+  not change tab font weight or measured tab width; use color/border changes for
+  the selected state. General-tab form sections share a measured label column so
+  fields align across group boxes.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional
@@ -176,7 +179,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   numeric release tag. Standard releases should use
   `python scripts/create_release.py` from a clean, up-to-date `main`; the script
   prompts for the version, bumps metadata, runs checks, commits when metadata
-  changed, pushes, tags, and pushes the tag.
+  changed, pushes, tags, and pushes the tag. GitHub Actions release notes that
+  contain Markdown backticks must use a literal PowerShell here-string (`@'`) so
+  asset-name backticks are not consumed as PowerShell escapes.
 - **Local ONNX ASR**: Cohere Transcribe, IBM Granite Speech 4.0,
   and IBM Granite Speech 4.1 are selectable local models through
   `transcriber/local_webgpu_asr.py`. They are batch-only and require Node.js.

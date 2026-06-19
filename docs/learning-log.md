@@ -5,6 +5,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-19
 
+- **Release and dialog polish after 0.4.1.** The Windows release workflow now
+  writes release notes with a literal PowerShell here-string so Markdown
+  backticks around asset names survive GitHub Actions. The published History
+  dialog default size was increased and the native maximize button restored.
+  The Remote settings provider grid now keeps provider labels, key fields,
+  Azure Endpoint, Clear buttons, and status badges on shared columns with
+  fixed status-badge widths; "Last test" rows reserve the same bottom padding
+  before and after a connection test. General-tab form labels now share a
+  measured minimum width, and Settings tab selection no longer changes text
+  weight, preventing one-pixel tab jitter while preserving a visible selected
+  state.
 - **Settings and overlay UI polish before 0.4.1.** The Settings dialog now opens
   larger by default, keeps one stable size while switching tabs, and ignores
   scroll-area size-hint changes that previously caused small resize jitter. The
