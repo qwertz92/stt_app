@@ -9,6 +9,7 @@ import threading
 import time
 import wave
 from pathlib import Path
+from typing import Callable
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
@@ -33,6 +34,7 @@ from .base import (
     ITranscriber,
     StreamingCallback,
     StreamingErrorCallback,
+    TranscriptionCanceled,
     TranscriptionError,
 )
 
@@ -355,6 +357,25 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._stream_last_partial_size = 0
         self._stream_abort_requested = False
         self._stream_error_reported = False
+        self._cancel_check: Callable[[], bool] | None = None
+
+    def set_cancel_check(self, cancel_check: Callable[[], bool] | None) -> None:
+        """Install a callable polled during batch decoding to stop early.
+
+        faster-whisper decodes lazily per segment, so checking between segments
+        lets a long batch transcription be aborted promptly without finishing
+        the whole recording.
+        """
+        self._cancel_check = cancel_check
+
+    def _is_cancel_requested(self) -> bool:
+        check = self._cancel_check
+        if check is None:
+            return False
+        try:
+            return bool(check())
+        except Exception:
+            return False
 
     def _ensure_model(self):
         if self._model is not None:
@@ -440,6 +461,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             else:
                 input_for_model = str(audio_source)
 
+            if self._is_cancel_requested():
+                raise TranscriptionCanceled()
+
             model = self._ensure_model()
             segments, _info = model.transcribe(
                 input_for_model,
@@ -449,6 +473,10 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
             parts = []
             for segment in segments:
+                # Decoding happens lazily as we iterate, so checking here lets a
+                # long transcription stop between segments instead of finishing.
+                if self._is_cancel_requested():
+                    raise TranscriptionCanceled()
                 text = getattr(segment, "text", "")
                 if text:
                     stripped = str(text).strip()
@@ -457,6 +485,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
             return " ".join(parts).strip()
 
+        except TranscriptionCanceled:
+            raise
         except Exception as exc:
             detail = self._format_transcription_error(exc)
             raise TranscriptionError(f"Local transcription failed: {detail}") from exc

@@ -18,6 +18,10 @@ from .config import (
     OVERLAY_WIDTH,
 )
 
+# Maximum queue rows rendered with their own cancel button; extra in-flight
+# transcriptions are summarized as a "+N more" line so the overlay stays compact.
+_QUEUE_MAX_VISIBLE_ROWS = 4
+
 
 class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
@@ -26,6 +30,8 @@ class OverlayUI(QtWidgets.QWidget):
     cancel_requested = QtCore.Signal()
     opacity_changed = QtCore.Signal(int)
     always_on_top_changed = QtCore.Signal(bool)
+    queue_cancel_requested = QtCore.Signal(int)
+    queue_clear_requested = QtCore.Signal()
 
     def __init__(self) -> None:
         super().__init__()
@@ -52,6 +58,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._initial_corner: str | None = None
         self._initial_compact_size: QtCore.QSize | None = None
         self._compact_mode = False
+        self._queue_visible = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
         self._manual_positioned = False
         self._screen_change_connected = False
@@ -210,8 +217,11 @@ class OverlayUI(QtWidgets.QWidget):
         controls.addWidget(self._edit_button)
         controls.addWidget(self._reset_pos_button)
 
+        self._build_queue_widget()
+
         self._layout.addWidget(self._header_widget)
         self._layout.addWidget(self._controls_widget)
+        self._layout.addWidget(self._queue_widget)
         self._layout.addWidget(self._detail_scroll)
         self._layout.addWidget(self._footer_widget)
 
@@ -609,6 +619,7 @@ class OverlayUI(QtWidgets.QWidget):
         header_height = self._header_widget.sizeHint().height()
         controls_height = self._controls_widget.sizeHint().height()
         footer_height = self._footer_widget.sizeHint().height()
+        queue_extent = self._queue_extent()
         max_detail_height = max(
             OVERLAY_DETAIL_MIN_HEIGHT,
             OVERLAY_MAX_HEIGHT
@@ -618,6 +629,7 @@ class OverlayUI(QtWidgets.QWidget):
                 + header_height
                 + controls_height
                 + footer_height
+                + queue_extent
                 + (spacing * 3)
             ),
         )
@@ -639,6 +651,7 @@ class OverlayUI(QtWidgets.QWidget):
                 + header_height
                 + controls_height
                 + footer_height
+                + queue_extent
                 + (spacing * 3)
                 + desired_detail_height
             )
@@ -660,13 +673,19 @@ class OverlayUI(QtWidgets.QWidget):
             + self._header_widget.sizeHint().height()
             + self._controls_widget.sizeHint().height()
             + self._footer_widget.sizeHint().height()
+            + self._queue_extent()
             + (spacing * 3)
             + OVERLAY_DETAIL_MIN_HEIGHT
         )
 
     def _compact_target_size(self) -> QtCore.QSize:
         if self._initial_compact_size is not None:
-            return QtCore.QSize(self._initial_compact_size)
+            # The captured baseline excludes the queue panel; add its extent so
+            # compact mode grows to fit any visible queue rows.
+            return QtCore.QSize(
+                self._initial_compact_size.width(),
+                self._initial_compact_size.height() + self._queue_extent(),
+            )
         return QtCore.QSize(
             self._target_window_width(),
             self._compact_window_height(),
@@ -694,6 +713,115 @@ class OverlayUI(QtWidgets.QWidget):
             self.resize(target_size)
         self._detail_scroll.setFixedHeight(OVERLAY_DETAIL_MIN_HEIGHT)
         self._update_detail_height()
+
+    # -- Transcription queue panel -------------------------------------------
+
+    def _build_queue_widget(self) -> None:
+        self._queue_widget = QtWidgets.QWidget()
+        self._queue_widget.setObjectName("overlayQueue")
+        queue_layout = QtWidgets.QVBoxLayout(self._queue_widget)
+        queue_layout.setContentsMargins(0, 0, 0, 0)
+        queue_layout.setSpacing(2)
+
+        queue_header = QtWidgets.QHBoxLayout()
+        queue_header.setContentsMargins(0, 0, 0, 0)
+        queue_header.setSpacing(6)
+        self._queue_title_label = QtWidgets.QLabel("")
+        self._queue_title_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
+        self._queue_clear_button = QtWidgets.QPushButton("Clear queue")
+        self._queue_clear_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._queue_clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._queue_clear_button.setFixedHeight(20)
+        self._queue_clear_button.setToolTip(
+            "Cancel all queued and running transcriptions."
+        )
+        self._queue_clear_button.clicked.connect(self.queue_clear_requested.emit)
+        queue_header.addWidget(self._queue_title_label, 1)
+        queue_header.addWidget(self._queue_clear_button, 0, QtCore.Qt.AlignRight)
+        queue_layout.addLayout(queue_header)
+
+        self._queue_rows_widget = QtWidgets.QWidget()
+        self._queue_rows_layout = QtWidgets.QVBoxLayout(self._queue_rows_widget)
+        self._queue_rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._queue_rows_layout.setSpacing(2)
+        queue_layout.addWidget(self._queue_rows_widget)
+
+        self._queue_widget.setVisible(False)
+
+    def _clear_queue_rows(self) -> None:
+        while self._queue_rows_layout.count():
+            item = self._queue_rows_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+
+    def _build_queue_row(self, token: int, label: str) -> QtWidgets.QWidget:
+        row = QtWidgets.QWidget()
+        row_layout = QtWidgets.QHBoxLayout(row)
+        row_layout.setContentsMargins(0, 0, 0, 0)
+        row_layout.setSpacing(6)
+        text_label = QtWidgets.QLabel(str(label))
+        text_label.setTextFormat(QtCore.Qt.PlainText)
+        text_label.setWordWrap(False)
+        text_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
+        cancel_button = QtWidgets.QPushButton("✕")
+        cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
+        cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        cancel_button.setFixedSize(20, 20)
+        cancel_button.setToolTip("Cancel this transcription.")
+        cancel_button.clicked.connect(
+            lambda _checked=False, t=int(token): self.queue_cancel_requested.emit(t)
+        )
+        row_layout.addWidget(text_label, 1)
+        row_layout.addWidget(cancel_button, 0, QtCore.Qt.AlignRight)
+        return row
+
+    def set_transcription_queue(self, items) -> None:
+        """Render the in-flight transcription queue with per-item cancel.
+
+        ``items`` is a list of ``(token, label)`` pairs. An empty list hides
+        the queue panel entirely.
+        """
+        entries = list(items or [])
+        self._clear_queue_rows()
+        if not entries:
+            self._queue_visible = False
+            self._queue_widget.setVisible(False)
+            self._refresh_size_after_queue_change()
+            return
+
+        count = len(entries)
+        self._queue_title_label.setText(
+            f"Transcribing {count} file" + ("" if count == 1 else "s")
+        )
+        for token, label in entries[:_QUEUE_MAX_VISIBLE_ROWS]:
+            self._queue_rows_layout.addWidget(self._build_queue_row(token, label))
+        hidden = count - _QUEUE_MAX_VISIBLE_ROWS
+        if hidden > 0:
+            more_label = QtWidgets.QLabel(f"+{hidden} more queued")
+            self._queue_rows_layout.addWidget(more_label)
+
+        self._queue_visible = True
+        self._queue_widget.setVisible(True)
+        self._refresh_size_after_queue_change()
+
+    def _queue_extent(self) -> int:
+        if not self._queue_visible:
+            return 0
+        return self._queue_widget.sizeHint().height() + self._layout.spacing()
+
+    def _refresh_size_after_queue_change(self) -> None:
+        if self._compact_mode:
+            self.ensure_compact_size()
+        else:
+            self._update_detail_height()
 
     def _current_screen(self) -> QtGui.QScreen | None:
         frame = self.frameGeometry()

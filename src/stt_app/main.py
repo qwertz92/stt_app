@@ -127,6 +127,8 @@ def run() -> int:
     overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
     overlay.retry_requested.connect(controller.retry_last_transcription)
     overlay.cancel_requested.connect(controller.cancel_current_action)
+    overlay.queue_cancel_requested.connect(controller.cancel_queued_transcription)
+    overlay.queue_clear_requested.connect(controller.clear_transcription_queue)
     overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
     overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
 

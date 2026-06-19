@@ -14,6 +14,16 @@ class TranscriptionError(RuntimeError):
     pass
 
 
+class TranscriptionCanceled(Exception):
+    """Raised inside a transcriber when a cooperative cancel was requested.
+
+    Transcribers that support stopping mid-run (e.g. faster-whisper between
+    segments) accept a cancel-check callable via ``set_cancel_check`` and raise
+    this when it returns True. It is intentionally not a ``TranscriptionError``
+    so callers can distinguish a user cancel from a real failure.
+    """
+
+
 class ITranscriber(ABC):
     @abstractmethod
     def transcribe_batch(self, audio_source: AudioInput) -> str:

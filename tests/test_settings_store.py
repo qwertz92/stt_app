@@ -50,6 +50,7 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.overlay_corner == DEFAULT_OVERLAY_CORNER
     assert settings.engine == DEFAULT_ENGINE
     assert settings.mode == DEFAULT_MODE
+    assert settings.concurrent_transcription_mode == "insert"
     assert settings.paste_mode == DEFAULT_PASTE_MODE
     assert (
         settings.keep_transcript_in_clipboard
@@ -69,6 +70,43 @@ def test_load_defaults_creates_file(tmp_path):
     assert raw["schema_version"] == CURRENT_SCHEMA_VERSION
     assert "openai_api_key" not in raw
     assert "deepgram_api_key" not in raw
+
+
+def test_concurrent_transcription_mode_round_trips(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+
+    for mode in ("insert", "history", "cancel"):
+        store.save(AppSettings(concurrent_transcription_mode=mode))
+        assert store.load().concurrent_transcription_mode == mode
+
+
+def test_invalid_concurrent_transcription_mode_falls_back_to_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"concurrent_transcription_mode": "bogus"}), encoding="utf-8"
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.concurrent_transcription_mode == "insert"
+
+
+def test_legacy_queue_boolean_migrates_to_mode(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"transcription_queue_enabled": False}), encoding="utf-8"
+    )
+    assert (
+        SettingsStore(settings_path).load().concurrent_transcription_mode == "cancel"
+    )
+
+    settings_path.write_text(
+        json.dumps({"transcription_queue_enabled": True}), encoding="utf-8"
+    )
+    assert (
+        SettingsStore(settings_path).load().concurrent_transcription_mode == "insert"
+    )
 
 
 def test_load_fills_missing_values_with_defaults(tmp_path):

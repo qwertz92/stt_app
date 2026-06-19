@@ -43,6 +43,10 @@ from .config import (
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_START_BEEP_ENABLED,
     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
+    DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+    CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
+    VALID_CONCURRENT_TRANSCRIPTION_MODES,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DEFAULT_VAD_ENABLED,
@@ -89,6 +93,7 @@ DEFAULTS = {
     "engine": DEFAULT_ENGINE,
     "mode": DEFAULT_MODE,
     "streaming_full_final_transcript": DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
+    "concurrent_transcription_mode": DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     "paste_mode": DEFAULT_PASTE_MODE,
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "allow_insecure_key_storage": DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
@@ -142,6 +147,7 @@ class AppSettings:
     engine: str = DEFAULT_ENGINE
     mode: str = DEFAULT_MODE
     streaming_full_final_transcript: bool = DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT
+    concurrent_transcription_mode: str = DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
     paste_mode: str = DEFAULT_PASTE_MODE
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     allow_insecure_key_storage: bool = DEFAULT_ALLOW_INSECURE_KEY_STORAGE
@@ -188,6 +194,24 @@ class AppSettings:
         paste_mode = str(merged.get("paste_mode", DEFAULT_PASTE_MODE)).lower()
         if paste_mode not in VALID_PASTE_MODES:
             paste_mode = DEFAULT_PASTE_MODE
+
+        # Read from raw (not merged) so an absent key can fall back to the
+        # earlier boolean before defaulting.
+        concurrent_transcription_mode = str(
+            raw.get("concurrent_transcription_mode", "")
+        ).strip().lower()
+        if concurrent_transcription_mode not in VALID_CONCURRENT_TRANSCRIPTION_MODES:
+            # Migrate the earlier boolean: True meant "queue + insert", while
+            # False meant the old discard-on-supersede behavior, now "cancel".
+            legacy_queue = raw.get("transcription_queue_enabled")
+            if legacy_queue is not None:
+                concurrent_transcription_mode = (
+                    CONCURRENT_TRANSCRIPTION_MODE_INSERT
+                    if bool(legacy_queue)
+                    else CONCURRENT_TRANSCRIPTION_MODE_CANCEL
+                )
+            else:
+                concurrent_transcription_mode = DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
 
         model_size = str(merged.get("model_size", DEFAULT_MODEL_SIZE)).lower()
         if model_size not in VALID_MODEL_SIZES:
@@ -318,6 +342,7 @@ class AppSettings:
                     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
                 )
             ),
+            concurrent_transcription_mode=concurrent_transcription_mode,
             paste_mode=paste_mode,
             keep_transcript_in_clipboard=bool(
                 merged.get(

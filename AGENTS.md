@@ -54,7 +54,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
 | `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
-| `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model` |
+| `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models) |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
@@ -66,7 +66,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore |
-| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
+| `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
 | `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
 | `ui_feedback.py` | Shared Qt button feedback styles, stable feedback widths, scroll restoration helpers |
@@ -233,6 +233,32 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcribes only the trailing partial window and merges it into the
   provider-tracked live transcript, so stop returns quickly and the history
   entry matches the streamed text. Inserted text stays append-only either way.
+- **Concurrent transcription mode + cooperative cancel**: a finished
+  transcription is *never* discarded. `concurrent_transcription_mode`
+  (`insert` default / `history` / `cancel`) decides what happens to the
+  in-flight transcription when a new recording starts: `insert` keeps it and
+  inserts its result into the window that was focused when it was recorded
+  (plus history); `history` keeps it but only saves to history; `cancel`
+  requests a real stop and, if it still finishes, keeps it in history. Local and
+  remote share the single `max_workers=1` transcription executor, so jobs
+  serialize — this only changes delivery, never runs two at once. Each recording
+  snapshots its target window into a `_TranscriptionJob`; the job also carries
+  `background_delivery` (`insert`/`history`) and `aborting`. A result is
+  "foreground" only when its token is active, no newer recording is active, and
+  the job is not aborting — `_new_recording_active()` intentionally excludes
+  `_streaming_recording` because a pending streaming finalize keeps that flag
+  True. Background results are delivered via `_handle_background_transcription_ready`
+  per `background_delivery` (streaming finalize is always history-only). Never
+  reset foreground session state from a background result handler.
+  Explicit cancel — the overlay per-row ✕, Clear queue, and the Cancel button —
+  goes through `_request_job_stop` (delivery `history`): it sets `aborting` (so a
+  not-yet-started worker skips and a cooperative transcriber stops) and cancels
+  the future if it has not started. Real mid-run abort exists for faster-whisper
+  via `set_cancel_check` (polled between segments → raises `TranscriptionCanceled`
+  → worker emits `transcription_canceled`); other engines only skip-if-not-started
+  and otherwise run to completion with their result kept in history. The cancel
+  hook must be cleared after each batch run so it cannot leak into the cached
+  transcriber's next request.
 - **Overlay corner vs. dragged position**: after a settings save, apply the
   corner through `OverlayUI.apply_corner_setting`, which repositions only when
   the configured corner changed. Never call `move_to_corner` unconditionally

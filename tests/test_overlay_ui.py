@@ -70,6 +70,51 @@ def test_overlay_copy_button_stays_functional_after_repeated_clicks(monkeypatch)
     assert overlay._copy_button.isEnabled()
 
 
+def test_overlay_queue_panel_renders_and_emits_signals():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    # Empty queue hides the panel.
+    overlay.set_transcription_queue([])
+    assert overlay._queue_visible is False
+    assert overlay._queue_widget.isHidden() is True
+
+    canceled: list[int] = []
+    cleared: list[bool] = []
+    overlay.queue_cancel_requested.connect(canceled.append)
+    overlay.queue_clear_requested.connect(lambda: cleared.append(True))
+
+    overlay.set_transcription_queue([(7, "local · small"), (8, "groq · whisper")])
+    assert overlay._queue_visible is True
+    assert overlay._queue_widget.isHidden() is False
+    assert overlay._queue_rows_layout.count() == 2
+
+    first_row = overlay._queue_rows_layout.itemAt(0).widget()
+    first_row.findChild(QtWidgets.QPushButton).click()
+    assert canceled == [7]
+
+    overlay._queue_clear_button.click()
+    assert cleared == [True]
+
+    # Emptying again hides the panel.
+    overlay.set_transcription_queue([])
+    assert overlay._queue_visible is False
+    assert overlay._queue_widget.isHidden() is True
+
+
+def test_overlay_queue_panel_caps_visible_rows():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    items = [(token, f"local · {token}") for token in range(6)]
+    overlay.set_transcription_queue(items)
+
+    # Four rows with cancel buttons plus a single "+N more" summary label.
+    assert overlay._queue_rows_layout.count() == 5
+    summary = overlay._queue_rows_layout.itemAt(4).widget()
+    assert "more" in summary.text()
+
+
 def test_overlay_copy_button_survives_clipboard_error(monkeypatch):
     """If clipboard.setText() raises, the button must not freeze."""
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

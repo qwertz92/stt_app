@@ -66,10 +66,14 @@ class FakeOverlay:
         self.compact_calls = 0
         self.always_on_top_values = []
         self.reveal_calls = 0
+        self.queue_updates = []
 
     def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))
         self.state_kwargs.append(dict(kwargs))
+
+    def set_transcription_queue(self, items):
+        self.queue_updates.append([(int(t), str(label)) for t, label in items])
 
     def set_opacity_percent(self, value: int):
         self.opacity_values.append(int(value))

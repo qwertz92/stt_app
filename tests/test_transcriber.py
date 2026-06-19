@@ -3,7 +3,7 @@ import wave
 
 import pytest
 
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
 
@@ -68,6 +68,56 @@ def test_local_transcriber_transcribe_batch_from_bytes():
     assert text == "hello world"
     assert len(model.calls) == 1
     assert model.calls[0]["language"] is None
+
+
+class _GeneratorModel:
+    """Yields segments lazily so a cancel can stop decoding between segments."""
+
+    def __init__(self):
+        self.yielded = []
+
+    def transcribe(self, audio_source, language=None, vad_filter=True):
+        def gen():
+            for word in ("one", "two", "three"):
+                self.yielded.append(word)
+                yield Segment(word)
+
+        return gen(), {"language": "en"}
+
+
+def test_transcribe_batch_aborts_between_segments_on_cancel():
+    model = _GeneratorModel()
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=lambda *args, **kwargs: model,
+    )
+    checks = {"count": 0}
+
+    def cancel_check():
+        checks["count"] += 1
+        # False for the pre-decode check, True once the first segment is in.
+        return checks["count"] >= 2
+
+    transcriber.set_cancel_check(cancel_check)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_build_wav_bytes())
+
+    # Stopped early: it did not consume all three segments.
+    assert model.yielded == ["one"]
+
+
+def test_transcribe_batch_completes_when_cancel_check_stays_false():
+    model = FakeModel()
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=lambda *args, **kwargs: model,
+    )
+    transcriber.set_cancel_check(lambda: False)
+
+    assert transcriber.transcribe_batch(_build_wav_bytes()) == "hello world"
 
 
 def test_local_transcriber_sets_language_when_explicit():

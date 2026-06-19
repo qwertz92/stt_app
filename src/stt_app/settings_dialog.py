@@ -38,6 +38,8 @@ from .config import (
     DEFAULT_MODEL_SIZE,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OVERLAY_CORNER,
+    DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    VALID_CONCURRENT_TRANSCRIPTION_MODES,
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_MAX_COUNT,
     DEFAULT_START_BEEP_TONE,
@@ -965,6 +967,41 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.streaming_full_final_check,
                 streaming_full_final_hint,
             ),
+        )
+
+        self.concurrent_mode_combo = _WheelPassthroughComboBox()
+        concurrent_mode_labels = {
+            "insert": "Queue & insert into its window",
+            "history": "Queue & save to history only",
+            "cancel": "Cancel the running transcription",
+        }
+        for value in VALID_CONCURRENT_TRANSCRIPTION_MODES:
+            self.concurrent_mode_combo.addItem(
+                concurrent_mode_labels.get(value, value), value
+            )
+        self.concurrent_mode_combo.setToolTip(
+            "What happens to a transcription that is still running when you start "
+            "a new recording. A finished transcription is never discarded.\n"
+            "- Insert: keep it running, insert its result into the window that "
+            "was focused when it was recorded, and save it to history.\n"
+            "- History only: keep it running, save its result to history without "
+            "inserting it.\n"
+            "- Cancel: request a real stop (local compute is aborted; a remote "
+            "upload that has not started yet never starts). If it still finishes, "
+            "it is saved to history."
+        )
+        concurrent_mode_hint = QtWidgets.QLabel(
+            "Local and remote engines share one transcription worker, so jobs run "
+            "one at a time. Use the overlay queue (with per-item cancel) to stop a "
+            "specific transcription; canceling a local transcription stops its "
+            "compute between segments, a not-yet-started one never starts, and a "
+            "result that still completes is kept in history."
+        )
+        concurrent_mode_hint.setWordWrap(True)
+        self._style_note_label(concurrent_mode_hint)
+        engine_form.addRow(
+            "While transcribing",
+            self._field_with_hint(self.concurrent_mode_combo, concurrent_mode_hint),
         )
         layout.addWidget(engine_box)
 
@@ -4695,6 +4732,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.streaming_full_final_check.setChecked(
             bool(getattr(settings, "streaming_full_final_transcript", False))
         )
+        self._select_combo_data(
+            self.concurrent_mode_combo,
+            str(
+                getattr(
+                    settings,
+                    "concurrent_transcription_mode",
+                    DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+                )
+            ),
+        )
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
         self._update_local_model_runtime_warning()
@@ -5374,6 +5421,10 @@ class SettingsDialog(QtWidgets.QDialog):
             streaming_full_final_transcript=(
                 self.streaming_full_final_check.isChecked()
             ),
+            concurrent_transcription_mode=str(
+                self.concurrent_mode_combo.currentData()
+                or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
+            ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
@@ -5512,6 +5563,10 @@ class SettingsDialog(QtWidgets.QDialog):
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
             streaming_full_final_transcript=(
                 self.streaming_full_final_check.isChecked()
+            ),
+            concurrent_transcription_mode=str(
+                self.concurrent_mode_combo.currentData()
+                or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
             ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE

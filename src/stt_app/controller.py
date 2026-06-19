@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable
 
@@ -18,7 +18,11 @@ from .audio_capture import AudioCapture, AudioCaptureError
 from .config import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
+    CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
+    CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+    CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     DEFAULT_CANCEL_HOTKEY,
+    DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_ENGINE,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
@@ -64,14 +68,43 @@ from .streaming_text import (
 from .text_inserter import TextInserter, TextInsertionError
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .transcriber import create_transcriber
-from .transcriber.base import TranscriptionError
+from .transcriber.base import TranscriptionCanceled, TranscriptionError
 from .vad import EnergyVad
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
+
+
+@dataclass(slots=True)
+class _TranscriptionJob:
+    """A submitted transcription tracked for the queue and per-job insertion.
+
+    Each recording captures its own target window so a queued transcription
+    can be inserted into the window that was focused when it was recorded,
+    even after the user has moved on to another recording.
+    """
+
+    token: int
+    engine: str
+    model: str
+    mode: str
+    settings: AppSettings
+    target_handle: int | None
+    target_signature: FocusSignature | None
+    source_recording_id: str = ""
+    future: object | None = None
+    # How a non-foreground (queued/background) result is delivered:
+    # "insert" -> save to history and insert into target_handle;
+    # "history" -> save to history only.
+    background_delivery: str = "insert"
+    # When True, the worker should stop this transcription's compute as soon as
+    # possible (checked cooperatively by transcribers that support it) and never
+    # start it if it has not begun.
+    aborting: bool = False
 
 
 class DictationController(QtCore.QObject):
     transcription_ready = QtCore.Signal(int, str)
     transcription_failed = QtCore.Signal(int, str)
+    transcription_canceled = QtCore.Signal(int)
     transcription_progress = QtCore.Signal(int, str)
     transcription_partial = QtCore.Signal(str)
     stream_runtime_failed = QtCore.Signal(str)
@@ -146,11 +179,15 @@ class DictationController(QtCore.QObject):
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
         self._active_request_token: int | None = None
-        self._canceled_request_tokens: set[int] = set()
         self._request_audio_by_token: dict[int, tuple[bytes, AppSettings]] = {}
+        # In-flight transcription jobs (pending + running), insertion-ordered,
+        # used for the overlay queue display, per-job target insertion, and
+        # cooperative cancellation. A token is "live" while its job is present.
+        self._jobs: dict[int, _TranscriptionJob] = {}
 
         self.transcription_ready.connect(self._on_transcription_ready_result)
         self.transcription_failed.connect(self._on_transcription_failed_result)
+        self.transcription_canceled.connect(self._on_transcription_canceled_result)
         self.transcription_progress.connect(self._on_transcription_progress_result)
         self.transcription_partial.connect(self._on_transcription_partial)
         self.stream_runtime_failed.connect(self._on_stream_runtime_failed)
@@ -200,8 +237,8 @@ class DictationController(QtCore.QObject):
             except Exception:
                 pass
         self._active_request_token = None
-        self._canceled_request_tokens.clear()
         self._request_audio_by_token.clear()
+        self._jobs.clear()
         self._reset_streaming_state()
         self._reset_transcriber_cache()
         self._executor.shutdown(wait=False, cancel_futures=False)
@@ -298,7 +335,7 @@ class DictationController(QtCore.QObject):
             return
         self._recording_start_in_progress = True
         try:
-            self._supersede_active_request_result()
+            self._apply_concurrent_mode_to_active_job()
             self._overlay.reveal_temporarily()
             self._overlay.set_state(
                 "Listening",
@@ -777,32 +814,156 @@ class DictationController(QtCore.QObject):
     def _drop_request_audio(self, request_token: int) -> None:
         self._request_audio_by_token.pop(request_token, None)
 
-    def _cancel_request_result(
+    # -- Transcription queue --------------------------------------------------
+
+    def _new_recording_active(self) -> bool:
+        """Whether a newer recording owns the live session.
+
+        A pending streaming finalize keeps ``_streaming_recording`` True until
+        its result is handled, so that flag must not count here; only an active
+        capture or an in-progress recording start marks a queued job background.
+        """
+        return (
+            self._audio_capture is not None
+            or self._recording_start_in_progress
+        )
+
+    def _register_transcription_job(
         self,
-        request_token: int | None,
-        *,
-        preserve_audio: bool,
-    ) -> bool:
+        request_token: int,
+        settings: AppSettings,
+        mode: str,
+    ) -> _TranscriptionJob:
+        """Track a submitted transcription for the queue and target insertion.
+
+        The current target window/signature are snapshotted now so the result
+        can later be inserted into the window that was focused for this
+        recording, even after a newer recording reused the shared target state.
+        """
+        job = _TranscriptionJob(
+            token=request_token,
+            engine=settings.engine,
+            model=self._selected_model_name(settings),
+            mode=mode,
+            settings=replace(settings),
+            target_handle=self._target_window_handle,
+            target_signature=self._target_focus_signature,
+            source_recording_id=self._current_last_recording_id(),
+        )
+        self._jobs[request_token] = job
+        self._update_queue_overlay()
+        return job
+
+    def _finish_transcription_job(self, request_token: int | None) -> None:
         if request_token is None:
-            return False
-        self._canceled_request_tokens.add(request_token)
-        preserved = False
-        if preserve_audio:
-            preserved = self._promote_request_audio_for_retry(request_token)
-            if not preserved:
-                self._last_failed_wav_bytes = b""
-        else:
-            self._drop_request_audio(request_token)
+            return
+        if self._jobs.pop(request_token, None) is not None:
+            self._update_queue_overlay()
+
+    def _queue_job_label(self, job: _TranscriptionJob) -> str:
+        engine = (job.engine or "").strip() or "transcriber"
+        model = (job.model or "").strip()
+        return f"{engine} · {model}" if model else engine
+
+    def _update_queue_overlay(self) -> None:
+        setter = getattr(self._overlay, "set_transcription_queue", None)
+        if not callable(setter):
+            return
+        items = [
+            (job.token, self._queue_job_label(job))
+            for job in self._jobs.values()
+            if not job.aborting
+        ]
+        setter(items)
+
+    def _request_job_stop(self, request_token: int | None, *, delivery: str) -> None:
+        """Request a real stop of an in-flight transcription.
+
+        Sets the job's abort flag so a cooperative transcriber stops its compute
+        and a not-yet-started worker skips it. The job stays registered until the
+        worker resolves it: a result that still arrives is delivered per
+        ``delivery`` (history-only here), and a worker that actually aborts emits
+        ``transcription_canceled``. A future canceled before it starts is removed
+        immediately.
+        """
+        if request_token is None:
+            return
+        job = self._jobs.get(request_token)
+        if job is None:
+            return
+        job.aborting = True
+        job.background_delivery = delivery
         if self._active_request_token == request_token:
             self._active_request_token = None
             self._last_transcribe_settings = None
-        return preserved
+        canceled_before_start = False
+        future = job.future
+        if future is not None:
+            try:
+                canceled_before_start = bool(future.cancel())
+            except Exception:
+                canceled_before_start = False
+        if canceled_before_start:
+            self._drop_request_audio(request_token)
+            self._finish_transcription_job(request_token)
+        else:
+            # Hide the aborting row while the worker winds down.
+            self._update_queue_overlay()
 
-    def _supersede_active_request_result(self) -> None:
-        self._cancel_request_result(
-            self._active_request_token,
-            preserve_audio=True,
+    def cancel_queued_transcription(self, request_token: int) -> None:
+        """Cancel a single queued/running transcription from the overlay.
+
+        The compute is stopped where supported; a transcript that still finishes
+        is kept in history rather than discarded.
+        """
+        if request_token not in self._jobs:
+            return
+        was_active = request_token == self._active_request_token
+        self._request_job_stop(
+            request_token,
+            delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
         )
+        if was_active and not self._new_recording_active():
+            # The foreground transcription was canceled; reflect it in the
+            # main overlay area instead of leaving a stale "Processing".
+            self._overlay.set_state("Done", "Transcription canceled.")
+
+    def clear_transcription_queue(self) -> None:
+        """Cancel every queued/running transcription."""
+        for token in list(self._jobs.keys()):
+            self._request_job_stop(
+                token,
+                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+            )
+
+    def _apply_concurrent_mode_to_active_job(self) -> None:
+        """Apply the configured mode to the in-flight transcription when a new
+        recording starts.
+
+        The result is never discarded: ``insert`` keeps it inserting into its
+        captured window, ``history`` switches it to history-only, and ``cancel``
+        asks the compute to stop (a transcript that still finishes is kept in
+        history).
+        """
+        token = self._active_request_token
+        if token is None or token not in self._jobs:
+            return
+        mode = str(
+            getattr(
+                self._settings,
+                "concurrent_transcription_mode",
+                DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+            )
+        )
+        if mode == CONCURRENT_TRANSCRIPTION_MODE_HISTORY:
+            self._jobs[token].background_delivery = (
+                CONCURRENT_TRANSCRIPTION_MODE_HISTORY
+            )
+        elif mode == CONCURRENT_TRANSCRIPTION_MODE_CANCEL:
+            self._request_job_stop(
+                token,
+                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+            )
 
     def _submit_batch_transcription(
         self,
@@ -813,6 +974,7 @@ class DictationController(QtCore.QObject):
         self._active_request_token = request_token
         self._last_transcribe_settings = replace(settings)
         self._store_request_audio(request_token, wav_bytes, settings)
+        job = self._register_transcription_job(request_token, settings, "batch")
         try:
             self._last_recording_store.mark_transcribing(
                 engine=settings.engine,
@@ -821,11 +983,12 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark last recording as transcribing")
-        self._executor.submit(
+        job.future = self._executor.submit(
             self._transcribe_worker,
             request_token,
             wav_bytes,
             settings,
+            job,
         )
 
     def _submit_stream_finalize(self) -> None:
@@ -835,6 +998,7 @@ class DictationController(QtCore.QObject):
         self._last_transcribe_settings = replace(settings)
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
+        job = self._register_transcription_job(request_token, settings, "streaming")
         try:
             self._last_recording_store.mark_transcribing(
                 engine=settings.engine,
@@ -843,7 +1007,9 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark streaming recording as transcribing")
-        self._executor.submit(self._finalize_stream_worker, request_token, transcriber)
+        job.future = self._executor.submit(
+            self._finalize_stream_worker, request_token, transcriber, job
+        )
 
     def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
         retry_available = (
@@ -1182,7 +1348,12 @@ class DictationController(QtCore.QObject):
         request_token: int,
         wav_bytes: bytes,
         settings: AppSettings,
+        job: _TranscriptionJob | None = None,
     ) -> None:
+        # Skip a job that was canceled before its compute/upload started.
+        if job is not None and job.aborting:
+            self.transcription_canceled.emit(request_token)
+            return
         worker_started_at = time.perf_counter()
         init_started_at = worker_started_at
         close_after_transcription = (
@@ -1204,6 +1375,10 @@ class DictationController(QtCore.QObject):
                     str(detail),
                 ),
             )
+            if job is not None:
+                self._set_transcriber_cancel_check(
+                    transcriber, lambda: job.aborting
+                )
         except TranscriptionError as exc:
             self.transcription_failed.emit(request_token, str(exc))
             return
@@ -1220,6 +1395,9 @@ class DictationController(QtCore.QObject):
         try:
             text = transcriber.transcribe_batch(wav_bytes)
             self.transcription_ready.emit(request_token, text)
+        except TranscriptionCanceled:
+            outcome = "canceled"
+            self.transcription_canceled.emit(request_token)
         except NotImplementedError as exc:
             outcome = "not_implemented"
             self.transcription_failed.emit(request_token, str(exc))
@@ -1260,10 +1438,22 @@ class DictationController(QtCore.QObject):
                 len(wav_bytes),
                 outcome,
             )
+            if transcriber is not None:
+                # Clear the cancel hook so it cannot leak into a cached
+                # transcriber's next request.
+                self._set_transcriber_cancel_check(transcriber, None)
             if close_after_transcription and transcriber is not None:
                 self._close_cached_transcriber(transcriber)
 
-    def _finalize_stream_worker(self, request_token: int, transcriber) -> None:
+    def _finalize_stream_worker(
+        self,
+        request_token: int,
+        transcriber,
+        job: _TranscriptionJob | None = None,
+    ) -> None:
+        if job is not None and job.aborting:
+            self.transcription_canceled.emit(request_token)
+            return
         try:
             if transcriber is None:
                 raise TranscriptionError("Streaming session was not initialized.")
@@ -1390,8 +1580,6 @@ class DictationController(QtCore.QObject):
         request_token: int,
         detail: str,
     ) -> None:
-        if request_token in self._canceled_request_tokens:
-            return
         if self._active_request_token not in {None, request_token}:
             return
         message = str(detail or "").strip()
@@ -1409,17 +1597,34 @@ class DictationController(QtCore.QObject):
         *,
         request_token: int | None = None,
     ) -> None:
+        job: _TranscriptionJob | None = None
         if request_token is not None:
-            if request_token in self._canceled_request_tokens:
-                self._canceled_request_tokens.discard(request_token)
+            job = self._jobs.get(request_token)
+            is_foreground = (
+                self._active_request_token in {None, request_token}
+                and not self._new_recording_active()
+                and not (job is not None and job.aborting)
+            )
+            if not is_foreground:
+                # A newer recording owns the live session, or this job was asked
+                # to stop. Keep the live session untouched and deliver this
+                # queued result on its own (history and/or its own window).
                 self._drop_request_audio(request_token)
-                return
-            if self._active_request_token not in {None, request_token}:
-                self._drop_request_audio(request_token)
+                self._handle_background_transcription_ready(job, text)
+                self._finish_transcription_job(request_token)
                 return
             self._active_request_token = None
             self._drop_request_audio(request_token)
             self._last_failed_wav_bytes = b""
+
+        self._finish_transcription_job(request_token)
+
+        target_handle = (
+            job.target_handle if job is not None else self._target_window_handle
+        )
+        target_signature = (
+            job.target_signature if job is not None else self._target_focus_signature
+        )
 
         session_mode = self._active_session_mode
         self._focus_poll_timer.stop()
@@ -1452,6 +1657,8 @@ class DictationController(QtCore.QObject):
                 if not self._insert_text_at_target(
                     final_insertion,
                     restore_focus=True,
+                    target_handle=target_handle,
+                    target_signature=target_signature,
                 ):
                     self._mark_last_recording_completed()
                     self._last_transcribe_settings = None
@@ -1459,7 +1666,12 @@ class DictationController(QtCore.QObject):
                     return
             self._overlay.set_state("Done", final_text)
         else:
-            if not self._insert_text_at_target(text, restore_focus=True):
+            if not self._insert_text_at_target(
+                text,
+                restore_focus=True,
+                target_handle=target_handle,
+                target_signature=target_signature,
+            ):
                 self._mark_last_recording_completed()
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
@@ -1472,6 +1684,49 @@ class DictationController(QtCore.QObject):
         self._mark_last_recording_completed()
         self._last_transcribe_settings = None
         self._reset_streaming_state()
+
+    def _handle_background_transcription_ready(
+        self,
+        job: _TranscriptionJob | None,
+        text: str,
+    ) -> None:
+        """Deliver a queued/canceled result while a newer session is active.
+
+        The transcript is always saved to history (a finished transcription is
+        never discarded). It is additionally inserted into the window that was
+        focused when it was recorded only when the job's delivery is "insert"
+        and it is a batch job. Streaming jobs already inserted their text live,
+        and history-only / canceled jobs are not re-inserted. The live overlay
+        state is left untouched for the active session.
+        """
+        if job is None or not text.strip():
+            return
+        self._append_transcript_history(
+            text,
+            job.settings,
+            job.mode,
+            source_recording_id=job.source_recording_id,
+        )
+        if (
+            job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
+            and job.mode != "streaming"
+        ):
+            self._insert_text_at_target(
+                text,
+                restore_focus=True,
+                target_handle=job.target_handle,
+                target_signature=job.target_signature,
+                show_overlay_error=False,
+            )
+
+    @QtCore.Slot(int)
+    def _on_transcription_canceled_result(self, request_token: int) -> None:
+        """A worker confirmed it stopped before producing a transcript."""
+        self._drop_request_audio(request_token)
+        if self._active_request_token == request_token:
+            self._active_request_token = None
+            self._last_transcribe_settings = None
+        self._finish_transcription_job(request_token)
 
     @QtCore.Slot(int, str)
     def _on_transcription_failed_result(
@@ -1489,18 +1744,25 @@ class DictationController(QtCore.QObject):
     ) -> None:
         preserved_audio = bool(self._last_failed_wav_bytes)
         if request_token is not None:
-            if request_token in self._canceled_request_tokens:
-                self._canceled_request_tokens.discard(request_token)
-                self._drop_request_audio(request_token)
-                return
-            if self._active_request_token not in {None, request_token}:
-                self._drop_request_audio(request_token)
+            job = self._jobs.get(request_token)
+            is_foreground = (
+                self._active_request_token in {None, request_token}
+                and not self._new_recording_active()
+                and not (job is not None and job.aborting)
+            )
+            if not is_foreground:
+                # A queued/canceled transcription failed while a newer session
+                # is active. Drop it quietly without disturbing the live session;
+                # keep its audio available for a manual retry.
+                self._promote_request_audio_for_retry(request_token)
+                self._finish_transcription_job(request_token)
                 return
             self._active_request_token = None
             preserved_audio = self._promote_request_audio_for_retry(request_token)
             if not preserved_audio:
                 self._last_failed_wav_bytes = b""
 
+        self._finish_transcription_job(request_token)
         self._focus_poll_timer.stop()
         runtime_stream_failed = (
             self._audio_capture is not None
@@ -1743,6 +2005,8 @@ class DictationController(QtCore.QObject):
         foreground = self._current_foreground_window()
         return (foreground, foreground, foreground) if foreground else None
 
+    _UNSET_TARGET = object()
+
     def _insert_text_at_target(
         self,
         text: str,
@@ -1750,17 +2014,27 @@ class DictationController(QtCore.QObject):
         restore_focus: bool,
         copy_on_error: bool = True,
         show_overlay_error: bool = True,
+        target_handle=_UNSET_TARGET,
+        target_signature=_UNSET_TARGET,
     ) -> bool:
         if not text.strip():
             return True
+        handle = (
+            self._target_window_handle
+            if target_handle is self._UNSET_TARGET
+            else target_handle
+        )
+        signature = (
+            self._target_focus_signature
+            if target_signature is self._UNSET_TARGET
+            else target_signature
+        )
         if restore_focus:
             try:
-                self._window_focus_helper.restore_target_window(
-                    self._target_window_handle
-                )
+                self._window_focus_helper.restore_target_window(handle)
             except Exception:
                 self._logger.exception("Failed to restore target window focus")
-        insert_hwnd = self._target_insert_window()
+        insert_hwnd = self._target_insert_window(signature, handle)
         try:
             self._text_inserter.insert_text_with_options(
                 text,
@@ -1779,15 +2053,18 @@ class DictationController(QtCore.QObject):
             return False
         return True
 
-    def _target_insert_window(self) -> int | None:
-        signature = self._target_focus_signature
+    def _target_insert_window(
+        self,
+        signature: FocusSignature | None,
+        handle: int | None,
+    ) -> int | None:
         if signature is not None:
             _foreground, focus_hwnd, caret_hwnd = signature
             if caret_hwnd:
                 return caret_hwnd
             if focus_hwnd:
                 return focus_hwnd
-        return self._target_window_handle
+        return handle
 
     def copy_last_transcript_to_clipboard(self) -> bool:
         if not self._last_transcript.strip():
@@ -1835,7 +2112,12 @@ class DictationController(QtCore.QObject):
             self._overlay.set_state("Error", "No failed transcription to retry.")
             return False
         settings = replace(self._settings)
-        self._supersede_active_request_result()
+        # Stop any still-running transcription before retrying; if it finishes
+        # anyway it is kept in history rather than discarded.
+        self._request_job_stop(
+            self._active_request_token,
+            delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+        )
         self._overlay.set_state(
             "Processing",
             "Retrying transcription with current settings...",
@@ -1924,6 +2206,15 @@ class DictationController(QtCore.QObject):
         if callable(setter):
             setter(callback)
 
+    @staticmethod
+    def _set_transcriber_cancel_check(
+        transcriber: object,
+        cancel_check: Callable[[], bool] | None,
+    ) -> None:
+        setter = getattr(transcriber, "set_cancel_check", None)
+        if callable(setter):
+            setter(cancel_check)
+
     def cancel_current_action(self) -> None:
         if self._cancel_model_preload_if_running():
             return
@@ -1964,18 +2255,23 @@ class DictationController(QtCore.QObject):
 
         request_token = self._active_request_token
         if request_token is not None:
-            preserved_audio = self._cancel_request_result(
+            had_job = request_token in self._jobs
+            # Request a real stop; a transcript that still finishes is kept in
+            # history rather than discarded.
+            self._request_job_stop(
                 request_token,
-                preserve_audio=True,
+                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
             )
+            if self._active_request_token == request_token:
+                self._active_request_token = None
+                self._last_transcribe_settings = None
+            if not had_job:
+                self._drop_request_audio(request_token)
             try:
                 self._last_recording_store.mark_canceled("Transcription canceled by user.")
             except Exception:
                 self._logger.exception("Failed to mark canceled transcription")
-            self._overlay.set_state(
-                "Done",
-                f"Transcription canceled. {self._retry_guidance(has_retry_audio=preserved_audio)}",
-            )
+            self._overlay.set_state("Done", "Transcription canceled.")
             return
 
         self._overlay.set_state("Done", "Nothing to cancel.")

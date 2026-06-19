@@ -22,6 +22,22 @@ DEFAULT_LANGUAGE_MODE = "auto"
 DEFAULT_ENGINE = "local"
 DEFAULT_MODE = "batch"
 DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT = False
+# What happens to an in-flight transcription when a new recording starts while it
+# is still running. A finished transcription is never discarded:
+#   "insert"  -> keep running; insert its result into the window that was focused
+#               when it was recorded, and save it to history (default).
+#   "history" -> keep running; save its result to history only (do not insert).
+#   "cancel"  -> request a real stop (local compute is aborted, a not-yet-started
+#               remote upload never starts); if it still finishes, save to history.
+CONCURRENT_TRANSCRIPTION_MODE_INSERT = "insert"
+CONCURRENT_TRANSCRIPTION_MODE_HISTORY = "history"
+CONCURRENT_TRANSCRIPTION_MODE_CANCEL = "cancel"
+VALID_CONCURRENT_TRANSCRIPTION_MODES = (
+    CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+    CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+    CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
+)
+DEFAULT_CONCURRENT_TRANSCRIPTION_MODE = CONCURRENT_TRANSCRIPTION_MODE_INSERT
 DEFAULT_VAD_ENABLED = False
 DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_SAVE_ALL_RECORDINGS = False

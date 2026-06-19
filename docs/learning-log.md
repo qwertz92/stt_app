@@ -13,6 +13,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
   feedback. Refreshes for Settings History, local model lists, benchmark model
   lists, and the standalone History dialog now preserve selection, current item,
   and scroll position when the same entry still exists.
+- **Transcription queue branch was never merged into main.** Ported the queue
+  implementation from `claude/transcription-queue-history`: Settings now expose
+  `concurrent_transcription_mode` (`insert` default, `history`, `cancel`), the
+  overlay renders in-flight transcription jobs with per-item cancel and Clear
+  queue, and the controller tracks each recording as a `_TranscriptionJob` with
+  captured target window/signature. A finished transcription is never discarded:
+  background results are inserted into their captured target or saved to history
+  depending on mode. Cancel requests cooperative stop where supported; local
+  faster-whisper polls `set_cancel_check` between segments and raises
+  `TranscriptionCanceled`, while engines without a cancel hook may still finish
+  and are then kept in history.
 
 ## 2026-06-18
 

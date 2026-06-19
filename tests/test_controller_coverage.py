@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 from stt_app.config import FALLBACK_HOTKEY
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcript_history import TranscriptHistoryStore
 
 from conftest import (
     FakeCapture,
@@ -17,6 +18,7 @@ from conftest import (
     FakeOverlay,
     FakeSettingsStore,
     FakeStreamingTranscriber,
+    FakeTextInserter,
     ImmediateExecutor,
     make_controller as _make_controller,
 )
@@ -768,7 +770,7 @@ def test_retry_last_transcription_resubmits_failed_audio():
         openai_model="gpt-4o-transcribe",
     )
 
-    def fake_worker(request_token, wav_bytes, snapshot):
+    def fake_worker(request_token, wav_bytes, snapshot, job=None):
         captured.append((request_token, wav_bytes, snapshot.engine, snapshot.openai_model))
 
     controller._transcribe_worker = fake_worker  # type: ignore[method-assign]
@@ -792,7 +794,7 @@ def test_stop_recording_persists_last_recording_and_marks_transcribing(monkeypat
     controller._executor = ImmediateExecutor()
     submitted = []
 
-    def fake_worker(request_token, wav_bytes, snapshot):
+    def fake_worker(request_token, wav_bytes, snapshot, job=None):
         submitted.append((request_token, wav_bytes, snapshot.mode, snapshot.model_size))
 
     controller._transcribe_worker = fake_worker  # type: ignore[method-assign]
@@ -840,41 +842,43 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
         overlay=overlay,
         last_recording_store=last_recording_store,
     )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
     controller._active_request_token = 7
-    controller._request_audio_by_token[7] = (
-        b"wav-bytes",
-        AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small"),
-    )
+    controller._register_transcription_job(7, settings, "batch")
     last_recording_store._available = True
 
     controller.cancel_current_action()
-    controller._on_transcription_failed("transcriber failed", request_token=7)
 
-    assert overlay.states[-1][0] == "Done"
-    assert "canceled" in overlay.states[-1][1].lower()
-    assert "preserved in memory" in overlay.states[-1][1].lower()
-    assert controller._last_failed_wav_bytes == b"wav-bytes"
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
+    assert controller._jobs[7].aborting is True
     assert controller._active_request_token is None
     assert last_recording_store.canceled == ["Transcription canceled by user."]
     controller.shutdown()
     _ = app
 
 
-def test_cancel_current_action_clears_stale_retry_audio_for_non_retryable_request():
+def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    history = TranscriptHistoryStore(tmp_path / "history.json")
     controller, app = _make_controller(
         overlay=overlay,
+        text_inserter=inserter,
+        history_store=history,
         last_recording_store=FakeLastRecordingStore(),
     )
-    controller._last_failed_wav_bytes = b"older-wav"
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
     controller._active_request_token = 9
+    controller._register_transcription_job(9, settings, "batch")
 
     controller.cancel_current_action()
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
 
-    assert overlay.states[-1][0] == "Done"
-    assert "canceled" in overlay.states[-1][1].lower()
-    assert "preserved in memory" not in overlay.states[-1][1].lower()
-    assert controller._last_failed_wav_bytes == b""
+    # A transcript that still finishes after cancel is kept in history, not
+    # inserted into whatever window is focused now.
+    controller._on_transcription_ready("finished anyway", request_token=9)
+    assert [e.text for e in history.load()] == ["finished anyway"]
+    assert inserter.calls == []
     controller.shutdown()
     _ = app
 
