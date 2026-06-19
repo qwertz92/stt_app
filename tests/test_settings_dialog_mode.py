@@ -204,6 +204,12 @@ def _combo_item_enabled(combo: QtWidgets.QComboBox, value: str) -> bool:
     return bool(item.isEnabled())
 
 
+def _combo_text_for_data(combo: QtWidgets.QComboBox, value: str) -> str:
+    idx = combo.findData(value)
+    assert idx >= 0
+    return combo.itemText(idx)
+
+
 def _history_entry(text: str) -> TranscriptHistoryEntry:
     return TranscriptHistoryEntry.new(
         text=text,
@@ -451,6 +457,62 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     assert "falls back to CPU" in dialog.local_model_runtime_warning_label.text()
     assert "Batch mode only" in dialog.local_model_runtime_warning_label.text()
     assert dialog.keep_onnx_model_loaded_checkbox.isChecked() is False
+    _ = app
+
+
+def test_local_model_labels_show_onnx_precision_tags():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert "[Q4]" in _combo_text_for_data(
+        dialog.model_combo,
+        "cohere-transcribe-03-2026",
+    )
+    assert "[Q4]" in _combo_text_for_data(
+        dialog.model_combo,
+        "granite-speech-4.1-2b",
+    )
+    assert "[INT8]" in _combo_text_for_data(
+        dialog.model_combo,
+        "granite-speech-4.1-2b-plus",
+    )
+    assert "[INT8]" in _combo_text_for_data(
+        dialog.model_combo,
+        "granite-speech-4.1-2b-nar",
+    )
+    assert "[INT4]" in _combo_text_for_data(
+        dialog.model_combo,
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+    )
+    _ = app
+
+
+def test_local_model_runtime_note_is_short_and_attached_to_model_choice():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    model_index = dialog.model_combo.findData("granite-speech-4.1-2b-plus")
+    assert model_index >= 0
+    dialog.model_combo.setCurrentIndex(model_index)
+
+    note_layout = dialog.local_model_runtime_warning_label.parentWidget().layout()
+    assert note_layout is not None
+    assert note_layout.spacing() == 2
+    assert dialog.local_model_runtime_warning_label.isHidden() is False
+    warning_text = dialog.local_model_runtime_warning_label.text()
+    assert "Batch mode only" in warning_text
+    assert "DirectML" in warning_text
+    assert "Granite 4.1" not in warning_text
+    assert "raw ONNX" not in warning_text
+    assert len(warning_text) < 180
     _ = app
 
 
@@ -839,6 +901,112 @@ def test_settings_dialog_precomputes_size_before_first_show():
 
     assert dialog._initial_dialog_size_applied is True
     assert dialog.size() == dialog._default_dialog_size
+    _ = app
+
+
+def test_settings_dialog_uses_roomier_default_size_when_screen_allows(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(
+        SettingsDialog,
+        "_available_dialog_size",
+        lambda _self: QtCore.QSize(2000, 2000),
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.size().width() >= 780
+    assert dialog.size().height() >= 960
+    _ = app
+
+
+def test_settings_dialog_size_stays_stable_when_switching_tabs(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(
+        SettingsDialog,
+        "_available_dialog_size",
+        lambda _self: QtCore.QSize(2000, 2000),
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    app.processEvents()
+
+    initial_size = QtCore.QSize(dialog.size())
+    for index in range(dialog.tabs.count()):
+        dialog.tabs.setCurrentIndex(index)
+        app.processEvents()
+        assert dialog.size() == initial_size
+    _ = app
+
+
+def test_remote_provider_key_fields_start_before_form_fields():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    remote_index = next(
+        index
+        for index in range(dialog.tabs.count())
+        if dialog.tabs.tabText(index) == "Remote"
+    )
+    dialog.tabs.setCurrentIndex(remote_index)
+    dialog.show()
+    app.processEvents()
+
+    key_x = dialog.assemblyai_key_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+    form_x = dialog.azure_endpoint_edit.mapTo(dialog, QtCore.QPoint(0, 0)).x()
+    assert key_x < form_x
+    _ = app
+
+
+def test_remote_provider_status_badges_use_calculated_fixed_width():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    expected_width = dialog._provider_status_badge_width()
+    assert expected_width < 230
+    for badge in dialog._provider_status_labels.values():
+        assert badge.minimumWidth() == expected_width
+        assert badge.maximumWidth() == expected_width
+    _ = app
+
+
+def test_inline_field_buttons_match_their_field_height():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.model_dir_browse.maximumHeight() == (
+        dialog.model_dir_edit.maximumHeight()
+    )
+    assert dialog.recordings_dir_browse.maximumHeight() == (
+        dialog.recordings_dir_edit.maximumHeight()
+    )
+    assert dialog.recordings_open_button.maximumHeight() == (
+        dialog.recordings_dir_edit.maximumHeight()
+    )
+    assert dialog.benchmark_audio_browse_button.maximumHeight() == (
+        dialog.benchmark_audio_edit.maximumHeight()
+    )
+    assert dialog.benchmark_audio_last_button.maximumHeight() == (
+        dialog.benchmark_audio_edit.maximumHeight()
+    )
     _ = app
 
 
@@ -1799,8 +1967,15 @@ def test_remote_provider_rows_limit_key_and_badge_growth():
     )
 
     assert dialog.assemblyai_key_edit.maximumWidth() == 16777215
-    assert dialog._provider_status_labels["assemblyai"].maximumWidth() == 170
-    assert dialog._provider_status_labels["assemblyai"].minimumWidth() == 148
+    expected_width = dialog._provider_status_badge_width()
+    assert (
+        dialog._provider_status_labels["assemblyai"].maximumWidth()
+        == expected_width
+    )
+    assert (
+        dialog._provider_status_labels["assemblyai"].minimumWidth()
+        == expected_width
+    )
     _ = app
 
 
@@ -2016,6 +2191,10 @@ def test_settings_tabs_use_scroll_areas_and_scroll_buttons():
         widget = dialog.tabs.widget(index)
         assert isinstance(widget, QtWidgets.QScrollArea)
         assert widget.widgetResizable() is True
+        assert (
+            widget.sizeAdjustPolicy()
+            == QtWidgets.QAbstractScrollArea.AdjustIgnored
+        )
         assert widget.horizontalScrollBarPolicy() == QtCore.Qt.ScrollBarAsNeeded
 
     assert dialog.tabs.tabBar().usesScrollButtons() is True

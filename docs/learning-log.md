@@ -5,6 +5,15 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-19
 
+- **Settings and overlay UI polish before 0.4.1.** The Settings dialog now opens
+  larger by default, keeps one stable size while switching tabs, and ignores
+  scroll-area size-hint changes that previously caused small resize jitter. The
+  Remote API key rows use a compact grid with calculated status-badge widths,
+  and inline field buttons share the corresponding input height. Local ONNX model
+  labels now show consistent precision tags (`Q4`, `INT8`, `INT4`), while the
+  red Local runtime note is shorter and sits directly under the model selector.
+  The overlay queue's per-item cancel action now uses a visible `Cancel` label
+  instead of a symbol that could render ambiguously.
 - **Fixed two queue/history UI regressions before cutting another release.**
   The standalone History dialog and Settings History size spin boxes now disable
   keyboard tracking, so typing an increased limit (for example `224` → `300`)

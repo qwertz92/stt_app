@@ -55,6 +55,7 @@ from .config import (
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
@@ -189,12 +190,24 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
     ),
 }
 
-_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(680, 860)
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(780, 960)
 _DIALOG_SCREEN_MARGIN = 48
 _COMPACT_LIST_ITEM_STYLESHEET = "QListWidget::item { padding: 0px 4px; }"
 _COMPACT_LIST_ROW_EXTRA_PX = 4
 _COMPACT_TABLE_ROW_EXTRA_PX = 4
 _LOCAL_MODEL_AUTO_REFRESH_DELAY_MS = 150
+_PROVIDER_STATUS_BADGE_TEXTS = (
+    "Not configured",
+    "Unsaved input",
+    "Will clear on Save",
+    "Stored securely",
+    "Stored securely (legacy)",
+    "Stored insecurely",
+    "Stored insecurely (disabled)",
+)
+_PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX = 18
+_ACTION_ROW_SPACING_PX = 8
+_INLINE_FIELD_BUTTON_SPACING_PX = 6
 
 _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
     "groq": DEFAULT_GROQ_MODEL,
@@ -483,6 +496,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
 
         buttons = QtWidgets.QHBoxLayout()
+        self._configure_button_row(buttons)
         buttons.addWidget(self.copy_diag_button)
         buttons.addStretch(1)
         buttons.addWidget(self._save_status_label)
@@ -566,11 +580,42 @@ class SettingsDialog(QtWidgets.QDialog):
             max(0, geometry.height() - _DIALOG_SCREEN_MARGIN),
         )
 
+    def _provider_status_badge_width(self) -> int:
+        metrics = self.fontMetrics()
+        text_width = max(
+            metrics.horizontalAdvance(text)
+            for text in _PROVIDER_STATUS_BADGE_TEXTS
+        )
+        return text_width + _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX
+
     def _style_note_label(self, label: QtWidgets.QLabel, *, bold: bool = False) -> None:
         style = "color: #555; font-size: 11px; padding: 0 0 6px 0;"
         if bold:
             style += " font-weight: bold;"
         label.setStyleSheet(style)
+
+    @staticmethod
+    def _configure_button_row(
+        layout: QtWidgets.QHBoxLayout,
+        *,
+        spacing: int = _ACTION_ROW_SPACING_PX,
+    ) -> None:
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(spacing)
+
+    @staticmethod
+    def _match_field_button_height(
+        field: QtWidgets.QWidget,
+        *buttons: QtWidgets.QAbstractButton,
+    ) -> None:
+        height = max(
+            1,
+            field.sizeHint().height(),
+            *(button.sizeHint().height() for button in buttons),
+        )
+        field.setFixedHeight(height)
+        for button in buttons:
+            button.setFixedHeight(height)
 
     @staticmethod
     def _field_with_hint(
@@ -810,11 +855,12 @@ class SettingsDialog(QtWidgets.QDialog):
         scroll = QtWidgets.QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setSizeAdjustPolicy(QtWidgets.QAbstractScrollArea.AdjustIgnored)
         scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
         content = QtWidgets.QWidget()
         content.setSizePolicy(
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
         )
         scroll.setWidget(content)
@@ -1137,7 +1183,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.recordings_dir_browse.clicked.connect(self._browse_recordings_dir)
         self.recordings_open_button = QtWidgets.QPushButton("Open Folder")
         self.recordings_open_button.clicked.connect(self._open_recordings_dir)
+        self._match_field_button_height(
+            self.recordings_dir_edit,
+            self.recordings_dir_browse,
+            self.recordings_open_button,
+        )
         recordings_dir_layout = QtWidgets.QHBoxLayout()
+        self._configure_button_row(
+            recordings_dir_layout,
+            spacing=_INLINE_FIELD_BUTTON_SPACING_PX,
+        )
         recordings_dir_layout.addWidget(self.recordings_dir_edit, 1)
         recordings_dir_layout.addWidget(self.recordings_dir_browse)
         recordings_dir_layout.addWidget(self.recordings_open_button)
@@ -1198,13 +1253,19 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.model_combo = _WheelPassthroughComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
-        form.addRow("Model Size", self.model_combo)
         self.local_model_runtime_warning_label = QtWidgets.QLabel("")
         self.local_model_runtime_warning_label.setWordWrap(True)
         self.local_model_runtime_warning_label.setStyleSheet(
             "color: #b71c1c; font-size: 11px;"
         )
-        form.addRow("", self.local_model_runtime_warning_label)
+        self.local_model_runtime_warning_label.setVisible(False)
+        form.addRow(
+            "Model Size",
+            self._field_with_hint(
+                self.model_combo,
+                self.local_model_runtime_warning_label,
+            ),
+        )
 
         self.model_dir_edit = QtWidgets.QLineEdit()
         self.model_dir_edit.setPlaceholderText(
@@ -1220,7 +1281,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.model_dir_browse.setFixedWidth(80)
         self.model_dir_browse.clicked.connect(self._browse_model_dir)
         self.model_dir_edit.textChanged.connect(self._on_model_dir_changed)
+        self._match_field_button_height(self.model_dir_edit, self.model_dir_browse)
         model_dir_layout = QtWidgets.QHBoxLayout()
+        self._configure_button_row(
+            model_dir_layout,
+            spacing=_INLINE_FIELD_BUTTON_SPACING_PX,
+        )
         model_dir_layout.addWidget(self.model_dir_edit, 1)
         model_dir_layout.addWidget(self.model_dir_browse)
         form.addRow("Model Dir", model_dir_layout)
@@ -1302,6 +1368,7 @@ class SettingsDialog(QtWidgets.QDialog):
         local_models_layout.addWidget(self.local_models_list, 1)
 
         manage_buttons = QtWidgets.QHBoxLayout()
+        self._configure_button_row(manage_buttons)
         self.refresh_local_models_button = QtWidgets.QPushButton("Refresh")
         self.refresh_local_models_button.clicked.connect(
             self._refresh_local_model_views
@@ -1371,6 +1438,10 @@ class SettingsDialog(QtWidgets.QDialog):
         audio_box = QtWidgets.QGroupBox("Audio Sample")
         audio_layout = QtWidgets.QVBoxLayout(audio_box)
         audio_row = QtWidgets.QHBoxLayout()
+        self._configure_button_row(
+            audio_row,
+            spacing=_INLINE_FIELD_BUTTON_SPACING_PX,
+        )
         self.benchmark_audio_edit = QtWidgets.QLineEdit()
         self.benchmark_audio_edit.setPlaceholderText(
             "Choose an audio file or use the last recording"
@@ -1387,6 +1458,11 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self.benchmark_audio_last_button.clicked.connect(
             self._use_last_recording_for_benchmark
+        )
+        self._match_field_button_height(
+            self.benchmark_audio_edit,
+            self.benchmark_audio_browse_button,
+            self.benchmark_audio_last_button,
         )
         audio_row.addWidget(self.benchmark_audio_edit, 1)
         audio_row.addWidget(self.benchmark_audio_browse_button)
@@ -1575,6 +1651,7 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(options_box)
 
         benchmark_actions = QtWidgets.QHBoxLayout()
+        self._configure_button_row(benchmark_actions)
         self.run_benchmark_button = QtWidgets.QPushButton("Run Benchmark")
         self.run_benchmark_button.clicked.connect(self._run_local_benchmark)
         self.cancel_benchmark_button = QtWidgets.QPushButton("Cancel Benchmark")
@@ -1645,6 +1722,7 @@ class SettingsDialog(QtWidgets.QDialog):
         history_layout.addWidget(self.benchmark_history_list, 1)
 
         benchmark_history_actions = QtWidgets.QHBoxLayout()
+        self._configure_button_row(benchmark_history_actions)
         self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
         self.load_benchmark_history_button.setEnabled(False)
         self.load_benchmark_history_button.clicked.connect(
@@ -1684,14 +1762,9 @@ class SettingsDialog(QtWidgets.QDialog):
 
         # API keys
         provider_box = QtWidgets.QGroupBox("Remote Provider API Keys")
-        provider_layout = QtWidgets.QFormLayout(provider_box)
+        provider_layout = QtWidgets.QVBoxLayout(provider_box)
         provider_layout.setContentsMargins(10, 10, 10, 10)
-        provider_layout.setHorizontalSpacing(10)
-        provider_layout.setVerticalSpacing(6)
-        provider_layout.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
-        provider_layout.setFieldGrowthPolicy(
-            QtWidgets.QFormLayout.AllNonFixedFieldsGrow
-        )
+        provider_layout.setSpacing(6)
         provider_rows = (
             ("assemblyai", "AssemblyAI"),
             ("groq", "Groq"),
@@ -1706,8 +1779,21 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         provider_intro.setWordWrap(True)
         self._style_note_label(provider_intro)
-        provider_layout.addRow("", provider_intro)
-        for provider, title in provider_rows:
+        provider_layout.addWidget(provider_intro)
+
+        provider_label_width = max(
+            self.fontMetrics().horizontalAdvance(title)
+            for _provider, title in provider_rows
+        ) + 6
+        status_badge_width = self._provider_status_badge_width()
+        provider_key_rows = QtWidgets.QWidget()
+        provider_key_layout = QtWidgets.QGridLayout(provider_key_rows)
+        provider_key_layout.setContentsMargins(0, 0, 0, 0)
+        provider_key_layout.setHorizontalSpacing(6)
+        provider_key_layout.setVerticalSpacing(3)
+        provider_key_layout.setColumnMinimumWidth(0, provider_label_width)
+        provider_key_layout.setColumnStretch(1, 1)
+        for row_index, (provider, title) in enumerate(provider_rows):
             key_field = QtWidgets.QLineEdit()
             key_field.setEchoMode(QtWidgets.QLineEdit.Password)
             key_field.setPlaceholderText(
@@ -1721,6 +1807,7 @@ class SettingsDialog(QtWidgets.QDialog):
             clear_button.setToolTip("Delete the stored key for this provider on Save.")
             clear_button.setMinimumWidth(78)
             clear_button.setMaximumWidth(88)
+            self._match_field_button_height(key_field, clear_button)
             clear_button.clicked.connect(
                 lambda _checked=False, p=provider: self._mark_provider_key_for_clear(p)
             )
@@ -1729,19 +1816,19 @@ class SettingsDialog(QtWidgets.QDialog):
             status_badge.setAlignment(
                 QtCore.Qt.AlignCenter | QtCore.Qt.AlignVCenter
             )
-            status_badge.setMinimumWidth(148)
-            status_badge.setMaximumWidth(170)
+            status_badge.setFixedWidth(status_badge_width)
             status_badge.setSizePolicy(
                 QtWidgets.QSizePolicy.Fixed,
                 QtWidgets.QSizePolicy.Fixed,
             )
             status_badge.setStyleSheet(
-                "padding: 2px 8px; border: 1px solid #bbb; border-radius: 9px;"
+                "padding: 2px 6px; border: 1px solid #bbb; border-radius: 9px;"
                 " color: #555; background: #f2f2f2;"
             )
 
             title_label = QtWidgets.QLabel(title)
-            title_label.setMinimumWidth(54)
+            title_label.setFixedWidth(provider_label_width)
+            title_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
 
             field_row_widget = QtWidgets.QWidget()
             field_row = QtWidgets.QHBoxLayout(field_row_widget)
@@ -1754,14 +1841,33 @@ class SettingsDialog(QtWidgets.QDialog):
             last_test_label = QtWidgets.QLabel("Last test: never.")
             last_test_label.setWordWrap(True)
             self._style_note_label(last_test_label)
-            provider_layout.addRow(
+            layout_row = row_index * 2
+            provider_key_layout.addWidget(
                 title_label,
-                self._field_with_hint(field_row_widget, last_test_label),
+                layout_row,
+                0,
+                QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop,
+            )
+            provider_key_layout.addWidget(field_row_widget, layout_row, 1)
+            provider_key_layout.addWidget(last_test_label, layout_row + 1, 1)
+            provider_key_layout.setRowMinimumHeight(
+                layout_row + 1,
+                max(1, self.fontMetrics().height()),
             )
 
             self._provider_key_edits[provider] = key_field
             self._provider_status_labels[provider] = status_badge
             self._provider_last_test_labels[provider] = last_test_label
+        provider_layout.addWidget(provider_key_rows)
+
+        provider_form = QtWidgets.QFormLayout()
+        provider_form.setContentsMargins(0, 0, 0, 0)
+        provider_form.setHorizontalSpacing(8)
+        provider_form.setVerticalSpacing(6)
+        provider_form.setLabelAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignVCenter)
+        provider_form.setFieldGrowthPolicy(
+            QtWidgets.QFormLayout.AllNonFixedFieldsGrow
+        )
 
         self.assemblyai_key_edit = self._provider_key_edits["assemblyai"]
         self.groq_key_edit = self._provider_key_edits["groq"]
@@ -1785,7 +1891,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         azure_endpoint_hint.setWordWrap(True)
         self._style_note_label(azure_endpoint_hint)
-        provider_layout.addRow(
+        provider_form.addRow(
             "Azure Endpoint",
             self._field_with_hint(self.azure_endpoint_edit, azure_endpoint_hint),
         )
@@ -1794,7 +1900,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Status badges show where each key is currently sourced from."
         )
         self._style_note_label(provider_note)
-        provider_layout.addRow("", provider_note)
+        provider_form.addRow("", provider_note)
 
         self.insecure_key_storage_checkbox = QtWidgets.QCheckBox(
             "Allow insecure local API key fallback (plain text)"
@@ -1806,7 +1912,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.insecure_key_storage_checkbox.toggled.connect(
             lambda _checked: self._apply_secret_store_options()
         )
-        provider_layout.addRow("", self.insecure_key_storage_checkbox)
+        provider_form.addRow("", self.insecure_key_storage_checkbox)
 
         self.key_storage_status_label = QtWidgets.QLabel("")
         self.key_storage_status_label.setWordWrap(True)
@@ -1816,7 +1922,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Store entered API keys without applying all settings or refreshing the app."
         )
         self.save_api_keys_button.clicked.connect(self._save_api_keys_only)
-        provider_layout.addRow(self.save_api_keys_button, self.key_storage_status_label)
+        provider_form.addRow(self.save_api_keys_button, self.key_storage_status_label)
 
         self.test_conn_target_combo = _WheelPassthroughComboBox()
         self.test_conn_target_combo.addItem(
@@ -1834,7 +1940,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
         )
-        provider_layout.addRow("Connection Target", self.test_conn_target_combo)
+        provider_form.addRow("Connection Target", self.test_conn_target_combo)
 
         # Test connection
         self.test_conn_button = QtWidgets.QPushButton("Run Connection Test")
@@ -1845,7 +1951,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.test_conn_button.clicked.connect(self._test_connection)
         self.test_conn_result = QtWidgets.QLabel("")
         self.test_conn_result.setWordWrap(True)
-        provider_layout.addRow(self.test_conn_button, self.test_conn_result)
+        provider_form.addRow(self.test_conn_button, self.test_conn_result)
+        provider_layout.addLayout(provider_form)
 
         self._refresh_provider_key_statuses()
 
@@ -1882,6 +1989,7 @@ class SettingsDialog(QtWidgets.QDialog):
             lambda _value: self._refresh_history_list()
         )
         history_controls = QtWidgets.QHBoxLayout()
+        self._configure_button_row(history_controls)
         history_controls.addWidget(QtWidgets.QLabel("History Size"))
         history_controls.addWidget(self.history_max_spin)
         history_controls.addStretch(1)
@@ -1926,6 +2034,7 @@ class SettingsDialog(QtWidgets.QDialog):
         history_layout.addWidget(self.history_splitter, 1)
 
         history_buttons = QtWidgets.QHBoxLayout()
+        self._configure_button_row(history_buttons)
         self.history_refresh_button = QtWidgets.QPushButton("Refresh")
         self.history_refresh_button.clicked.connect(self._refresh_history_list)
         self.history_copy_button = QtWidgets.QPushButton("Copy selected")
@@ -2011,6 +2120,7 @@ class SettingsDialog(QtWidgets.QDialog):
         import_controls_layout.addWidget(self.import_model_note)
 
         import_buttons = QtWidgets.QHBoxLayout()
+        self._configure_button_row(import_buttons)
         self.import_file_button = QtWidgets.QPushButton("Choose file...")
         self.import_file_button.clicked.connect(self._choose_import_file)
         self.import_last_recording_button = QtWidgets.QPushButton(
@@ -2041,6 +2151,7 @@ class SettingsDialog(QtWidgets.QDialog):
         import_result_layout.setSpacing(6)
 
         import_result_header = QtWidgets.QHBoxLayout()
+        self._configure_button_row(import_result_header)
         import_result_header.addWidget(QtWidgets.QLabel("Result"))
         import_result_header.addStretch(1)
         self.import_copy_button = QtWidgets.QPushButton("Copy result")
@@ -2108,18 +2219,38 @@ class SettingsDialog(QtWidgets.QDialog):
         "large-v3-turbo": "large-v3-turbo (~809 MB, multilingual, fast)",
         "distil-large-v3.5": "distil-large-v3.5 (~756 MB, English only, improved)",
         "cohere-transcribe-03-2026": (
-            "Cohere Transcribe 03-2026 (~2.13 GB q4, ONNX/WebGPU)"
+            "Cohere Transcribe 03-2026 (~2.13 GB, ONNX/WebGPU)"
         ),
         "granite-4.0-1b-speech": (
-            "IBM Granite 4.0 1B Speech (~1.84 GB q4, ONNX/WebGPU)"
+            "IBM Granite 4.0 1B Speech (~1.84 GB, ONNX/WebGPU)"
+        ),
+        "granite-speech-4.1-2b": (
+            "IBM Granite Speech 4.1 2B (~1.84 GB, ONNX/WebGPU)"
+        ),
+        "granite-speech-4.1-2b-plus": (
+            "IBM Granite Speech 4.1 2B Plus (~4.1 GB, ONNX)"
+        ),
+        "granite-speech-4.1-2b-nar": (
+            "IBM Granite Speech 4.1 2B NAR (~2.5 GB, ONNX)"
         ),
         "nemotron-3.5-asr-streaming-0.6b-int4": (
-            "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB INT4, true 560 ms streaming)"
+            "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB, true 560 ms streaming)"
         ),
     }
 
+    @staticmethod
+    def _precision_label(model_name: str) -> str:
+        precision = LOCAL_ONNX_MODEL_PRECISION.get(model_name, "")
+        if not precision:
+            return ""
+        return precision.upper()
+
     def _model_label(self, model_name: str) -> str:
-        return self._MODEL_LABELS.get(model_name, model_name)
+        label = self._MODEL_LABELS.get(model_name, model_name)
+        precision = self._precision_label(model_name)
+        if not precision:
+            return label
+        return f"{label} [{precision}]"
 
     def _local_model_cache_key(self, model_dir: str | None = None) -> str:
         return str(model_dir or "").strip()
@@ -3987,22 +4118,17 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             self.local_model_runtime_warning_label.setText(
-                "ONNX model: Batch mode only. The app tries the available ONNX "
-                "GPU target first (WebGPU, then DirectML) and falls back to CPU "
-                "when no compatible GPU runtime is available. Granite 4.1 uses "
-                "INT8 raw ONNX graphs (no q4 export is published yet). The "
-                "active runtime device is shown in the overlay/import status."
+                "ONNX model: Batch mode only. Auto tries WebGPU, then DirectML, "
+                "then falls back to CPU. The active device appears in the "
+                "overlay/import status."
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self.local_model_runtime_warning_label.setText(
-                "Nemotron INT4 model: true cache-aware streaming with "
-                "a fixed 560 ms ONNX chunk. The app tries DirectML first when a "
-                "compatible ORT GenAI DirectML runtime is installed, then falls back "
-                "to the bundled CPU runtime. Microsoft's current DirectML dependency "
-                "is not yet available from PyPI. The published ONNX graph does not "
-                "currently expose the model's other latency profiles."
+                "Nemotron streams with a fixed 560 ms ONNX chunk. Auto tries "
+                "DirectML, then falls back to CPU. Other latency profiles are "
+                "not exposed by the published graph."
             )
             self.local_model_runtime_warning_label.setVisible(True)
             return

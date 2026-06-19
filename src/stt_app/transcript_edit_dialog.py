@@ -35,6 +35,7 @@ class TranscriptEditDialog(QtWidgets.QDialog):
         cancel_button.clicked.connect(self.reject)
 
         buttons = QtWidgets.QHBoxLayout()
+        buttons.setSpacing(6)
         buttons.addStretch(1)
         buttons.addWidget(self._save_button)
         buttons.addWidget(cancel_button)

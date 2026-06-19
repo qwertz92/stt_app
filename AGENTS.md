@@ -107,7 +107,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `ui_feedback.py` so layouts do not jump. Dialog/list refreshes should preserve
   selection, current item, and scroll position when the same entry still exists;
   use the shared scroll helper instead of rebuilding lists in a way that resets
-  the user's place.
+  the user's place. Settings tabs use a session-stable default dialog size and
+  `QScrollArea` `AdjustIgnored` to avoid small tab-switch resize jitter. Inline
+  field buttons match the corresponding input height; action rows keep explicit
+  spacing rather than relying on platform defaults.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional

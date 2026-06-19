@@ -90,7 +90,10 @@ def test_overlay_queue_panel_renders_and_emits_signals():
     assert overlay._queue_rows_layout.count() == 2
 
     first_row = overlay._queue_rows_layout.itemAt(0).widget()
-    first_row.findChild(QtWidgets.QPushButton).click()
+    cancel_button = first_row.findChild(QtWidgets.QPushButton)
+    assert cancel_button.text() == "Cancel"
+    assert "Cancel this transcription" in cancel_button.toolTip()
+    cancel_button.click()
     assert canceled == [7]
 
     overlay._queue_clear_button.click()

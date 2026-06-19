@@ -784,10 +784,10 @@ class OverlayUI(QtWidgets.QWidget):
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Preferred,
         )
-        cancel_button = QtWidgets.QPushButton("✕")
+        cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
         cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        cancel_button.setFixedSize(20, 20)
+        cancel_button.setFixedSize(58, 20)
         cancel_button.setToolTip("Cancel this transcription.")
         cancel_button.clicked.connect(
             lambda _checked=False, t=int(token): self.queue_cancel_requested.emit(t)
