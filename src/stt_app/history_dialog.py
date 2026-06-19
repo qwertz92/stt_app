@@ -11,8 +11,15 @@ from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from .ui_feedback import (
+    BUTTON_FEEDBACK_STYLESHEET,
+    reserve_button_width_for_texts,
+    restore_vertical_scrollbar,
+    set_button_feedback_state,
+)
 
 _COMPACT_TABLE_ROW_EXTRA_PX = 4
+_TABLE_TEXT_PREVIEW_CHARS = 180
 
 
 class HistoryDialog(QtWidgets.QDialog):
@@ -28,6 +35,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._settings_store = settings_store
         self._on_history_limit_changed = on_history_limit_changed
         self._entries: list[TranscriptHistoryEntry] = []
+        self._last_total_entries = 0
         self._copy_feedback_timer = QtCore.QTimer(self)
         self._copy_feedback_timer.setSingleShot(True)
         self._copy_feedback_timer.setInterval(1000)
@@ -97,6 +105,19 @@ class HistoryDialog(QtWidgets.QDialog):
         self._detail = QtWidgets.QPlainTextEdit()
         self._detail.setReadOnly(True)
         self._detail.setFont(self._table.font())
+        self._detail.setMinimumHeight(self.fontMetrics().height() * 4)
+        self._detail.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+
+        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.addWidget(self._table)
+        self._splitter.addWidget(self._detail)
+        self._splitter.setStretchFactor(0, 2)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([360, 180])
 
         self._refresh_button = QtWidgets.QPushButton("Refresh")
         self._refresh_button.clicked.connect(self.reload)
@@ -113,6 +134,10 @@ class HistoryDialog(QtWidgets.QDialog):
         self._copy_button = QtWidgets.QPushButton("Copy selected")
         self._copy_button.setEnabled(False)
         self._copy_button.clicked.connect(self._copy_selected)
+        reserve_button_width_for_texts(
+            self._copy_button,
+            ("Copy selected", "Copied"),
+        )
 
         self._edit_button = QtWidgets.QPushButton("Edit selected")
         self._edit_button.setEnabled(False)
@@ -141,32 +166,60 @@ class HistoryDialog(QtWidgets.QDialog):
         root.setContentsMargins(10, 10, 10, 10)
         root.setSpacing(8)
         root.addLayout(controls)
-        root.addWidget(self._table, 2)
-        root.addWidget(self._detail, 1)
+        root.addWidget(self._splitter, 1)
         root.addLayout(buttons)
+        reserve_button_width_for_texts(
+            self._copy_button,
+            ("Copy selected", "Copied"),
+        )
 
         self.reload()
 
     def reload(self) -> None:
-        self._entries = self._history_store.recent_entries(limit=self._history_limit)
-        self._table.setRowCount(len(self._entries))
-        for row, entry in enumerate(self._entries):
-            self._table.setItem(
-                row, 0, QtWidgets.QTableWidgetItem(_format_time(entry.created_at))
-            )
-            self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(entry.engine))
-            self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(entry.model))
-            self._table.setItem(row, 3, QtWidgets.QTableWidgetItem(entry.text))
-        total = self._history_store.count()
-        if self._history_limit == 0:
-            self._history_count_label.setText(f"Stored: {total} entries (showing all)")
-        else:
-            shown = min(total, self._history_limit)
-            self._history_count_label.setText(
-                f"Stored: {total} entries (showing latest {shown})"
-            )
+        previous_selected_row = self._selected_row()
+        previous_selected_entry = (
+            self._entries[previous_selected_row]
+            if previous_selected_row is not None
+            else None
+        )
+        previous_scroll_value = self._table.verticalScrollBar().value()
+        self._entries, total = self._history_store.recent_entries_with_count(
+            limit=self._history_limit
+        )
+        restored_selected_row: int | None = None
+        self._table.setUpdatesEnabled(False)
+        self._table.blockSignals(True)
+        try:
+            self._table.clearContents()
+            self._table.setRowCount(len(self._entries))
+            for row, entry in enumerate(self._entries):
+                self._table.setItem(
+                    row, 0, QtWidgets.QTableWidgetItem(_format_time(entry.created_at))
+                )
+                self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(entry.engine))
+                self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(entry.model))
+                self._table.setItem(
+                    row,
+                    3,
+                    QtWidgets.QTableWidgetItem(_preview_text(entry.text)),
+                )
+                if previous_selected_entry is not None and entry == previous_selected_entry:
+                    restored_selected_row = row
+        finally:
+            self._table.blockSignals(False)
+            self._table.setUpdatesEnabled(True)
+
+        self._last_total_entries = total
+        self._update_history_count_label(total)
         if self._entries:
-            self._table.selectRow(0)
+            fallback_row = previous_selected_row if previous_selected_row is not None else 0
+            row_to_select = (
+                restored_selected_row
+                if restored_selected_row is not None
+                else min(fallback_row, len(self._entries) - 1)
+            )
+            self._table.selectRow(row_to_select)
+            restore_vertical_scrollbar(self._table, previous_scroll_value)
         else:
             self._detail.clear()
             self._copy_button.setEnabled(False)
@@ -208,9 +261,7 @@ class HistoryDialog(QtWidgets.QDialog):
             return
         QtGui.QGuiApplication.clipboard().setText(text)
         self._copy_button.setText("Copied")
-        self._copy_button.setStyleSheet(
-            "background-color: #dff5e0; border: 1px solid #89c88f;"
-        )
+        set_button_feedback_state(self._copy_button, "success")
         self._copy_feedback_timer.start()
 
     def _edit_selected(self) -> None:
@@ -235,11 +286,13 @@ class HistoryDialog(QtWidgets.QDialog):
 
     def _reset_copy_feedback(self) -> None:
         self._copy_button.setText("Copy selected")
-        self._copy_button.setStyleSheet("")
+        set_button_feedback_state(self._copy_button, None)
 
     @staticmethod
     def _scrollbar_stylesheet() -> str:
-        return """
+        return (
+            BUTTON_FEEDBACK_STYLESHEET
+            + """
         QScrollBar:vertical {
             width: 12px;
             background: transparent;
@@ -279,6 +332,7 @@ class HistoryDialog(QtWidgets.QDialog):
             background: transparent;
         }
         """
+        )
 
     def _delete_selected(self) -> None:
         row = self._selected_row()
@@ -310,6 +364,8 @@ class HistoryDialog(QtWidgets.QDialog):
             return
 
         current_count = self._history_store.count()
+        current_visible = _visible_history_count(current_count, self._history_limit)
+        next_visible = _visible_history_count(current_count, next_limit)
         if next_limit > 0 and current_count > next_limit:
             to_delete = current_count - next_limit
             answer = QtWidgets.QMessageBox.question(
@@ -337,7 +393,13 @@ class HistoryDialog(QtWidgets.QDialog):
 
         if next_limit > 0:
             self._history_store.apply_max_items(next_limit)
-        self.reload()
+            current_count = min(current_count, next_limit)
+            next_visible = _visible_history_count(current_count, next_limit)
+
+        self._last_total_entries = current_count
+        self._update_history_count_label(current_count)
+        if next_visible != current_visible:
+            self.reload()
 
     def _persist_limit(self, limit: int) -> bool:
         settings = self._settings_store.load()
@@ -391,7 +453,7 @@ class HistoryDialog(QtWidgets.QDialog):
         path, _filter = QtWidgets.QFileDialog.getOpenFileName(
             self,
             "Import transcript history",
-            "",
+            self._import_dialog_dir(),
             "JSON files (*.json);;All files (*)",
         )
         if not path:
@@ -451,6 +513,35 @@ class HistoryDialog(QtWidgets.QDialog):
             self,
             "Import complete",
             f"Imported {imported_count} entr{'y' if imported_count == 1 else 'ies'}.",
+        )
+
+    def _import_dialog_dir(self) -> str:
+        path = self._history_store.path.parent
+        try:
+            path.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            return str(Path.home() / "Documents")
+        return str(path)
+
+    def _update_history_count_label(self, total: int | None = None) -> None:
+        count = self._last_total_entries if total is None else int(total)
+        if self._history_limit == 0:
+            self._history_count_label.setText(
+                f"Stored: {count} entries (unlimited; showing all)"
+            )
+            return
+
+        shown = min(count, self._history_limit)
+        if count <= self._history_limit:
+            self._history_count_label.setText(
+                f"Stored: {count} entries (limit {self._history_limit}; "
+                "showing all stored entries)"
+            )
+            return
+
+        self._history_count_label.setText(
+            f"Stored: {count} entries (limit {self._history_limit}; "
+            f"showing latest {shown})"
         )
 
     def _prompt_import_overflow(
@@ -527,6 +618,19 @@ def _normalize_history_limit(value: int) -> int:
     if limit < 0:
         return 0
     return min(limit, HISTORY_MAX_ITEMS_MAX)
+
+
+def _visible_history_count(total: int, limit: int) -> int:
+    if limit == 0:
+        return max(0, int(total))
+    return min(max(0, int(total)), max(0, int(limit)))
+
+
+def _preview_text(value: str) -> str:
+    text = str(value or "").strip().replace("\n", " ")
+    if len(text) <= _TABLE_TEXT_PREVIEW_CHARS:
+        return text
+    return f"{text[:_TABLE_TEXT_PREVIEW_CHARS]}..."
 
 
 def _format_time(value: str) -> str:

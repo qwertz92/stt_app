@@ -79,6 +79,41 @@ def test_recent_entries_returns_newest_first(tmp_path):
     assert [entry.text for entry in recent] == ["third", "second"]
 
 
+def test_recent_entries_with_count_returns_limited_entries_and_total(tmp_path):
+    path = tmp_path / "history.json"
+    store = TranscriptHistoryStore(path=path)
+    store.save(
+        [
+            TranscriptHistoryEntry(
+                created_at="2026-01-01T00:00:00+00:00",
+                text="first",
+                engine="local",
+                model="small",
+                mode="batch",
+            ),
+            TranscriptHistoryEntry(
+                created_at="2026-01-01T00:00:01+00:00",
+                text="second",
+                engine="local",
+                model="small",
+                mode="batch",
+            ),
+            TranscriptHistoryEntry(
+                created_at="2026-01-01T00:00:02+00:00",
+                text="third",
+                engine="local",
+                model="small",
+                mode="batch",
+            ),
+        ]
+    )
+
+    recent, total = store.recent_entries_with_count(limit=2)
+
+    assert total == 3
+    assert [entry.text for entry in recent] == ["third", "second"]
+
+
 def test_load_ignores_invalid_payload(tmp_path):
     path = tmp_path / "history.json"
     path.write_text(json.dumps([{"text": "ok"}, 123, "x", {}]), encoding="utf-8")

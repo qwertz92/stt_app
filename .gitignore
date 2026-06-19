@@ -13,6 +13,7 @@ wheels/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 *~
@@ -34,6 +35,7 @@ desktop.ini
 
 # Benchmark output
 benchmark/
+Benchmark_testing_*.txt
 
 # PyInstaller
 *.manifest

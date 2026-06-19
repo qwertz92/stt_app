@@ -56,6 +56,7 @@ def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
         history_store=history_store,
         settings_store=settings_store,
     )
+    assert dialog._copy_button.minimumWidth() >= dialog._copy_button.sizeHint().width()
     dialog._table.selectRow(0)
     dialog._copy_button.click()
 
@@ -203,4 +204,127 @@ def test_history_dialog_uses_compact_table_rows(tmp_path):
 
     expected = max(dialog.fontMetrics().height() + 4, 18)
     assert dialog._table.verticalHeader().defaultSectionSize() == expected
+    _ = app
+
+
+def test_history_dialog_reload_preserves_selected_entry_and_scroll(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry(f"entry {index}") for index in range(30)])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=50))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    row_height = dialog._table.verticalHeader().defaultSectionSize()
+    dialog._table.setFixedHeight(row_height * 5)
+    dialog.show()
+    app.processEvents()
+
+    dialog._table.selectRow(10)
+    expected_entry = dialog._entries[10]
+    scroll_bar = dialog._table.verticalScrollBar()
+    scroll_bar.setValue(scroll_bar.maximum())
+    scroll_before = scroll_bar.value()
+
+    dialog.reload()
+
+    selected = dialog._table.selectionModel().selectedRows()
+    assert len(selected) == 1
+    assert dialog._entries[selected[0].row()] == expected_entry
+    if scroll_before > 0:
+        assert dialog._table.verticalScrollBar().value() == scroll_before
+    _ = app
+
+
+def test_history_dialog_uses_vertical_splitter(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    assert dialog._splitter.orientation() == QtCore.Qt.Vertical
+    assert dialog._splitter.childrenCollapsible() is False
+    assert dialog._splitter.widget(0) is dialog._table
+    assert dialog._splitter.widget(1) is dialog._detail
+    _ = app
+
+
+def test_increasing_limit_updates_label_without_rebuilding_table(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=2))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    def fail_reload():
+        raise AssertionError("Increasing above stored count should not reload table")
+
+    dialog.reload = fail_reload
+    dialog._max_items_spin.setValue(3)
+
+    assert settings_store.load().history_max_items == 3
+    assert dialog._history_count_label.text() == (
+        "Stored: 2 entries (limit 3; showing all stored entries)"
+    )
+    assert dialog._table.rowCount() == 2
+    _ = app
+
+
+def test_import_defaults_to_history_store_directory(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "data" / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    captured = {}
+
+    def fake_get_open_file_name(_parent, _title, directory, _filter):
+        captured["directory"] = directory
+        return "", ""
+
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        fake_get_open_file_name,
+    )
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._import_history()
+
+    assert captured["directory"] == str(history_store.path.parent)
+    assert history_store.path.parent.is_dir()
+    _ = app
+
+
+def test_history_table_shows_preview_but_detail_keeps_full_text(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    long_text = "word " * 80
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry(long_text)])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    assert dialog._table.item(0, 3).text().endswith("...")
+    assert len(dialog._table.item(0, 3).text()) < len(long_text)
+    assert dialog._detail.toPlainText() == long_text
     _ = app

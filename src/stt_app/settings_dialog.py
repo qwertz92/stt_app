@@ -97,6 +97,12 @@ from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import TranscriptHistoryStore
+from .ui_feedback import (
+    BUTTON_FEEDBACK_STYLESHEET,
+    reserve_button_width_for_texts,
+    restore_vertical_scrollbar,
+    set_button_feedback_state,
+)
 from .transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
     delete_cached_model,
@@ -351,6 +357,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self._history_copy_feedback_timer.timeout.connect(
             self._reset_history_copy_feedback
         )
+        self._import_copy_feedback_timer = QtCore.QTimer(self)
+        self._import_copy_feedback_timer.setSingleShot(True)
+        self._import_copy_feedback_timer.setInterval(900)
+        self._import_copy_feedback_timer.timeout.connect(
+            self._reset_import_copy_feedback
+        )
         self._deferred_local_model_refresh_timer = QtCore.QTimer(self)
         self._deferred_local_model_refresh_timer.setSingleShot(True)
         self._deferred_local_model_refresh_timer.timeout.connect(
@@ -481,6 +493,15 @@ class SettingsDialog(QtWidgets.QDialog):
         root.addWidget(self.engine_indicator)
         root.addWidget(self.tabs, 1)
         root.addLayout(buttons)
+        self._reserve_feedback_button_widths()
+
+    def _reserve_feedback_button_widths(self) -> None:
+        for button, texts in (
+            (getattr(self, "history_copy_button", None), ("Copy selected", "Copied")),
+            (getattr(self, "import_copy_button", None), ("Copy result", "Copied")),
+        ):
+            if isinstance(button, QtWidgets.QPushButton):
+                reserve_button_width_for_texts(button, texts)
 
     def _restore_default_dialog_size(self) -> None:
         target_size = self._refresh_default_dialog_size()
@@ -612,7 +633,9 @@ class SettingsDialog(QtWidgets.QDialog):
         return frame + (row_height * effective_rows) + 2
 
     def _dialog_scrollbar_stylesheet(self) -> str:
-        return """
+        return (
+            BUTTON_FEEDBACK_STYLESHEET
+            + """
         QScrollBar:vertical {
             width: 12px;
             background: transparent;
@@ -652,6 +675,7 @@ class SettingsDialog(QtWidgets.QDialog):
             background: transparent;
         }
         """
+        )
 
     def _configure_combo_popups(self) -> None:
         for combo in self.findChildren(QtWidgets.QComboBox):
@@ -1866,6 +1890,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_copy_button = QtWidgets.QPushButton("Copy selected")
         self.history_copy_button.clicked.connect(self._copy_selected_history)
         self.history_copy_button.setEnabled(False)
+        reserve_button_width_for_texts(
+            self.history_copy_button,
+            ("Copy selected", "Copied"),
+        )
         self.history_edit_button = QtWidgets.QPushButton("Edit selected")
         self.history_edit_button.clicked.connect(self._edit_selected_history)
         self.history_edit_button.setEnabled(False)
@@ -1878,6 +1906,10 @@ class SettingsDialog(QtWidgets.QDialog):
         history_buttons.addWidget(self.history_edit_button)
         history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
+        reserve_button_width_for_texts(
+            self.history_copy_button,
+            ("Copy selected", "Copied"),
+        )
         layout.addWidget(history_box, 1)
         self.tabs.addTab(tab, "History")
 
@@ -1889,14 +1921,24 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.setSpacing(6)
 
         import_box = QtWidgets.QGroupBox("Import Audio File")
+        import_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
         import_layout = QtWidgets.QVBoxLayout(import_box)
+
+        import_controls = QtWidgets.QWidget()
+        import_controls_layout = QtWidgets.QVBoxLayout(import_controls)
+        import_controls_layout.setContentsMargins(0, 0, 0, 0)
+        import_controls_layout.setSpacing(6)
+
         import_hint = QtWidgets.QLabel(
             "Transcribe an existing audio file and select the transcription service "
             "and model directly here (useful after failures or for external recordings)."
         )
         import_hint.setWordWrap(True)
         self._style_note_label(import_hint)
-        import_layout.addWidget(import_hint)
+        import_controls_layout.addWidget(import_hint)
 
         self.import_engine_combo = _WheelPassthroughComboBox()
         import_engine_labels = {
@@ -1920,9 +1962,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_engine_combo.currentIndexChanged.connect(
             self._on_import_engine_changed
         )
-        import_layout.addWidget(QtWidgets.QLabel("Import Service"))
-        import_layout.addWidget(self.import_engine_combo)
-        import_layout.addWidget(self.import_engine_note)
+        import_controls_layout.addWidget(QtWidgets.QLabel("Import Service"))
+        import_controls_layout.addWidget(self.import_engine_combo)
+        import_controls_layout.addWidget(self.import_engine_note)
 
         self.import_model_combo = _WheelPassthroughComboBox()
         self.import_model_note = QtWidgets.QLabel("")
@@ -1931,9 +1973,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_model_combo.currentIndexChanged.connect(
             self._on_import_model_changed
         )
-        import_layout.addWidget(QtWidgets.QLabel("Import Model"))
-        import_layout.addWidget(self.import_model_combo)
-        import_layout.addWidget(self.import_model_note)
+        import_controls_layout.addWidget(QtWidgets.QLabel("Import Model"))
+        import_controls_layout.addWidget(self.import_model_combo)
+        import_controls_layout.addWidget(self.import_model_note)
 
         import_buttons = QtWidgets.QHBoxLayout()
         self.import_file_button = QtWidgets.QPushButton("Choose file...")
@@ -1953,28 +1995,63 @@ class SettingsDialog(QtWidgets.QDialog):
         import_buttons.addWidget(self.import_last_recording_button)
         import_buttons.addWidget(self.import_start_button)
         import_buttons.addStretch(1)
-        import_layout.addLayout(import_buttons)
+        import_controls_layout.addLayout(import_buttons)
 
         self.import_selected_file_label = QtWidgets.QLabel("No file selected.")
         self.import_selected_file_label.setWordWrap(True)
         self.import_selected_file_label.setStyleSheet("color: #555;")
-        import_layout.addWidget(self.import_selected_file_label)
+        import_controls_layout.addWidget(self.import_selected_file_label)
+
+        import_result = QtWidgets.QWidget()
+        import_result_layout = QtWidgets.QVBoxLayout(import_result)
+        import_result_layout.setContentsMargins(0, 0, 0, 0)
+        import_result_layout.setSpacing(6)
+
+        import_result_header = QtWidgets.QHBoxLayout()
+        import_result_header.addWidget(QtWidgets.QLabel("Result"))
+        import_result_header.addStretch(1)
+        self.import_copy_button = QtWidgets.QPushButton("Copy result")
+        self.import_copy_button.setEnabled(False)
+        self.import_copy_button.clicked.connect(self._copy_import_result)
+        reserve_button_width_for_texts(
+            self.import_copy_button,
+            ("Copy result", "Copied"),
+        )
+        import_result_header.addWidget(self.import_copy_button)
+        import_result_layout.addLayout(import_result_header)
 
         self.import_result_label = QtWidgets.QLabel("")
         self.import_result_label.setWordWrap(True)
         self.import_result_label.setTextInteractionFlags(
             QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
         )
-        import_layout.addWidget(self.import_result_label)
+        import_result_layout.addWidget(self.import_result_label)
 
         self.import_result_text = QtWidgets.QPlainTextEdit()
         self.import_result_text.setReadOnly(True)
-        import_layout.addWidget(self.import_result_text)
+        self.import_result_text.setMinimumHeight(self.fontMetrics().height() * 12)
+        self.import_result_text.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        import_result_layout.addWidget(self.import_result_text, 1)
+
+        self.import_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.import_splitter.setChildrenCollapsible(False)
+        self.import_splitter.addWidget(import_controls)
+        self.import_splitter.addWidget(import_result)
+        self.import_splitter.setStretchFactor(0, 0)
+        self.import_splitter.setStretchFactor(1, 1)
+        self.import_splitter.setSizes([320, 420])
+        import_layout.addWidget(self.import_splitter, 1)
 
         self._selected_import_file_path = ""
 
-        layout.addWidget(import_box)
-        layout.addStretch(1)
+        layout.addWidget(import_box, 1)
+        reserve_button_width_for_texts(
+            self.import_copy_button,
+            ("Copy result", "Copied"),
+        )
         self.tabs.addTab(tab, "Import Audio")
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
@@ -2178,51 +2255,78 @@ class SettingsDialog(QtWidgets.QDialog):
             str(item.data(QtCore.Qt.UserRole) or "")
             for item in self.local_models_list.selectedItems()
         }
+        current_item = self.local_models_list.currentItem()
+        current_model = (
+            str(current_item.data(QtCore.Qt.UserRole) or "")
+            if current_item is not None
+            else ""
+        )
+        scroll_value = self.local_models_list.verticalScrollBar().value()
         cached_set = set(cached)
         with self._local_model_download_lock:
             cached_set.update(self._local_model_download_completed_names)
 
-        self.local_models_list.clear()
-        for model_name in VALID_MODEL_SIZES:
-            download_state = self._local_model_download_state(model_name)
-            if download_state == "active":
-                status = "Downloading"
-            elif download_state == "queued":
-                status = "Queued"
-            else:
-                status = "Downloaded" if model_name in cached_set else "Not downloaded"
-            if model_name in LOCAL_ENGLISH_ONLY_MODELS:
-                status = f"{status}, English only"
-            if model_name in LOCAL_WEBGPU_MODEL_SIZES:
-                runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
-                    model_name,
-                    "ONNX/WebGPU",
+        restored_current_item: QtWidgets.QListWidgetItem | None = None
+        self.local_models_list.setUpdatesEnabled(False)
+        self.local_models_list.blockSignals(True)
+        try:
+            self.local_models_list.clear()
+            for model_name in VALID_MODEL_SIZES:
+                download_state = self._local_model_download_state(model_name)
+                if download_state == "active":
+                    status = "Downloading"
+                elif download_state == "queued":
+                    status = "Queued"
+                else:
+                    status = (
+                        "Downloaded"
+                        if model_name in cached_set
+                        else "Not downloaded"
+                    )
+                if model_name in LOCAL_ENGLISH_ONLY_MODELS:
+                    status = f"{status}, English only"
+                if model_name in LOCAL_WEBGPU_MODEL_SIZES:
+                    runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
+                        model_name,
+                        "ONNX/WebGPU",
+                    )
+                    status = f"{status}, {runtime}, batch only"
+                elif model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+                    runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
+                        model_name,
+                        "ORT GenAI INT4",
+                    )
+                    status = f"{status}, {runtime}, batch and true streaming"
+                item = QtWidgets.QListWidgetItem(
+                    f"{self._model_label(model_name)} - {status}"
                 )
-                status = f"{status}, {runtime}, batch only"
-            elif model_name in LOCAL_NEMOTRON_MODEL_SIZES:
-                runtime = LOCAL_ONNX_MODEL_RUNTIME_LABELS.get(
-                    model_name,
-                    "ORT GenAI INT4",
-                )
-                status = f"{status}, {runtime}, batch and true streaming"
-            item = QtWidgets.QListWidgetItem(
-                f"{self._model_label(model_name)} - {status}"
+                item.setData(QtCore.Qt.UserRole, model_name)
+                item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
+                self._apply_compact_list_item_size(self.local_models_list, item)
+                if model_name in cached_set:
+                    item.setBackground(QtGui.QColor("#e8f5e9"))
+                    item.setForeground(QtGui.QColor("#1b5e20"))
+                elif download_state == "active":
+                    item.setBackground(QtGui.QColor("#e3f2fd"))
+                    item.setForeground(QtGui.QColor("#0d47a1"))
+                elif download_state == "queued":
+                    item.setBackground(QtGui.QColor("#fff8e1"))
+                    item.setForeground(QtGui.QColor("#8d6e00"))
+                self.local_models_list.addItem(item)
+                if model_name in selected:
+                    item.setSelected(True)
+                if model_name == current_model:
+                    restored_current_item = item
+        finally:
+            self.local_models_list.blockSignals(False)
+            self.local_models_list.setUpdatesEnabled(True)
+
+        if restored_current_item is not None:
+            self.local_models_list.setCurrentItem(
+                restored_current_item,
+                QtCore.QItemSelectionModel.NoUpdate,
             )
-            item.setData(QtCore.Qt.UserRole, model_name)
-            item.setData(QtCore.Qt.UserRole + 1, model_name in cached_set)
-            self._apply_compact_list_item_size(self.local_models_list, item)
-            if model_name in cached_set:
-                item.setBackground(QtGui.QColor("#e8f5e9"))
-                item.setForeground(QtGui.QColor("#1b5e20"))
-            elif download_state == "active":
-                item.setBackground(QtGui.QColor("#e3f2fd"))
-                item.setForeground(QtGui.QColor("#0d47a1"))
-            elif download_state == "queued":
-                item.setBackground(QtGui.QColor("#fff8e1"))
-                item.setForeground(QtGui.QColor("#8d6e00"))
-            self.local_models_list.addItem(item)
-            if model_name in selected:
-                item.setSelected(True)
+        restore_vertical_scrollbar(self.local_models_list, scroll_value)
 
         visible_rows = min(max(self.local_models_list.count(), 1), 5)
         self.local_models_list.setMinimumHeight(
@@ -2245,20 +2349,47 @@ class SettingsDialog(QtWidgets.QDialog):
             str(item.data(QtCore.Qt.UserRole) or "")
             for item in self.benchmark_models_list.selectedItems()
         }
-        self.benchmark_models_list.clear()
+        current_item = self.benchmark_models_list.currentItem()
+        current_model = (
+            str(current_item.data(QtCore.Qt.UserRole) or "")
+            if current_item is not None
+            else ""
+        )
+        scroll_value = self.benchmark_models_list.verticalScrollBar().value()
 
-        for model_name in cached:
-            suffix = " (English only)" if model_name in LOCAL_ENGLISH_ONLY_MODELS else ""
-            item = QtWidgets.QListWidgetItem(
-                f"{self._model_label(model_name)}{suffix}"
+        restored_current_item: QtWidgets.QListWidgetItem | None = None
+        self.benchmark_models_list.setUpdatesEnabled(False)
+        self.benchmark_models_list.blockSignals(True)
+        try:
+            self.benchmark_models_list.clear()
+            for model_name in cached:
+                suffix = (
+                    " (English only)"
+                    if model_name in LOCAL_ENGLISH_ONLY_MODELS
+                    else ""
+                )
+                item = QtWidgets.QListWidgetItem(
+                    f"{self._model_label(model_name)}{suffix}"
+                )
+                item.setData(QtCore.Qt.UserRole, model_name)
+                self._apply_compact_list_item_size(self.benchmark_models_list, item)
+                self.benchmark_models_list.addItem(item)
+                if selected:
+                    item.setSelected(model_name in selected)
+                else:
+                    item.setSelected(True)
+                if model_name == current_model:
+                    restored_current_item = item
+        finally:
+            self.benchmark_models_list.blockSignals(False)
+            self.benchmark_models_list.setUpdatesEnabled(True)
+
+        if restored_current_item is not None:
+            self.benchmark_models_list.setCurrentItem(
+                restored_current_item,
+                QtCore.QItemSelectionModel.NoUpdate,
             )
-            item.setData(QtCore.Qt.UserRole, model_name)
-            self._apply_compact_list_item_size(self.benchmark_models_list, item)
-            self.benchmark_models_list.addItem(item)
-            if selected:
-                item.setSelected(model_name in selected)
-            else:
-                item.setSelected(True)
+        restore_vertical_scrollbar(self.benchmark_models_list, scroll_value)
 
         visible_rows = min(max(self.benchmark_models_list.count(), 1), 4)
         self.benchmark_models_list.setMinimumHeight(
@@ -4712,20 +4843,57 @@ class SettingsDialog(QtWidgets.QDialog):
         return self._effective_recordings_dir()
 
     def _refresh_history_list(self) -> None:
-        self.history_list.clear()
+        selected_entries = [
+            item.data(QtCore.Qt.UserRole)
+            for item in self.history_list.selectedItems()
+        ]
+        current_item = self.history_list.currentItem()
+        current_entry = (
+            current_item.data(QtCore.Qt.UserRole)
+            if current_item is not None
+            else None
+        )
+        scroll_value = self.history_list.verticalScrollBar().value()
+        entries = self._history_store.recent_entries(self.history_max_spin.value())
+        restored_selection = False
+        restored_current_item: QtWidgets.QListWidgetItem | None = None
+
+        self.history_list.setUpdatesEnabled(False)
+        self.history_list.blockSignals(True)
+        try:
+            self.history_list.clear()
+            for entry in entries:
+                text = entry.text.strip().replace("\n", " ")
+                preview = text[:70] + ("..." if len(text) > 70 else "")
+                label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
+                item = QtWidgets.QListWidgetItem(label)
+                item.setData(QtCore.Qt.UserRole, entry)
+                self._apply_compact_list_item_size(self.history_list, item)
+                self.history_list.addItem(item)
+                if any(entry == selected for selected in selected_entries):
+                    item.setSelected(True)
+                    restored_selection = True
+                if current_entry is not None and entry == current_entry:
+                    restored_current_item = item
+        finally:
+            self.history_list.blockSignals(False)
+            self.history_list.setUpdatesEnabled(True)
+
+        if restored_current_item is not None:
+            self.history_list.setCurrentItem(
+                restored_current_item,
+                QtCore.QItemSelectionModel.NoUpdate,
+            )
+        restore_vertical_scrollbar(self.history_list, scroll_value)
+        if restored_selection:
+            self._on_history_item_selected()
+            return
+
         self.history_detail.clear()
         self.history_copy_button.setEnabled(False)
         self.history_edit_button.setEnabled(False)
         self.history_delete_button.setEnabled(False)
-        entries = self._history_store.recent_entries(self.history_max_spin.value())
-        for entry in entries:
-            text = entry.text.strip().replace("\n", " ")
-            preview = text[:70] + ("..." if len(text) > 70 else "")
-            label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
-            item = QtWidgets.QListWidgetItem(label)
-            item.setData(QtCore.Qt.UserRole, entry)
-            self._apply_compact_list_item_size(self.history_list, item)
-            self.history_list.addItem(item)
+        self._reset_history_copy_feedback()
 
     def _on_history_item_selected(self) -> None:
         items = self.history_list.selectedItems()
@@ -4754,9 +4922,7 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         QtGui.QGuiApplication.clipboard().setText(text)
         self.history_copy_button.setText("Copied")
-        self.history_copy_button.setStyleSheet(
-            "background-color: #dff5e0; border: 1px solid #89c88f;"
-        )
+        set_button_feedback_state(self.history_copy_button, "success")
         self._history_copy_feedback_timer.start()
 
     def _edit_selected_history(self) -> None:
@@ -4802,7 +4968,20 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _reset_history_copy_feedback(self) -> None:
         self.history_copy_button.setText("Copy selected")
-        self.history_copy_button.setStyleSheet("")
+        set_button_feedback_state(self.history_copy_button, None)
+
+    def _copy_import_result(self) -> None:
+        text = self.import_result_text.toPlainText()
+        if not text:
+            return
+        QtGui.QGuiApplication.clipboard().setText(text)
+        self.import_copy_button.setText("Copied")
+        set_button_feedback_state(self.import_copy_button, "success")
+        self._import_copy_feedback_timer.start()
+
+    def _reset_import_copy_feedback(self) -> None:
+        self.import_copy_button.setText("Copy result")
+        set_button_feedback_state(self.import_copy_button, None)
 
     def _set_selected_import_file(self, path: str) -> None:
         selected = str(path or "").strip()
@@ -4843,6 +5022,8 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             self.import_result_text.clear()
+            self.import_copy_button.setEnabled(False)
+            self._reset_import_copy_feedback()
             return False
         self._set_selected_import_file(str(path))
         self.import_result_label.setText(
@@ -4877,6 +5058,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self._set_import_progress("Preparing transcription...")
         self.import_result_label.setStyleSheet("color: #555;")
         self.import_result_text.clear()
+        self.import_copy_button.setEnabled(False)
+        self._reset_import_copy_feedback()
         self.import_file_button.setEnabled(False)
         self.import_last_recording_button.setEnabled(False)
         self.import_start_button.setEnabled(False)
@@ -4905,6 +5088,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 )
             self.import_result_label.setText(detail)
             self.import_result_label.setStyleSheet("color: #b71c1c;")
+            self.import_result_text.setPlainText(detail)
+            self.import_copy_button.setEnabled(bool(detail))
             self.import_file_button.setEnabled(True)
             self.import_last_recording_button.setEnabled(True)
             self.import_start_button.setEnabled(
@@ -5001,6 +5186,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_result_label.setText("Transcription finished.")
             self.import_result_label.setStyleSheet("color: #1b5e20;")
             self.import_result_text.setPlainText(text)
+            self.import_copy_button.setEnabled(bool(text))
+            self._reset_import_copy_feedback()
             self._refresh_history_list()
             return
         detail = f"Failed: {text}"
@@ -5014,6 +5201,8 @@ class SettingsDialog(QtWidgets.QDialog):
         self.import_result_label.setText(detail)
         self.import_result_label.setStyleSheet("color: #b71c1c;")
         self.import_result_text.setPlainText(detail)
+        self.import_copy_button.setEnabled(bool(detail))
+        self._reset_import_copy_feedback()
 
     def _copy_diagnostics(self) -> None:
         text = self._app_logger.diagnostics_text()

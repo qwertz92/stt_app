@@ -69,6 +69,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider |
 | `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
+| `ui_feedback.py` | Shared Qt button feedback styles, stable feedback widths, scroll restoration helpers |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
@@ -101,6 +102,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   The tray schedules a hidden settings-dialog preparation after startup so the
   first visible open and first Local tab paint avoid lazy Qt layout work. A
   hidden prepared dialog reloads settings from disk before it is shown.
+- **Qt dialog feedback and refresh state**: transient button text such as
+  "Copied" must reserve enough width for all feedback states via
+  `ui_feedback.py` so layouts do not jump. Dialog/list refreshes should preserve
+  selection, current item, and scroll position when the same entry still exists;
+  use the shared scroll helper instead of rebuilding lists in a way that resets
+  the user's place.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional

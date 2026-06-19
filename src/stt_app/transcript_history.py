@@ -145,6 +145,20 @@ class TranscriptHistoryStore:
 
     def recent_entries(self, limit: int = 10) -> list[TranscriptHistoryEntry]:
         entries = self.load()
+        return self._recent_entries_from(entries, limit)
+
+    def recent_entries_with_count(
+        self,
+        limit: int = 10,
+    ) -> tuple[list[TranscriptHistoryEntry], int]:
+        entries = self.load()
+        return self._recent_entries_from(entries, limit), len(entries)
+
+    @staticmethod
+    def _recent_entries_from(
+        entries: list[TranscriptHistoryEntry],
+        limit: int,
+    ) -> list[TranscriptHistoryEntry]:
         keep = _normalize_limit(limit)
         selected = entries if keep == 0 else entries[-keep:]
         return list(reversed(selected))

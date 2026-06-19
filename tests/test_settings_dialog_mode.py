@@ -18,6 +18,7 @@ from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
+from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
 
 class _FakeSettingsStore:
@@ -46,6 +47,17 @@ class _FakeSecretStore:
 class _FakeLogger:
     def diagnostics_text(self) -> str:
         return "diag"
+
+
+class _FakeClipboard:
+    def __init__(self) -> None:
+        self.value = ""
+
+    def setText(self, text: str) -> None:
+        self.value = text
+
+    def text(self) -> str:
+        return self.value
 
 
 class _FakeLocalModelInventoryStore:
@@ -190,6 +202,15 @@ def _combo_item_enabled(combo: QtWidgets.QComboBox, value: str) -> bool:
     if item is None:
         return False
     return bool(item.isEnabled())
+
+
+def _history_entry(text: str) -> TranscriptHistoryEntry:
+    return TranscriptHistoryEntry.new(
+        text=text,
+        engine="local",
+        model="small",
+        mode="batch",
+    )
 
 
 def _send_wheel_event(widget: QtWidgets.QWidget) -> None:
@@ -633,6 +654,45 @@ def test_history_list_matches_detail_font_and_compact_item_spacing():
     )
     assert dialog.history_splitter.orientation() == QtCore.Qt.Vertical
     assert dialog.history_splitter.childrenCollapsible() is False
+    assert dialog.history_copy_button.minimumWidth() >= (
+        dialog.history_copy_button.sizeHint().width()
+    )
+    _ = app
+
+
+def test_settings_history_refresh_preserves_selected_entry_and_scroll(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry(f"entry {index}") for index in range(30)])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog.tabs.setCurrentWidget(dialog._history_tab)
+    row_height = dialog._compact_list_item_size(dialog.history_list).height()
+    dialog.history_list.setFixedHeight(row_height * 4)
+    dialog._refresh_history_list()
+    dialog.show()
+    app.processEvents()
+
+    item = dialog.history_list.item(10)
+    expected_entry = item.data(QtCore.Qt.UserRole)
+    item.setSelected(True)
+    dialog.history_list.setCurrentItem(item)
+    scroll_bar = dialog.history_list.verticalScrollBar()
+    scroll_bar.setValue(scroll_bar.maximum())
+    scroll_before = scroll_bar.value()
+
+    dialog._refresh_history_list()
+
+    selected = dialog.history_list.selectedItems()
+    assert len(selected) == 1
+    assert selected[0].data(QtCore.Qt.UserRole) == expected_entry
+    assert dialog.history_list.currentItem().data(QtCore.Qt.UserRole) == expected_entry
+    if scroll_before > 0:
+        assert dialog.history_list.verticalScrollBar().value() == scroll_before
     _ = app
 
 
@@ -1492,6 +1552,49 @@ def test_soft_local_model_refresh_keeps_lists_enabled(monkeypatch):
     _ = app
 
 
+def test_local_model_refresh_preserves_current_selection_and_scroll():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    row_height = dialog._compact_list_item_size(dialog.local_models_list).height()
+    dialog.local_models_list.setFixedHeight(row_height * 4)
+    dialog._refresh_local_models_list(["small"])
+    dialog.show()
+    app.processEvents()
+
+    target_item = dialog.local_models_list.item(dialog.local_models_list.count() - 2)
+    target_model = str(target_item.data(QtCore.Qt.UserRole) or "")
+    target_item.setSelected(True)
+    dialog.local_models_list.setCurrentItem(
+        target_item,
+        QtCore.QItemSelectionModel.NoUpdate,
+    )
+    scroll_bar = dialog.local_models_list.verticalScrollBar()
+    scroll_bar.setValue(scroll_bar.maximum())
+    scroll_before = scroll_bar.value()
+
+    dialog._refresh_local_models_list(["small"])
+
+    restored_items = [
+        dialog.local_models_list.item(index)
+        for index in range(dialog.local_models_list.count())
+        if str(
+            dialog.local_models_list.item(index).data(QtCore.Qt.UserRole) or ""
+        )
+        == target_model
+    ]
+    assert len(restored_items) == 1
+    assert restored_items[0].isSelected() is True
+    assert dialog.local_models_list.currentItem() is restored_items[0]
+    if scroll_before > 0:
+        assert dialog.local_models_list.verticalScrollBar().value() == scroll_before
+    _ = app
+
+
 def test_model_dir_change_triggers_single_rescan(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     calls: list[str] = []
@@ -2096,6 +2199,35 @@ def test_import_progress_callback_is_passed_to_controller(monkeypatch):
     _ = app
 
 
+def test_import_result_has_copy_button_and_resizable_result_area(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    clipboard = _FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.import_splitter.orientation() == QtCore.Qt.Vertical
+    assert dialog.import_splitter.childrenCollapsible() is False
+    assert dialog.import_result_text.sizePolicy().verticalPolicy() == (
+        QtWidgets.QSizePolicy.Expanding
+    )
+    assert dialog.import_copy_button.isEnabled() is False
+    assert dialog.import_copy_button.minimumWidth() >= (
+        dialog.import_copy_button.sizeHint().width()
+    )
+
+    dialog._finish_import_transcription(True, "imported text")
+    dialog.import_copy_button.click()
+
+    assert dialog.import_copy_button.isEnabled() is True
+    assert clipboard.text() == "imported text"
+    assert dialog.import_copy_button.text() == "Copied"
+    _ = app
+
+
 def test_import_failure_details_are_copyable():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
@@ -2109,6 +2241,7 @@ def test_import_failure_details_are_copyable():
 
     assert detail in dialog.import_result_label.text()
     assert detail in dialog.import_result_text.toPlainText()
+    assert dialog.import_copy_button.isEnabled() is True
     assert dialog.import_result_label.textInteractionFlags() & (
         QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
     )

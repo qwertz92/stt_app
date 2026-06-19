@@ -3,8 +3,27 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-19
+
+- **Settings import and history refresh polish.** The Import Audio tab now has a
+  copy button for transcription results and uses a vertical splitter so long
+  transcripts can take more space without hiding provider controls. Dialog copy
+  buttons reserve enough width for both normal and "Copied" states, and shared
+  button feedback styling gives hover/pressed/copy states clearer visual
+  feedback. Refreshes for Settings History, local model lists, benchmark model
+  lists, and the standalone History dialog now preserve selection, current item,
+  and scroll position when the same entry still exists.
+
 ## 2026-06-18
 
+- **Standalone History dialog matched Settings History resizing.** The overlay
+  History button's dialog now uses a vertical splitter between the transcript
+  table and selected text detail, just like the Settings History tab. The import
+  file picker starts in the active transcript-history store directory instead of
+  an empty/default folder. Limit changes now update the count label with the
+  configured limit, avoid rebuilding the table when the visible row count would
+  not change, and keep full transcript text out of table cells by rendering only
+  a preview there; the detail pane remains the full text source.
 - **Tightened the 0.4 release path and final docs drift.** Clarified that the
   current q4 `~2 GB` explanation applies to 1B/2B-class speech models, not every
   possible quantized model size. Fixed stale Granite 4.1 wording in
