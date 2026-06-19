@@ -115,6 +115,45 @@ def test_reducing_limit_confirms_and_trims(monkeypatch, tmp_path):
     _ = app
 
 
+def test_typing_larger_limit_does_not_confirm_intermediate_digits(
+    monkeypatch,
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry(f"entry-{index}") for index in range(224)])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=224))
+
+    def fail_question(*_args, **_kwargs):
+        raise AssertionError("Limit confirmation must wait for the committed value")
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", fail_question)
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog.show()
+    app.processEvents()
+
+    spin_editor = dialog._max_items_spin.lineEdit()
+    dialog._max_items_spin.setFocus()
+    spin_editor.selectAll()
+    QtTest.QTest.keyClicks(spin_editor, "300")
+    app.processEvents()
+
+    assert settings_store.load().history_max_items == 224
+    assert history_store.count() == 224
+
+    QtTest.QTest.keyClick(spin_editor, QtCore.Qt.Key_Return)
+    app.processEvents()
+
+    assert settings_store.load().history_max_items == 300
+    assert history_store.count() == 224
+    _ = app
+
+
 def test_import_overflow_can_switch_to_unlimited(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")

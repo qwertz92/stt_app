@@ -5,6 +5,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-19
 
+- **Fixed two queue/history UI regressions before cutting another release.**
+  The standalone History dialog and Settings History size spin boxes now disable
+  keyboard tracking, so typing an increased limit (for example `224` → `300`)
+  does not apply the temporary `3` and show a trim-confirmation dialog. The
+  overlay transcription queue now renders every in-flight row, recomputes its
+  layout before measuring height, can temporarily grow beyond the normal
+  transcript-text height cap when the queue needs room, and returns to the normal
+  non-queue size as soon as the queue is empty.
 - **Settings import and history refresh polish.** The Import Audio tab now has a
   copy button for transcription results and uses a vertical splitter so long
   transcripts can take more space without hiding provider controls. Dialog copy

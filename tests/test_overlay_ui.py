@@ -102,17 +102,42 @@ def test_overlay_queue_panel_renders_and_emits_signals():
     assert overlay._queue_widget.isHidden() is True
 
 
-def test_overlay_queue_panel_caps_visible_rows():
+def test_overlay_queue_panel_renders_all_rows(monkeypatch):
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1400, 900))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
 
-    items = [(token, f"local · {token}") for token in range(6)]
+    items = [(token, f"local · {token}") for token in range(18)]
     overlay.set_transcription_queue(items)
 
-    # Four rows with cancel buttons plus a single "+N more" summary label.
-    assert overlay._queue_rows_layout.count() == 5
-    summary = overlay._queue_rows_layout.itemAt(4).widget()
-    assert "more" in summary.text()
+    assert overlay._queue_rows_layout.count() == len(items)
+    assert overlay.height() > OVERLAY_MAX_HEIGHT
+    last_row = overlay._queue_rows_layout.itemAt(len(items) - 1).widget()
+    assert last_row is not None
+    assert last_row.isHidden() is False
+
+
+def test_overlay_queue_height_resets_after_queue_finishes():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    initial_size = overlay.size()
+
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    processing_size = overlay.size()
+    overlay.set_transcription_queue([(7, "local · small"), (8, "groq · whisper")])
+    queued_height = overlay.height()
+    assert queued_height > processing_size.height()
+
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    assert overlay.height() > initial_size.height()
+
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    overlay.set_transcription_queue([])
+    assert overlay.size() == processing_size
+
+    overlay.set_state("Listening", "Speak now.", compact=True)
+    assert overlay.size() == initial_size
 
 
 def test_overlay_copy_button_survives_clipboard_error(monkeypatch):

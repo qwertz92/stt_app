@@ -18,11 +18,6 @@ from .config import (
     OVERLAY_WIDTH,
 )
 
-# Maximum queue rows rendered with their own cancel button; extra in-flight
-# transcriptions are summarized as a "+N more" line so the overlay stays compact.
-_QUEUE_MAX_VISIBLE_ROWS = 4
-
-
 class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
     edit_requested = QtCore.Signal()
@@ -604,6 +599,7 @@ class OverlayUI(QtWidgets.QWidget):
         previous_size = QtCore.QSize(self.size())
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
+        height_cap = self._window_height_cap()
         target_window_width = self._target_window_width()
         target_content_width = max(
             80,
@@ -622,7 +618,7 @@ class OverlayUI(QtWidgets.QWidget):
         queue_extent = self._queue_extent()
         max_detail_height = max(
             OVERLAY_DETAIL_MIN_HEIGHT,
-            OVERLAY_MAX_HEIGHT
+            height_cap
             - (
                 margins.top()
                 + margins.bottom()
@@ -655,10 +651,7 @@ class OverlayUI(QtWidgets.QWidget):
                 + (spacing * 3)
                 + desired_detail_height
             )
-        desired_window_height = max(
-            OVERLAY_HEIGHT,
-            min(OVERLAY_MAX_HEIGHT, desired_window_height),
-        )
+        desired_window_height = self._bounded_window_height(desired_window_height)
         desired_size = QtCore.QSize(target_window_width, desired_window_height)
         if self.size() != desired_size:
             self.resize(desired_size)
@@ -682,13 +675,31 @@ class OverlayUI(QtWidgets.QWidget):
         if self._initial_compact_size is not None:
             # The captured baseline excludes the queue panel; add its extent so
             # compact mode grows to fit any visible queue rows.
+            target_height = self._bounded_window_height(
+                self._initial_compact_size.height() + self._queue_extent()
+            )
             return QtCore.QSize(
                 self._initial_compact_size.width(),
-                self._initial_compact_size.height() + self._queue_extent(),
+                target_height,
             )
         return QtCore.QSize(
             self._target_window_width(),
-            self._compact_window_height(),
+            self._bounded_window_height(self._compact_window_height()),
+        )
+
+    def _window_height_cap(self) -> int:
+        if not self._queue_visible:
+            return OVERLAY_MAX_HEIGHT
+        screen = self._current_screen()
+        if screen is None:
+            return max(OVERLAY_MAX_HEIGHT, OVERLAY_HEIGHT + self._queue_extent())
+        available = screen.availableGeometry().height() - (OVERLAY_MARGIN_Y * 2)
+        return max(OVERLAY_HEIGHT, available)
+
+    def _bounded_window_height(self, desired_height: int) -> int:
+        return max(
+            OVERLAY_HEIGHT,
+            min(self._window_height_cap(), int(desired_height)),
         )
 
     def _target_window_width(self) -> int:
@@ -756,6 +767,7 @@ class OverlayUI(QtWidgets.QWidget):
             item = self._queue_rows_layout.takeAt(0)
             widget = item.widget()
             if widget is not None:
+                widget.hide()
                 widget.setParent(None)
                 widget.deleteLater()
 
@@ -766,10 +778,11 @@ class OverlayUI(QtWidgets.QWidget):
         row_layout.setSpacing(6)
         text_label = QtWidgets.QLabel(str(label))
         text_label.setTextFormat(QtCore.Qt.PlainText)
-        text_label.setWordWrap(False)
+        text_label.setWordWrap(True)
+        text_label.setMinimumWidth(0)
         text_label.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Fixed,
+            QtWidgets.QSizePolicy.Preferred,
         )
         cancel_button = QtWidgets.QPushButton("✕")
         cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
@@ -794,6 +807,7 @@ class OverlayUI(QtWidgets.QWidget):
         if not entries:
             self._queue_visible = False
             self._queue_widget.setVisible(False)
+            self._refresh_queue_layout_geometry()
             self._refresh_size_after_queue_change()
             return
 
@@ -801,21 +815,24 @@ class OverlayUI(QtWidgets.QWidget):
         self._queue_title_label.setText(
             f"Transcribing {count} file" + ("" if count == 1 else "s")
         )
-        for token, label in entries[:_QUEUE_MAX_VISIBLE_ROWS]:
+        for token, label in entries:
             self._queue_rows_layout.addWidget(self._build_queue_row(token, label))
-        hidden = count - _QUEUE_MAX_VISIBLE_ROWS
-        if hidden > 0:
-            more_label = QtWidgets.QLabel(f"+{hidden} more queued")
-            self._queue_rows_layout.addWidget(more_label)
 
         self._queue_visible = True
         self._queue_widget.setVisible(True)
+        self._refresh_queue_layout_geometry()
         self._refresh_size_after_queue_change()
 
     def _queue_extent(self) -> int:
         if not self._queue_visible:
             return 0
         return self._queue_widget.sizeHint().height() + self._layout.spacing()
+
+    def _refresh_queue_layout_geometry(self) -> None:
+        self._queue_rows_widget.updateGeometry()
+        self._queue_widget.updateGeometry()
+        self._layout.invalidate()
+        self._layout.activate()
 
     def _refresh_size_after_queue_change(self) -> None:
         if self._compact_mode:

@@ -1873,6 +1873,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_max_spin = _WheelPassthroughSpinBox()
         self.history_max_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
         self.history_max_spin.setSpecialValueText("Unlimited (0)")
+        self.history_max_spin.setKeyboardTracking(False)
         self.history_max_spin.setValue(DEFAULT_HISTORY_MAX_ITEMS)
         self.history_max_spin.setToolTip(
             "Maximum transcript history items stored (0 = unlimited)."

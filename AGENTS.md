@@ -122,7 +122,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   paste/focus failure does not drop the transcript. The stored model name comes
   from the transcription settings snapshot, not from later UI changes.
   Settings History supports multi-select copy/delete for bulk cleanup; editing
-  remains single-entry only.
+  remains single-entry only. History-limit spin boxes disable keyboard tracking:
+  typed intermediate values are not applied until the edit is committed, so
+  increasing a limit such as `224` to `300` never prompts to trim at the
+  temporary `3` value.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
@@ -258,8 +261,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the future if it has not started. Real mid-run abort exists for faster-whisper
   via `set_cancel_check` (polled between segments → raises `TranscriptionCanceled`
   → worker emits `transcription_canceled`); other engines only skip-if-not-started
-  and otherwise run to completion with their result kept in history. The cancel
-  hook must be cleared after each batch run so it cannot leak into the cached
+  and otherwise run to completion with their result kept in history.
+  The overlay queue is a temporary size extension: all in-flight rows are
+  rendered, the overlay may exceed the normal transcript-text height cap while
+  the queue is visible, and hiding the queue must return the window to the
+  normal compact/non-queue size. The cancel hook must be cleared after each batch
+  run so it cannot leak into the cached
   transcriber's next request.
 - **Overlay corner vs. dragged position**: after a settings save, apply the
   corner through `OverlayUI.apply_corner_setting`, which repositions only when

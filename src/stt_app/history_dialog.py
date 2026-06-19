@@ -59,6 +59,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._max_items_spin = QtWidgets.QSpinBox()
         self._max_items_spin.setRange(0, HISTORY_MAX_ITEMS_MAX)
         self._max_items_spin.setSpecialValueText("Unlimited (0)")
+        self._max_items_spin.setKeyboardTracking(False)
         self._max_items_spin.setToolTip(
             "Maximum number of entries kept in transcript history (0 = unlimited)."
         )
