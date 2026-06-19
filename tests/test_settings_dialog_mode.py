@@ -19,6 +19,7 @@ from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.update_checker import UpdateCheckResult
 
 
 class _FakeSettingsStore:
@@ -2294,6 +2295,27 @@ def test_save_shows_status_feedback_for_real_changes():
     dialog.vad_checkbox.setChecked(True)
     dialog._save()
     assert "saved" in dialog._save_status_label.text().lower()
+    _ = app
+
+
+def test_check_for_updates_button_reports_up_to_date(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        update_check_runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.1",
+            latest_tag="v0.4.1",
+        ),
+    )
+
+    dialog.check_updates_button.click()
+
+    assert dialog.check_updates_button.isEnabled() is True
+    assert dialog._save_status_label.text() == "Already up to date"
     _ = app
 
 

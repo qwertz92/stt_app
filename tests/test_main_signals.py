@@ -1,11 +1,12 @@
 import signal
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
     _HistoryDialogPresenter,
+    _TrayUpdateChecker,
     _create_tray_icon,
     _refresh_local_model_inventory_in_background,
     _install_signal_handlers,
@@ -15,6 +16,7 @@ from stt_app.main import (
 )
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.update_checker import UpdateCheckResult
 
 
 def test_install_signal_handlers_registers_int_and_term(monkeypatch):
@@ -149,6 +151,15 @@ class FakeLocalModelInventoryStore:
         self.saved.append((model_dir, list(cached_models)))
 
 
+class FakeTrayIcon(QtWidgets.QSystemTrayIcon):
+    def __init__(self):
+        super().__init__()
+        self.messages: list[tuple[str, str]] = []
+
+    def showMessage(self, title, message, icon=None, msecs=10000):
+        self.messages.append((title, message))
+
+
 def test_startup_local_model_inventory_refresh_saves_scan(monkeypatch):
     calls: list[str] = []
     inventory_store = FakeLocalModelInventoryStore()
@@ -192,6 +203,7 @@ def test_create_tray_icon_has_expected_menu_actions():
     assert "Cancel current action" in action_labels
     assert "Copy last transcript" in action_labels
     assert "Copy diagnostics" in action_labels
+    assert "Check for updates" in action_labels
     assert "Quit" in action_labels
 
 
@@ -213,6 +225,59 @@ def test_tray_toggle_action_calls_controller():
     toggle_action = [a for a in menu.actions() if a.text() == "Toggle Dictation"][0]
     toggle_action.trigger()
     assert controller.toggle_calls == 1
+
+
+def test_tray_update_checker_shows_message_for_available_update(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+    tray = FakeTrayIcon()
+    checker = _TrayUpdateChecker(
+        tray_icon=tray,
+        runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.2",
+            latest_tag="v0.4.2",
+            update_available=True,
+        ),
+    )
+
+    checker.start()
+
+    assert tray.messages == [
+        (
+            "Voice Dictation App",
+            "Update v0.4.2 is available. Current version: 0.4.1.",
+        )
+    ]
+    _ = app
+
+
+def test_tray_update_action_runs_manual_check_without_update(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    messages: list[tuple[str, str]] = []
+    monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        lambda _parent, title, text: messages.append((title, text)),
+    )
+    tray = FakeTrayIcon()
+    action = QtGui.QAction("Check for updates")
+    checker = _TrayUpdateChecker(
+        tray_icon=tray,
+        runner=lambda: UpdateCheckResult(
+            current_version="0.4.1",
+            latest_version="0.4.1",
+            latest_tag="v0.4.1",
+        ),
+    )
+
+    checker.start(manual=True, action=action)
+
+    assert action.isEnabled() is True
+    assert messages == [("No update available", "Version 0.4.1 is up to date.")]
+    assert tray.messages == []
+    _ = app
 
 
 def test_tray_double_click_connected():

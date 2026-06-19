@@ -75,6 +75,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
 | `provider_connection_test_store.py` | Persistent last-known remote-provider connection test status keyed by provider |
+| `update_checker.py` | GitHub Releases update check and version comparison helpers |
+| `update_ui.py` | Shared Qt dialogs/actions for presenting update-check results |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |
 | `app_paths.py` | Centralized app data/config path helpers |
@@ -123,6 +125,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   restore these labels on open and overwrite only the providers tested. Saving a
   new provider key or deleting a provider key must clear that provider's stored
   test result because the old result no longer describes the active credential.
+- **Update checks**: update discovery uses GitHub Releases directly through
+  `update_checker.py`; no custom domain or update server is required. The app
+  schedules one asynchronous check after startup and shows a tray notification
+  only when a newer release exists. Manual checks are available from Settings
+  and the tray menu. Keep update checks non-blocking and avoid downloading or
+  executing installers automatically without a separate review.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional

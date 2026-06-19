@@ -101,6 +101,8 @@ from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from .update_checker import UpdateCheckResult, check_for_updates
+from .update_ui import show_update_available_dialog
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -253,6 +255,7 @@ class SettingsDialog(QtWidgets.QDialog):
     local_model_scan_finished = QtCore.Signal(int, str, object)
     local_model_download_progress = QtCore.Signal(int, str)
     local_model_download_finished = QtCore.Signal(int, bool, str)
+    update_check_finished = QtCore.Signal(object)
     benchmark_progress = QtCore.Signal(str)
     benchmark_case_finished = QtCore.Signal(object)
     benchmark_finished = QtCore.Signal(bool, str, object)
@@ -267,6 +270,7 @@ class SettingsDialog(QtWidgets.QDialog):
         last_recording_store: LastRecordingStore | None = None,
         local_model_inventory_store: LocalModelInventoryStore | None = None,
         provider_connection_test_store: ProviderConnectionTestStore | None = None,
+        update_check_runner: Callable[[], UpdateCheckResult] | None = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -281,6 +285,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._provider_connection_test_store = (
             provider_connection_test_store or ProviderConnectionTestStore()
         )
+        self._update_check_runner = update_check_runner or check_for_updates
         self._loaded_settings = self._settings_store.load()
         self._connection_test_id = 0
         self._connection_test_details: dict[int, dict[str, tuple[bool, str]]] = {}
@@ -367,6 +372,7 @@ class SettingsDialog(QtWidgets.QDialog):
             "funasr": self._remote_model_values["funasr"],
         }
         self._active_connection_test_thread: threading.Thread | None = None
+        self._active_update_check_thread: threading.Thread | None = None
         self._import_progress_message = ""
         self._import_progress_started_at: datetime | None = None
         self._import_progress_timer = QtCore.QTimer(self)
@@ -420,6 +426,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.local_model_download_finished.connect(
             self._on_local_model_download_finished
         )
+        self.update_check_finished.connect(self._on_update_check_finished)
         self.benchmark_progress.connect(self._on_benchmark_progress)
         self.benchmark_case_finished.connect(self._on_benchmark_case_finished)
         self.benchmark_finished.connect(self._on_benchmark_finished)
@@ -488,6 +495,8 @@ class SettingsDialog(QtWidgets.QDialog):
         # --- Bottom buttons ---
         self.copy_diag_button = QtWidgets.QPushButton("Copy diagnostics")
         self.copy_diag_button.clicked.connect(self._copy_diagnostics)
+        self.check_updates_button = QtWidgets.QPushButton("Check for updates")
+        self.check_updates_button.clicked.connect(self._check_for_updates)
 
         save_button = QtWidgets.QPushButton("Save")
         close_button = QtWidgets.QPushButton("Close")
@@ -506,6 +515,7 @@ class SettingsDialog(QtWidgets.QDialog):
         buttons = QtWidgets.QHBoxLayout()
         self._configure_button_row(buttons)
         buttons.addWidget(self.copy_diag_button)
+        buttons.addWidget(self.check_updates_button)
         buttons.addStretch(1)
         buttons.addWidget(self._save_status_label)
         buttons.addWidget(save_button)
@@ -518,6 +528,12 @@ class SettingsDialog(QtWidgets.QDialog):
         root.addWidget(self.tabs, 1)
         root.addLayout(buttons)
         self._reserve_feedback_button_widths()
+
+    def _set_bottom_status(self, text: str, color: str = "#2e7d32") -> None:
+        self._save_status_label.setStyleSheet(
+            f"color: {color}; font-weight: bold;"
+        )
+        self._save_status_label.setText(text)
 
     def _reserve_feedback_button_widths(self) -> None:
         for button, texts in (
@@ -5575,6 +5591,56 @@ class SettingsDialog(QtWidgets.QDialog):
         clipboard = QtGui.QGuiApplication.clipboard()
         clipboard.setText(text)
 
+    def _check_for_updates(self) -> None:
+        if self._active_update_check_thread is not None:
+            return
+        self.check_updates_button.setEnabled(False)
+        self._set_bottom_status("Checking for updates...", "#0d47a1")
+
+        def _run() -> None:
+            try:
+                result = self._update_check_runner()
+            except Exception as exc:
+                result = UpdateCheckResult(
+                    current_version="",
+                    error=f"Update check failed: {exc}",
+                )
+            self.update_check_finished.emit(result)
+
+        thread = threading.Thread(
+            target=_run,
+            name="stt_app_settings_update_check",
+            daemon=True,
+        )
+        self._active_update_check_thread = thread
+        thread.start()
+
+    @QtCore.Slot(object)
+    def _on_update_check_finished(self, result: object) -> None:
+        self._active_update_check_thread = None
+        self.check_updates_button.setEnabled(True)
+        if not isinstance(result, UpdateCheckResult):
+            result = UpdateCheckResult(
+                current_version="",
+                error="Update check returned an unexpected result.",
+            )
+
+        if result.update_available:
+            self._set_bottom_status(f"Update {result.latest_tag} available", "#0d47a1")
+            show_update_available_dialog(result, parent=self)
+            return
+
+        if result.error:
+            self._set_bottom_status("Update check failed", "#b71c1c")
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Update check failed",
+                result.error,
+            )
+            return
+        self._set_bottom_status("Already up to date")
+        self._save_status_timer.start()
+
     def _apply_secret_store_options(self) -> None:
         enabled = self.insecure_key_storage_checkbox.isChecked()
         setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
@@ -5912,7 +5978,7 @@ class SettingsDialog(QtWidgets.QDialog):
         settings_changed = not self._settings_match_loaded_values(settings)
         if not settings_changed and not key_storage_changed:
             if not key_storage_errors:
-                self._save_status_label.setText("No settings changes")
+                self._set_bottom_status("No settings changes")
                 self._save_status_timer.start()
             return
 
@@ -5921,7 +5987,7 @@ class SettingsDialog(QtWidgets.QDialog):
         if settings_changed:
             self._settings_store.save(settings)
             self._loaded_settings = settings
-        self._save_status_label.setText(
+        self._set_bottom_status(
             "\u2713 Settings saved" if settings_changed else "\u2713 API keys saved"
         )
         self._save_status_timer.start()

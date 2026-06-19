@@ -25,6 +25,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
   reopened. Saving a replacement key or deleting a provider key now invalidates
   that provider's saved connection-test result so the Remote tab cannot show a
   stale "OK" for a missing or changed credential.
+- **GitHub Releases update checks were added without an updater framework.** The
+  app now has a Settings and tray "Check for updates" action backed by
+  `update_checker.py`, and startup schedules one delayed background check that
+  only notifies through the tray when a newer release exists. This deliberately
+  stops at discovery/opening the release page; automatic installer download and
+  execution remains out of scope until it is reviewed separately.
 - **Settings and overlay UI polish before 0.4.1.** The Settings dialog now opens
   larger by default, keeps one stable size while switching tabs, and ignores
   scroll-area size-hint changes that previously caused small resize jitter. The

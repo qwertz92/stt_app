@@ -23,6 +23,8 @@ from .settings_store import SettingsStore
 from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcript_history import TranscriptHistoryStore
+from .update_checker import UpdateCheckResult, check_for_updates
+from .update_ui import show_update_available_dialog
 from .app_paths import appdata_root
 
 
@@ -133,6 +135,9 @@ def run() -> int:
         open_history_dialog=open_history_dialog,
     )
     tray_icon.show()
+    update_checker = _TrayUpdateChecker(tray_icon=tray_icon, logger=logger)
+    tray_icon._update_checker = update_checker
+    _schedule_startup_update_check(update_checker)
     QtCore.QTimer.singleShot(
         0,
         lambda: _prompt_recoverable_last_recording(
@@ -206,6 +211,7 @@ def _create_tray_icon(
 
     copy_last_action = menu.addAction("Copy last transcript")
     copy_diag_action = menu.addAction("Copy diagnostics")
+    check_updates_action = menu.addAction("Check for updates")
 
     menu.addSeparator()
 
@@ -275,6 +281,15 @@ def _create_tray_icon(
     copy_last_action.triggered.connect(copy_last_transcript)
     copy_diag_action.triggered.connect(copy_diagnostics)
 
+    def check_for_updates_from_tray() -> None:
+        checker = getattr(tray_icon, "_update_checker", None)
+        if checker is None:
+            checker = _TrayUpdateChecker(tray_icon=tray_icon)
+            tray_icon._update_checker = checker
+        checker.start(manual=True, action=check_updates_action)
+
+    check_updates_action.triggered.connect(check_for_updates_from_tray)
+
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
             open_settings_dialog()
@@ -284,6 +299,106 @@ def _create_tray_icon(
     tray_icon._open_settings_dialog = open_settings_dialog
     QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
     return tray_icon
+
+
+class _TrayUpdateChecker(QtCore.QObject):
+    finished = QtCore.Signal(object, bool)
+
+    def __init__(
+        self,
+        *,
+        tray_icon: QtWidgets.QSystemTrayIcon,
+        logger=None,
+        runner=check_for_updates,
+    ) -> None:
+        super().__init__(tray_icon)
+        self._tray_icon = tray_icon
+        self._logger = logger
+        self._runner = runner
+        self._active_thread: threading.Thread | None = None
+        self._active_action: QtGui.QAction | None = None
+        self.finished.connect(self._on_finished)
+
+    def start(
+        self,
+        *,
+        manual: bool = False,
+        action: QtGui.QAction | None = None,
+    ) -> None:
+        if self._active_thread is not None:
+            return
+        self._active_action = action
+        if action is not None:
+            action.setEnabled(False)
+
+        def _run() -> None:
+            try:
+                result = self._runner()
+            except Exception as exc:
+                result = UpdateCheckResult(
+                    current_version="",
+                    error=f"Update check failed: {exc}",
+                )
+            self.finished.emit(result, manual)
+
+        thread = threading.Thread(
+            target=_run,
+            name="stt_app_update_check",
+            daemon=True,
+        )
+        self._active_thread = thread
+        thread.start()
+
+    @QtCore.Slot(object, bool)
+    def _on_finished(self, result: object, manual: bool) -> None:
+        self._active_thread = None
+        if self._active_action is not None:
+            self._active_action.setEnabled(True)
+            self._active_action = None
+        if not isinstance(result, UpdateCheckResult):
+            result = UpdateCheckResult(
+                current_version="",
+                error="Update check returned an unexpected result.",
+            )
+
+        if result.update_available:
+            self._tray_icon.showMessage(
+                APP_DISPLAY_NAME,
+                (
+                    f"Update {result.latest_tag or result.latest_version} is "
+                    f"available. Current version: {result.current_version}."
+                ),
+                QtWidgets.QSystemTrayIcon.Information,
+                10000,
+            )
+            if manual:
+                show_update_available_dialog(result)
+            return
+
+        if result.error:
+            if self._logger is not None:
+                try:
+                    self._logger.info("Update check skipped/failed: %s", result.error)
+                except Exception:
+                    pass
+            if manual:
+                QtWidgets.QMessageBox.warning(
+                    None,
+                    "Update check failed",
+                    result.error,
+                )
+            return
+
+        if manual:
+            QtWidgets.QMessageBox.information(
+                None,
+                "No update available",
+                f"Version {result.current_version} is up to date.",
+            )
+
+
+def _schedule_startup_update_check(checker: _TrayUpdateChecker) -> None:
+    QtCore.QTimer.singleShot(5000, lambda: checker.start(manual=False))
 
 
 class _HistoryDialogPresenter:
