@@ -76,5 +76,9 @@ def benchmark_history_path() -> Path:
     return appdata_root() / "benchmark_history.json"
 
 
+def provider_connection_tests_path() -> Path:
+    return appdata_root() / "provider_connection_tests.json"
+
+
 def insecure_keys_path() -> Path:
     return appdata_root() / "insecure_api_keys.json"

@@ -16,6 +16,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
   measured minimum width, and Settings tab selection no longer changes text
   weight, preventing one-pixel tab jitter while preserving a visible selected
   state.
+- **Settings follow-up polish after the first post-release pass.** The Benchmark
+  Results box now uses a vertical splitter between the table and summary and
+  gets more vertical stretch inside the tab. Settings Save now detects true
+  no-op saves and avoids emitting `settings_changed`, preventing unnecessary
+  controller reloads/model preloads. Remote provider connection test results are
+  persisted in a separate diagnostic JSON store and restored when Settings is
+  reopened.
 - **Settings and overlay UI polish before 0.4.1.** The Settings dialog now opens
   larger by default, keeps one stable size while switching tabs, and ignores
   scroll-area size-hint changes that previously caused small resize jitter. The

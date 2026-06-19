@@ -96,6 +96,7 @@ from .model_download_progress import (
     ModelDownloadSpeedTracker,
     format_model_download_progress,
 )
+from .provider_connection_test_store import ProviderConnectionTestStore
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
@@ -265,6 +266,7 @@ class SettingsDialog(QtWidgets.QDialog):
         controller: DictationController | None = None,
         last_recording_store: LastRecordingStore | None = None,
         local_model_inventory_store: LocalModelInventoryStore | None = None,
+        provider_connection_test_store: ProviderConnectionTestStore | None = None,
         parent: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -276,6 +278,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self._benchmark_history_store = BenchmarkHistoryStore()
         self._last_recording_store = last_recording_store or LastRecordingStore()
         self._local_model_inventory_store = local_model_inventory_store
+        self._provider_connection_test_store = (
+            provider_connection_test_store or ProviderConnectionTestStore()
+        )
         self._loaded_settings = self._settings_store.load()
         self._connection_test_id = 0
         self._connection_test_details: dict[int, dict[str, tuple[bool, str]]] = {}
@@ -1735,8 +1740,16 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.addWidget(self.benchmark_status_label)
 
         results_box = QtWidgets.QGroupBox("Results")
+        results_box.setMinimumHeight(360)
+        results_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
         results_layout = QtWidgets.QVBoxLayout(results_box)
+        self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.benchmark_results_splitter.setChildrenCollapsible(False)
         self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
+        self.benchmark_results_table.setMinimumHeight(140)
         self.benchmark_results_table.setHorizontalHeaderLabels(
             ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
         )
@@ -1757,12 +1770,15 @@ class SettingsDialog(QtWidgets.QDialog):
             QtWidgets.QAbstractItemView.NoSelection
         )
         self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
-        results_layout.addWidget(self.benchmark_results_table)
+        self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
 
         self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
         self.benchmark_summary_text.setReadOnly(True)
-        results_layout.addWidget(self.benchmark_summary_text)
-        layout.addWidget(results_box, 1)
+        self.benchmark_summary_text.setMinimumHeight(140)
+        self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
+        self.benchmark_results_splitter.setSizes([190, 230])
+        results_layout.addWidget(self.benchmark_results_splitter)
+        layout.addWidget(results_box, 2)
 
         history_box = QtWidgets.QGroupBox("Benchmark History")
         history_layout = QtWidgets.QVBoxLayout(history_box)
@@ -4846,19 +4862,11 @@ class SettingsDialog(QtWidgets.QDialog):
         self._active_connection_test_thread = None
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         for provider, (provider_ok, provider_msg) in details.items():
-            self._provider_test_history[provider] = (
-                bool(provider_ok),
-                str(provider_msg),
-                timestamp,
-            )
-            last_label = self._provider_last_test_labels.get(provider)
-            if last_label is None:
-                continue
-            marker = "\u2713" if provider_ok else "\u2717"
-            color = "#1b5e20" if provider_ok else "#b71c1c"
-            self._style_provider_last_test_label(last_label, color=color)
-            last_label.setText(
-                f"Last test ({timestamp}): {marker} {provider_msg}"
+            self._remember_provider_connection_test(
+                provider,
+                ok=provider_ok,
+                message=provider_msg,
+                timestamp=timestamp,
             )
 
         if len(details) > 1:
@@ -4890,6 +4898,60 @@ class SettingsDialog(QtWidgets.QDialog):
     def _set_test_connection_feedback(self, text: str, color: str) -> None:
         self.test_conn_result.setText(text)
         self.test_conn_result.setStyleSheet(f"color: {color};")
+
+    def _remember_provider_connection_test(
+        self,
+        provider: str,
+        *,
+        ok: bool,
+        message: str,
+        timestamp: str,
+    ) -> None:
+        self._provider_test_history[provider] = (bool(ok), str(message), timestamp)
+        try:
+            self._provider_connection_test_store.save_result(
+                provider,
+                ok=ok,
+                message=message,
+                checked_at=timestamp,
+            )
+        except Exception:
+            self._settings_perf_logger.exception(
+                "Failed to persist %s connection test result", provider
+            )
+        self._apply_provider_connection_test_label(provider)
+
+    def _restore_provider_connection_test_labels(self) -> None:
+        try:
+            results = self._provider_connection_test_store.load_all()
+        except Exception:
+            self._settings_perf_logger.exception(
+                "Failed to load provider connection test results"
+            )
+            results = {}
+        for provider, result in results.items():
+            self._provider_test_history[provider] = (
+                result.ok,
+                result.message,
+                result.checked_at,
+            )
+        for provider in self._provider_last_test_labels:
+            self._apply_provider_connection_test_label(provider)
+
+    def _apply_provider_connection_test_label(self, provider: str) -> None:
+        last_label = self._provider_last_test_labels.get(provider)
+        if last_label is None:
+            return
+        result = self._provider_test_history.get(provider)
+        if result is None:
+            self._style_provider_last_test_label(last_label)
+            last_label.setText("Last test: never.")
+            return
+        ok, message, timestamp = result
+        marker = "\u2713" if ok else "\u2717"
+        color = "#1b5e20" if ok else "#b71c1c"
+        self._style_provider_last_test_label(last_label, color=color)
+        last_label.setText(f"Last test ({timestamp}): {marker} {message}")
 
     # ------------------------------------------------------------------
     # Populate / select helpers
@@ -5036,6 +5098,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_benchmark_history_list()
         self._apply_secret_store_options()
         self._refresh_provider_key_statuses()
+        self._restore_provider_connection_test_labels()
 
     def _select_combo_data(
         self, combo: QtWidgets.QComboBox, value: str
@@ -5072,6 +5135,23 @@ class SettingsDialog(QtWidgets.QDialog):
         if text:
             return text
         return str(recordings_dir())
+
+    @staticmethod
+    def _recordings_dir_compare_value(value: str) -> str:
+        text = str(value or "").strip()
+        return text or str(recordings_dir())
+
+    def _settings_match_loaded_values(self, settings: AppSettings) -> bool:
+        loaded = self._loaded_settings
+        if settings == loaded:
+            return True
+        return replace(
+            settings,
+            recordings_dir=self._recordings_dir_compare_value(settings.recordings_dir),
+        ) == replace(
+            loaded,
+            recordings_dir=self._recordings_dir_compare_value(loaded.recordings_dir),
+        )
 
     def _recordings_file_dialog_dir(self) -> str:
         target = self._effective_recordings_dir()
@@ -5817,11 +5897,21 @@ class SettingsDialog(QtWidgets.QDialog):
             funasr_model=self._remote_model_value_for_provider("funasr"),
         )
 
+        settings_changed = not self._settings_match_loaded_values(settings)
+        if not settings_changed and not key_storage_changed:
+            if not key_storage_errors:
+                self._save_status_label.setText("No settings changes")
+                self._save_status_timer.start()
+            return
+
         if history_limit_changed and requested_history_limit > 0:
             self._history_store.apply_max_items(requested_history_limit)
-        self._settings_store.save(settings)
-        self._loaded_settings = settings
-        self._save_status_label.setText("\u2713 Settings saved")
+        if settings_changed:
+            self._settings_store.save(settings)
+            self._loaded_settings = settings
+        self._save_status_label.setText(
+            "\u2713 Settings saved" if settings_changed else "\u2713 API keys saved"
+        )
         self._save_status_timer.start()
         self.settings_changed.emit()
 

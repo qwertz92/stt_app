@@ -3,6 +3,7 @@ from __future__ import annotations
 from PySide6 import QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
+from stt_app.provider_connection_test_store import ProviderConnectionTestStore
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
 
@@ -69,13 +70,18 @@ class _ImmediateThread:
             self._target(*self._args, **self._kwargs)
 
 
-def _make_dialog(settings: AppSettings, secret_values: dict[str, str] | None = None):
+def _make_dialog(
+    settings: AppSettings,
+    secret_values: dict[str, str] | None = None,
+    connection_test_store: ProviderConnectionTestStore | None = None,
+):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     secret_store = _FakeSecretStore(secret_values)
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(settings),
         secret_store=secret_store,
         app_logger=_FakeLogger(),
+        provider_connection_test_store=connection_test_store,
     )
     return dialog, app, secret_store
 
@@ -305,6 +311,37 @@ def test_test_all_configured_runs_multiple_provider_checks(monkeypatch):
     assert "padding: 0 0 6px 0" in (
         dialog._provider_last_test_labels["openai"].styleSheet()
     )
+    _ = app
+
+
+def test_provider_connection_test_result_persists_between_dialogs(tmp_path):
+    store_path = tmp_path / "provider_connection_tests.json"
+    first_store = ProviderConnectionTestStore(store_path)
+    dialog, app, _secret_store = _make_dialog(
+        AppSettings(engine="local"),
+        connection_test_store=first_store,
+    )
+
+    dialog._remember_provider_connection_test(
+        "openai",
+        ok=True,
+        message="OpenAI OK",
+        timestamp="2026-06-19 17:30:00",
+    )
+
+    reopened = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(engine="local")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        provider_connection_test_store=ProviderConnectionTestStore(store_path),
+    )
+
+    assert "Last test (2026-06-19 17:30:00): \u2713 OpenAI OK" == (
+        reopened._provider_last_test_labels["openai"].text()
+    )
+    assert "color: #1b5e20" in reopened._provider_last_test_labels[
+        "openai"
+    ].styleSheet()
     _ = app
 
 

@@ -74,6 +74,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
+| `provider_connection_test_store.py` | Persistent last-known remote-provider connection test status keyed by provider |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |
 | `app_paths.py` | Centralized app data/config path helpers |
@@ -113,7 +114,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   spacing rather than relying on platform defaults. Settings tab selection must
   not change tab font weight or measured tab width; use color/border changes for
   the selected state. General-tab form sections share a measured label column so
-  fields align across group boxes.
+  fields align across group boxes. Pressing Save with no effective setting or
+  API-key changes must not emit `settings_changed`; otherwise the controller can
+  reload or preload local models unnecessarily.
+- **Remote connection test persistence**: last-known provider connection test
+  results live in `provider_connection_tests.json`, not `settings.json`, because
+  they are diagnostic UI state rather than configuration. The Remote tab should
+  restore these labels on open and overwrite only the providers tested.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional

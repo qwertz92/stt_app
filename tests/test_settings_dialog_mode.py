@@ -1425,6 +1425,28 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     _ = app
 
 
+def test_benchmark_results_table_and_summary_are_resizable():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    dialog.show()
+    app.processEvents()
+
+    splitter = dialog.benchmark_results_splitter
+    assert isinstance(splitter, QtWidgets.QSplitter)
+    assert splitter.orientation() == QtCore.Qt.Vertical
+    assert splitter.childrenCollapsible() is False
+    assert splitter.widget(0) is dialog.benchmark_results_table
+    assert splitter.widget(1) is dialog.benchmark_summary_text
+    assert splitter.sizes()[0] > 0
+    assert splitter.sizes()[1] > 0
+    _ = app
+
+
 def test_benchmark_history_double_click_loads_entry(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     case = BenchmarkCase(
@@ -2214,8 +2236,31 @@ def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
 # ------------------------------------------------------------------
 
 
-def test_save_emits_settings_changed_signal():
-    """_save() emits settings_changed and does NOT close the dialog."""
+def test_save_emits_settings_changed_signal_for_real_changes():
+    """_save() emits settings_changed for changes and does NOT close the dialog."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    received: list[bool] = []
+    dialog.settings_changed.connect(lambda: received.append(True))
+
+    dialog.vad_checkbox.setChecked(True)
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.vad_enabled is True
+    assert len(received) == 1, "settings_changed signal should fire once"
+    # Dialog must still be visible (not closed via accept)
+    assert dialog.result() != QtWidgets.QDialog.Accepted
+    _ = app
+
+
+def test_save_without_changes_does_not_emit_settings_changed():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
     dialog = SettingsDialog(
@@ -2229,14 +2274,13 @@ def test_save_emits_settings_changed_signal():
 
     dialog._save()
 
-    assert store.saved is not None
-    assert len(received) == 1, "settings_changed signal should fire once"
-    # Dialog must still be visible (not closed via accept)
-    assert dialog.result() != QtWidgets.QDialog.Accepted
+    assert store.saved is None
+    assert received == []
+    assert "no settings changes" in dialog._save_status_label.text().lower()
     _ = app
 
 
-def test_save_shows_status_feedback():
+def test_save_shows_status_feedback_for_real_changes():
     """_save() shows a status message in the save-status label."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
@@ -2247,6 +2291,7 @@ def test_save_shows_status_feedback():
     )
 
     assert dialog._save_status_label.text() == ""
+    dialog.vad_checkbox.setChecked(True)
     dialog._save()
     assert "saved" in dialog._save_status_label.text().lower()
     _ = app

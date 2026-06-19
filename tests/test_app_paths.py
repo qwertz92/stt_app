@@ -64,6 +64,15 @@ def test_local_model_inventory_path_returns_json(monkeypatch, tmp_path):
     assert result.name == "local_model_inventory.json"
 
 
+def test_provider_connection_tests_path_returns_json(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from stt_app.app_paths import provider_connection_tests_path
+
+    result = provider_connection_tests_path()
+    assert result.name == "provider_connection_tests.json"
+    assert str(tmp_path) in str(result)
+
+
 def test_temp_audio_dir_is_created(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(tmp_path))
     from stt_app.app_paths import temp_audio_dir
