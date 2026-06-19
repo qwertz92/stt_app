@@ -121,6 +121,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Successful transcriptions are added to history before text insertion, so a
   paste/focus failure does not drop the transcript. The stored model name comes
   from the transcription settings snapshot, not from later UI changes.
+  Settings History supports multi-select copy/delete for bulk cleanup; editing
+  remains single-entry only.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the

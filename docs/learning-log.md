@@ -24,6 +24,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
   faster-whisper polls `set_cancel_check` between segments and raises
   `TranscriptionCanceled`, while engines without a cancel hook may still finish
   and are then kept in history.
+- **Settings History multi-select was also still only on the queue branch.**
+  Ported the desired History-tab multi-select behavior: multiple selected
+  transcripts can be copied as blank-line-separated text, deleted together after
+  one confirmation, and editing remains limited to a single selected entry.
 
 ## 2026-06-18
 

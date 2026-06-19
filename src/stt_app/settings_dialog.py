@@ -98,7 +98,7 @@ from .model_download_progress import (
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
-from .transcript_history import TranscriptHistoryStore
+from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -1898,6 +1898,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_list = QtWidgets.QListWidget()
         history_font = QtGui.QFont(self.font())
         self.history_list.setFont(history_font)
+        self.history_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.ExtendedSelection
+        )
         self._configure_compact_list_widget(self.history_list, expand=True)
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
 
@@ -4942,41 +4945,60 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_delete_button.setEnabled(False)
         self._reset_history_copy_feedback()
 
-    def _on_history_item_selected(self) -> None:
+    def _selected_history_items(self) -> list[QtWidgets.QListWidgetItem]:
+        """Selected history items sorted by their row order in the list."""
         items = self.history_list.selectedItems()
-        if not items:
+        return sorted(items, key=self.history_list.row)
+
+    def _selected_history_entries(self) -> list[TranscriptHistoryEntry]:
+        entries: list[TranscriptHistoryEntry] = []
+        for item in self._selected_history_items():
+            entry = item.data(QtCore.Qt.UserRole)
+            if entry is not None:
+                entries.append(entry)
+        return entries
+
+    def _on_history_item_selected(self) -> None:
+        entries = self._selected_history_entries()
+        if not entries:
             self.history_copy_button.setEnabled(False)
             self.history_edit_button.setEnabled(False)
             self.history_delete_button.setEnabled(False)
             self.history_detail.clear()
             self._reset_history_copy_feedback()
             return
-        entry = items[0].data(QtCore.Qt.UserRole)
-        text = str(getattr(entry, "text", "") or "")
-        self.history_copy_button.setEnabled(bool(text))
-        self.history_edit_button.setEnabled(bool(text))
+        if len(entries) == 1:
+            text = str(getattr(entries[0], "text", "") or "")
+            self.history_copy_button.setEnabled(bool(text))
+            self.history_edit_button.setEnabled(bool(text))
+            self.history_detail.setPlainText(text)
+        else:
+            has_text = any(str(getattr(e, "text", "") or "") for e in entries)
+            self.history_copy_button.setEnabled(has_text)
+            # Editing is only meaningful for a single entry.
+            self.history_edit_button.setEnabled(False)
+            self.history_detail.setPlainText(f"{len(entries)} entries selected.")
         self.history_delete_button.setEnabled(True)
-        self.history_detail.setPlainText(text)
         self._reset_history_copy_feedback()
 
     def _copy_selected_history(self) -> None:
-        items = self.history_list.selectedItems()
-        if not items:
+        texts = [
+            str(getattr(entry, "text", "") or "")
+            for entry in self._selected_history_entries()
+        ]
+        texts = [text for text in texts if text]
+        if not texts:
             return
-        entry = items[0].data(QtCore.Qt.UserRole)
-        text = str(getattr(entry, "text", "") or "")
-        if not text:
-            return
-        QtGui.QGuiApplication.clipboard().setText(text)
+        QtGui.QGuiApplication.clipboard().setText("\n\n".join(texts))
         self.history_copy_button.setText("Copied")
         set_button_feedback_state(self.history_copy_button, "success")
         self._history_copy_feedback_timer.start()
 
     def _edit_selected_history(self) -> None:
-        items = self.history_list.selectedItems()
-        if not items:
+        entries = self._selected_history_entries()
+        if len(entries) != 1:
             return
-        entry = items[0].data(QtCore.Qt.UserRole)
+        entry = entries[0]
         if entry is None:
             return
         current_text = str(getattr(entry, "text", "") or "")
@@ -4991,24 +5013,29 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_history_list()
 
     def _delete_selected_history(self) -> None:
-        items = self.history_list.selectedItems()
-        if not items:
+        entries = self._selected_history_entries()
+        if not entries:
             return
-        entry = items[0].data(QtCore.Qt.UserRole)
-        if entry is None:
-            return
+        count = len(entries)
+        prompt = (
+            "Delete the selected transcription from history?"
+            if count == 1
+            else f"Delete {count} selected transcriptions from history?"
+        )
         answer = QtWidgets.QMessageBox.question(
             self,
-            "Delete history entry",
-            "Delete the selected transcription from history?",
+            "Delete history entries" if count > 1 else "Delete history entry",
+            prompt,
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
         )
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        removed = self._history_store.delete_entry(entry)
+        removed = self._history_store.delete_entries(entries)
         if removed <= 0:
-            self.import_result_label.setText("Selected history entry was not found.")
+            self.import_result_label.setText(
+                "Selected history entries were not found."
+            )
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             return
         self._refresh_history_list()

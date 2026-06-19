@@ -696,6 +696,71 @@ def test_settings_history_refresh_preserves_selected_entry_and_scroll(tmp_path):
     _ = app
 
 
+def test_settings_history_multiselect_copy_joins_selected_entries(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            _history_entry("first"),
+            _history_entry("second"),
+            _history_entry("third"),
+        ]
+    )
+    clipboard = _FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+
+    dialog.history_list.item(0).setSelected(True)
+    dialog.history_list.item(1).setSelected(True)
+    dialog._copy_selected_history()
+
+    assert clipboard.text() == "third\n\nsecond"
+    assert dialog.history_edit_button.isEnabled() is False
+    assert dialog.history_delete_button.isEnabled() is True
+    _ = app
+
+
+def test_settings_history_multiselect_delete_removes_selected_entries(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            _history_entry("first"),
+            _history_entry("second"),
+            _history_entry("third"),
+        ]
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+
+    dialog.history_list.item(0).setSelected(True)
+    dialog.history_list.item(1).setSelected(True)
+    dialog._delete_selected_history()
+
+    assert [entry.text for entry in history_store.load()] == ["first"]
+    _ = app
+
+
 def test_granite_language_options_follow_selected_variant():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
