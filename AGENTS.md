@@ -118,7 +118,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the selected state. General-tab form sections share a measured label column so
   fields align across group boxes. Pressing Save with no effective setting or
   API-key changes must not emit `settings_changed`; otherwise the controller can
-  reload or preload local models unnecessarily.
+  reload or preload local models unnecessarily. Benchmark Results tables use
+  per-pixel scroll modes, and the Benchmark tab keeps History, Results, and Run
+  controls in a vertical splitter with Run Options collapsed by default.
 - **Remote connection test persistence**: last-known provider connection test
   results live in `provider_connection_tests.json`, not `settings.json`, because
   they are diagnostic UI state rather than configuration. The Remote tab should

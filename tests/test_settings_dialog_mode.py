@@ -1443,8 +1443,46 @@ def test_benchmark_results_table_and_summary_are_resizable():
     assert splitter.childrenCollapsible() is False
     assert splitter.widget(0) is dialog.benchmark_results_table
     assert splitter.widget(1) is dialog.benchmark_summary_text
+    assert (
+        dialog.benchmark_results_table.horizontalScrollMode()
+        == QtWidgets.QAbstractItemView.ScrollPerPixel
+    )
+    assert (
+        dialog.benchmark_results_table.verticalScrollMode()
+        == QtWidgets.QAbstractItemView.ScrollPerPixel
+    )
     assert splitter.sizes()[0] > 0
     assert splitter.sizes()[1] > 0
+    _ = app
+
+
+def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    dialog.show()
+    app.processEvents()
+
+    splitter = dialog.benchmark_main_splitter
+    assert isinstance(splitter, QtWidgets.QSplitter)
+    assert splitter.orientation() == QtCore.Qt.Vertical
+    assert splitter.childrenCollapsible() is False
+    assert splitter.indexOf(dialog.benchmark_history_list.parentWidget()) == 0
+    assert splitter.indexOf(dialog.benchmark_results_splitter.parentWidget()) == 1
+    assert splitter.widget(2) is dialog.benchmark_setup_scroll
+    assert dialog.benchmark_setup_scroll.widget() is dialog.benchmark_setup_box
+    assert dialog.benchmark_setup_box.title() == "Run Benchmark"
+    assert dialog.benchmark_options_box.isVisible() is False
+    assert dialog.benchmark_options_toggle.text() == "Show Run Options"
+
+    dialog.benchmark_options_toggle.click()
+
+    assert dialog.benchmark_options_box.isVisible() is True
+    assert dialog.benchmark_options_toggle.text() == "Hide Run Options"
     _ = app
 
 
@@ -1498,13 +1536,20 @@ def test_benchmark_history_double_click_loads_entry(tmp_path):
     )
     dialog._benchmark_history_store = benchmark_store
     dialog._refresh_benchmark_history_list()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    dialog.show()
+    app.processEvents()
 
     item = dialog.benchmark_history_list.item(0)
     dialog.benchmark_history_list.itemDoubleClicked.emit(item)
+    app.processEvents()
 
     assert dialog.benchmark_results_table.rowCount() == 1
     assert dialog.benchmark_results_table.item(0, 0).text() == "small"
     assert dialog.benchmark_summary_text.toPlainText() == entry.summary
+    main_sizes = dialog.benchmark_main_splitter.sizes()
+    assert main_sizes[1] > main_sizes[0]
+    assert main_sizes[1] > main_sizes[2]
     _ = app
 
 

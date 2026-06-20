@@ -31,6 +31,11 @@ Agents and developers: use this as a knowledge base for past issues and solution
   only notifies through the tray when a newer release exists. This deliberately
   stops at discovery/opening the release page; automatic installer download and
   execution remains out of scope until it is reviewed separately.
+- **Benchmark tab layout now prioritizes reading results.** The Benchmark tab
+  order is History, Results, then Run Benchmark. Results and the run controls are
+  separated by a vertical splitter, Run Options start collapsed, and the Results
+  table scrolls per pixel horizontally and vertically instead of jumping by
+  table item.
 - **Settings and overlay UI polish before 0.4.1.** The Settings dialog now opens
   larger by default, keeps one stable size while switching tabs, and ignores
   scroll-area size-hint changes that previously caused small resize jitter. The

@@ -1502,6 +1502,29 @@ class SettingsDialog(QtWidgets.QDialog):
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
+        self.benchmark_main_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.benchmark_main_splitter.setChildrenCollapsible(False)
+
+        setup_box = QtWidgets.QGroupBox("Run Benchmark")
+        setup_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Preferred,
+        )
+        self.benchmark_setup_box = setup_box
+        self.benchmark_setup_scroll = QtWidgets.QScrollArea()
+        self.benchmark_setup_scroll.setWidgetResizable(True)
+        self.benchmark_setup_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self.benchmark_setup_scroll.setMinimumHeight(170)
+        self.benchmark_setup_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAsNeeded
+        )
+        self.benchmark_setup_scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarAsNeeded
+        )
+        self.benchmark_setup_scroll.setWidget(setup_box)
+        setup_layout = QtWidgets.QVBoxLayout(setup_box)
+        setup_layout.setContentsMargins(10, 10, 10, 10)
+        setup_layout.setSpacing(6)
 
         intro = QtWidgets.QLabel(
             "Benchmark installed local models against one audio file. "
@@ -1511,7 +1534,7 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         intro.setWordWrap(True)
         self._style_note_label(intro)
-        layout.addWidget(intro)
+        setup_layout.addWidget(intro)
 
         audio_box = QtWidgets.QGroupBox("Audio Sample")
         audio_layout = QtWidgets.QVBoxLayout(audio_box)
@@ -1558,7 +1581,7 @@ class SettingsDialog(QtWidgets.QDialog):
         audio_help.setWordWrap(True)
         self._style_note_label(audio_help)
         audio_layout.addWidget(audio_help)
-        layout.addWidget(audio_box)
+        setup_layout.addWidget(audio_box)
 
         models_box = QtWidgets.QGroupBox("Installed Models")
         models_box.setSizePolicy(
@@ -1592,10 +1615,25 @@ class SettingsDialog(QtWidgets.QDialog):
         models_help.setWordWrap(True)
         self._style_note_label(models_help)
         models_layout.addWidget(models_help)
-        layout.addWidget(models_box)
+        setup_layout.addWidget(models_box)
 
-        options_box = QtWidgets.QGroupBox("Run Options")
-        options_form = QtWidgets.QFormLayout(options_box)
+        self.benchmark_options_toggle = QtWidgets.QToolButton()
+        self.benchmark_options_toggle.setCheckable(True)
+        self.benchmark_options_toggle.setChecked(False)
+        self.benchmark_options_toggle.setToolButtonStyle(
+            QtCore.Qt.ToolButtonTextBesideIcon
+        )
+        self.benchmark_options_toggle.toggled.connect(
+            self._set_benchmark_options_visible
+        )
+        setup_layout.addWidget(
+            self.benchmark_options_toggle,
+            0,
+            QtCore.Qt.AlignLeft,
+        )
+
+        self.benchmark_options_box = QtWidgets.QGroupBox("Run Options")
+        options_form = QtWidgets.QFormLayout(self.benchmark_options_box)
         options_form.setContentsMargins(10, 10, 10, 10)
         options_form.setHorizontalSpacing(10)
         options_form.setVerticalSpacing(6)
@@ -1726,7 +1764,8 @@ class SettingsDialog(QtWidgets.QDialog):
             "",
             self._field_with_hint(self.benchmark_vad_checkbox, vad_note),
         )
-        layout.addWidget(options_box)
+        setup_layout.addWidget(self.benchmark_options_box)
+        self._set_benchmark_options_visible(False)
 
         benchmark_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_actions)
@@ -1749,11 +1788,11 @@ class SettingsDialog(QtWidgets.QDialog):
         benchmark_actions.addWidget(self.clear_benchmark_results_button)
         benchmark_actions.addWidget(self.export_benchmark_results_button)
         benchmark_actions.addStretch(1)
-        layout.addLayout(benchmark_actions)
+        setup_layout.addLayout(benchmark_actions)
 
         self.benchmark_status_label = QtWidgets.QLabel("")
         self.benchmark_status_label.setWordWrap(True)
-        layout.addWidget(self.benchmark_status_label)
+        setup_layout.addWidget(self.benchmark_status_label)
 
         results_box = QtWidgets.QGroupBox("Results")
         results_box.setMinimumHeight(360)
@@ -1785,6 +1824,12 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_results_table.setSelectionMode(
             QtWidgets.QAbstractItemView.NoSelection
         )
+        self.benchmark_results_table.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        self.benchmark_results_table.setVerticalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
         self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
         self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
 
@@ -1794,7 +1839,6 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
         self.benchmark_results_splitter.setSizes([190, 230])
         results_layout.addWidget(self.benchmark_results_splitter)
-        layout.addWidget(results_box, 2)
 
         history_box = QtWidgets.QGroupBox("Benchmark History")
         history_layout = QtWidgets.QVBoxLayout(history_box)
@@ -1837,7 +1881,12 @@ class SettingsDialog(QtWidgets.QDialog):
         benchmark_history_actions.addWidget(self.delete_benchmark_history_button)
         benchmark_history_actions.addWidget(self.clear_benchmark_history_button)
         history_layout.addLayout(benchmark_history_actions)
-        layout.addWidget(history_box)
+
+        self.benchmark_main_splitter.addWidget(history_box)
+        self.benchmark_main_splitter.addWidget(results_box)
+        self.benchmark_main_splitter.addWidget(self.benchmark_setup_scroll)
+        self.benchmark_main_splitter.setSizes([170, 500, 210])
+        layout.addWidget(self.benchmark_main_splitter, 1)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
 
@@ -3357,6 +3406,23 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_status_label.setText(text)
         self.benchmark_status_label.setStyleSheet(f"color: {color};")
 
+    def _set_benchmark_options_visible(self, visible: bool) -> None:
+        if hasattr(self, "benchmark_options_box"):
+            self.benchmark_options_box.setVisible(bool(visible))
+        if hasattr(self, "benchmark_options_toggle"):
+            self.benchmark_options_toggle.setChecked(bool(visible))
+            self.benchmark_options_toggle.setText(
+                "Hide Run Options" if visible else "Show Run Options"
+            )
+            self.benchmark_options_toggle.setArrowType(
+                QtCore.Qt.DownArrow if visible else QtCore.Qt.RightArrow
+            )
+
+    def _expand_benchmark_results_area(self) -> None:
+        if not hasattr(self, "benchmark_main_splitter"):
+            return
+        self.benchmark_main_splitter.setSizes([140, 620, 170])
+
     def _update_benchmark_actions(self) -> None:
         if not hasattr(self, "run_benchmark_button"):
             return
@@ -3724,6 +3790,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
         else:
             self._set_benchmark_status("Benchmark finished.", "#1b5e20")
+        self._expand_benchmark_results_area()
         self._update_benchmark_actions()
 
     def _refresh_benchmark_history_list(
@@ -3789,6 +3856,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._populate_benchmark_results(entry.cases)
         self.benchmark_summary_text.setPlainText(entry.summary)
         self._set_benchmark_status("Loaded benchmark history entry.", "#555")
+        self._expand_benchmark_results_area()
         self._update_benchmark_actions()
 
     def _export_current_benchmark_results(self) -> None:
