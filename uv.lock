@@ -890,7 +890,7 @@ wheels = [
 
 [[package]]
 name = "stt-app"
-version = "0.4.1"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
     { name = "assemblyai" },
