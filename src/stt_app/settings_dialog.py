@@ -105,7 +105,8 @@ from .transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     join_recent_entries_for_clipboard,
-    prepended_recent_entries_count,
+    map_recent_entry_rows,
+    recent_entries_change_plan,
 )
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog
@@ -5286,63 +5287,47 @@ class SettingsDialog(QtWidgets.QDialog):
             and signature == self._history_reload_signature
         ):
             return
-        selected_entries = [
-            item.data(QtCore.Qt.UserRole)
-            for item in self.history_list.selectedItems()
+        selected_rows = [
+            row
+            for row in (
+                self.history_list.row(item)
+                for item in self.history_list.selectedItems()
+            )
+            if row >= 0
         ]
         current_item = self.history_list.currentItem()
-        current_entry = (
-            current_item.data(QtCore.Qt.UserRole)
-            if current_item is not None
-            else None
+        current_row = (
+            self.history_list.row(current_item) if current_item is not None else None
         )
         scroll_value = self.history_list.verticalScrollBar().value()
         entries = self._history_store.recent_entries(self.history_max_spin.value())
-        if self._apply_incremental_history_refresh(
+        if self._apply_reconciled_history_refresh(
             entries=entries,
-            selected_entries=selected_entries,
-            current_entry=current_entry,
+            selected_rows=selected_rows,
+            current_row=current_row,
             scroll_value=scroll_value,
         ):
             self._history_reload_signature = signature
             return
-
-        restored_selection = False
-        restored_current_item: QtWidgets.QListWidgetItem | None = None
 
         self.history_list.setUpdatesEnabled(False)
         self.history_list.blockSignals(True)
         try:
             self.history_list.clear()
             for entry in entries:
-                item = self._history_list_item(entry)
-                self.history_list.addItem(item)
-                if any(entry == selected for selected in selected_entries):
-                    item.setSelected(True)
-                    restored_selection = True
-                if current_entry is not None and entry == current_entry:
-                    restored_current_item = item
+                self.history_list.addItem(self._history_list_item(entry))
         finally:
             self.history_list.blockSignals(False)
             self.history_list.setUpdatesEnabled(True)
 
         self._history_entries = entries
         self._history_reload_signature = signature
-        if restored_current_item is not None:
-            self.history_list.setCurrentItem(
-                restored_current_item,
-                QtCore.QItemSelectionModel.NoUpdate,
-            )
-        restore_vertical_scrollbar(self.history_list, scroll_value)
-        if restored_selection:
-            self._on_history_item_selected()
-            return
-
-        self.history_detail.clear()
-        self.history_copy_button.setEnabled(False)
-        self.history_edit_button.setEnabled(False)
-        self.history_delete_button.setEnabled(False)
-        self._reset_history_copy_feedback()
+        self._finish_history_refresh(
+            entries=entries,
+            selected_rows=selected_rows,
+            current_row=current_row,
+            scroll_value=scroll_value,
+        )
 
     def _current_history_reload_signature(
         self,
@@ -5364,57 +5349,131 @@ class SettingsDialog(QtWidgets.QDialog):
         self._apply_compact_list_item_size(self.history_list, item)
         return item
 
-    def _apply_incremental_history_refresh(
+    def _apply_reconciled_history_refresh(
         self,
         *,
         entries: list[TranscriptHistoryEntry],
-        selected_entries: list[TranscriptHistoryEntry],
-        current_entry: TranscriptHistoryEntry | None,
+        selected_rows: list[int],
+        current_row: int | None,
         scroll_value: int,
     ) -> bool:
-        prefix_count = prepended_recent_entries_count(self._history_entries, entries)
-        if prefix_count is None or prefix_count <= 0:
+        changes = recent_entries_change_plan(self._history_entries, entries)
+        if not changes:
+            self._history_entries = entries
+            self._finish_history_refresh(
+                entries=entries,
+                selected_rows=selected_rows,
+                current_row=current_row,
+                scroll_value=scroll_value,
+            )
+            return True
+        if not self._history_entries and entries:
             return False
 
         self.history_list.setUpdatesEnabled(False)
         self.history_list.blockSignals(True)
         try:
-            for entry in reversed(entries[:prefix_count]):
-                self.history_list.insertItem(0, self._history_list_item(entry))
-            while self.history_list.count() > len(entries):
-                self.history_list.takeItem(self.history_list.count() - 1)
-            restored_current_item: QtWidgets.QListWidgetItem | None = None
-            restored_selection = False
-            for row, entry in enumerate(entries):
-                item = self.history_list.item(row)
-                if item is None:
-                    continue
-                if any(entry == selected for selected in selected_entries):
-                    item.setSelected(True)
-                    restored_selection = True
-                if current_entry is not None and entry == current_entry:
-                    restored_current_item = item
+            for change in reversed(changes):
+                if change.kind == "delete":
+                    self._remove_history_items(
+                        change.previous_start,
+                        change.previous_stop,
+                    )
+                elif change.kind == "insert":
+                    self._insert_history_items(
+                        change.previous_start,
+                        entries[change.current_start:change.current_stop],
+                    )
+                elif change.kind == "update":
+                    for row, entry in zip(
+                        range(change.previous_start, change.previous_stop),
+                        entries[change.current_start:change.current_stop],
+                    ):
+                        self._update_history_item(row, entry)
+                elif change.kind == "replace":
+                    self._remove_history_items(
+                        change.previous_start,
+                        change.previous_stop,
+                    )
+                    self._insert_history_items(
+                        change.previous_start,
+                        entries[change.current_start:change.current_stop],
+                    )
+                else:
+                    return False
         finally:
             self.history_list.blockSignals(False)
             self.history_list.setUpdatesEnabled(True)
 
         self._history_entries = entries
-        if restored_current_item is not None:
+        mapped_current_rows = (
+            map_recent_entry_rows(changes, [current_row])
+            if current_row is not None and current_row >= 0
+            else []
+        )
+        self._finish_history_refresh(
+            entries=entries,
+            selected_rows=map_recent_entry_rows(changes, selected_rows),
+            current_row=mapped_current_rows[0] if mapped_current_rows else None,
+            scroll_value=scroll_value,
+        )
+        return True
+
+    def _remove_history_items(self, start: int, stop: int) -> None:
+        for row in range(stop - 1, start - 1, -1):
+            if 0 <= row < self.history_list.count():
+                self.history_list.takeItem(row)
+
+    def _insert_history_items(
+        self,
+        start: int,
+        entries: list[TranscriptHistoryEntry],
+    ) -> None:
+        for entry in reversed(entries):
+            self.history_list.insertItem(start, self._history_list_item(entry))
+
+    def _update_history_item(self, row: int, entry: TranscriptHistoryEntry) -> None:
+        item = self.history_list.item(row)
+        if item is None:
+            return
+        replacement = self._history_list_item(entry)
+        item.setText(replacement.text())
+        item.setData(QtCore.Qt.UserRole, entry)
+        item.setSizeHint(replacement.sizeHint())
+
+    def _finish_history_refresh(
+        self,
+        *,
+        entries: list[TranscriptHistoryEntry],
+        selected_rows: list[int],
+        current_row: int | None,
+        scroll_value: int,
+    ) -> None:
+        selected_row_set = {row for row in selected_rows if 0 <= row < len(entries)}
+        restored_selection = False
+        for row, entry in enumerate(entries):
+            item = self.history_list.item(row)
+            if item is None:
+                continue
+            item.setData(QtCore.Qt.UserRole, entry)
+            item.setSelected(row in selected_row_set)
+            if item.isSelected():
+                restored_selection = True
+        if current_row is not None and 0 <= current_row < self.history_list.count():
             self.history_list.setCurrentItem(
-                restored_current_item,
+                self.history_list.item(current_row),
                 QtCore.QItemSelectionModel.NoUpdate,
             )
         restore_vertical_scrollbar(self.history_list, scroll_value)
         if restored_selection:
             self._on_history_item_selected()
-            return True
+            return
 
         self.history_detail.clear()
         self.history_copy_button.setEnabled(False)
         self.history_edit_button.setEnabled(False)
         self.history_delete_button.setEnabled(False)
         self._reset_history_copy_feedback()
-        return True
 
     def _selected_history_items(self) -> list[QtWidgets.QListWidgetItem]:
         """Selected history items sorted by their row order in the list."""

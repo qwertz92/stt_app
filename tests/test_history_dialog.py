@@ -88,11 +88,14 @@ def test_delete_selected_button_removes_entry(monkeypatch, tmp_path):
         history_store=history_store,
         settings_store=settings_store,
     )
+    alpha_item = dialog._table.item(1, 3)
     dialog._table.selectRow(0)
 
     dialog._delete_button.click()
 
     assert [entry.text for entry in history_store.load()] == ["alpha"]
+    assert dialog._table.rowCount() == 1
+    assert dialog._table.item(0, 3) is alpha_item
     _ = app
 
 
@@ -179,10 +182,13 @@ def test_reducing_limit_confirms_and_trims(monkeypatch, tmp_path):
         history_store=history_store,
         settings_store=settings_store,
     )
+    newest_item = dialog._table.item(0, 3)
     dialog._max_items_spin.setValue(2)
 
     assert history_store.count() == 2
     assert settings_store.load().history_max_items == 2
+    assert dialog._table.rowCount() == 2
+    assert dialog._table.item(0, 3) is newest_item
     _ = app
 
 
@@ -411,6 +417,36 @@ def test_history_dialog_refresh_prepends_new_entries_without_rebuilding_old_rows
 
     assert dialog._table.item(0, 3).text() == "gamma"
     assert dialog._table.item(1, 3) is beta_item
+    _ = app
+
+
+def test_history_dialog_edit_updates_row_without_rebuilding_other_rows(
+    monkeypatch,
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    alpha = _entry("alpha")
+    beta = _entry("beta")
+    history_store.save([alpha, beta])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    monkeypatch.setattr(
+        "stt_app.history_dialog.TranscriptEditDialog.get_text",
+        lambda *_args, **_kwargs: "beta edited",
+    )
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    alpha_item = dialog._table.item(1, 3)
+    dialog._table.selectRow(0)
+
+    dialog._edit_button.click()
+
+    assert dialog._table.item(0, 3).text() == "beta edited"
+    assert dialog._table.item(1, 3) is alpha_item
     _ = app
 
 

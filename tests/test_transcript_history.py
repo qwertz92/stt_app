@@ -8,7 +8,8 @@ from stt_app.transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     join_recent_entries_for_clipboard,
-    prepended_recent_entries_count,
+    map_recent_entry_rows,
+    recent_entries_change_plan,
 )
 
 
@@ -142,7 +143,7 @@ def test_join_recent_entries_for_clipboard_uses_oldest_first_order():
     assert text == "second\n\nthird"
 
 
-def test_prepended_recent_entries_count_detects_append_only_recent_update():
+def test_recent_entries_change_plan_detects_prepend_delete_and_update():
     first = TranscriptHistoryEntry(
         created_at="2026-01-01T00:00:00+00:00",
         text="first",
@@ -165,12 +166,39 @@ def test_prepended_recent_entries_count_detects_append_only_recent_update():
         mode="batch",
     )
 
-    count = prepended_recent_entries_count([second, first], [third, second, first])
+    prepend = recent_entries_change_plan([second, first], [third, second, first])
 
-    assert count == 1
+    assert [
+        (change.kind, change.previous_start, change.current_start)
+        for change in prepend
+    ] == [("insert", 0, 0)]
+    assert map_recent_entry_rows(prepend, [0, 1]) == [1, 2]
+
+    delete = recent_entries_change_plan([third, second, first], [third, first])
+
+    assert [
+        (change.kind, change.previous_start, change.previous_stop)
+        for change in delete
+    ] == [("delete", 1, 2)]
+    assert map_recent_entry_rows(delete, [0, 1, 2]) == [0, 1]
+
+    edited_second = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:01+00:00",
+        text="second edited",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    update = recent_entries_change_plan([second, first], [edited_second, first])
+
+    assert [
+        (change.kind, change.previous_start, change.current_start)
+        for change in update
+    ] == [("update", 0, 0)]
+    assert map_recent_entry_rows(update, [0, 1]) == [0, 1]
 
 
-def test_prepended_recent_entries_count_rejects_edits_or_deletes():
+def test_recent_entries_change_plan_replaces_identity_changes():
     first = TranscriptHistoryEntry(
         created_at="2026-01-01T00:00:00+00:00",
         text="first",
@@ -185,17 +213,21 @@ def test_prepended_recent_entries_count_rejects_edits_or_deletes():
         model="small",
         mode="batch",
     )
-    edited_second = TranscriptHistoryEntry(
-        created_at="2026-01-01T00:00:01+00:00",
-        text="second edited",
+    different_entry = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:02+00:00",
+        text="different",
         engine="local",
         model="small",
         mode="batch",
     )
 
-    count = prepended_recent_entries_count([second, first], [edited_second, first])
+    plan = recent_entries_change_plan([second, first], [different_entry, first])
 
-    assert count is None
+    assert [
+        (change.kind, change.previous_start, change.current_start)
+        for change in plan
+    ] == [("replace", 0, 0)]
+    assert map_recent_entry_rows(plan, [0, 1]) == [1]
 
 
 def test_load_ignores_invalid_payload(tmp_path):

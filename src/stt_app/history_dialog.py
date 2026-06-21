@@ -15,7 +15,8 @@ from .transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     join_recent_entries_for_clipboard,
-    prepended_recent_entries_count,
+    map_recent_entry_rows,
+    recent_entries_change_plan,
 )
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
@@ -199,12 +200,11 @@ class HistoryDialog(QtWidgets.QDialog):
         entries, total = self._history_store.recent_entries_with_count(
             limit=self._history_limit
         )
-        if self._apply_incremental_reload(
+        if self._apply_reconciled_reload(
             previous_entries=previous_entries,
             entries=entries,
             total=total,
             previous_selected_rows=previous_selected_rows,
-            previous_selected_entries=previous_selected_entries,
             previous_scroll_value=previous_scroll_value,
         ):
             self._history_reload_signature = signature
@@ -253,27 +253,56 @@ class HistoryDialog(QtWidgets.QDialog):
             QtWidgets.QTableWidgetItem(_preview_text(entry.text)),
         )
 
-    def _apply_incremental_reload(
+    def _apply_reconciled_reload(
         self,
         *,
         previous_entries: list[TranscriptHistoryEntry],
         entries: list[TranscriptHistoryEntry],
         total: int,
         previous_selected_rows: list[int],
-        previous_selected_entries: list[TranscriptHistoryEntry],
         previous_scroll_value: int,
     ) -> bool:
-        prefix_count = prepended_recent_entries_count(previous_entries, entries)
-        if prefix_count is None or prefix_count <= 0:
+        changes = recent_entries_change_plan(previous_entries, entries)
+        if not changes:
+            self._entries = entries
+            self._finish_reload(
+                total=total,
+                restored_selected_rows=[
+                    row
+                    for row in map_recent_entry_rows(changes, previous_selected_rows)
+                    if 0 <= row < len(entries)
+                ],
+                previous_selected_rows=previous_selected_rows,
+                previous_scroll_value=previous_scroll_value,
+            )
+            return True
+        if not previous_entries and entries:
             return False
         self._table.setUpdatesEnabled(False)
         self._table.blockSignals(True)
         try:
-            for entry in reversed(entries[:prefix_count]):
-                self._table.insertRow(0)
-                self._populate_row(0, entry)
-            while self._table.rowCount() > len(entries):
-                self._table.removeRow(self._table.rowCount() - 1)
+            for change in reversed(changes):
+                if change.kind == "delete":
+                    self._remove_rows(change.previous_start, change.previous_stop)
+                elif change.kind == "insert":
+                    self._insert_rows(
+                        change.previous_start,
+                        entries[change.current_start:change.current_stop],
+                    )
+                elif change.kind == "update":
+                    for row, entry in zip(
+                        range(change.previous_start, change.previous_stop),
+                        entries[change.current_start:change.current_stop],
+                    ):
+                        self._populate_row(row, entry)
+                elif change.kind == "replace":
+                    self._remove_rows(change.previous_start, change.previous_stop)
+                    self._insert_rows(
+                        change.previous_start,
+                        entries[change.current_start:change.current_stop],
+                    )
+                else:
+                    return False
         finally:
             self._table.blockSignals(False)
             self._table.setUpdatesEnabled(True)
@@ -281,8 +310,8 @@ class HistoryDialog(QtWidgets.QDialog):
         self._entries = entries
         restored_selected_rows = [
             row
-            for row, entry in enumerate(entries)
-            if any(entry == selected for selected in previous_selected_entries)
+            for row in map_recent_entry_rows(changes, previous_selected_rows)
+            if 0 <= row < len(entries)
         ]
         self._finish_reload(
             total=total,
@@ -291,6 +320,20 @@ class HistoryDialog(QtWidgets.QDialog):
             previous_scroll_value=previous_scroll_value,
         )
         return True
+
+    def _remove_rows(self, start: int, stop: int) -> None:
+        for row in range(stop - 1, start - 1, -1):
+            if 0 <= row < self._table.rowCount():
+                self._table.removeRow(row)
+
+    def _insert_rows(
+        self,
+        start: int,
+        entries: list[TranscriptHistoryEntry],
+    ) -> None:
+        for entry in reversed(entries):
+            self._table.insertRow(start)
+            self._populate_row(start, entry)
 
     def _finish_reload(
         self,

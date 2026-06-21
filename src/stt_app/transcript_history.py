@@ -6,6 +6,7 @@ from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from dataclasses import replace
 from datetime import datetime, timezone
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,15 @@ from .app_paths import transcript_history_path
 from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
 
 HistoryStorageSignature = tuple[int, int] | None
+
+
+@dataclass(frozen=True, slots=True)
+class HistoryEntryListChange:
+    kind: str
+    previous_start: int
+    previous_stop: int
+    current_start: int
+    current_stop: int
 
 
 @dataclass(slots=True)
@@ -261,28 +271,102 @@ def join_recent_entries_for_clipboard(
     return "\n\n".join(texts)
 
 
-def prepended_recent_entries_count(
+def recent_entries_change_plan(
     previous_newest_first: Iterable[TranscriptHistoryEntry],
     current_newest_first: Iterable[TranscriptHistoryEntry],
-) -> int | None:
-    """Return how many entries were prepended to a newest-first recent list.
-
-    ``None`` means the change was not a simple prepend and the caller should
-    rebuild its view.
-    """
+) -> list[HistoryEntryListChange]:
     previous = list(previous_newest_first)
     current = list(current_newest_first)
-    if not previous:
-        return len(current)
-    if not current:
+    matcher = SequenceMatcher(
+        None,
+        [_history_entry_full_key(entry) for entry in previous],
+        [_history_entry_full_key(entry) for entry in current],
+        autojunk=False,
+    )
+    changes: list[HistoryEntryListChange] = []
+    for tag, previous_start, previous_stop, current_start, current_stop in (
+        matcher.get_opcodes()
+    ):
+        if tag == "equal":
+            continue
+        kind = str(tag)
+        if (
+            tag == "replace"
+            and previous_stop - previous_start == current_stop - current_start
+            and [
+                _history_entry_identity_key(entry)
+                for entry in previous[previous_start:previous_stop]
+            ]
+            == [
+                _history_entry_identity_key(entry)
+                for entry in current[current_start:current_stop]
+            ]
+        ):
+            kind = "update"
+        changes.append(
+            HistoryEntryListChange(
+                kind=kind,
+                previous_start=previous_start,
+                previous_stop=previous_stop,
+                current_start=current_start,
+                current_stop=current_stop,
+            )
+        )
+    return changes
+
+
+def map_recent_entry_rows(
+    changes: Iterable[HistoryEntryListChange],
+    previous_rows: Iterable[int],
+) -> list[int]:
+    ordered_changes = list(changes)
+    mapped_rows: list[int] = []
+    for row in previous_rows:
+        current_row = _map_recent_entry_row(ordered_changes, row)
+        if current_row is not None and current_row not in mapped_rows:
+            mapped_rows.append(current_row)
+    return mapped_rows
+
+
+def _map_recent_entry_row(
+    changes: list[HistoryEntryListChange],
+    row: int,
+) -> int | None:
+    offset = 0
+    for change in changes:
+        if row < change.previous_start:
+            break
+        if row >= change.previous_stop:
+            offset += (change.current_stop - change.current_start) - (
+                change.previous_stop - change.previous_start
+            )
+            continue
+        if change.kind == "update":
+            return change.current_start + (row - change.previous_start)
         return None
-    try:
-        prefix_count = current.index(previous[0])
-    except ValueError:
-        return None
-    common_count = len(current) - prefix_count
-    if common_count < 0:
-        return None
-    if current[prefix_count:] != previous[:common_count]:
-        return None
-    return prefix_count
+    return row + offset
+
+
+def _history_entry_identity_key(
+    entry: TranscriptHistoryEntry,
+) -> tuple[str, str, str, str, str]:
+    return (
+        entry.created_at,
+        entry.engine,
+        entry.model,
+        entry.mode,
+        entry.source_recording_id,
+    )
+
+
+def _history_entry_full_key(
+    entry: TranscriptHistoryEntry,
+) -> tuple[str, str, str, str, str, str]:
+    return (
+        entry.created_at,
+        entry.text,
+        entry.engine,
+        entry.model,
+        entry.mode,
+        entry.source_recording_id,
+    )

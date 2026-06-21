@@ -12,6 +12,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
     dialog and Settings History tab prepend just the new visible rows/items and
     keep existing Qt items, selection, and scroll state instead of clearing and
     rebuilding the whole view.
+  - Follow-up: refreshes now reconcile inserts, deletes, limit trims/expansions,
+    row replacements, and in-place text edits through one shared diff plan.
+    Selection/current-row restore is mapped through that diff instead of relying
+    on non-unique timestamps, so same-second entries remain distinct.
 - **History multi-select copy now pastes oldest selected transcript first:**
   - Both the overlay History dialog and the Settings History tab still display
     recent entries newest-first, but `Copy selected` reverses the selected

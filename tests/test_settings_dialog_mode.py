@@ -796,7 +796,6 @@ def test_settings_history_refresh_prepends_new_entries_without_rebuilding_old_it
     dialog._history_store = history_store
     dialog._refresh_history_list()
     second_item = dialog.history_list.item(0)
-    second_entry = second_item.data(QtCore.Qt.UserRole)
 
     history_store.save(
         [
@@ -808,7 +807,35 @@ def test_settings_history_refresh_prepends_new_entries_without_rebuilding_old_it
     dialog._refresh_history_list()
 
     assert "third" in dialog.history_list.item(0).text()
-    assert dialog.history_list.item(1).data(QtCore.Qt.UserRole) is second_entry
+    assert dialog.history_list.item(1) is second_item
+    _ = app
+
+
+def test_settings_history_limit_change_removes_extra_items_without_rebuilding(
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            _history_entry("first"),
+            _history_entry("second"),
+            _history_entry("third"),
+        ]
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    newest_item = dialog.history_list.item(0)
+
+    dialog.history_max_spin.setValue(2)
+
+    assert dialog.history_list.count() == 2
+    assert dialog.history_list.item(0) is newest_item
     _ = app
 
 
@@ -868,12 +895,49 @@ def test_settings_history_multiselect_delete_removes_selected_entries(
     )
     dialog._history_store = history_store
     dialog._refresh_history_list()
+    first_item = dialog.history_list.item(2)
 
     dialog.history_list.item(0).setSelected(True)
     dialog.history_list.item(1).setSelected(True)
     dialog._delete_selected_history()
 
     assert [entry.text for entry in history_store.load()] == ["first"]
+    assert dialog.history_list.count() == 1
+    assert dialog.history_list.item(0) is first_item
+    _ = app
+
+
+def test_settings_history_edit_updates_item_without_rebuilding_others(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            _history_entry("first"),
+            _history_entry("second"),
+        ]
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.TranscriptEditDialog.get_text",
+        lambda *_args, **_kwargs: "second edited",
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    first_item = dialog.history_list.item(1)
+
+    dialog.history_list.item(0).setSelected(True)
+    dialog._edit_selected_history()
+
+    assert "second edited" in dialog.history_list.item(0).text()
+    assert dialog.history_list.item(0).isSelected() is True
+    assert dialog.history_detail.toPlainText() == "second edited"
+    assert dialog.history_list.item(1) is first_item
     _ = app
 
 
