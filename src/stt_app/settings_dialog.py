@@ -101,9 +101,11 @@ from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import (
+    HistoryStorageSignature,
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     join_recent_entries_for_clipboard,
+    prepended_recent_entries_count,
 )
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog
@@ -283,6 +285,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._app_logger = app_logger
         self._controller = controller
         self._history_store = TranscriptHistoryStore()
+        self._history_entries: list[TranscriptHistoryEntry] = []
+        self._history_reload_signature: tuple[
+            HistoryStorageSignature, int
+        ] | None = None
         self._benchmark_history_store = BenchmarkHistoryStore()
         self._last_recording_store = last_recording_store or LastRecordingStore()
         self._local_model_inventory_store = local_model_inventory_store
@@ -5192,7 +5198,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 "Open Local or Benchmark to verify local model availability in the background."
             )
         self._update_engine_indicator()
-        self._refresh_history_list()
+        self._refresh_history_list(force=True)
         self._refresh_benchmark_history_list()
         self._apply_secret_store_options()
         self._refresh_provider_key_statuses()
@@ -5272,7 +5278,14 @@ class SettingsDialog(QtWidgets.QDialog):
             return None
         return self._effective_recordings_dir()
 
-    def _refresh_history_list(self) -> None:
+    def _refresh_history_list(self, force: bool = False) -> None:
+        signature = self._current_history_reload_signature()
+        if (
+            not force
+            and signature is not None
+            and signature == self._history_reload_signature
+        ):
+            return
         selected_entries = [
             item.data(QtCore.Qt.UserRole)
             for item in self.history_list.selectedItems()
@@ -5285,6 +5298,15 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         scroll_value = self.history_list.verticalScrollBar().value()
         entries = self._history_store.recent_entries(self.history_max_spin.value())
+        if self._apply_incremental_history_refresh(
+            entries=entries,
+            selected_entries=selected_entries,
+            current_entry=current_entry,
+            scroll_value=scroll_value,
+        ):
+            self._history_reload_signature = signature
+            return
+
         restored_selection = False
         restored_current_item: QtWidgets.QListWidgetItem | None = None
 
@@ -5293,12 +5315,7 @@ class SettingsDialog(QtWidgets.QDialog):
         try:
             self.history_list.clear()
             for entry in entries:
-                text = entry.text.strip().replace("\n", " ")
-                preview = text[:70] + ("..." if len(text) > 70 else "")
-                label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
-                item = QtWidgets.QListWidgetItem(label)
-                item.setData(QtCore.Qt.UserRole, entry)
-                self._apply_compact_list_item_size(self.history_list, item)
+                item = self._history_list_item(entry)
                 self.history_list.addItem(item)
                 if any(entry == selected for selected in selected_entries):
                     item.setSelected(True)
@@ -5309,6 +5326,8 @@ class SettingsDialog(QtWidgets.QDialog):
             self.history_list.blockSignals(False)
             self.history_list.setUpdatesEnabled(True)
 
+        self._history_entries = entries
+        self._history_reload_signature = signature
         if restored_current_item is not None:
             self.history_list.setCurrentItem(
                 restored_current_item,
@@ -5324,6 +5343,78 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_edit_button.setEnabled(False)
         self.history_delete_button.setEnabled(False)
         self._reset_history_copy_feedback()
+
+    def _current_history_reload_signature(
+        self,
+    ) -> tuple[HistoryStorageSignature, int] | None:
+        getter = getattr(self._history_store, "storage_signature", None)
+        if not callable(getter):
+            return None
+        return (getter(), self.history_max_spin.value())
+
+    def _history_list_item(
+        self,
+        entry: TranscriptHistoryEntry,
+    ) -> QtWidgets.QListWidgetItem:
+        text = entry.text.strip().replace("\n", " ")
+        preview = text[:70] + ("..." if len(text) > 70 else "")
+        label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
+        item = QtWidgets.QListWidgetItem(label)
+        item.setData(QtCore.Qt.UserRole, entry)
+        self._apply_compact_list_item_size(self.history_list, item)
+        return item
+
+    def _apply_incremental_history_refresh(
+        self,
+        *,
+        entries: list[TranscriptHistoryEntry],
+        selected_entries: list[TranscriptHistoryEntry],
+        current_entry: TranscriptHistoryEntry | None,
+        scroll_value: int,
+    ) -> bool:
+        prefix_count = prepended_recent_entries_count(self._history_entries, entries)
+        if prefix_count is None or prefix_count <= 0:
+            return False
+
+        self.history_list.setUpdatesEnabled(False)
+        self.history_list.blockSignals(True)
+        try:
+            for entry in reversed(entries[:prefix_count]):
+                self.history_list.insertItem(0, self._history_list_item(entry))
+            while self.history_list.count() > len(entries):
+                self.history_list.takeItem(self.history_list.count() - 1)
+            restored_current_item: QtWidgets.QListWidgetItem | None = None
+            restored_selection = False
+            for row, entry in enumerate(entries):
+                item = self.history_list.item(row)
+                if item is None:
+                    continue
+                if any(entry == selected for selected in selected_entries):
+                    item.setSelected(True)
+                    restored_selection = True
+                if current_entry is not None and entry == current_entry:
+                    restored_current_item = item
+        finally:
+            self.history_list.blockSignals(False)
+            self.history_list.setUpdatesEnabled(True)
+
+        self._history_entries = entries
+        if restored_current_item is not None:
+            self.history_list.setCurrentItem(
+                restored_current_item,
+                QtCore.QItemSelectionModel.NoUpdate,
+            )
+        restore_vertical_scrollbar(self.history_list, scroll_value)
+        if restored_selection:
+            self._on_history_item_selected()
+            return True
+
+        self.history_detail.clear()
+        self.history_copy_button.setEnabled(False)
+        self.history_edit_button.setEnabled(False)
+        self.history_delete_button.setEnabled(False)
+        self._reset_history_copy_feedback()
+        return True
 
     def _selected_history_items(self) -> list[QtWidgets.QListWidgetItem]:
         """Selected history items sorted by their row order in the list."""
@@ -5386,7 +5477,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_result_label.setText("Selected history entry was not found.")
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             return
-        self._refresh_history_list()
+        self._refresh_history_list(force=True)
 
     def _delete_selected_history(self) -> None:
         entries = self._selected_history_entries()
@@ -5414,7 +5505,7 @@ class SettingsDialog(QtWidgets.QDialog):
             )
             self.import_result_label.setStyleSheet("color: #b71c1c;")
             return
-        self._refresh_history_list()
+        self._refresh_history_list(force=True)
 
     def _reset_history_copy_feedback(self) -> None:
         self.history_copy_button.setText("Copy selected")
@@ -5638,7 +5729,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_result_text.setPlainText(text)
             self.import_copy_button.setEnabled(bool(text))
             self._reset_import_copy_feedback()
-            self._refresh_history_list()
+            self._refresh_history_list(force=True)
             return
         detail = f"Failed: {text}"
         if self._last_recording_store.is_managed_audio_path(

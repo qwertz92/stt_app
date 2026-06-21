@@ -5,6 +5,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-21
 
+- **History refreshes now avoid full Qt rebuilds when possible:**
+  - Transcript history views use the history file mtime/size as a cheap reload
+    signature and return immediately when Refresh sees no storage change.
+  - When new transcript entries were only appended, the newest-first History
+    dialog and Settings History tab prepend just the new visible rows/items and
+    keep existing Qt items, selection, and scroll state instead of clearing and
+    rebuilding the whole view.
 - **History multi-select copy now pastes oldest selected transcript first:**
   - Both the overlay History dialog and the Settings History tab still display
     recent entries newest-first, but `Copy selected` reverses the selected

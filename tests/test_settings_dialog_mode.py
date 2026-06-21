@@ -759,6 +759,59 @@ def test_settings_history_refresh_preserves_selected_entry_and_scroll(tmp_path):
     _ = app
 
 
+def test_settings_history_refresh_skips_unchanged_history(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    first = _history_entry("first")
+    second = _history_entry("second")
+    history_store.save([first, second])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    original_item = dialog.history_list.item(0)
+
+    dialog._refresh_history_list()
+
+    assert dialog.history_list.item(0) is original_item
+    _ = app
+
+
+def test_settings_history_refresh_prepends_new_entries_without_rebuilding_old_items(
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    first = _history_entry("first")
+    second = _history_entry("second")
+    history_store.save([first, second])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    second_item = dialog.history_list.item(0)
+    second_entry = second_item.data(QtCore.Qt.UserRole)
+
+    history_store.save(
+        [
+            first,
+            second,
+            _history_entry("third"),
+        ]
+    )
+    dialog._refresh_history_list()
+
+    assert "third" in dialog.history_list.item(0).text()
+    assert dialog.history_list.item(1).data(QtCore.Qt.UserRole) is second_entry
+    _ = app
+
+
 def test_settings_history_multiselect_copy_joins_selected_entries(
     monkeypatch, tmp_path
 ):

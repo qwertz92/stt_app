@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from dataclasses import replace
@@ -10,6 +11,8 @@ from typing import Any
 
 from .app_paths import transcript_history_path
 from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
+
+HistoryStorageSignature = tuple[int, int] | None
 
 
 @dataclass(slots=True)
@@ -61,6 +64,15 @@ class TranscriptHistoryStore:
     @property
     def path(self) -> Path:
         return self._path
+
+    def storage_signature(self) -> HistoryStorageSignature:
+        try:
+            stat = self._path.stat()
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return (time.monotonic_ns(), -1)
+        return (int(stat.st_mtime_ns), int(stat.st_size))
 
     def load(self) -> list[TranscriptHistoryEntry]:
         return self._load_from_path(self._path)
@@ -247,3 +259,30 @@ def join_recent_entries_for_clipboard(
         if text:
             texts.append(text)
     return "\n\n".join(texts)
+
+
+def prepended_recent_entries_count(
+    previous_newest_first: Iterable[TranscriptHistoryEntry],
+    current_newest_first: Iterable[TranscriptHistoryEntry],
+) -> int | None:
+    """Return how many entries were prepended to a newest-first recent list.
+
+    ``None`` means the change was not a simple prepend and the caller should
+    rebuild its view.
+    """
+    previous = list(previous_newest_first)
+    current = list(current_newest_first)
+    if not previous:
+        return len(current)
+    if not current:
+        return None
+    try:
+        prefix_count = current.index(previous[0])
+    except ValueError:
+        return None
+    common_count = len(current) - prefix_count
+    if common_count < 0:
+        return None
+    if current[prefix_count:] != previous[:common_count]:
+        return None
+    return prefix_count

@@ -8,6 +8,7 @@ from stt_app.transcript_history import (
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     join_recent_entries_for_clipboard,
+    prepended_recent_entries_count,
 )
 
 
@@ -139,6 +140,62 @@ def test_join_recent_entries_for_clipboard_uses_oldest_first_order():
     text = join_recent_entries_for_clipboard(entries)
 
     assert text == "second\n\nthird"
+
+
+def test_prepended_recent_entries_count_detects_append_only_recent_update():
+    first = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:00+00:00",
+        text="first",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    second = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:01+00:00",
+        text="second",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    third = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:02+00:00",
+        text="third",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+
+    count = prepended_recent_entries_count([second, first], [third, second, first])
+
+    assert count == 1
+
+
+def test_prepended_recent_entries_count_rejects_edits_or_deletes():
+    first = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:00+00:00",
+        text="first",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    second = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:01+00:00",
+        text="second",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    edited_second = TranscriptHistoryEntry(
+        created_at="2026-01-01T00:00:01+00:00",
+        text="second edited",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+
+    count = prepended_recent_entries_count([second, first], [edited_second, first])
+
+    assert count is None
 
 
 def test_load_ignores_invalid_payload(tmp_path):

@@ -11,9 +11,11 @@ from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import (
+    HistoryStorageSignature,
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
     join_recent_entries_for_clipboard,
+    prepended_recent_entries_count,
 )
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
@@ -40,6 +42,9 @@ class HistoryDialog(QtWidgets.QDialog):
         self._settings_store = settings_store
         self._on_history_limit_changed = on_history_limit_changed
         self._entries: list[TranscriptHistoryEntry] = []
+        self._history_reload_signature: tuple[
+            HistoryStorageSignature, int
+        ] | None = None
         self._last_total_entries = 0
         self._copy_feedback_timer = QtCore.QTimer(self)
         self._copy_feedback_timer.setSingleShot(True)
@@ -179,13 +184,33 @@ class HistoryDialog(QtWidgets.QDialog):
         if autoload:
             self.reload()
 
-    def reload(self) -> None:
+    def reload(self, force: bool = False) -> None:
+        signature = self._current_history_reload_signature()
+        if (
+            not force
+            and signature is not None
+            and signature == self._history_reload_signature
+        ):
+            return
         previous_selected_rows = self._selected_rows()
         previous_selected_entries = self._selected_entries()
         previous_scroll_value = self._table.verticalScrollBar().value()
-        self._entries, total = self._history_store.recent_entries_with_count(
+        previous_entries = list(self._entries)
+        entries, total = self._history_store.recent_entries_with_count(
             limit=self._history_limit
         )
+        if self._apply_incremental_reload(
+            previous_entries=previous_entries,
+            entries=entries,
+            total=total,
+            previous_selected_rows=previous_selected_rows,
+            previous_selected_entries=previous_selected_entries,
+            previous_scroll_value=previous_scroll_value,
+        ):
+            self._history_reload_signature = signature
+            return
+
+        self._entries = entries
         restored_selected_rows: list[int] = []
         self._table.setUpdatesEnabled(False)
         self._table.blockSignals(True)
@@ -193,22 +218,88 @@ class HistoryDialog(QtWidgets.QDialog):
             self._table.clearContents()
             self._table.setRowCount(len(self._entries))
             for row, entry in enumerate(self._entries):
-                self._table.setItem(
-                    row, 0, QtWidgets.QTableWidgetItem(_format_time(entry.created_at))
-                )
-                self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(entry.engine))
-                self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(entry.model))
-                self._table.setItem(
-                    row,
-                    3,
-                    QtWidgets.QTableWidgetItem(_preview_text(entry.text)),
-                )
+                self._populate_row(row, entry)
                 if any(entry == selected for selected in previous_selected_entries):
                     restored_selected_rows.append(row)
         finally:
             self._table.blockSignals(False)
             self._table.setUpdatesEnabled(True)
 
+        self._finish_reload(
+            total=total,
+            restored_selected_rows=restored_selected_rows,
+            previous_selected_rows=previous_selected_rows,
+            previous_scroll_value=previous_scroll_value,
+        )
+        self._history_reload_signature = signature
+
+    def _current_history_reload_signature(
+        self,
+    ) -> tuple[HistoryStorageSignature, int] | None:
+        getter = getattr(self._history_store, "storage_signature", None)
+        if not callable(getter):
+            return None
+        return (getter(), self._history_limit)
+
+    def _populate_row(self, row: int, entry: TranscriptHistoryEntry) -> None:
+        self._table.setItem(
+            row, 0, QtWidgets.QTableWidgetItem(_format_time(entry.created_at))
+        )
+        self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(entry.engine))
+        self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(entry.model))
+        self._table.setItem(
+            row,
+            3,
+            QtWidgets.QTableWidgetItem(_preview_text(entry.text)),
+        )
+
+    def _apply_incremental_reload(
+        self,
+        *,
+        previous_entries: list[TranscriptHistoryEntry],
+        entries: list[TranscriptHistoryEntry],
+        total: int,
+        previous_selected_rows: list[int],
+        previous_selected_entries: list[TranscriptHistoryEntry],
+        previous_scroll_value: int,
+    ) -> bool:
+        prefix_count = prepended_recent_entries_count(previous_entries, entries)
+        if prefix_count is None or prefix_count <= 0:
+            return False
+        self._table.setUpdatesEnabled(False)
+        self._table.blockSignals(True)
+        try:
+            for entry in reversed(entries[:prefix_count]):
+                self._table.insertRow(0)
+                self._populate_row(0, entry)
+            while self._table.rowCount() > len(entries):
+                self._table.removeRow(self._table.rowCount() - 1)
+        finally:
+            self._table.blockSignals(False)
+            self._table.setUpdatesEnabled(True)
+
+        self._entries = entries
+        restored_selected_rows = [
+            row
+            for row, entry in enumerate(entries)
+            if any(entry == selected for selected in previous_selected_entries)
+        ]
+        self._finish_reload(
+            total=total,
+            restored_selected_rows=restored_selected_rows,
+            previous_selected_rows=previous_selected_rows,
+            previous_scroll_value=previous_scroll_value,
+        )
+        return True
+
+    def _finish_reload(
+        self,
+        *,
+        total: int,
+        restored_selected_rows: list[int],
+        previous_selected_rows: list[int],
+        previous_scroll_value: int,
+    ) -> None:
         self._last_total_entries = total
         self._update_history_count_label(total)
         if self._entries:
@@ -313,7 +404,7 @@ class HistoryDialog(QtWidgets.QDialog):
                 "The selected history entry could not be updated.",
             )
             return
-        self.reload()
+        self.reload(force=True)
         if row < self._table.rowCount():
             self._table.selectRow(row)
 
@@ -394,7 +485,7 @@ class HistoryDialog(QtWidgets.QDialog):
                 "The selected history entries could not be removed.",
             )
             return
-        self.reload()
+        self.reload(force=True)
 
     def _on_limit_spin_changed(self, value: int) -> None:
         next_limit = _normalize_history_limit(value)
@@ -437,7 +528,7 @@ class HistoryDialog(QtWidgets.QDialog):
         self._last_total_entries = current_count
         self._update_history_count_label(current_count)
         if next_visible != current_visible:
-            self.reload()
+            self.reload(force=True)
 
     def _persist_limit(self, limit: int) -> bool:
         settings = self._settings_store.load()
@@ -546,7 +637,7 @@ class HistoryDialog(QtWidgets.QDialog):
             entries_to_append,
             max_items=active_limit,
         )
-        self.reload()
+        self.reload(force=True)
         QtWidgets.QMessageBox.information(
             self,
             "Import complete",
@@ -645,7 +736,7 @@ class HistoryDialog(QtWidgets.QDialog):
             return
 
         self._history_store.clear()
-        self.reload()
+        self.reload(force=True)
 
 
 def _normalize_history_limit(value: int) -> int:

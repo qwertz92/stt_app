@@ -45,7 +45,9 @@ def _close_top_level_windows_after_test():
 def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
-    history_store.save([_entry("alpha"), _entry("beta")])
+    alpha = _entry("alpha")
+    beta = _entry("beta")
+    history_store.save([alpha, beta])
     settings_store = SettingsStore(tmp_path / "settings.json")
     settings_store.save(AppSettings(history_max_items=20))
 
@@ -70,7 +72,9 @@ def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
 def test_delete_selected_button_removes_entry(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
-    history_store.save([_entry("alpha"), _entry("beta")])
+    alpha = _entry("alpha")
+    beta = _entry("beta")
+    history_store.save([alpha, beta])
     settings_store = SettingsStore(tmp_path / "settings.json")
     settings_store.save(AppSettings(history_max_items=20))
 
@@ -361,6 +365,52 @@ def test_history_dialog_reload_preserves_selected_entry_and_scroll(tmp_path):
     assert dialog._entries[selected[0].row()] == expected_entry
     if scroll_before > 0:
         assert dialog._table.verticalScrollBar().value() == scroll_before
+    _ = app
+
+
+def test_history_dialog_refresh_skips_unchanged_history(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    alpha = _entry("alpha")
+    beta = _entry("beta")
+    history_store.save([alpha, beta])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    original_item = dialog._table.item(0, 3)
+
+    dialog.reload()
+
+    assert dialog._table.item(0, 3) is original_item
+    _ = app
+
+
+def test_history_dialog_refresh_prepends_new_entries_without_rebuilding_old_rows(
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    alpha = _entry("alpha")
+    beta = _entry("beta")
+    history_store.save([alpha, beta])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    beta_item = dialog._table.item(0, 3)
+
+    history_store.save([alpha, beta, _entry("gamma")])
+    dialog.reload()
+
+    assert dialog._table.item(0, 3).text() == "gamma"
+    assert dialog._table.item(1, 3) is beta_item
     _ = app
 
 
