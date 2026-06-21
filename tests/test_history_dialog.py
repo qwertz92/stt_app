@@ -112,7 +112,7 @@ def test_multiselect_copy_joins_selected_entries(monkeypatch, tmp_path):
 
     dialog._copy_button.click()
 
-    assert clipboard.text() == "gamma\n\nbeta"
+    assert clipboard.text() == "beta\n\ngamma"
     assert dialog._copy_button.text() == "Copied"
     _ = app
 

@@ -785,7 +785,7 @@ def test_settings_history_multiselect_copy_joins_selected_entries(
     dialog.history_list.item(1).setSelected(True)
     dialog._copy_selected_history()
 
-    assert clipboard.text() == "third\n\nsecond"
+    assert clipboard.text() == "second\n\nthird"
     assert dialog.history_edit_button.isEnabled() is False
     assert dialog.history_delete_button.isEnabled() is True
     _ = app

@@ -4,7 +4,11 @@ import json
 from pathlib import Path
 
 from stt_app.persistence import backup_path
-from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from stt_app.transcript_history import (
+    TranscriptHistoryEntry,
+    TranscriptHistoryStore,
+    join_recent_entries_for_clipboard,
+)
 
 
 def test_add_entry_persists_and_respects_max_items(tmp_path):
@@ -112,6 +116,29 @@ def test_recent_entries_with_count_returns_limited_entries_and_total(tmp_path):
 
     assert total == 3
     assert [entry.text for entry in recent] == ["third", "second"]
+
+
+def test_join_recent_entries_for_clipboard_uses_oldest_first_order():
+    entries = [
+        TranscriptHistoryEntry(
+            created_at="2026-01-01T00:00:02+00:00",
+            text="third",
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+        TranscriptHistoryEntry(
+            created_at="2026-01-01T00:00:01+00:00",
+            text="second",
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+    ]
+
+    text = join_recent_entries_for_clipboard(entries)
+
+    assert text == "second\n\nthird"
 
 
 def test_load_ignores_invalid_payload(tmp_path):

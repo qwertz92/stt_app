@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from dataclasses import asdict, dataclass
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -234,3 +235,15 @@ def _normalize_limit(value: int) -> int:
     if keep < 0:
         return 0
     return keep
+
+
+def join_recent_entries_for_clipboard(
+    entries_newest_first: Iterable[TranscriptHistoryEntry],
+) -> str:
+    """Join selected recent-history entries in chronological paste order."""
+    texts: list[str] = []
+    for entry in reversed(list(entries_newest_first)):
+        text = str(getattr(entry, "text", "") or "")
+        if text:
+            texts.append(text)
+    return "\n\n".join(texts)

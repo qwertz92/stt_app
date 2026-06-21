@@ -10,7 +10,11 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
-from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from .transcript_history import (
+    TranscriptHistoryEntry,
+    TranscriptHistoryStore,
+    join_recent_entries_for_clipboard,
+)
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -285,10 +289,10 @@ class HistoryDialog(QtWidgets.QDialog):
             )
 
     def _copy_selected(self) -> None:
-        texts = [entry.text for entry in self._selected_entries() if entry.text]
-        if not texts:
+        text = join_recent_entries_for_clipboard(self._selected_entries())
+        if not text:
             return
-        QtGui.QGuiApplication.clipboard().setText("\n\n".join(texts))
+        QtGui.QGuiApplication.clipboard().setText(text)
         self._copy_button.setText("Copied")
         set_button_feedback_state(self._copy_button, "success")
         self._copy_feedback_timer.start()

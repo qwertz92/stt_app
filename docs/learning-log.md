@@ -3,6 +3,16 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-21
+
+- **History multi-select copy now pastes oldest selected transcript first:**
+  - Both the overlay History dialog and the Settings History tab still display
+    recent entries newest-first, but `Copy selected` reverses the selected
+    recent entries before joining them so pasted text is chronological.
+  - Batch transcription queue delivery remains serialized through the single
+    controller transcription executor; local and remote jobs are not currently
+    uploaded or transcribed in parallel.
+
 ## 2026-06-19
 
 - **Release and dialog polish after 0.4.1.** The Windows release workflow now

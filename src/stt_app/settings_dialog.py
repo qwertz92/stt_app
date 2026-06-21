@@ -100,7 +100,11 @@ from .provider_connection_test_store import ProviderConnectionTestStore
 from .secret_store import SecretStore
 from .settings_store import AppSettings, SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
-from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+from .transcript_history import (
+    TranscriptHistoryEntry,
+    TranscriptHistoryStore,
+    join_recent_entries_for_clipboard,
+)
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog
 from .ui_feedback import (
@@ -5358,14 +5362,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._reset_history_copy_feedback()
 
     def _copy_selected_history(self) -> None:
-        texts = [
-            str(getattr(entry, "text", "") or "")
-            for entry in self._selected_history_entries()
-        ]
-        texts = [text for text in texts if text]
-        if not texts:
+        text = join_recent_entries_for_clipboard(self._selected_history_entries())
+        if not text:
             return
-        QtGui.QGuiApplication.clipboard().setText("\n\n".join(texts))
+        QtGui.QGuiApplication.clipboard().setText(text)
         self.history_copy_button.setText("Copied")
         set_button_feedback_state(self.history_copy_button, "success")
         self._history_copy_feedback_timer.start()
