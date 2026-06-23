@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes
+import threading
 import time
 from dataclasses import dataclass
 
@@ -22,13 +23,28 @@ except Exception:  # pragma: no cover - import guarded for testability
 
 
 class TextInsertionError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str = "",
+        *,
+        allow_clipboard_fallback: bool = True,
+    ) -> None:
+        super().__init__(message)
+        self.allow_clipboard_fallback = allow_clipboard_fallback
+
+
+class ClipboardContentionError(TextInsertionError):
+    def __init__(self, message: str) -> None:
+        super().__init__(message, allow_clipboard_fallback=False)
 
 
 @dataclass(slots=True)
 class ClipboardState:
     has_text: bool
     text: str | None
+
+
+_UNAVAILABLE_CLIPBOARD_TEXT = object()
 
 
 class Win32ClipboardBackend:
@@ -54,6 +70,19 @@ class Win32ClipboardBackend:
             win32clipboard.EmptyClipboard()
             if state.has_text and state.text is not None:
                 win32clipboard.SetClipboardText(state.text, win32con.CF_UNICODETEXT)
+
+    def get_clipboard_sequence_number(self) -> int | None:
+        getter = getattr(self._user32, "GetClipboardSequenceNumber", None)
+        if getter is None:
+            return None
+        getter.restype = ctypes.wintypes.DWORD
+        return int(getter() or 0)
+
+    def get_clipboard_text(self) -> str | None:
+        with self._clipboard_opened():
+            if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
+                return str(win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT))
+            return None
 
     def send_ctrl_v(self) -> None:
         _send_ctrl_v_input()
@@ -172,6 +201,7 @@ class TextInserter:
         self._sleep_fn = sleep_fn
         self._clipboard_settle_s = clipboard_settle_s
         self._sendinput_restore_delay_s = sendinput_restore_delay_s
+        self._insert_lock = threading.RLock()
 
     def insert_text(self, text: str, target_hwnd: int | None = None) -> bool:
         return self.insert_text_with_options(
@@ -187,51 +217,122 @@ class TextInserter:
         target_hwnd: int | None,
         paste_mode: str,
     ) -> bool:
-        requested_mode = paste_mode
-        previous_state = self._backend.capture_clipboard_state()
-        actual_mode = "send_input"
-        paste_error: Exception | None = None
-        restore_error: Exception | None = None
-        try:
-            self._backend.set_clipboard_text(text)
-            self._sleep_fn(self._clipboard_settle_s)
-
-            if hasattr(self._backend, "send_paste_with_mode"):
-                actual_mode = self._backend.send_paste_with_mode(
-                    requested_mode,
-                    target_hwnd=target_hwnd,
-                )
-            elif hasattr(self._backend, "send_paste"):
-                actual_mode = self._backend.send_paste(target_hwnd=target_hwnd)
-            else:
-                self._backend.send_ctrl_v()
-                actual_mode = "send_input"
-
-            if actual_mode == "send_input":
-                # Give target app enough time to read clipboard before restore.
-                self._sleep_fn(self._sendinput_restore_delay_s)
-        except Exception as exc:
-            paste_error = exc
-        finally:
+        with self._insert_lock:
+            requested_mode = paste_mode
+            previous_state = self._backend.capture_clipboard_state()
+            clipboard_marker: int | None = None
+            restore_previous_state = True
+            actual_mode = "send_input"
+            paste_error: Exception | None = None
+            restore_error: Exception | None = None
             try:
-                self._backend.restore_clipboard_state(previous_state)
+                self._backend.set_clipboard_text(text)
+                clipboard_marker = self._clipboard_sequence_number()
+                self._sleep_fn(self._clipboard_settle_s)
+
+                if self._clipboard_changed_after_set(clipboard_marker, text):
+                    restore_previous_state = False
+                    raise ClipboardContentionError(
+                        "Clipboard changed before paste; left the current "
+                        "clipboard untouched."
+                    )
+
+                if hasattr(self._backend, "send_paste_with_mode"):
+                    actual_mode = self._backend.send_paste_with_mode(
+                        requested_mode,
+                        target_hwnd=target_hwnd,
+                    )
+                elif hasattr(self._backend, "send_paste"):
+                    actual_mode = self._backend.send_paste(target_hwnd=target_hwnd)
+                else:
+                    self._backend.send_ctrl_v()
+                    actual_mode = "send_input"
+
+                if actual_mode == "send_input":
+                    # Give target app enough time to read clipboard before restore.
+                    self._sleep_fn(self._sendinput_restore_delay_s)
+
+                if self._clipboard_changed_after_set(clipboard_marker, text):
+                    restore_previous_state = False
+                    raise ClipboardContentionError(
+                        "Clipboard changed during paste; left the current "
+                        "clipboard untouched."
+                    )
             except Exception as exc:
-                restore_error = exc
+                paste_error = exc
+                if isinstance(exc, ClipboardContentionError):
+                    restore_previous_state = False
+                elif clipboard_marker is not None:
+                    try:
+                        if self._clipboard_changed_after_set(clipboard_marker, text):
+                            restore_previous_state = False
+                            paste_error = ClipboardContentionError(
+                                "Paste failed after the clipboard changed; left "
+                                "the current clipboard untouched."
+                            )
+                    except ClipboardContentionError as contention:
+                        restore_previous_state = False
+                        paste_error = contention
+            finally:
+                if restore_previous_state:
+                    try:
+                        self._backend.restore_clipboard_state(previous_state)
+                    except Exception as exc:
+                        restore_error = exc
 
-        if paste_error is not None and restore_error is not None:
-            raise TextInsertionError(
-                f"Failed to paste text ({paste_error}) and failed to restore clipboard ({restore_error})."
-            ) from paste_error
-        if paste_error is not None:
-            raise TextInsertionError(
-                f"Failed to insert transcribed text: {paste_error}"
-            ) from paste_error
-        if restore_error is not None:
-            raise TextInsertionError(
-                f"Text pasted but clipboard restore failed: {restore_error}"
-            ) from restore_error
+            if paste_error is not None and restore_error is not None:
+                raise TextInsertionError(
+                    f"Failed to paste text ({paste_error}) and failed to restore clipboard ({restore_error})."
+                ) from paste_error
+            if paste_error is not None:
+                if isinstance(paste_error, TextInsertionError):
+                    raise paste_error
+                raise TextInsertionError(
+                    f"Failed to insert transcribed text: {paste_error}"
+                ) from paste_error
+            if restore_error is not None:
+                raise TextInsertionError(
+                    f"Text pasted but clipboard restore failed: {restore_error}"
+                ) from restore_error
 
-        return True
+            return True
+
+    def _clipboard_sequence_number(self) -> int | None:
+        getter = getattr(self._backend, "get_clipboard_sequence_number", None)
+        if not callable(getter):
+            return None
+        try:
+            sequence = getter()
+        except Exception:
+            return None
+        if sequence is None:
+            return None
+        return int(sequence)
+
+    def _clipboard_text(self):
+        getter = getattr(self._backend, "get_clipboard_text", None)
+        if not callable(getter):
+            return _UNAVAILABLE_CLIPBOARD_TEXT
+        try:
+            return getter()
+        except Exception as exc:
+            raise ClipboardContentionError(
+                "Clipboard could not be verified; left the current clipboard "
+                "untouched."
+            ) from exc
+
+    def _clipboard_changed_after_set(
+        self,
+        marker: int | None,
+        expected_text: str,
+    ) -> bool:
+        current_marker = self._clipboard_sequence_number()
+        if marker is not None and current_marker is not None:
+            return current_marker != marker
+        current_text = self._clipboard_text()
+        if current_text is not _UNAVAILABLE_CLIPBOARD_TEXT:
+            return current_text != expected_text
+        return False
 
     def insert_text_with_options(
         self,

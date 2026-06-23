@@ -3,6 +3,7 @@ import ctypes
 import pytest
 
 from stt_app.text_inserter import (
+    ClipboardContentionError,
     INPUT,
     TextInserter,
     TextInsertionError,
@@ -53,6 +54,38 @@ class PasteBackend(LegacyBackend):
     def send_paste_with_mode(self, mode, target_hwnd=None):
         self.last_requested_mode = mode
         return self.send_paste(target_hwnd=target_hwnd)
+
+
+class SequencedPasteBackend(PasteBackend):
+    def __init__(self, paste_mode="send_input"):
+        super().__init__(paste_mode=paste_mode)
+        self.sequence = 100
+
+    def set_clipboard_text(self, text):
+        self.calls.append(f"set:{text}")
+        self.state = {"has_text": True, "text": text}
+        self.sequence += 1
+
+    def restore_clipboard_state(self, state):
+        self.calls.append("restore")
+        if isinstance(state, dict):
+            self.state = dict(state)
+        else:
+            self.state = {
+                "has_text": bool(state.has_text),
+                "text": state.text,
+            }
+        self.sequence += 1
+
+    def get_clipboard_sequence_number(self):
+        return self.sequence
+
+    def get_clipboard_text(self):
+        return self.state["text"] if self.state["has_text"] else None
+
+    def simulate_user_copy(self, text):
+        self.state = {"has_text": True, "text": text}
+        self.sequence += 1
 
 
 def test_text_inserter_saves_and_restores_clipboard():
@@ -150,6 +183,62 @@ def test_text_inserter_waits_before_restore_after_sendinput_paste():
     assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
     assert backend.last_requested_mode == "send_input"
     assert sleep_calls == [0.05, 0.2]
+
+
+def test_text_inserter_aborts_if_clipboard_changes_before_paste():
+    backend = SequencedPasteBackend()
+    sleep_calls = []
+
+    def sleep(value):
+        sleep_calls.append(value)
+        if len(sleep_calls) == 1:
+            backend.simulate_user_copy("user text")
+
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=sleep,
+        clipboard_settle_s=0.05,
+        sendinput_restore_delay_s=0.2,
+    )
+
+    with pytest.raises(ClipboardContentionError) as error:
+        inserter.insert_text_with_options(
+            "hello",
+            target_hwnd=123,
+            paste_mode="send_input",
+        )
+
+    assert error.value.allow_clipboard_fallback is False
+    assert backend.calls == ["capture", "set:hello"]
+    assert backend.state["text"] == "user text"
+
+
+def test_text_inserter_preserves_user_clipboard_change_during_paste_window():
+    backend = SequencedPasteBackend()
+    sleep_calls = []
+
+    def sleep(value):
+        sleep_calls.append(value)
+        if len(sleep_calls) == 2:
+            backend.simulate_user_copy("copied while pasting")
+
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=sleep,
+        clipboard_settle_s=0.05,
+        sendinput_restore_delay_s=0.2,
+    )
+
+    with pytest.raises(ClipboardContentionError) as error:
+        inserter.insert_text_with_options(
+            "hello",
+            target_hwnd=123,
+            paste_mode="send_input",
+        )
+
+    assert error.value.allow_clipboard_fallback is False
+    assert backend.calls == ["capture", "set:hello", "paste:123"]
+    assert backend.state["text"] == "copied while pasting"
 
 
 def test_format_sendinput_failure_uipi_message():

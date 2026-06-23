@@ -3,6 +3,21 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-22
+
+- **Clipboard paste delivery is guarded against user-copy races.**
+  `TextInserter` now serializes app-initiated paste operations and verifies the
+  Win32 clipboard sequence/content after setting the transcript, before sending
+  paste, and before restoring the previous clipboard. If the user changes the
+  clipboard during that narrow SendInput window, the app leaves the user's new
+  clipboard untouched and reports a contention error instead of fallback-copying
+  the transcript over it.
+- **Recording start snapshots the target before draining pending events.** A
+  queued transcription result can arrive while `start_recording()` is painting
+  the "Starting recording" state. The controller now captures the new target
+  window/signature before that `processEvents()` window and restores it if an
+  old background delivery briefly moves focus back to its own target.
+
 ## 2026-06-21
 
 - **History refreshes now avoid full Qt rebuilds when possible:**

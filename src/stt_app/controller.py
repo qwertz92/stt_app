@@ -335,6 +335,10 @@ class DictationController(QtCore.QObject):
             return
         self._recording_start_in_progress = True
         try:
+            start_target_handle = self._window_focus_helper.capture_target_window()
+            start_target_signature = self._capture_target_signature(
+                fallback_window=start_target_handle
+            )
             self._apply_concurrent_mode_to_active_job()
             self._overlay.reveal_temporarily()
             self._overlay.set_state(
@@ -406,8 +410,19 @@ class DictationController(QtCore.QObject):
                 )
                 return
 
-            self._target_window_handle = self._window_focus_helper.capture_target_window()
-            self._target_focus_signature = self._capture_target_signature()
+            self._target_window_handle = start_target_handle
+            self._target_focus_signature = start_target_signature
+            if start_target_handle:
+                try:
+                    current_window = self._current_foreground_window()
+                    if current_window not in {None, start_target_handle}:
+                        self._window_focus_helper.restore_target_window(
+                            start_target_handle
+                        )
+                except Exception:
+                    self._logger.exception(
+                        "Failed to restore recording target after pending events"
+                    )
             if self._settings.mode == "streaming":
                 self._start_streaming_recording()
                 return
@@ -1995,7 +2010,10 @@ class DictationController(QtCore.QObject):
                 return None
         return self._window_focus_helper.capture_target_window()
 
-    def _capture_target_signature(self) -> FocusSignature | None:
+    def _capture_target_signature(
+        self,
+        fallback_window: int | None = None,
+    ) -> FocusSignature | None:
         getter = getattr(self._window_focus_helper, "capture_target_signature", None)
         if callable(getter):
             try:
@@ -2003,7 +2021,9 @@ class DictationController(QtCore.QObject):
             except Exception:
                 self._logger.exception("Failed to capture target focus signature")
                 return None
-        window = self._target_window_handle
+        window = fallback_window
+        if window is None:
+            window = self._target_window_handle
         return (window, window, window) if window else None
 
     def _current_focus_signature(self) -> FocusSignature | None:
@@ -2054,12 +2074,20 @@ class DictationController(QtCore.QObject):
                 paste_mode=self._settings.paste_mode,
             )
         except TextInsertionError as exc:
-            if copy_on_error:
+            allow_clipboard_fallback = bool(
+                getattr(exc, "allow_clipboard_fallback", True)
+            )
+            if copy_on_error and allow_clipboard_fallback:
                 QtGui.QGuiApplication.clipboard().setText(text)
             if show_overlay_error:
                 detail = str(exc)
-                if copy_on_error:
+                if copy_on_error and allow_clipboard_fallback:
                     detail = f"{detail} Transcript copied to clipboard."
+                elif copy_on_error:
+                    detail = (
+                        f"{detail} Transcript saved to history; current "
+                        "clipboard left untouched."
+                    )
                 self._overlay.set_state("Error", detail)
             self._logger.exception("Text insertion failed")
             return False

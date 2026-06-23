@@ -18,6 +18,8 @@ Quality has the highest priority. Take as much time as needed.
 
 ## Commit style
 
+- After validated code changes, commit the agent's own changes and push the
+  commit unless the user explicitly asks not to.
 - Use logical commits for distinct bugfix/feature/refactor units.
 - Match the existing history: short conventional subject line, blank line, then concise `-` bullet points.
 - Hard-wrap every commit body line at a maximum of 100 characters.
@@ -65,7 +67,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/azure_provider.py` | Batch via Azure LLM Speech fast-transcription REST (enhanced mode / MAI-Transcribe); needs endpoint + key |
 | `transcriber/funasr_provider.py` | Batch via Alibaba Fun-ASR over the DashScope realtime WebSocket (key-only; no German) |
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
-| `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore |
+| `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
 | `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
@@ -91,7 +93,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
-- **SendInput restore delay (160ms)**: Empirical value. Some apps (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms prevents stale paste.
+- **SendInput restore delay (160ms)**: Empirical value. Some apps
+  (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms
+  prevents stale paste. `TextInserter` serializes app-initiated paste operations
+  and checks the Win32 clipboard sequence/content before paste and before
+  restore; if the user changes the clipboard during that window, leave the
+  user's clipboard untouched and do not fallback-copy the transcript over it.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.
   Cached inventories are used for initial Local/Benchmark tab rendering, then
   disk verification starts automatically after the tab has had a chance to

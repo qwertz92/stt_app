@@ -7,6 +7,8 @@ signals directly.
 
 import logging
 
+from PySide6 import QtCore
+
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
 from stt_app.config import FALLBACK_HOTKEY
@@ -101,6 +103,61 @@ def test_insert_mode_keeps_and_inserts_background_result(monkeypatch, tmp_path):
     assert inserter.calls[-1] == ("transcript A", 321, "auto")
     assert overlay.states[-1][0] == "Listening"
     assert overlay.queue_updates[-1] == []
+    controller.shutdown()
+    _ = app
+
+
+def test_start_recording_keeps_new_target_when_old_result_arrives_during_start(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    focus.captured = 111
+    focus.captured_focus = 222
+    focus.captured_caret = 333
+    focus.current = 111
+    focus.current_focus = 222
+    focus.current_caret = 333
+
+    def restore_target_window(hwnd):
+        focus.restore_calls.append(hwnd)
+        if hwnd == 987:
+            focus.captured = 987
+            focus.captured_focus = 654
+            focus.captured_caret = 321
+            focus.current = 987
+            focus.current_focus = 654
+            focus.current_caret = 321
+        elif hwnd == 111:
+            focus.captured = 111
+            focus.captured_focus = 222
+            focus.captured_caret = 333
+            focus.current = 111
+            focus.current_focus = 222
+            focus.current_caret = 333
+        return True
+
+    focus.restore_target_window = restore_target_window
+    processed = {"done": False}
+
+    def process_events(*_args):
+        if processed["done"]:
+            return
+        processed["done"] = True
+        controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    monkeypatch.setattr(QtCore.QCoreApplication, "processEvents", process_events)
+
+    controller.start_recording()
+
+    assert inserter.calls[-1] == ("transcript A", 321, "auto")
+    assert focus.restore_calls == [987, 111]
+    assert controller._target_window_handle == 111
+    assert controller._target_focus_signature == (111, 222, 333)
     controller.shutdown()
     _ = app
 

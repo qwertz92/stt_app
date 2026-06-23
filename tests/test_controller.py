@@ -6,6 +6,7 @@ from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
 import stt_app.controller as controller_module
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
 from conftest import (
@@ -161,6 +162,42 @@ def test_controller_copies_transcript_on_insert_error(monkeypatch):
     assert fake_clipboard.text() == "copy me"
     assert overlay.states[-1][0] == "Error"
     assert "Transcript copied to clipboard." in overlay.states[-1][1]
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_preserves_clipboard_on_contention_error(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
+    overlay = FakeOverlay()
+
+    class ContendedInserter:
+        def insert_text_with_options(self, text, target_hwnd=None, paste_mode="auto"):
+            raise TextInsertionError(
+                "Clipboard changed during paste.",
+                allow_clipboard_fallback=False,
+            )
+
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=ContendedInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    fake_clipboard = FakeClipboard()
+    fake_clipboard.setText("user copy")
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+
+    controller._target_window_handle = 555
+    controller._on_transcription_ready("do not overwrite")
+
+    assert fake_clipboard.text() == "user copy"
+    assert overlay.states[-1][0] == "Error"
+    assert "current clipboard left untouched" in overlay.states[-1][1]
 
     controller.shutdown()
     _ = app
