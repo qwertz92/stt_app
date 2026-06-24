@@ -120,6 +120,48 @@ Agents and developers: use this as a knowledge base for past issues and solution
   Ported the desired History-tab multi-select behavior: multiple selected
   transcripts can be copied as blank-line-separated text, deleted together after
   one confirmation, and editing remains limited to a single selected entry.
+- **Granite Speech 4.1 NAR was completely broken in the app — root-caused and
+  fixed.** NAR emitted token-garbage at **every** precision, including the shipped
+  INT8. The bug was host-side in `webgpu_asr_runner.mjs` (`ctcDraftTokenIds`): the
+  encoder's BPE/CTC head emits **100353** classes (vocab 100352 **+1**) with the
+  **blank prepended at index 0**, and non-blank class `c` maps to LLM token `c−1`.
+  The app stripped the wrong blank (`100257`, the LLM eos), skipped the `−1`
+  offset, and did a non-reference decode→re-encode round-trip that corrupted the
+  editor's `[blank, t0, blank, t1, …]` slots. Fix: argmax→collapse→drop blank
+  `0`→subtract `1`→feed ids directly. Verified: English verbatim-correct, German
+  good (CPU). Lesson: gate the baseline through the real pipeline before trusting
+  it — INT8 was "shipped" but never end-to-end verified. Note
+  `config.blank_token_id=100257` is the *editor/slot* blank, NOT the *CTC* blank
+  (`0`) in smcleod's ONNX export.
+- **Self-converted a q4 (INT4) NAR build; not worth shipping on current hardware.**
+  New `scripts/convert_granite_nar_q4.py` re-quantises smcleod's FP32 editor to
+  4-bit `MatMulNBits` (HQQ default, RTN fallback), keeping encoder INT8 (a q4
+  encoder is *larger*: Convs stay FP32) and embed_tokens fp16w. Vs INT8 on a
+  7600X: q4 is **slower on CPU** (RTF 0.62–0.70 vs 0.53), only **~9–16 % smaller**
+  (not half), quality comparable. q4 is a GPU/bandwidth optimisation; on a VNNI
+  CPU, native INT8 GEMM beats q4's dequant overhead. **INT8 stays the NAR default.**
+- **NAR has no working GPU path here (separate from q4).** DirectML fails at the
+  conformer encoder's first attention (5-D batched MatMul unsupported by the DML
+  EP) — identically for INT8 and q4. WebGPU has the Einsum bug. AR models run on
+  GPU via the Transformers.js WebGPU pipeline, not this raw `onnxruntime-node`
+  conformer path — so it's the encoder ops, not autoregression.
+- **GPU benchmarked (Arc A750):** the q4 editor runs on DirectML (~2–3× faster
+  than INT8-CPU *in isolation* at N≥256), but the conformer encoder is ~90 % of the
+  runtime and is CPU-locked, so GPU gives **no end-to-end win** (slightly slower);
+  q4-HQQ is broken on DirectML (use RTN). Making NAR GPU-fast needs an encoder
+  re-export — separate R&D, not part of the q4 publication pass. A 2026-06-24
+  graph check found 32 high-rank attention `MatMul` nodes plus 16 `Einsum` nodes,
+  so this is a repeated conformer-layer export problem, not a one-node patch.
+  Full write-up + HF-card source: `docs/granite-speech-4.1-nar-q4.md`. Plan:
+  publish the RTN q4 artifact to HF (`qwertz92`) with a prominent
+  INT8-preferred warning; keep HQQ local/documented because DirectML breaks it.
+- **SSL CA bundle validation should reject existing-but-invalid files.** The SSL
+  env sync helper previously treated any existing file as a usable CA bundle.
+  Test placeholders such as `cert` could leak through `REQUESTS_CA_BUNDLE`, then
+  provider tests failed while creating `ssl.SSLContext` before mocked network
+  calls. Centralized validation now loads the bundle with `ssl.create_default_context`;
+  nonexistent or unparsable bundles are ignored/removed, and tests use real PEMs
+  when they expect a valid bundle.
 
 ## 2026-06-18
 
