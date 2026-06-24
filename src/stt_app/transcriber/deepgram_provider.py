@@ -347,6 +347,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
 
         with self._stream_lock:
             active_ws = self._stream_ws
+            active_thread = self._stream_thread
             self._stream_ws = None
             self._stream_thread = None
             self._stream_send_queue = None
@@ -356,6 +357,11 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 active_ws.close()
             except Exception:
                 pass
+        # Join the reader thread so the failed-connect path is consistent
+        # with stop_stream/abort_stream and does not leave an orphaned
+        # run_forever thread lingering on a dead WebSocket.
+        if active_thread is not None:
+            active_thread.join(timeout=2.0)
 
         error = self._stream_error
         if error is not None:

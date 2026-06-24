@@ -54,10 +54,15 @@ class ProviderConnectionTestStore:
         return self._path
 
     def load_all(self) -> dict[str, ProviderConnectionTestResult]:
-        payload, source = load_json_with_backup(self._path, expected_type=dict)
+        payload, _source = load_json_with_backup(self._path, expected_type=dict)
         if payload is None:
-            if source != "missing":
-                quarantine_corrupt_file(self._path, include_backup=True)
+            # ``load_json_with_backup`` collapses "file absent" and "file
+            # present but unparseable" into the same ``None`` return. All
+            # sibling stores unconditionally quarantine here: the helper is a
+            # no-op for genuinely-missing files, and a corrupt primary (even
+            # with no usable backup) must be moved aside so the next write
+            # does not keep failing on the same bad bytes.
+            quarantine_corrupt_file(self._path, include_backup=True)
             return {}
 
         raw_results = payload.get("results", {})

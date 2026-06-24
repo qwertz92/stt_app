@@ -9,6 +9,7 @@ import sys
 import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -509,7 +510,10 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self._lock = threading.Lock()
         self._process: subprocess.Popen[str] | None = None
         self._stdout_queue: queue.Queue[str] = queue.Queue()
-        self._stderr_lines: list[str] = []
+        # Cap retained stderr to avoid unbounded memory growth in a
+        # long-running tray app with a chatty Node.js runtime. Only the last
+        # few lines are ever consumed (``_stderr_tail``).
+        self._stderr_lines: deque[str] = deque(maxlen=256)
         self._request_id = 0
         self._runtime_device = ""
         self._gpu_available = False
@@ -648,7 +652,8 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         ).start()
 
     def _stderr_tail(self) -> str:
-        return "\n".join(self._stderr_lines[-12:]).strip()
+        # ``deque`` has no slice support; take the last 12 via list().
+        return "\n".join(list(self._stderr_lines)[-12:]).strip()
 
     def _read_json_message(self, timeout_s: float) -> dict[str, Any]:
         deadline = time.monotonic() + timeout_s

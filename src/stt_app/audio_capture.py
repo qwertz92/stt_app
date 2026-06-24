@@ -11,6 +11,7 @@ import numpy as np
 import sounddevice as sd
 
 from .config import AUDIO_BLOCK_DURATION_MS, AUDIO_CHANNELS, AUDIO_SAMPLE_RATE
+from .persistence import atomic_write_bytes
 from .vad import EnergyVad
 
 
@@ -56,16 +57,27 @@ class AudioCapture:
             self.vad.reset()
 
         try:
-            self._stream = sd.InputStream(
+            stream = sd.InputStream(
                 samplerate=self.sample_rate,
                 channels=self.channels,
                 dtype="float32",
                 blocksize=self.block_size,
                 callback=self._on_audio,
             )
-            self._stream.start()
+            try:
+                stream.start()
+            except Exception:
+                # ``InputStream`` may have opened the device during
+                # construction; close it so PortAudio does not keep the
+                # device handle alive when ``start()`` fails.
+                try:
+                    stream.close()
+                except Exception:
+                    if self._logger is not None:
+                        self._logger.exception("Failed to close audio stream after start failure")
+                raise
+            self._stream = stream
         except Exception as exc:
-            self._stream = None
             raise AudioCaptureError(f"Failed to start microphone capture: {exc}") from exc
 
     def stop(self) -> bytes:
@@ -77,7 +89,8 @@ class AudioCapture:
                 stream.stop()
                 stream.close()
             except Exception:
-                pass
+                if self._logger is not None:
+                    self._logger.exception("Failed to stop/close audio stream cleanly")
 
         with self._lock:
             if not self._chunks:
@@ -88,7 +101,7 @@ class AudioCapture:
 
     def save_wav(self, output_path: Path, wav_bytes: bytes) -> None:
         output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_bytes(wav_bytes)
+        atomic_write_bytes(output_path, wav_bytes)
 
     def _on_audio(self, indata, frames, _time, status) -> None:
         if status and self._logger is not None:

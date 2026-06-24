@@ -12,6 +12,17 @@ import ssl
 from pathlib import Path
 
 
+def _is_valid_ca_bundle(path: str) -> bool:
+    candidate = Path(path)
+    if not candidate.is_file():
+        return False
+    try:
+        ssl.create_default_context(cafile=str(candidate))
+    except (OSError, ValueError, ssl.SSLError):
+        return False
+    return True
+
+
 def inject_system_trust_store() -> bool:
     """Inject OS certificate store into Python's ssl module.
 
@@ -51,18 +62,19 @@ def sync_ca_bundle_env_vars() -> None:
     ssl_cert = os.environ.get("SSL_CERT_FILE", "").strip()
     requests_bundle = os.environ.get("REQUESTS_CA_BUNDLE", "").strip()
 
-    # Remove stale/invalid paths so libraries (especially httpx) do not
-    # crash with FileNotFoundError while creating SSL contexts.
-    if ssl_cert and not Path(ssl_cert).is_file():
+    # Remove stale/invalid paths so libraries do not crash while creating SSL
+    # contexts. Existing-but-not-parseable files are invalid too; users
+    # sometimes point these variables at placeholders or exported wrong files.
+    if ssl_cert and not _is_valid_ca_bundle(ssl_cert):
         os.environ.pop("SSL_CERT_FILE", None)
         ssl_cert = ""
-    if requests_bundle and not Path(requests_bundle).is_file():
+    if requests_bundle and not _is_valid_ca_bundle(requests_bundle):
         os.environ.pop("REQUESTS_CA_BUNDLE", None)
         requests_bundle = ""
 
-    if ssl_cert and Path(ssl_cert).is_file() and not requests_bundle:
+    if ssl_cert and _is_valid_ca_bundle(ssl_cert) and not requests_bundle:
         os.environ["REQUESTS_CA_BUNDLE"] = ssl_cert
-    elif requests_bundle and Path(requests_bundle).is_file() and not ssl_cert:
+    elif requests_bundle and _is_valid_ca_bundle(requests_bundle) and not ssl_cert:
         os.environ["SSL_CERT_FILE"] = requests_bundle
 
 
@@ -88,7 +100,7 @@ def resolve_ca_bundle() -> str | None:
     """
     for var in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE"):
         path = os.environ.get(var, "").strip()
-        if path and Path(path).is_file():
+        if path and _is_valid_ca_bundle(path):
             return path
     return None
 
@@ -110,23 +122,28 @@ def create_ssl_context() -> ssl.SSLContext | None:
 def is_ssl_error(exc: Exception) -> bool:
     """Check if an exception is caused by SSL certificate verification failure.
 
-    Walks the exception chain (``__cause__``) to detect chained SSL errors
-    (e.g. ``requests`` wrapping an ``urllib3`` wrapping an ``ssl`` error).
+    Walks the exception chain (``__cause__`` and ``__context__``) to detect
+    chained SSL errors (e.g. ``requests`` wrapping an ``urllib3`` wrapping an
+    ``ssl`` error, or a library that re-raises inside a bare ``except`` and
+    therefore only sets ``__context__`` instead of ``__cause__``).
     """
-    msg = str(exc).lower()
-    ssl_markers = (
-        "certificate_verify_failed",
-        "ssl: certificate_verify_failed",
-        "certificate verify failed",
-        "unable to get local issuer certificate",
-        "self-signed certificate",
-        "sslcertverificationerror",
-    )
-    for marker in ssl_markers:
-        if marker in msg:
-            return True
-    # Walk the exception chain (__cause__).
-    cause = getattr(exc, "__cause__", None)
-    if cause is not None and cause is not exc:
-        return is_ssl_error(cause)
+    seen: set[int] = set()
+    current: Exception | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        msg = str(current).lower()
+        ssl_markers = (
+            "certificate_verify_failed",
+            "ssl: certificate_verify_failed",
+            "certificate verify failed",
+            "unable to get local issuer certificate",
+            "self-signed certificate",
+            "sslcertverificationerror",
+        )
+        for marker in ssl_markers:
+            if marker in msg:
+                return True
+        # Prefer ``__cause__`` (explicit ``raise ... from ...``); fall back to
+        # ``__context__`` (implicit chaining from a bare ``except``).
+        current = current.__cause__ or current.__context__
     return False

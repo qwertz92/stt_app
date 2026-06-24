@@ -40,6 +40,10 @@ def _quarantine_single_file(path: Path) -> Path | None:
     target = path.with_name(base_name)
     counter = 1
     while target.exists():
+        if counter > 10000:
+            # Pathological number of same-timestamp corrupt files; give up
+            # rather than spinning forever.
+            return None
         target = path.with_name(f"{base_name}.{counter}")
         counter += 1
 

@@ -175,6 +175,11 @@ class DictationController(QtCore.QObject):
         self._preload_target_model: str | None = None
         self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
+        # Fallback model resolved by the preload worker (background thread).
+        # Applied to ``self._settings`` from the Qt thread in
+        # ``_on_model_preload_done`` so settings mutation and JSON persistence
+        # never race with the main thread.
+        self._pending_preload_fallback: str | None = None
         self._preload_download_process: subprocess.Popen | None = None
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
@@ -241,8 +246,8 @@ class DictationController(QtCore.QObject):
         self._jobs.clear()
         self._reset_streaming_state()
         self._reset_transcriber_cache()
-        self._executor.shutdown(wait=False, cancel_futures=False)
-        self._preload_executor.shutdown(wait=False, cancel_futures=False)
+        self._executor.shutdown(wait=False, cancel_futures=True)
+        self._preload_executor.shutdown(wait=False, cancel_futures=True)
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
         self._settings = self._settings_store.load()
@@ -1298,14 +1303,13 @@ class DictationController(QtCore.QObject):
                     ),
                 ):
                     transcriber.preload_model()
-                self._settings = fallback_settings
-                try:
-                    self._settings_store.save(fallback_settings)
-                except Exception:
-                    self._logger.exception(
-                        "Failed to persist fallback model setting: %s",
-                        fallback,
-                    )
+                # Do NOT mutate ``self._settings`` or call
+                # ``self._settings_store.save()`` here: this runs on the preload
+                # worker thread and would race with Qt-thread reads/writes of
+                # ``self._settings`` and concurrent JSON writes. Stage the
+                # fallback model name for ``_on_model_preload_done`` to apply
+                # on the Qt thread instead.
+                self._pending_preload_fallback = fallback
                 self.model_preload_done.emit(
                     True,
                     f"Fallback: using '{fallback}' model "
@@ -1326,7 +1330,6 @@ class DictationController(QtCore.QObject):
     @QtCore.Slot(bool, str)
     def _on_model_preload_done(self, success: bool, message: str) -> None:
         self._preload_progress_timer.stop()
-        ready_model = self._preload_target_model or self._settings.model_size
         self._preload_target_model = None
         self._terminate_preload_download_process()
         session_active = (
@@ -1334,6 +1337,22 @@ class DictationController(QtCore.QObject):
             or self._streaming_recording
             or self._recording_start_in_progress
         )
+
+        # Apply a fallback model resolved by the preload worker. This runs on
+        # the Qt thread, so mutating ``self._settings`` and persisting it is
+        # safe and cannot race with Qt-thread reads or concurrent JSON writes.
+        pending_fallback = self._pending_preload_fallback
+        self._pending_preload_fallback = None
+        ready_model = pending_fallback or self._settings.model_size
+        if pending_fallback is not None:
+            self._settings = replace(self._settings, model_size=pending_fallback)
+            try:
+                self._settings_store.save(self._settings)
+            except Exception:
+                self._logger.exception(
+                    "Failed to persist fallback model setting: %s",
+                    pending_fallback,
+                )
 
         if self._preload_cancel_requested:
             self._preload_cancel_requested = False
@@ -1476,9 +1495,12 @@ class DictationController(QtCore.QObject):
                 outcome,
             )
             if transcriber is not None:
-                # Clear the cancel hook so it cannot leak into a cached
-                # transcriber's next request.
+                # Clear the cancel hook and progress callback so they cannot
+                # leak into a cached transcriber's next request.  The closure
+                # captures ``request_token``; leaving it installed would let a
+                # later run surface stale progress or cancel state.
                 self._set_transcriber_cancel_check(transcriber, None)
+                self._set_transcriber_progress_callback(transcriber, None)
             if close_after_transcription and transcriber is not None:
                 self._close_cached_transcriber(transcriber)
 
@@ -1921,7 +1943,7 @@ class DictationController(QtCore.QObject):
             try:
                 wav_bytes = capture.stop()
             except Exception:
-                pass
+                self._logger.exception("Failed to stop audio capture during abort")
         if capture is not None:
             self._save_recording_artifacts(capture, wav_bytes)
         if preserve_audio and wav_bytes:
@@ -1942,7 +1964,7 @@ class DictationController(QtCore.QObject):
                 else:
                     transcriber.stop_stream()
             except Exception:
-                pass
+                self._logger.exception("Failed to stop/abort streaming transcriber during abort")
 
         self._streaming_recording = False
         self._active_stream_settings = None
@@ -2430,8 +2452,11 @@ class DictationController(QtCore.QObject):
 
         try:
             self._hotkey_manager.register(FALLBACK_HOTKEY)
-            self._settings.hotkey = FALLBACK_HOTKEY
-            self._settings_store.save(self._settings)
+            self._settings = replace(self._settings, hotkey=FALLBACK_HOTKEY)
+            try:
+                self._settings_store.save(self._settings)
+            except Exception:
+                self._logger.exception("Failed to persist fallback hotkey")
             self._hotkey_notice = (
                 f"Preferred hotkey '{preferred}' unavailable. "
                 f"Using fallback '{FALLBACK_HOTKEY}'."

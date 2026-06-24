@@ -69,6 +69,3 @@ class EnergyVad:
                     should_stop = True
 
         return VadDecision(speech_started=speech_started, should_stop=should_stop)
-
-
-Vad = EnergyVad

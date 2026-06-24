@@ -84,7 +84,7 @@ def normalize_webgpu_benchmark_devices(
         if device not in {"auto", "gpu", "cpu", "dml", "webgpu"}:
             raise ValueError(
                 "Unsupported ONNX device target "
-                f"'{device}'. Use auto, gpu, cpu, dml, webgpu, gpu,cpu, or all."
+                f"'{device}'. Use auto, gpu, cpu, dml, webgpu, 'gpu,cpu', or all."
             )
         if device not in devices:
             devices.append(device)

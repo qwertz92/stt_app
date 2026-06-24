@@ -63,6 +63,3 @@ class AppLogger:
             root_logger.addHandler(handler)
 
         self._configured = True
-
-
-Logger = AppLogger

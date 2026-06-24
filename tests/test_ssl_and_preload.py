@@ -66,6 +66,23 @@ class TestIsSSLError:
 # ---------------------------------------------------------------------------
 
 
+def _write_valid_ca_bundle(path: Path) -> None:
+    """Write one system CA certificate as a valid PEM bundle for SSL tests."""
+    import base64
+    import ssl
+
+    ctx = ssl.create_default_context()
+    certs = ctx.get_ca_certs(binary_form=True)
+    if not certs:
+        pytest.skip("No system CA certs available for test")
+    pem = (
+        "-----BEGIN CERTIFICATE-----\n"
+        + base64.encodebytes(certs[0]).decode("ascii")
+        + "-----END CERTIFICATE-----\n"
+    )
+    path.write_text(pem)
+
+
 class TestResolveCABundle:
     def test_returns_none_when_no_env_vars(self, monkeypatch):
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
@@ -74,14 +91,14 @@ class TestResolveCABundle:
 
     def test_returns_ssl_cert_file_when_set(self, tmp_path, monkeypatch):
         bundle = tmp_path / "ca-bundle.pem"
-        bundle.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        _write_valid_ca_bundle(bundle)
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
         monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
         assert resolve_ca_bundle() == str(bundle)
 
     def test_returns_requests_ca_bundle_when_set(self, tmp_path, monkeypatch):
         bundle = tmp_path / "ca-bundle.pem"
-        bundle.write_text("-----BEGIN CERTIFICATE-----\nfake\n-----END CERTIFICATE-----\n")
+        _write_valid_ca_bundle(bundle)
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
         assert resolve_ca_bundle() == str(bundle)
@@ -89,8 +106,8 @@ class TestResolveCABundle:
     def test_ssl_cert_file_takes_precedence(self, tmp_path, monkeypatch):
         bundle1 = tmp_path / "ssl-cert.pem"
         bundle2 = tmp_path / "requests-bundle.pem"
-        bundle1.write_text("cert1")
-        bundle2.write_text("cert2")
+        _write_valid_ca_bundle(bundle1)
+        _write_valid_ca_bundle(bundle2)
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle1))
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle2))
         assert resolve_ca_bundle() == str(bundle1)
@@ -105,6 +122,13 @@ class TestResolveCABundle:
         monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
         assert resolve_ca_bundle() is None
 
+    def test_ignores_invalid_existing_file(self, tmp_path, monkeypatch):
+        bundle = tmp_path / "not-a-ca-bundle.pem"
+        bundle.write_text("cert")
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
+        assert resolve_ca_bundle() is None
+
 
 class TestCreateSSLContext:
     def test_returns_none_when_no_bundle(self, monkeypatch):
@@ -113,22 +137,10 @@ class TestCreateSSLContext:
         assert create_ssl_context() is None
 
     def test_returns_ssl_context_when_bundle_exists(self, tmp_path, monkeypatch):
-        # Use a real PEM file (system cert) if available, otherwise skip
         import ssl
+
         bundle = tmp_path / "ca-bundle.pem"
-        # Create a minimal valid PEM by using the default context's certs
-        ctx = ssl.create_default_context()
-        certs = ctx.get_ca_certs(binary_form=True)
-        if not certs:
-            pytest.skip("No system CA certs available for test")
-        # Write one cert as PEM
-        import base64
-        pem = (
-            "-----BEGIN CERTIFICATE-----\n"
-            + base64.encodebytes(certs[0]).decode()
-            + "-----END CERTIFICATE-----\n"
-        )
-        bundle.write_text(pem)
+        _write_valid_ca_bundle(bundle)
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
         result = create_ssl_context()
         assert result is not None
@@ -168,7 +180,7 @@ class TestSyncCABundleEnvVars:
 
     def test_copies_ssl_cert_file_to_requests_ca_bundle(self, tmp_path, monkeypatch):
         bundle = tmp_path / "ca.pem"
-        bundle.write_text("cert")
+        _write_valid_ca_bundle(bundle)
         monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
         monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
         sync_ca_bundle_env_vars()
@@ -176,7 +188,7 @@ class TestSyncCABundleEnvVars:
 
     def test_copies_requests_ca_bundle_to_ssl_cert_file(self, tmp_path, monkeypatch):
         bundle = tmp_path / "ca.pem"
-        bundle.write_text("cert")
+        _write_valid_ca_bundle(bundle)
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(bundle))
         sync_ca_bundle_env_vars()
@@ -185,8 +197,8 @@ class TestSyncCABundleEnvVars:
     def test_does_not_overwrite_existing(self, tmp_path, monkeypatch):
         b1 = tmp_path / "a.pem"
         b2 = tmp_path / "b.pem"
-        b1.write_text("cert1")
-        b2.write_text("cert2")
+        _write_valid_ca_bundle(b1)
+        _write_valid_ca_bundle(b2)
         monkeypatch.setenv("SSL_CERT_FILE", str(b1))
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", str(b2))
         sync_ca_bundle_env_vars()
@@ -203,6 +215,15 @@ class TestSyncCABundleEnvVars:
     def test_removes_invalid_requests_ca_bundle(self, monkeypatch):
         monkeypatch.delenv("SSL_CERT_FILE", raising=False)
         monkeypatch.setenv("REQUESTS_CA_BUNDLE", "/nonexistent/ca.pem")
+        sync_ca_bundle_env_vars()
+        assert os.environ.get("SSL_CERT_FILE", "") == ""
+        assert os.environ.get("REQUESTS_CA_BUNDLE", "") == ""
+
+    def test_removes_existing_invalid_ca_bundle(self, tmp_path, monkeypatch):
+        bundle = tmp_path / "invalid.pem"
+        bundle.write_text("cert")
+        monkeypatch.setenv("SSL_CERT_FILE", str(bundle))
+        monkeypatch.delenv("REQUESTS_CA_BUNDLE", raising=False)
         sync_ca_bundle_env_vars()
         assert os.environ.get("SSL_CERT_FILE", "") == ""
         assert os.environ.get("REQUESTS_CA_BUNDLE", "") == ""
