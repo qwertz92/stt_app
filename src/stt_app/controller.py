@@ -100,6 +100,7 @@ class _TranscriptionJob:
     # possible (checked cooperatively by transcribers that support it) and never
     # start it if it has not begun.
     aborting: bool = False
+    insertion_deferred: bool = False
 
 
 class DictationController(QtCore.QObject):
@@ -166,6 +167,9 @@ class DictationController(QtCore.QObject):
             revision_word_window=STREAMING_REVISION_WORD_WINDOW,
         )
         self._recording_start_in_progress = False
+        self._recording_stop_in_progress = False
+        self._pending_toggle_after_start_count = 0
+        self._pending_toggle_after_stop_count = 0
         self._active_session_mode = "batch"
         self._focus_poll_timer = QtCore.QTimer(self)
         self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
@@ -323,6 +327,22 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot()
     def toggle_recording(self) -> None:
+        if self._recording_start_in_progress:
+            self._pending_toggle_after_start_count += 1
+            self._logger.info(
+                "Queued hotkey toggle while recording start is in progress. "
+                "pending_toggles=%s",
+                self._pending_toggle_after_start_count,
+            )
+            return
+        if self._recording_stop_in_progress:
+            self._pending_toggle_after_stop_count += 1
+            self._logger.info(
+                "Queued hotkey toggle while recording stop is in progress. "
+                "pending_toggles=%s",
+                self._pending_toggle_after_stop_count,
+            )
+            return
         if self._audio_capture is None and self._streaming_recording:
             self._overlay.set_state(
                 "Processing",
@@ -335,6 +355,17 @@ class DictationController(QtCore.QObject):
             self.stop_recording()
 
     def start_recording(self) -> None:
+        if self._recording_start_in_progress:
+            self._logger.info("Ignored nested start_recording while start is active.")
+            return
+        if self._recording_stop_in_progress:
+            self._pending_toggle_after_stop_count += 1
+            self._logger.info(
+                "Queued start request while recording stop is in progress. "
+                "pending_toggles=%s",
+                self._pending_toggle_after_stop_count,
+            )
+            return
         if self._audio_capture is None and self._streaming_recording:
             self._overlay.set_state(
                 "Processing",
@@ -440,8 +471,15 @@ class DictationController(QtCore.QObject):
                 fallback_notice=fallback_notice,
             )
         finally:
+            pending_toggles = self._pending_toggle_after_start_count
+            self._pending_toggle_after_start_count = 0
             self._recording_start_in_progress = False
             self._flush_deferred_background_results()
+            if pending_toggles % 2 == 1 and self._audio_capture is not None:
+                self._logger.info(
+                    "Applying queued hotkey stop after recording start completed."
+                )
+                QtCore.QTimer.singleShot(0, self.stop_recording)
 
     def _start_batch_recording(
         self,
@@ -560,38 +598,54 @@ class DictationController(QtCore.QObject):
         )
 
     def stop_recording(self) -> None:
+        if self._recording_stop_in_progress:
+            return
         capture = self._audio_capture
         if capture is None:
             return
 
-        self._audio_capture = None
-        wav_bytes = capture.stop()
-        self._persist_last_recording_audio(wav_bytes)
-        self._save_recording_artifacts(capture, wav_bytes)
+        self._recording_stop_in_progress = True
+        try:
+            self._audio_capture = None
+            wav_bytes = capture.stop()
+            self._persist_last_recording_audio(wav_bytes)
+            self._save_recording_artifacts(capture, wav_bytes)
 
-        if self._streaming_recording:
-            self._focus_poll_timer.stop()
-            if self._stream_abort_requested:
-                self._abort_streaming_session(
-                    "Streaming aborted.",
-                    beep=False,
-                    finalize_stream=False,
+            if self._streaming_recording:
+                self._focus_poll_timer.stop()
+                if self._stream_abort_requested:
+                    self._abort_streaming_session(
+                        "Streaming aborted.",
+                        beep=False,
+                        finalize_stream=False,
+                    )
+                    return
+                self._overlay.set_state(
+                    "Processing", "Finalizing streaming transcript..."
                 )
+                self._submit_stream_finalize()
                 return
-            self._overlay.set_state("Processing", "Finalizing streaming transcript...")
-            self._submit_stream_finalize()
-            return
 
-        if not wav_bytes:
-            self._overlay.set_state("Error", "No audio captured.")
+            if not wav_bytes:
+                self._overlay.set_state("Error", "No audio captured.")
+                self._active_batch_settings = None
+                return
+
+            settings_snapshot = self._active_batch_settings or replace(self._settings)
             self._active_batch_settings = None
-            return
-
-        settings_snapshot = self._active_batch_settings or replace(self._settings)
-        self._active_batch_settings = None
-        self._overlay.set_state("Processing", "Transcribing audio...")
-        self._submit_batch_transcription(wav_bytes, settings_snapshot)
-        self._flush_deferred_background_results()
+            self._overlay.set_state("Processing", "Transcribing audio...")
+            self._submit_batch_transcription(wav_bytes, settings_snapshot)
+            self._flush_deferred_background_results()
+        finally:
+            pending_toggles = self._pending_toggle_after_stop_count
+            self._pending_toggle_after_stop_count = 0
+            self._recording_stop_in_progress = False
+            self._flush_deferred_background_results()
+            if pending_toggles % 2 == 1 and self._audio_capture is None:
+                self._logger.info(
+                    "Applying queued hotkey start after recording stop completed."
+                )
+                QtCore.QTimer.singleShot(0, self.start_recording)
 
     def _auto_stop_from_vad(self) -> None:
         QtCore.QTimer.singleShot(0, self.stop_recording)
@@ -948,6 +1002,7 @@ class DictationController(QtCore.QObject):
     def _finish_transcription_job(self, request_token: int | None) -> None:
         if request_token is None:
             return
+        self._remove_deferred_background_result(request_token)
         if self._jobs.pop(request_token, None) is not None:
             self._update_queue_overlay()
 
@@ -967,7 +1022,8 @@ class DictationController(QtCore.QObject):
             rank_label = f"{rank_label} Newest"
         timestamp = job.created_at.strftime("%H:%M:%S")
         provider = f"{engine} · {model}" if model else engine
-        return f"{rank_label} · {timestamp} · {provider}"
+        status = " · Pending insert" if job.insertion_deferred else ""
+        return f"{rank_label} · {timestamp} · {provider}{status}"
 
     def _update_queue_overlay(self) -> None:
         setter = getattr(self._overlay, "set_transcription_queue", None)
@@ -1001,6 +1057,11 @@ class DictationController(QtCore.QObject):
             return
         job.aborting = True
         job.background_delivery = delivery
+        if job.insertion_deferred:
+            self._remove_deferred_background_result(request_token)
+            job.insertion_deferred = False
+            self._finish_transcription_job(request_token)
+            return
         if self._active_request_token == request_token:
             self._active_request_token = None
             self._last_transcribe_settings = None
@@ -1017,6 +1078,13 @@ class DictationController(QtCore.QObject):
         else:
             # Hide the aborting row while the worker winds down.
             self._update_queue_overlay()
+
+    def _remove_deferred_background_result(self, request_token: int) -> None:
+        self._deferred_background_results = [
+            (job, text)
+            for job, text in self._deferred_background_results
+            if job.token != request_token
+        ]
 
     def cancel_queued_transcription(self, request_token: int) -> None:
         """Cancel a single queued/running transcription from the overlay.
@@ -1083,6 +1151,15 @@ class DictationController(QtCore.QObject):
         self._last_transcribe_settings = replace(settings)
         self._store_request_audio(request_token, wav_bytes, settings)
         job = self._register_transcription_job(request_token, settings, "batch")
+        self._logger.info(
+            "transcription_submitted token=%s mode=batch engine=%s model=%s "
+            "audio_bytes=%d recording_id=%s",
+            request_token,
+            settings.engine,
+            self._selected_model_name(settings),
+            len(wav_bytes),
+            job.source_recording_id or "n/a",
+        )
         try:
             self._last_recording_store.mark_transcribing(
                 engine=settings.engine,
@@ -1107,6 +1184,14 @@ class DictationController(QtCore.QObject):
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
         job = self._register_transcription_job(request_token, settings, "streaming")
+        self._logger.info(
+            "transcription_submitted token=%s mode=streaming engine=%s model=%s "
+            "recording_id=%s",
+            request_token,
+            settings.engine,
+            self._selected_model_name(settings),
+            job.source_recording_id or "n/a",
+        )
         try:
             self._last_recording_store.mark_transcribing(
                 engine=settings.engine,
@@ -1475,6 +1560,14 @@ class DictationController(QtCore.QObject):
     ) -> None:
         # Skip a job that was canceled before its compute/upload started.
         if job is not None and job.aborting:
+            self._logger.info(
+                "transcription_skipped_before_start token=%s engine=%s model=%s "
+                "audio_bytes=%d",
+                request_token,
+                settings.engine,
+                self._selected_model_name(settings),
+                len(wav_bytes),
+            )
             self.transcription_canceled.emit(request_token)
             return
         worker_started_at = time.perf_counter()
@@ -1587,6 +1680,12 @@ class DictationController(QtCore.QObject):
         job: _TranscriptionJob | None = None,
     ) -> None:
         if job is not None and job.aborting:
+            self._logger.info(
+                "stream_finalize_skipped_before_start token=%s engine=%s model=%s",
+                request_token,
+                job.engine,
+                job.model,
+            )
             self.transcription_canceled.emit(request_token)
             return
         try:
@@ -1743,8 +1842,9 @@ class DictationController(QtCore.QObject):
                 if self._active_request_token == request_token:
                     self._active_request_token = None
                     self._last_transcribe_settings = None
-                self._handle_background_transcription_ready(job, text)
-                self._finish_transcription_job(request_token)
+                should_finish = self._handle_background_transcription_ready(job, text)
+                if should_finish:
+                    self._finish_transcription_job(request_token)
                 return
             self._active_request_token = None
             self._drop_request_audio(request_token)
@@ -1823,7 +1923,7 @@ class DictationController(QtCore.QObject):
         self,
         job: _TranscriptionJob | None,
         text: str,
-    ) -> None:
+    ) -> bool:
         """Deliver a queued/canceled result while a newer session is active.
 
         The transcript is always saved to history (a finished transcription is
@@ -1834,7 +1934,7 @@ class DictationController(QtCore.QObject):
         state is left untouched for the active session.
         """
         if job is None or not text.strip():
-            return
+            return True
         self._append_transcript_history(
             text,
             job.settings,
@@ -1846,7 +1946,9 @@ class DictationController(QtCore.QObject):
             and job.mode != "streaming"
         ):
             if self._should_defer_background_insertion():
+                job.insertion_deferred = True
                 self._deferred_background_results.append((job, text))
+                self._update_queue_overlay()
                 self._logger.info(
                     "Deferred background transcription insertion until the "
                     "active recording stops. token=%s engine=%s model=%s",
@@ -1854,11 +1956,16 @@ class DictationController(QtCore.QObject):
                     job.engine,
                     job.model,
                 )
-                return
+                return False
             self._insert_background_transcription(job, text)
+        return True
 
     def _should_defer_background_insertion(self) -> bool:
-        return self._recording_start_in_progress or self._audio_capture is not None
+        return (
+            self._recording_start_in_progress
+            or self._recording_stop_in_progress
+            or self._audio_capture is not None
+        )
 
     def _insert_background_transcription(
         self,
@@ -1892,7 +1999,9 @@ class DictationController(QtCore.QObject):
         pending = list(self._deferred_background_results)
         self._deferred_background_results.clear()
         for job, text in sorted(pending, key=lambda item: item[0].token):
+            job.insertion_deferred = False
             self._insert_background_transcription(job, text)
+            self._finish_transcription_job(job.token)
         if self._active_request_token is not None and self._target_window_handle:
             try:
                 self._window_focus_helper.restore_target_window(

@@ -104,7 +104,8 @@ def test_insert_mode_keeps_and_inserts_background_result(monkeypatch, tmp_path):
     assert [e.text for e in history.load()] == ["transcript A"]
     assert inserter.calls == []
     assert overlay.states[-1][0] == "Listening"
-    assert overlay.queue_updates[-1] == []
+    assert overlay.queue_updates[-1][0][0] == token_a
+    assert "Pending insert" in overlay.queue_updates[-1][0][1]
     assert controller._active_request_token is None
 
     controller.stop_recording()
@@ -168,6 +169,7 @@ def test_start_recording_keeps_new_target_when_old_result_arrives_during_start(
     assert [job.token for job, _text in controller._deferred_background_results] == [
         token_a
     ]
+    assert controller._jobs[token_a].insertion_deferred is True
     assert focus.restore_calls == []
     assert controller._target_window_handle == 111
     assert controller._target_focus_signature == (111, 222, 333)
@@ -196,12 +198,78 @@ def test_background_insert_waits_until_active_recording_stops(
     assert [e.text for e in history.load()] == ["transcript A"]
     assert inserter.calls == []
     assert controller._deferred_background_results
+    assert overlay.queue_updates[-1][0][0] == token_a
+    assert "Pending insert" in overlay.queue_updates[-1][0][1]
     assert overlay.states[-1][0] == "Listening"
 
     controller.stop_recording()
 
     assert inserter.calls == [("transcript A", 321, "auto")]
     assert controller._deferred_background_results == []
+    assert token_a not in controller._jobs
+    controller.shutdown()
+    _ = app
+
+
+def test_cancel_deferred_background_insert_drops_pending_paste(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    assert controller._deferred_background_results
+    controller.cancel_queued_transcription(token_a)
+
+    assert controller._deferred_background_results == []
+    assert token_a not in controller._jobs
+    assert overlay.queue_updates[-1] == []
+    assert [e.text for e in history.load()] == ["transcript A"]
+
+    controller.stop_recording()
+
+    assert inserter.calls == []
+    controller.shutdown()
+    _ = app
+
+
+def test_hotkey_during_recording_start_stops_after_start(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    single_shots = []
+
+    def run_single_shot(_msec, callback):
+        single_shots.append(callback)
+        callback()
+
+    processed = {"done": False}
+
+    def process_events(*_args):
+        if processed["done"]:
+            return
+        processed["done"] = True
+        controller.toggle_recording()
+
+    monkeypatch.setattr(QtCore.QCoreApplication, "processEvents", process_events)
+    monkeypatch.setattr(QtCore.QTimer, "singleShot", run_single_shot)
+
+    controller.toggle_recording()
+
+    assert len(FakeCapture.instances) == 1
+    assert FakeCapture.instances[0].stopped is True
+    assert controller._audio_capture is None
+    assert controller._active_request_token is not None
+    assert len(controller._executor.calls) == 1
+    assert single_shots
     controller.shutdown()
     _ = app
 
@@ -248,10 +316,10 @@ def test_background_insert_failure_does_not_overwrite_clipboard(
     token_a = _record_and_stop(controller)
     controller.start_recording()
     controller._on_transcription_ready("transcript A", request_token=token_a)
+    controller.stop_recording()
 
     assert [e.text for e in history.load()] == ["transcript A"]
     assert clipboard.text() == "user clipboard"
-    assert overlay.states[-1][0] == "Listening"
     controller.shutdown()
     _ = app
 
