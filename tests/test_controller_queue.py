@@ -102,11 +102,15 @@ def test_insert_mode_keeps_and_inserts_background_result(monkeypatch, tmp_path):
     controller._on_transcription_ready("transcript A", request_token=token_a)
 
     assert [e.text for e in history.load()] == ["transcript A"]
-    # Inserted into the window focused when A was recorded (caret 321).
-    assert inserter.calls[-1] == ("transcript A", 321, "auto")
+    assert inserter.calls == []
     assert overlay.states[-1][0] == "Listening"
     assert overlay.queue_updates[-1] == []
     assert controller._active_request_token is None
+
+    controller.stop_recording()
+
+    # Inserted into the window focused when A was recorded (caret 321).
+    assert inserter.calls[-1] == ("transcript A", 321, "auto")
     controller.shutdown()
     _ = app
 
@@ -160,10 +164,44 @@ def test_start_recording_keeps_new_target_when_old_result_arrives_during_start(
 
     controller.start_recording()
 
-    assert inserter.calls[-1] == ("transcript A", 321, "auto")
-    assert focus.restore_calls == [987, 111]
+    assert inserter.calls == []
+    assert [job.token for job, _text in controller._deferred_background_results] == [
+        token_a
+    ]
+    assert focus.restore_calls == []
     assert controller._target_window_handle == 111
     assert controller._target_focus_signature == (111, 222, 333)
+
+    controller.stop_recording()
+
+    assert inserter.calls[-1] == ("transcript A", 321, "auto")
+    assert focus.restore_calls == [987, 111]
+    controller.shutdown()
+    _ = app
+
+
+def test_background_insert_waits_until_active_recording_stops(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    assert [e.text for e in history.load()] == ["transcript A"]
+    assert inserter.calls == []
+    assert controller._deferred_background_results
+    assert overlay.states[-1][0] == "Listening"
+
+    controller.stop_recording()
+
+    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert controller._deferred_background_results == []
     controller.shutdown()
     _ = app
 

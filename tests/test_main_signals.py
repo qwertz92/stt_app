@@ -51,6 +51,7 @@ class FakeController:
         self._last_transcript = ""
         self.settings_changed_calls = 0
         self.hotkey_refresh_calls = 0
+        self.resume_calls = 0
 
     def toggle_recording(self):
         self.toggle_calls += 1
@@ -69,6 +70,10 @@ class FakeController:
 
     def refresh_hotkey_registration(self):
         self.hotkey_refresh_calls += 1
+
+    def handle_system_resume(self):
+        self.resume_calls += 1
+        self.refresh_hotkey_registration()
 
     def retry_last_transcription(self):
         return True
@@ -498,6 +503,7 @@ def test_restore_after_system_resume_refreshes_hotkeys_and_overlay():
 
     _restore_after_system_resume(controller, overlay)
 
+    assert controller.resume_calls == 1
     assert controller.hotkey_refresh_calls == 1
     assert overlay.restore_visibility_calls == 1
 

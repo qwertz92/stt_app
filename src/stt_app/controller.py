@@ -591,6 +591,7 @@ class DictationController(QtCore.QObject):
         self._active_batch_settings = None
         self._overlay.set_state("Processing", "Transcribing audio...")
         self._submit_batch_transcription(wav_bytes, settings_snapshot)
+        self._flush_deferred_background_results()
 
     def _auto_stop_from_vad(self) -> None:
         QtCore.QTimer.singleShot(0, self.stop_recording)
@@ -734,6 +735,50 @@ class DictationController(QtCore.QObject):
             self._close_cached_transcriber(cached)
             self._transcriber_cache = None
             self._transcriber_cache_key = None
+
+    def _reset_resume_sensitive_transcriber_cache(self) -> None:
+        if (
+            self._audio_capture is not None
+            or self._recording_start_in_progress
+            or self._streaming_recording
+        ):
+            self._logger.info(
+                "System resume detected during an active session; keeping "
+                "current transcriber runtime."
+            )
+            return
+
+        with self._transcriber_cache_lock:
+            cached = self._transcriber_cache
+            cache_key = self._transcriber_cache_key
+            cached_model = str(getattr(cached, "model_size", "") or "")
+            cached_device = str(getattr(cached, "runtime_device", "") or "")
+            cache_model = ""
+            if isinstance(cache_key, tuple) and len(cache_key) > 1:
+                cache_model = str(cache_key[1] or "")
+            should_reset = (
+                cached is not None
+                and (
+                    cached_model in LOCAL_WEBGPU_MODEL_SIZES
+                    or cache_model in LOCAL_WEBGPU_MODEL_SIZES
+                )
+            )
+            if not should_reset:
+                return
+            self._logger.info(
+                "System resume detected; closing cached ONNX/WebGPU runtime "
+                "model=%s device=%s so GPU backends are recreated.",
+                cached_model or cache_model,
+                cached_device or "unknown",
+            )
+            self._close_cached_transcriber(cached)
+            self._transcriber_cache = None
+            self._transcriber_cache_key = None
+
+    def handle_system_resume(self) -> None:
+        """Refresh Windows integrations and drop GPU runtimes after resume."""
+        self.refresh_hotkey_registration()
+        self._reset_resume_sensitive_transcriber_cache()
 
     def _close_cached_transcriber(self, transcriber) -> None:
         if transcriber is None or not hasattr(transcriber, "close"):
@@ -1073,6 +1118,7 @@ class DictationController(QtCore.QObject):
         job.future = self._executor.submit(
             self._finalize_stream_worker, request_token, transcriber, job
         )
+        self._flush_deferred_background_results()
 
     def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
         retry_available = (
@@ -1504,9 +1550,15 @@ class DictationController(QtCore.QObject):
             total_elapsed_ms = round(
                 (time.perf_counter() - worker_started_at) * 1000
             )
+            runtime_device = str(getattr(transcriber, "runtime_device", "") or "")
+            gpu_available = getattr(transcriber, "gpu_available", "")
+            runtime_details = str(
+                getattr(transcriber, "runtime_details_text", "") or ""
+            )
             self._logger.info(
                 "transcription_timing engine=%s model=%s init_ms=%d "
-                "transcribe_ms=%d total_ms=%d audio_bytes=%d outcome=%s",
+                "transcribe_ms=%d total_ms=%d audio_bytes=%d outcome=%s "
+                "runtime_device=%s gpu_available=%s runtime_details=%s",
                 settings.engine,
                 self._selected_model_name(settings),
                 init_elapsed_ms,
@@ -1514,6 +1566,9 @@ class DictationController(QtCore.QObject):
                 total_elapsed_ms,
                 len(wav_bytes),
                 outcome,
+                runtime_device or "n/a",
+                gpu_available if gpu_available != "" else "n/a",
+                runtime_details or "n/a",
             )
             if transcriber is not None:
                 # Clear the cancel hook and progress callback so they cannot
@@ -1696,6 +1751,7 @@ class DictationController(QtCore.QObject):
             self._last_failed_wav_bytes = b""
 
         self._finish_transcription_job(request_token)
+        self._flush_deferred_background_results()
 
         target_handle = (
             job.target_handle if job is not None else self._target_window_handle
@@ -1779,9 +1835,6 @@ class DictationController(QtCore.QObject):
         """
         if job is None or not text.strip():
             return
-        if self._recording_start_in_progress:
-            self._deferred_background_results.append((job, text))
-            return
         self._append_transcript_history(
             text,
             job.settings,
@@ -1792,40 +1845,62 @@ class DictationController(QtCore.QObject):
             job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and job.mode != "streaming"
         ):
-            inserted = self._insert_text_at_target(
-                text,
-                restore_focus=True,
-                copy_on_error=False,
-                target_handle=job.target_handle,
-                target_signature=job.target_signature,
-                show_overlay_error=False,
-            )
-            if not inserted:
-                self._logger.warning(
-                    "Background transcription insertion failed; saved to history "
-                    "only. token=%s mode=%s engine=%s model=%s",
+            if self._should_defer_background_insertion():
+                self._deferred_background_results.append((job, text))
+                self._logger.info(
+                    "Deferred background transcription insertion until the "
+                    "active recording stops. token=%s engine=%s model=%s",
                     job.token,
-                    job.mode,
                     job.engine,
                     job.model,
                 )
+                return
+            self._insert_background_transcription(job, text)
+
+    def _should_defer_background_insertion(self) -> bool:
+        return self._recording_start_in_progress or self._audio_capture is not None
+
+    def _insert_background_transcription(
+        self,
+        job: _TranscriptionJob,
+        text: str,
+    ) -> bool:
+        inserted = self._insert_text_at_target(
+            text,
+            restore_focus=True,
+            copy_on_error=False,
+            target_handle=job.target_handle,
+            target_signature=job.target_signature,
+            show_overlay_error=False,
+        )
+        if not inserted:
+            self._logger.warning(
+                "Background transcription insertion failed; saved to history "
+                "only. token=%s mode=%s engine=%s model=%s",
+                job.token,
+                job.mode,
+                job.engine,
+                job.model,
+            )
+        return inserted
 
     def _flush_deferred_background_results(self) -> None:
         if not self._deferred_background_results:
             return
+        if self._should_defer_background_insertion():
+            return
         pending = list(self._deferred_background_results)
         self._deferred_background_results.clear()
-        for job, text in pending:
-            self._handle_background_transcription_ready(job, text)
-            self._finish_transcription_job(job.token)
-        if self._audio_capture is not None and self._target_window_handle:
+        for job, text in sorted(pending, key=lambda item: item[0].token):
+            self._insert_background_transcription(job, text)
+        if self._active_request_token is not None and self._target_window_handle:
             try:
                 self._window_focus_helper.restore_target_window(
                     self._target_window_handle
                 )
             except Exception:
                 self._logger.exception(
-                    "Failed to restore active recording target after queued insert"
+                    "Failed to restore active transcription target after queued insert"
                 )
 
     @QtCore.Slot(int)

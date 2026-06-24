@@ -403,6 +403,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
 
     try:
         text = transcriber.transcribe_batch(b"RIFF")
+        assert transcriber.is_model_loaded is True
     finally:
         transcriber.close()
 
@@ -531,3 +532,84 @@ def test_webgpu_transcriber_closes_process_when_startup_response_fails(
     assert fake_process.wait_calls == 1
     assert json.loads(fake_process.stdin.getvalue().strip()) == {"command": "shutdown"}
     assert transcriber.is_model_loaded is False
+
+
+def test_webgpu_transcriber_restarts_after_auto_cpu_fallback(
+    monkeypatch,
+    tmp_path,
+):
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    fake_process = _FakeProcess()
+    messages = [
+        {
+            "ok": True,
+            "device": "cpu",
+            "gpuAvailable": False,
+            "fallbackErrors": [
+                "webgpu: adapter unavailable after resume",
+                "dml: DirectML is unavailable",
+            ],
+        },
+        {
+            "id": 1,
+            "ok": True,
+            "text": "hello world",
+            "device": "cpu",
+            "gpuAvailable": False,
+            "fallbackErrors": [
+                "webgpu: adapter unavailable after resume",
+                "dml: DirectML is unavailable",
+            ],
+        },
+    ]
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_ensure_snapshot",
+        lambda self: tmp_path,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_start_reader_threads",
+        lambda self, process: None,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, timeout_s: messages.pop(0),
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner: None,
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess,
+        "Popen",
+        lambda command, **kwargs: fake_process,
+    )
+
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        language_mode="en",
+        device="auto",
+        node_path="node",
+        runner_path=runner,
+    )
+    progress: list[str] = []
+    transcriber.set_progress_callback(progress.append)
+
+    text = transcriber.transcribe_batch(b"RIFF")
+
+    assert text == "hello world"
+    assert transcriber.runtime_device == "cpu"
+    assert transcriber.is_model_loaded is False
+    assert fake_process.wait_calls == 1
+    requests = [
+        json.loads(line)
+        for line in fake_process.stdin.getvalue().splitlines()
+        if line.strip()
+    ]
+    assert requests[-1] == {"command": "shutdown"}
+    assert any("restarting before the next request" in item for item in progress)

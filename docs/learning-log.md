@@ -7,9 +7,20 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 - **Clipboard restore race hardened again after rare stale paste reports.**
   The previous 160 ms SendInput restore window remains unchanged; the stronger
-  fix is to defer queued/background result insertion until `start_recording()`
-  finishes when an old transcription result arrives during the next recording's
-  startup. This avoids pasting in the fragile focus handoff window.
+  fix is to defer queued/background result insertion until the active recording
+  has stopped when an old transcription result arrives during the next
+  recording. The history entry is still saved immediately, but the paste is
+  played back later in token order. This avoids pasting in fragile focus and
+  clipboard handoff windows while rapid short recordings are being started and
+  stopped.
+- **ONNX/WebGPU GPU fallback is no longer sticky after sleep/resume.** Windows
+  resume now closes cached Cohere/Granite ONNX/WebGPU runtimes so the next
+  transcription recreates the graphics backend. If an `auto`/`gpu` ONNX runtime
+  falls back to CPU during a request, the result is still returned, then the
+  Node runtime is closed so the following request retries WebGPU/DirectML
+  instead of staying on CPU until the app restarts. Transcription timing logs now
+  include `runtime_device`, `gpu_available`, and fallback details for future
+  diagnostics.
 - **Clipboard contention now checks text after sequence-only changes.** Windows
   clipboard sequence bumps with the expected transcript still present no longer
   abort insertion as a false user-copy race.

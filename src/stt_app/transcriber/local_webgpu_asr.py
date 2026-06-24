@@ -610,6 +610,13 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         else:
             self.runtime_warning = ""
 
+    def _should_restart_after_cpu_fallback(self) -> bool:
+        return (
+            self.device in {"auto", "gpu"}
+            and self._runtime_device == "cpu"
+            and bool(self._runtime_fallback_details)
+        )
+
     def _node_executable(self) -> str:
         node_path = self.node_path or _default_node_path()
         if not node_path:
@@ -761,6 +768,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         temp_path: Path | None = None
+        restart_after_cpu_fallback = False
         try:
             if isinstance(audio_source, bytes):
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
@@ -808,12 +816,22 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                     )
                     if self._runtime_device != previous_device:
                         self._emit_progress(self.runtime_status_text())
+                    restart_after_cpu_fallback = (
+                        self._should_restart_after_cpu_fallback()
+                    )
+                    if restart_after_cpu_fallback:
+                        self._emit_progress(
+                            "ONNX runtime fell back to CPU; restarting before "
+                            "the next request so WebGPU/DirectML can be retried."
+                        )
                     return str(response.get("text") or "").strip()
         except TranscriptionError:
             raise
         except Exception as exc:
             raise TranscriptionError(f"Local ONNX/WebGPU transcription failed: {exc}") from exc
         finally:
+            if restart_after_cpu_fallback:
+                self.close()
             if temp_path is not None:
                 try:
                     temp_path.unlink(missing_ok=True)

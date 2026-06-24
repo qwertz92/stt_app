@@ -21,6 +21,7 @@ from conftest import (
     FakeWindowFocusHelper,
     FailSubmitExecutor,
     ImmediateExecutor,
+    make_controller,
 )
 
 
@@ -1302,5 +1303,45 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
 
     assert preload_called == []
     assert any(state == "Idle" for state, _detail in overlay.states)
+    controller.shutdown()
+    _ = app
+
+
+def test_system_resume_closes_cached_webgpu_runtime():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=True,
+    )
+    controller, _app = make_controller(
+        settings_store=FakeSettingsStore(settings),
+        logger=logging.getLogger("test.controller"),
+    )
+
+    class CachedWebGpuTranscriber:
+        model_size = "cohere-transcribe-03-2026"
+        runtime_device = "webgpu"
+
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    cached = CachedWebGpuTranscriber()
+    controller._transcriber_cache = cached
+    controller._transcriber_cache_key = (
+        "local",
+        "cohere-transcribe-03-2026",
+        "auto",
+    )
+
+    controller.handle_system_resume()
+
+    assert cached.closed is True
+    assert controller._transcriber_cache is None
+    assert controller._transcriber_cache_key is None
     controller.shutdown()
     _ = app

@@ -470,7 +470,11 @@ def _restore_after_system_resume(
     controller: DictationController,
     overlay: OverlayUI,
 ) -> None:
-    controller.refresh_hotkey_registration()
+    resume_handler = getattr(controller, "handle_system_resume", None)
+    if callable(resume_handler):
+        resume_handler()
+    else:
+        controller.refresh_hotkey_registration()
     overlay.restore_visibility()
 
 
