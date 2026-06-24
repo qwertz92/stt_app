@@ -23,6 +23,11 @@ const GRANITE_4_1_EOS_TOKEN_ID = 100257;
 const GRANITE_4_1_HIDDEN_SIZE = 2048;
 const GRANITE_4_1_NUM_LAYERS = 40;
 const GRANITE_4_1_NAR_EMBEDDING_MULTIPLIER = 12;
+// The NAR encoder's BPE/CTC head emits vocab+1 classes: a blank PREPENDED at
+// index 0, then the LLM token ids shifted up by one. CTC decode collapses
+// repeats, drops the blank (0), and shifts class c -> LLM token (c - 1).
+const GRANITE_4_1_NAR_CTC_BLANK_ID = 0;
+const GRANITE_4_1_NAR_CTC_TOKEN_OFFSET = 1;
 const ORT_NEG_INF = -3.4028234663852886e38;
 
 // Models that load through the high-level Transformers.js
@@ -884,7 +889,15 @@ async function loadGranite41ArRuntime(options, device, webgpuAvailable) {
   };
 }
 
-function ctcDraftTokenIds(tokenizer, bpeLogits, bpeMask) {
+function ctcDraftTokenIds(bpeLogits, bpeMask) {
+  // Greedy CTC decode of the encoder's BPE head, matching
+  // GraniteSpeechNarForASR._ctc_collapse_decode: per-valid-frame argmax ->
+  // collapse consecutive repeats -> drop the CTC blank -> shift to LLM ids.
+  // The BPE head emits vocab+1 (=100353) classes with the blank at index 0, so
+  // a non-blank class c is LLM token (c - 1). The collapsed ids feed the
+  // editor's insertion slots *directly* (do NOT decode to text and re-encode:
+  // re-tokenisation changes the id sequence/length and breaks the editor's
+  // trained [eos, t0, eos, t1, ...] structure).
   const [, timesteps, vocabSize] = bpeLogits.dims.map(Number);
   const raw = [];
   for (let timestep = 0; timestep < timesteps; timestep += 1) {
@@ -893,15 +906,8 @@ function ctcDraftTokenIds(tokenizer, bpeLogits, bpeMask) {
     }
     raw.push(argmax(bpeLogits.data, timestep * vocabSize, vocabSize));
   }
-  const collapsed = uniqueConsecutiveWithout(raw, GRANITE_4_1_EOS_TOKEN_ID);
-  if (collapsed.length === 0) {
-    return [];
-  }
-  const draftText = cleanDecodedText(tokenizer, collapsed);
-  if (!draftText) {
-    return [];
-  }
-  return tokenizer.encode(draftText, { add_special_tokens: false }).ids;
+  const collapsed = uniqueConsecutiveWithout(raw, GRANITE_4_1_NAR_CTC_BLANK_ID);
+  return collapsed.map((id) => id - GRANITE_4_1_NAR_CTC_TOKEN_OFFSET);
 }
 
 function insertionSlotIds(tokenIds) {
@@ -957,7 +963,6 @@ async function loadGranite41NarRuntime(options, device, webgpuAvailable) {
       ),
     });
     const draftIds = ctcDraftTokenIds(
-      tokenizer,
       encoderOutputs.bpe_logits_dense,
       encoderOutputs.bpe_mask,
     );
