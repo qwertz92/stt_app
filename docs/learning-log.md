@@ -10,6 +10,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
   stop now remains registered in `_jobs` with a "Pending insert" queue label.
   The row is removed only after the deferred paste flushes, so the overlay no
   longer hides a transcript that still has delivery work pending.
+- **Deferred inserts now wait for the current transcription to finish.**
+  Pending background inserts are no longer flushed immediately when the next
+  recording stops while that recording's transcription is still running. The
+  queue remains visible through Processing, then completed transcripts are
+  delivered in token order once the current transcription resolves. Foreground
+  failure/cancel paths also flush older pending inserts so they cannot hang.
 - **Rapid hotkey toggles during recording startup are serialized.** If the
   recording hotkey arrives while `start_recording()` is still initializing the
   microphone, the controller queues the toggle and applies it after startup
@@ -20,8 +26,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
   Import Audio tab opens a non-modal Qt file dialog so global recording hotkeys
   can still be processed while the picker is open.
 - **History timestamps are display-configurable.** History entries continue to
-  be stored in UTC, but Settings now has a History time-display selector that
+  be stored in UTC, but Settings now has a General > Display time selector that
   defaults to local time and can be switched to UTC for diagnostics.
+- **Benchmark layout gives Run Benchmark room to breathe.** The Benchmark tab
+  keeps a taller history list and reserves substantially more height for the
+  Run Benchmark panel, especially when Run Options is expanded, instead of
+  squeezing those controls under an oversized Results area.
 - **Clipboard restore race hardened again after rare stale paste reports.**
   The previous 160 ms SendInput restore window remains unchanged; the stronger
   fix is to defer queued/background result insertion until the active recording

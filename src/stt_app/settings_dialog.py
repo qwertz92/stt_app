@@ -988,6 +988,56 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         layout.addWidget(hotkey_box)
 
+        # --- Display section ---
+        display_box = QtWidgets.QGroupBox("Display")
+        display_form = QtWidgets.QFormLayout(display_box)
+        display_form.setContentsMargins(10, 10, 10, 10)
+        display_form.setHorizontalSpacing(10)
+        display_form.setVerticalSpacing(6)
+        display_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+
+        self.history_timezone_combo = _WheelPassthroughComboBox()
+        history_timezone_labels = {
+            "local": "Local time",
+            "utc": "UTC",
+        }
+        for value in VALID_DISPLAY_TIMEZONES:
+            self.history_timezone_combo.addItem(
+                history_timezone_labels.get(value, value.upper()),
+                value,
+            )
+        self.history_timezone_combo.setToolTip(
+            "How stored UTC history timestamps are displayed in the app."
+        )
+        self.history_timezone_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_history_list(force=True)
+        )
+        history_timezone_hint = QtWidgets.QLabel(
+            "Transcript history is stored in UTC. This only changes how times "
+            "are shown in Settings and the History window."
+        )
+        history_timezone_hint.setWordWrap(True)
+        self._style_note_label(history_timezone_hint)
+        display_form.addRow(
+            "History Time",
+            self._field_with_hint(
+                self.history_timezone_combo,
+                history_timezone_hint,
+            ),
+        )
+
+        self.overlay_corner_combo = _WheelPassthroughComboBox()
+        corner_labels = {
+            "top-right": "Top Right",
+            "top-left": "Top Left",
+            "bottom-right": "Bottom Right",
+            "bottom-left": "Bottom Left",
+        }
+        for value in VALID_OVERLAY_CORNERS:
+            self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
+        display_form.addRow("Overlay Corner", self.overlay_corner_combo)
+        layout.addWidget(display_box)
+
         # --- Engine / Mode section ---
         engine_box = QtWidgets.QGroupBox("Engine && Mode")
         engine_form = QtWidgets.QFormLayout(engine_box)
@@ -1297,34 +1347,14 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         layout.addWidget(recordings_box)
 
-        # --- Appearance section ---
-        appearance_box = QtWidgets.QGroupBox("Appearance")
-        appearance_form = QtWidgets.QFormLayout(appearance_box)
-        appearance_form.setContentsMargins(10, 10, 10, 10)
-        appearance_form.setHorizontalSpacing(10)
-        appearance_form.setVerticalSpacing(6)
-        appearance_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
-
-        self.overlay_corner_combo = _WheelPassthroughComboBox()
-        corner_labels = {
-            "top-right": "Top Right",
-            "top-left": "Top Left",
-            "bottom-right": "Bottom Right",
-            "bottom-left": "Bottom Left",
-        }
-        for value in VALID_OVERLAY_CORNERS:
-            self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
-        appearance_form.addRow("Overlay Corner", self.overlay_corner_combo)
-        layout.addWidget(appearance_box)
-
         self._apply_shared_form_label_width(
             (
                 hotkey_form,
+                display_form,
                 engine_form,
                 paste_form,
                 audio_form,
                 recordings_form,
-                appearance_form,
             )
         )
         layout.addStretch(1)
@@ -1528,7 +1558,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_setup_scroll = QtWidgets.QScrollArea()
         self.benchmark_setup_scroll.setWidgetResizable(True)
         self.benchmark_setup_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.benchmark_setup_scroll.setMinimumHeight(170)
+        self.benchmark_setup_scroll.setMinimumHeight(360)
         self.benchmark_setup_scroll.setHorizontalScrollBarPolicy(
             QtCore.Qt.ScrollBarAsNeeded
         )
@@ -1818,7 +1848,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.benchmark_results_splitter.setChildrenCollapsible(False)
         self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
-        self.benchmark_results_table.setMinimumHeight(140)
+        self.benchmark_results_table.setMinimumHeight(110)
         self.benchmark_results_table.setHorizontalHeaderLabels(
             ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
         )
@@ -1849,16 +1879,18 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
         self.benchmark_summary_text.setReadOnly(True)
-        self.benchmark_summary_text.setMinimumHeight(140)
+        self.benchmark_summary_text.setMinimumHeight(110)
         self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
-        self.benchmark_results_splitter.setSizes([190, 230])
+        self.benchmark_results_splitter.setSizes([150, 170])
         results_layout.addWidget(self.benchmark_results_splitter)
 
         history_box = QtWidgets.QGroupBox("Benchmark History")
+        history_box.setMinimumHeight(210)
         history_layout = QtWidgets.QVBoxLayout(history_box)
         history_layout.setContentsMargins(10, 10, 10, 10)
         history_layout.setSpacing(6)
         self.benchmark_history_list = QtWidgets.QListWidget()
+        self.benchmark_history_list.setMinimumHeight(120)
         self._configure_compact_list_widget(self.benchmark_history_list, expand=True)
         self.benchmark_history_list.itemSelectionChanged.connect(
             self._update_benchmark_history_actions
@@ -1899,7 +1931,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self.benchmark_main_splitter.addWidget(history_box)
         self.benchmark_main_splitter.addWidget(results_box)
         self.benchmark_main_splitter.addWidget(self.benchmark_setup_scroll)
-        self.benchmark_main_splitter.setSizes([170, 500, 210])
+        self.benchmark_main_splitter.setSizes([240, 330, 430])
         layout.addWidget(self.benchmark_main_splitter, 1)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
@@ -2161,29 +2193,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_max_spin.valueChanged.connect(
             lambda _value: self._refresh_history_list()
         )
-        self.history_timezone_combo = _WheelPassthroughComboBox()
-        history_timezone_labels = {
-            "local": "Local time",
-            "utc": "UTC",
-        }
-        for value in VALID_DISPLAY_TIMEZONES:
-            self.history_timezone_combo.addItem(
-                history_timezone_labels.get(value, value.upper()),
-                value,
-            )
-        self.history_timezone_combo.setToolTip(
-            "How stored UTC history timestamps are displayed in the app."
-        )
-        self.history_timezone_combo.currentIndexChanged.connect(
-            lambda _index: self._refresh_history_list(force=True)
-        )
         history_controls = QtWidgets.QHBoxLayout()
         self._configure_button_row(history_controls)
         history_controls.addWidget(QtWidgets.QLabel("History Size"))
         history_controls.addWidget(self.history_max_spin)
-        history_controls.addSpacing(12)
-        history_controls.addWidget(QtWidgets.QLabel("Time Display"))
-        history_controls.addWidget(self.history_timezone_combo)
         history_controls.addStretch(1)
         layout.addLayout(history_controls)
 
@@ -3451,11 +3464,15 @@ class SettingsDialog(QtWidgets.QDialog):
             self.benchmark_options_toggle.setArrowType(
                 QtCore.Qt.DownArrow if visible else QtCore.Qt.RightArrow
             )
+        if hasattr(self, "benchmark_main_splitter"):
+            self.benchmark_main_splitter.setSizes(
+                [220, 300, 500] if visible else [240, 330, 430]
+            )
 
     def _expand_benchmark_results_area(self) -> None:
         if not hasattr(self, "benchmark_main_splitter"):
             return
-        self.benchmark_main_splitter.setSizes([140, 620, 170])
+        self.benchmark_main_splitter.setSizes([220, 420, 360])
 
     def _update_benchmark_actions(self) -> None:
         if not hasattr(self, "run_benchmark_button"):

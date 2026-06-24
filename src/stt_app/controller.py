@@ -1965,6 +1965,7 @@ class DictationController(QtCore.QObject):
             self._recording_start_in_progress
             or self._recording_stop_in_progress
             or self._audio_capture is not None
+            or self._active_request_token is not None
         )
 
     def _insert_background_transcription(
@@ -2020,6 +2021,7 @@ class DictationController(QtCore.QObject):
             self._active_request_token = None
             self._last_transcribe_settings = None
         self._finish_transcription_job(request_token)
+        self._flush_deferred_background_results()
 
     @QtCore.Slot(int, str)
     def _on_transcription_failed_result(
@@ -2044,6 +2046,7 @@ class DictationController(QtCore.QObject):
                 # keep its audio available for a manual retry.
                 self._promote_request_audio_for_retry(request_token)
                 self._finish_transcription_job(request_token)
+                self._flush_deferred_background_results()
                 return
             self._active_request_token = None
             preserved_audio = self._promote_request_audio_for_retry(request_token)
@@ -2051,6 +2054,7 @@ class DictationController(QtCore.QObject):
                 self._last_failed_wav_bytes = b""
 
         self._finish_transcription_job(request_token)
+        self._flush_deferred_background_results()
         self._focus_poll_timer.stop()
         runtime_stream_failed = (
             self._audio_capture is not None
@@ -2547,6 +2551,10 @@ class DictationController(QtCore.QObject):
                 pass
             self._persist_last_recording_audio(wav_bytes)
             self._save_recording_artifacts(capture, wav_bytes)
+            self._logger.info(
+                "recording_canceled_before_transcription audio_bytes=%d",
+                len(wav_bytes),
+            )
             if wav_bytes:
                 try:
                     self._last_recording_store.mark_canceled(

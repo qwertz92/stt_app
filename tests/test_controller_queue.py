@@ -10,6 +10,7 @@ import logging
 from PySide6 import QtCore, QtGui
 
 from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
 from stt_app.config import FALLBACK_HOTKEY
 
@@ -109,9 +110,18 @@ def test_insert_mode_keeps_and_inserts_background_result(monkeypatch, tmp_path):
     assert controller._active_request_token is None
 
     controller.stop_recording()
+    token_b = controller._active_request_token
 
-    # Inserted into the window focused when A was recorded (caret 321).
-    assert inserter.calls[-1] == ("transcript A", 321, "auto")
+    assert inserter.calls == []
+    assert controller._jobs[token_a].insertion_deferred is True
+
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+
+    # Inserted into each recording's captured target in token order.
+    assert inserter.calls == [
+        ("transcript A", 321, "auto"),
+        ("transcript B", 333, "auto"),
+    ]
     controller.shutdown()
     _ = app
 
@@ -175,8 +185,17 @@ def test_start_recording_keeps_new_target_when_old_result_arrives_during_start(
     assert controller._target_focus_signature == (111, 222, 333)
 
     controller.stop_recording()
+    token_b = controller._active_request_token
 
-    assert inserter.calls[-1] == ("transcript A", 321, "auto")
+    assert inserter.calls == []
+    assert focus.restore_calls == []
+
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+
+    assert inserter.calls == [
+        ("transcript A", 321, "auto"),
+        ("transcript B", 333, "auto"),
+    ]
     assert focus.restore_calls == [987, 111]
     controller.shutdown()
     _ = app
@@ -203,10 +222,21 @@ def test_background_insert_waits_until_active_recording_stops(
     assert overlay.states[-1][0] == "Listening"
 
     controller.stop_recording()
+    token_b = controller._active_request_token
 
-    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert inserter.calls == []
+    assert controller._deferred_background_results
+    assert token_a in controller._jobs
+
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+
+    assert inserter.calls == [
+        ("transcript A", 321, "auto"),
+        ("transcript B", 321, "auto"),
+    ]
     assert controller._deferred_background_results == []
     assert token_a not in controller._jobs
+    assert token_b not in controller._jobs
     controller.shutdown()
     _ = app
 
@@ -311,15 +341,50 @@ def test_background_insert_failure_does_not_overwrite_clipboard(
 
     clipboard = FakeClipboard()
     monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
-    inserter.should_fail = True
+
+    def insert_text_with_options(text, target_hwnd=None, paste_mode="auto"):
+        inserter.calls.append((text, target_hwnd, paste_mode))
+        if text == "transcript A":
+            raise TextInsertionError("failed insert")
+        return True
+
+    inserter.insert_text_with_options = insert_text_with_options
 
     token_a = _record_and_stop(controller)
     controller.start_recording()
     controller._on_transcription_ready("transcript A", request_token=token_a)
     controller.stop_recording()
+    token_b = controller._active_request_token
+
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+
+    assert {e.text for e in history.load()} == {"transcript A", "transcript B"}
+    assert clipboard.text() == "user clipboard"
+    controller.shutdown()
+    _ = app
+
+
+def test_deferred_background_insert_flushes_when_current_job_fails(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+
+    assert inserter.calls == []
+
+    controller._on_transcription_failed("provider failed", request_token=token_b)
 
     assert [e.text for e in history.load()] == ["transcript A"]
-    assert clipboard.text() == "user clipboard"
+    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert controller._deferred_background_results == []
     controller.shutdown()
     _ = app
 

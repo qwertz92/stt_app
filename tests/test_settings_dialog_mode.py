@@ -782,6 +782,7 @@ def test_settings_history_list_formats_utc_display_timezone(tmp_path):
 
     dialog._refresh_history_list()
 
+    assert dialog.history_timezone_combo.currentData() == "utc"
     assert dialog.history_list.item(0).text().startswith(
         "2026-06-24 16:45:00 UTC | local/small"
     )
@@ -1622,6 +1623,9 @@ def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
     assert splitter.widget(2) is dialog.benchmark_setup_scroll
     assert dialog.benchmark_setup_scroll.widget() is dialog.benchmark_setup_box
     assert dialog.benchmark_setup_box.title() == "Run Benchmark"
+    assert dialog.benchmark_history_list.minimumHeight() >= 120
+    assert dialog.benchmark_setup_scroll.minimumHeight() >= 360
+    assert splitter.sizes()[2] >= splitter.sizes()[1]
     assert dialog.benchmark_options_box.isVisible() is False
     assert dialog.benchmark_options_toggle.text() == "Show Run Options"
 
@@ -1629,6 +1633,7 @@ def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
 
     assert dialog.benchmark_options_box.isVisible() is True
     assert dialog.benchmark_options_toggle.text() == "Hide Run Options"
+    assert splitter.sizes()[2] >= splitter.sizes()[1]
     _ = app
 
 
@@ -1695,7 +1700,7 @@ def test_benchmark_history_double_click_loads_entry(tmp_path):
     assert dialog.benchmark_summary_text.toPlainText() == entry.summary
     main_sizes = dialog.benchmark_main_splitter.sizes()
     assert main_sizes[1] > main_sizes[0]
-    assert main_sizes[1] > main_sizes[2]
+    assert main_sizes[2] > main_sizes[0]
     _ = app
 
 
