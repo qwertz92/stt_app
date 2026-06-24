@@ -5,6 +5,7 @@ from stt_app.config import (
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
+    DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
@@ -43,6 +44,7 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.save_all_recordings is False
     assert settings.recordings_max_count == DEFAULT_RECORDINGS_MAX_COUNT
     assert settings.history_max_items == DEFAULT_HISTORY_MAX_ITEMS
+    assert settings.display_timezone == DEFAULT_DISPLAY_TIMEZONE
     assert settings.overlay_opacity_percent == DEFAULT_OVERLAY_OPACITY_PERCENT
     assert settings.overlay_always_on_top == DEFAULT_OVERLAY_ALWAYS_ON_TOP
     assert settings.start_beep_enabled is False
@@ -79,6 +81,19 @@ def test_concurrent_transcription_mode_round_trips(tmp_path):
     for mode in ("insert", "history", "cancel"):
         store.save(AppSettings(concurrent_transcription_mode=mode))
         assert store.load().concurrent_transcription_mode == mode
+
+
+def test_display_timezone_round_trips_and_invalid_falls_back(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+
+    store.save(AppSettings(display_timezone="utc"))
+    assert store.load().display_timezone == "utc"
+
+    settings_path.write_text(
+        json.dumps({"display_timezone": "mars"}), encoding="utf-8"
+    )
+    assert store.load().display_timezone == DEFAULT_DISPLAY_TIMEZONE
 
 
 def test_invalid_concurrent_transcription_mode_falls_back_to_default(tmp_path):

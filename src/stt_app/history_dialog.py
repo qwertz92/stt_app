@@ -14,6 +14,7 @@ from .transcript_history import (
     HistoryStorageSignature,
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
+    format_history_timestamp,
     join_recent_entries_for_clipboard,
     map_recent_entry_rows,
     recent_entries_change_plan,
@@ -54,6 +55,9 @@ class HistoryDialog(QtWidgets.QDialog):
 
         settings = self._settings_store.load()
         self._history_limit = _normalize_history_limit(settings.history_max_items)
+        self._display_timezone = str(
+            getattr(settings, "display_timezone", "local") or "local"
+        )
 
         self.setWindowTitle("Recent Transcriptions")
         self.resize(1040, 660)
@@ -243,7 +247,11 @@ class HistoryDialog(QtWidgets.QDialog):
 
     def _populate_row(self, row: int, entry: TranscriptHistoryEntry) -> None:
         self._table.setItem(
-            row, 0, QtWidgets.QTableWidgetItem(_format_time(entry.created_at))
+            row,
+            0,
+            QtWidgets.QTableWidgetItem(
+                format_history_timestamp(entry.created_at, self._display_timezone)
+            ),
         )
         self._table.setItem(row, 1, QtWidgets.QTableWidgetItem(entry.engine))
         self._table.setItem(row, 2, QtWidgets.QTableWidgetItem(entry.model))
@@ -803,11 +811,3 @@ def _preview_text(value: str) -> str:
     if len(text) <= _TABLE_TEXT_PREVIEW_CHARS:
         return text
     return f"{text[:_TABLE_TEXT_PREVIEW_CHARS]}..."
-
-
-def _format_time(value: str) -> str:
-    try:
-        dt = datetime.fromisoformat(value)
-        return dt.strftime("%Y-%m-%d %H:%M:%S")
-    except Exception:
-        return value

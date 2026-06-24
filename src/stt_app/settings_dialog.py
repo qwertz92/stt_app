@@ -39,7 +39,9 @@ from .config import (
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    DEFAULT_DISPLAY_TIMEZONE,
     VALID_CONCURRENT_TRANSCRIPTION_MODES,
+    VALID_DISPLAY_TIMEZONES,
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_MAX_COUNT,
     DEFAULT_START_BEEP_TONE,
@@ -104,6 +106,7 @@ from .transcript_history import (
     HistoryStorageSignature,
     TranscriptHistoryEntry,
     TranscriptHistoryStore,
+    format_history_timestamp,
     join_recent_entries_for_clipboard,
     map_recent_entry_rows,
     recent_entries_change_plan,
@@ -288,7 +291,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._history_store = TranscriptHistoryStore()
         self._history_entries: list[TranscriptHistoryEntry] = []
         self._history_reload_signature: tuple[
-            HistoryStorageSignature, int
+            HistoryStorageSignature, int, str
         ] | None = None
         self._benchmark_history_store = BenchmarkHistoryStore()
         self._last_recording_store = last_recording_store or LastRecordingStore()
@@ -2158,10 +2161,29 @@ class SettingsDialog(QtWidgets.QDialog):
         self.history_max_spin.valueChanged.connect(
             lambda _value: self._refresh_history_list()
         )
+        self.history_timezone_combo = _WheelPassthroughComboBox()
+        history_timezone_labels = {
+            "local": "Local time",
+            "utc": "UTC",
+        }
+        for value in VALID_DISPLAY_TIMEZONES:
+            self.history_timezone_combo.addItem(
+                history_timezone_labels.get(value, value.upper()),
+                value,
+            )
+        self.history_timezone_combo.setToolTip(
+            "How stored UTC history timestamps are displayed in the app."
+        )
+        self.history_timezone_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_history_list(force=True)
+        )
         history_controls = QtWidgets.QHBoxLayout()
         self._configure_button_row(history_controls)
         history_controls.addWidget(QtWidgets.QLabel("History Size"))
         history_controls.addWidget(self.history_max_spin)
+        history_controls.addSpacing(12)
+        history_controls.addWidget(QtWidgets.QLabel("Time Display"))
+        history_controls.addWidget(self.history_timezone_combo)
         history_controls.addStretch(1)
         layout.addLayout(history_controls)
 
@@ -2356,6 +2378,7 @@ class SettingsDialog(QtWidgets.QDialog):
         import_layout.addWidget(self.import_splitter, 1)
 
         self._selected_import_file_path = ""
+        self._import_file_dialog: QtWidgets.QFileDialog | None = None
 
         layout.addWidget(import_box, 1)
         self.tabs.addTab(tab, "Import Audio")
@@ -5088,6 +5111,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self.recordings_dir_edit.setText(settings.recordings_dir or "")
         self.recordings_max_spin.setValue(int(settings.recordings_max_count))
         self.history_max_spin.setValue(int(settings.history_max_items))
+        self._select_combo_data(
+            self.history_timezone_combo,
+            str(getattr(settings, "display_timezone", DEFAULT_DISPLAY_TIMEZONE)),
+        )
         self._select_combo_data(self.overlay_corner_combo, settings.overlay_corner)
         self.keep_clipboard_checkbox.setChecked(
             settings.keep_transcript_in_clipboard
@@ -5331,11 +5358,15 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _current_history_reload_signature(
         self,
-    ) -> tuple[HistoryStorageSignature, int] | None:
+    ) -> tuple[HistoryStorageSignature, int, str] | None:
         getter = getattr(self._history_store, "storage_signature", None)
         if not callable(getter):
             return None
-        return (getter(), self.history_max_spin.value())
+        return (
+            getter(),
+            self.history_max_spin.value(),
+            str(self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE),
+        )
 
     def _history_list_item(
         self,
@@ -5343,7 +5374,11 @@ class SettingsDialog(QtWidgets.QDialog):
     ) -> QtWidgets.QListWidgetItem:
         text = entry.text.strip().replace("\n", " ")
         preview = text[:70] + ("..." if len(text) > 70 else "")
-        label = f"{entry.created_at} | {entry.engine}/{entry.model} | {preview}"
+        display_timezone = str(
+            self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
+        )
+        timestamp = format_history_timestamp(entry.created_at, display_timezone)
+        label = f"{timestamp} | {entry.engine}/{entry.model} | {preview}"
         item = QtWidgets.QListWidgetItem(label)
         item.setData(QtCore.Qt.UserRole, entry)
         self._apply_compact_list_item_size(self.history_list, item)
@@ -5602,15 +5637,34 @@ class SettingsDialog(QtWidgets.QDialog):
             self.import_start_button.setEnabled(False)
 
     def _choose_import_file(self) -> None:
-        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
+        if (
+            self._import_file_dialog is not None
+            and self._import_file_dialog.isVisible()
+        ):
+            self._import_file_dialog.raise_()
+            self._import_file_dialog.activateWindow()
+            return
+        dialog = QtWidgets.QFileDialog(
             self,
             "Select audio file",
             self._import_file_dialog_dir(),
-            "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.webm);;All files (*)",
         )
-        if not path:
-            return
-        self._set_selected_import_file(path)
+        dialog.setNameFilter(
+            "Audio files (*.wav *.mp3 *.m4a *.flac *.ogg *.opus *.webm);;All files (*)"
+        )
+        dialog.setFileMode(QtWidgets.QFileDialog.ExistingFile)
+        dialog.setOption(QtWidgets.QFileDialog.DontUseNativeDialog, True)
+        dialog.setModal(False)
+        dialog.setWindowModality(QtCore.Qt.NonModal)
+        dialog.fileSelected.connect(self._set_selected_import_file)
+        dialog.finished.connect(self._on_import_file_dialog_finished)
+        self._import_file_dialog = dialog
+        dialog.show()
+
+    def _on_import_file_dialog_finished(self, _result: int) -> None:
+        if self._import_file_dialog is not None:
+            self._import_file_dialog.deleteLater()
+            self._import_file_dialog = None
 
     def _select_last_recording_file(self) -> bool:
         path = self._last_recording_store.selectable_path(
@@ -6006,6 +6060,9 @@ class SettingsDialog(QtWidgets.QDialog):
             recordings_dir=self._effective_recordings_dir(),
             recordings_max_count=int(self.recordings_max_spin.value()),
             history_max_items=int(self.history_max_spin.value()),
+            display_timezone=str(
+                self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
+            ),
             overlay_opacity_percent=latest_overlay_opacity,
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
@@ -6147,6 +6204,9 @@ class SettingsDialog(QtWidgets.QDialog):
             recordings_dir=self._effective_recordings_dir(),
             recordings_max_count=int(self.recordings_max_spin.value()),
             history_max_items=requested_history_limit,
+            display_timezone=str(
+                self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
+            ),
             overlay_opacity_percent=latest_overlay_opacity,
             keep_transcript_in_clipboard=(
                 self.keep_clipboard_checkbox.isChecked()

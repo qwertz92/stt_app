@@ -5,6 +5,23 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-06-24
 
+- **Queued background inserts stay visible until paste delivery completes.**
+  A background transcription result that must wait for the active recording to
+  stop now remains registered in `_jobs` with a "Pending insert" queue label.
+  The row is removed only after the deferred paste flushes, so the overlay no
+  longer hides a transcript that still has delivery work pending.
+- **Rapid hotkey toggles during recording startup are serialized.** If the
+  recording hotkey arrives while `start_recording()` is still initializing the
+  microphone, the controller queues the toggle and applies it after startup
+  completes instead of re-entering `start_recording()`. This prevents nested
+  captures and closes the gap where a WAV could be saved without a matching
+  transcription worker submission.
+- **Import Audio file picking no longer uses a blocking native dialog.** The
+  Import Audio tab opens a non-modal Qt file dialog so global recording hotkeys
+  can still be processed while the picker is open.
+- **History timestamps are display-configurable.** History entries continue to
+  be stored in UTC, but Settings now has a History time-display selector that
+  defaults to local time and can be switched to UTC for diagnostics.
 - **Clipboard restore race hardened again after rare stale paste reports.**
   The previous 160 ms SendInput restore window remains unchanged; the stronger
   fix is to defer queued/background result insertion until the active recording

@@ -759,6 +759,35 @@ def test_settings_history_refresh_preserves_selected_entry_and_scroll(tmp_path):
     _ = app
 
 
+def test_settings_history_list_formats_utc_display_timezone(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            TranscriptHistoryEntry(
+                created_at="2026-06-24T16:45:00+00:00",
+                text="entry",
+                engine="local",
+                model="small",
+                mode="batch",
+            )
+        ]
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(display_timezone="utc")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+
+    dialog._refresh_history_list()
+
+    assert dialog.history_list.item(0).text().startswith(
+        "2026-06-24 16:45:00 UTC | local/small"
+    )
+    _ = app
+
+
 def test_settings_history_refresh_skips_unchanged_history(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
@@ -1700,20 +1729,9 @@ def test_benchmark_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
     _ = app
 
 
-def test_import_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
+def test_import_audio_picker_starts_in_recordings_dir(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     recordings_path = tmp_path / "recordings"
-    captured: dict[str, str] = {}
-
-    def fake_get_open_file_name(parent, title, directory, file_filter):
-        captured["directory"] = directory
-        return "", ""
-
-    monkeypatch.setattr(
-        QtWidgets.QFileDialog,
-        "getOpenFileName",
-        fake_get_open_file_name,
-    )
 
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(
@@ -1725,8 +1743,16 @@ def test_import_audio_picker_starts_in_recordings_dir(monkeypatch, tmp_path):
 
     dialog._choose_import_file()
 
-    assert captured["directory"] == str(recordings_path)
+    assert dialog._import_file_dialog is not None
+    assert Path(dialog._import_file_dialog.directory().absolutePath()) == (
+        recordings_path
+    )
+    assert dialog._import_file_dialog.testOption(
+        QtWidgets.QFileDialog.DontUseNativeDialog
+    )
+    assert dialog._import_file_dialog.isModal() is False
     assert recordings_path.is_dir()
+    dialog._on_import_file_dialog_finished(0)
     _ = app
 
 
@@ -1770,23 +1796,12 @@ def test_open_recordings_dir_refreshes_global_hotkeys(monkeypatch, tmp_path):
     _ = app
 
 
-def test_import_audio_picker_reuses_selected_file_directory(monkeypatch, tmp_path):
+def test_import_audio_picker_reuses_selected_file_directory(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     selected_dir = tmp_path / "selected"
     selected_dir.mkdir()
     selected_path = selected_dir / "sample.wav"
     selected_path.write_bytes(b"RIFF")
-    captured: dict[str, str] = {}
-
-    def fake_get_open_file_name(parent, title, directory, file_filter):
-        captured["directory"] = directory
-        return "", ""
-
-    monkeypatch.setattr(
-        QtWidgets.QFileDialog,
-        "getOpenFileName",
-        fake_get_open_file_name,
-    )
 
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -1797,7 +1812,9 @@ def test_import_audio_picker_reuses_selected_file_directory(monkeypatch, tmp_pat
 
     dialog._choose_import_file()
 
-    assert captured["directory"] == str(selected_dir)
+    assert dialog._import_file_dialog is not None
+    assert Path(dialog._import_file_dialog.directory().absolutePath()) == selected_dir
+    dialog._on_import_file_dialog_finished(0)
     _ = app
 
 

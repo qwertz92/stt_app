@@ -69,6 +69,32 @@ def test_copy_selected_button_shows_feedback(monkeypatch, tmp_path):
     _ = app
 
 
+def test_history_dialog_formats_utc_display_timezone(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            TranscriptHistoryEntry(
+                created_at="2026-06-24T16:45:00+00:00",
+                text="alpha",
+                engine="local",
+                model="small",
+                mode="batch",
+            )
+        ]
+    )
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(display_timezone="utc"))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    assert dialog._table.item(0, 0).text() == "2026-06-24 16:45:00 UTC"
+    _ = app
+
+
 def test_delete_selected_button_removes_entry(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     history_store = TranscriptHistoryStore(path=tmp_path / "history.json")

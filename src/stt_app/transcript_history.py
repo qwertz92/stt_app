@@ -14,6 +14,9 @@ from .app_paths import transcript_history_path
 from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
 
 HistoryStorageSignature = tuple[int, int] | None
+DISPLAY_TIMEZONE_LOCAL = "local"
+DISPLAY_TIMEZONE_UTC = "utc"
+VALID_HISTORY_DISPLAY_TIMEZONES = (DISPLAY_TIMEZONE_LOCAL, DISPLAY_TIMEZONE_UTC)
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,3 +373,19 @@ def _history_entry_full_key(
         entry.mode,
         entry.source_recording_id,
     )
+
+
+def format_history_timestamp(value: str, display_timezone: str = "local") -> str:
+    try:
+        dt = datetime.fromisoformat(value)
+    except Exception:
+        return value
+
+    mode = str(display_timezone or DISPLAY_TIMEZONE_LOCAL).strip().lower()
+    if mode not in VALID_HISTORY_DISPLAY_TIMEZONES:
+        mode = DISPLAY_TIMEZONE_LOCAL
+    if dt.tzinfo is None:
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    if mode == DISPLAY_TIMEZONE_UTC:
+        return f"{dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+    return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")

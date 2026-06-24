@@ -46,7 +46,9 @@ from .config import (
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
+    DEFAULT_DISPLAY_TIMEZONE,
     VALID_CONCURRENT_TRANSCRIPTION_MODES,
+    VALID_DISPLAY_TIMEZONES,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
     DEFAULT_VAD_ENABLED,
@@ -88,6 +90,7 @@ DEFAULTS = {
     "recordings_dir": DEFAULT_RECORDINGS_DIR,
     "recordings_max_count": DEFAULT_RECORDINGS_MAX_COUNT,
     "history_max_items": DEFAULT_HISTORY_MAX_ITEMS,
+    "display_timezone": DEFAULT_DISPLAY_TIMEZONE,
     "overlay_opacity_percent": DEFAULT_OVERLAY_OPACITY_PERCENT,
     "overlay_always_on_top": DEFAULT_OVERLAY_ALWAYS_ON_TOP,
     "engine": DEFAULT_ENGINE,
@@ -142,6 +145,7 @@ class AppSettings:
     recordings_dir: str = DEFAULT_RECORDINGS_DIR
     recordings_max_count: int = DEFAULT_RECORDINGS_MAX_COUNT
     history_max_items: int = DEFAULT_HISTORY_MAX_ITEMS
+    display_timezone: str = DEFAULT_DISPLAY_TIMEZONE
     overlay_opacity_percent: int = DEFAULT_OVERLAY_OPACITY_PERCENT
     overlay_always_on_top: bool = DEFAULT_OVERLAY_ALWAYS_ON_TOP
     engine: str = DEFAULT_ENGINE
@@ -286,6 +290,11 @@ class AppSettings:
             and parsed_history_max_items == _LEGACY_DEFAULT_HISTORY_MAX_ITEMS
         ):
             history_max_items = DEFAULT_HISTORY_MAX_ITEMS
+        display_timezone = str(
+            merged.get("display_timezone", DEFAULT_DISPLAY_TIMEZONE)
+        ).strip().lower()
+        if display_timezone not in VALID_DISPLAY_TIMEZONES:
+            display_timezone = DEFAULT_DISPLAY_TIMEZONE
         try:
             overlay_opacity_percent = int(
                 merged.get(
@@ -327,6 +336,7 @@ class AppSettings:
             ).strip(),
             recordings_max_count=recordings_max_count,
             history_max_items=history_max_items,
+            display_timezone=display_timezone,
             overlay_opacity_percent=overlay_opacity_percent,
             overlay_always_on_top=bool(
                 merged.get(
