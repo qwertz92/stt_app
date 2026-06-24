@@ -6,9 +6,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
 ## 2026-06-24
 
 - **Clipboard restore race hardened again after rare stale paste reports.**
-  Some target apps can read the clipboard later than the previous 160 ms
-  SendInput restore window, causing the restored old clipboard text to be pasted
-  instead of the transcript. The SendInput restore delay is now 500 ms.
+  The previous 160 ms SendInput restore window remains unchanged; the stronger
+  fix is to defer queued/background result insertion until `start_recording()`
+  finishes when an old transcription result arrives during the next recording's
+  startup. This avoids pasting in the fragile focus handoff window.
 - **Clipboard contention now checks text after sequence-only changes.** Windows
   clipboard sequence bumps with the expected transcript still present no longer
   abort insertion as a false user-copy race.

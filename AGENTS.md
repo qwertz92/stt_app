@@ -93,8 +93,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
-- **SendInput restore delay (500ms)**: Empirical value. Some apps
-  (Electron/Chrome) read clipboard asynchronously well after Ctrl+V. 500ms
+- **SendInput restore delay (160ms)**: Empirical value. Some apps
+  (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms
   prevents stale paste. `TextInserter` serializes app-initiated paste operations
   and checks the Win32 clipboard sequence/content before paste and before
   restore; if the user changes the clipboard during that window, leave the

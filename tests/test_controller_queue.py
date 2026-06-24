@@ -153,6 +153,8 @@ def test_start_recording_keeps_new_target_when_old_result_arrives_during_start(
             return
         processed["done"] = True
         controller._on_transcription_ready("transcript A", request_token=token_a)
+        assert inserter.calls == []
+        assert focus.restore_calls == []
 
     monkeypatch.setattr(QtCore.QCoreApplication, "processEvents", process_events)
 

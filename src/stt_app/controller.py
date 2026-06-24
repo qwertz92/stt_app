@@ -190,6 +190,7 @@ class DictationController(QtCore.QObject):
         # used for the overlay queue display, per-job target insertion, and
         # cooperative cancellation. A token is "live" while its job is present.
         self._jobs: dict[int, _TranscriptionJob] = {}
+        self._deferred_background_results: list[tuple[_TranscriptionJob, str]] = []
 
         self.transcription_ready.connect(self._on_transcription_ready_result)
         self.transcription_failed.connect(self._on_transcription_failed_result)
@@ -245,6 +246,7 @@ class DictationController(QtCore.QObject):
         self._active_request_token = None
         self._request_audio_by_token.clear()
         self._jobs.clear()
+        self._deferred_background_results.clear()
         self._reset_streaming_state()
         self._reset_transcriber_cache()
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -439,6 +441,7 @@ class DictationController(QtCore.QObject):
             )
         finally:
             self._recording_start_in_progress = False
+            self._flush_deferred_background_results()
 
     def _start_batch_recording(
         self,
@@ -1776,6 +1779,9 @@ class DictationController(QtCore.QObject):
         """
         if job is None or not text.strip():
             return
+        if self._recording_start_in_progress:
+            self._deferred_background_results.append((job, text))
+            return
         self._append_transcript_history(
             text,
             job.settings,
@@ -1802,6 +1808,24 @@ class DictationController(QtCore.QObject):
                     job.mode,
                     job.engine,
                     job.model,
+                )
+
+    def _flush_deferred_background_results(self) -> None:
+        if not self._deferred_background_results:
+            return
+        pending = list(self._deferred_background_results)
+        self._deferred_background_results.clear()
+        for job, text in pending:
+            self._handle_background_transcription_ready(job, text)
+            self._finish_transcription_job(job.token)
+        if self._audio_capture is not None and self._target_window_handle:
+            try:
+                self._window_focus_helper.restore_target_window(
+                    self._target_window_handle
+                )
+            except Exception:
+                self._logger.exception(
+                    "Failed to restore active recording target after queued insert"
                 )
 
     @QtCore.Slot(int)

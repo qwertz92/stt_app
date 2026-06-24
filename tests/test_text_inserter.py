@@ -289,30 +289,6 @@ def test_text_inserter_tolerates_sequence_change_when_text_is_unchanged():
     assert backend.state["text"] == "old"
 
 
-def test_text_inserter_waits_long_enough_for_slow_async_paste_target():
-    backend = SequencedPasteBackend()
-    sleep_calls = []
-
-    def sleep(value):
-        sleep_calls.append(value)
-        if backend.pending_paste and value >= 0.35:
-            backend.consume_pending_paste()
-
-    inserter = TextInserter(backend=backend, sleep_fn=sleep)
-
-    assert inserter.insert_text_with_options(
-        "new transcript",
-        target_hwnd=123,
-        paste_mode="send_input",
-    )
-
-    if backend.pending_paste:
-        backend.consume_pending_paste()
-
-    assert backend.target_text == "new transcript"
-    assert backend.state["text"] == "old"
-
-
 def test_format_sendinput_failure_uipi_message():
     msg = _format_sendinput_failure(sent=0, expected=4, error_code=5)
     assert "UIPI" in msg
