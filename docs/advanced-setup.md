@@ -452,7 +452,7 @@ The app inserts transcribed text at the cursor using clipboard-based paste:
 - **SendInput only**: Always simulates Ctrl+V keystrokes.
 - **WM_PASTE only**: Sends WM_PASTE message directly to the target window.
 
-A short delay after SendInput prevents race conditions where the target app reads the clipboard asynchronously.
+A 500 ms delay after SendInput prevents race conditions where the target app reads the clipboard asynchronously.
 
 ### Hotkey
 

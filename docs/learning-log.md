@@ -3,6 +3,22 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-06-24
+
+- **Clipboard restore race hardened again after rare stale paste reports.**
+  Some target apps can read the clipboard later than the previous 160 ms
+  SendInput restore window, causing the restored old clipboard text to be pasted
+  instead of the transcript. The SendInput restore delay is now 500 ms.
+- **Clipboard contention now checks text after sequence-only changes.** Windows
+  clipboard sequence bumps with the expected transcript still present no longer
+  abort insertion as a false user-copy race.
+- **Background queue insert failures no longer silently copy transcripts.** If a
+  queued/background insertion fails while another recording is active, the
+  transcript stays in history and the user's clipboard is left alone.
+- **Queue rows now include rank and time.** In-flight rows show oldest/newest
+  markers and a submission timestamp so multiple queued recordings are easier
+  to distinguish before canceling one.
+
 ## 2026-06-22
 
 - **Clipboard paste delivery is guarded against user-copy races.**

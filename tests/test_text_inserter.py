@@ -60,6 +60,8 @@ class SequencedPasteBackend(PasteBackend):
     def __init__(self, paste_mode="send_input"):
         super().__init__(paste_mode=paste_mode)
         self.sequence = 100
+        self.pending_paste = False
+        self.target_text = ""
 
     def set_clipboard_text(self, text):
         self.calls.append(f"set:{text}")
@@ -83,8 +85,26 @@ class SequencedPasteBackend(PasteBackend):
     def get_clipboard_text(self):
         return self.state["text"] if self.state["has_text"] else None
 
+    def send_paste(self, target_hwnd=None):
+        self.last_target_hwnd = target_hwnd
+        self.calls.append(f"paste:{target_hwnd}")
+        if self.raise_on_paste:
+            raise RuntimeError("send failed")
+        self.pending_paste = True
+        return self.paste_mode
+
+    def consume_pending_paste(self):
+        if not self.pending_paste:
+            return
+        self.pending_paste = False
+        if self.state["has_text"] and self.state["text"] is not None:
+            self.target_text += self.state["text"]
+
     def simulate_user_copy(self, text):
         self.state = {"has_text": True, "text": text}
+        self.sequence += 1
+
+    def simulate_sequence_bump(self):
         self.sequence += 1
 
 
@@ -239,6 +259,58 @@ def test_text_inserter_preserves_user_clipboard_change_during_paste_window():
     assert error.value.allow_clipboard_fallback is False
     assert backend.calls == ["capture", "set:hello", "paste:123"]
     assert backend.state["text"] == "copied while pasting"
+
+
+def test_text_inserter_tolerates_sequence_change_when_text_is_unchanged():
+    backend = SequencedPasteBackend()
+    sleep_calls = []
+
+    def sleep(value):
+        sleep_calls.append(value)
+        if len(sleep_calls) == 1:
+            backend.simulate_sequence_bump()
+        if len(sleep_calls) == 2:
+            backend.consume_pending_paste()
+
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=sleep,
+        clipboard_settle_s=0.05,
+        sendinput_restore_delay_s=0.2,
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="send_input",
+    )
+
+    assert backend.target_text == "hello"
+    assert backend.state["text"] == "old"
+
+
+def test_text_inserter_waits_long_enough_for_slow_async_paste_target():
+    backend = SequencedPasteBackend()
+    sleep_calls = []
+
+    def sleep(value):
+        sleep_calls.append(value)
+        if backend.pending_paste and value >= 0.35:
+            backend.consume_pending_paste()
+
+    inserter = TextInserter(backend=backend, sleep_fn=sleep)
+
+    assert inserter.insert_text_with_options(
+        "new transcript",
+        target_hwnd=123,
+        paste_mode="send_input",
+    )
+
+    if backend.pending_paste:
+        backend.consume_pending_paste()
+
+    assert backend.target_text == "new transcript"
+    assert backend.state["text"] == "old"
 
 
 def test_format_sendinput_failure_uipi_message():

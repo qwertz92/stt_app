@@ -779,6 +779,7 @@ class OverlayUI(QtWidgets.QWidget):
         text_label = QtWidgets.QLabel(str(label))
         text_label.setTextFormat(QtCore.Qt.PlainText)
         text_label.setWordWrap(True)
+        text_label.setToolTip(str(label))
         text_label.setMinimumWidth(0)
         text_label.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,

@@ -328,7 +328,12 @@ class TextInserter:
     ) -> bool:
         current_marker = self._clipboard_sequence_number()
         if marker is not None and current_marker is not None:
-            return current_marker != marker
+            if current_marker == marker:
+                return False
+            current_text = self._clipboard_text()
+            if current_text is not _UNAVAILABLE_CLIPBOARD_TEXT:
+                return current_text != expected_text
+            return True
         current_text = self._clipboard_text()
         if current_text is not _UNAVAILABLE_CLIPBOARD_TEXT:
             return current_text != expected_text

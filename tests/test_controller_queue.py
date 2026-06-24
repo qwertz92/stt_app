@@ -7,7 +7,7 @@ signals directly.
 
 import logging
 
-from PySide6 import QtCore
+from PySide6 import QtCore, QtGui
 
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -77,7 +77,10 @@ def test_queue_overlay_lists_running_job(monkeypatch, tmp_path):
         monkeypatch, tmp_path, mode="insert"
     )
     token_a = _record_and_stop(controller)
-    assert overlay.queue_updates[-1] == [(token_a, "local · small")]
+    assert len(overlay.queue_updates[-1]) == 1
+    assert overlay.queue_updates[-1][0][0] == token_a
+    assert overlay.queue_updates[-1][0][1].startswith("#1 · ")
+    assert overlay.queue_updates[-1][0][1].endswith("local · small")
     controller.shutdown()
     _ = app
 
@@ -103,6 +106,7 @@ def test_insert_mode_keeps_and_inserts_background_result(monkeypatch, tmp_path):
     assert inserter.calls[-1] == ("transcript A", 321, "auto")
     assert overlay.states[-1][0] == "Listening"
     assert overlay.queue_updates[-1] == []
+    assert controller._active_request_token is None
     controller.shutdown()
     _ = app
 
@@ -175,6 +179,39 @@ def test_history_mode_keeps_but_does_not_insert(monkeypatch, tmp_path):
 
     assert [e.text for e in history.load()] == ["transcript A"]
     assert inserter.calls == []  # history only, never inserted
+    controller.shutdown()
+    _ = app
+
+
+def test_background_insert_failure_does_not_overwrite_clipboard(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    class FakeClipboard:
+        def __init__(self):
+            self.value = "user clipboard"
+
+        def setText(self, text):
+            self.value = text
+
+        def text(self):
+            return self.value
+
+    clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    inserter.should_fail = True
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+
+    assert [e.text for e in history.load()] == ["transcript A"]
+    assert clipboard.text() == "user clipboard"
+    assert overlay.states[-1][0] == "Listening"
     controller.shutdown()
     _ = app
 

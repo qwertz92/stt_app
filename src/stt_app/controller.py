@@ -7,7 +7,7 @@ import subprocess
 import threading
 import time
 from datetime import datetime
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable
 
@@ -89,6 +89,7 @@ class _TranscriptionJob:
     settings: AppSettings
     target_handle: int | None
     target_signature: FocusSignature | None
+    created_at: datetime = field(default_factory=datetime.now)
     source_recording_id: str = ""
     future: object | None = None
     # How a non-foreground (queued/background) result is delivered:
@@ -902,19 +903,36 @@ class DictationController(QtCore.QObject):
         if self._jobs.pop(request_token, None) is not None:
             self._update_queue_overlay()
 
-    def _queue_job_label(self, job: _TranscriptionJob) -> str:
+    def _queue_job_label(
+        self,
+        job: _TranscriptionJob,
+        *,
+        rank: int,
+        total: int,
+    ) -> str:
         engine = (job.engine or "").strip() or "transcriber"
         model = (job.model or "").strip()
-        return f"{engine} · {model}" if model else engine
+        rank_label = f"#{rank}/{total}" if total > 1 else "#1"
+        if total > 1 and rank == 1:
+            rank_label = f"{rank_label} Oldest"
+        elif total > 1 and rank == total:
+            rank_label = f"{rank_label} Newest"
+        timestamp = job.created_at.strftime("%H:%M:%S")
+        provider = f"{engine} · {model}" if model else engine
+        return f"{rank_label} · {timestamp} · {provider}"
 
     def _update_queue_overlay(self) -> None:
         setter = getattr(self._overlay, "set_transcription_queue", None)
         if not callable(setter):
             return
+        visible_jobs = [job for job in self._jobs.values() if not job.aborting]
+        total = len(visible_jobs)
         items = [
-            (job.token, self._queue_job_label(job))
-            for job in self._jobs.values()
-            if not job.aborting
+            (
+                job.token,
+                self._queue_job_label(job, rank=index, total=total),
+            )
+            for index, job in enumerate(visible_jobs, start=1)
         ]
         setter(items)
 
@@ -1664,6 +1682,9 @@ class DictationController(QtCore.QObject):
                 # to stop. Keep the live session untouched and deliver this
                 # queued result on its own (history and/or its own window).
                 self._drop_request_audio(request_token)
+                if self._active_request_token == request_token:
+                    self._active_request_token = None
+                    self._last_transcribe_settings = None
                 self._handle_background_transcription_ready(job, text)
                 self._finish_transcription_job(request_token)
                 return
@@ -1765,13 +1786,23 @@ class DictationController(QtCore.QObject):
             job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and job.mode != "streaming"
         ):
-            self._insert_text_at_target(
+            inserted = self._insert_text_at_target(
                 text,
                 restore_focus=True,
+                copy_on_error=False,
                 target_handle=job.target_handle,
                 target_signature=job.target_signature,
                 show_overlay_error=False,
             )
+            if not inserted:
+                self._logger.warning(
+                    "Background transcription insertion failed; saved to history "
+                    "only. token=%s mode=%s engine=%s model=%s",
+                    job.token,
+                    job.mode,
+                    job.engine,
+                    job.model,
+                )
 
     @QtCore.Slot(int)
     def _on_transcription_canceled_result(self, request_token: int) -> None:
@@ -2113,6 +2144,14 @@ class DictationController(QtCore.QObject):
                 self._overlay.set_state("Error", detail)
             self._logger.exception("Text insertion failed")
             return False
+        self._logger.info(
+            "text_insertion outcome=success chars=%d target_hwnd=%s "
+            "restore_focus=%s paste_mode=%s",
+            len(text),
+            insert_hwnd,
+            restore_focus,
+            self._settings.paste_mode,
+        )
         return True
 
     def _target_insert_window(
