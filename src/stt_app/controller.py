@@ -358,13 +358,13 @@ class DictationController(QtCore.QObject):
         if self._recording_start_in_progress:
             self._logger.info("Ignored nested start_recording while start is active.")
             return
-        if self._recording_stop_in_progress:
-            self._pending_toggle_after_stop_count += 1
-            self._logger.info(
-                "Queued start request while recording stop is in progress. "
-                "pending_toggles=%s",
-                self._pending_toggle_after_stop_count,
-            )
+        if self._audio_capture is not None:
+            # A recording is already active. This can happen when a queued
+            # ``singleShot(0, self.start_recording)`` (from a prior stop's
+            # toggle-parity drain) fires after the user already started a new
+            # recording via the hotkey. Bail out instead of clobbering the
+            # active capture.
+            self._logger.info("Ignored start_recording while a capture is already active.")
             return
         if self._audio_capture is None and self._streaming_recording:
             self._overlay.set_state(
@@ -635,7 +635,6 @@ class DictationController(QtCore.QObject):
             self._active_batch_settings = None
             self._overlay.set_state("Processing", "Transcribing audio...")
             self._submit_batch_transcription(wav_bytes, settings_snapshot)
-            self._flush_deferred_background_results()
         finally:
             pending_toggles = self._pending_toggle_after_stop_count
             self._pending_toggle_after_stop_count = 0
@@ -795,6 +794,7 @@ class DictationController(QtCore.QObject):
             self._audio_capture is not None
             or self._recording_start_in_progress
             or self._streaming_recording
+            or self._active_request_token is not None
         ):
             self._logger.info(
                 "System resume detected during an active session; keeping "
@@ -1003,7 +1003,9 @@ class DictationController(QtCore.QObject):
         if request_token is None:
             return
         self._remove_deferred_background_result(request_token)
-        if self._jobs.pop(request_token, None) is not None:
+        job = self._jobs.pop(request_token, None)
+        if job is not None:
+            job.insertion_deferred = False
             self._update_queue_overlay()
 
     def _queue_job_label(
@@ -2001,17 +2003,15 @@ class DictationController(QtCore.QObject):
         self._deferred_background_results.clear()
         for job, text in sorted(pending, key=lambda item: item[0].token):
             job.insertion_deferred = False
-            self._insert_background_transcription(job, text)
-            self._finish_transcription_job(job.token)
-        if self._active_request_token is not None and self._target_window_handle:
             try:
-                self._window_focus_helper.restore_target_window(
-                    self._target_window_handle
-                )
+                self._insert_background_transcription(job, text)
             except Exception:
                 self._logger.exception(
-                    "Failed to restore active transcription target after queued insert"
+                    "Failed to insert deferred background transcription; "
+                    "saved to history only. token=%s",
+                    job.token,
                 )
+            self._finish_transcription_job(job.token)
 
     @QtCore.Slot(int)
     def _on_transcription_canceled_result(self, request_token: int) -> None:
