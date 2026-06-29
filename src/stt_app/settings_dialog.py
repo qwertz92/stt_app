@@ -2257,6 +2257,13 @@ class SettingsDialog(QtWidgets.QDialog):
         history_buttons.addWidget(self.history_edit_button)
         history_buttons.addWidget(self.history_delete_button)
         history_layout.addLayout(history_buttons)
+
+        self.history_status_label = QtWidgets.QLabel("")
+        self.history_status_label.setWordWrap(True)
+        self.history_status_label.setStyleSheet("color: #555;")
+        self.history_status_label.setVisible(False)
+        history_layout.addWidget(self.history_status_label)
+
         layout.addWidget(history_box, 1)
         self.tabs.addTab(tab, "History")
 
@@ -5323,6 +5330,14 @@ class SettingsDialog(QtWidgets.QDialog):
             return None
         return self._effective_recordings_dir()
 
+    def _set_history_status(self, message: str, *, error: bool = False) -> None:
+        text = str(message or "").strip()
+        self.history_status_label.setText(text)
+        self.history_status_label.setStyleSheet(
+            "color: #b71c1c;" if error else "color: #555;"
+        )
+        self.history_status_label.setVisible(bool(text))
+
     def _refresh_history_list(self, force: bool = False) -> None:
         signature = self._current_history_reload_signature()
         if (
@@ -5585,9 +5600,9 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         updated = self._history_store.update_entry_text(entry, next_text)
         if updated <= 0:
-            self.import_result_label.setText("Selected history entry was not found.")
-            self.import_result_label.setStyleSheet("color: #b71c1c;")
+            self._set_history_status("Selected history entry was not found.", error=True)
             return
+        self._set_history_status("")
         self._refresh_history_list(force=True)
 
     def _delete_selected_history(self) -> None:
@@ -5611,11 +5626,11 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         removed = self._history_store.delete_entries(entries)
         if removed <= 0:
-            self.import_result_label.setText(
-                "Selected history entries were not found."
+            self._set_history_status(
+                "Selected history entries were not found.", error=True
             )
-            self.import_result_label.setStyleSheet("color: #b71c1c;")
             return
+        self._set_history_status("")
         self._refresh_history_list(force=True)
 
     def _reset_history_copy_feedback(self) -> None:

@@ -2385,6 +2385,12 @@ class DictationController(QtCore.QObject):
         QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
         return True
 
+    def show_overlay_error(self, message: str) -> None:
+        """Surface a transient error on the overlay without exposing the
+        overlay widget to callers (kept so main.py does not reach into
+        ``_overlay`` directly)."""
+        self._overlay.set_state("Error", str(message))
+
     def edit_last_transcript(self, parent=None) -> bool:
         current_text = self._last_transcript.strip()
         if not current_text:

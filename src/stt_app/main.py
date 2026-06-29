@@ -135,7 +135,9 @@ def run() -> int:
         open_history_dialog=open_history_dialog,
     )
     tray_icon.show()
-    update_checker = _TrayUpdateChecker(tray_icon=tray_icon, logger=logger)
+    update_checker = _TrayUpdateChecker(
+        tray_icon=tray_icon, logger=logger, parent_widget=overlay
+    )
     tray_icon._update_checker = update_checker
     _schedule_startup_update_check(update_checker)
     QtCore.QTimer.singleShot(
@@ -144,6 +146,7 @@ def run() -> int:
             last_recording_store,
             tray_icon._open_settings_dialog,
             history_store,
+            parent=overlay,
         ),
     )
 
@@ -270,9 +273,7 @@ def _create_tray_icon(
 
     def copy_last_transcript() -> None:
         if not controller.copy_last_transcript_to_clipboard():
-            controller._overlay.set_state(
-                "Error", "No transcript available to copy yet."
-            )
+            controller.show_overlay_error("No transcript available to copy yet.")
 
     settings_action.triggered.connect(open_settings_dialog)
     history_action.triggered.connect(open_history_dialog)
@@ -284,7 +285,9 @@ def _create_tray_icon(
     def check_for_updates_from_tray() -> None:
         checker = getattr(tray_icon, "_update_checker", None)
         if checker is None:
-            checker = _TrayUpdateChecker(tray_icon=tray_icon)
+            checker = _TrayUpdateChecker(
+                tray_icon=tray_icon, parent_widget=overlay
+            )
             tray_icon._update_checker = checker
         checker.start(manual=True, action=check_updates_action)
 
@@ -310,11 +313,13 @@ class _TrayUpdateChecker(QtCore.QObject):
         tray_icon: QtWidgets.QSystemTrayIcon,
         logger=None,
         runner=check_for_updates,
+        parent_widget: QtWidgets.QWidget | None = None,
     ) -> None:
         super().__init__(tray_icon)
         self._tray_icon = tray_icon
         self._logger = logger
         self._runner = runner
+        self._parent_widget = parent_widget
         self._active_thread: threading.Thread | None = None
         self._active_action: QtGui.QAction | None = None
         self.finished.connect(self._on_finished)
@@ -372,7 +377,7 @@ class _TrayUpdateChecker(QtCore.QObject):
                 10000,
             )
             if manual:
-                show_update_available_dialog(result)
+                show_update_available_dialog(result, parent=self._parent_widget)
             return
 
         if result.error:
@@ -383,7 +388,7 @@ class _TrayUpdateChecker(QtCore.QObject):
                     pass
             if manual:
                 QtWidgets.QMessageBox.warning(
-                    None,
+                    self._parent_widget,
                     "Update check failed",
                     result.error,
                 )
@@ -391,7 +396,7 @@ class _TrayUpdateChecker(QtCore.QObject):
 
         if manual:
             QtWidgets.QMessageBox.information(
-                None,
+                self._parent_widget,
                 "No update available",
                 f"Version {result.current_version} is up to date.",
             )
@@ -517,6 +522,8 @@ def _prompt_recoverable_last_recording(
     last_recording_store: LastRecordingStore,
     open_settings_dialog,
     history_store: TranscriptHistoryStore | None = None,
+    *,
+    parent: QtWidgets.QWidget | None = None,
 ) -> None:
     if not last_recording_store.has_recoverable_recording():
         return
@@ -542,7 +549,7 @@ def _prompt_recoverable_last_recording(
         description = f"{description}\n\nLast error: {state.error}"
 
     answer = QtWidgets.QMessageBox.question(
-        None,
+        parent,
         "Recover last recording",
         (
             f"{description}\n\n"

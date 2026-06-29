@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
@@ -34,22 +35,24 @@ class ITranscriber(ABC):
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        raise NotImplementedError("Phase 2: streaming is not implemented.")
+        raise NotImplementedError("Streaming is not supported by this engine.")
 
     def push_audio_chunk(self, chunk: bytes) -> None:
-        raise NotImplementedError("Phase 2: streaming is not implemented.")
+        raise NotImplementedError("Streaming is not supported by this engine.")
 
     def stop_stream(self) -> str:
-        raise NotImplementedError("Phase 2: streaming is not implemented.")
+        raise NotImplementedError("Streaming is not supported by this engine.")
 
     def abort_stream(self) -> None:
-        raise NotImplementedError("Phase 2: streaming is not implemented.")
+        raise NotImplementedError("Streaming is not supported by this engine.")
 
 
 Transcriber = ITranscriber
 
 
 class ProgressReporter:
+    _logger = logging.getLogger(__name__)
+
     def __init__(self) -> None:
         self._progress_callback: ProgressCallback | None = None
 
@@ -62,4 +65,4 @@ class ProgressReporter:
         try:
             self._progress_callback(text)
         except Exception:
-            pass
+            self._logger.debug("Progress callback raised", exc_info=True)
