@@ -110,12 +110,19 @@ class KeyringSecretStore:
                     self._keyring.delete_password(legacy_name, provider)
                 except Exception:
                     pass
-            # Keyring succeeded: remove stale insecure fallback copy.
-            self._delete_insecure_api_key(provider)
-            return
         except Exception:
             if not self._insecure_fallback_enabled:
                 raise
+        else:
+            # Keyring write succeeded: remove stale insecure fallback copy.
+            # A failure here must NOT fall through to the insecure write below;
+            # the key is safely in the keyring and we just failed to clean up
+            # the old plaintext copy, which will be retried on the next write.
+            try:
+                self._delete_insecure_api_key(provider)
+            except Exception:
+                pass
+            return
         self._set_insecure_api_key(provider, api_key)
 
     def get_api_key(self, provider: str) -> str | None:
