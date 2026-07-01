@@ -307,6 +307,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   normal compact/non-queue size. The cancel hook must be cleared after each batch
   run so it cannot leak into the cached
   transcriber's next request.
+  Deferred background inserts (`_deferred_background_results`) must be flushed on
+  every path that clears the blocking session — recording start/stop *and*
+  `cancel_current_action` — so a completed insert-mode transcript is never left
+  pending in the queue after nothing is blocking it.
+- **Do not close an in-use transcriber runtime**: never close/reset the cached
+  transcriber while `_transcription_runtime_active()` (an active capture,
+  in-progress start, live stream, or in-flight transcription). Closing there can
+  break a keep-loaded ONNX subprocess (its `close()` shares the worker's stdin
+  and takes no batch lock) or tear down a live Nemotron stream. `reload_settings`
+  defers the reset via `_pending_transcriber_cache_reset`;
+  `_get_or_create_transcriber` applies it before the next build so new
+  settings/keys still take effect. The resume path shares the same guard.
 - **Overlay corner vs. dragged position**: after a settings save, apply the
   corner through `OverlayUI.apply_corner_setting`, which repositions only when
   the configured corner changed. Never call `move_to_corner` unconditionally

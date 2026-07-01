@@ -146,6 +146,12 @@ class DictationController(QtCore.QObject):
         self._transcriber_cache_lock = threading.Lock()
         self._transcriber_cache_key = None
         self._transcriber_cache = None
+        # Set when a settings reload happens while a transcription/stream is
+        # still using the cached transcriber. The reset is deferred and applied
+        # from ``_get_or_create_transcriber`` before the next transcriber is
+        # built, so the in-flight runtime is never closed out from under an
+        # active worker or stream while still picking up new settings/keys.
+        self._pending_transcriber_cache_reset = False
         self._hotkey_registration_ok = False
         self._hotkey_notice: str | None = None
         self._cancel_hotkey_registration_ok = False
@@ -268,7 +274,16 @@ class DictationController(QtCore.QObject):
         self._overlay.set_always_on_top(
             bool(getattr(self._settings, "overlay_always_on_top", True))
         )
-        self._reset_transcriber_cache()
+        if self._transcription_runtime_active():
+            # A batch worker or an active stream still holds the cached
+            # transcriber. Closing it now could break that in-flight run (e.g.
+            # a keep-loaded ONNX subprocess or a live Nemotron stream). Defer the
+            # reset; ``_get_or_create_transcriber`` applies it before the next
+            # transcriber is built, once the serial worker has finished, so
+            # changed settings and API keys still take effect on the next run.
+            self._pending_transcriber_cache_reset = True
+        else:
+            self._reset_transcriber_cache()
         if re_register_hotkey:
             self._hotkey_registration_ok = self._register_hotkey_with_fallback()
             self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
@@ -782,20 +797,31 @@ class DictationController(QtCore.QObject):
     def _stream_last_partial_text(self, value: str) -> None:
         self._stream_text_state.last_partial_text = str(value or "")
 
+    def _transcription_runtime_active(self) -> bool:
+        """Whether the cached transcriber runtime is in use by a live session.
+
+        True while a recording capture, an in-progress recording start, an
+        active stream, or an in-flight transcription still holds the cached
+        transcriber. Callers use this to avoid closing that runtime out from
+        under an active worker/stream.
+        """
+        return (
+            self._audio_capture is not None
+            or self._recording_start_in_progress
+            or self._streaming_recording
+            or self._active_request_token is not None
+        )
+
     def _reset_transcriber_cache(self) -> None:
         with self._transcriber_cache_lock:
             cached = self._transcriber_cache
             self._close_cached_transcriber(cached)
             self._transcriber_cache = None
             self._transcriber_cache_key = None
+            self._pending_transcriber_cache_reset = False
 
     def _reset_resume_sensitive_transcriber_cache(self) -> None:
-        if (
-            self._audio_capture is not None
-            or self._recording_start_in_progress
-            or self._streaming_recording
-            or self._active_request_token is not None
-        ):
+        if self._transcription_runtime_active():
             self._logger.info(
                 "System resume detected during an active session; keeping "
                 "current transcriber runtime."
@@ -1774,6 +1800,11 @@ class DictationController(QtCore.QObject):
             )
 
     def _get_or_create_transcriber(self, settings: AppSettings):
+        if self._pending_transcriber_cache_reset:
+            # A settings reload was deferred while the previous run still held
+            # the cached transcriber. Apply it now, before building the next one,
+            # so the new settings/keys take effect without racing that run.
+            self._reset_transcriber_cache()
         cache_key = (
             settings.engine,
             settings.model_size,
@@ -2574,6 +2605,10 @@ class DictationController(QtCore.QObject):
                 f"Recording canceled. {self._retry_guidance(has_retry_audio=False)}",
             )
             self._reset_streaming_state()
+            # Canceling this recording removed the capture that was blocking any
+            # deferred background inserts; deliver them now instead of leaving
+            # them pending until the next recording.
+            self._flush_deferred_background_results()
             return
 
         request_token = self._active_request_token
@@ -2594,6 +2629,9 @@ class DictationController(QtCore.QObject):
                 self._last_recording_store.mark_canceled("Transcription canceled by user.")
             except Exception:
                 self._logger.exception("Failed to mark canceled transcription")
+            # Clearing the active transcription may unblock deferred background
+            # inserts that were waiting behind it.
+            self._flush_deferred_background_results()
             self._overlay.set_state("Done", "Transcription canceled.")
             return
 

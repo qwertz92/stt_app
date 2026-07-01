@@ -3,6 +3,33 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-01
+
+- **Canceling an active recording now flushes deferred background inserts.**
+  A queued insert-mode transcript that finished while a newer recording was
+  active is held in `_deferred_background_results` until the blocking session
+  ends. `start_recording`/`stop_recording` already flushed on completion, but
+  `cancel_current_action` did not: canceling the blocking recording (or the
+  active transcription) left the completed transcript pending in the queue
+  overlay until some later, unrelated recording. Both cancel branches now call
+  `_flush_deferred_background_results()` so the transcript is delivered as soon
+  as nothing is blocking it. The transcript was always safe in history; this
+  only fixes the delayed paste.
+- **Settings reloads defer closing an in-use transcriber runtime.** A non-modal
+  settings Save runs `reload_settings` on the Qt thread even while a batch
+  worker or a live stream still holds the cached transcriber. Unconditionally
+  closing it there could break that in-flight run — a keep-loaded ONNX
+  subprocess shares one stdin with the worker (its `close()` does not take the
+  batch lock), and a live Nemotron stream would be torn down mid-utterance.
+  faster-whisper (the default) has no `close()`, so it was only a reference
+  drop, but the advanced local engines were exposed. `reload_settings` now sets
+  `_pending_transcriber_cache_reset` when `_transcription_runtime_active()`
+  instead of closing immediately; `_get_or_create_transcriber` applies the
+  deferred reset before building the next transcriber, once the serial worker
+  has finished, so changed settings and API keys still take effect on the next
+  run. Mirrors the existing resume-path guard and shares its condition via the
+  new `_transcription_runtime_active()` helper.
+
 ## 2026-06-24
 
 - **Queued background inserts stay visible until paste delivery completes.**
