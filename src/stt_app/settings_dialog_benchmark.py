@@ -7,8 +7,6 @@ from pathlib import Path
 
 from PySide6 import QtCore, QtWidgets
 
-import stt_app.settings_dialog as _sd
-
 from .benchmark_environment import BenchmarkEnvironment, collect_benchmark_environment
 from .benchmark_history import (
     BenchmarkHistoryEntry,
@@ -32,6 +30,18 @@ from .settings_dialog_helpers import (
     _WheelPassthroughSpinBox,
 )
 from .ui_feedback import restore_vertical_scrollbar
+
+
+def _facade():
+    """Return the settings_dialog facade module.
+
+    Imported lazily so this mixin module has no import-time dependency on the
+    facade (which imports this module), and so the monkeypatched
+    ``stt_app.settings_dialog.run_benchmark_cases`` still resolves at call time.
+    """
+    import stt_app.settings_dialog as facade
+
+    return facade
 
 
 class _BenchmarkMixin:
@@ -772,7 +782,7 @@ class _BenchmarkMixin:
                 return cancel_event.is_set()
 
             try:
-                cases = _sd.run_benchmark_cases(
+                cases = _facade().run_benchmark_cases(
                     audio_path=audio_path,
                     model_names=model_names,
                     device="auto",

@@ -6,8 +6,6 @@ import time
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
-import stt_app.settings_dialog as _sd
-
 from .config import (
     DOC_MODELS_PATH,
     LOCAL_ENGLISH_ONLY_MODELS,
@@ -29,6 +27,18 @@ from .settings_dialog_helpers import (
     _WheelPassthroughComboBox,
 )
 from .ui_feedback import restore_vertical_scrollbar
+
+
+def _facade():
+    """Return the settings_dialog facade module.
+
+    Imported lazily so this mixin module has no import-time dependency on the
+    facade (which imports this module), and so the monkeypatched
+    ``stt_app.settings_dialog.<name>`` functions still resolve at call time.
+    """
+    import stt_app.settings_dialog as facade
+
+    return facade
 
 
 class _LocalModelsMixin:
@@ -615,7 +625,7 @@ class _LocalModelsMixin:
 
         def _run() -> None:
             try:
-                cached = _sd._scan_cached_models(model_dir)
+                cached = _facade()._scan_cached_models(model_dir)
             except Exception:
                 cached = None
             _emit_background_signal(
@@ -900,7 +910,7 @@ class _LocalModelsMixin:
         model_dir: str,
     ) -> tuple[str, str, int, int]:
         try:
-            process = _sd.start_model_download_process(model_name, model_dir)
+            process = _facade().start_model_download_process(model_name, model_dir)
         except Exception as exc:
             return "failed", str(exc), 0, 0
 
@@ -911,7 +921,7 @@ class _LocalModelsMixin:
                 if self._local_model_download_cancel_event.wait(timeout=0.1):
                     terminate_model_download_process(process)
                     model_download_process_error(process)
-                    removed_files, removed_bytes = _sd.cleanup_incomplete_model_download(
+                    removed_files, removed_bytes = _facade().cleanup_incomplete_model_download(
                         model_name,
                         model_dir,
                     )
@@ -921,7 +931,7 @@ class _LocalModelsMixin:
             if process.returncode == 0:
                 return "success", "", 0, 0
             if self._local_model_download_cancel_event.is_set():
-                removed_files, removed_bytes = _sd.cleanup_incomplete_model_download(
+                removed_files, removed_bytes = _facade().cleanup_incomplete_model_download(
                     model_name,
                     model_dir,
                 )
@@ -1047,7 +1057,7 @@ class _LocalModelsMixin:
             return
 
         model_name, model_dir = active
-        downloaded_bytes = _sd.estimate_cached_model_bytes(model_name, model_dir)
+        downloaded_bytes = _facade().estimate_cached_model_bytes(model_name, model_dir)
         progress = self._local_model_download_speed_tracker.measure(
             model_name,
             downloaded_bytes,
@@ -1131,7 +1141,7 @@ class _LocalModelsMixin:
         errors: list[str] = []
         for model_name in names:
             try:
-                removed = _sd.delete_cached_model(
+                removed = _facade().delete_cached_model(
                     model_name,
                     self.model_dir_edit.text().strip(),
                 )

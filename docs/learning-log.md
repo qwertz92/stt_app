@@ -19,8 +19,10 @@ Agents and developers: use this as a knowledge base for past issues and solution
   there. Global patches (`threading.Thread`, `time.monotonic`,
   `TranscriptEditDialog.get_text`) survive the split because they mutate shared
   module/class objects; the six patched *function* bindings are reached through
-  `import stt_app.settings_dialog as _sd` in the local/benchmark mixins so the
-  facade stays the resolution point. The split was done with an AST tool that
+  a lazy `_facade()` accessor in the local/benchmark mixins so the facade stays
+  the resolution point without a module-scope import cycle (a mixin can be
+  imported directly; `test_settings_dialog_modules.py` guards this). The split
+  was done with an AST tool that
   asserts every one of the 203 methods lands in exactly one module, then `ruff`
   pruned the import supersets.
 - **Canceling an active recording now flushes deferred background inserts.**

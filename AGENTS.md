@@ -113,8 +113,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   patch (`run_benchmark_cases`, `_scan_cached_models`,
   `start_model_download_process`, `delete_cached_model`,
   `estimate_cached_model_bytes`, `cleanup_incomplete_model_download`) are called
-  through `import stt_app.settings_dialog as _sd` (`_sd.<name>(...)`) in the
-  local/benchmark mixins so the patch target still resolves after the split.
+  through a lazy `_facade()` accessor (`_facade().<name>(...)`) in the
+  local/benchmark mixins so the patch target still resolves after the split. The
+  accessor imports the facade lazily (not at module scope) so a mixin can be
+  imported directly without an import cycle.
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps
