@@ -3,6 +3,53 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-01
+
+- **`settings_dialog.py` split from ~6.4k lines into a mixin facade.** The
+  monolithic `SettingsDialog` god-class is now composed from per-tab mixins
+  (`settings_dialog_general/local/benchmark/remote/history/import/persistence.py`)
+  plus `settings_dialog_helpers.py` for shared widgets/constants/pure helpers.
+  `settings_dialog.py` keeps the dialog lifecycle, shared-UI helpers, the Qt
+  `Signal`s, and re-exports the module's public API. Method bodies moved
+  verbatim (same `self`), so behavior is unchanged — the full suite passes with
+  only the one pre-existing offscreen width test failing. Two constraints drove
+  the shape: Qt signals must stay on the `QObject`-derived class (mixins are
+  plain classes and only touch `self.<signal>`), and the test suite monkeypatches
+  ~40 names on `stt_app.settings_dialog`, so those names must remain resolvable
+  there. Global patches (`threading.Thread`, `time.monotonic`,
+  `TranscriptEditDialog.get_text`) survive the split because they mutate shared
+  module/class objects; the six patched *function* bindings are reached through
+  a lazy `_facade()` accessor in the local/benchmark mixins so the facade stays
+  the resolution point without a module-scope import cycle (a mixin can be
+  imported directly; `test_settings_dialog_modules.py` guards this). The split
+  was done with an AST tool that
+  asserts every one of the 203 methods lands in exactly one module, then `ruff`
+  pruned the import supersets.
+- **Canceling an active recording now flushes deferred background inserts.**
+  A queued insert-mode transcript that finished while a newer recording was
+  active is held in `_deferred_background_results` until the blocking session
+  ends. `start_recording`/`stop_recording` already flushed on completion, but
+  `cancel_current_action` did not: canceling the blocking recording (or the
+  active transcription) left the completed transcript pending in the queue
+  overlay until some later, unrelated recording. Both cancel branches now call
+  `_flush_deferred_background_results()` so the transcript is delivered as soon
+  as nothing is blocking it. The transcript was always safe in history; this
+  only fixes the delayed paste.
+- **Settings reloads defer closing an in-use transcriber runtime.** A non-modal
+  settings Save runs `reload_settings` on the Qt thread even while a batch
+  worker or a live stream still holds the cached transcriber. Unconditionally
+  closing it there could break that in-flight run — a keep-loaded ONNX
+  subprocess shares one stdin with the worker (its `close()` does not take the
+  batch lock), and a live Nemotron stream would be torn down mid-utterance.
+  faster-whisper (the default) has no `close()`, so it was only a reference
+  drop, but the advanced local engines were exposed. `reload_settings` now sets
+  `_pending_transcriber_cache_reset` when `_transcription_runtime_active()`
+  instead of closing immediately; `_get_or_create_transcriber` applies the
+  deferred reset before building the next transcriber, once the serial worker
+  has finished, so changed settings and API keys still take effect on the next
+  run. Mirrors the existing resume-path guard and shares its condition via the
+  new `_transcription_runtime_active()` helper.
+
 ## 2026-06-24
 
 - **Queued background inserts stay visible until paste delivery completes.**

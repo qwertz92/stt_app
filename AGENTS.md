@@ -69,7 +69,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/factory.py` | Creates transcriber from settings; routes engine to provider |
 | `text_inserter.py` | Clipboard-safe paste: save > set > paste > restore with contention guard |
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
-| `settings_dialog.py` | PySide6 settings UI with Local/Remote/History tabs, model management |
+| `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
+| `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
+| `settings_dialog_general.py` | General tab: engine/mode/model/language selection mixin |
+| `settings_dialog_local.py` | Local tab: local-model inventory, scan, download queue, delete mixin |
+| `settings_dialog_benchmark.py` | Benchmark tab: run, results, and history mixin |
+| `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
+| `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete mixin |
+| `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
+| `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
 | `ui_feedback.py` | Shared Qt button feedback styles, stable feedback widths, scroll restoration helpers |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
@@ -91,6 +99,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ### Key design decisions
 
+- **Settings dialog is a mixin facade**: `settings_dialog.py` composes
+  `SettingsDialog` from per-tab mixins in `settings_dialog_*.py`
+  (`_GeneralTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,
+  `_RemoteProvidersMixin`, `_HistoryTabMixin`, `_ImportTabMixin`,
+  `_PersistenceMixin`) plus shared code in `settings_dialog_helpers.py`. Rules to
+  keep intact: Qt `Signal`s stay on the `QObject`-derived `SettingsDialog`
+  (mixins are plain classes and only use `self.<signal>`); every method reaches
+  peers/attributes through `self`, so scattering across mixins is safe. The
+  module's public names must remain importable/patchable as
+  `stt_app.settings_dialog.<name>` — tests monkeypatch there — so the facade
+  re-exports them (guarded by `__all__`). The six external functions the tests
+  patch (`run_benchmark_cases`, `_scan_cached_models`,
+  `start_model_download_process`, `delete_cached_model`,
+  `estimate_cached_model_bytes`, `cleanup_incomplete_model_download`) are called
+  through a lazy `_facade()` accessor (`_facade().<name>(...)`) in the
+  local/benchmark mixins so the patch target still resolves after the split. The
+  accessor imports the facade lazily (not at module scope) so a mixin can be
+  imported directly without an import cycle.
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps
@@ -307,6 +333,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   normal compact/non-queue size. The cancel hook must be cleared after each batch
   run so it cannot leak into the cached
   transcriber's next request.
+  Deferred background inserts (`_deferred_background_results`) must be flushed on
+  every path that clears the blocking session — recording start/stop *and*
+  `cancel_current_action` — so a completed insert-mode transcript is never left
+  pending in the queue after nothing is blocking it.
+- **Do not close an in-use transcriber runtime**: never close/reset the cached
+  transcriber while `_transcription_runtime_active()` (an active capture,
+  in-progress start, live stream, or in-flight transcription). Closing there can
+  break a keep-loaded ONNX subprocess (its `close()` shares the worker's stdin
+  and takes no batch lock) or tear down a live Nemotron stream. `reload_settings`
+  defers the reset via `_pending_transcriber_cache_reset`;
+  `_get_or_create_transcriber` applies it before the next build so new
+  settings/keys still take effect. The resume path shares the same guard.
 - **Overlay corner vs. dragged position**: after a settings save, apply the
   corner through `OverlayUI.apply_corner_setting`, which repositions only when
   the configured corner changed. Never call `move_to_corner` unconditionally

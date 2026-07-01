@@ -510,3 +510,71 @@ def test_clear_transcription_queue_aborts_all(monkeypatch, tmp_path):
     assert overlay.queue_updates[-1] == []
     controller.shutdown()
     _ = app
+
+
+def test_cancel_recording_flushes_deferred_background_insert(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    # A new recording supersedes A and blocks A's insert while it is active.
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    assert controller._deferred_background_results
+    assert inserter.calls == []
+
+    # Canceling the blocking recording must deliver the deferred insert instead
+    # of leaving it pending until some later recording.
+    controller.cancel_current_action()
+
+    assert controller._audio_capture is None
+    assert controller._deferred_background_results == []
+    assert token_a not in controller._jobs
+    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert [e.text for e in history.load()] == ["transcript A"]
+    controller.shutdown()
+    _ = app
+
+
+def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    # Simulate an in-flight transcription still holding the cached transcriber.
+    _record_and_stop(controller)
+    sentinel = object()
+    closed: list[object] = []
+    monkeypatch.setattr(controller, "_close_cached_transcriber", closed.append)
+    controller._transcriber_cache = sentinel
+    controller._transcriber_cache_key = ("local", "small")
+
+    # Saving settings while the job is active must not close the runtime now.
+    controller.reload_settings(re_register_hotkey=False)
+
+    assert controller._pending_transcriber_cache_reset is True
+    assert controller._transcriber_cache is sentinel
+    assert closed == []
+
+    # The deferred reset is applied before the next transcriber is built, once
+    # the active job is gone, so new settings/keys still take effect.
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _s, **kw: FakeStreamingTranscriber(),
+    )
+    controller._active_request_token = None
+    built = controller._get_or_create_transcriber(controller.settings)
+
+    # The stale runtime is closed exactly once; the real close no-ops on None.
+    assert [c for c in closed if c is not None] == [sentinel]
+    assert controller._pending_transcriber_cache_reset is False
+    assert built is controller._transcriber_cache
+    controller.shutdown()
+    _ = app
