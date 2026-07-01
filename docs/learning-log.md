@@ -5,6 +5,24 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-01
 
+- **`settings_dialog.py` split from ~6.4k lines into a mixin facade.** The
+  monolithic `SettingsDialog` god-class is now composed from per-tab mixins
+  (`settings_dialog_general/local/benchmark/remote/history/import/persistence.py`)
+  plus `settings_dialog_helpers.py` for shared widgets/constants/pure helpers.
+  `settings_dialog.py` keeps the dialog lifecycle, shared-UI helpers, the Qt
+  `Signal`s, and re-exports the module's public API. Method bodies moved
+  verbatim (same `self`), so behavior is unchanged — the full suite passes with
+  only the one pre-existing offscreen width test failing. Two constraints drove
+  the shape: Qt signals must stay on the `QObject`-derived class (mixins are
+  plain classes and only touch `self.<signal>`), and the test suite monkeypatches
+  ~40 names on `stt_app.settings_dialog`, so those names must remain resolvable
+  there. Global patches (`threading.Thread`, `time.monotonic`,
+  `TranscriptEditDialog.get_text`) survive the split because they mutate shared
+  module/class objects; the six patched *function* bindings are reached through
+  `import stt_app.settings_dialog as _sd` in the local/benchmark mixins so the
+  facade stays the resolution point. The split was done with an AST tool that
+  asserts every one of the 203 methods lands in exactly one module, then `ruff`
+  pruned the import supersets.
 - **Canceling an active recording now flushes deferred background inserts.**
   A queued insert-mode transcript that finished while a newer recording was
   active is held in `_deferred_background_results` until the blocking session
