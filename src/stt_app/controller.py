@@ -1090,6 +1090,17 @@ class DictationController(QtCore.QObject):
             job.insertion_deferred = False
             self._finish_transcription_job(request_token)
             return
+        if (
+            request_token == self._active_request_token
+            and job.mode == "streaming"
+            and self._streaming_recording
+        ):
+            # This job is the pending streaming finalize; stopping it ends the
+            # streaming session. Clear the session state so the next recording
+            # is not blocked waiting on a finalize that now resolves
+            # history-only in the background.
+            self._active_stream_settings = None
+            self._reset_streaming_state()
         if self._active_request_token == request_token:
             self._active_request_token = None
             self._last_transcribe_settings = None

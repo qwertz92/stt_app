@@ -6,6 +6,7 @@ signals directly.
 """
 
 import logging
+from dataclasses import replace
 
 from PySide6 import QtCore, QtGui
 
@@ -536,6 +537,68 @@ def test_cancel_recording_flushes_deferred_background_insert(
     assert token_a not in controller._jobs
     assert inserter.calls == [("transcript A", 321, "auto")]
     assert [e.text for e in history.load()] == ["transcript A"]
+    controller.shutdown()
+    _ = app
+
+
+def test_cancel_during_pending_stream_finalize_unblocks_recording(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+
+    controller.start_recording()
+    controller.stop_recording()
+    token = controller._active_request_token
+    assert controller._streaming_recording is True
+
+    controller.cancel_current_action()
+
+    assert controller._streaming_recording is False
+    assert controller._active_request_token is None
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
+
+    # The next recording must start instead of waiting forever on the
+    # canceled finalize ("Streaming transcript is still finalizing.").
+    captures_before = len(FakeCapture.instances)
+    controller.toggle_recording()
+    assert controller._audio_capture is not None
+    assert len(FakeCapture.instances) == captures_before + 1
+
+    # A finalize transcript that still arrives stays history-only and must
+    # not reset the new live session.
+    controller._on_transcription_ready("stream final", request_token=token)
+    assert [e.text for e in history.load()] == ["stream final"]
+    assert inserter.calls == []
+    assert controller._audio_capture is not None
+    assert controller._streaming_recording is True
+    controller.shutdown()
+    _ = app
+
+
+def test_cancel_stream_finalize_queue_row_unblocks_recording(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+
+    controller.start_recording()
+    controller.stop_recording()
+    token = controller._active_request_token
+
+    controller.cancel_queued_transcription(token)
+
+    assert controller._streaming_recording is False
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
+
+    controller.toggle_recording()
+    assert controller._audio_capture is not None
     controller.shutdown()
     _ = app
 
