@@ -565,3 +565,18 @@ def test_history_table_shows_preview_but_detail_keeps_full_text(tmp_path):
     assert len(dialog._table.item(0, 3).text()) < len(long_text)
     assert dialog._detail.toPlainText() == long_text
     _ = app
+
+
+def test_history_dialog_uses_app_window_icon(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    assert dialog.windowIcon().isNull() is False
+    _ = app

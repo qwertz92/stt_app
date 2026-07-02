@@ -468,3 +468,10 @@ def test_save_api_keys_only_does_not_emit_settings_changed():
     assert dialog.openai_key_edit.text() == ""
     assert changed == []
     _ = app
+
+
+def test_settings_dialog_uses_app_window_icon():
+    dialog, app, _secret_store = _make_dialog(AppSettings())
+
+    assert dialog.windowIcon().isNull() is False
+    _ = app

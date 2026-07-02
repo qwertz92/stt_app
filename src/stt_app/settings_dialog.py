@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .app_icon import load_app_icon
 from .benchmark_environment import BenchmarkEnvironment
 from .benchmark_history import (
     BenchmarkHistoryEntry,
@@ -275,6 +276,7 @@ class SettingsDialog(
         self._initial_dialog_size_applied = False
 
         self.setWindowTitle("Dictation Settings")
+        self.setWindowIcon(load_app_icon())
         self.setModal(False)
         self.setWindowFlag(QtCore.Qt.Window, True)
         self.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)

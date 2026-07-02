@@ -7,6 +7,7 @@ from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from .app_icon import load_app_icon
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
@@ -60,6 +61,7 @@ class HistoryDialog(QtWidgets.QDialog):
         )
 
         self.setWindowTitle("Recent Transcriptions")
+        self.setWindowIcon(load_app_icon())
         self.resize(1040, 660)
         self.setMinimumSize(700, 460)
         self.setModal(False)

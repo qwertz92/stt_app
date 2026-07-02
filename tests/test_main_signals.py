@@ -3,6 +3,7 @@ import signal
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import stt_app.main as main_module
+from stt_app.app_icon import app_icon_path, load_app_icon
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
     _HistoryDialogPresenter,
@@ -581,8 +582,9 @@ def test_prompt_recoverable_last_recording_skips_completed_history_match(
 def test_load_app_icon_uses_bundled_asset():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
-    assert main_module._app_icon_path().is_file()
-    icon = main_module._load_app_icon(app)
+    assert app_icon_path().is_file()
+    icon = load_app_icon()
 
     assert icon.isNull() is False
     assert icon.availableSizes()
+    _ = app
