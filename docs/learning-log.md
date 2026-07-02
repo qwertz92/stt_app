@@ -1375,3 +1375,26 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Validation:** ruff plus the full pytest suite (with
   `test_ssl_and_preload.py` run separately) after every task on the Linux
   VPS via xvfb.
+
+- **Concurrent transcription queue validation pass (three defects fixed):**
+  - Canceling the pending streaming finalize (Cancel button/hotkey, overlay
+    row ✕, Clear queue, or Retry) left `_streaming_recording` True forever:
+    the canceled job resolves in the background, which never resets foreground
+    session state, so every later `toggle_recording` was blocked with
+    "Streaming transcript is still finalizing" and
+    `_transcription_runtime_active()` kept deferring transcriber cache resets.
+    `_request_job_stop` now clears the streaming session state when it stops
+    the active pending finalize; the late transcript stays history-only.
+  - Deferred background inserts were not flushed when a live streaming session
+    was torn down: `_abort_streaming_session` (cancel during streaming,
+    focus-change abort) never flushed, and `_on_transcription_failed` flushed
+    *before* tearing down the failed stream's capture, so the deferred result
+    stayed "Pending insert" until some later recording. The abort path now
+    flushes at the end, and the failure path flushes after the teardown/reset.
+  - `clear_transcription_queue` canceled the foreground job without updating
+    the overlay, leaving a permanent stale "Processing" state. It now
+    delegates to `cancel_queued_transcription` per token, which also removes
+    the duplicated stop logic.
+  - Added deterministic queue tests for all three defects plus coverage that a
+    background failure cannot disturb a live recording session and that a late
+    canceled-finalize transcript cannot reset a new live session.

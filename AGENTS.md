@@ -339,6 +339,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   via `set_cancel_check` (polled between segments → raises `TranscriptionCanceled`
   → worker emits `transcription_canceled`); other engines only skip-if-not-started
   and otherwise run to completion with their result kept in history.
+  Stopping the pending streaming finalize ends that streaming session:
+  `_request_job_stop` clears the session state so the next recording is not
+  blocked behind a finalize that now resolves history-only. Clear queue routes
+  through the per-row cancel so a canceled foreground job is reflected in the
+  overlay instead of leaving a stale "Processing" state.
   The overlay queue is a temporary size extension: all in-flight rows are
   rendered, the overlay may exceed the normal transcript-text height cap while
   the queue is visible, and hiding the queue must return the window to the
@@ -346,9 +351,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   run so it cannot leak into the cached
   transcriber's next request.
   Deferred background inserts (`_deferred_background_results`) must be flushed on
-  every path that clears the blocking session — recording start/stop *and*
-  `cancel_current_action` — so a completed insert-mode transcript is never left
-  pending in the queue after nothing is blocking it.
+  every path that clears the blocking session — recording start/stop,
+  streaming-session abort and stream runtime failure (after the capture/stream
+  teardown, not before), and `cancel_current_action` — so a completed
+  insert-mode transcript is never left pending in the queue after nothing is
+  blocking it.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can
