@@ -1,14 +1,20 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from datetime import datetime
-from pathlib import Path
 from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
+from .history_ui_actions import (
+    format_history_count_label,
+    history_import_dialog_dir,
+    prompt_import_overflow,
+    run_history_clear,
+    run_history_export,
+    run_history_import,
+)
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import (
@@ -601,129 +607,47 @@ class HistoryDialog(QtWidgets.QDialog):
         return True
 
     def _export_history(self) -> None:
-        suggested = (
-            Path.home()
-            / "Documents"
-            / f"dictation_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-        )
-        path, _filter = QtWidgets.QFileDialog.getSaveFileName(
-            self,
-            "Export transcript history",
-            str(suggested),
-            "JSON files (*.json);;All files (*)",
-        )
-        if not path:
-            return
-
-        try:
-            count = self._history_store.export_to_file(Path(path))
-        except Exception as exc:
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Export failed",
-                f"Failed to export transcript history: {exc}",
-            )
-            return
-
-        QtWidgets.QMessageBox.information(
-            self,
-            "Export complete",
-            f"Exported {count} entr{'y' if count == 1 else 'ies'} to:\n{path}",
-        )
-
-    def _import_history(self) -> None:
-        path, _filter = QtWidgets.QFileDialog.getOpenFileName(
-            self,
-            "Import transcript history",
-            self._import_dialog_dir(),
-            "JSON files (*.json);;All files (*)",
-        )
-        if not path:
-            return
-
-        try:
-            imported_entries = self._history_store.import_from_file(Path(path))
-        except ValueError as exc:
-            QtWidgets.QMessageBox.warning(self, "Import failed", str(exc))
-            return
-
-        if not imported_entries:
+        def _on_exported(count: int, path: str) -> None:
             QtWidgets.QMessageBox.information(
                 self,
-                "No entries found",
-                "The selected file does not contain importable transcript entries.",
+                "Export complete",
+                f"Exported {count} entr{'y' if count == 1 else 'ies'} to:\n{path}",
             )
-            return
 
-        active_limit = self._history_limit
-        current_count = self._history_store.count()
-        entries_to_append = imported_entries
+        run_history_export(self, self._history_store, on_exported=_on_exported)
 
-        if active_limit > 0:
-            free_slots = max(0, active_limit - current_count)
-            if len(imported_entries) > free_slots:
-                decision = self._prompt_import_overflow(
-                    import_count=len(imported_entries),
-                    free_slots=free_slots,
-                    max_items=active_limit,
-                )
-                if decision == "cancel":
-                    return
-                if decision == "free":
-                    if free_slots <= 0:
-                        QtWidgets.QMessageBox.information(
-                            self,
-                            "No free slots",
-                            "History is already full. Increase the limit or use unlimited mode.",
-                        )
-                        return
-                    entries_to_append = imported_entries[:free_slots]
-                else:
-                    if not self._persist_limit(0):
-                        return
-                    active_limit = 0
-                    blocker = QtCore.QSignalBlocker(self._max_items_spin)
-                    self._max_items_spin.setValue(0)
-                    del blocker
+    def _import_history(self) -> None:
+        def _on_imported(imported_count: int, _active_limit: int) -> None:
+            self.reload(force=True)
+            QtWidgets.QMessageBox.information(
+                self,
+                "Import complete",
+                f"Imported {imported_count} entr{'y' if imported_count == 1 else 'ies'}.",
+            )
 
-        imported_count = self._history_store.append_entries(
-            entries_to_append,
-            max_items=active_limit,
-        )
-        self.reload(force=True)
-        QtWidgets.QMessageBox.information(
+        run_history_import(
             self,
-            "Import complete",
-            f"Imported {imported_count} entr{'y' if imported_count == 1 else 'ies'}.",
+            self._history_store,
+            dialog_dir=self._import_dialog_dir(),
+            current_limit=self._history_limit,
+            prompt_overflow=self._prompt_import_overflow,
+            persist_limit=self._persist_limit,
+            set_limit_widget=self._set_max_items_spin_value,
+            on_imported=_on_imported,
         )
+
+    def _set_max_items_spin_value(self, value: int) -> None:
+        blocker = QtCore.QSignalBlocker(self._max_items_spin)
+        self._max_items_spin.setValue(value)
+        del blocker
 
     def _import_dialog_dir(self) -> str:
-        path = self._history_store.path.parent
-        try:
-            path.mkdir(parents=True, exist_ok=True)
-        except OSError:
-            return str(Path.home() / "Documents")
-        return str(path)
+        return history_import_dialog_dir(self._history_store)
 
     def _update_history_count_label(self, total: int | None = None) -> None:
         count = self._last_total_entries if total is None else int(total)
-        if self._history_limit == 0:
-            self._history_count_label.setText(
-                f"Stored: {count} entries (unlimited; showing all)"
-            )
-            return
-
-        shown = min(count, self._history_limit)
-        if count <= self._history_limit:
-            self._history_count_label.setText(
-                f"Stored: {count} entries (limit {self._history_limit}; "
-                "showing all stored entries)"
-            )
-            return
-
         self._history_count_label.setText(
-            f"Stored: {count} entries (limit {self._history_limit}; "
-            f"showing latest {shown})"
+            format_history_count_label(count, self._history_limit)
         )
 
     def _prompt_import_overflow(
@@ -733,63 +657,19 @@ class HistoryDialog(QtWidgets.QDialog):
         free_slots: int,
         max_items: int,
     ) -> str:
-        box = QtWidgets.QMessageBox(self)
-        box.setWindowTitle("Import exceeds history size")
-        box.setIcon(QtWidgets.QMessageBox.Question)
-        box.setText(
-            (
-                f"Import contains {import_count} entries, but only {free_slots} "
-                f"slot{'s' if free_slots != 1 else ''} are free "
-                f"(current max: {max_items})."
-            )
+        return prompt_import_overflow(
+            self,
+            import_count=import_count,
+            free_slots=free_slots,
+            max_items=max_items,
         )
-        box.setInformativeText(
-            "Choose whether to import only free slots or switch to unlimited storage."
-        )
-        free_button = box.addButton(
-            f"Import only {free_slots}",
-            QtWidgets.QMessageBox.AcceptRole,
-        )
-        unlimited_button = box.addButton(
-            "Import all and set unlimited",
-            QtWidgets.QMessageBox.DestructiveRole,
-        )
-        cancel_button = box.addButton(QtWidgets.QMessageBox.Cancel)
-        box.setDefaultButton(free_button)
-        box.exec()
-        clicked = box.clickedButton()
-        if clicked == free_button:
-            return "free"
-        if clicked == unlimited_button:
-            return "unlimited"
-        if clicked == cancel_button:
-            return "cancel"
-        return "cancel"
 
     def _clear_history(self) -> None:
-        count = self._history_store.count()
-        if count <= 0:
-            QtWidgets.QMessageBox.information(
-                self,
-                "History is empty",
-                "There are no history entries to clear.",
-            )
-            return
-        answer = QtWidgets.QMessageBox.question(
+        run_history_clear(
             self,
-            "Clear history",
-            (
-                f"This will permanently delete {count} "
-                f"entr{'y' if count == 1 else 'ies'}.\n\nContinue?"
-            ),
-            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-            QtWidgets.QMessageBox.No,
+            self._history_store,
+            on_cleared=lambda: self.reload(force=True),
         )
-        if answer != QtWidgets.QMessageBox.Yes:
-            return
-
-        self._history_store.clear()
-        self.reload(force=True)
 
 
 def _normalize_history_limit(value: int) -> int:

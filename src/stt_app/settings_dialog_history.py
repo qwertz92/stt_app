@@ -1,12 +1,22 @@
 """Settings dialog: history mixin (split from settings_dialog.py)."""
 from __future__ import annotations
 
+from dataclasses import replace
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_HISTORY_MAX_ITEMS,
     HISTORY_MAX_ITEMS_MAX,
+)
+from .history_ui_actions import (
+    format_history_count_label,
+    history_import_dialog_dir,
+    prompt_import_overflow,
+    run_history_clear,
+    run_history_export,
+    run_history_import,
 )
 from .settings_dialog_helpers import _WheelPassthroughSpinBox
 from .transcript_edit_dialog import TranscriptEditDialog
@@ -48,11 +58,15 @@ class _HistoryTabMixin:
         self.history_max_spin.valueChanged.connect(
             lambda _value: self._refresh_history_list()
         )
+        self.history_count_label = QtWidgets.QLabel("")
+        self.history_count_label.setStyleSheet("color: #555;")
+
         history_controls = QtWidgets.QHBoxLayout()
         self._configure_button_row(history_controls)
         history_controls.addWidget(QtWidgets.QLabel("History Size"))
         history_controls.addWidget(self.history_max_spin)
         history_controls.addStretch(1)
+        history_controls.addWidget(self.history_count_label)
         layout.addLayout(history_controls)
 
         history_box = QtWidgets.QGroupBox("Transcript History")
@@ -97,6 +111,12 @@ class _HistoryTabMixin:
         self._configure_button_row(history_buttons)
         self.history_refresh_button = QtWidgets.QPushButton("Refresh")
         self.history_refresh_button.clicked.connect(self._refresh_history_list)
+        self.history_export_button = QtWidgets.QPushButton("Export...")
+        self.history_export_button.clicked.connect(self._export_history)
+        self.history_import_button = QtWidgets.QPushButton("Import...")
+        self.history_import_button.clicked.connect(self._import_history)
+        self.history_clear_button = QtWidgets.QPushButton("Clear history")
+        self.history_clear_button.clicked.connect(self._clear_history)
         self.history_copy_button = QtWidgets.QPushButton("Copy selected")
         self.history_copy_button.clicked.connect(self._copy_selected_history)
         self.history_copy_button.setEnabled(False)
@@ -107,6 +127,9 @@ class _HistoryTabMixin:
         self.history_delete_button.clicked.connect(self._delete_selected_history)
         self.history_delete_button.setEnabled(False)
         history_buttons.addWidget(self.history_refresh_button)
+        history_buttons.addWidget(self.history_export_button)
+        history_buttons.addWidget(self.history_import_button)
+        history_buttons.addWidget(self.history_clear_button)
         history_buttons.addStretch(1)
         history_buttons.addWidget(self.history_copy_button)
         history_buttons.addWidget(self.history_edit_button)
@@ -130,6 +153,77 @@ class _HistoryTabMixin:
         )
         self.history_status_label.setVisible(bool(text))
 
+    def _update_history_count_label(self, total: int) -> None:
+        self.history_count_label.setText(
+            format_history_count_label(total, self.history_max_spin.value())
+        )
+
+    def _export_history(self) -> None:
+        def _on_exported(count: int, path: str) -> None:
+            self._set_history_status(
+                f"Exported {count} entr{'y' if count == 1 else 'ies'} to {path}"
+            )
+
+        run_history_export(self, self._history_store, on_exported=_on_exported)
+
+    def _import_history(self) -> None:
+        run_history_import(
+            self,
+            self._history_store,
+            dialog_dir=history_import_dialog_dir(self._history_store),
+            current_limit=int(self.history_max_spin.value()),
+            prompt_overflow=self._prompt_history_import_overflow,
+            persist_limit=self._persist_history_limit_now,
+            set_limit_widget=self._set_history_max_spin_value,
+            on_imported=self._on_history_imported,
+        )
+
+    def _prompt_history_import_overflow(
+        self,
+        *,
+        import_count: int,
+        free_slots: int,
+        max_items: int,
+    ) -> str:
+        return prompt_import_overflow(
+            self,
+            import_count=import_count,
+            free_slots=free_slots,
+            max_items=max_items,
+        )
+
+    def _persist_history_limit_now(self, limit: int) -> bool:
+        updated = replace(self._loaded_settings, history_max_items=limit)
+        try:
+            self._settings_store.save(updated)
+        except Exception as exc:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Save failed",
+                f"Failed to persist history setting: {exc}",
+            )
+            return False
+        self._loaded_settings = updated
+        return True
+
+    def _set_history_max_spin_value(self, value: int) -> None:
+        blocker = QtCore.QSignalBlocker(self.history_max_spin)
+        self.history_max_spin.setValue(value)
+        del blocker
+
+    def _on_history_imported(self, imported_count: int, _active_limit: int) -> None:
+        self._set_history_status(
+            f"Imported {imported_count} entr{'y' if imported_count == 1 else 'ies'}."
+        )
+        self._refresh_history_list(force=True)
+
+    def _clear_history(self) -> None:
+        def _on_cleared() -> None:
+            self._set_history_status("History cleared.")
+            self._refresh_history_list(force=True)
+
+        run_history_clear(self, self._history_store, on_cleared=_on_cleared)
+
     def _refresh_history_list(self, force: bool = False) -> None:
         signature = self._current_history_reload_signature()
         if (
@@ -151,9 +245,12 @@ class _HistoryTabMixin:
             self.history_list.row(current_item) if current_item is not None else None
         )
         scroll_value = self.history_list.verticalScrollBar().value()
-        entries = self._history_store.recent_entries(self.history_max_spin.value())
+        entries, total = self._history_store.recent_entries_with_count(
+            self.history_max_spin.value()
+        )
         if self._apply_reconciled_history_refresh(
             entries=entries,
+            total=total,
             selected_rows=selected_rows,
             current_row=current_row,
             scroll_value=scroll_value,
@@ -175,6 +272,7 @@ class _HistoryTabMixin:
         self._history_reload_signature = signature
         self._finish_history_refresh(
             entries=entries,
+            total=total,
             selected_rows=selected_rows,
             current_row=current_row,
             scroll_value=scroll_value,
@@ -212,6 +310,7 @@ class _HistoryTabMixin:
         self,
         *,
         entries: list[TranscriptHistoryEntry],
+        total: int,
         selected_rows: list[int],
         current_row: int | None,
         scroll_value: int,
@@ -221,6 +320,7 @@ class _HistoryTabMixin:
             self._history_entries = entries
             self._finish_history_refresh(
                 entries=entries,
+                total=total,
                 selected_rows=selected_rows,
                 current_row=current_row,
                 scroll_value=scroll_value,
@@ -272,6 +372,7 @@ class _HistoryTabMixin:
         )
         self._finish_history_refresh(
             entries=entries,
+            total=total,
             selected_rows=map_recent_entry_rows(changes, selected_rows),
             current_row=mapped_current_rows[0] if mapped_current_rows else None,
             scroll_value=scroll_value,
@@ -304,10 +405,12 @@ class _HistoryTabMixin:
         self,
         *,
         entries: list[TranscriptHistoryEntry],
+        total: int,
         selected_rows: list[int],
         current_row: int | None,
         scroll_value: int,
     ) -> None:
+        self._update_history_count_label(total)
         selected_row_set = {row for row in selected_rows if 0 <= row < len(entries)}
         restored_selection = False
         for row, entry in enumerate(entries):

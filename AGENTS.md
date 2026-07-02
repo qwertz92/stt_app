@@ -89,6 +89,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `update_ui.py` | Shared Qt dialogs/actions for presenting update-check results |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |
+| `history_ui_actions.py` | Shared export/import/clear flows and stored-count label formatting for the History dialog and Settings History tab |
 | `app_paths.py` | Centralized app data/config path helpers |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
@@ -188,6 +189,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   while the dialog is open re-presents the existing window and refreshes it
   once via `reload(force=True)` (selection and scroll position are preserved);
   it must not create another dialog.
+- **History export/import/clear parity**: the standalone History dialog and the
+  Settings History tab share the same export, import (including the overflow
+  choice between "import only free slots" and "import all and set unlimited"),
+  and clear flows via `history_ui_actions.py`, so the logic exists exactly once.
+  Only feedback presentation (popup vs. inline status label) and how the active
+  limit is read/persisted differ per caller. The Settings tab persists a
+  switch-to-unlimited decision immediately (via `_settings_store` plus
+  `dataclasses.replace` on `_loaded_settings`), the same way the dialog does,
+  so a later Save does not see it as a phantom change.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the

@@ -1,3 +1,4 @@
+import json
 import logging
 import os
 import threading
@@ -968,6 +969,182 @@ def test_settings_history_edit_updates_item_without_rebuilding_others(
     assert dialog.history_list.item(0).isSelected() is True
     assert dialog.history_detail.toPlainText() == "second edited"
     assert dialog.history_list.item(1) is first_item
+    _ = app
+
+
+def test_settings_history_tab_has_export_import_clear_buttons_and_count_label(
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("alpha"), _history_entry("beta")])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(history_max_items=1)),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+
+    assert dialog.history_export_button.text() == "Export..."
+    assert dialog.history_import_button.text() == "Import..."
+    assert dialog.history_clear_button.text() == "Clear history"
+    assert dialog.history_count_label.text() == (
+        "Stored: 2 entries (limit 1; showing latest 1)"
+    )
+    _ = app
+
+
+def test_settings_history_export_writes_file(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("alpha"), _history_entry("beta")])
+    export_path = tmp_path / "export.json"
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getSaveFileName",
+        lambda *args, **kwargs: (str(export_path), "JSON files (*.json)"),
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+
+    dialog._export_history()
+
+    assert export_path.exists()
+    exported = json.loads(export_path.read_text(encoding="utf-8"))
+    assert len(exported) == 2
+    assert "Exported 2 entries" in dialog.history_status_label.text()
+    _ = app
+
+
+def test_settings_history_clear_empties_store_after_confirmation(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("alpha"), _history_entry("beta")])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+
+    dialog._clear_history()
+
+    assert history_store.count() == 0
+    assert dialog.history_list.count() == 0
+    assert "History cleared" in dialog.history_status_label.text()
+    _ = app
+
+
+def test_settings_history_import_appends_entries(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("old")])
+    import_file = tmp_path / "import.json"
+    import_file.write_text(
+        json.dumps(
+            [
+                {
+                    "created_at": "2026-03-03T00:00:00+00:00",
+                    "text": "new-1",
+                    "engine": "local",
+                    "model": "small",
+                    "mode": "batch",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(import_file), "JSON files (*.json)"),
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(history_max_items=20)),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+
+    dialog._import_history()
+
+    assert history_store.count() == 2
+    assert [entry.text for entry in history_store.load()] == ["old", "new-1"]
+    assert "Imported 1 entry" in dialog.history_status_label.text()
+    _ = app
+
+
+def test_settings_history_import_overflow_switches_to_unlimited(
+    monkeypatch, tmp_path
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("old-1"), _history_entry("old-2")])
+    import_file = tmp_path / "import.json"
+    import_file.write_text(
+        json.dumps(
+            [
+                {
+                    "created_at": "2026-03-03T00:00:00+00:00",
+                    "text": "new-1",
+                    "engine": "local",
+                    "model": "small",
+                    "mode": "batch",
+                },
+                {
+                    "created_at": "2026-03-03T00:00:01+00:00",
+                    "text": "new-2",
+                    "engine": "local",
+                    "model": "small",
+                    "mode": "batch",
+                },
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(import_file), "JSON files (*.json)"),
+    )
+
+    store = _FakeSettingsStore(AppSettings(history_max_items=2))
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    dialog._prompt_history_import_overflow = lambda **_kwargs: "unlimited"
+
+    dialog._import_history()
+
+    assert dialog.history_max_spin.value() == 0
+    assert store.saved is not None
+    assert store.saved.history_max_items == 0
+    assert dialog._loaded_settings.history_max_items == 0
+    assert history_store.count() == 4
+    assert "Imported 2 entries" in dialog.history_status_label.text()
+
+    # A later Save must not treat the already-persisted limit as a pending change
+    # (no "Reduce history size" confirmation would be answered in this test).
+    dialog._save()
+    assert store.saved.history_max_items == 0
     _ = app
 
 
