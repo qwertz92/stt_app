@@ -677,6 +677,25 @@ def test_background_failure_keeps_live_recording_session(monkeypatch, tmp_path):
     _ = app
 
 
+def test_clear_queue_reflects_foreground_cancel_in_overlay(monkeypatch, tmp_path):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    assert overlay.states[-1][0] == "Processing"
+
+    controller.clear_transcription_queue()
+
+    job = controller._jobs.get(token_a)
+    assert job is not None and job.aborting is True
+    assert overlay.queue_updates[-1] == []
+    # The canceled foreground job must not leave a stale "Processing" state.
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
+    controller.shutdown()
+    _ = app
+
+
 def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     monkeypatch,
     tmp_path,

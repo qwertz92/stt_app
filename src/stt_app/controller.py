@@ -1146,10 +1146,7 @@ class DictationController(QtCore.QObject):
     def clear_transcription_queue(self) -> None:
         """Cancel every queued/running transcription."""
         for token in list(self._jobs.keys()):
-            self._request_job_stop(
-                token,
-                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
-            )
+            self.cancel_queued_transcription(token)
 
     def _apply_concurrent_mode_to_active_job(self) -> None:
         """Apply the configured mode to the in-flight transcription when a new
