@@ -296,6 +296,26 @@ non-standard location.
 
 ---
 
+## Automatic ModelScope fallback
+
+If a Hugging Face download fails for any reason, the app and the download script
+**automatically retry against the [ModelScope](https://modelscope.cn) mirror**
+(Alibaba's model hub). ModelScope mirrors the same repository IDs
+(`onnx-community/…`, `Systran/…`, etc.) and serves the large LFS weights from its
+own CDN instead of redirecting back to Hugging Face, so it usually works even
+when a corporate proxy blocks Hugging Face wholesale under a "Generative AI and
+ML Applications" category rule (see
+[SSL / proxy issues → Category block](advanced-setup.md#category-block-hugging-face-fully-blocked-not-an-ssl-error)).
+
+- No setup is required; the fallback is transparent and lands the files in the
+  same cache location a Hugging Face download would use.
+- Disable it with the environment variable `STT_APP_DISABLE_MODELSCOPE=1`.
+- Override the mirror host with `STT_APP_MODELSCOPE_ENDPOINT` if needed.
+- A few repositories are **not** mirrored on ModelScope (`distil-large-v3.5`,
+  the `smcleod` Granite 4.1 Plus/NAR ONNX repos). For those, download on an
+  unrestricted machine or have IT allow `huggingface.co`, `hf.co` and
+  `cas-bridge.xethub.hf.co`.
+
 ## Offline download
 
 If the app cannot reach HuggingFace Hub (corporate firewall, air-gapped network, SSL/proxy issues), download models in advance on a machine with internet access.

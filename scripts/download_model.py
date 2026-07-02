@@ -24,6 +24,12 @@ faster-whisper models use CTranslate2. Cohere, Granite 4.0, and Granite Speech
 4.1 2B use q4 ONNX/WebGPU snapshots. Granite Speech 4.1 Plus/NAR use the
 published INT8 raw ONNX tiers and require the JavaScript runtime from
 package.json. Nemotron 3.5 uses the INT4 ONNX Runtime GenAI streaming export.
+
+If Hugging Face is unreachable (e.g. a corporate proxy such as Zscaler that
+blocks the whole "Generative AI and ML Applications" category), the download
+automatically falls back to the ModelScope mirror (modelscope.cn), which hosts
+the same repositories and serves the weights from its own CDN. Set the
+environment variable STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
 """
 
 from __future__ import annotations
@@ -62,6 +68,11 @@ def _print_ssl_help(model_name: str) -> None:
         "\n"
         "Your network intercepts HTTPS connections, which breaks the\n"
         "SSL certificate chain that Python / huggingface_hub expects.\n"
+        "\n"
+        "NOTE: The download already tries the ModelScope mirror\n"
+        "(modelscope.cn) automatically when Hugging Face fails. If you see\n"
+        "this message, both sources were unreachable. The workarounds below\n"
+        "target Hugging Face directly; ModelScope needs no extra setup.\n"
         "\n"
         "Workarounds (pick one):\n"
         "\n"

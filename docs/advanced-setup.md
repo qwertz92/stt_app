@@ -271,6 +271,29 @@ python -m pip install truststore
 
 This is the same package the app uses internally. Once installed, restart the app and SSL should work automatically.
 
+## Category block (Hugging Face fully blocked, not an SSL error)
+
+Some proxies do not just intercept TLS — they **deny the whole Hugging Face
+domain** under a content category such as *"Generative AI and ML Applications"*.
+The symptom is different from an SSL error: requests to `huggingface.co`,
+`hf.co` and the LFS CDN `cas-bridge.xethub.hf.co` are redirected (HTTP 307) to a
+corporate "you have been redirected / access denied" page, and the app reports
+something like *"An error while trying to locate the files on the Hub … check
+your internet connection"* — because no bytes ever arrive. Setting a CA bundle
+does **not** help here; the connection is refused before TLS matters.
+
+**Automatic fallback: ModelScope.** When a Hugging Face download fails for any
+reason, the app and `scripts/download_model.py` automatically retry against the
+[ModelScope](https://modelscope.cn) mirror (a Chinese model hub operated by
+Alibaba). ModelScope mirrors the same repository IDs (`onnx-community/…`,
+`Systran/…`, etc.) and serves the large LFS weights from its own CDN instead of
+redirecting back to Hugging Face, so it is typically reached even when the
+Hugging Face category is blocked. No configuration is required. To disable the
+fallback, set `STT_APP_DISABLE_MODELSCOPE=1`. A few repositories are not
+mirrored there (e.g. `distil-large-v3.5`, the `smcleod` Granite 4.1 Plus/NAR
+ONNX repos); for those, use a machine without the category block or ask IT to
+allow the Hugging Face hosts above.
+
 ---
 
 ## ENOENT / "No such file or directory" errors

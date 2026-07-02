@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import os
 import queue
 import shutil
@@ -37,6 +38,8 @@ from .base import (
     TranscriptionCanceled,
     TranscriptionError,
 )
+
+logger = logging.getLogger(__name__)
 
 _STREAM_SENTINEL = object()
 _DOWNLOAD_ALLOW_PATTERNS: list[str] = [
@@ -222,7 +225,48 @@ def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
     try:
         return str(snapshot_download(repo_id, **kwargs))
     except Exception as exc:
-        raise RuntimeError(format_model_download_error(model_name, exc)) from exc
+        return _download_faster_whisper_via_modelscope(repo_id, model_dir, model_name, exc)
+
+
+def _download_faster_whisper_via_modelscope(
+    repo_id: str,
+    model_dir: str,
+    model_name: str,
+    hf_error: Exception,
+) -> str:
+    """Fall back to the ModelScope mirror when Hugging Face is unreachable.
+
+    Corporate proxies (e.g. Zscaler) may block Hugging Face wholesale. ModelScope
+    hosts the same repo IDs and serves the weights from its own CDN. The files
+    are written into the standard Hugging Face hub cache layout so faster-whisper
+    resolves them exactly like a real download.
+    """
+    from . import modelscope_mirror as ms
+
+    if not ms.modelscope_fallback_enabled() or not ms.repo_available(repo_id):
+        raise RuntimeError(format_model_download_error(model_name, hf_error)) from hf_error
+
+    cache_dir = (
+        model_dir.strip()
+        if model_dir and model_dir.strip()
+        else _default_hf_cache_dir()
+    )
+    logger.warning(
+        "Hugging Face download failed for %s (%s); trying ModelScope mirror.",
+        repo_id,
+        hf_error,
+    )
+    try:
+        path = ms.download_faster_whisper_to_cache(
+            repo_id, cache_dir, allow_patterns=_DOWNLOAD_ALLOW_PATTERNS
+        )
+    except Exception as ms_error:
+        raise RuntimeError(
+            f"Model download for '{model_name}' failed on Hugging Face "
+            f"({hf_error}) and on the ModelScope mirror ({ms_error})."
+        ) from ms_error
+    logger.info("Downloaded %s from ModelScope mirror.", repo_id)
+    return path
 
 
 def _directory_has_required_files(directory: Path, required_files: set[str]) -> bool:

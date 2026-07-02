@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import queue
 import shutil
@@ -25,6 +26,8 @@ from ..config import (
     language_modes_for_selection,
 )
 from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
+
+logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class _OnnxModelLayout:
@@ -345,7 +348,48 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
         "max_workers": 2,
     }
 
-    return str(snapshot_download(repo_id, **kwargs))
+    try:
+        return str(snapshot_download(repo_id, **kwargs))
+    except Exception as hf_error:
+        # Hugging Face may be unreachable (e.g. a corporate proxy blocking the
+        # whole "Generative AI and ML Applications" category). Fall back to the
+        # ModelScope mirror, which hosts the same repo IDs and serves the LFS
+        # weights from its own CDN. The flat local_dir layout is identical to
+        # what snapshot_download produces, so the app finds it unchanged.
+        return _download_onnx_via_modelscope(
+            repo_id, local_dir, layout.allow_patterns, hf_error
+        )
+
+
+def _download_onnx_via_modelscope(
+    repo_id: str,
+    local_dir: Path,
+    allow_patterns: tuple[str, ...],
+    hf_error: Exception,
+) -> str:
+    from . import modelscope_mirror as ms
+
+    if not ms.modelscope_fallback_enabled() or not ms.repo_available(repo_id):
+        raise RuntimeError(
+            f"Model download for '{repo_id}' failed: {hf_error}. See {DOC_MODELS_PATH}."
+        ) from hf_error
+
+    logger.warning(
+        "Hugging Face download failed for %s (%s); trying ModelScope mirror.",
+        repo_id,
+        hf_error,
+    )
+    try:
+        path = ms.download_repo_to_dir(
+            repo_id, local_dir, allow_patterns=allow_patterns
+        )
+    except Exception as ms_error:
+        raise RuntimeError(
+            f"Model download for '{repo_id}' failed on Hugging Face ({hf_error}) "
+            f"and on the ModelScope mirror ({ms_error})."
+        ) from ms_error
+    logger.info("Downloaded %s from ModelScope mirror.", repo_id)
+    return path
 
 
 def _default_runner_path() -> Path:
@@ -371,6 +415,24 @@ def _default_node_path() -> str | None:
     candidate = Path(program_files) / "nodejs" / "node.exe"
     if candidate.is_file():
         return str(candidate)
+    return None
+
+
+def _npm_beside_node(node_path: str | None) -> str | None:
+    """Locate npm next to the resolved node executable.
+
+    A portable/unzipped Node.js install (used when the machine-wide MSI is
+    blocked by policy and the app is pointed at it via STT_APP_NODE_PATH) ships
+    npm in the same directory as node but is not on PATH, so shutil.which finds
+    neither. Deriving npm from the node location keeps the auto-install working.
+    """
+    if not node_path:
+        return None
+    node_dir = Path(node_path).parent
+    for name in ("npm.cmd", "npm"):
+        candidate = node_dir / name
+        if candidate.is_file():
+            return str(candidate)
     return None
 
 
@@ -427,7 +489,11 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
             return
 
         source_root = _find_source_package_root(runner)
-        npm_path = shutil.which("npm") or shutil.which("npm.cmd")
+        npm_path = (
+            shutil.which("npm")
+            or shutil.which("npm.cmd")
+            or _npm_beside_node(node_path)
+        )
         if source_root is not None and npm_path:
             try:
                 install = subprocess.run(
