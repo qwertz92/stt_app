@@ -426,10 +426,10 @@ def test_save_persists_only_supported_remote_keys():
 
     providers = [provider for provider, _value in secret_store.set_calls]
     assert providers == [
-        "openai",
-        "deepgram",
         "assemblyai",
         "groq",
+        "openai",
+        "deepgram",
         "elevenlabs",
     ]
     assert "azure" not in providers

@@ -1,6 +1,7 @@
 """Shared widgets, constants and pure helpers for the settings dialog."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -213,14 +214,46 @@ _REMOTE_MODEL_DEFAULTS: dict[str, str] = {
 }
 
 
-_REMOTE_API_KEY_PROVIDERS = (
-    "openai",
-    "deepgram",
-    "assemblyai",
-    "groq",
-    "elevenlabs",
-    "azure",
-    "funasr",
+@dataclass(frozen=True)
+class _RemoteProviderInfo:
+    """One row in the canonical remote-provider table.
+
+    ``title`` is the short label used for the Remote-tab row and the
+    "<title> only" connection-test target; ``label`` is the longer display
+    label used in status/import text (falls back to ``name`` elsewhere via
+    :func:`_remote_provider_label`).
+    """
+
+    name: str
+    title: str
+    label: str
+
+
+# Single source of truth for the 7 remote providers and their UI order.
+# Every other provider-name list/order in the settings dialog derives from
+# this tuple instead of repeating it.
+_REMOTE_PROVIDERS: tuple[_RemoteProviderInfo, ...] = (
+    _RemoteProviderInfo("assemblyai", "AssemblyAI", "AssemblyAI"),
+    _RemoteProviderInfo("groq", "Groq", "Groq"),
+    _RemoteProviderInfo("openai", "OpenAI", "OpenAI"),
+    _RemoteProviderInfo("deepgram", "Deepgram", "Deepgram"),
+    _RemoteProviderInfo("elevenlabs", "ElevenLabs", "ElevenLabs"),
+    _RemoteProviderInfo("azure", "Azure", "Azure LLM Speech"),
+    _RemoteProviderInfo("funasr", "Fun-ASR", "Fun-ASR (Alibaba)"),
+)
+
+
+_REMOTE_PROVIDER_LABELS: dict[str, str] = {
+    provider.name: provider.label for provider in _REMOTE_PROVIDERS
+}
+
+
+def _remote_provider_label(name: str) -> str:
+    return _REMOTE_PROVIDER_LABELS.get(name, name)
+
+
+_REMOTE_API_KEY_PROVIDERS: tuple[str, ...] = tuple(
+    provider.name for provider in _REMOTE_PROVIDERS
 )
 
 

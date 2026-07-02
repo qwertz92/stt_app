@@ -11,7 +11,9 @@ from PySide6 import QtCore, QtWidgets
 from .config import DEFAULT_ENGINE, DEFAULT_LANGUAGE_MODE
 from .settings_dialog_helpers import (
     _emit_background_signal,
+    _remote_provider_label,
     _REMOTE_PROVIDER_GRID_SPACING_PX,
+    _REMOTE_PROVIDERS,
     _WheelPassthroughComboBox,
 )
 
@@ -139,14 +141,8 @@ class _RemoteProvidersMixin:
         provider_layout = QtWidgets.QVBoxLayout(provider_box)
         provider_layout.setContentsMargins(10, 10, 10, 10)
         provider_layout.setSpacing(6)
-        provider_rows = (
-            ("assemblyai", "AssemblyAI"),
-            ("groq", "Groq"),
-            ("openai", "OpenAI"),
-            ("deepgram", "Deepgram"),
-            ("elevenlabs", "ElevenLabs"),
-            ("azure", "Azure"),
-            ("funasr", "Fun-ASR"),
+        provider_rows = tuple(
+            (provider.name, provider.title) for provider in _REMOTE_PROVIDERS
         )
         provider_intro = QtWidgets.QLabel(
             "Enter a key only when you want to replace the stored one. The status badge shows whether the app already has a usable key."
@@ -306,13 +302,10 @@ class _RemoteProvidersMixin:
             "All configured providers (Recommended)",
             "all-configured",
         )
-        self.test_conn_target_combo.addItem("AssemblyAI only", "assemblyai")
-        self.test_conn_target_combo.addItem("Groq only", "groq")
-        self.test_conn_target_combo.addItem("OpenAI only", "openai")
-        self.test_conn_target_combo.addItem("Deepgram only", "deepgram")
-        self.test_conn_target_combo.addItem("ElevenLabs only", "elevenlabs")
-        self.test_conn_target_combo.addItem("Azure only", "azure")
-        self.test_conn_target_combo.addItem("Fun-ASR only", "funasr")
+        for provider in _REMOTE_PROVIDERS:
+            self.test_conn_target_combo.addItem(
+                f"{provider.title} only", provider.name
+            )
         self.test_conn_target_combo.setToolTip(
             "Choose which provider to test. "
             "This is independent from the transcription engine selection."
@@ -363,16 +356,7 @@ class _RemoteProvidersMixin:
         self._update_import_engine_note()
 
     def _provider_label(self, provider: str) -> str:
-        labels = {
-            "assemblyai": "AssemblyAI",
-            "groq": "Groq",
-            "openai": "OpenAI",
-            "deepgram": "Deepgram",
-            "elevenlabs": "ElevenLabs",
-            "azure": "Azure LLM Speech",
-            "funasr": "Fun-ASR (Alibaba)",
-        }
-        return labels.get(provider, provider)
+        return _remote_provider_label(provider)
 
     def _stored_key_source(self, provider: str) -> str:
         source_getter = getattr(self._secret_store, "get_api_key_source", None)
@@ -604,15 +588,7 @@ class _RemoteProvidersMixin:
 
     def _providers_for_connection_target(self, target: str) -> list[str]:
         normalized = str(target or "").strip().lower()
-        remote_providers = (
-            "assemblyai",
-            "groq",
-            "openai",
-            "deepgram",
-            "elevenlabs",
-            "azure",
-            "funasr",
-        )
+        remote_providers = tuple(provider.name for provider in _REMOTE_PROVIDERS)
         if normalized == "all-configured":
             configured: list[str] = []
             for provider in remote_providers:
@@ -724,15 +700,7 @@ class _RemoteProvidersMixin:
 
         if len(details) > 1:
             parts = []
-            for provider in (
-                "assemblyai",
-                "groq",
-                "openai",
-                "deepgram",
-                "elevenlabs",
-                "azure",
-                "funasr",
-            ):
+            for provider in (provider.name for provider in _REMOTE_PROVIDERS):
                 if provider not in details:
                     continue
                 provider_ok, _provider_msg = details[provider]
