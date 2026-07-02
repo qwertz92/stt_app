@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .app_paths import recordings_dir
 from .config import DEFAULT_ENGINE, VALID_ENGINES
 from .settings_dialog_helpers import (
+    _emit_background_signal,
     _ENGINE_LABELS,
     _set_transcriber_progress_callback,
     _WheelPassthroughComboBox,
@@ -349,7 +350,11 @@ class _ImportTabMixin:
 
         def _run() -> None:
             def _progress(text: str) -> None:
-                self.import_transcription_progress.emit(str(text))
+                _emit_background_signal(
+                    self,
+                    "import_transcription_progress",
+                    str(text),
+                )
 
             try:
                 _progress(f"Sending audio to {self._provider_label(import_engine)}...")
@@ -360,7 +365,12 @@ class _ImportTabMixin:
                 )
             except Exception as exc:
                 ok, text = False, str(exc)
-            self.import_transcription_finished.emit(bool(ok), str(text))
+            _emit_background_signal(
+                self,
+                "import_transcription_finished",
+                bool(ok),
+                str(text),
+            )
 
         threading.Thread(
             target=_run,

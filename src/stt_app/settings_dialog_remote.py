@@ -10,6 +10,7 @@ from PySide6 import QtCore, QtWidgets
 
 from .config import DEFAULT_ENGINE, DEFAULT_LANGUAGE_MODE
 from .settings_dialog_helpers import (
+    _emit_background_signal,
     _REMOTE_PROVIDER_GRID_SPACING_PX,
     _WheelPassthroughComboBox,
 )
@@ -696,7 +697,13 @@ class _RemoteProvidersMixin:
                 summary = "No providers tested."
         else:
             summary = f"{success_count}/{total_count} provider tests passed."
-        self.connection_test_finished.emit(test_id, all_ok, summary)
+        _emit_background_signal(
+            self,
+            "connection_test_finished",
+            test_id,
+            all_ok,
+            summary,
+        )
 
     @QtCore.Slot(int, bool, str)
     def _on_connection_test_finished(self, test_id: int, ok: bool, msg: str) -> None:

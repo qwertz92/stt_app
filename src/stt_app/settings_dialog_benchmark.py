@@ -23,9 +23,10 @@ from .local_benchmark import (
     normalize_webgpu_benchmark_devices,
 )
 from .settings_dialog_helpers import (
-    _INLINE_FIELD_BUTTON_SPACING_PX,
     _benchmark_history_label,
     _benchmark_status_text,
+    _emit_background_signal,
+    _INLINE_FIELD_BUTTON_SPACING_PX,
     _WheelPassthroughComboBox,
     _WheelPassthroughSpinBox,
 )
@@ -767,7 +768,7 @@ class _BenchmarkMixin:
         self._update_benchmark_actions()
 
         def _progress(text: str) -> None:
-            self.benchmark_progress.emit(text)
+            _emit_background_signal(self, "benchmark_progress", text)
 
         def _run() -> None:
             completed_cases: list[BenchmarkCase] = []
@@ -776,7 +777,7 @@ class _BenchmarkMixin:
 
             def _case_finished(case: BenchmarkCase) -> None:
                 completed_cases.append(case)
-                self.benchmark_case_finished.emit(case)
+                _emit_background_signal(self, "benchmark_case_finished", case)
 
             def _is_canceled() -> bool:
                 return cancel_event.is_set()
@@ -806,7 +807,9 @@ class _BenchmarkMixin:
                     options=options,
                     environment=environment,
                 )
-                self.benchmark_finished.emit(
+                _emit_background_signal(
+                    self,
+                    "benchmark_finished",
                     True,
                     summary,
                     {
@@ -818,11 +821,19 @@ class _BenchmarkMixin:
                 )
                 return
             except Exception as exc:
-                self.benchmark_finished.emit(False, str(exc), [])
+                _emit_background_signal(
+                    self,
+                    "benchmark_finished",
+                    False,
+                    str(exc),
+                    [],
+                )
                 return
 
             status = "completed_with_errors" if any(case.error for case in cases) else "completed"
-            self.benchmark_finished.emit(
+            _emit_background_signal(
+                self,
+                "benchmark_finished",
                 True,
                 self._benchmark_summary(
                     cases,

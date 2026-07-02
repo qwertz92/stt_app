@@ -47,6 +47,7 @@ from .settings_dialog_helpers import (
     _COMPACT_TABLE_ROW_EXTRA_PX,
     _DEFAULT_SETTINGS_DIALOG_SIZE,
     _DIALOG_SCREEN_MARGIN,
+    _emit_background_signal,
     _GENERAL_FORM_LABEL_EXTRA_PX,
     _LOCAL_MODEL_AUTO_REFRESH_DELAY_MS,
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
@@ -871,7 +872,7 @@ class SettingsDialog(
                     current_version="",
                     error=f"Update check failed: {exc}",
                 )
-            self.update_check_finished.emit(result)
+            _emit_background_signal(self, "update_check_finished", result)
 
         thread = threading.Thread(
             target=_run,
