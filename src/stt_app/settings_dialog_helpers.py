@@ -101,6 +101,60 @@ _REMOTE_MODEL_CHOICES: dict[str, tuple[tuple[str, str], ...]] = {
 }
 
 
+_ENGINE_LABELS: dict[str, str] = {
+    "local": "Local (faster-whisper / ONNX)",
+    "assemblyai": "Remote (AssemblyAI)",
+    "groq": "Remote (Groq)",
+    "openai": "Remote (OpenAI)",
+    "deepgram": "Remote (Deepgram)",
+    "elevenlabs": "Remote (ElevenLabs)",
+    "azure": "Remote (Azure LLM Speech)",
+    "funasr": "Remote (Fun-ASR / Alibaba)",
+}
+
+
+_HISTORY_TIMEZONE_LABELS: dict[str, str] = {
+    "local": "Local time",
+    "utc": "UTC",
+}
+
+
+_OVERLAY_CORNER_LABELS: dict[str, str] = {
+    "top-right": "Top Right",
+    "top-left": "Top Left",
+    "bottom-right": "Bottom Right",
+    "bottom-left": "Bottom Left",
+}
+
+
+_MODE_LABELS: dict[str, str] = {
+    "batch": "Batch",
+    "streaming": "Streaming (Experimental)",
+}
+
+
+_CONCURRENT_MODE_LABELS: dict[str, str] = {
+    "insert": "Queue & insert into its window",
+    "history": "Queue & save to history only",
+    "cancel": "Cancel the running transcription",
+}
+
+
+_PASTE_MODE_LABELS: dict[str, str] = {
+    "auto": "Auto (SendInput -> WM_PASTE)",
+    "wm_paste": "WM_PASTE only",
+    "send_input": "SendInput only",
+}
+
+
+_START_BEEP_TONE_LABELS: dict[str, str] = {
+    "soft": "Soft beep",
+    "high": "High beep",
+    "chime": "Two-tone chime",
+    "system": "System notification",
+}
+
+
 _DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(780, 960)
 
 

@@ -38,9 +38,16 @@ from .config import (
     supports_streaming,
 )
 from .settings_dialog_helpers import (
+    _CONCURRENT_MODE_LABELS,
+    _ENGINE_LABELS,
+    _HISTORY_TIMEZONE_LABELS,
     _INLINE_FIELD_BUTTON_SPACING_PX,
+    _MODE_LABELS,
+    _OVERLAY_CORNER_LABELS,
+    _PASTE_MODE_LABELS,
     _REMOTE_MODEL_CHOICES,
     _REMOTE_MODEL_DEFAULTS,
+    _START_BEEP_TONE_LABELS,
     _WheelPassthroughComboBox,
     _WheelPassthroughDoubleSpinBox,
     _WheelPassthroughSpinBox,
@@ -96,13 +103,9 @@ class _GeneralTabMixin:
         display_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
         self.history_timezone_combo = _WheelPassthroughComboBox()
-        history_timezone_labels = {
-            "local": "Local time",
-            "utc": "UTC",
-        }
         for value in VALID_DISPLAY_TIMEZONES:
             self.history_timezone_combo.addItem(
-                history_timezone_labels.get(value, value.upper()),
+                _HISTORY_TIMEZONE_LABELS.get(value, value.upper()),
                 value,
             )
         self.history_timezone_combo.setToolTip(
@@ -126,14 +129,10 @@ class _GeneralTabMixin:
         )
 
         self.overlay_corner_combo = _WheelPassthroughComboBox()
-        corner_labels = {
-            "top-right": "Top Right",
-            "top-left": "Top Left",
-            "bottom-right": "Bottom Right",
-            "bottom-left": "Bottom Left",
-        }
         for value in VALID_OVERLAY_CORNERS:
-            self.overlay_corner_combo.addItem(corner_labels.get(value, value), value)
+            self.overlay_corner_combo.addItem(
+                _OVERLAY_CORNER_LABELS.get(value, value), value
+            )
         display_form.addRow("Overlay Corner", self.overlay_corner_combo)
         layout.addWidget(display_box)
 
@@ -146,18 +145,8 @@ class _GeneralTabMixin:
         engine_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
         self.engine_combo = _WheelPassthroughComboBox()
-        engine_labels = {
-            "local": "Local (faster-whisper / ONNX)",
-            "assemblyai": "Remote (AssemblyAI)",
-            "groq": "Remote (Groq)",
-            "openai": "Remote (OpenAI)",
-            "deepgram": "Remote (Deepgram)",
-            "elevenlabs": "Remote (ElevenLabs)",
-            "azure": "Remote (Azure LLM Speech)",
-            "funasr": "Remote (Fun-ASR / Alibaba)",
-        }
         for value in VALID_ENGINES:
-            self.engine_combo.addItem(engine_labels.get(value, value), value)
+            self.engine_combo.addItem(_ENGINE_LABELS.get(value, value), value)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_hint = QtWidgets.QLabel(
             "Local keeps audio on your machine. Local models can use either "
@@ -203,12 +192,8 @@ class _GeneralTabMixin:
         )
 
         self.mode_combo = _WheelPassthroughComboBox()
-        mode_labels = {
-            "batch": "Batch",
-            "streaming": "Streaming (Experimental)",
-        }
         for value in VALID_MODES:
-            self.mode_combo.addItem(mode_labels.get(value, value), value)
+            self.mode_combo.addItem(_MODE_LABELS.get(value, value), value)
         self.mode_combo.setToolTip(
             "Streaming inserts only stable append-only text while speaking and "
             "auto-aborts on focus change. Batch remains the recommended default."
@@ -247,14 +232,9 @@ class _GeneralTabMixin:
         )
 
         self.concurrent_mode_combo = _WheelPassthroughComboBox()
-        concurrent_mode_labels = {
-            "insert": "Queue & insert into its window",
-            "history": "Queue & save to history only",
-            "cancel": "Cancel the running transcription",
-        }
         for value in VALID_CONCURRENT_TRANSCRIPTION_MODES:
             self.concurrent_mode_combo.addItem(
-                concurrent_mode_labels.get(value, value), value
+                _CONCURRENT_MODE_LABELS.get(value, value), value
             )
         self.concurrent_mode_combo.setToolTip(
             "What happens to a transcription that is still running when you start "
@@ -291,14 +271,9 @@ class _GeneralTabMixin:
         paste_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
         self.paste_mode_combo = _WheelPassthroughComboBox()
-        paste_mode_labels = {
-            "auto": "Auto (SendInput -> WM_PASTE)",
-            "wm_paste": "WM_PASTE only",
-            "send_input": "SendInput only",
-        }
         for value in VALID_PASTE_MODES:
             self.paste_mode_combo.addItem(
-                paste_mode_labels.get(value, value), value
+                _PASTE_MODE_LABELS.get(value, value), value
             )
         self.paste_mode_combo.setToolTip(
             "Auto tries SendInput first and falls back to WM_PASTE. "
@@ -367,14 +342,10 @@ class _GeneralTabMixin:
         audio_form.addRow("", self.start_beep_checkbox)
 
         self.start_beep_tone_combo = _WheelPassthroughComboBox()
-        tone_labels = {
-            "soft": "Soft beep",
-            "high": "High beep",
-            "chime": "Two-tone chime",
-            "system": "System notification",
-        }
         for value in VALID_START_BEEP_TONES:
-            self.start_beep_tone_combo.addItem(tone_labels.get(value, value), value)
+            self.start_beep_tone_combo.addItem(
+                _START_BEEP_TONE_LABELS.get(value, value), value
+            )
         audio_form.addRow("Start Tone", self.start_beep_tone_combo)
         layout.addWidget(audio_box)
 

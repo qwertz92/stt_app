@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .app_paths import recordings_dir
 from .config import DEFAULT_ENGINE, VALID_ENGINES
 from .settings_dialog_helpers import (
+    _ENGINE_LABELS,
     _set_transcriber_progress_callback,
     _WheelPassthroughComboBox,
 )
@@ -47,19 +48,9 @@ class _ImportTabMixin:
         import_controls_layout.addWidget(import_hint)
 
         self.import_engine_combo = _WheelPassthroughComboBox()
-        import_engine_labels = {
-            "local": "Local (faster-whisper / ONNX)",
-            "assemblyai": "Remote (AssemblyAI)",
-            "groq": "Remote (Groq)",
-            "openai": "Remote (OpenAI)",
-            "deepgram": "Remote (Deepgram)",
-            "elevenlabs": "Remote (ElevenLabs)",
-            "azure": "Remote (Azure LLM Speech)",
-            "funasr": "Remote (Fun-ASR / Alibaba)",
-        }
         for value in VALID_ENGINES:
             self.import_engine_combo.addItem(
-                import_engine_labels.get(value, value),
+                _ENGINE_LABELS.get(value, value),
                 value,
             )
         self.import_engine_note = QtWidgets.QLabel("")
