@@ -421,6 +421,9 @@ class _HistoryDialogPresenter:
 
     def open(self) -> HistoryDialog:
         if self._active_dialog is not None:
+            # Refresh once so re-clicking History shows current entries;
+            # reload(force=True) preserves selection and scroll position.
+            _reload_history_dialog(self._active_dialog, force=True)
             _present_dialog(self._active_dialog)
             return self._active_dialog
 
@@ -453,10 +456,10 @@ def _present_dialog(dialog: QtWidgets.QDialog) -> None:
     dialog.activateWindow()
 
 
-def _reload_history_dialog(dialog: HistoryDialog) -> None:
+def _reload_history_dialog(dialog: HistoryDialog, force: bool = False) -> None:
     try:
         if dialog.isVisible():
-            dialog.reload()
+            dialog.reload(force=force)
     except RuntimeError:
         return
 

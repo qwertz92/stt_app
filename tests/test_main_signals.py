@@ -422,7 +422,7 @@ def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
     assert instances[0].show_calls == 1
 
 
-def test_history_presenter_reuses_open_dialog_without_repeat_reload(
+def test_history_presenter_reuses_open_dialog_and_reloads_on_refocus(
     monkeypatch,
     tmp_path,
 ):
@@ -435,13 +435,15 @@ def test_history_presenter_reuses_open_dialog_without_repeat_reload(
             super().__init__()
             self.autoload = autoload
             self.reload_calls = 0
+            self.reload_force_values = []
             self.show_calls = 0
             self.raise_calls = 0
             self.activate_calls = 0
             instances.append(self)
 
-        def reload(self):
+        def reload(self, force=False):
             self.reload_calls += 1
+            self.reload_force_values.append(force)
 
         def show(self):
             self.show_calls += 1
@@ -475,13 +477,17 @@ def test_history_presenter_reuses_open_dialog_without_repeat_reload(
     assert instances[0].show_calls == 2
     assert instances[0].raise_calls == 2
     assert instances[0].activate_calls == 2
-    assert instances[0].reload_calls == 0
+    # Re-clicking History refreshes the open dialog exactly once, with the
+    # selection/scroll-preserving forced reload.
+    assert instances[0].reload_calls == 1
+    assert instances[0].reload_force_values == [True]
     assert len(callbacks) == 1
 
     callbacks[0]()
     presenter.open()
 
-    assert instances[0].reload_calls == 1
+    assert instances[0].reload_calls == 3
+    assert instances[0].reload_force_values == [True, False, True]
     assert len(callbacks) == 1
     _ = app
 

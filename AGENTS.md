@@ -184,8 +184,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   spin boxes disable keyboard tracking: typed intermediate values are not
   applied until the edit is committed, so increasing a limit such as `224` to
   `300` never prompts to trim at the temporary `3` value. Re-clicking History
-  while the dialog is open should present the existing window only; it must not
-  reload repeatedly or create another dialog.
+  while the dialog is open re-presents the existing window and refreshes it
+  once via `reload(force=True)` (selection and scroll position are preserved);
+  it must not create another dialog.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
