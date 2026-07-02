@@ -126,6 +126,7 @@ class HistoryDialog(QtWidgets.QDialog):
             2, QtWidgets.QHeaderView.ResizeToContents
         )
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
+        self._table.itemDoubleClicked.connect(self._on_item_double_clicked)
 
         self._detail = QtWidgets.QPlainTextEdit()
         self._detail.setReadOnly(True)
@@ -443,6 +444,20 @@ class HistoryDialog(QtWidgets.QDialog):
         if not text:
             return
         QtGui.QGuiApplication.clipboard().setText(text)
+        self._flash_copy_feedback()
+
+    def _on_item_double_clicked(self, item: QtWidgets.QTableWidgetItem) -> None:
+        """Copy the double-clicked entry's transcript to the clipboard."""
+        row = item.row()
+        if not 0 <= row < len(self._entries):
+            return
+        text = self._entries[row].text
+        if not text:
+            return
+        QtGui.QGuiApplication.clipboard().setText(text)
+        self._flash_copy_feedback()
+
+    def _flash_copy_feedback(self) -> None:
         self._copy_button.setText("Copied")
         set_button_feedback_state(self._copy_button, "success")
         self._copy_feedback_timer.start()

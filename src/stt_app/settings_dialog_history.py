@@ -86,6 +86,9 @@ class _HistoryTabMixin:
         )
         self._configure_compact_list_widget(self.history_list, expand=True)
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
+        self.history_list.itemDoubleClicked.connect(
+            self._on_history_item_double_clicked
+        )
 
         self.history_detail = QtWidgets.QPlainTextEdit()
         self.history_detail.setReadOnly(True)
@@ -478,6 +481,21 @@ class _HistoryTabMixin:
         if not text:
             return
         QtGui.QGuiApplication.clipboard().setText(text)
+        self._flash_history_copy_feedback()
+
+    def _on_history_item_double_clicked(
+        self,
+        item: QtWidgets.QListWidgetItem,
+    ) -> None:
+        """Copy the double-clicked entry's transcript to the clipboard."""
+        entry = item.data(QtCore.Qt.UserRole)
+        text = str(getattr(entry, "text", "") or "")
+        if not text:
+            return
+        QtGui.QGuiApplication.clipboard().setText(text)
+        self._flash_history_copy_feedback()
+
+    def _flash_history_copy_feedback(self) -> None:
         self.history_copy_button.setText("Copied")
         set_button_feedback_state(self.history_copy_button, "success")
         self._history_copy_feedback_timer.start()

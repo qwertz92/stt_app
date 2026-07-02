@@ -580,3 +580,25 @@ def test_history_dialog_uses_app_window_icon(tmp_path):
 
     assert dialog.windowIcon().isNull() is False
     _ = app
+
+
+def test_double_click_copies_entry_to_clipboard(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+
+    clipboard = _FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+
+    dialog._table.itemDoubleClicked.emit(dialog._table.item(1, 0))
+
+    assert clipboard.text() == dialog._entries[1].text
+    assert dialog._copy_button.text() == "Copied"
+    _ = app

@@ -3086,3 +3086,34 @@ def test_prepare_last_recording_import_switches_to_import_tab(monkeypatch, tmp_p
     assert dialog.tabs.currentIndex() == dialog.tabs.indexOf(dialog._import_tab)
     assert str(path) in dialog.import_selected_file_label.text()
     _ = app
+
+
+def test_settings_history_double_click_copies_entry(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("alpha"), _history_entry("beta")])
+
+    copied: list[str] = []
+
+    class _FakeClipboard:
+        def setText(self, text: str) -> None:
+            copied.append(text)
+
+    monkeypatch.setattr(
+        QtGui.QGuiApplication, "clipboard", lambda: _FakeClipboard()
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(history_max_items=20)),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list(force=True)
+
+    item = dialog.history_list.item(0)
+    dialog.history_list.itemDoubleClicked.emit(item)
+
+    entry = item.data(QtCore.Qt.UserRole)
+    assert copied == [entry.text]
+    assert dialog.history_copy_button.text() == "Copied"
+    _ = app
