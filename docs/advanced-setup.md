@@ -294,6 +294,77 @@ mirrored there (e.g. `distil-large-v3.5`, the `smcleod` Granite 4.1 Plus/NAR
 ONNX repos); for those, use a machine without the category block or ask IT to
 allow the Hugging Face hosts above.
 
+**If ModelScope is *also* blocked.** ModelScope worked in our environment, but
+another proxy may block it too. Other public sources that host the same weights
+and are often in a different category than Hugging Face (verify what your proxy
+actually allows — `curl -I <url>` should return a normal `200`/`302`, not a
+`307` to a corporate block page):
+
+- **ModelScope** (`modelscope.cn`) — automatic fallback, tried first.
+- **gitee.com** — a Chinese Git host that serves LFS from its own domain; some
+  models are mirrored there and can be `git clone`d.
+- **Kaggle Models / Datasets** (`kaggle.com`) — hosts many model mirrors behind
+  a free login.
+- **GitHub** (`github.com`, `raw.githubusercontent.com`,
+  `objects.githubusercontent.com`) — if a community member mirrors the ONNX
+  files in a repo/release, they can be fetched with `git`/`git lfs`.
+- **PyPI / npm / jsDelivr** — reachable for anything published as a package.
+
+Download on any reachable machine, then transfer the files (see
+[Models & Offline Setup → Offline download](models.md#offline-download)). As a
+last resort, give the exact blocked URLs to IT and ask for a category
+exception — the same self-service "I understand the risk" unblock that some
+proxies show for individual links can be enough.
+
+> **Deterministic vs. agent-driven.** All of the above is scripted and needs no
+> LLM: `scripts/download_model.py` (with the automatic ModelScope fallback) and
+> `scripts/setup_node_windows.py` run stand-alone. This matters where AI
+> assistants are disallowed. An assistant is only a convenience for *discovering*
+> which hosts a given proxy allows; the actual download and setup stay
+> deterministic and reproducible.
+
+---
+
+## Node.js for the GPU/ONNX models (no-admin install)
+
+The Cohere and IBM Granite Speech (WebGPU) models run through a small Node.js
+helper, so the machine that runs the app (native Windows — **not** WSL) needs a
+Node.js runtime. Nemotron and the faster-whisper models do **not** need Node.js.
+
+On locked-down machines the normal installers fail:
+
+- the machine-wide MSI is blocked by policy
+  (`winget install OpenJS.NodeJS.LTS` → exit code **1625**,
+  *"Installation prevented by organization policies"*), and
+- PowerShell may run in **ConstrainedLanguage** mode, which blocks the .NET
+  calls normally used to set environment variables (use the native `setx`
+  instead).
+
+**No-admin fix — portable Node.js.** Install the portable ZIP (no admin) and
+point the app at it via `STT_APP_NODE_PATH`. A helper script automates this:
+
+```powershell
+:: run with the Windows Python interpreter, not WSL
+python scripts\setup_node_windows.py
+```
+
+It downloads the portable Node.js ZIP (nodejs.org, with an automatic
+npmmirror.com fallback), extracts it to `%USERPROFILE%\programs\`, and sets
+`STT_APP_NODE_PATH` with `setx`. Options: `--version`, `--target-dir`,
+`--check` (report current state), `--force`.
+
+Manual equivalent, if you prefer:
+
+```powershell
+:: 1. download+extract node-v<ver>-win-x64.zip from https://nodejs.org/dist/
+:: 2. point the app at it (no admin, works under ConstrainedLanguage):
+setx STT_APP_NODE_PATH "C:\Users\<you>\programs\node-v24.18.0-win-x64\node.exe"
+```
+
+Then **restart the app**. On the first GPU/ONNX transcription it runs
+`npm install` automatically; npm ships next to `node.exe` and is located from
+`STT_APP_NODE_PATH`, so it works even when Node is not on `PATH`.
+
 ---
 
 ## ENOENT / "No such file or directory" errors

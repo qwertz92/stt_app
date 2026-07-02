@@ -294,6 +294,12 @@ at build time, but it still needs a Node.js executable unless the distribution
 bundle adds one separately. Set `STT_APP_NODE_PATH` if Node.js is installed in a
 non-standard location.
 
+If the machine-wide Node.js installer is blocked by corporate policy, use the
+no-admin portable install: run `python scripts/setup_node_windows.py` (Windows
+Python), which downloads the portable Node.js ZIP and sets `STT_APP_NODE_PATH`
+for you. See
+[Advanced Setup → Node.js for the GPU/ONNX models](advanced-setup.md#nodejs-for-the-gpuonnx-models-no-admin-install).
+
 ---
 
 ## Automatic ModelScope fallback
