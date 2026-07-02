@@ -95,6 +95,10 @@ EXCLUDES=(
     --exclude='*.pyc'
     --exclude='.gitignore'
     --exclude='uv.lock'
+    # node_modules is installed natively on Windows (npm install) and is not
+    # present in the WSL source. Without this exclude, --delete would wipe the
+    # Windows JS runtime on every sync, breaking the Cohere/Granite models.
+    --exclude='node_modules/'
 )
 
 # --- Rsync flags ---

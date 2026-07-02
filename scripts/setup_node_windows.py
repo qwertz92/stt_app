@@ -37,6 +37,7 @@ import argparse
 import os
 import platform
 import shutil
+import ssl
 import subprocess
 import tempfile
 import urllib.request
@@ -102,7 +103,53 @@ def _set_node_path_env(node_exe: Path) -> bool:
         return False
 
 
-def install(version: str, target_dir: Path, force: bool) -> int:
+def configure_corporate_ca(target_dir: Path) -> None:
+    """Make npm trust the corporate proxy CA (Zscaler etc.).
+
+    Node/npm ship their own CA list and ignore the Windows certificate store, so
+    behind a TLS-intercepting proxy `npm install` fails with
+    `UNABLE_TO_GET_ISSUER_CERT_LOCALLY`. We export the Windows ROOT+CA stores to
+    a PEM bundle and point npm/Node at it via NODE_EXTRA_CA_CERTS. Python (and
+    therefore pip) already trusts these via the OS store, which is why pip works
+    but npm does not.
+
+    No-op if NODE_EXTRA_CA_CERTS is already set, or off Windows.
+    """
+    if platform.system() != "Windows":
+        return
+    if os.environ.get("NODE_EXTRA_CA_CERTS", "").strip():
+        print(f"NODE_EXTRA_CA_CERTS already set: {os.environ['NODE_EXTRA_CA_CERTS']}")
+        return
+    if not hasattr(ssl, "enum_certificates"):
+        return
+    pems: list[str] = []
+    for store in ("ROOT", "CA"):
+        try:
+            for cert, encoding, _trust in ssl.enum_certificates(store):
+                if encoding == "x509_asn":
+                    pems.append(ssl.DER_cert_to_PEM_cert(cert))
+        except Exception:  # noqa: BLE001
+            continue
+    if not pems:
+        return
+    bundle = target_dir / "corporate-ca-bundle.pem"
+    bundle.write_text("".join(pems), encoding="ascii")
+    print(f"Exported {len(pems)} CA certificates to {bundle}")
+    try:
+        subprocess.run(
+            ["setx", "NODE_EXTRA_CA_CERTS", str(bundle)],
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        print("Set NODE_EXTRA_CA_CERTS (takes effect for newly started programs).")
+    except Exception as exc:  # noqa: BLE001
+        print(f"WARNING: could not set NODE_EXTRA_CA_CERTS: {exc}")
+        print(f'    setx NODE_EXTRA_CA_CERTS "{bundle}"')
+
+
+def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) -> int:
     existing = _existing_node()
     if existing and not force:
         print(f"Node.js already available: {existing}")
@@ -132,6 +179,9 @@ def install(version: str, target_dir: Path, force: bool) -> int:
         print("Set this environment variable manually and restart the app:")
         print(f'    setx STT_APP_NODE_PATH "{node_exe}"')
 
+    if not skip_ca:
+        configure_corporate_ca(target_dir)
+
     print("\nRestart the app; the GPU/ONNX models (Cohere, Granite) will use it.")
     print("The app auto-runs 'npm install' on first ONNX use; npm ships in the")
     print("same folder as node.exe and is located automatically.")
@@ -149,6 +199,11 @@ def main() -> int:
         help=r"Install directory (default: %USERPROFILE%\programs).",
     )
     parser.add_argument("--force", action="store_true", help="Install even if Node exists.")
+    parser.add_argument(
+        "--skip-ca",
+        action="store_true",
+        help="Do not export the corporate CA / set NODE_EXTRA_CA_CERTS.",
+    )
     parser.add_argument(
         "--check", action="store_true", help="Only report the current Node.js state."
     )
@@ -171,7 +226,7 @@ def main() -> int:
 
     default_root = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "programs"
     target_dir = Path(args.target_dir) if args.target_dir else default_root
-    return install(args.version, target_dir, args.force)
+    return install(args.version, target_dir, args.force, skip_ca=args.skip_ca)
 
 
 if __name__ == "__main__":

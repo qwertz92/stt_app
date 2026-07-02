@@ -365,6 +365,27 @@ Then **restart the app**. On the first GPU/ONNX transcription it runs
 `npm install` automatically; npm ships next to `node.exe` and is located from
 `STT_APP_NODE_PATH`, so it works even when Node is not on `PATH`.
 
+**npm behind a TLS-intercepting proxy.** Node/npm ship their own CA list and
+ignore the Windows certificate store, so behind Zscaler `npm install` fails with
+`UNABLE_TO_GET_ISSUER_CERT_LOCALLY` (pip works because Python trusts the OS
+store). `setup_node_windows.py` handles this automatically: it exports the
+Windows ROOT/CA certificates to `corporate-ca-bundle.pem` and sets
+`NODE_EXTRA_CA_CERTS`. To do it manually, or if `npm install` still fails:
+
+```powershell
+:: export the OS trust store and point Node at it (no admin)
+python -c "import os,ssl;open(os.path.expandvars(r'%USERPROFILE%\programs\corporate-ca-bundle.pem'),'w').write(''.join(ssl.DER_cert_to_PEM_cert(c) for s in ('ROOT','CA') for c,e,t in ssl.enum_certificates(s) if e=='x509_asn'))"
+setx NODE_EXTRA_CA_CERTS "%USERPROFILE%\programs\corporate-ca-bundle.pem"
+```
+
+The **Nemotron** model instead needs the Python package `onnxruntime-genai`
+(Windows-only). If a benchmark/transcription reports *"Nemotron requires ONNX
+Runtime GenAI …"*, install it into the app's Python and restart:
+
+```powershell
+python -m pip install --user onnxruntime-genai==0.14.1
+```
+
 ---
 
 ## ENOENT / "No such file or directory" errors
