@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import threading
+from dataclasses import dataclass
 from datetime import datetime
+from typing import Callable
 
 from PySide6 import QtCore, QtWidgets
 
@@ -11,6 +13,117 @@ from .settings_dialog_helpers import (
     _REMOTE_PROVIDER_GRID_SPACING_PX,
     _WheelPassthroughComboBox,
 )
+
+
+@dataclass(frozen=True)
+class _ConnectionTestSnapshot:
+    """Widget values for one provider test, captured on the GUI thread.
+
+    The connection-test worker thread must never read Qt widgets, so every
+    value it needs is snapshotted into this plain dataclass before the
+    thread starts.
+    """
+
+    api_key: str
+    model: str
+    language_mode: str
+    azure_endpoint: str = ""
+
+
+def _assemblyai_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.assemblyai_provider import AssemblyAITranscriber
+
+    return AssemblyAITranscriber(**kwargs)
+
+
+def _groq_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.groq_provider import GroqTranscriber
+
+    return GroqTranscriber(**kwargs)
+
+
+def _openai_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.openai_provider import OpenAITranscriber
+
+    return OpenAITranscriber(**kwargs)
+
+
+def _deepgram_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.deepgram_provider import DeepgramTranscriber
+
+    return DeepgramTranscriber(**kwargs)
+
+
+def _elevenlabs_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.elevenlabs_provider import ElevenLabsTranscriber
+
+    return ElevenLabsTranscriber(**kwargs)
+
+
+def _azure_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.azure_provider import AzureLlmSpeechTranscriber
+
+    return AzureLlmSpeechTranscriber(**kwargs)
+
+
+def _funasr_transcriber_factory(**kwargs: object) -> object:
+    from .transcriber.funasr_provider import FunAsrTranscriber
+
+    return FunAsrTranscriber(**kwargs)
+
+
+# Maps provider name to (lazy transcriber factory, extra snapshot fields the
+# factory needs besides api_key and model).
+_CONNECTION_TESTER_FACTORIES: dict[
+    str,
+    tuple[Callable[..., object], tuple[str, ...]],
+] = {
+    "assemblyai": (_assemblyai_transcriber_factory, ()),
+    "groq": (_groq_transcriber_factory, ()),
+    "openai": (_openai_transcriber_factory, ()),
+    "deepgram": (_deepgram_transcriber_factory, ()),
+    "elevenlabs": (_elevenlabs_transcriber_factory, ("language_mode",)),
+    "azure": (_azure_transcriber_factory, ("language_mode", "endpoint")),
+    "funasr": (_funasr_transcriber_factory, ("language_mode",)),
+}
+
+
+def _build_connection_tester(
+    provider: str,
+    snapshot: _ConnectionTestSnapshot,
+) -> tuple[Callable[[], tuple[bool, str]] | None, str | None]:
+    """Build the ``test_connection`` callable for *provider* from *snapshot*.
+
+    Safe to call from the worker thread: it only reads the snapshot, never
+    Qt widgets. Returns ``(tester, None)`` on success and
+    ``(None, error_text)`` — or ``(None, None)`` for an unknown provider —
+    otherwise.
+    """
+    factory_entry = _CONNECTION_TESTER_FACTORIES.get(provider)
+    if factory_entry is None:
+        return None, None
+    if not snapshot.api_key:
+        return None, "No API key entered. Enter a key above first."
+    factory, extra_fields = factory_entry
+    kwargs: dict[str, object] = {
+        "api_key": snapshot.api_key,
+        "model": snapshot.model,
+    }
+    if "language_mode" in extra_fields:
+        kwargs["language_mode"] = snapshot.language_mode
+    if "endpoint" in extra_fields:
+        if not snapshot.azure_endpoint:
+            return (
+                None,
+                "No Azure endpoint entered. "
+                "Enter the resource endpoint above first.",
+            )
+        kwargs["endpoint"] = snapshot.azure_endpoint
+    try:
+        transcriber = factory(**kwargs)
+    except Exception as exc:
+        return None, str(exc)
+    return transcriber.test_connection, None
 
 
 class _RemoteProvidersMixin:
@@ -444,6 +557,9 @@ class _RemoteProvidersMixin:
             )
             return
 
+        # Snapshot every widget value the worker needs while still on the
+        # GUI thread; the worker must never touch Qt widgets.
+        snapshots: dict[str, _ConnectionTestSnapshot] = {}
         for provider in providers:
             key_field = self._provider_key_edits.get(provider)
             if key_field is None:
@@ -452,12 +568,14 @@ class _RemoteProvidersMixin:
                     "#b71c1c",
                 )
                 return
-            if not self._resolve_api_key(provider, key_field):
+            snapshot = self._connection_test_snapshot(provider, key_field)
+            if not snapshot.api_key:
                 self._set_test_connection_feedback(
                     f"No API key entered for {self._provider_label(provider)}.",
                     "#b71c1c",
                 )
                 return
+            snapshots[provider] = snapshot
 
         self._connection_test_id += 1
         test_id = self._connection_test_id
@@ -476,7 +594,7 @@ class _RemoteProvidersMixin:
             )
         worker = threading.Thread(
             target=self._run_connection_test_worker,
-            args=(test_id, tuple(providers)),
+            args=(test_id, snapshots),
             name="stt_app_settings_connection_test",
             daemon=True,
         )
@@ -507,140 +625,22 @@ class _RemoteProvidersMixin:
             return [normalized]
         return []
 
-    def _build_connection_tester(self, engine: str):
-        if engine == "assemblyai":
-            api_key = self._resolve_api_key("assemblyai", self.assemblyai_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-
-            from .transcriber.assemblyai_provider import AssemblyAITranscriber
-
-            transcriber = AssemblyAITranscriber(
-                api_key=api_key,
-                model=self._remote_model_value_for_provider("assemblyai"),
-            )
-            return transcriber.test_connection, None
-
-        if engine == "groq":
-            api_key = self._resolve_api_key("groq", self.groq_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-
-            from .transcriber.groq_provider import GroqTranscriber
-
-            transcriber = GroqTranscriber(
-                api_key=api_key,
-                model=self._remote_model_value_for_provider("groq"),
-            )
-            return transcriber.test_connection, None
-
-        if engine == "openai":
-            api_key = self._resolve_api_key("openai", self.openai_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-
-            from .transcriber.openai_provider import OpenAITranscriber
-
-            transcriber = OpenAITranscriber(
-                api_key=api_key,
-                model=str(
-                    self._remote_model_value_for_provider("openai")
-                ),
-            )
-            return transcriber.test_connection, None
-
-        if engine == "deepgram":
-            api_key = self._resolve_api_key("deepgram", self.deepgram_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-
-            from .transcriber.deepgram_provider import DeepgramTranscriber
-
-            transcriber = DeepgramTranscriber(
-                api_key=api_key,
-                model=self._remote_model_value_for_provider("deepgram"),
-            )
-            return transcriber.test_connection, None
-
-        if engine == "elevenlabs":
-            api_key = self._resolve_api_key("elevenlabs", self.elevenlabs_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-
-            from .transcriber.elevenlabs_provider import ElevenLabsTranscriber
-
-            transcriber = ElevenLabsTranscriber(
-                api_key=api_key,
-                language_mode=str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE),
-                model=self._remote_model_value_for_provider("elevenlabs"),
-            )
-            return transcriber.test_connection, None
-
-        if engine == "azure":
-            api_key = self._resolve_api_key("azure", self.azure_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-            endpoint = self._resolve_azure_endpoint()
-            if not endpoint:
-                return (
-                    None,
-                    "No Azure endpoint entered. "
-                    "Enter the resource endpoint above first.",
-                )
-
-            from .transcriber.azure_provider import AzureLlmSpeechTranscriber
-
-            try:
-                transcriber = AzureLlmSpeechTranscriber(
-                    api_key=api_key,
-                    endpoint=endpoint,
-                    language_mode=str(
-                        self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
-                    ),
-                    model=self._remote_model_value_for_provider("azure"),
-                )
-            except Exception as exc:
-                return None, str(exc)
-            return transcriber.test_connection, None
-
-        if engine == "funasr":
-            api_key = self._resolve_api_key("funasr", self.funasr_key_edit)
-            if not api_key:
-                return (
-                    None,
-                    "No API key entered. Enter a key above first.",
-                )
-
-            from .transcriber.funasr_provider import FunAsrTranscriber
-
-            transcriber = FunAsrTranscriber(
-                api_key=api_key,
-                language_mode=str(
-                    self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
-                ),
-                model=self._remote_model_value_for_provider("funasr"),
-            )
-            return transcriber.test_connection, None
-
-        return None, None
+    def _connection_test_snapshot(
+        self,
+        provider: str,
+        key_field: QtWidgets.QLineEdit,
+    ) -> _ConnectionTestSnapshot:
+        """Capture the widget values one provider test needs (GUI thread)."""
+        return _ConnectionTestSnapshot(
+            api_key=self._resolve_api_key(provider, key_field),
+            model=self._remote_model_value_for_provider(provider),
+            language_mode=str(
+                self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+            ),
+            azure_endpoint=(
+                self._resolve_azure_endpoint() if provider == "azure" else ""
+            ),
+        )
 
     def _resolve_api_key(self, provider: str, key_field: QtWidgets.QLineEdit) -> str:
         api_key = key_field.text().strip()
@@ -664,11 +664,11 @@ class _RemoteProvidersMixin:
     def _run_connection_test_worker(
         self,
         test_id: int,
-        providers: tuple[str, ...],
+        snapshots: dict[str, _ConnectionTestSnapshot],
     ) -> None:
         results: dict[str, tuple[bool, str]] = {}
-        for provider in providers:
-            tester, error_text = self._build_connection_tester(provider)
+        for provider, snapshot in snapshots.items():
+            tester, error_text = _build_connection_tester(provider, snapshot)
             if tester is None:
                 if error_text:
                     results[provider] = (False, error_text)
