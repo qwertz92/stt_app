@@ -316,25 +316,60 @@ class _PersistenceMixin:
             return
         self._loaded_settings = updated
 
-    def _build_current_settings(
+    def _construct_settings_from_widgets(
         self,
         *,
-        engine_override: str | None = None,
-        model_override: str | None = None,
+        hotkey: str | None = None,
+        cancel_hotkey: str | None = None,
+        history_limit: int | None = None,
+        key_states: dict[str, bool] | None = None,
+        model_size: str | None = None,
+        engine: str | None = None,
     ) -> AppSettings:
         """Construct an ``AppSettings`` from current widget state.
+
+        Fields that differ between callers are taken from the keyword
+        arguments; every other field is read from the widgets exactly once.
+        When an argument is ``None`` it falls back to the value implied by
+        ``self._loaded_settings`` (or the relevant widget), matching the
+        historical behavior of ``_build_current_settings``.
 
         Must be called on the GUI thread.
         """
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent
         )
-        settings = AppSettings(
-            hotkey=self._loaded_settings.hotkey,
-            cancel_hotkey=self._loaded_settings.cancel_hotkey,
-            model_size=str(
-                self.model_combo.currentData()
-                or self._loaded_settings.model_size
+        if key_states is None:
+            has_openai_key = self._loaded_settings.has_openai_key
+            has_deepgram_key = self._loaded_settings.has_deepgram_key
+            has_assemblyai_key = self._loaded_settings.has_assemblyai_key
+            has_groq_key = self._loaded_settings.has_groq_key
+            has_elevenlabs_key = getattr(
+                self._loaded_settings, "has_elevenlabs_key", False
+            )
+            has_azure_key = getattr(self._loaded_settings, "has_azure_key", False)
+            has_funasr_key = getattr(self._loaded_settings, "has_funasr_key", False)
+        else:
+            has_openai_key = key_states["openai"]
+            has_deepgram_key = key_states["deepgram"]
+            has_assemblyai_key = key_states["assemblyai"]
+            has_groq_key = key_states["groq"]
+            has_elevenlabs_key = key_states["elevenlabs"]
+            has_azure_key = key_states["azure"]
+            has_funasr_key = key_states["funasr"]
+        return AppSettings(
+            hotkey=hotkey if hotkey is not None else self._loaded_settings.hotkey,
+            cancel_hotkey=(
+                cancel_hotkey
+                if cancel_hotkey is not None
+                else self._loaded_settings.cancel_hotkey
+            ),
+            model_size=(
+                model_size
+                if model_size is not None
+                else str(
+                    self.model_combo.currentData() or self._loaded_settings.model_size
+                )
             ),
             language_mode=str(
                 self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
@@ -345,7 +380,11 @@ class _PersistenceMixin:
             save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
             recordings_dir=self._effective_recordings_dir(),
             recordings_max_count=int(self.recordings_max_spin.value()),
-            history_max_items=int(self.history_max_spin.value()),
+            history_max_items=(
+                history_limit
+                if history_limit is not None
+                else int(self.history_max_spin.value())
+            ),
             display_timezone=str(
                 self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
             ),
@@ -362,9 +401,7 @@ class _PersistenceMixin:
                 self.overlay_corner_combo.currentData() or DEFAULT_OVERLAY_CORNER
             ),
             model_dir=self.model_dir_edit.text().strip(),
-            engine=str(
-                engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
-            ),
+            engine=str(engine or self.engine_combo.currentData() or DEFAULT_ENGINE),
             mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
             streaming_full_final_transcript=(
                 self.streaming_full_final_check.isChecked()
@@ -376,13 +413,13 @@ class _PersistenceMixin:
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
             ),
-            has_openai_key=self._loaded_settings.has_openai_key,
-            has_deepgram_key=self._loaded_settings.has_deepgram_key,
-            has_assemblyai_key=self._loaded_settings.has_assemblyai_key,
-            has_groq_key=self._loaded_settings.has_groq_key,
-            has_elevenlabs_key=getattr(self._loaded_settings, "has_elevenlabs_key", False),
-            has_azure_key=getattr(self._loaded_settings, "has_azure_key", False),
-            has_funasr_key=getattr(self._loaded_settings, "has_funasr_key", False),
+            has_openai_key=has_openai_key,
+            has_deepgram_key=has_deepgram_key,
+            has_assemblyai_key=has_assemblyai_key,
+            has_groq_key=has_groq_key,
+            has_elevenlabs_key=has_elevenlabs_key,
+            has_azure_key=has_azure_key,
+            has_funasr_key=has_funasr_key,
             groq_model=self._remote_model_value_for_provider("groq"),
             openai_model=self._remote_model_value_for_provider("openai"),
             deepgram_model=self._remote_model_value_for_provider("deepgram"),
@@ -392,6 +429,19 @@ class _PersistenceMixin:
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
             funasr_model=self._remote_model_value_for_provider("funasr"),
         )
+
+    def _build_current_settings(
+        self,
+        *,
+        engine_override: str | None = None,
+        model_override: str | None = None,
+    ) -> AppSettings:
+        """Construct an ``AppSettings`` from current widget state.
+
+        Delegates the widget reads to ``_construct_settings_from_widgets``
+        and then applies the engine/model override resolution.
+        """
+        settings = self._construct_settings_from_widgets(engine=engine_override)
         effective_engine = str(
             engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
         )
@@ -469,70 +519,12 @@ class _PersistenceMixin:
         if key_storage_errors or key_storage_changed:
             self._show_key_storage_result(key_storage_errors, key_storage_changed)
 
-        latest_overlay_opacity = int(
-            self._settings_store.load().overlay_opacity_percent
-        )
-        settings = AppSettings(
+        settings = self._construct_settings_from_widgets(
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
+            history_limit=requested_history_limit,
+            key_states=key_states,
             model_size=str(self.model_combo.currentData()),
-            language_mode=str(
-                self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
-            ),
-            vad_enabled=self.vad_checkbox.isChecked(),
-            vad_energy_threshold=float(self.vad_threshold_spin.value()),
-            save_last_wav=self.save_wav_checkbox.isChecked(),
-            save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
-            recordings_dir=self._effective_recordings_dir(),
-            recordings_max_count=int(self.recordings_max_spin.value()),
-            history_max_items=requested_history_limit,
-            display_timezone=str(
-                self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
-            ),
-            overlay_opacity_percent=latest_overlay_opacity,
-            keep_transcript_in_clipboard=(
-                self.keep_clipboard_checkbox.isChecked()
-            ),
-            allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
-            offline_mode=self.offline_mode_checkbox.isChecked(),
-            keep_onnx_model_loaded=self.keep_onnx_model_loaded_checkbox.isChecked(),
-            start_beep_enabled=self.start_beep_checkbox.isChecked(),
-            start_beep_tone=str(
-                self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE
-            ),
-            overlay_corner=str(
-                self.overlay_corner_combo.currentData() or DEFAULT_OVERLAY_CORNER
-            ),
-            model_dir=self.model_dir_edit.text().strip(),
-            engine=str(
-                self.engine_combo.currentData() or DEFAULT_ENGINE
-            ),
-            mode=str(self.mode_combo.currentData() or DEFAULT_MODE),
-            streaming_full_final_transcript=(
-                self.streaming_full_final_check.isChecked()
-            ),
-            concurrent_transcription_mode=str(
-                self.concurrent_mode_combo.currentData()
-                or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
-            ),
-            paste_mode=str(
-                self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
-            ),
-            has_openai_key=key_states["openai"],
-            has_deepgram_key=key_states["deepgram"],
-            has_assemblyai_key=key_states["assemblyai"],
-            has_groq_key=key_states["groq"],
-            has_elevenlabs_key=key_states["elevenlabs"],
-            has_azure_key=key_states["azure"],
-            has_funasr_key=key_states["funasr"],
-            groq_model=self._remote_model_value_for_provider("groq"),
-            openai_model=self._remote_model_value_for_provider("openai"),
-            deepgram_model=self._remote_model_value_for_provider("deepgram"),
-            assemblyai_model=self._remote_model_value_for_provider("assemblyai"),
-            elevenlabs_model=self._remote_model_value_for_provider("elevenlabs"),
-            azure_speech_model=self._remote_model_value_for_provider("azure"),
-            azure_endpoint=self.azure_endpoint_edit.text().strip(),
-            funasr_model=self._remote_model_value_for_provider("funasr"),
         )
 
         settings_changed = not self._settings_match_loaded_values(settings)
