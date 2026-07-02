@@ -2096,7 +2096,6 @@ class DictationController(QtCore.QObject):
                 self._last_failed_wav_bytes = b""
 
         self._finish_transcription_job(request_token)
-        self._flush_deferred_background_results()
         self._focus_poll_timer.stop()
         runtime_stream_failed = (
             self._audio_capture is not None
@@ -2113,6 +2112,10 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._last_transcribe_settings = None
         self._reset_streaming_state()
+        # The failed session no longer blocks queued inserts; flush after the
+        # stream/capture teardown above so a deferred result is not left
+        # pending behind a capture that was just removed.
+        self._flush_deferred_background_results()
         try:
             self._last_recording_store.mark_failed(error_text)
         except Exception:
@@ -2255,6 +2258,10 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._reset_streaming_state()
         self._overlay.set_state("Error", reason)
+        # Aborting this session removed the capture that was blocking any
+        # deferred background inserts; deliver them now instead of leaving
+        # them pending until the next recording.
+        self._flush_deferred_background_results()
 
     def _play_abort_beep(self) -> None:
         try:

@@ -603,6 +603,80 @@ def test_cancel_stream_finalize_queue_row_unblocks_recording(
     _ = app
 
 
+def test_streaming_cancel_flushes_deferred_background_insert(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    assert controller._deferred_background_results
+    assert inserter.calls == []
+
+    # Canceling the live streaming session removes the capture that blocked
+    # A's insert; the deferred result must be delivered, not left pending.
+    controller.cancel_current_action()
+
+    assert controller._audio_capture is None
+    assert controller._streaming_recording is False
+    assert controller._deferred_background_results == []
+    assert token_a not in controller._jobs
+    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert [e.text for e in history.load()] == ["transcript A"]
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_runtime_failure_flushes_deferred_background_insert(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    assert controller._deferred_background_results
+
+    controller._on_stream_runtime_failed("stream died")
+
+    assert controller._audio_capture is None
+    assert controller._deferred_background_results == []
+    assert token_a not in controller._jobs
+    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert [e.text for e in history.load()] == ["transcript A"]
+    assert overlay.states[-1][0] == "Error"
+    controller.shutdown()
+    _ = app
+
+
+def test_background_failure_keeps_live_recording_session(monkeypatch, tmp_path):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+
+    controller._on_transcription_failed("provider down", request_token=token_a)
+
+    assert overlay.states[-1][0] == "Listening"
+    assert controller._audio_capture is not None
+    assert token_a not in controller._jobs
+    # The failed job's audio stays available for a manual retry.
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    controller.shutdown()
+    _ = app
+
+
 def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     monkeypatch,
     tmp_path,
