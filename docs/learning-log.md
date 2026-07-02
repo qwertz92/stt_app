@@ -1345,3 +1345,33 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Added `.editorconfig` so editors save LF consistently on every machine.
   - Renormalized the affected text files so CRLF-only noise no longer appears as
     fake code changes.
+
+## 2026-07-02
+
+- **Settings-dialog thread-safety pass:**
+  - The connection-test worker read Qt widgets (`key_field.text()`,
+    `language_combo.currentData()`, the Azure endpoint field) from its
+    background thread. Widget values are now snapshotted on the GUI thread
+    into a frozen `_ConnectionTestSnapshot` per provider before the thread
+    starts, and `_build_connection_tester` became a table-driven module
+    function keyed by provider name with lazy transcriber imports.
+  - Benchmark, import, connection-test, and update-check workers emitted Qt
+    signals directly; a dialog destroyed mid-operation raised `RuntimeError`
+    in the daemon thread. All of them now go through
+    `_emit_background_signal` like the local-models mixin already did.
+- **Duplication cleanup:** `_save` and `_build_current_settings` share
+  `_construct_settings_from_widgets`; the engine/mode/paste/corner/tone/
+  timezone label dicts moved to module-level constants in
+  `settings_dialog_helpers.py`; the 7 remote provider names collapsed from
+  five hardcoded copies into the `_REMOTE_PROVIDERS` table (key persistence
+  now iterates in canonical UI order, which is functionally irrelevant but
+  test-visible).
+- **History UX parity:** the Settings History tab gained Export/Import/Clear
+  and a stored-count label via the new shared `history_ui_actions.py`;
+  re-clicking History now force-reloads the open dialog once (selection and
+  scroll preserved); double-clicking an entry copies its transcript in both
+  surfaces; Settings and History dialogs now set the app window icon through
+  the new shared `app_icon.py`.
+- **Validation:** ruff plus the full pytest suite (with
+  `test_ssl_and_preload.py` run separately) after every task on the Linux
+  VPS via xvfb.
