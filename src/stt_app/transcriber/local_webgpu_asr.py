@@ -402,7 +402,10 @@ def _default_runner_path() -> Path:
 
 
 def _default_node_path() -> str | None:
-    configured = os.environ.get("STT_APP_NODE_PATH", "").strip()
+    # Strip surrounding quotes: a value set via `setx STT_APP_NODE_PATH "..."`
+    # can store the literal quotes, which then make subprocess fail with
+    # WinError 2 (the quoted string is not a real file path).
+    configured = os.environ.get("STT_APP_NODE_PATH", "").strip().strip('"')
     if configured:
         return configured
 

@@ -99,6 +99,17 @@ def test_no_fallback_when_disabled(monkeypatch):
         local_faster_whisper.download_model_snapshot("small")
 
 
+def test_default_node_path_strips_surrounding_quotes(monkeypatch, tmp_path):
+    # `setx STT_APP_NODE_PATH "..."` can store the literal quotes; the resolved
+    # path must not include them or subprocess fails with WinError 2.
+    node = tmp_path / "node.exe"
+    node.write_text("")
+    monkeypatch.setenv("STT_APP_NODE_PATH", f'"{node}"')
+    assert local_webgpu_asr._default_node_path() == str(node)
+    monkeypatch.setenv("STT_APP_NODE_PATH", str(node))
+    assert local_webgpu_asr._default_node_path() == str(node)
+
+
 def test_npm_beside_node(tmp_path):
     assert local_webgpu_asr._npm_beside_node(None) is None
     node = tmp_path / "node.exe"
