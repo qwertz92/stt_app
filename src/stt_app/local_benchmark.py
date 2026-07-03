@@ -564,6 +564,15 @@ def format_benchmark_summary(
             f"avg={_format_seconds(case.avg_seconds)}, "
             f"rtf={_format_number(case.avg_rtf)} [{status}]"
         )
+        # With more than one run, also list each run so outliers/variance are
+        # visible instead of only the average.
+        if len(case.runs) > 1:
+            for run in case.runs:
+                lines.append(
+                    f"    run {run.run_index}: "
+                    f"{_format_seconds(run.seconds)}, "
+                    f"rtf={_format_number(run.real_time_factor)}"
+                )
 
     successful = _successful_cases(cases)
     if successful:

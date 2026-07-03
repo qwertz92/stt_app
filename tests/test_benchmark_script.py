@@ -240,6 +240,60 @@ def test_benchmark_summary_includes_runtime_fallback_details():
     assert "runtime: Fallback attempts: webgpu: operator unsupported" in summary
 
 
+def test_benchmark_summary_lists_individual_runs_when_multiple():
+    def _run(index, seconds, rtf):
+        return local_benchmark.BenchmarkRun(
+            run_index=index,
+            seconds=seconds,
+            audio_duration_seconds=10.0,
+            real_time_factor=rtf,
+            transcript_chars=0,
+            transcript_words=0,
+            detected_language="de",
+            language_probability=float("nan"),
+        )
+
+    case = local_benchmark.BenchmarkCase(
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=1.0,
+        runs=[_run(1, 2.0, 0.2), _run(2, 3.0, 0.3)],
+    )
+
+    summary = local_benchmark.format_benchmark_summary([case])
+
+    assert "run 1: 2.00s, rtf=0.200" in summary
+    assert "run 2: 3.00s, rtf=0.300" in summary
+
+
+def test_benchmark_summary_omits_run_list_for_single_run():
+    case = local_benchmark.BenchmarkCase(
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=1.0,
+        runs=[
+            local_benchmark.BenchmarkRun(
+                run_index=1,
+                seconds=2.0,
+                audio_duration_seconds=10.0,
+                real_time_factor=0.2,
+                transcript_chars=0,
+                transcript_words=0,
+                detected_language="de",
+                language_probability=float("nan"),
+            )
+        ],
+    )
+
+    summary = local_benchmark.format_benchmark_summary([case])
+
+    assert "run 1:" not in summary
+
+
 def test_run_benchmark_cases_can_cancel_between_cases(monkeypatch, tmp_path):
     audio_path = tmp_path / "sample.wav"
     audio_path.write_bytes(b"RIFF")
