@@ -139,8 +139,10 @@ class _BenchmarkMixin:
         )
         models_layout = QtWidgets.QVBoxLayout(models_box)
         self.benchmark_models_list = QtWidgets.QListWidget()
+        # ExtendedSelection enables Shift-range and Ctrl-toggle multi-select
+        # (the previous MultiSelection mode toggled one item per click only).
         self.benchmark_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.MultiSelection
+            QtWidgets.QAbstractItemView.ExtendedSelection
         )
         self._configure_compact_list_widget(
             self.benchmark_models_list,
@@ -151,6 +153,22 @@ class _BenchmarkMixin:
             self._update_benchmark_actions
         )
         models_layout.addWidget(self.benchmark_models_list, 1)
+
+        # Quality-of-life: bulk select/clear so the user does not have to click
+        # each model individually (all models are selected by default).
+        select_buttons_row = QtWidgets.QHBoxLayout()
+        self.benchmark_select_all_button = QtWidgets.QPushButton("Select All")
+        self.benchmark_select_all_button.clicked.connect(
+            self.benchmark_models_list.selectAll
+        )
+        self.benchmark_deselect_all_button = QtWidgets.QPushButton("Deselect All")
+        self.benchmark_deselect_all_button.clicked.connect(
+            self.benchmark_models_list.clearSelection
+        )
+        select_buttons_row.addWidget(self.benchmark_select_all_button)
+        select_buttons_row.addWidget(self.benchmark_deselect_all_button)
+        models_layout.addLayout(select_buttons_row)
+
         self.refresh_benchmark_models_button = QtWidgets.QPushButton(
             "Refresh Installed Models"
         )
@@ -588,6 +606,8 @@ class _BenchmarkMixin:
         self.benchmark_audio_browse_button.setEnabled(not busy)
         self.benchmark_audio_last_button.setEnabled(not busy)
         self.benchmark_models_list.setEnabled(not busy)
+        self.benchmark_select_all_button.setEnabled(not busy)
+        self.benchmark_deselect_all_button.setEnabled(not busy)
         self.refresh_benchmark_models_button.setEnabled(not busy)
         self.benchmark_compute_type_combo.setEnabled(not busy)
         self.benchmark_webgpu_device_combo.setEnabled(not busy)
