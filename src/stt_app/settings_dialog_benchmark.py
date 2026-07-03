@@ -139,10 +139,11 @@ class _BenchmarkMixin:
         )
         models_layout = QtWidgets.QVBoxLayout(models_box)
         self.benchmark_models_list = QtWidgets.QListWidget()
-        # ExtendedSelection enables Shift-range and Ctrl-toggle multi-select
-        # (the previous MultiSelection mode toggled one item per click only).
+        # Match the Local tab's model list (MultiSelection): click or click-drag
+        # toggles items. Bulk changes are handled by the Select/Deselect buttons
+        # below.
         self.benchmark_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.ExtendedSelection
+            QtWidgets.QAbstractItemView.MultiSelection
         )
         self._configure_compact_list_widget(
             self.benchmark_models_list,
@@ -187,9 +188,12 @@ class _BenchmarkMixin:
         self.benchmark_options_toggle = QtWidgets.QToolButton()
         self.benchmark_options_toggle.setCheckable(True)
         self.benchmark_options_toggle.setChecked(False)
+        # Use a small text triangle instead of the style-drawn QToolButton arrow,
+        # which some styles render oversized and misaligned next to the label.
         self.benchmark_options_toggle.setToolButtonStyle(
-            QtCore.Qt.ToolButtonTextBesideIcon
+            QtCore.Qt.ToolButtonTextOnly
         )
+        self.benchmark_options_toggle.setArrowType(QtCore.Qt.NoArrow)
         self.benchmark_options_toggle.toggled.connect(
             self._set_benchmark_options_visible
         )
@@ -578,10 +582,7 @@ class _BenchmarkMixin:
         if hasattr(self, "benchmark_options_toggle"):
             self.benchmark_options_toggle.setChecked(bool(visible))
             self.benchmark_options_toggle.setText(
-                "Hide Run Options" if visible else "Show Run Options"
-            )
-            self.benchmark_options_toggle.setArrowType(
-                QtCore.Qt.DownArrow if visible else QtCore.Qt.RightArrow
+                "▾  Hide Run Options" if visible else "▸  Show Run Options"
             )
         if hasattr(self, "benchmark_main_splitter"):
             self.benchmark_main_splitter.setSizes(
