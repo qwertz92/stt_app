@@ -96,6 +96,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `window_focus.py` | Win32 foreground/focus/caret window tracking for text insertion |
 | `hotkey.py` | Global hotkey registration via Win32 RegisterHotKey |
 | `benchmark_environment.py` | Best-effort benchmark system metadata |
+| `local_benchmark.py` | Pure benchmark runner (`run_benchmark_cases`) + result models; used by the CLI and the out-of-process worker |
+| `benchmark_worker.py` | Subprocess entry point: runs `run_benchmark_cases` and streams progress/case/done events as prefixed JSON lines |
+| `benchmark_process.py` | Launches/streams the benchmark worker; re-exports `run_benchmark_cases` (same signature) for the settings dialog so the UI never freezes |
 | `scripts/import_model.py` | Import manually downloaded models; validates for Git LFS pointers |
 | `scripts/download_model.py` | Automated model download for offline/corporate use |
 
@@ -345,8 +348,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   through the per-row cancel so a canceled foreground job is reflected in the
   overlay instead of leaving a stale "Processing" state.
   The overlay queue is a temporary size extension: all in-flight rows are
-  rendered, the overlay may exceed the normal transcript-text height cap while
-  the queue is visible, and hiding the queue must return the window to the
+  rendered inside a scroll area (`_queue_scroll`), so the overlay grows only up
+  to `OVERLAY_QUEUE_MAX_HEIGHT` (bounded by the screen) and the queue scrolls
+  beyond that instead of expanding to full screen height, the same way long
+  transcript text does. `_apply_queue_scroll_height` bounds the rows so the
+  detail area keeps at least `OVERLAY_DETAIL_MIN_HEIGHT`; it measures the rows
+  via the *layout* sizeHint (the widget sizeHint is inflated by the minimum
+  height it sets, which would be self-reinforcing). `set_transcription_queue`
+  re-asserts the size after the event loop drains (a deferred
+  `_refresh_size_after_queue_change`) because switching between very different
+  queue sizes, or clearing a grown queue with a short final result, otherwise
+  leaves a stale pending resize; hiding the queue must return the window to the
   normal compact/non-queue size. The cancel hook must be cleared after each batch
   run so it cannot leak into the cached
   transcriber's next request.
@@ -390,6 +402,41 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Settings, history exports, and the CLI benchmark do not drift. ONNX benchmark
   cases also persist concise runtime fallback details so a CPU result explains
   why WebGPU or DirectML was rejected.
+- **Benchmark runs out-of-process**: the Settings benchmark loads
+  faster-whisper/ONNX models back-to-back; model loading does not release the
+  Python GIL reliably, so running it in a background *thread* still froze the Qt
+  UI. `benchmark_process.run_benchmark_cases` therefore launches
+  `benchmark_worker` (a child process running the pure
+  `local_benchmark.run_benchmark_cases`) and streams `progress`/`case`/`done`
+  events as `@@STTBENCH@@`-prefixed JSON lines on stdout; the parent translates
+  them back into the same `progress_callback`/`case_callback` and returns the
+  same `list[BenchmarkCase]`. The settings-dialog facade re-exports this under
+  the name `run_benchmark_cases`, so the Qt-facing benchmark code and the test
+  seam (`stt_app.settings_dialog.run_benchmark_cases`) are unchanged. Cancel
+  terminates the child process tree (`taskkill /T` on Windows) and raises
+  `BenchmarkCancelled`; cases finished before the cancel are already streamed
+  and kept. Keep the pure in-process function for the CLI and the worker; only
+  the settings dialog goes through the process path. Wire new worker args into
+  the frozen entry point (`main.py`) and the PyInstaller `hiddenimports`.
+- **Normal transcription stays threaded, not isolated**: batch/stream
+  transcription runs in the shared `max_workers=1` executor with models
+  preloaded; faster-whisper (CTranslate2) and ONNX Runtime release the GIL
+  during inference and the Cohere/Granite Node path is already its own
+  subprocess, so dictation does not freeze the UI. Do not move it to a
+  subprocess — that would break the preload latency guarantee and streaming.
+- **Overlay reveal after a result**: a floating (non-pinned) overlay is a tool
+  window (no Alt+Tab) and can hide behind other windows. The controller calls
+  `_reveal_overlay_result` after a finished transcription — briefly on success
+  (`OVERLAY_RESULT_REVEAL_MS`) and longer on errors/insertion failures
+  (`OVERLAY_ERROR_REVEAL_MS`) so the transcript can still be copied. A tray
+  "Show overlay" action (`controller.bring_overlay_to_front`) is the manual
+  escape hatch. Reveals are best-effort (wrapped so a missing overlay method
+  never breaks delivery).
+- **Windows taskbar identity**: `main._set_windows_app_user_model_id` sets an
+  explicit `APP_USER_MODEL_ID` before the first window is created. Without it
+  Windows groups our windows under the host process (python.exe) and shows its
+  generic icon on the taskbar (most visibly for the Settings dialog). Keep the
+  ID stable so taskbar pinning/grouping is consistent.
 
 ## Core flow
 

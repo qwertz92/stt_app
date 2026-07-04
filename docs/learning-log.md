@@ -3,6 +3,51 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-04
+
+- **Benchmark no longer freezes the app (process isolation).** Running a
+  benchmark loads faster-whisper/ONNX models back-to-back; the benchmark already
+  ran in a background `threading.Thread`, yet the whole Qt UI still froze (no tab
+  switching, no actions) because model loading does not release the Python GIL
+  reliably. The benchmark now runs in a dedicated child process:
+  `benchmark_worker.py` runs the pure `local_benchmark.run_benchmark_cases` and
+  streams `progress`/`case`/`done` events as `@@STTBENCH@@`-prefixed JSON lines
+  on stdout; `benchmark_process.py` launches it (source and frozen), translates
+  the events back into the same `progress_callback`/`case_callback`, and returns
+  the same `list[BenchmarkCase]`. The settings-dialog facade re-exports this
+  under the name `run_benchmark_cases`, so the Qt code and the test seam are
+  unchanged; the pure in-process function stays for the CLI and the worker.
+  Cancel terminates the child process tree (`taskkill /T` on Windows) and raises
+  `BenchmarkCancelled`, keeping already-streamed partial cases. A dedicated
+  stderr pump avoids a full-pipe deadlock. Normal transcription was checked and
+  intentionally left threaded (not isolated): models are preloaded and
+  CTranslate2/ONNX release the GIL during inference, and the Cohere/Granite Node
+  path is already its own subprocess, so dictation does not freeze the UI.
+- **Overlay comes to the front after a result.** A floating (non-pinned) overlay
+  is a tool window (not in Alt+Tab) and could hide behind other windows, so a
+  finished transcript — or, worse, an insertion failure — could stay invisible
+  with no easy way to see/copy it. The controller now reveals the overlay after
+  a result: briefly on success (`OVERLAY_RESULT_REVEAL_MS`) and longer on
+  errors/insertion failures (`OVERLAY_ERROR_REVEAL_MS`). A tray "Show overlay"
+  action (`controller.bring_overlay_to_front`) is the manual escape hatch.
+- **Settings dialog shows the app icon on the Windows taskbar.** Without an
+  explicit AppUserModelID, Windows groups our windows under python.exe and shows
+  its generic icon on the taskbar (most visibly for the Settings dialog).
+  `main._set_windows_app_user_model_id` now sets a stable `APP_USER_MODEL_ID`
+  before the first window is created.
+- **Transcription queue scrolls and resets its size.** With the queue visible the
+  overlay grew toward full screen height to render all rows, and after the queue
+  emptied it could stay large when the final result was short (a regression of an
+  old pre-queue bug). The queue rows now live in a scroll area, so the overlay
+  grows only up to `OVERLAY_QUEUE_MAX_HEIGHT` (bounded by the screen) and scrolls
+  beyond that, like long transcript text. Two subtleties: the rows are measured
+  via the *layout* sizeHint (the widget sizeHint is inflated by the minimum
+  height we set to keep the rows from being compressed by `widgetResizable`,
+  which would be self-reinforcing), and `set_transcription_queue` re-asserts the
+  size after the event loop drains (deferred `_refresh_size_after_queue_change`)
+  because switching between very different queue sizes otherwise leaves a stale
+  pending resize from the previous state.
+
 ## 2026-07-01
 
 - **`settings_dialog.py` split from ~6.4k lines into a mixin facade.** The
