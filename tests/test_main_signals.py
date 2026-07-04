@@ -53,9 +53,13 @@ class FakeController:
         self.settings_changed_calls = 0
         self.hotkey_refresh_calls = 0
         self.resume_calls = 0
+        self.bring_overlay_calls = 0
 
     def toggle_recording(self):
         self.toggle_calls += 1
+
+    def bring_overlay_to_front(self):
+        self.bring_overlay_calls += 1
 
     def reload_settings(self, re_register_hotkey=True):
         pass
@@ -203,6 +207,7 @@ def test_create_tray_icon_has_expected_menu_actions():
     menu = tray.contextMenu()
     action_labels = [a.text() for a in menu.actions() if not a.isSeparator()]
     assert "Toggle Dictation" in action_labels
+    assert "Show overlay" in action_labels
     assert "Settings" in action_labels
     assert "History" in action_labels
     assert "Retry last transcription" in action_labels
@@ -231,6 +236,26 @@ def test_tray_toggle_action_calls_controller():
     toggle_action = [a for a in menu.actions() if a.text() == "Toggle Dictation"][0]
     toggle_action.trigger()
     assert controller.toggle_calls == 1
+
+
+def test_tray_show_overlay_action_calls_controller():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = FakeController()
+    overlay = FakeOverlay()
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=overlay,
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+    menu = tray.contextMenu()
+    show_action = [a for a in menu.actions() if a.text() == "Show overlay"][0]
+    show_action.trigger()
+    assert controller.bring_overlay_calls == 1
 
 
 def test_tray_update_checker_shows_message_for_available_update(monkeypatch):

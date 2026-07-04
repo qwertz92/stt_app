@@ -41,6 +41,8 @@ from .config import (
     STREAMING_STABLE_WORD_GUARD,
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
+    OVERLAY_RESULT_REVEAL_MS,
+    OVERLAY_ERROR_REVEAL_MS,
     VALID_MODEL_SIZES,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_START_BEEP_TONES,
@@ -1913,6 +1915,7 @@ class DictationController(QtCore.QObject):
         if not text.strip():
             self._mark_last_recording_completed()
             self._overlay.set_state("Done", "No speech detected.")
+            self._reveal_overlay_result(is_error=False)
             self._last_transcribe_settings = None
             self._reset_streaming_state()
             return
@@ -1935,6 +1938,7 @@ class DictationController(QtCore.QObject):
                     target_handle=target_handle,
                     target_signature=target_signature,
                 ):
+                    self._reveal_overlay_result(is_error=True)
                     self._mark_last_recording_completed()
                     self._last_transcribe_settings = None
                     self._reset_streaming_state()
@@ -1947,6 +1951,7 @@ class DictationController(QtCore.QObject):
                 target_handle=target_handle,
                 target_signature=target_signature,
             ):
+                self._reveal_overlay_result(is_error=True)
                 self._mark_last_recording_completed()
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
@@ -1954,6 +1959,9 @@ class DictationController(QtCore.QObject):
 
             self._overlay.set_state("Done", text)
 
+        # Bring the (possibly floating/hidden) overlay forward so the finished
+        # transcript is actually visible for a quick confirmation.
+        self._reveal_overlay_result(is_error=False)
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
         self._mark_last_recording_completed()
@@ -2121,6 +2129,7 @@ class DictationController(QtCore.QObject):
             "Error",
             f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}",
         )
+        self._reveal_overlay_result(is_error=True)
 
     @QtCore.Slot(str)
     def _on_transcription_partial(self, partial_text: str) -> None:
@@ -2436,6 +2445,32 @@ class DictationController(QtCore.QObject):
         overlay widget to callers (kept so main.py does not reach into
         ``_overlay`` directly)."""
         self._overlay.set_state("Error", str(message))
+        self._reveal_overlay_result(is_error=True)
+
+    def _reveal_overlay_result(self, *, is_error: bool) -> None:
+        """Bring the overlay to the foreground after a finished transcription.
+
+        A floating (non-pinned) overlay can sit behind other windows and, being
+        a tool window, is not reachable via Alt+Tab. Reveal it briefly on
+        success so the result is seen, and for longer on errors/insert failures
+        so the transcript can still be copied from the overlay.
+        """
+        duration = OVERLAY_ERROR_REVEAL_MS if is_error else OVERLAY_RESULT_REVEAL_MS
+        try:
+            self._overlay.reveal_temporarily(duration)
+        except Exception:
+            self._logger.exception("Failed to reveal overlay for result")
+
+    def bring_overlay_to_front(self) -> None:
+        """Manually bring the overlay to the foreground (tray action).
+
+        Reliable escape hatch when the overlay is floating and hidden behind
+        another window; reuses the longer reveal window so there is time to act.
+        """
+        try:
+            self._overlay.reveal_temporarily(OVERLAY_ERROR_REVEAL_MS)
+        except Exception:
+            self._logger.exception("Failed to bring overlay to front")
 
     def edit_last_transcript(self, parent=None) -> bool:
         current_text = self._last_transcript.strip()

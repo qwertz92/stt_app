@@ -66,6 +66,7 @@ class FakeOverlay:
         self.compact_calls = 0
         self.always_on_top_values = []
         self.reveal_calls = 0
+        self.reveal_durations = []
         self.queue_updates = []
 
     def set_state(self, state, detail="", **kwargs):
@@ -81,8 +82,9 @@ class FakeOverlay:
     def set_always_on_top(self, value: bool):
         self.always_on_top_values.append(bool(value))
 
-    def reveal_temporarily(self):
+    def reveal_temporarily(self, duration_ms=1800):
         self.reveal_calls += 1
+        self.reveal_durations.append(int(duration_ms))
 
     def ensure_compact_size(self):
         self.compact_calls += 1

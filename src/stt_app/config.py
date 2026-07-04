@@ -934,9 +934,20 @@ VAD_MAX_SILENCE_MS = 700
 OVERLAY_WIDTH = 396
 OVERLAY_HEIGHT = 98
 OVERLAY_MAX_HEIGHT = OVERLAY_HEIGHT * 4
+# When the transcription queue is visible the overlay may grow taller than the
+# normal transcript cap, but it stays bounded (and scrolls beyond this) instead
+# of expanding to full screen height.
+OVERLAY_QUEUE_MAX_HEIGHT = OVERLAY_HEIGHT * 6
 OVERLAY_MARGIN_X = 24
 OVERLAY_MARGIN_Y = 24
 OVERLAY_DETAIL_MIN_HEIGHT = 42
+# Minimum visible height of the scrollable queue panel before it scrolls.
+OVERLAY_QUEUE_MIN_HEIGHT = 96
+# How long the overlay is brought to the foreground (temporary topmost) after a
+# result so a floating overlay is actually seen: a brief glance on success, a
+# longer window on errors/insert failures so the transcript can be copied.
+OVERLAY_RESULT_REVEAL_MS = 2500
+OVERLAY_ERROR_REVEAL_MS = 9000
 OVERLAY_INITIAL_DETAIL = "Press hotkey to start dictation"
 OVERLAY_OPACITY_MIN_PERCENT = 25
 OVERLAY_OPACITY_MAX_PERCENT = 100

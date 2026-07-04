@@ -339,6 +339,58 @@ def test_controller_keeps_transcript_in_clipboard_on_success(monkeypatch):
     _ = app
 
 
+def test_controller_reveals_overlay_briefly_after_successful_result():
+    from stt_app.config import OVERLAY_RESULT_REVEAL_MS
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._target_window_handle = 123
+
+    controller._on_transcription_ready("hello world")
+
+    assert overlay.states[-1][0] == "Done"
+    assert overlay.reveal_durations[-1:] == [OVERLAY_RESULT_REVEAL_MS]
+
+    controller.shutdown()
+    _ = app
+
+
+def test_controller_reveals_overlay_longer_when_insertion_fails():
+    from stt_app.config import OVERLAY_ERROR_REVEAL_MS
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(should_fail=True),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._target_window_handle = 123
+
+    controller._on_transcription_ready("insertion will fail")
+
+    # Insertion failed -> overlay shows an error and is revealed for longer so
+    # the transcript can still be copied from it.
+    assert overlay.states[-1][0] == "Error"
+    assert overlay.reveal_durations[-1:] == [OVERLAY_ERROR_REVEAL_MS]
+
+    controller.shutdown()
+    _ = app
+
+
 def test_copy_last_transcript_returns_false_when_empty(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)

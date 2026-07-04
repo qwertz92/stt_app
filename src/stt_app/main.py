@@ -217,6 +217,9 @@ def _create_tray_icon(
     toggle_action = menu.addAction("Toggle Dictation")
     toggle_action.triggered.connect(controller.toggle_recording)
 
+    show_overlay_action = menu.addAction("Show overlay")
+    show_overlay_action.triggered.connect(controller.bring_overlay_to_front)
+
     settings_action = menu.addAction("Settings")
     history_action = menu.addAction("History")
     retry_action = menu.addAction("Retry last transcription")
