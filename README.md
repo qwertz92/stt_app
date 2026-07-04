@@ -117,6 +117,7 @@ Right-click the **system tray icon** → **Quit**.
 
 | Document | For whom | Content |
 |----------|----------|---------|
+| [Agent & Contributor Guide](AGENTS.md) | Agents / contributors | Architecture, module map, design decisions, and coding/commit rules — the cross-agent source of truth. `CLAUDE.md` bridges Claude Code to it; history lives in the [learning log](docs/learning-log.md). |
 | [Quick Start](docs/quick-start.md) | New users | 5-minute setup guide |
 | [Models & Offline Setup](docs/models.md) | All users | Model choices, download, offline/corporate setup |
 | [Advanced Setup](docs/advanced-setup.md) | IT / DevOps | Corporate deployment, wheelhouse, PyInstaller, SSL/proxy, benchmarking |
