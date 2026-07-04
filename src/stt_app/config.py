@@ -6,6 +6,11 @@ APP_NAME = "stt_app"
 LEGACY_APP_NAME = "tts_app"
 APP_DISPLAY_NAME = "Voice Dictation App"
 APP_LOGGER_NAME = "stt_app"
+# Explicit Windows AppUserModelID. Without one, Windows groups our windows
+# under the host process (python.exe / pythonw.exe) and shows its generic icon
+# on the taskbar (e.g. for the Settings dialog). Setting an explicit, stable ID
+# makes the taskbar button use the app/window icon instead.
+APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
 SCHEMA_VERSION = 18
 

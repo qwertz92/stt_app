@@ -8,7 +8,12 @@ from datetime import datetime
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
-from .config import APP_DISPLAY_NAME, APP_LOGGER_NAME, DEFAULT_CANCEL_HOTKEY_ID
+from .config import (
+    APP_DISPLAY_NAME,
+    APP_LOGGER_NAME,
+    APP_USER_MODEL_ID,
+    DEFAULT_CANCEL_HOTKEY_ID,
+)
 from .history_dialog import HistoryDialog
 from .controller import DictationController
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
@@ -28,11 +33,34 @@ from .update_ui import show_update_available_dialog
 from .app_paths import appdata_root
 
 
+def _set_windows_app_user_model_id() -> None:
+    """Give the app its own Windows taskbar identity.
+
+    Must run before the first window is created. Without an explicit
+    AppUserModelID, Windows associates our windows with the host process
+    (python.exe / pythonw.exe) and shows its generic icon on the taskbar
+    button (most visibly for the Settings dialog). Setting an explicit ID
+    makes Windows use the app/window icon for the taskbar button instead.
+    """
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            APP_USER_MODEL_ID
+        )
+    except Exception:
+        pass
+
+
 def run() -> int:
     # SSL: trust OS certificate store (handles corporate proxies like Zscaler)
     # and synchronize env vars so all HTTP libraries use the same CA bundle.
     inject_system_trust_store()
     sync_ca_bundle_env_vars()
+
+    _set_windows_app_user_model_id()
 
     app = QtWidgets.QApplication(sys.argv)
     app.setApplicationName(APP_DISPLAY_NAME)
