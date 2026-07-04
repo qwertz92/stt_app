@@ -6,6 +6,7 @@ from stt_app.config import (
     OVERLAY_MARGIN_X,
     OVERLAY_MARGIN_Y,
     OVERLAY_MAX_HEIGHT,
+    OVERLAY_QUEUE_MAX_HEIGHT,
 )
 from stt_app.overlay_ui import OverlayUI
 
@@ -141,6 +142,56 @@ def test_overlay_queue_height_resets_after_queue_finishes():
 
     overlay.set_state("Listening", "Speak now.", compact=True)
     assert overlay.size() == initial_size
+
+
+def test_overlay_queue_scrolls_and_stays_bounded_with_many_rows(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1400, 1000))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.show()
+    app.processEvents()
+
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    overlay.set_transcription_queue(
+        [(i, f"#{i} - 12:00:00 - local - whisper-large-v3 model") for i in range(24)]
+    )
+    for _ in range(3):
+        app.processEvents()
+
+    # All rows exist, the panel scrolls, and the window stays bounded (does not
+    # grow to full screen height like it used to).
+    assert overlay._queue_rows_layout.count() == 24
+    assert overlay._queue_scroll.verticalScrollBar().maximum() > 0
+    assert overlay.height() <= OVERLAY_QUEUE_MAX_HEIGHT + 8
+    assert overlay.height() < screen.availableGeometry().height()
+    overlay.hide()
+
+
+def test_overlay_resets_size_after_queue_finishes_with_short_result(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1400, 1000))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.show()
+    app.processEvents()
+    initial_height = overlay.height()
+
+    overlay.set_state("Processing", "Transcribing audio...", compact=False)
+    overlay.set_transcription_queue([(i, f"#{i} file") for i in range(16)])
+    for _ in range(3):
+        app.processEvents()
+    assert overlay.height() > initial_height  # grew for the queue
+
+    # The last queued item finishes: the queue clears and a short result shows.
+    # The overlay must return to its original compact size, not stay large.
+    overlay.set_transcription_queue([])
+    overlay.set_state("Done", "ok")
+    for _ in range(3):
+        app.processEvents()
+
+    assert abs(overlay.height() - initial_height) <= 8
+    overlay.hide()
 
 
 def test_overlay_copy_button_survives_clipboard_error(monkeypatch):

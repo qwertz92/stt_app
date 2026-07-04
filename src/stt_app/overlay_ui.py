@@ -14,6 +14,8 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_MARGIN_Y,
     OVERLAY_MAX_HEIGHT,
+    OVERLAY_QUEUE_MAX_HEIGHT,
+    OVERLAY_QUEUE_MIN_HEIGHT,
     OVERLAY_STATE_COLORS,
     OVERLAY_WIDTH,
 )
@@ -597,6 +599,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _update_detail_height(self) -> None:
         previous_size = QtCore.QSize(self.size())
+        self._apply_queue_scroll_height()
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
         height_cap = self._window_height_cap()
@@ -690,11 +693,65 @@ class OverlayUI(QtWidgets.QWidget):
     def _window_height_cap(self) -> int:
         if not self._queue_visible:
             return OVERLAY_MAX_HEIGHT
+        # With a queue the overlay may grow past the normal transcript cap, but
+        # it stays bounded (the queue scrolls beyond this) instead of expanding
+        # to full screen height. Never exceed the current screen.
+        cap = OVERLAY_QUEUE_MAX_HEIGHT
         screen = self._current_screen()
-        if screen is None:
-            return max(OVERLAY_MAX_HEIGHT, OVERLAY_HEIGHT + self._queue_extent())
-        available = screen.availableGeometry().height() - (OVERLAY_MARGIN_Y * 2)
-        return max(OVERLAY_HEIGHT, available)
+        if screen is not None:
+            available = screen.availableGeometry().height() - (OVERLAY_MARGIN_Y * 2)
+            cap = min(cap, max(OVERLAY_HEIGHT, available))
+        return max(OVERLAY_HEIGHT, cap)
+
+    def _apply_queue_scroll_height(self) -> None:
+        """Bound the scrollable queue panel so the detail area keeps its room.
+
+        The queue rows get as much height as fits within the window cap after
+        the fixed chrome and a minimum detail area; anything beyond scrolls.
+        """
+        if not self._queue_visible or not hasattr(self, "_queue_scroll"):
+            return
+        margins = self._layout.contentsMargins()
+        spacing = self._layout.spacing()
+        non_queue_fixed = (
+            margins.top()
+            + margins.bottom()
+            + self._header_widget.sizeHint().height()
+            + self._controls_widget.sizeHint().height()
+            + self._footer_widget.sizeHint().height()
+            + (spacing * 3)
+        )
+        queue_layout = self._queue_widget.layout()
+        queue_spacing = queue_layout.spacing() if queue_layout is not None else 0
+        queue_overhead = (
+            self._queue_header_widget.sizeHint().height()
+            + queue_spacing
+            + spacing  # main-layout gap before the queue block (see _queue_extent)
+        )
+        available_for_rows = (
+            self._window_height_cap()
+            - non_queue_fixed
+            - queue_overhead
+            - OVERLAY_DETAIL_MIN_HEIGHT
+        )
+        # Measure via the rows layout, not the widget: the widget's own
+        # sizeHint is inflated by the minimum height we set below, which would
+        # make the measurement self-reinforcing across queue changes.
+        rows_layout = self._queue_rows_widget.layout()
+        natural = (
+            rows_layout.sizeHint().height()
+            if rows_layout is not None
+            else self._queue_rows_widget.sizeHint().height()
+        )
+        # Keep the rows widget at its full content height so the scroll area
+        # actually scrolls (widgetResizable would otherwise compress the rows to
+        # fit the viewport, hiding the overflow instead of scrolling it).
+        if self._queue_rows_widget.minimumHeight() != natural:
+            self._queue_rows_widget.setMinimumHeight(natural)
+        rows_height = min(natural, max(OVERLAY_QUEUE_MIN_HEIGHT, available_for_rows))
+        rows_height = max(0, int(rows_height))
+        if self._queue_scroll.height() != rows_height:
+            self._queue_scroll.setFixedHeight(rows_height)
 
     def _bounded_window_height(self, desired_height: int) -> int:
         return max(
@@ -719,6 +776,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def ensure_compact_size(self) -> None:
         self._compact_mode = True
+        self._apply_queue_scroll_height()
         target_size = self._compact_target_size()
         if self.size() != target_size:
             self.resize(target_size)
@@ -734,7 +792,8 @@ class OverlayUI(QtWidgets.QWidget):
         queue_layout.setContentsMargins(0, 0, 0, 0)
         queue_layout.setSpacing(2)
 
-        queue_header = QtWidgets.QHBoxLayout()
+        self._queue_header_widget = QtWidgets.QWidget()
+        queue_header = QtWidgets.QHBoxLayout(self._queue_header_widget)
         queue_header.setContentsMargins(0, 0, 0, 0)
         queue_header.setSpacing(6)
         self._queue_title_label = QtWidgets.QLabel("")
@@ -752,13 +811,24 @@ class OverlayUI(QtWidgets.QWidget):
         self._queue_clear_button.clicked.connect(self.queue_clear_requested.emit)
         queue_header.addWidget(self._queue_title_label, 1)
         queue_header.addWidget(self._queue_clear_button, 0, QtCore.Qt.AlignRight)
-        queue_layout.addLayout(queue_header)
+        queue_layout.addWidget(self._queue_header_widget)
 
         self._queue_rows_widget = QtWidgets.QWidget()
         self._queue_rows_layout = QtWidgets.QVBoxLayout(self._queue_rows_widget)
         self._queue_rows_layout.setContentsMargins(0, 0, 0, 0)
         self._queue_rows_layout.setSpacing(2)
-        queue_layout.addWidget(self._queue_rows_widget)
+
+        # Scroll the queue rows (like the transcript detail) so a long queue is
+        # fully viewable while the overlay stays bounded instead of growing to
+        # full screen height.
+        self._queue_scroll = QtWidgets.QScrollArea()
+        self._queue_scroll.setWidgetResizable(True)
+        self._queue_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        self._queue_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._queue_scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        self._queue_scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self._queue_scroll.setWidget(self._queue_rows_widget)
+        queue_layout.addWidget(self._queue_scroll)
 
         self._queue_widget.setVisible(False)
 
@@ -805,24 +875,26 @@ class OverlayUI(QtWidgets.QWidget):
         """
         entries = list(items or [])
         self._clear_queue_rows()
-        if not entries:
+        if entries:
+            count = len(entries)
+            self._queue_title_label.setText(
+                f"Transcribing {count} file" + ("" if count == 1 else "s")
+            )
+            for token, label in entries:
+                self._queue_rows_layout.addWidget(self._build_queue_row(token, label))
+            self._queue_visible = True
+            self._queue_widget.setVisible(True)
+        else:
             self._queue_visible = False
             self._queue_widget.setVisible(False)
-            self._refresh_queue_layout_geometry()
-            self._refresh_size_after_queue_change()
-            return
 
-        count = len(entries)
-        self._queue_title_label.setText(
-            f"Transcribing {count} file" + ("" if count == 1 else "s")
-        )
-        for token, label in entries:
-            self._queue_rows_layout.addWidget(self._build_queue_row(token, label))
-
-        self._queue_visible = True
-        self._queue_widget.setVisible(True)
         self._refresh_queue_layout_geometry()
         self._refresh_size_after_queue_change()
+        # Re-assert once the layout settles. Switching between very different
+        # queue sizes (or hiding a queue that had grown the window) can leave a
+        # stale pending resize from the previous state, so recompute the size
+        # after the event loop drains.
+        QtCore.QTimer.singleShot(0, self._refresh_size_after_queue_change)
 
     def _queue_extent(self) -> int:
         if not self._queue_visible:
