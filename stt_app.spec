@@ -14,6 +14,8 @@ hiddenimports = [
     'stt_app.main',
     'stt_app.local_model_download_worker',
     'stt_app.local_model_scan_worker',
+    'stt_app.benchmark_process',
+    'stt_app.benchmark_worker',
     'onnxruntime_genai',
 ]
 ort_genai_datas, ort_genai_binaries, ort_genai_hiddenimports = collect_all(

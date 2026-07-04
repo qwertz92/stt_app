@@ -31,7 +31,12 @@ from .config import (
     DEFAULT_FUNASR_MODEL,
 )
 from .last_recording_store import LastRecordingStore
-from .local_benchmark import BenchmarkCase, run_benchmark_cases
+from .local_benchmark import BenchmarkCase
+# Runs the benchmark out-of-process so heavy model loading/inference never
+# freezes the Qt UI; same signature/return as the pure function, and the name
+# is kept so ``stt_app.settings_dialog.run_benchmark_cases`` stays the seam
+# tests patch.
+from .benchmark_process import run_benchmark_cases
 from .local_model_download import start_model_download_process
 from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process as _scan_cached_models
