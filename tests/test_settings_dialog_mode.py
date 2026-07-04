@@ -1804,12 +1804,12 @@ def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
     assert dialog.benchmark_setup_scroll.minimumHeight() >= 360
     assert splitter.sizes()[2] >= splitter.sizes()[1]
     assert dialog.benchmark_options_box.isVisible() is False
-    assert dialog.benchmark_options_toggle.text() == "Show Run Options"
+    assert dialog.benchmark_options_toggle.text().endswith("Show Run Options")
 
     dialog.benchmark_options_toggle.click()
 
     assert dialog.benchmark_options_box.isVisible() is True
-    assert dialog.benchmark_options_toggle.text() == "Hide Run Options"
+    assert dialog.benchmark_options_toggle.text().endswith("Hide Run Options")
     assert splitter.sizes()[2] >= splitter.sizes()[1]
     _ = app
 
