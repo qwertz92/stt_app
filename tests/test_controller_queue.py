@@ -87,6 +87,32 @@ def test_queue_overlay_lists_running_job(monkeypatch, tmp_path):
     _ = app
 
 
+def test_stop_recording_reveals_overlay_on_hotkey_press(monkeypatch, tmp_path):
+    """Stopping a recording surfaces the (floating) overlay immediately.
+
+    The overlay is brought forward on the stop press itself — via the same
+    non-activating reveal used on start — so a floating overlay sitting behind
+    other windows shows the new Processing state right away instead of only
+    after the transcript finishes.
+    """
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    controller.start_recording()
+    reveals_after_start = overlay.reveal_calls
+    assert reveals_after_start >= 1
+
+    controller.stop_recording()
+
+    # Stopping adds its own reveal (not only the later result reveal), and the
+    # overlay is in the Processing state the reveal makes visible.
+    assert overlay.reveal_calls == reveals_after_start + 1
+    assert overlay.states[-1] == ("Processing", "Transcribing audio...")
+    controller.shutdown()
+    _ = app
+
+
 def test_insert_mode_keeps_and_inserts_background_result(monkeypatch, tmp_path):
     controller, app, overlay, inserter, focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"

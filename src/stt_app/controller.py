@@ -361,6 +361,9 @@ class DictationController(QtCore.QObject):
             )
             return
         if self._audio_capture is None and self._streaming_recording:
+            # Surface the overlay so this feedback is visible on the hotkey press
+            # even when the overlay is floating and sitting behind other windows.
+            self._overlay.reveal_temporarily()
             self._overlay.set_state(
                 "Processing",
                 "Streaming transcript is still finalizing. Please wait.",
@@ -384,6 +387,9 @@ class DictationController(QtCore.QObject):
             self._logger.info("Ignored start_recording while a capture is already active.")
             return
         if self._audio_capture is None and self._streaming_recording:
+            # Surface the overlay so this feedback is visible even when the
+            # overlay is floating and sitting behind other windows.
+            self._overlay.reveal_temporarily()
             self._overlay.set_state(
                 "Processing",
                 "Streaming transcript is still finalizing. Please wait.",
@@ -623,6 +629,13 @@ class DictationController(QtCore.QObject):
 
         self._recording_stop_in_progress = True
         try:
+            # Bring the (possibly floating/hidden) overlay forward the moment the
+            # hotkey stop is pressed, so the new state (Processing / Finalizing,
+            # or an error) is visible immediately instead of only after the
+            # transcript finishes. This reuses the same non-activating reveal as
+            # recording start, so focus stays on the target window and the
+            # pending insertion is unaffected.
+            self._overlay.reveal_temporarily()
             self._audio_capture = None
             wav_bytes = capture.stop()
             self._persist_last_recording_audio(wav_bytes)
