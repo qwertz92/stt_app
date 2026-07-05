@@ -1140,6 +1140,11 @@ class DictationController(QtCore.QObject):
             request_token,
             delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
         )
+        # Canceling the active/foreground transcription clears a session that was
+        # blocking deferred background inserts; deliver those earlier finished
+        # transcripts now instead of leaving them pending until the next
+        # recording. The flush no-ops while anything is still blocking.
+        self._flush_deferred_background_results()
         if was_active and not self._new_recording_active():
             # The foreground transcription was canceled; reflect it in the
             # main overlay area instead of leaving a stale "Processing".

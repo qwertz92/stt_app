@@ -541,6 +541,48 @@ def test_cancel_recording_flushes_deferred_background_insert(
     _ = app
 
 
+def test_cancel_newest_queued_flushes_earlier_deferred_insert(
+    monkeypatch,
+    tmp_path,
+):
+    """Canceling the newest (foreground) job still delivers earlier ones.
+
+    Regression: a completed transcript deferred behind the live session was
+    left stuck when the blocking foreground job was canceled from the overlay
+    queue row, so nothing was inserted at all — not even the earlier recording
+    that had already finished and should have been pasted.
+    """
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    # A second recording supersedes A and defers A's insert behind the live
+    # session; A finishes while B is still being recorded.
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+
+    assert controller._deferred_background_results
+    assert controller._jobs[token_a].insertion_deferred is True
+    assert inserter.calls == []
+
+    # Cancel the newest (foreground) transcription B from the overlay queue.
+    # The earlier finished transcript A must still be delivered.
+    controller.cancel_queued_transcription(token_b)
+
+    # B is aborting (kept for its winding-down worker); A was flushed + inserted.
+    assert controller._jobs[token_b].aborting is True
+    assert token_a not in controller._jobs
+    assert controller._deferred_background_results == []
+    assert inserter.calls == [("transcript A", 321, "auto")]
+    assert [e.text for e in history.load()] == ["transcript A"]
+    assert overlay.states[-1] == ("Done", "Transcription canceled.")
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_during_pending_stream_finalize_unblocks_recording(
     monkeypatch,
     tmp_path,
