@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-05
+
+- **Canceling the newest queued job dropped earlier finished transcripts.**
+  With several recordings pending and insert mode, a transcript that finished
+  while a newer recording was still live is deferred behind the blocking
+  session (`_deferred_background_results`). Canceling the newest/foreground job
+  from the overlay queue row (or Clear queue) went through
+  `cancel_queued_transcription` → `_request_job_stop`, which clears
+  `_active_request_token` (a blocking condition) but — unlike
+  `cancel_current_action` — never flushed the deferred inserts. Result: nothing
+  was inserted at all, not even the earlier recordings that had completed and
+  should have been pasted. `cancel_queued_transcription` now flushes deferred
+  background inserts after the stop; the flush no-ops while anything is still
+  blocking, so Clear queue still drops each deferred job to history via its own
+  per-row cancel (order-independent because `_jobs` is insertion-ordered and
+  every deferred job is canceled in the loop). Regression test:
+  `test_cancel_newest_queued_flushes_earlier_deferred_insert`.
+- **Overlay now surfaces on the hotkey stop, not only after the transcript.**
+  A floating overlay could sit behind other windows, so pressing the hotkey to
+  stop gave no visible feedback until the transcript finished — masking the case
+  where the stop was fumbled and the recording actually kept running.
+  `stop_recording` now reveals the overlay the moment the stop is processed
+  (and a hotkey press during a pending streaming finalize reveals the
+  "still finalizing" state too), mirroring the existing reveal on
+  `start_recording`. The reveal is non-activating (`reveal_temporarily`:
+  `WS_EX_NOACTIVATE` / `SWP_NOACTIVATE` / `MA_NOACTIVATE` /
+  `WindowDoesNotAcceptFocus`) and the insertion path restores focus to the
+  captured target window, so it never steals focus from the app receiving the
+  paste. Regression test: `test_stop_recording_reveals_overlay_on_hotkey_press`.
+
 ## 2026-07-04
 
 - **Benchmark no longer freezes the app (process isolation).** Running a

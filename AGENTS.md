@@ -224,11 +224,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.
-- **Overlay visibility after activity/resume**: every recording start
-  re-presents the overlay without activation and reasserts native Windows
-  topmost z-order. `WM_POWERBROADCAST` resume events also restore overlay
-  visibility and refresh both global hotkey registrations after display/session
-  state has stabilized.
+- **Overlay visibility after activity/resume**: every recording start *and
+  stop* (and a hotkey press while a streaming finalize is pending) re-presents
+  the overlay without activation and reasserts native Windows topmost z-order,
+  so a floating overlay shows the new state on the hotkey press itself rather
+  than only after the transcript finishes. The reveal is non-activating
+  (`reveal_temporarily`), so focus stays on the target window and the pending
+  insertion is unaffected. `WM_POWERBROADCAST` resume events also restore
+  overlay visibility and refresh both global hotkey registrations after
+  display/session state has stabilized.
 - **Model-aware language selection**: `config.language_modes_for_selection()`
   is the shared source of truth for the General-tab language list and provider
   validation. Auto remains the persisted default where supported; Cohere
@@ -365,9 +369,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Deferred background inserts (`_deferred_background_results`) must be flushed on
   every path that clears the blocking session — recording start/stop,
   streaming-session abort and stream runtime failure (after the capture/stream
-  teardown, not before), and `cancel_current_action` — so a completed
-  insert-mode transcript is never left pending in the queue after nothing is
-  blocking it.
+  teardown, not before), `cancel_current_action`, and
+  `cancel_queued_transcription` (the overlay per-row ✕ / Clear queue) — so a
+  completed insert-mode transcript is never left pending in the queue after
+  nothing is blocking it. In particular, canceling the newest/foreground job
+  from the queue clears `_active_request_token`, which was blocking earlier
+  finished transcripts; those must be delivered, not dropped alongside the
+  canceled job.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can
