@@ -1153,11 +1153,12 @@ class DictationController(QtCore.QObject):
             request_token,
             delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
         )
-        # Canceling the active/foreground transcription clears a session that was
-        # blocking deferred background inserts; deliver those earlier finished
-        # transcripts now instead of leaving them pending until the next
-        # recording. The flush no-ops while anything is still blocking.
-        self._flush_deferred_background_results()
+        # Canceling a queued/foreground transcription is an explicit user action:
+        # deliver every completed deferred insert now — even if another
+        # transcription is still running — instead of leaving earlier finished
+        # transcripts stuck pending. The flush still no-ops while a recording is
+        # active (never insert mid-recording).
+        self._flush_deferred_background_results(ignore_active_transcription=True)
         if was_active and not self._new_recording_active():
             # The foreground transcription was canceled; reflect it in the
             # main overlay area instead of leaving a stale "Processing".
@@ -2027,13 +2028,32 @@ class DictationController(QtCore.QObject):
             self._insert_background_transcription(job, text)
         return True
 
-    def _should_defer_background_insertion(self) -> bool:
-        return (
+    def _should_defer_background_insertion(
+        self,
+        *,
+        ignore_active_transcription: bool = False,
+    ) -> bool:
+        """Whether a completed background result must wait before insertion.
+
+        An active recording/capture (or an in-progress start/stop) is always a
+        hard blocker: never insert text into a window while the user is still
+        recording. An in-flight foreground transcription normally also defers
+        background inserts so the live session stays coherent, but an explicit
+        user cancel passes ``ignore_active_transcription=True`` to deliver
+        already-completed results immediately — each targets its own captured
+        window, and delivering the older result now keeps token order intact —
+        instead of leaving them stuck (looking "deleted") behind a transcription
+        that can take a minute.
+        """
+        if (
             self._recording_start_in_progress
             or self._recording_stop_in_progress
             or self._audio_capture is not None
-            or self._active_request_token is not None
-        )
+        ):
+            return True
+        if ignore_active_transcription:
+            return False
+        return self._active_request_token is not None
 
     def _insert_background_transcription(
         self,
@@ -2059,10 +2079,16 @@ class DictationController(QtCore.QObject):
             )
         return inserted
 
-    def _flush_deferred_background_results(self) -> None:
+    def _flush_deferred_background_results(
+        self,
+        *,
+        ignore_active_transcription: bool = False,
+    ) -> None:
         if not self._deferred_background_results:
             return
-        if self._should_defer_background_insertion():
+        if self._should_defer_background_insertion(
+            ignore_active_transcription=ignore_active_transcription
+        ):
             return
         pending = list(self._deferred_background_results)
         self._deferred_background_results.clear()
@@ -2283,9 +2309,9 @@ class DictationController(QtCore.QObject):
         self._reset_streaming_state()
         self._overlay.set_state("Error", reason)
         # Aborting this session removed the capture that was blocking any
-        # deferred background inserts; deliver them now instead of leaving
-        # them pending until the next recording.
-        self._flush_deferred_background_results()
+        # deferred background inserts; deliver every completed one now — even if
+        # another transcription is still running — instead of leaving them stuck.
+        self._flush_deferred_background_results(ignore_active_transcription=True)
 
     def _play_abort_beep(self) -> None:
         try:
@@ -2674,9 +2700,11 @@ class DictationController(QtCore.QObject):
             )
             self._reset_streaming_state()
             # Canceling this recording removed the capture that was blocking any
-            # deferred background inserts; deliver them now instead of leaving
-            # them pending until the next recording.
-            self._flush_deferred_background_results()
+            # deferred background inserts. Deliver every completed one now — even
+            # if an unrelated transcription is still running — instead of leaving
+            # them stuck as "Insert Pending" behind a transcription that can take
+            # a minute (which reads as "deleted, only in history").
+            self._flush_deferred_background_results(ignore_active_transcription=True)
             return
 
         request_token = self._active_request_token
@@ -2698,11 +2726,14 @@ class DictationController(QtCore.QObject):
             except Exception:
                 self._logger.exception("Failed to mark canceled transcription")
             # Clearing the active transcription may unblock deferred background
-            # inserts that were waiting behind it.
-            self._flush_deferred_background_results()
+            # inserts that were waiting behind it; deliver every completed one now.
+            self._flush_deferred_background_results(ignore_active_transcription=True)
             self._overlay.set_state("Done", "Transcription canceled.")
             return
 
+        # Nothing active to cancel, but the hotkey should still deliver any
+        # completed results that are stuck pending insertion.
+        self._flush_deferred_background_results(ignore_active_transcription=True)
         self._overlay.set_state("Done", "Nothing to cancel.")
 
     def set_overlay_opacity_percent(self, value: int) -> None:

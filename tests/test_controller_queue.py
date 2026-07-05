@@ -567,6 +567,56 @@ def test_cancel_recording_flushes_deferred_background_insert(
     _ = app
 
 
+def test_cancel_recording_delivers_deferred_insert_despite_active_transcription(
+    monkeypatch,
+    tmp_path,
+):
+    """Cancel (Ctrl+Alt+F12) delivers completed pending inserts immediately.
+
+    Regression: with a finished transcript deferred as "Insert Pending" and an
+    unrelated newer transcription still running, canceling the active recording
+    left the completed one stuck behind the running transcription (blocked by
+    ``_active_request_token``) until it finished — up to a minute later, which
+    reads as "deleted, only in history". An explicit cancel now delivers the
+    completed result right away (into its own captured window); an active
+    recording/capture still blocks insertion, and the running transcription
+    delivers itself later with no duplicate.
+    """
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token1 = _record_and_stop(controller)
+    # A second recording supersedes msg1; msg2 becomes the active transcription.
+    controller.start_recording()
+    controller.stop_recording()
+    token2 = controller._active_request_token
+    # msg1 finishes while msg2 is still transcribing -> deferred (Insert Pending).
+    controller._on_transcription_ready("msg1", request_token=token1)
+    assert controller._deferred_background_results
+    assert controller._active_request_token == token2
+    assert inserter.calls == []
+
+    # A third recording is active while msg2 still transcribes.
+    controller.start_recording()
+    assert controller._audio_capture is not None
+
+    # Cancel the active recording via the cancel hotkey. The completed msg1 must
+    # be delivered now, not left pending behind the still-running msg2.
+    controller.cancel_current_action()
+
+    assert controller._audio_capture is None
+    assert controller._deferred_background_results == []
+    assert inserter.calls == [("msg1", 321, "auto")]
+
+    # msg2 finishing later still delivers itself, with no duplicate msg1.
+    controller._on_transcription_ready("msg2", request_token=token2)
+    assert inserter.calls == [("msg1", 321, "auto"), ("msg2", 321, "auto")]
+    assert [e.text for e in history.load()] == ["msg1", "msg2"]
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_newest_queued_flushes_earlier_deferred_insert(
     monkeypatch,
     tmp_path,

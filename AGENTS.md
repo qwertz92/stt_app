@@ -376,6 +376,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   from the queue clears `_active_request_token`, which was blocking earlier
   finished transcripts; those must be delivered, not dropped alongside the
   canceled job.
+  `_should_defer_background_insertion`/`_flush_deferred_background_results` take
+  `ignore_active_transcription`: an active recording/capture (or in-progress
+  start/stop) is always a hard blocker (never insert mid-recording), but on an
+  **explicit user cancel** (`cancel_current_action` incl. its "nothing to
+  cancel" path, `cancel_queued_transcription`, and `_abort_streaming_session`)
+  the flush passes `ignore_active_transcription=True` so a completed result is
+  delivered immediately instead of waiting behind an *unrelated* in-flight
+  transcription. Deferred tokens are always older than the active one, so
+  delivering them first keeps token order intact; the still-running
+  transcription delivers itself later with no duplicate. Normal (non-cancel)
+  flow keeps the `_active_request_token` guard so background text is not
+  inserted mid-foreground-session.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can

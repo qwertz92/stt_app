@@ -5,6 +5,28 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-05
 
+- **Cancel (Ctrl+Alt+F12) left completed pending inserts stuck behind an
+  unrelated transcription.** Scenario: msg1 finished and is deferred as
+  "Insert Pending", msg2 is still transcribing (`_active_request_token` set),
+  and the user cancels the active recording with the cancel hotkey. The cancel
+  paths already flushed deferred inserts, but the flush guard
+  (`_should_defer_background_insertion`) treated *any* in-flight transcription
+  as a blocker, so msg1 was not delivered until msg2 finished — up to a minute
+  later, which reads as "deleted, only in history" (the transcript is appended
+  to history the moment it is deferred, so it shows in history but is not yet
+  pasted). Fix: the guard and `_flush_deferred_background_results` gained an
+  `ignore_active_transcription` flag. An active recording/capture (or
+  in-progress start/stop) stays a hard blocker — never insert mid-recording —
+  but explicit user cancels (`cancel_current_action` incl. its "nothing to
+  cancel" fall-through, `cancel_queued_transcription`, `_abort_streaming_session`)
+  now flush with `ignore_active_transcription=True`, delivering every completed
+  deferred insert immediately into its own captured window. Deferred tokens are
+  always older than the active one, so order stays intact and the running
+  transcription still delivers itself later with no duplicate. Normal
+  (non-cancel) flow is unchanged. This is distinct from the queue-row cancel fix
+  below (which only closed the flush gap for `cancel_queued_transcription`);
+  here the completed result was being *delayed*, not dropped. Regression test:
+  `test_cancel_recording_delivers_deferred_insert_despite_active_transcription`.
 - **Canceling the newest queued job dropped earlier finished transcripts.**
   With several recordings pending and insert mode, a transcript that finished
   while a newer recording was still live is deferred behind the blocking
