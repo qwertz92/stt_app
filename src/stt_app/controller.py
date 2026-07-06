@@ -48,6 +48,7 @@ from .config import (
     VALID_START_BEEP_TONES,
     VAD_MAX_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
+    language_modes_for_selection,
     supports_streaming,
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError
@@ -276,6 +277,7 @@ class DictationController(QtCore.QObject):
         self._overlay.set_always_on_top(
             bool(getattr(self._settings, "overlay_always_on_top", True))
         )
+        self._sync_overlay_language_options()
         if self._transcription_runtime_active():
             # A batch worker or an active stream still holds the cached
             # transcriber. Closing it now could break that in-flight run (e.g.
@@ -2758,6 +2760,45 @@ class DictationController(QtCore.QObject):
             self._settings_store.save(self._settings)
         except Exception:
             self._logger.exception("Failed to persist overlay always-on-top mode")
+
+    def _sync_overlay_language_options(self) -> None:
+        supported_modes = language_modes_for_selection(
+            self._settings.engine,
+            self._settings.model_size,
+            self._settings.mode,
+        )
+        self._overlay.set_language_options(
+            supported_modes,
+            self._settings.language_mode,
+        )
+
+    def set_language_mode(self, mode: str) -> None:
+        normalized = str(mode or "").strip().lower()
+        supported_modes = language_modes_for_selection(
+            self._settings.engine,
+            self._settings.model_size,
+            self._settings.mode,
+        )
+        if normalized not in supported_modes:
+            self._sync_overlay_language_options()
+            return
+        if self._settings.language_mode == normalized:
+            self._sync_overlay_language_options()
+            return
+
+        self._settings = replace(self._settings, language_mode=normalized)
+        try:
+            self._settings_store.save(self._settings)
+        except Exception:
+            self._logger.exception("Failed to persist transcription language")
+        self._sync_overlay_language_options()
+
+        if self._transcription_runtime_active():
+            self._pending_transcriber_cache_reset = True
+            return
+        self._reset_transcriber_cache()
+        if self._settings.engine == DEFAULT_ENGINE:
+            self._start_local_model_preload()
 
     def set_history_max_items(self, value: int) -> None:
         normalized = max(0, int(value))

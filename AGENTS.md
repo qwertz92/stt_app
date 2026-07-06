@@ -234,9 +234,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   overlay visibility and refresh both global hotkey registrations after
   display/session state has stabilized.
 - **Model-aware language selection**: `config.language_modes_for_selection()`
-  is the shared source of truth for the General-tab language list and provider
-  validation. Auto remains the persisted default where supported; Cohere
-  requires an explicit language.
+  is the shared source of truth for the General-tab language list, the overlay
+  quick selector, and provider validation. The overlay persists a selection for
+  the next recording, disables changes while listening/processing, and shows a
+  disabled `Lang: Auto` button when automatic detection is the only mode.
+  Auto remains the persisted default where supported; Cohere requires an
+  explicit language and therefore never exposes Auto.
 - **Remote first-request diagnostics**: transcription workers log
   `transcription_timing` with initialization, transcription, and total
   durations. Groq reuses its SDK/HTTP client for the lifetime of the cached

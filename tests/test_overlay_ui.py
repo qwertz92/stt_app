@@ -564,3 +564,52 @@ def test_overlay_opacity_slider_emits_clamped_values():
     overlay._opacity_slider.setValue(80)
     assert emitted[-1] == 80
     assert round(overlay.windowOpacity() * 100) == 80
+
+
+def test_overlay_language_button_selects_supported_language():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[str] = []
+    overlay.language_changed.connect(emitted.append)
+
+    overlay.set_language_options(("auto", "de", "en"), "de")
+
+    assert overlay._language_button.text() == "Lang: German"
+    assert overlay._language_button.isEnabled() is True
+    german_action = next(
+        action for action in overlay._language_menu.actions()
+        if action.text() == "German"
+    )
+    german_action.trigger()
+    assert next(
+        action for action in overlay._language_menu.actions()
+        if action.text() == "German"
+    ).isChecked()
+    english_action = next(
+        action for action in overlay._language_menu.actions()
+        if action.text() == "English"
+    )
+    english_action.trigger()
+
+    assert emitted == ["en"]
+    assert overlay._language_button.text() == "Lang: English"
+
+
+def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[str] = []
+    overlay.language_changed.connect(emitted.append)
+
+    overlay.set_language_options(("auto",), "de")
+
+    assert overlay._language_button.text() == "Lang: Auto"
+    assert overlay._language_button.isEnabled() is False
+
+    overlay.set_language_options(("auto", "de"), "auto")
+    overlay.set_state("Listening", "Recording...")
+    overlay._select_language("de")
+
+    assert emitted == []
+    assert overlay._language_button.text() == "Lang: Auto"
+    assert overlay._language_button.isEnabled() is False

@@ -1359,6 +1359,73 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
     _ = app
 
 
+def test_overlay_language_change_persists_and_refreshes_local_transcriber():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="small",
+        language_mode="auto",
+        hotkey=FALLBACK_HOTKEY,
+    )
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    preload_calls = []
+    controller._start_local_model_preload = lambda: preload_calls.append(True)
+    controller._transcriber_cache = object()
+
+    controller.set_language_mode("de")
+
+    assert controller.settings.language_mode == "de"
+    assert store.saved is not None
+    assert store.saved.language_mode == "de"
+    assert controller._transcriber_cache is None
+    assert preload_calls == [True]
+    assert overlay.language_options[-1][1] == "de"
+    controller.shutdown()
+    _ = app
+
+
+def test_overlay_language_change_rejects_unsupported_cohere_auto():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        language_mode="de",
+        hotkey=FALLBACK_HOTKEY,
+    )
+    store = FakeSettingsStore(settings)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=store,
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    controller.set_language_mode("auto")
+
+    assert controller.settings.language_mode == "de"
+    assert store.saved is None
+    assert overlay.language_options[-1] == (
+        ("de", "en", "fr", "it", "es", "pt", "el", "nl", "pl", "ar", "vi", "zh", "ja", "ko"),
+        "de",
+    )
+    controller.shutdown()
+    _ = app
+
+
 def test_system_resume_closes_cached_webgpu_runtime():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(

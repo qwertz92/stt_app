@@ -286,9 +286,10 @@ Whisper models support `Auto`.
 
 The ONNX models are model-specific:
 
-- Cohere requires an explicit language. In this app, `Auto` maps to German for
-  Cohere because German is the primary local workflow and it is safer than
-  silently choosing English.
+- Cohere requires an explicit language, so the UI does not offer `Auto` for
+  this model. Legacy settings that still contain `Auto` fall back to German
+  because German is the primary local workflow and it is safer than silently
+  choosing English.
 - Granite can use a generic transcription prompt. In this app, `Auto` keeps the
   generic prompt, while explicit German or English uses language-specific
   prompts.

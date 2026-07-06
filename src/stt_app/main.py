@@ -144,6 +144,7 @@ def run() -> int:
     overlay.queue_clear_requested.connect(controller.clear_transcription_queue)
     overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
     overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
+    overlay.language_changed.connect(controller.set_language_mode)
 
     try:
         controller.initialize()

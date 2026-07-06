@@ -3,6 +3,18 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-06
+
+- **The overlay now has a model-aware language quick selector.** It uses
+  `config.language_modes_for_selection()` like the General settings tab, saves
+  changes immediately for the next recording, and safely resets or defers the
+  cached transcriber so the new language takes effect. Language changes are
+  blocked while listening/processing. Engines or modes with only automatic
+  detection show a disabled `Lang: Auto` button instead of a meaningless
+  menu. Cohere exposes its 14 explicit languages and no Auto option, matching
+  its official model card: the model does not perform automatic language
+  detection and performs best with one pre-specified language.
+
 ## 2026-07-05
 
 - **Cancel (Ctrl+Alt+F12) left completed pending inserts stuck behind an

@@ -188,6 +188,10 @@ model. Auto is selected by default when supported. The app keeps one canonical
 language code and adapts it where a provider requires a different code format,
 such as ElevenLabs Scribe's three-letter codes.
 
+The overlay uses the same model-aware list in its `Lang` button. A selection is
+saved immediately and applies to the next recording; the button is disabled
+while a recording or transcription is active.
+
 The model-aware lists are based on the current primary documentation:
 
 - [OpenAI speech-to-text languages](https://platform.openai.com/docs/guides/speech-to-text#supported-languages)

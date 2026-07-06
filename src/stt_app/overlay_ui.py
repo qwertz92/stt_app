@@ -6,6 +6,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
+    LANGUAGE_MODE_LABELS,
     OVERLAY_DETAIL_MIN_HEIGHT,
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
@@ -27,6 +28,7 @@ class OverlayUI(QtWidgets.QWidget):
     cancel_requested = QtCore.Signal()
     opacity_changed = QtCore.Signal(int)
     always_on_top_changed = QtCore.Signal(bool)
+    language_changed = QtCore.Signal(str)
     queue_cancel_requested = QtCore.Signal(int)
     queue_clear_requested = QtCore.Signal()
 
@@ -56,6 +58,9 @@ class OverlayUI(QtWidgets.QWidget):
         self._initial_compact_size: QtCore.QSize | None = None
         self._compact_mode = False
         self._queue_visible = False
+        self._language_modes = ("auto",)
+        self._language_mode = "auto"
+        self._language_change_blocked = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
         self._manual_positioned = False
         self._screen_change_connected = False
@@ -135,6 +140,14 @@ class OverlayUI(QtWidgets.QWidget):
         self._reset_pos_button.setFixedSize(74, 22)
         self._reset_pos_button.clicked.connect(self.reset_position)
 
+        self._language_button = QtWidgets.QPushButton("")
+        self._language_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._language_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._language_button.setFixedSize(130, 22)
+        self._language_menu = QtWidgets.QMenu(self._language_button)
+        self._language_button.setMenu(self._language_menu)
+        self._rebuild_language_menu()
+
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
         self._detail_label.setAlignment(QtCore.Qt.AlignLeft | QtCore.Qt.AlignTop)
         self._detail_label.setWordWrap(True)
@@ -213,6 +226,7 @@ class OverlayUI(QtWidgets.QWidget):
         controls.addWidget(self._cancel_button)
         controls.addWidget(self._edit_button)
         controls.addWidget(self._reset_pos_button)
+        controls.addWidget(self._language_button)
 
         self._build_queue_widget()
 
@@ -320,6 +334,8 @@ class OverlayUI(QtWidgets.QWidget):
         self._retry_button.setEnabled(state == "Error")
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})
         self._reset_pos_button.setEnabled(True)
+        self._language_change_blocked = state in {"Listening", "Processing"}
+        self._sync_language_button()
         self._reset_copy_button_feedback()
         self._update_detail_height()
         self._detail_scroll.verticalScrollBar().setValue(
@@ -407,6 +423,65 @@ class OverlayUI(QtWidgets.QWidget):
             }}
             """
         )
+
+    def set_language_options(
+        self,
+        modes: tuple[str, ...],
+        selected_mode: str,
+    ) -> None:
+        normalized_modes = tuple(
+            dict.fromkeys(
+                str(mode).strip().lower() for mode in modes if str(mode).strip()
+            )
+        ) or ("auto",)
+        normalized_selected = str(selected_mode or "auto").strip().lower()
+        self._language_modes = normalized_modes
+        self._language_mode = (
+            normalized_selected
+            if normalized_selected in normalized_modes
+            else normalized_modes[0]
+        )
+        self._rebuild_language_menu()
+
+    def _rebuild_language_menu(self) -> None:
+        self._language_menu.clear()
+        for mode in self._language_modes:
+            action = self._language_menu.addAction(
+                LANGUAGE_MODE_LABELS.get(mode, mode)
+            )
+            action.setCheckable(True)
+            action.setChecked(mode == self._language_mode)
+            action.triggered.connect(
+                lambda _checked=False, value=mode: self._select_language(value)
+            )
+        self._sync_language_button()
+
+    def _select_language(self, mode: str) -> None:
+        if self._language_change_blocked or mode not in self._language_modes:
+            return
+        if mode == self._language_mode:
+            self._rebuild_language_menu()
+            return
+        self._language_mode = mode
+        self._rebuild_language_menu()
+        self.language_changed.emit(mode)
+
+    def _sync_language_button(self) -> None:
+        label = LANGUAGE_MODE_LABELS.get(self._language_mode, self._language_mode)
+        has_choices = len(self._language_modes) > 1
+        self._language_button.setText(f"Lang: {label}")
+        self._language_button.setEnabled(
+            has_choices and not self._language_change_blocked
+        )
+        if self._language_change_blocked:
+            tooltip = "Language can be changed after the current operation finishes."
+        elif not has_choices:
+            tooltip = (
+                f"Language is fixed to {label} for the selected engine and model."
+            )
+        else:
+            tooltip = f"Current language: {label}. Click to change it."
+        self._language_button.setToolTip(tooltip)
 
     def move_to_corner(
         self,
