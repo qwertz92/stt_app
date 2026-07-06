@@ -49,12 +49,13 @@ jobs:
         shell: pwsh
         run: powershell -ExecutionPolicy Bypass -File .\scripts\build_windows_installer.ps1 -SkipBundleBuild
 
-      - name: Upload workflow artifacts
+      - name: Upload manual workflow artifacts
+        if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v7
         with:
           name: stt_app-windows-release
           if-no-files-found: error
-          retention-days: 14
+          retention-days: 3
           path: |
             release/stt_app-win-x64
             release/stt_app-win-x64.zip
