@@ -130,6 +130,40 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and checks the Win32 clipboard sequence/content before paste and before
   restore; if the user changes the clipboard during that window, leave the
   user's clipboard untouched and do not fallback-copy the transcript over it.
+- **Paste hardening (2026-07-09)**: two real intermittent-paste races are
+  closed in `text_inserter.py` and must not be reintroduced:
+  - *Held hotkey modifiers*: inserts are often triggered straight from the
+    WM_HOTKEY press (stop, cancel, queue flush), so the user's physical
+    Ctrl/Alt was still down and the injected Ctrl+V reached the target as
+    Ctrl+Alt+V (AltGr+V on German layouts) — silently pasting nothing (the
+    transcript then existed "only in history"). The inserter now waits via
+    `wait_for_modifier_release` (GetAsyncKeyState poll, bounded timeout)
+    before injecting; WM_PASTE mode skips the wait because messages ignore
+    keyboard state.
+  - *Late clipboard read vs. restore*: a busy target (likely under local
+    transcription CPU load) processes the injected Ctrl+V after the fixed
+    restore delay and pastes the restored old clipboard instead of the
+    transcript. The restore is now gated on the target thread answering
+    WM_NULL again (`wait_for_paste_target_ready`); if the target stays
+    unresponsive past the budget the restore is skipped so the eventual paste
+    still reads the transcript. With `keep_transcript_in_clipboard` enabled
+    the restore is skipped entirely, which closes this race completely.
+  There is no Windows API that signals "the target read the clipboard"
+  (delayed rendering is defeated by clipboard history/managers), so the
+  fixed delay after the responsiveness gate remains a heuristic; the gates
+  above shrink the window to practical irrelevance.
+- **Deferred queue inserts are coalesced**: `_flush_deferred_background_results`
+  groups token-ordered pending results by their captured insertion target and
+  pastes each group as one space-joined text. Each separate paste is its own
+  clipboard set/paste/restore race window, so N queued results used to mean N
+  chances to lose one. Do not flush deferred results one paste per result.
+- **`immediate_background_insert` (default off)**: opt-in continuous queue
+  delivery — a finished queued transcription inserts into its captured window
+  as soon as it completes, even while another transcription is still running.
+  An active recording (or in-progress start/stop) always blocks insertion;
+  the single serial worker keeps insert order equal to recording order. The
+  modifier-release wait above is what makes this safe: it was the missing
+  piece that made "insert while I press the hotkey" fail in the past.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.
   Cached inventories are used for initial Local/Benchmark tab rendering, then
   disk verification starts automatically after the tab has had a chance to

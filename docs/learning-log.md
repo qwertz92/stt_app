@@ -3,6 +3,55 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-09
+
+- **Root-caused the long-standing intermittent paste failures (wrong clipboard
+  content pasted; queued transcripts landing "only in history").** Two distinct
+  races, both in the clipboard paste path, explained every reported symptom:
+  1. *Held hotkey modifiers corrupt the injected Ctrl+V.* The recording hotkey
+     is `Ctrl+Alt+Space` and cancel is `Ctrl+Alt+F12`; every insert triggered
+     synchronously from the WM_HOTKEY press (stop, cancel, deferred-queue
+     flush) ran while the user still physically held Ctrl+Alt. SendInput adds
+     its own Ctrl+V *on top of* the real keyboard state, so the target app
+     received Ctrl+Alt+V — AltGr+V on a German layout — which is not a paste
+     in most apps. Nothing was inserted, no error was raised anywhere (the
+     injection itself succeeds), and the transcript existed only in history.
+     With a multi-item queue flush (~230 ms per item) the first ~2-3 items were
+     corrupted until the keys were released, matching "only 3 of 6 inserted".
+     Fix: `Win32ClipboardBackend.wait_for_modifier_release` polls
+     GetAsyncKeyState for Ctrl/Alt/Shift/Win before the clipboard is touched
+     (bounded by `PASTE_MODIFIER_RELEASE_TIMEOUT_S`); WM_PASTE mode skips it.
+     This was also why "pressing the hotkey while an insert ran" used to break
+     insertion — the historical reason immediate queue delivery was removed.
+  2. *Late clipboard read loses against the fixed 160 ms restore.* The injected
+     Ctrl+V is processed asynchronously by the target's message loop; under
+     transcription CPU load (local Whisper pegging all cores — i.e. exactly
+     when a queue exists) the target can read the clipboard after
+     `SENDINPUT_RESTORE_DELAY_S`, receiving the already-restored *previous*
+     clipboard content instead of the transcript. Fix: before starting the
+     restore delay, `wait_for_paste_target_ready` waits until the target
+     thread answers WM_NULL again (SendMessageTimeout); if it stays
+     unresponsive past `PASTE_TARGET_RESPONSIVE_TIMEOUT_S`, the restore is
+     skipped so the eventual late paste still reads the transcript. With
+     `keep_transcript_in_clipboard` enabled the restore is skipped entirely,
+     eliminating this race for that configuration.
+  Windows offers no "clipboard was read" signal (delayed rendering exists but
+  clipboard history/managers request the data immediately, defeating it), so
+  a heuristic delay remains after the responsiveness gate — accepted as
+  practically irrelevant after the gates.
+- **Deferred queue-insert flush is now coalesced per target window.** Six
+  queued results used to flush as six separate set/paste/restore cycles, each
+  its own race window (and ~230 ms of Qt-thread blocking each). Same-target
+  results are now joined (space-separated, unless a boundary already has
+  whitespace) and pasted in one cycle; different targets stay separate pastes.
+- **Continuous queue delivery is back as an opt-in setting**
+  (`immediate_background_insert`, General tab, default off): a finished queued
+  transcription inserts as soon as it completes even while another
+  transcription runs. It had been removed because inserts coinciding with a
+  hotkey press failed mysteriously — that was race 1 above, now fixed at the
+  root. An active recording still always blocks insertion, and the serial
+  worker keeps insert order equal to recording order.
+
 ## 2026-07-06
 
 - **The overlay now has a model-aware language quick selector.** It uses
