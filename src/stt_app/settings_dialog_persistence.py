@@ -53,6 +53,9 @@ class _PersistenceMixin:
         del blocker
         self._refresh_model_combo(selected=settings.model_size, cached=[])
         self.vad_checkbox.setChecked(settings.vad_enabled)
+        self.keep_microphone_warm_checkbox.setChecked(
+            bool(getattr(settings, "keep_microphone_warm", False))
+        )
         self.vad_threshold_spin.setValue(float(settings.vad_energy_threshold))
         self.start_beep_checkbox.setChecked(settings.start_beep_enabled)
         self._select_combo_data(self.start_beep_tone_combo, settings.start_beep_tone)
@@ -383,6 +386,9 @@ class _PersistenceMixin:
                 self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
             ),
             vad_enabled=self.vad_checkbox.isChecked(),
+            keep_microphone_warm=(
+                self.keep_microphone_warm_checkbox.isChecked()
+            ),
             vad_energy_threshold=float(self.vad_threshold_spin.value()),
             save_last_wav=self.save_wav_checkbox.isChecked(),
             save_all_recordings=self.save_all_recordings_checkbox.isChecked(),

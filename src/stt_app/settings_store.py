@@ -46,6 +46,7 @@ from .config import (
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
     DEFAULT_INSERT_TARGET,
+    DEFAULT_KEEP_MICROPHONE_WARM,
     VALID_INSERT_TARGETS,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
@@ -87,6 +88,7 @@ DEFAULTS = {
     "model_size": DEFAULT_MODEL_SIZE,
     "language_mode": DEFAULT_LANGUAGE_MODE,
     "vad_enabled": DEFAULT_VAD_ENABLED,
+    "keep_microphone_warm": DEFAULT_KEEP_MICROPHONE_WARM,
     "vad_energy_threshold": DEFAULT_VAD_ENERGY_THRESHOLD,
     "save_last_wav": DEFAULT_SAVE_LAST_WAV,
     "save_all_recordings": DEFAULT_SAVE_ALL_RECORDINGS,
@@ -144,6 +146,7 @@ class AppSettings:
     model_size: str = DEFAULT_MODEL_SIZE
     language_mode: str = DEFAULT_LANGUAGE_MODE
     vad_enabled: bool = DEFAULT_VAD_ENABLED
+    keep_microphone_warm: bool = DEFAULT_KEEP_MICROPHONE_WARM
     vad_energy_threshold: float = DEFAULT_VAD_ENERGY_THRESHOLD
     save_last_wav: bool = DEFAULT_SAVE_LAST_WAV
     save_all_recordings: bool = DEFAULT_SAVE_ALL_RECORDINGS
@@ -373,6 +376,12 @@ class AppSettings:
                 )
             ),
             insert_target=insert_target,
+            keep_microphone_warm=bool(
+                merged.get(
+                    "keep_microphone_warm",
+                    DEFAULT_KEEP_MICROPHONE_WARM,
+                )
+            ),
             paste_mode=paste_mode,
             keep_transcript_in_clipboard=bool(
                 merged.get(

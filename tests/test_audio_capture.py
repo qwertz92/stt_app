@@ -4,8 +4,27 @@ from io import BytesIO
 
 import numpy as np
 
-from stt_app.audio_capture import AudioCapture
+from stt_app.audio_capture import AudioCapture, WarmMicrophoneStream
 from stt_app.vad import VadDecision
+
+
+class FakeInputStream:
+    instances = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.started = False
+        self.closed = False
+        FakeInputStream.instances.append(self)
+
+    def start(self):
+        self.started = True
+
+    def stop(self):
+        self.started = False
+
+    def close(self):
+        self.closed = True
 
 
 class FakeVad:
@@ -57,6 +76,59 @@ def test_auto_stop_callback_runs_once_when_vad_requests_stop():
 
     assert event.wait(timeout=1.0)
     assert call_count["count"] == 1
+
+
+def test_capture_attaches_to_running_warm_stream(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    assert len(FakeInputStream.instances) == 1
+
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    # No second device stream is opened; audio flows via the warm dispatch.
+    assert len(FakeInputStream.instances) == 1
+    assert capture.is_recording is True
+    chunk = np.ones((160, 1), dtype=np.float32) * 0.25
+    warm._dispatch(chunk, 160, None, None)
+    wav_bytes = capture.stop()
+    assert wav_bytes
+    # The warm stream keeps running for the next recording.
+    assert warm.is_running is True
+    # After detaching, further audio is discarded instead of recorded.
+    recorded_chunks = len(capture._chunks)
+    warm._dispatch(chunk, 160, None, None)
+    assert len(capture._chunks) == recorded_chunks
+    warm.close()
+    assert FakeInputStream.instances[0].closed is True
+
+
+def test_capture_falls_back_to_cold_stream_when_warm_not_running(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    # The warm stream was never started, so the capture opens its own stream.
+    assert len(FakeInputStream.instances) == 1
+    assert FakeInputStream.instances[0].started is True
+    capture.stop()
+    assert FakeInputStream.instances[0].closed is True
+
+
+def test_warm_stream_allows_single_consumer(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started()
+
+    assert warm.attach(lambda *a: None) is True
+    assert warm.attach(lambda *a: None) is False
+    warm.close()
 
 
 def test_chunk_callback_receives_pcm16_bytes():

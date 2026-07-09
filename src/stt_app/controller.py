@@ -14,7 +14,7 @@ from typing import Callable
 from PySide6 import QtCore, QtGui
 
 from .app_paths import recordings_dir
-from .audio_capture import AudioCapture, AudioCaptureError
+from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .config import (
     AUDIO_CHANNELS,
     AUDIO_SAMPLE_RATE,
@@ -158,6 +158,7 @@ class DictationController(QtCore.QObject):
 
         self._settings: AppSettings = self._settings_store.load()
         self._audio_capture: AudioCapture | None = None
+        self._warm_mic_stream: WarmMicrophoneStream | None = None
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_future: concurrent.futures.Future | None = None
@@ -257,6 +258,12 @@ class DictationController(QtCore.QObject):
             except Exception:
                 pass
             self._audio_capture = None
+        if self._warm_mic_stream is not None:
+            try:
+                self._warm_mic_stream.close()
+            except Exception:
+                pass
+            self._warm_mic_stream = None
         if self._active_stream_transcriber is not None:
             try:
                 self._active_stream_transcriber.stop_stream()
@@ -293,6 +300,7 @@ class DictationController(QtCore.QObject):
             bool(getattr(self._settings, "overlay_always_on_top", True))
         )
         self._sync_overlay_language_options()
+        self._sync_warm_microphone_stream()
         if self._transcription_runtime_active():
             # A batch worker or an active stream still holds the cached
             # transcriber. Closing it now could break that in-flight run (e.g.
@@ -535,8 +543,11 @@ class DictationController(QtCore.QObject):
 
         # Play beep BEFORE starting capture so the microphone does not
         # pick up the beep sound (winsound.Beep is synchronous/blocking).
+        beep_started_at = time.perf_counter()
         self._play_start_beep()
+        beep_ms = round((time.perf_counter() - beep_started_at) * 1000)
 
+        capture_started_at = time.perf_counter()
         try:
             capture.start()
         except AudioCaptureError as exc:
@@ -544,6 +555,9 @@ class DictationController(QtCore.QObject):
             self._overlay.set_state("Error", str(exc))
             self._logger.exception("Audio capture failed to start")
             return
+        self._log_recording_start_timing(
+            "batch", beep_ms, capture_started_at, capture
+        )
 
         self._audio_capture = capture
         self._overlay.set_state(
@@ -582,8 +596,11 @@ class DictationController(QtCore.QObject):
 
         # Play beep BEFORE starting capture so the microphone does not
         # pick up the beep sound (winsound.Beep is synchronous/blocking).
+        beep_started_at = time.perf_counter()
         self._play_start_beep()
+        beep_ms = round((time.perf_counter() - beep_started_at) * 1000)
 
+        capture_started_at = time.perf_counter()
         try:
             capture.start()
         except AudioCaptureError as exc:
@@ -598,6 +615,9 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Audio capture failed to start")
             return
 
+        self._log_recording_start_timing(
+            "streaming", beep_ms, capture_started_at, capture
+        )
         self._streaming_recording = True
         self._active_batch_settings = None
         self._stream_chunk_error_reported = False
@@ -613,6 +633,38 @@ class DictationController(QtCore.QObject):
             "Listening",
             "Streaming active. Speak now, press hotkey to finalize.",
             compact=True,
+        )
+
+    def _log_recording_start_timing(
+        self,
+        mode: str,
+        beep_ms: int,
+        capture_started_at: float,
+        capture: AudioCapture,
+    ) -> None:
+        """Diagnose slow recording starts (audio is lost until capture runs).
+
+        On locked-down machines opening the microphone can take seconds; this
+        makes the culprit visible in the log so 'my first words are cut off'
+        reports can be verified and the keep_microphone_warm option suggested.
+        """
+        capture_ms = round((time.perf_counter() - capture_started_at) * 1000)
+        warm = bool(getattr(capture, "_warm_attached", False))
+        level = logging.WARNING if capture_ms >= 500 else logging.INFO
+        self._logger.log(
+            level,
+            "recording_start_timing mode=%s beep_ms=%d capture_start_ms=%d "
+            "warm_stream=%s%s",
+            mode,
+            beep_ms,
+            capture_ms,
+            warm,
+            (
+                " (slow microphone open; speech before this point is lost — "
+                "consider enabling keep_microphone_warm)"
+                if capture_ms >= 500 and not warm
+                else ""
+            ),
         )
 
     def _build_audio_capture(self, chunk_callback=None) -> AudioCapture:
@@ -635,7 +687,50 @@ class DictationController(QtCore.QObject):
             auto_stop_callback=self._auto_stop_from_vad,
             chunk_callback=chunk_callback,
             logger=self._logger,
+            warm_stream=self._warm_mic_stream,
         )
+
+    def _sync_warm_microphone_stream(self) -> None:
+        """Create or tear down the shared warm stream to match settings."""
+        enabled = bool(getattr(self._settings, "keep_microphone_warm", False))
+        if enabled and self._warm_mic_stream is None:
+            self._warm_mic_stream = WarmMicrophoneStream(logger=self._logger)
+            self._start_warm_microphone_stream_async()
+        elif not enabled and self._warm_mic_stream is not None:
+            stream = self._warm_mic_stream
+            self._warm_mic_stream = None
+            stream.close()
+
+    def _start_warm_microphone_stream_async(self) -> None:
+        """Open the warm stream off the UI thread; opening can take seconds
+        on locked-down machines, which is exactly what this feature hides."""
+        stream = self._warm_mic_stream
+        if stream is None:
+            return
+        threading.Thread(
+            target=stream.ensure_started,
+            name="stt_app_warm_mic",
+            daemon=True,
+        ).start()
+
+    def _restart_warm_microphone_stream_after_resume(self) -> None:
+        stream = self._warm_mic_stream
+        if stream is None:
+            return
+        if self._audio_capture is not None:
+            # A recording is running on its own cold stream or the warm one;
+            # do not yank the device from under it.
+            return
+
+        def _restart() -> None:
+            stream.close()
+            stream.ensure_started()
+
+        threading.Thread(
+            target=_restart,
+            name="stt_app_warm_mic_resume",
+            daemon=True,
+        ).start()
 
     def stop_recording(self) -> None:
         if self._recording_stop_in_progress:
@@ -891,6 +986,9 @@ class DictationController(QtCore.QObject):
         """Refresh Windows integrations and drop GPU runtimes after resume."""
         self.refresh_hotkey_registration()
         self._reset_resume_sensitive_transcriber_cache()
+        # Audio devices commonly change identity across suspend; reopen the
+        # warm stream so the next recording does not attach to a dead one.
+        self._restart_warm_microphone_stream_after_resume()
 
     def _close_cached_transcriber(self, transcriber) -> None:
         if transcriber is None or not hasattr(transcriber, "close"):

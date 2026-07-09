@@ -476,6 +476,17 @@ def test_immediate_background_insert_roundtrip(tmp_path):
     assert settings.immediate_background_insert is True
 
 
+def test_keep_microphone_warm_roundtrip_and_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    assert SettingsStore(settings_path).load().keep_microphone_warm is False
+
+    settings_path.write_text(
+        json.dumps({"keep_microphone_warm": True}),
+        encoding="utf-8",
+    )
+    assert SettingsStore(settings_path).load().keep_microphone_warm is True
+
+
 def test_insert_target_roundtrip_and_validation(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(

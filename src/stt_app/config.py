@@ -65,6 +65,11 @@ VALID_INSERT_TARGETS = (
 )
 DEFAULT_INSERT_TARGET = INSERT_TARGET_RECORDING_WINDOW
 DEFAULT_VAD_ENABLED = False
+# Keep one PortAudio input stream open so a recording starts instantly even on
+# machines where opening the microphone takes seconds (EDR/GPO-hooked audio
+# stacks). Opt-in because the microphone then stays open all the time and
+# Windows shows the microphone-in-use indicator permanently.
+DEFAULT_KEEP_MICROPHONE_WARM = False
 DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_SAVE_ALL_RECORDINGS = False
 DEFAULT_RECORDINGS_DIR = ""

@@ -372,6 +372,30 @@ class _GeneralTabMixin:
         audio_form.setVerticalSpacing(6)
         audio_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
 
+        self.keep_microphone_warm_checkbox = QtWidgets.QCheckBox(
+            "Keep microphone warm for instant recording start"
+        )
+        self.keep_microphone_warm_checkbox.setToolTip(
+            "Keeps one microphone stream open in the background so pressing "
+            "the hotkey starts capturing immediately. Useful on machines "
+            "where opening the microphone takes seconds and the first words "
+            "get cut off."
+        )
+        keep_microphone_warm_hint = QtWidgets.QLabel(
+            "The microphone stays open while the app runs, so Windows shows "
+            "the microphone-in-use indicator permanently. Audio is discarded "
+            "unless a recording is active."
+        )
+        keep_microphone_warm_hint.setWordWrap(True)
+        self._style_note_label(keep_microphone_warm_hint)
+        audio_form.addRow(
+            "",
+            self._field_with_hint(
+                self.keep_microphone_warm_checkbox,
+                keep_microphone_warm_hint,
+            ),
+        )
+
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
         audio_form.addRow("", self.vad_checkbox)
 
