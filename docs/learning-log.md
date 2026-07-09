@@ -5,6 +5,46 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-10
 
+- **Mid-recording insert + insert-target setting.** With
+  `immediate_background_insert`, a finished queued result now pastes during an
+  active *batch* recording when its captured target is already the foreground
+  window — the paste lands where the user is dictating anyway and needs no
+  focus steal. A streaming recording never allows it (live inserts + focus
+  abort), and a result targeting another window stays deferred (never steal
+  focus mid-recording); deferral is decided per job in the flush. The new
+  `insert_target` setting chooses between the recording-start window snapshot
+  (default) and the window focused when the transcript is ready; the caret
+  position inside the target is always the position at insert time because
+  Windows cannot paste at a remembered caret offset.
+- **Cut-off first words on locked-down machines = slow microphone open.** On a
+  GPO/EDR-heavy work PC, `sd.InputStream(...).start()` can take seconds and
+  everything spoken before the stream runs is silently lost; the overlay only
+  shows "Speak now" after the open finishes, so the app was honest but slow.
+  Fix: opt-in `keep_microphone_warm` keeps one shared PortAudio stream open
+  (`WarmMicrophoneStream`) and a recording merely attaches as consumer —
+  effectively instant start. Detach must compare bound methods with `==`
+  (each `self._on_audio` access creates a new object; an `is` check silently
+  failed to detach — caught by a test). `recording_start_timing` logs beep +
+  capture-start durations and warns above 500 ms.
+- **Silence gate against hallucinated words.** Whisper-family models
+  hallucinate text from pure silence. Opt-in gate: if the loudest 100 ms
+  window of a batch recording stays below a tunable RMS threshold
+  (default 0.004, deliberately below whisper level), transcription is skipped
+  and the overlay reports the measured level. Windowed peak measurement keeps
+  short whispers detectable that full-recording averaging would dilute;
+  `recording_peak_level` is logged on every batch stop for tuning.
+- **Two real overlay layout-shift bugs fixed.** (1) The transcript label's
+  wrap width came from the live scroll viewport, which changes after the
+  deferred queue resize and with scrollbar visibility — the same text
+  re-wrapped a moment after "Done" and visibly jumped. It now wraps at a
+  width derived from the target window width and pre-measures whether the
+  scrollbar will appear. (2) `_apply_window_flags` called `setWindowFlags`
+  unconditionally; that recreates the native window and blinked the overlay
+  on every hotkey reveal. It now only rebuilds when the flags actually
+  change. Also, the Local-tab model runtime note keeps a reserved three-line
+  area (neutral gray note for faster-whisper models) instead of toggling
+  visibility, so model switches no longer shift the widgets below.
+
 - **Unified model selection on the General tab ("General = choose, Local/Remote
   = manage").** The Local tab's "Model Size" row (`model_combo` plus the
   reserved-height `local_model_runtime_warning_label`) moved into the General

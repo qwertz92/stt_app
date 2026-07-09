@@ -173,10 +173,45 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **`immediate_background_insert` (default off)**: opt-in continuous queue
   delivery — a finished queued transcription inserts into its captured window
   as soon as it completes, even while another transcription is still running.
-  An active recording (or in-progress start/stop) always blocks insertion;
-  the single serial worker keeps insert order equal to recording order. The
+  An in-progress recording start/stop always blocks insertion; the single
+  serial worker keeps insert order equal to recording order. The
   modifier-release wait above is what makes this safe: it was the missing
   piece that made "insert while I press the hotkey" fail in the past.
+  During an active **batch** capture a finished result may additionally paste
+  when its target is already the foreground window (no focus steal;
+  `_can_insert_during_active_recording`); a streaming capture never allows it
+  (live inserts write at the caret and a focus change aborts the stream), and
+  a result whose target is elsewhere stays deferred so focus is never stolen
+  mid-recording. Deferral is decided per job in the flush.
+- **`insert_target` setting**: `recording_window` (default) pastes into the
+  window/control snapshotted at recording start; `current_window` pastes into
+  whatever is focused when the transcript is ready. The caret position inside
+  the target is always the position at insert time — Windows cannot paste at
+  a remembered caret offset. With `current_window`, deferred flushes coalesce
+  into a single paste since every result goes to the same target.
+- **Warm microphone stream (`keep_microphone_warm`, default off)**: one shared
+  PortAudio input stream stays open (`WarmMicrophoneStream`); a recording
+  attaches as its consumer, so capture start is instant even where opening
+  the microphone takes seconds (EDR/GPO-hooked audio stacks) and the first
+  words were cut off. The controller owns its lifecycle (settings change,
+  system resume, shutdown); a capture falls back to a cold stream when the
+  warm one is not running. `recording_start_timing` logs beep and
+  capture-start durations and warns above 500 ms.
+- **Silence gate (`silence_gate_enabled` + `silence_gate_threshold`, default
+  off/0.004)**: batch recordings whose loudest 100 ms window stays below the
+  threshold skip transcription entirely (speech models hallucinate words from
+  silence). The windowed peak (`peak_windowed_rms_from_wav`) keeps short
+  whispers detectable; every batch stop logs `recording_peak_level` for
+  threshold tuning, and gated audio stays available as the last recording.
+- **Overlay must never re-wrap or blink**: the transcript label wraps at a
+  width derived from the target window width (never the live scroll
+  viewport, which changes with deferred queue resizes and scrollbar
+  visibility) and pre-measures the scrollbar case; `_apply_window_flags`
+  calls `setWindowFlags` only when the flags actually change because it
+  recreates the native window (a visible blink on every hotkey reveal
+  otherwise). The Local/General model runtime note keeps a reserved
+  three-line area and shows a neutral gray note for faster-whisper models so
+  model switches never shift the layout.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.
   Cached inventories are used for initial Local/Benchmark tab rendering, then
   disk verification starts automatically after the tab has had a chance to
