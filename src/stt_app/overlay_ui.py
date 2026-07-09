@@ -269,12 +269,20 @@ class OverlayUI(QtWidgets.QWidget):
         )
 
     def _apply_window_flags(self, *, raise_window: bool = False) -> None:
-        was_visible = self.isVisible()
-        self.setWindowFlags(self._base_window_flags())
-        if was_visible or raise_window:
+        desired_flags = self._base_window_flags()
+        if getattr(self, "_applied_window_flags", None) != desired_flags:
+            # ``setWindowFlags`` destroys and recreates the native window,
+            # which shows as a visible blink. Reveals fire on every hotkey
+            # press, so only pay that cost when the flags actually change.
+            was_visible = self.isVisible()
+            self.setWindowFlags(desired_flags)
+            self._applied_window_flags = desired_flags
+            if was_visible or raise_window:
+                self.show()
+        elif raise_window and not self.isVisible():
             self.show()
-            if raise_window:
-                self.raise_()
+        if raise_window:
+            self.raise_()
         if sys.platform == "win32":
             self._apply_noactivate_style()
             self._apply_native_z_order()
@@ -683,13 +691,7 @@ class OverlayUI(QtWidgets.QWidget):
             80,
             target_window_width - margins.left() - margins.right() - 4,
         )
-        available_width = max(80, self._detail_scroll.viewport().width() - 2)
-        if available_width <= 82 or available_width > target_content_width:
-            available_width = target_content_width
-        self._detail_label.setFixedWidth(available_width)
-        self._detail_label.adjustSize()
 
-        content_height = self._detail_label.sizeHint().height()
         header_height = self._header_widget.sizeHint().height()
         controls_height = self._controls_widget.sizeHint().height()
         footer_height = self._footer_widget.sizeHint().height()
@@ -707,6 +709,30 @@ class OverlayUI(QtWidgets.QWidget):
                 + (spacing * 3)
             ),
         )
+
+        # Wrap the detail text at a width derived from the *target* window
+        # width, never from the live viewport: the viewport width changes
+        # with deferred queue resizes and scrollbar visibility, and
+        # re-wrapping the same text a moment later made it visibly jump.
+        wrap_width = max(80, target_content_width - 2)
+        self._detail_label.setFixedWidth(wrap_width)
+        self._detail_label.adjustSize()
+        content_height = self._detail_label.sizeHint().height()
+        shown_detail_height = (
+            OVERLAY_DETAIL_MIN_HEIGHT if self._compact_mode else max_detail_height
+        )
+        if content_height + 6 > shown_detail_height:
+            # The vertical scrollbar will appear; re-wrap once at the final
+            # (narrower) width so the layout is stable from the start.
+            scrollbar_width = (
+                self._detail_scroll.verticalScrollBar().sizeHint().width()
+            )
+            narrowed_width = max(80, wrap_width - scrollbar_width)
+            if narrowed_width != wrap_width:
+                self._detail_label.setFixedWidth(narrowed_width)
+                self._detail_label.adjustSize()
+                content_height = self._detail_label.sizeHint().height()
+
         if self._compact_mode:
             desired_detail_height = OVERLAY_DETAIL_MIN_HEIGHT
         else:

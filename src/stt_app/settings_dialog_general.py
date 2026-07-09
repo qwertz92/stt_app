@@ -862,24 +862,34 @@ class _GeneralTabMixin:
             if hasattr(self, "model_combo")
             else ""
         )
+        # The label stays visible with reserved space either way; only its
+        # text and color change, so model switches never shift the layout.
+        warning_style = "color: #b71c1c; font-size: 11px;"
+        note_style = "color: #666666; font-size: 11px;"
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
+            self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(
                 "ONNX model: Batch mode only. Auto tries WebGPU, then DirectML, "
                 "then falls back to CPU. The active device appears in the "
                 "overlay/import status."
             )
-            self.local_model_runtime_warning_label.setVisible(True)
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(
                 "Nemotron streams with a fixed 560 ms ONNX chunk. Auto tries "
                 "DirectML, then falls back to CPU. Other latency profiles are "
                 "not exposed by the published graph."
             )
-            self.local_model_runtime_warning_label.setVisible(True)
+            return
+        self.local_model_runtime_warning_label.setStyleSheet(note_style)
+        if engine == "local" and model_name:
+            self.local_model_runtime_warning_label.setText(
+                "faster-whisper model: batch and streaming supported; runs "
+                "via CTranslate2."
+            )
             return
         self.local_model_runtime_warning_label.setText(" ")
-        self.local_model_runtime_warning_label.setVisible(False)
 
     def _update_engine_indicator(self) -> None:
         """Update the always-visible engine indicator bar."""

@@ -55,12 +55,16 @@ class _LocalModelsMixin:
 
         self.model_combo = _WheelPassthroughComboBox()
         self.model_combo.currentIndexChanged.connect(self._on_model_changed)
-        self.local_model_runtime_warning_label = QtWidgets.QLabel("")
+        self.local_model_runtime_warning_label = QtWidgets.QLabel(" ")
         self.local_model_runtime_warning_label.setWordWrap(True)
         self.local_model_runtime_warning_label.setStyleSheet(
             "color: #b71c1c; font-size: 11px;"
         )
-        self.local_model_runtime_warning_label.setVisible(False)
+        # Reserve a stable three-line note area so switching between models
+        # with and without runtime notes never shifts the widgets below.
+        self.local_model_runtime_warning_label.setMinimumHeight(
+            self.fontMetrics().height() * 3 + 4
+        )
         form.addRow(
             "Model Size",
             self._field_with_hint(
