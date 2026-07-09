@@ -260,6 +260,31 @@ class _GeneralTabMixin:
             "While transcribing",
             self._field_with_hint(self.concurrent_mode_combo, concurrent_mode_hint),
         )
+
+        self.immediate_background_insert_checkbox = QtWidgets.QCheckBox(
+            "Insert queued transcripts as soon as they finish"
+        )
+        self.immediate_background_insert_checkbox.setToolTip(
+            "When enabled, a finished queued transcription is inserted into "
+            "the window that was focused when it was recorded as soon as it "
+            "completes, even while another transcription is still running.\n"
+            "When disabled, queued results are inserted only after no "
+            "transcription is running anymore."
+        )
+        immediate_insert_hint = QtWidgets.QLabel(
+            "Only affects the Insert mode above. An active recording always "
+            "blocks insertion; results are inserted in recording order either "
+            "way."
+        )
+        immediate_insert_hint.setWordWrap(True)
+        self._style_note_label(immediate_insert_hint)
+        engine_form.addRow(
+            "",
+            self._field_with_hint(
+                self.immediate_background_insert_checkbox,
+                immediate_insert_hint,
+            ),
+        )
         layout.addWidget(engine_box)
 
         # --- Text Insertion section ---

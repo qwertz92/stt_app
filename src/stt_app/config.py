@@ -43,6 +43,12 @@ VALID_CONCURRENT_TRANSCRIPTION_MODES = (
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
 )
 DEFAULT_CONCURRENT_TRANSCRIPTION_MODE = CONCURRENT_TRANSCRIPTION_MODE_INSERT
+# When True, a finished queued transcription is inserted into its captured
+# window as soon as it completes, even while another transcription is still
+# running. An active recording (or an in-progress start/stop) always blocks
+# insertion. When False, queued results are inserted only once no
+# transcription is running (the pre-existing behavior).
+DEFAULT_IMMEDIATE_BACKGROUND_INSERT = False
 DEFAULT_VAD_ENABLED = False
 DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_SAVE_ALL_RECORDINGS = False

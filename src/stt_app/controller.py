@@ -2058,7 +2058,10 @@ class DictationController(QtCore.QObject):
         already-completed results immediately — each targets its own captured
         window, and delivering the older result now keeps token order intact —
         instead of leaving them stuck (looking "deleted") behind a transcription
-        that can take a minute.
+        that can take a minute. With ``immediate_background_insert`` enabled,
+        a running transcription never defers either: a finished queued result
+        is inserted as soon as it completes. Jobs run serially on the single
+        worker, so results still arrive (and insert) in token order.
         """
         if (
             self._recording_start_in_progress
@@ -2067,6 +2070,8 @@ class DictationController(QtCore.QObject):
         ):
             return True
         if ignore_active_transcription:
+            return False
+        if bool(getattr(self._settings, "immediate_background_insert", False)):
             return False
         return self._active_request_token is not None
 

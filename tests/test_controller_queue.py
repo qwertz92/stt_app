@@ -664,6 +664,48 @@ def test_cancel_newest_queued_flushes_earlier_deferred_insert(
     _ = app
 
 
+def test_immediate_background_insert_delivers_while_transcribing(
+    monkeypatch,
+    tmp_path,
+):
+    """With immediate_background_insert on, a finished queued result inserts
+    right away even while another transcription is still running; an active
+    recording still blocks insertion."""
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, immediate_background_insert=True
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    # A finishes while recording B: the capture is a hard blocker either way.
+    controller._on_transcription_ready("msg A", request_token=token_a)
+    assert inserter.calls == []
+    assert controller._deferred_background_results
+
+    controller.stop_recording()
+    token_b = controller._active_request_token
+    # Stopping flushed A immediately even though B is now transcribing.
+    assert inserter.calls == [("msg A", 321, "auto")]
+
+    controller.start_recording()
+    controller.stop_recording()
+    token_c = controller._active_request_token
+    # B finishes while C is still transcribing: inserted immediately, not
+    # deferred behind C.
+    controller._on_transcription_ready("msg B", request_token=token_b)
+    assert inserter.calls[-1] == ("msg B", 321, "auto")
+    assert controller._deferred_background_results == []
+
+    controller._on_transcription_ready("msg C", request_token=token_c)
+    assert inserter.calls[-1] == ("msg C", 321, "auto")
+    assert [e.text for e in history.load()] == ["msg A", "msg B", "msg C"]
+    controller.shutdown()
+    _ = app
+
+
 def test_deferred_inserts_coalesce_into_one_paste_per_target(
     monkeypatch,
     tmp_path,

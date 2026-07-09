@@ -457,6 +457,25 @@ def test_streaming_full_final_transcript_roundtrip(tmp_path):
     assert settings.streaming_full_final_transcript is True
 
 
+def test_immediate_background_insert_defaults_to_false(tmp_path):
+    """Continuous queued-insert delivery is opt-in."""
+    settings = SettingsStore(tmp_path / "settings.json").load()
+
+    assert settings.immediate_background_insert is False
+
+
+def test_immediate_background_insert_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"immediate_background_insert": True}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.immediate_background_insert is True
+
+
 def test_corrupt_primary_and_backup_are_both_quarantined(tmp_path):
     settings_path = tmp_path / "settings.json"
     backup_path = tmp_path / "settings.json.bak"

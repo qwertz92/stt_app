@@ -90,6 +90,9 @@ class _PersistenceMixin:
                 )
             ),
         )
+        self.immediate_background_insert_checkbox.setChecked(
+            bool(getattr(settings, "immediate_background_insert", False))
+        )
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
         self._update_local_model_runtime_warning()
@@ -409,6 +412,9 @@ class _PersistenceMixin:
             concurrent_transcription_mode=str(
                 self.concurrent_mode_combo.currentData()
                 or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
+            ),
+            immediate_background_insert=(
+                self.immediate_background_insert_checkbox.isChecked()
             ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE

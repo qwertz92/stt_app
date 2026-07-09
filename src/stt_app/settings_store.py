@@ -44,6 +44,7 @@ from .config import (
     DEFAULT_START_BEEP_ENABLED,
     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     DEFAULT_DISPLAY_TIMEZONE,
@@ -97,6 +98,7 @@ DEFAULTS = {
     "mode": DEFAULT_MODE,
     "streaming_full_final_transcript": DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     "concurrent_transcription_mode": DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    "immediate_background_insert": DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
     "paste_mode": DEFAULT_PASTE_MODE,
     "keep_transcript_in_clipboard": DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     "allow_insecure_key_storage": DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
@@ -152,6 +154,7 @@ class AppSettings:
     mode: str = DEFAULT_MODE
     streaming_full_final_transcript: bool = DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT
     concurrent_transcription_mode: str = DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
+    immediate_background_insert: bool = DEFAULT_IMMEDIATE_BACKGROUND_INSERT
     paste_mode: str = DEFAULT_PASTE_MODE
     keep_transcript_in_clipboard: bool = DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD
     allow_insecure_key_storage: bool = DEFAULT_ALLOW_INSECURE_KEY_STORAGE
@@ -353,6 +356,12 @@ class AppSettings:
                 )
             ),
             concurrent_transcription_mode=concurrent_transcription_mode,
+            immediate_background_insert=bool(
+                merged.get(
+                    "immediate_background_insert",
+                    DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
+                )
+            ),
             paste_mode=paste_mode,
             keep_transcript_in_clipboard=bool(
                 merged.get(
