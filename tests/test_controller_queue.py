@@ -669,8 +669,7 @@ def test_immediate_background_insert_delivers_while_transcribing(
     tmp_path,
 ):
     """With immediate_background_insert on, a finished queued result inserts
-    right away even while another transcription is still running; an active
-    recording still blocks insertion."""
+    right away even while another transcription is still running."""
     controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
@@ -680,28 +679,97 @@ def test_immediate_background_insert_delivers_while_transcribing(
 
     token_a = _record_and_stop(controller)
     controller.start_recording()
-    # A finishes while recording B: the capture is a hard blocker either way.
+    controller.stop_recording()
+    token_b = controller._active_request_token
+    # A finishes while B is still transcribing: inserted immediately, not
+    # deferred behind B.
+    controller._on_transcription_ready("msg A", request_token=token_a)
+    assert inserter.calls == [("msg A", 321, "auto")]
+    assert controller._deferred_background_results == []
+
+    controller._on_transcription_ready("msg B", request_token=token_b)
+    assert inserter.calls[-1] == ("msg B", 321, "auto")
+    assert [e.text for e in history.load()] == ["msg A", "msg B"]
+    controller.shutdown()
+    _ = app
+
+
+def test_immediate_insert_during_batch_recording_into_foreground_window(
+    monkeypatch,
+    tmp_path,
+):
+    """A finished result pastes mid-recording when its target is already the
+    foreground window: the paste lands where the user is dictating anyway and
+    no focus steal happens."""
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, immediate_background_insert=True
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    assert controller._audio_capture is not None
+
+    controller._on_transcription_ready("msg A", request_token=token_a)
+
+    assert inserter.calls == [("msg A", 321, "auto")]
+    assert controller._deferred_background_results == []
+    # No focus restore mid-recording: the target was already foreground.
+    assert focus.restore_calls == []
+    controller.shutdown()
+    _ = app
+
+
+def test_immediate_insert_defers_when_foreground_differs_mid_recording(
+    monkeypatch,
+    tmp_path,
+):
+    """Mid-recording insert is skipped when it would require a focus steal."""
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, immediate_background_insert=True
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    focus.current = 555  # the user switched windows mid-recording
+
     controller._on_transcription_ready("msg A", request_token=token_a)
     assert inserter.calls == []
     assert controller._deferred_background_results
 
     controller.stop_recording()
-    token_b = controller._active_request_token
-    # Stopping flushed A immediately even though B is now transcribing.
+    # The capture is gone; the deferred result is delivered on the stop flush.
     assert inserter.calls == [("msg A", 321, "auto")]
+    controller.shutdown()
+    _ = app
 
+
+def test_immediate_insert_blocked_during_streaming_recording(
+    monkeypatch,
+    tmp_path,
+):
+    """A streaming recording never allows mid-recording background pastes."""
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, immediate_background_insert=True
+    )
+
+    token_a = _record_and_stop(controller)
+    controller._settings = replace(controller._settings, mode="streaming")
     controller.start_recording()
-    controller.stop_recording()
-    token_c = controller._active_request_token
-    # B finishes while C is still transcribing: inserted immediately, not
-    # deferred behind C.
-    controller._on_transcription_ready("msg B", request_token=token_b)
-    assert inserter.calls[-1] == ("msg B", 321, "auto")
-    assert controller._deferred_background_results == []
+    assert controller._streaming_recording is True
 
-    controller._on_transcription_ready("msg C", request_token=token_c)
-    assert inserter.calls[-1] == ("msg C", 321, "auto")
-    assert [e.text for e in history.load()] == ["msg A", "msg B", "msg C"]
+    controller._on_transcription_ready("msg A", request_token=token_a)
+
+    assert inserter.calls == []
+    assert controller._deferred_background_results
     controller.shutdown()
     _ = app
 

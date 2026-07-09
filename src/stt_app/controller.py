@@ -2028,7 +2028,7 @@ class DictationController(QtCore.QObject):
             job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and job.mode != "streaming"
         ):
-            if self._should_defer_background_insertion():
+            if self._should_defer_background_insertion(job=job):
                 job.insertion_deferred = True
                 self._deferred_background_results.append((job, text))
                 self._update_queue_overlay()
@@ -2047,33 +2047,68 @@ class DictationController(QtCore.QObject):
         self,
         *,
         ignore_active_transcription: bool = False,
+        job: _TranscriptionJob | None = None,
     ) -> bool:
         """Whether a completed background result must wait before insertion.
 
-        An active recording/capture (or an in-progress start/stop) is always a
-        hard blocker: never insert text into a window while the user is still
-        recording. An in-flight foreground transcription normally also defers
-        background inserts so the live session stays coherent, but an explicit
-        user cancel passes ``ignore_active_transcription=True`` to deliver
-        already-completed results immediately — each targets its own captured
-        window, and delivering the older result now keeps token order intact —
-        instead of leaving them stuck (looking "deleted") behind a transcription
-        that can take a minute. With ``immediate_background_insert`` enabled,
-        a running transcription never defers either: a finished queued result
-        is inserted as soon as it completes. Jobs run serially on the single
+        An in-progress recording start/stop is always a hard blocker. An
+        active capture normally is too — except with
+        ``immediate_background_insert`` when the finished job targets the
+        window that is already in the foreground: pasting there is exactly
+        what the user is dictating into and requires no focus steal (see
+        ``_can_insert_during_active_recording``). An in-flight foreground
+        transcription normally also defers background inserts so the live
+        session stays coherent, but an explicit user cancel passes
+        ``ignore_active_transcription=True`` to deliver already-completed
+        results immediately — each targets its own captured window, and
+        delivering the older result now keeps token order intact — instead of
+        leaving them stuck (looking "deleted") behind a transcription that can
+        take a minute. With ``immediate_background_insert`` enabled, a running
+        transcription never defers either: a finished queued result is
+        inserted as soon as it completes. Jobs run serially on the single
         worker, so results still arrive (and insert) in token order.
         """
         if (
             self._recording_start_in_progress
             or self._recording_stop_in_progress
-            or self._audio_capture is not None
         ):
             return True
+        if self._audio_capture is not None:
+            return not self._can_insert_during_active_recording(job)
         if ignore_active_transcription:
             return False
         if bool(getattr(self._settings, "immediate_background_insert", False)):
             return False
         return self._active_request_token is not None
+
+    def _can_insert_during_active_recording(
+        self,
+        job: _TranscriptionJob | None,
+    ) -> bool:
+        """Whether a finished queued result may paste while a capture runs.
+
+        Requires ``immediate_background_insert``. A streaming recording never
+        allows it: live partial inserts already write at the caret and a
+        focus change aborts the stream. A batch recording allows it only when
+        the job's captured target window is already the foreground window, so
+        the paste lands where the user is dictating anyway and no focus steal
+        happens mid-recording (stealing focus while the user types or dictates
+        into another window would misroute their input).
+        """
+        if job is None:
+            return False
+        if not bool(getattr(self._settings, "immediate_background_insert", False)):
+            return False
+        if self._streaming_recording:
+            return False
+        current = self._current_foreground_window()
+        if not current:
+            return False
+        job_window = None
+        if job.target_signature is not None:
+            job_window = job.target_signature[0]
+        job_window = job_window or job.target_handle
+        return job_window == current
 
     def _insert_background_transcription(
         self,
@@ -2082,7 +2117,9 @@ class DictationController(QtCore.QObject):
     ) -> bool:
         inserted = self._insert_text_at_target(
             text,
-            restore_focus=True,
+            # During an active recording the insert is only allowed when the
+            # target is already the foreground window; never touch focus then.
+            restore_focus=self._audio_capture is None,
             copy_on_error=False,
             target_handle=job.target_handle,
             target_signature=job.target_signature,
@@ -2106,14 +2143,24 @@ class DictationController(QtCore.QObject):
     ) -> None:
         if not self._deferred_background_results:
             return
-        if self._should_defer_background_insertion(
-            ignore_active_transcription=ignore_active_transcription
-        ):
-            return
-        pending = sorted(
+        # Deferral is per job: with an active capture, only results targeting
+        # the current foreground window may insert (immediate mode); the rest
+        # stay queued for the next flush.
+        pending = []
+        still_deferred = []
+        for job, text in sorted(
             self._deferred_background_results, key=lambda item: item[0].token
-        )
-        self._deferred_background_results.clear()
+        ):
+            if self._should_defer_background_insertion(
+                ignore_active_transcription=ignore_active_transcription,
+                job=job,
+            ):
+                still_deferred.append((job, text))
+            else:
+                pending.append((job, text))
+        self._deferred_background_results = still_deferred
+        if not pending:
+            return
         # Coalesce results that target the same window into one paste: each
         # separate paste is its own clipboard set/paste/restore cycle and thus
         # its own race window against the target app, so six queued results
