@@ -56,8 +56,10 @@ jobs:
           name: stt_app-windows-release
           if-no-files-found: error
           retention-days: 3
+          # The portable bundle is only uploaded zipped; adding the unpacked
+          # folder as well doubled the artifact size and burned the free
+          # Actions storage quota (GB-months) for no benefit.
           path: |
-            release/stt_app-win-x64
             release/stt_app-win-x64.zip
             release/installer/stt_app-win-x64-setup.exe
 
