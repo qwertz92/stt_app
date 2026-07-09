@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 from .app_icon import load_app_icon
 from .benchmark_environment import BenchmarkEnvironment, collect_benchmark_environment
