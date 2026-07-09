@@ -774,6 +774,32 @@ def test_immediate_insert_blocked_during_streaming_recording(
     _ = app
 
 
+def test_insert_target_current_window_pastes_at_focus_at_insert_time(
+    monkeypatch,
+    tmp_path,
+):
+    """insert_target=current_window sends the transcript to the control that
+    is focused when the result is ready, not the recording-start snapshot."""
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, insert_target="current_window"
+    )
+
+    token_a = _record_and_stop(controller)
+    # The user moves to another window before the transcript is ready.
+    focus.current = 111
+    focus.current_focus = 222
+    focus.current_caret = 333
+
+    controller._on_transcription_ready("msg A", request_token=token_a)
+
+    assert inserter.calls == [("msg A", 333, "auto")]
+    controller.shutdown()
+    _ = app
+
+
 def test_deferred_inserts_coalesce_into_one_paste_per_target(
     monkeypatch,
     tmp_path,

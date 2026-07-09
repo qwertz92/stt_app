@@ -49,6 +49,21 @@ DEFAULT_CONCURRENT_TRANSCRIPTION_MODE = CONCURRENT_TRANSCRIPTION_MODE_INSERT
 # insertion. When False, queued results are inserted only once no
 # transcription is running (the pre-existing behavior).
 DEFAULT_IMMEDIATE_BACKGROUND_INSERT = False
+# Where a finished transcript is inserted:
+#   "recording_window" -> the window/control that was focused when its
+#                         recording started (default; a queued result follows
+#                         its own recording even after the user moved on).
+#   "current_window"   -> whatever window/control is focused at the moment the
+#                         transcript is ready to insert.
+# The caret position inside the target control is always the position at
+# insert time; Windows offers no way to paste at a remembered caret offset.
+INSERT_TARGET_RECORDING_WINDOW = "recording_window"
+INSERT_TARGET_CURRENT_WINDOW = "current_window"
+VALID_INSERT_TARGETS = (
+    INSERT_TARGET_RECORDING_WINDOW,
+    INSERT_TARGET_CURRENT_WINDOW,
+)
+DEFAULT_INSERT_TARGET = INSERT_TARGET_RECORDING_WINDOW
 DEFAULT_VAD_ENABLED = False
 DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_SAVE_ALL_RECORDINGS = False

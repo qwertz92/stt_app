@@ -24,6 +24,8 @@ from .config import (
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_ENGINE,
+    DEFAULT_INSERT_TARGET,
+    INSERT_TARGET_CURRENT_WINDOW,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
     FALLBACK_HOTKEY,
@@ -1936,6 +1938,9 @@ class DictationController(QtCore.QObject):
         target_signature = (
             job.target_signature if job is not None else self._target_focus_signature
         )
+        target_handle, target_signature = self._resolve_insert_target(
+            target_handle, target_signature
+        )
 
         session_mode = self._active_session_mode
         self._focus_poll_timer.stop()
@@ -2101,6 +2106,10 @@ class DictationController(QtCore.QObject):
             return False
         if self._streaming_recording:
             return False
+        if self._insert_target_is_current_window():
+            # The paste goes to the current foreground window by definition,
+            # so it never needs a focus steal.
+            return True
         current = self._current_foreground_window()
         if not current:
             return False
@@ -2110,19 +2119,51 @@ class DictationController(QtCore.QObject):
         job_window = job_window or job.target_handle
         return job_window == current
 
+    def _insert_target_is_current_window(self) -> bool:
+        return (
+            str(getattr(self._settings, "insert_target", DEFAULT_INSERT_TARGET))
+            == INSERT_TARGET_CURRENT_WINDOW
+        )
+
+    def _resolve_insert_target(
+        self,
+        handle: int | None,
+        signature: FocusSignature | None,
+    ) -> tuple[int | None, FocusSignature | None]:
+        """Apply the insert_target setting to a job's captured target.
+
+        With ``current_window`` the transcript goes to whatever is focused at
+        insert time; the recording-start snapshot stays the fallback when the
+        current focus cannot be read.
+        """
+        if not self._insert_target_is_current_window():
+            return handle, signature
+        current_signature = self._current_focus_signature()
+        current_handle = (
+            current_signature[0]
+            if current_signature is not None
+            else self._current_foreground_window()
+        )
+        if current_signature is None and not current_handle:
+            return handle, signature
+        return current_handle or handle, current_signature or signature
+
     def _insert_background_transcription(
         self,
         job: _TranscriptionJob,
         text: str,
     ) -> bool:
+        target_handle, target_signature = self._resolve_insert_target(
+            job.target_handle, job.target_signature
+        )
         inserted = self._insert_text_at_target(
             text,
             # During an active recording the insert is only allowed when the
             # target is already the foreground window; never touch focus then.
             restore_focus=self._audio_capture is None,
             copy_on_error=False,
-            target_handle=job.target_handle,
-            target_signature=job.target_signature,
+            target_handle=target_handle,
+            target_signature=target_signature,
             show_overlay_error=False,
         )
         if not inserted:
@@ -2165,7 +2206,12 @@ class DictationController(QtCore.QObject):
         # separate paste is its own clipboard set/paste/restore cycle and thus
         # its own race window against the target app, so six queued results
         # used to mean six chances to lose one.
-        for jobs, text in self._coalesced_deferred_inserts(pending):
+        for jobs, text in self._coalesced_deferred_inserts(
+            pending,
+            # With current-window insertion every result goes to the same
+            # (current) target anyway, so one paste covers them all.
+            single_group=self._insert_target_is_current_window(),
+        ):
             for job in jobs:
                 job.insertion_deferred = False
             if len(jobs) > 1:
@@ -2189,12 +2235,18 @@ class DictationController(QtCore.QObject):
     @staticmethod
     def _coalesced_deferred_inserts(
         pending: list[tuple[_TranscriptionJob, str]],
+        *,
+        single_group: bool = False,
     ) -> list[tuple[list[_TranscriptionJob], str]]:
         """Group token-ordered deferred results by their insertion target."""
         groups: list[tuple[list[_TranscriptionJob], list[str]]] = []
         index_by_target: dict[tuple, int] = {}
         for job, text in pending:
-            key = (job.target_handle, job.target_signature)
+            key = (
+                (None, None)
+                if single_group
+                else (job.target_handle, job.target_signature)
+            )
             index = index_by_target.get(key)
             if index is None:
                 index_by_target[key] = len(groups)

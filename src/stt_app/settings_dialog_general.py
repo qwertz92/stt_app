@@ -32,6 +32,7 @@ from .config import (
     VALID_MODEL_SIZES,
     VALID_MODES,
     VALID_OVERLAY_CORNERS,
+    VALID_INSERT_TARGETS,
     VALID_PASTE_MODES,
     VALID_START_BEEP_TONES,
     language_modes_for_selection,
@@ -39,6 +40,7 @@ from .config import (
 )
 from .settings_dialog_helpers import (
     _CONCURRENT_MODE_LABELS,
+    _INSERT_TARGET_LABELS,
     _ENGINE_LABELS,
     _HISTORY_TIMEZONE_LABELS,
     _INLINE_FIELD_BUTTON_SPACING_PX,
@@ -318,6 +320,29 @@ class _GeneralTabMixin:
         paste_form.addRow(
             "Paste Mode",
             self._field_with_hint(self.paste_mode_combo, self.paste_mode_hint_label),
+        )
+
+        self.insert_target_combo = _WheelPassthroughComboBox()
+        for value in VALID_INSERT_TARGETS:
+            self.insert_target_combo.addItem(
+                _INSERT_TARGET_LABELS.get(value, value), value
+            )
+        self.insert_target_combo.setToolTip(
+            "Which window receives the finished transcript.\n"
+            "- Window focused when the recording started: a queued result "
+            "follows its own recording even after you moved on (default).\n"
+            "- Window focused when the transcript is ready: the text goes to "
+            "wherever you are working at that moment."
+        )
+        insert_target_hint = QtWidgets.QLabel(
+            "The caret position inside the target is always the position at "
+            "insert time; Windows cannot paste at a remembered caret offset."
+        )
+        insert_target_hint.setWordWrap(True)
+        self._style_note_label(insert_target_hint)
+        paste_form.addRow(
+            "Insert Into",
+            self._field_with_hint(self.insert_target_combo, insert_target_hint),
         )
 
         self.keep_clipboard_checkbox = QtWidgets.QCheckBox(

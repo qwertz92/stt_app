@@ -476,6 +476,21 @@ def test_immediate_background_insert_roundtrip(tmp_path):
     assert settings.immediate_background_insert is True
 
 
+def test_insert_target_roundtrip_and_validation(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"insert_target": "current_window"}),
+        encoding="utf-8",
+    )
+    assert SettingsStore(settings_path).load().insert_target == "current_window"
+
+    settings_path.write_text(
+        json.dumps({"insert_target": "bogus"}),
+        encoding="utf-8",
+    )
+    assert SettingsStore(settings_path).load().insert_target == "recording_window"
+
+
 def test_corrupt_primary_and_backup_are_both_quarantined(tmp_path):
     settings_path = tmp_path / "settings.json"
     backup_path = tmp_path / "settings.json.bak"

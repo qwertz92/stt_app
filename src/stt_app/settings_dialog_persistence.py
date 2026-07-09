@@ -20,6 +20,7 @@ from .config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_OVERLAY_CORNER,
+    DEFAULT_INSERT_TARGET,
     DEFAULT_PASTE_MODE,
     DEFAULT_START_BEEP_TONE,
 )
@@ -97,6 +98,10 @@ class _PersistenceMixin:
         self._update_language_availability(preferred_mode=settings.language_mode)
         self._update_local_model_runtime_warning()
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
+        self._select_combo_data(
+            self.insert_target_combo,
+            str(getattr(settings, "insert_target", DEFAULT_INSERT_TARGET)),
+        )
         self._remote_model_values.update(
             {
                 "groq": settings.groq_model,
@@ -418,6 +423,9 @@ class _PersistenceMixin:
             ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE
+            ),
+            insert_target=str(
+                self.insert_target_combo.currentData() or DEFAULT_INSERT_TARGET
             ),
             has_openai_key=has_openai_key,
             has_deepgram_key=has_deepgram_key,

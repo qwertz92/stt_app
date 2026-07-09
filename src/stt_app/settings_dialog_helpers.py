@@ -148,6 +148,12 @@ _PASTE_MODE_LABELS: dict[str, str] = {
 }
 
 
+_INSERT_TARGET_LABELS: dict[str, str] = {
+    "recording_window": "Window focused when the recording started",
+    "current_window": "Window focused when the transcript is ready",
+}
+
+
 _START_BEEP_TONE_LABELS: dict[str, str] = {
     "soft": "Soft beep",
     "high": "High beep",
