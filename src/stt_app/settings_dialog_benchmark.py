@@ -5,8 +5,9 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
+from .app_icon import load_app_icon
 from .benchmark_environment import BenchmarkEnvironment, collect_benchmark_environment
 from .benchmark_history import (
     BenchmarkHistoryEntry,
@@ -32,6 +33,8 @@ from .settings_dialog_helpers import (
 )
 from .ui_feedback import restore_vertical_scrollbar
 
+_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(980, 720)
+
 
 def _facade():
     """Return the settings_dialog facade module.
@@ -47,8 +50,88 @@ def _facade():
 
 class _BenchmarkMixin:
     def _build_benchmark_tab(self) -> None:
-        tab, content = self._create_scroll_tab()
-        layout = QtWidgets.QVBoxLayout(content)
+        """Build the slim Benchmark tab: a launcher for the benchmark window.
+
+        The full benchmark UI (model selection, run options, results, history)
+        lives in a separate resizable window built by
+        ``_build_benchmark_window`` so the tab itself never scrolls or gets
+        cramped. This tab only explains what benchmarking does, summarizes the
+        most recent run, and offers a button to open that window.
+        """
+        tab = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(tab)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(6)
+
+        intro = QtWidgets.QLabel(
+            "Benchmark installed local models against one audio file to compare "
+            "load time, average speed, and real-time factor on this machine."
+        )
+        intro.setWordWrap(True)
+        self._style_note_label(intro)
+        layout.addWidget(intro)
+
+        self.benchmark_summary_label = QtWidgets.QLabel("")
+        self.benchmark_summary_label.setWordWrap(True)
+        self._style_note_label(self.benchmark_summary_label, bold=True)
+        layout.addWidget(self.benchmark_summary_label)
+        self._refresh_benchmark_tab_summary()
+
+        self.open_benchmark_window_button = QtWidgets.QPushButton(
+            "Open Benchmark Window"
+        )
+        self.open_benchmark_window_button.clicked.connect(
+            self._open_benchmark_window
+        )
+        layout.addWidget(
+            self.open_benchmark_window_button,
+            0,
+            QtCore.Qt.AlignLeft,
+        )
+        layout.addStretch(1)
+
+        self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
+        self._build_benchmark_window()
+
+    def _refresh_benchmark_tab_summary(self) -> None:
+        """Update the slim tab's most-recent-run summary line."""
+        if not hasattr(self, "benchmark_summary_label"):
+            return
+        entries = self._benchmark_history_store.recent_entries(1)
+        if not entries:
+            self.benchmark_summary_label.setText("No benchmarks yet.")
+            return
+        entry = entries[0]
+        model_count = len(entry.options.model_names)
+        model_word = "model" if model_count == 1 else "models"
+        status = _benchmark_status_text(entry.status)
+        self.benchmark_summary_label.setText(
+            f"Last run: {entry.created_at} - {status} - "
+            f"{model_count} {model_word}"
+        )
+
+    def _build_benchmark_window(self) -> None:
+        """Build the resizable pop-out window that hosts the full benchmark UI.
+
+        Owned by the settings dialog (parent=self) so it hides/closes together
+        with it; re-clicking "Open Benchmark Window" raises the existing
+        window instead of creating a second one (see
+        ``_open_benchmark_window``).
+        """
+        window = QtWidgets.QDialog(self)
+        self.benchmark_window = window
+        window.setWindowTitle("Benchmark")
+        window.setWindowIcon(load_app_icon())
+        window.setModal(False)
+        window.setWindowFlag(QtCore.Qt.Window, True)
+        window.setWindowFlag(QtCore.Qt.WindowSystemMenuHint, True)
+        window.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
+        window.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
+        window.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
+        window.resize(_BENCHMARK_WINDOW_DEFAULT_SIZE)
+        window.setMinimumSize(640, 480)
+
+        layout = QtWidgets.QVBoxLayout(window)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
         self.benchmark_main_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -461,7 +544,16 @@ class _BenchmarkMixin:
         self.benchmark_main_splitter.setSizes([240, 330, 430])
         layout.addWidget(self.benchmark_main_splitter, 1)
 
-        self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
+    def _open_benchmark_window(self) -> None:
+        """Show the benchmark window, raising the existing one if already open."""
+        window = self.benchmark_window
+        self._refresh_benchmark_history_list()
+        if window.isMinimized():
+            window.showNormal()
+        else:
+            window.show()
+        window.raise_()
+        window.activateWindow()
 
     def _refresh_benchmark_model_list(
         self,
@@ -998,6 +1090,7 @@ class _BenchmarkMixin:
         if selected_row >= 0:
             self.benchmark_history_list.setCurrentRow(selected_row)
         self._update_benchmark_history_actions()
+        self._refresh_benchmark_tab_summary()
 
     def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
         if not hasattr(self, "benchmark_history_list"):

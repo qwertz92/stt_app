@@ -73,7 +73,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
 | `settings_dialog_general.py` | General tab: engine/mode/model/language selection mixin |
 | `settings_dialog_local.py` | Local tab: local-model inventory, scan, download queue, delete mixin |
-| `settings_dialog_benchmark.py` | Benchmark tab: run, results, and history mixin |
+| `settings_dialog_benchmark.py` | Benchmark tab (slim launcher) plus the pop-out Benchmark window: run, results, and history mixin |
 | `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
@@ -190,9 +190,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the selected state. General-tab form sections share a measured label column so
   fields align across group boxes. Pressing Save with no effective setting or
   API-key changes must not emit `settings_changed`; otherwise the controller can
-  reload or preload local models unnecessarily. Benchmark Results tables use
-  per-pixel scroll modes, and the Benchmark tab keeps History, Results, and Run
-  controls in a vertical splitter with Run Options collapsed by default.
+  reload or preload local models unnecessarily. The Benchmark tab is a slim,
+  non-scrolling launcher page (intro label, most-recent-run summary, an
+  "Open Benchmark Window" button); the full benchmark UI (model selection, run
+  options, results, history) lives in a separate resizable, non-modal
+  `benchmark_window` (~980x720, owned by the settings dialog so it hides when
+  the dialog closes) built by `_build_benchmark_window`. Re-clicking the button
+  raises/activates the existing window rather than creating a second one via
+  `_open_benchmark_window`, which also refreshes the history list. Benchmark
+  Results tables use per-pixel scroll modes, and the window keeps History,
+  Results, and Run controls in a vertical splitter with Run Options collapsed
+  by default. All benchmark widget attribute names are unchanged from before
+  the split; only their container moved from the tab to the window.
 - **Remote connection test persistence**: last-known provider connection test
   results live in `provider_connection_tests.json`, not `settings.json`, because
   they are diagnostic UI state rather than configuration. The Remote tab should

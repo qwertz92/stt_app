@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-10
+
+- **Redesigned the Benchmark tab into a slim launcher + pop-out window.** The
+  tab was overloaded (model selection, run options, run controls, status,
+  results tables, and history all stacked in one scrolling tab), leaving each
+  pane tiny. The tab is now a short, non-scrolling page: an explanation label,
+  a most-recent-run summary line ("Last run: ... - N models" or "No benchmarks
+  yet"), and an "Open Benchmark Window" button. The full benchmark UI (the
+  existing History/Results/Run-controls vertical splitter, unchanged) moved
+  into a resizable, non-modal `benchmark_window` (~980x720, owned by the
+  settings dialog) built by `_build_benchmark_window`; `_open_benchmark_window`
+  raises/activates the existing window instead of creating a second one and
+  refreshes the history list on open. The window hides together with the
+  settings dialog via a new `closeEvent` override. All `_BenchmarkMixin`
+  widget attribute names, the `_facade()` patch seam, and the splitter/list
+  `AdjustToContents`/per-pixel-scroll conventions were kept unchanged — only
+  the container moved from the tab to the window.
+
 ## 2026-07-09
 
 - **Root-caused the long-standing intermittent paste failures (wrong clipboard

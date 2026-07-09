@@ -826,6 +826,14 @@ class SettingsDialog(
             )
         self._schedule_settings_tab_prewarm()
 
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        # The benchmark window is an independent top-level window (Qt.Window
+        # flag), so Qt does not hide it automatically when this dialog closes.
+        window = getattr(self, "benchmark_window", None)
+        if window is not None:
+            window.hide()
+        super().closeEvent(event)
+
     def _on_settings_tab_changed(self, _index: int) -> None:
         started_at = time.perf_counter()
         tab_name = self.tabs.tabText(_index) if 0 <= _index < self.tabs.count() else "-"

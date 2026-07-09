@@ -1787,8 +1787,8 @@ def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
-    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
+    dialog._open_benchmark_window()
     app.processEvents()
 
     splitter = dialog.benchmark_main_splitter
@@ -1864,8 +1864,8 @@ def test_benchmark_history_double_click_loads_entry(tmp_path):
     )
     dialog._benchmark_history_store = benchmark_store
     dialog._refresh_benchmark_history_list()
-    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
+    dialog._open_benchmark_window()
     app.processEvents()
 
     item = dialog.benchmark_history_list.item(0)
@@ -2709,6 +2709,11 @@ def test_settings_tabs_use_scroll_areas_and_scroll_buttons():
 
     for index in range(dialog.tabs.count()):
         widget = dialog.tabs.widget(index)
+        if index == dialog._benchmark_tab_index:
+            # The Benchmark tab is a slim, non-scrolling launcher page; the
+            # full scrollable benchmark UI lives in the pop-out window.
+            assert not isinstance(widget, QtWidgets.QScrollArea)
+            continue
         assert isinstance(widget, QtWidgets.QScrollArea)
         assert widget.widgetResizable() is True
         assert (
