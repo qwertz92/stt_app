@@ -47,6 +47,10 @@ from .config import (
     DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
     DEFAULT_INSERT_TARGET,
     DEFAULT_KEEP_MICROPHONE_WARM,
+    DEFAULT_SILENCE_GATE_ENABLED,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
+    SILENCE_GATE_THRESHOLD_MAX,
+    SILENCE_GATE_THRESHOLD_MIN,
     VALID_INSERT_TARGETS,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
@@ -89,6 +93,8 @@ DEFAULTS = {
     "language_mode": DEFAULT_LANGUAGE_MODE,
     "vad_enabled": DEFAULT_VAD_ENABLED,
     "keep_microphone_warm": DEFAULT_KEEP_MICROPHONE_WARM,
+    "silence_gate_enabled": DEFAULT_SILENCE_GATE_ENABLED,
+    "silence_gate_threshold": DEFAULT_SILENCE_GATE_THRESHOLD,
     "vad_energy_threshold": DEFAULT_VAD_ENERGY_THRESHOLD,
     "save_last_wav": DEFAULT_SAVE_LAST_WAV,
     "save_all_recordings": DEFAULT_SAVE_ALL_RECORDINGS,
@@ -147,6 +153,8 @@ class AppSettings:
     language_mode: str = DEFAULT_LANGUAGE_MODE
     vad_enabled: bool = DEFAULT_VAD_ENABLED
     keep_microphone_warm: bool = DEFAULT_KEEP_MICROPHONE_WARM
+    silence_gate_enabled: bool = DEFAULT_SILENCE_GATE_ENABLED
+    silence_gate_threshold: float = DEFAULT_SILENCE_GATE_THRESHOLD
     vad_energy_threshold: float = DEFAULT_VAD_ENERGY_THRESHOLD
     save_last_wav: bool = DEFAULT_SAVE_LAST_WAV
     save_all_recordings: bool = DEFAULT_SAVE_ALL_RECORDINGS
@@ -208,6 +216,20 @@ class AppSettings:
         paste_mode = str(merged.get("paste_mode", DEFAULT_PASTE_MODE)).lower()
         if paste_mode not in VALID_PASTE_MODES:
             paste_mode = DEFAULT_PASTE_MODE
+
+        try:
+            silence_gate_threshold = float(
+                merged.get(
+                    "silence_gate_threshold",
+                    DEFAULT_SILENCE_GATE_THRESHOLD,
+                )
+            )
+        except (TypeError, ValueError):
+            silence_gate_threshold = DEFAULT_SILENCE_GATE_THRESHOLD
+        silence_gate_threshold = min(
+            SILENCE_GATE_THRESHOLD_MAX,
+            max(SILENCE_GATE_THRESHOLD_MIN, silence_gate_threshold),
+        )
 
         insert_target = str(
             merged.get("insert_target", DEFAULT_INSERT_TARGET)
@@ -382,6 +404,13 @@ class AppSettings:
                     DEFAULT_KEEP_MICROPHONE_WARM,
                 )
             ),
+            silence_gate_enabled=bool(
+                merged.get(
+                    "silence_gate_enabled",
+                    DEFAULT_SILENCE_GATE_ENABLED,
+                )
+            ),
+            silence_gate_threshold=silence_gate_threshold,
             paste_mode=paste_mode,
             keep_transcript_in_clipboard=bool(
                 merged.get(

@@ -774,6 +774,62 @@ def test_immediate_insert_blocked_during_streaming_recording(
     _ = app
 
 
+def test_silence_gate_skips_transcription_of_silent_recording(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, silence_gate_enabled=True
+    )
+
+    controller.start_recording()
+    controller.stop_recording()
+
+    # FakeCapture returns unparsable audio -> measured level 0.0 -> gated.
+    assert controller._active_request_token is None
+    assert controller._executor.calls == []
+    assert overlay.states[-1][0] == "Done"
+    assert "No speech detected" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_silence_gate_passes_recording_with_speech(monkeypatch, tmp_path):
+    import io
+    import wave
+
+    import numpy as np
+
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(
+        controller._settings, silence_gate_enabled=True
+    )
+
+    audio = np.zeros(16000, dtype=np.float32)
+    audio[:1600] = 0.05  # whisper-level burst above the default threshold
+    pcm = (audio * 32767.0).astype(np.int16)
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(pcm.tobytes())
+
+    controller.start_recording()
+    FakeCapture.instances[-1]._wav_bytes = buffer.getvalue()
+    controller.stop_recording()
+
+    assert controller._active_request_token is not None
+    assert len(controller._executor.calls) == 1
+    controller.shutdown()
+    _ = app
+
+
 def test_insert_target_current_window_pastes_at_focus_at_insert_time(
     monkeypatch,
     tmp_path,

@@ -13,6 +13,9 @@ from .config import (
     DEFAULT_MODE,
     DEFAULT_MODEL_SIZE,
     DEFAULT_RECORDINGS_MAX_COUNT,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
+    SILENCE_GATE_THRESHOLD_MAX,
+    SILENCE_GATE_THRESHOLD_MIN,
     DEFAULT_VAD_ENERGY_THRESHOLD,
     LANGUAGE_MODE_LABELS,
     LOCAL_BATCH_ONLY_MODELS,
@@ -411,6 +414,41 @@ class _GeneralTabMixin:
             "Lower value = more sensitive for quiet speech/whispering."
         )
         audio_form.addRow("VAD Threshold", self.vad_threshold_spin)
+
+        self.silence_gate_checkbox = QtWidgets.QCheckBox(
+            "Skip transcription when the recording is silent"
+        )
+        self.silence_gate_checkbox.setToolTip(
+            "Speech models can hallucinate words from pure silence. When "
+            "enabled, a recording whose loudest 100 ms window stays below "
+            "the threshold is not transcribed at all; it is kept as the last "
+            "recording for a manual retry."
+        )
+        silence_gate_hint = QtWidgets.QLabel(
+            "Keep the threshold low so whispering still passes. The measured "
+            "peak level of every recording is written to the log "
+            "(recording_peak_level) to make tuning easy."
+        )
+        silence_gate_hint.setWordWrap(True)
+        self._style_note_label(silence_gate_hint)
+        audio_form.addRow(
+            "",
+            self._field_with_hint(self.silence_gate_checkbox, silence_gate_hint),
+        )
+
+        self.silence_gate_threshold_spin = _WheelPassthroughDoubleSpinBox()
+        self.silence_gate_threshold_spin.setDecimals(4)
+        self.silence_gate_threshold_spin.setSingleStep(0.0005)
+        self.silence_gate_threshold_spin.setRange(
+            SILENCE_GATE_THRESHOLD_MIN,
+            SILENCE_GATE_THRESHOLD_MAX,
+        )
+        self.silence_gate_threshold_spin.setValue(DEFAULT_SILENCE_GATE_THRESHOLD)
+        self.silence_gate_threshold_spin.setToolTip(
+            "Loudest-window RMS level below which a recording counts as "
+            "silent. Lower value = more sensitive (whispers pass more easily)."
+        )
+        audio_form.addRow("Silence Gate", self.silence_gate_threshold_spin)
 
         self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
         audio_form.addRow("", self.start_beep_checkbox)

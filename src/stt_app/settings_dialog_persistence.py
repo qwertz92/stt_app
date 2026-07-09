@@ -21,6 +21,7 @@ from .config import (
     DEFAULT_MODE,
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_INSERT_TARGET,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_PASTE_MODE,
     DEFAULT_START_BEEP_TONE,
 )
@@ -57,6 +58,18 @@ class _PersistenceMixin:
             bool(getattr(settings, "keep_microphone_warm", False))
         )
         self.vad_threshold_spin.setValue(float(settings.vad_energy_threshold))
+        self.silence_gate_checkbox.setChecked(
+            bool(getattr(settings, "silence_gate_enabled", False))
+        )
+        self.silence_gate_threshold_spin.setValue(
+            float(
+                getattr(
+                    settings,
+                    "silence_gate_threshold",
+                    DEFAULT_SILENCE_GATE_THRESHOLD,
+                )
+            )
+        )
         self.start_beep_checkbox.setChecked(settings.start_beep_enabled)
         self._select_combo_data(self.start_beep_tone_combo, settings.start_beep_tone)
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
@@ -388,6 +401,10 @@ class _PersistenceMixin:
             vad_enabled=self.vad_checkbox.isChecked(),
             keep_microphone_warm=(
                 self.keep_microphone_warm_checkbox.isChecked()
+            ),
+            silence_gate_enabled=self.silence_gate_checkbox.isChecked(),
+            silence_gate_threshold=float(
+                self.silence_gate_threshold_spin.value()
             ),
             vad_energy_threshold=float(self.vad_threshold_spin.value()),
             save_last_wav=self.save_wav_checkbox.isChecked(),

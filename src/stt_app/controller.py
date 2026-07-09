@@ -25,6 +25,7 @@ from .config import (
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_ENGINE,
     DEFAULT_INSERT_TARGET,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     INSERT_TARGET_CURRENT_WINDOW,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
@@ -74,7 +75,7 @@ from .text_inserter import TextInserter, TextInsertionError
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .transcriber import create_transcriber
 from .transcriber.base import TranscriptionCanceled, TranscriptionError
-from .vad import EnergyVad
+from .vad import EnergyVad, peak_windowed_rms_from_wav
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
 
@@ -773,6 +774,10 @@ class DictationController(QtCore.QObject):
                 self._active_batch_settings = None
                 return
 
+            if self._silence_gate_blocks(wav_bytes):
+                self._active_batch_settings = None
+                return
+
             settings_snapshot = self._active_batch_settings or replace(self._settings)
             self._active_batch_settings = None
             self._overlay.set_state("Processing", "Transcribing audio...")
@@ -787,6 +792,54 @@ class DictationController(QtCore.QObject):
                     "Applying queued hotkey start after recording stop completed."
                 )
                 QtCore.QTimer.singleShot(0, self.start_recording)
+
+    def _silence_gate_blocks(self, wav_bytes: bytes) -> bool:
+        """Skip transcription when the recording never rises above silence.
+
+        Speech models hallucinate words from pure silence, so an opt-in gate
+        checks the loudest 100 ms window of the recording against a
+        user-tunable threshold (kept low so whispering still passes). The
+        measured level is always logged so the threshold is easy to tune, and
+        a gated recording stays available as the last recording for a manual
+        retry via History -> Use last recording.
+        """
+        enabled = bool(getattr(self._settings, "silence_gate_enabled", False))
+        try:
+            peak_level = peak_windowed_rms_from_wav(wav_bytes)
+        except Exception:
+            self._logger.exception("Failed to measure recording peak level")
+            return False
+        threshold = float(
+            getattr(
+                self._settings,
+                "silence_gate_threshold",
+                DEFAULT_SILENCE_GATE_THRESHOLD,
+            )
+        )
+        self._logger.info(
+            "recording_peak_level level=%.4f silence_gate_enabled=%s "
+            "threshold=%.4f",
+            peak_level,
+            enabled,
+            threshold,
+        )
+        if not enabled or peak_level >= threshold:
+            return False
+        try:
+            self._last_recording_store.mark_canceled(
+                "Recording skipped by the silence gate."
+            )
+        except Exception:
+            self._logger.exception("Failed to mark silence-gated recording")
+        self._overlay.set_state(
+            "Done",
+            (
+                f"No speech detected (peak level {peak_level:.4f} below the "
+                f"silence gate threshold {threshold:.4f}). The recording is "
+                "kept as the last recording."
+            ),
+        )
+        return True
 
     def _auto_stop_from_vad(self) -> None:
         QtCore.QTimer.singleShot(0, self.stop_recording)

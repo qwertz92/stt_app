@@ -957,6 +957,17 @@ VAD_ENERGY_THRESHOLD_MAX = 0.1
 VAD_MIN_SPEECH_MS = 120
 VAD_MAX_SILENCE_MS = 700
 
+# Silence gate: skip transcription entirely when the recording's loudest
+# 100 ms window stays below the threshold, so speech models cannot
+# hallucinate words from silence. Opt-in and deliberately tuned well below
+# the VAD default so whispering into a good microphone still passes; the
+# measured peak level is logged on every batch stop to make tuning easy.
+DEFAULT_SILENCE_GATE_ENABLED = False
+DEFAULT_SILENCE_GATE_THRESHOLD = 0.004
+SILENCE_GATE_THRESHOLD_MIN = 0.0005
+SILENCE_GATE_THRESHOLD_MAX = 0.1
+SILENCE_GATE_WINDOW_MS = 100
+
 OVERLAY_WIDTH = 396
 OVERLAY_HEIGHT = 98
 OVERLAY_MAX_HEIGHT = OVERLAY_HEIGHT * 4
