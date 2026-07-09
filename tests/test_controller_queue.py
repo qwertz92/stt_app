@@ -369,7 +369,12 @@ def test_background_insert_failure_does_not_overwrite_clipboard(
     clipboard = FakeClipboard()
     monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
 
-    def insert_text_with_options(text, target_hwnd=None, paste_mode="auto"):
+    def insert_text_with_options(
+        text,
+        target_hwnd=None,
+        paste_mode="auto",
+        restore_clipboard=True,
+    ):
         inserter.calls.append((text, target_hwnd, paste_mode))
         if text == "transcript A":
             raise TextInsertionError("failed insert")

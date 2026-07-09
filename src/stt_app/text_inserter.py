@@ -8,6 +8,10 @@ from dataclasses import dataclass
 
 from .config import (
     CLIPBOARD_SETTLE_S,
+    PASTE_MODIFIER_POLL_INTERVAL_S,
+    PASTE_MODIFIER_RELEASE_TIMEOUT_S,
+    PASTE_TARGET_RESPONSIVE_PROBE_MS,
+    PASTE_TARGET_RESPONSIVE_TIMEOUT_S,
     SENDINPUT_RESTORE_DELAY_S,
     SENDINPUT_RETRY_ATTEMPTS,
     SENDINPUT_RETRY_SLEEP_S,
@@ -87,6 +91,57 @@ class Win32ClipboardBackend:
     def send_ctrl_v(self) -> None:
         _send_ctrl_v_input()
 
+    def wait_for_modifier_release(
+        self,
+        timeout_s: float = PASTE_MODIFIER_RELEASE_TIMEOUT_S,
+        poll_interval_s: float = PASTE_MODIFIER_POLL_INTERVAL_S,
+    ) -> bool:
+        """Wait until no physical modifier key is held down.
+
+        Inserts are often triggered straight from a WM_HOTKEY press, so the
+        user's Ctrl/Alt/Shift/Win keys can still be down when Ctrl+V is
+        injected; the target would then receive e.g. Ctrl+Alt+V (AltGr+V on
+        German layouts), which is not a paste. Returns False when a modifier
+        is still held after the timeout; the caller proceeds anyway.
+        """
+        get_state = getattr(self._user32, "GetAsyncKeyState", None)
+        if get_state is None:
+            return True
+        get_state.argtypes = (ctypes.c_int,)
+        get_state.restype = ctypes.c_short
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if not any(
+                int(get_state(vk)) & 0x8000 for vk in _MODIFIER_VIRTUAL_KEYS
+            ):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(max(0.001, poll_interval_s))
+
+    def wait_for_paste_target_ready(
+        self,
+        target_hwnd: int | None = None,
+        timeout_s: float = PASTE_TARGET_RESPONSIVE_TIMEOUT_S,
+        probe_timeout_ms: int = PASTE_TARGET_RESPONSIVE_PROBE_MS,
+    ) -> bool:
+        """Wait until the paste target's thread answers WM_NULL again.
+
+        A busy target has not processed the injected Ctrl+V yet; restoring the
+        previous clipboard on a fixed delay would make its late clipboard read
+        paste the old content instead of the transcript. Returns False when
+        the target stays unresponsive past the budget.
+        """
+        hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
+        if hwnd == 0:
+            return True
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        while True:
+            if self._send_message_timeout(hwnd, WM_NULL, int(probe_timeout_ms)):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+
     def send_paste(self, target_hwnd: int | None = None) -> str:
         return self.send_paste_with_mode("auto", target_hwnd=target_hwnd)
 
@@ -145,7 +200,9 @@ class Win32ClipboardBackend:
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
         if hwnd == 0:
             return False
+        return self._send_message_timeout(hwnd, WM_PASTE, WM_PASTE_TIMEOUT_MS)
 
+    def _send_message_timeout(self, hwnd: int, message: int, timeout_ms: int) -> bool:
         send_message_timeout = self._user32.SendMessageTimeoutW
         send_message_timeout.argtypes = (
             ctypes.wintypes.HWND,
@@ -162,11 +219,11 @@ class Win32ClipboardBackend:
         ctypes.set_last_error(0)
         ok = send_message_timeout(
             hwnd,
-            WM_PASTE,
+            message,
             0,
             0,
             SMTO_ABORTIFHUNG,
-            WM_PASTE_TIMEOUT_MS,
+            timeout_ms,
             ctypes.byref(result),
         )
         return bool(ok)
@@ -216,12 +273,17 @@ class TextInserter:
         *,
         target_hwnd: int | None,
         paste_mode: str,
+        restore_clipboard: bool = True,
     ) -> bool:
         with self._insert_lock:
-            requested_mode = paste_mode
+            requested_mode = (paste_mode or "auto").strip().lower()
+            if requested_mode != "wm_paste":
+                # A held hotkey modifier would turn the injected Ctrl+V into
+                # e.g. Ctrl+Alt+V for the target; wait for release first.
+                self._wait_for_modifier_release()
             previous_state = self._backend.capture_clipboard_state()
             clipboard_marker: int | None = None
-            restore_previous_state = True
+            restore_previous_state = restore_clipboard
             actual_mode = "send_input"
             paste_error: Exception | None = None
             restore_error: Exception | None = None
@@ -249,8 +311,16 @@ class TextInserter:
                     actual_mode = "send_input"
 
                 if actual_mode == "send_input":
-                    # Give target app enough time to read clipboard before restore.
-                    self._sleep_fn(self._sendinput_restore_delay_s)
+                    if self._wait_for_paste_target_ready(target_hwnd):
+                        # Give target app enough time to read clipboard
+                        # before restore.
+                        self._sleep_fn(self._sendinput_restore_delay_s)
+                    else:
+                        # The target never became responsive, so its Ctrl+V is
+                        # still queued. Keep the transcript on the clipboard;
+                        # restoring now would make the late paste insert the
+                        # previous clipboard content instead.
+                        restore_previous_state = False
 
                 if self._clipboard_changed_after_set(clipboard_marker, text):
                     restore_previous_state = False
@@ -295,6 +365,25 @@ class TextInserter:
                     f"Text pasted but clipboard restore failed: {restore_error}"
                 ) from restore_error
 
+            return True
+
+    def _wait_for_modifier_release(self) -> None:
+        waiter = getattr(self._backend, "wait_for_modifier_release", None)
+        if not callable(waiter):
+            return
+        try:
+            waiter()
+        except Exception:
+            # Never let modifier probing break the paste itself.
+            pass
+
+    def _wait_for_paste_target_ready(self, target_hwnd: int | None) -> bool:
+        checker = getattr(self._backend, "wait_for_paste_target_ready", None)
+        if not callable(checker):
+            return True
+        try:
+            return bool(checker(target_hwnd))
+        except Exception:
             return True
 
     def _clipboard_sequence_number(self) -> int | None:
@@ -344,6 +433,7 @@ class TextInserter:
         text: str,
         target_hwnd: int | None = None,
         paste_mode: str = "auto",
+        restore_clipboard: bool = True,
     ) -> bool:
         if not text or not text.strip():
             return False
@@ -351,16 +441,24 @@ class TextInserter:
             text,
             target_hwnd=target_hwnd,
             paste_mode=paste_mode,
+            restore_clipboard=restore_clipboard,
         )
 
 INPUT_KEYBOARD = 1
 KEYEVENTF_KEYUP = 0x0002
+VK_SHIFT = 0x10
 VK_CONTROL = 0x11
+VK_MENU = 0x12
+VK_LWIN = 0x5B
+VK_RWIN = 0x5C
 VK_V = 0x56
+# Physical modifiers that corrupt an injected Ctrl+V when still held down.
+_MODIFIER_VIRTUAL_KEYS = (VK_CONTROL, VK_MENU, VK_SHIFT, VK_LWIN, VK_RWIN)
 WIN_WORD = ctypes.c_uint16
 WIN_DWORD = ctypes.c_uint32
 WIN_LONG = ctypes.c_int32
 ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
+WM_NULL = 0x0000
 WM_PASTE = 0x0302
 SMTO_ABORTIFHUNG = 0x0002
 

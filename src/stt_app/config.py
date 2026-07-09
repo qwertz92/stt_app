@@ -982,3 +982,17 @@ SENDINPUT_RETRY_SLEEP_S = 0.02
 CLIPBOARD_SETTLE_S = 0.02
 SENDINPUT_RESTORE_DELAY_S = 0.16
 WM_PASTE_TIMEOUT_MS = 250
+# Inserts are often triggered straight from a WM_HOTKEY press, so the user's
+# physical Ctrl/Alt/Shift/Win keys can still be down when Ctrl+V is injected.
+# The target would then see e.g. Ctrl+Alt+V (AltGr+V) instead of a paste, so
+# the inserter waits for all physical modifiers to be released first.
+PASTE_MODIFIER_RELEASE_TIMEOUT_S = 1.5
+PASTE_MODIFIER_POLL_INTERVAL_S = 0.01
+# Before restoring the previous clipboard after a SendInput paste, wait until
+# the target window's thread answers WM_NULL again: a busy target has not
+# processed the injected Ctrl+V yet, and restoring early would make its late
+# clipboard read paste the old content instead of the transcript. If the
+# target stays unresponsive past this budget, the restore is skipped so the
+# eventual paste still reads the transcript.
+PASTE_TARGET_RESPONSIVE_TIMEOUT_S = 2.0
+PASTE_TARGET_RESPONSIVE_PROBE_MS = 200

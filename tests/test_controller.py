@@ -174,7 +174,13 @@ def test_controller_preserves_clipboard_on_contention_error(monkeypatch):
     overlay = FakeOverlay()
 
     class ContendedInserter:
-        def insert_text_with_options(self, text, target_hwnd=None, paste_mode="auto"):
+        def insert_text_with_options(
+            self,
+            text,
+            target_hwnd=None,
+            paste_mode="auto",
+            restore_clipboard=True,
+        ):
             raise TextInsertionError(
                 "Clipboard changed during paste.",
                 allow_clipboard_fallback=False,

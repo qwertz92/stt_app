@@ -108,6 +108,94 @@ class SequencedPasteBackend(PasteBackend):
         self.sequence += 1
 
 
+class GatedPasteBackend(PasteBackend):
+    """Backend faking the modifier-release and target-responsiveness gates."""
+
+    def __init__(self, paste_mode="send_input", target_ready=True):
+        super().__init__(paste_mode=paste_mode)
+        self.target_ready = target_ready
+
+    def wait_for_modifier_release(self):
+        self.calls.append("wait_modifiers")
+        return True
+
+    def wait_for_paste_target_ready(self, target_hwnd=None):
+        self.calls.append(f"wait_target:{target_hwnd}")
+        return self.target_ready
+
+
+def test_text_inserter_waits_for_modifier_release_before_touching_clipboard():
+    backend = GatedPasteBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    assert inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="send_input",
+    )
+
+    assert backend.calls == [
+        "wait_modifiers",
+        "capture",
+        "set:hello",
+        "paste:123",
+        "wait_target:123",
+        "restore",
+    ]
+
+
+def test_text_inserter_skips_gates_for_wm_paste_mode():
+    """WM_PASTE is message-based: held modifiers cannot corrupt it and the
+    synchronous SendMessageTimeout already proves the target processed it."""
+    backend = GatedPasteBackend(paste_mode="wm_paste")
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    assert inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="wm_paste",
+    )
+
+    assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
+
+
+def test_text_inserter_skips_restore_when_target_stays_unresponsive():
+    """An unresponsive target has not read the clipboard yet; restoring would
+    make its late Ctrl+V paste the previous clipboard content."""
+    backend = GatedPasteBackend(target_ready=False)
+    sleep_calls = []
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=sleep_calls.append,
+        clipboard_settle_s=0.05,
+        sendinput_restore_delay_s=0.2,
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="send_input",
+    )
+
+    assert "restore" not in backend.calls
+    assert sleep_calls == [0.05]
+
+
+def test_text_inserter_leaves_transcript_when_restore_disabled():
+    backend = GatedPasteBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    assert inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="send_input",
+        restore_clipboard=False,
+    )
+
+    assert "restore" not in backend.calls
+    assert backend.calls[-1] == "wait_target:123"
+
+
 def test_text_inserter_saves_and_restores_clipboard():
     backend = LegacyBackend()
     inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)

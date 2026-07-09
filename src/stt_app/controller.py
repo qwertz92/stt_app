@@ -2438,6 +2438,13 @@ class DictationController(QtCore.QObject):
                 text,
                 target_hwnd=insert_hwnd,
                 paste_mode=self._settings.paste_mode,
+                # When the transcript should stay in the clipboard anyway,
+                # skip the restore: a paste the target processes late then
+                # still reads the transcript instead of the restored previous
+                # clipboard content.
+                restore_clipboard=not bool(
+                    getattr(self._settings, "keep_transcript_in_clipboard", False)
+                ),
             )
         except TextInsertionError as exc:
             allow_clipboard_fallback = bool(

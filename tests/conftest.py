@@ -99,6 +99,7 @@ class FakeTextInserter:
     def __init__(self, should_fail=False):
         self.should_fail = should_fail
         self.calls = []
+        self.restore_flags = []
 
     def insert_text(self, text, target_hwnd=None):
         self.calls.append((text, target_hwnd))
@@ -106,8 +107,15 @@ class FakeTextInserter:
             raise TextInsertionError("failed insert")
         return True
 
-    def insert_text_with_options(self, text, target_hwnd=None, paste_mode="auto"):
+    def insert_text_with_options(
+        self,
+        text,
+        target_hwnd=None,
+        paste_mode="auto",
+        restore_clipboard=True,
+    ):
         self.calls.append((text, target_hwnd, paste_mode))
+        self.restore_flags.append(restore_clipboard)
         if self.should_fail:
             raise TextInsertionError("failed insert")
         return True
