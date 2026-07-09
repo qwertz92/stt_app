@@ -161,6 +161,32 @@ class _GeneralTabMixin:
         self._style_note_label(engine_hint)
         engine_form.addRow("Engine", self._field_with_hint(self.engine_combo, engine_hint))
 
+        # --- Unified model selector: one "Model" row, one page per engine kind ---
+        # The stack naturally sizes to its largest page (Qt keeps every page's
+        # sizeHint contributing to the stack's sizeHint regardless of which
+        # page is current), so switching pages never shifts the rows below.
+        self.model_selector_stack = QtWidgets.QStackedWidget()
+
+        local_model_widget = QtWidgets.QWidget()
+        local_model_layout = QtWidgets.QVBoxLayout(local_model_widget)
+        local_model_layout.setContentsMargins(0, 0, 0, 0)
+        local_model_layout.setSpacing(2)
+        self.model_combo = _WheelPassthroughComboBox()
+        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
+        self.local_model_runtime_warning_label = QtWidgets.QLabel(" ")
+        self.local_model_runtime_warning_label.setWordWrap(True)
+        self.local_model_runtime_warning_label.setStyleSheet(
+            "color: #b71c1c; font-size: 11px;"
+        )
+        # Reserve a stable three-line note area so switching between models
+        # with and without runtime notes never shifts the widgets below.
+        self.local_model_runtime_warning_label.setMinimumHeight(
+            self.fontMetrics().height() * 3 + 4
+        )
+        local_model_layout.addWidget(self.model_combo)
+        local_model_layout.addWidget(self.local_model_runtime_warning_label)
+        self.model_selector_stack.addWidget(local_model_widget)
+
         remote_model_widget = QtWidgets.QWidget()
         remote_model_layout = QtWidgets.QVBoxLayout(remote_model_widget)
         remote_model_layout.setContentsMargins(0, 0, 0, 0)
@@ -174,13 +200,17 @@ class _GeneralTabMixin:
         self.remote_model_note_label = QtWidgets.QLabel("")
         self.remote_model_note_label.setWordWrap(True)
         self._style_note_label(self.remote_model_note_label)
+        # Reserve roughly the same note height as the local page's three-line
+        # runtime note so switching engines does not shift the rows below.
         self.remote_model_note_label.setMinimumHeight(
-            self.fontMetrics().height() + 8
+            self.fontMetrics().height() * 3 + 4
         )
         remote_model_layout.addWidget(self.remote_model_provider_label)
         remote_model_layout.addWidget(self.remote_model_combo)
         remote_model_layout.addWidget(self.remote_model_note_label)
-        engine_form.addRow("Remote Model", remote_model_widget)
+        self.model_selector_stack.addWidget(remote_model_widget)
+
+        engine_form.addRow("Model", self.model_selector_stack)
 
         self.language_combo = _WheelPassthroughComboBox()
         for value in VALID_LANGUAGE_MODES:
@@ -676,10 +706,19 @@ class _GeneralTabMixin:
             return replace(settings, funasr_model=selected_model)
         return settings
 
+    def _update_model_selector_page(self) -> None:
+        """Switch the unified Model row to the local or remote page."""
+        if not hasattr(self, "model_selector_stack"):
+            return
+        provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        page = 0 if provider == DEFAULT_ENGINE else 1
+        self.model_selector_stack.setCurrentIndex(page)
+
     def _update_remote_model_selector(self) -> None:
         if not hasattr(self, "remote_model_combo"):
             return
 
+        self._update_model_selector_page()
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
         choices = _REMOTE_MODEL_CHOICES.get(provider, ())
 
@@ -691,9 +730,8 @@ class _GeneralTabMixin:
             self.remote_model_combo.addItem("Not applicable for local engine", "")
             self.remote_model_combo.setEnabled(False)
             self.remote_model_note_label.setText(
-                "Local transcription uses the model selected on the Local tab. "
-                "faster-whisper and Nemotron support streaming; Cohere and Granite "
-                "ONNX/WebGPU models are batch-only."
+                "faster-whisper and Nemotron support streaming; Cohere and "
+                "Granite ONNX/WebGPU models are batch-only."
             )
             self.remote_model_combo.blockSignals(False)
             return

@@ -24,7 +24,6 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _emit_background_signal,
-    _WheelPassthroughComboBox,
 )
 from .ui_feedback import restore_vertical_scrollbar
 
@@ -48,30 +47,17 @@ class _LocalModelsMixin:
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
+        active_model_note = QtWidgets.QLabel(
+            "The active local model is selected on the General tab (Engine && Mode)."
+        )
+        active_model_note.setWordWrap(True)
+        self._style_note_label(active_model_note)
+        layout.addWidget(active_model_note)
+
         form = QtWidgets.QFormLayout()
         form.setContentsMargins(0, 0, 0, 0)
         form.setHorizontalSpacing(10)
         form.setVerticalSpacing(6)
-
-        self.model_combo = _WheelPassthroughComboBox()
-        self.model_combo.currentIndexChanged.connect(self._on_model_changed)
-        self.local_model_runtime_warning_label = QtWidgets.QLabel(" ")
-        self.local_model_runtime_warning_label.setWordWrap(True)
-        self.local_model_runtime_warning_label.setStyleSheet(
-            "color: #b71c1c; font-size: 11px;"
-        )
-        # Reserve a stable three-line note area so switching between models
-        # with and without runtime notes never shifts the widgets below.
-        self.local_model_runtime_warning_label.setMinimumHeight(
-            self.fontMetrics().height() * 3 + 4
-        )
-        form.addRow(
-            "Model Size",
-            self._field_with_hint(
-                self.model_combo,
-                self.local_model_runtime_warning_label,
-            ),
-        )
 
         self.model_dir_edit = QtWidgets.QLineEdit()
         self.model_dir_edit.setPlaceholderText(

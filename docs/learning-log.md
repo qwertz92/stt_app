@@ -5,6 +5,24 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-10
 
+- **Unified model selection on the General tab ("General = choose, Local/Remote
+  = manage").** The Local tab's "Model Size" row (`model_combo` plus the
+  reserved-height `local_model_runtime_warning_label`) moved into the General
+  tab's "Engine && Mode" group box, physically joining the existing remote
+  model widget under one "Model" form row. Both pages live in a
+  `model_selector_stack` `QStackedWidget` (page 0 = local, page 1 = remote);
+  `_update_remote_model_selector` now also calls `_update_model_selector_page`
+  to flip the page whenever the engine changes. `QStackedWidget.sizeHint()`
+  already returns the max size across all of its pages regardless of the
+  current index, so the row never resizes on an engine switch without any
+  extra padding tricks — the remote note label's minimum height was simply
+  raised to match the local page's three-line reserved height. Widget
+  attribute names (`model_combo`, `local_model_runtime_warning_label`,
+  `remote_model_combo`, etc.) were kept unchanged; only their parent/placement
+  moved. The Local tab is now local-model management only (Model Dir,
+  inventory, download queue, delete) with a short gray note pointing users to
+  the General tab for the active model.
+
 - **Redesigned the Benchmark tab into a slim launcher + pop-out window.** The
   tab was overloaded (model selection, run options, run controls, status,
   results tables, and history all stacked in one scrolling tab), leaving each

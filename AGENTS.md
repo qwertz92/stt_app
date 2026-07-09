@@ -71,8 +71,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
-| `settings_dialog_general.py` | General tab: engine/mode/model/language selection mixin |
-| `settings_dialog_local.py` | Local tab: local-model inventory, scan, download queue, delete mixin |
+| `settings_dialog_general.py` | General tab: engine/model/language/mode selection mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
+| `settings_dialog_local.py` | Local tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the General tab) |
 | `settings_dialog_benchmark.py` | Benchmark tab (slim launcher) plus the pop-out Benchmark window: run, results, and history mixin |
 | `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete mixin |
@@ -122,6 +122,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   local/benchmark mixins so the patch target still resolves after the split. The
   accessor imports the facade lazily (not at module scope) so a mixin can be
   imported directly without an import cycle.
+- **Model selection is unified on the General tab; Local tab is management-only**:
+  "what do I use" (engine, model, language, mode) all live in the General tab's
+  "Engine && Mode" group box. A single "Model" form row hosts a
+  `model_selector_stack` `QStackedWidget` with page 0 (`model_combo` plus
+  `local_model_runtime_warning_label`) for the local engine and page 1
+  (`remote_model_provider_label`/`remote_model_combo`/`remote_model_note_label`)
+  for remote engines; `_update_remote_model_selector` flips the page via
+  `_update_model_selector_page` whenever the engine changes.
+  `QStackedWidget.sizeHint()` already reflects the largest page regardless of
+  the current index, so switching pages never shifts the rows below. The Local
+  tab keeps Model Dir, cached-model inventory, scan/refresh, download queue,
+  and delete only, with a short gray note pointing to the General tab for the
+  active model.
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
 - **SendInput restore delay (160ms)**: Empirical value. Some apps
