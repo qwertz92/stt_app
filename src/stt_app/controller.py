@@ -76,6 +76,19 @@ from .vad import EnergyVad
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
 
+def _join_transcripts(texts: list[str]) -> str:
+    """Join transcripts for one paste, separating them by a single space
+    unless a boundary already carries whitespace."""
+    joined = ""
+    for text in texts:
+        if not text:
+            continue
+        if joined and not joined[-1].isspace() and not text[0].isspace():
+            joined += " "
+        joined += text
+    return joined
+
+
 @dataclass(slots=True)
 class _TranscriptionJob:
     """A submitted transcription tracked for the queue and per-job insertion.
@@ -2092,19 +2105,55 @@ class DictationController(QtCore.QObject):
             ignore_active_transcription=ignore_active_transcription
         ):
             return
-        pending = list(self._deferred_background_results)
+        pending = sorted(
+            self._deferred_background_results, key=lambda item: item[0].token
+        )
         self._deferred_background_results.clear()
-        for job, text in sorted(pending, key=lambda item: item[0].token):
-            job.insertion_deferred = False
+        # Coalesce results that target the same window into one paste: each
+        # separate paste is its own clipboard set/paste/restore cycle and thus
+        # its own race window against the target app, so six queued results
+        # used to mean six chances to lose one.
+        for jobs, text in self._coalesced_deferred_inserts(pending):
+            for job in jobs:
+                job.insertion_deferred = False
+            if len(jobs) > 1:
+                self._logger.info(
+                    "Coalescing %d deferred transcription inserts into one "
+                    "paste. tokens=%s",
+                    len(jobs),
+                    [job.token for job in jobs],
+                )
             try:
-                self._insert_background_transcription(job, text)
+                self._insert_background_transcription(jobs[0], text)
             except Exception:
                 self._logger.exception(
                     "Failed to insert deferred background transcription; "
-                    "saved to history only. token=%s",
-                    job.token,
+                    "saved to history only. tokens=%s",
+                    [job.token for job in jobs],
                 )
-            self._finish_transcription_job(job.token)
+            for job in jobs:
+                self._finish_transcription_job(job.token)
+
+    @staticmethod
+    def _coalesced_deferred_inserts(
+        pending: list[tuple[_TranscriptionJob, str]],
+    ) -> list[tuple[list[_TranscriptionJob], str]]:
+        """Group token-ordered deferred results by their insertion target."""
+        groups: list[tuple[list[_TranscriptionJob], list[str]]] = []
+        index_by_target: dict[tuple, int] = {}
+        for job, text in pending:
+            key = (job.target_handle, job.target_signature)
+            index = index_by_target.get(key)
+            if index is None:
+                index_by_target[key] = len(groups)
+                groups.append(([job], [text]))
+            else:
+                groups[index][0].append(job)
+                groups[index][1].append(text)
+        return [
+            (jobs, _join_transcripts(texts))
+            for jobs, texts in groups
+        ]
 
     @QtCore.Slot(int)
     def _on_transcription_canceled_result(self, request_token: int) -> None:

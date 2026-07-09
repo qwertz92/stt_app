@@ -664,6 +664,82 @@ def test_cancel_newest_queued_flushes_earlier_deferred_insert(
     _ = app
 
 
+def test_deferred_inserts_coalesce_into_one_paste_per_target(
+    monkeypatch,
+    tmp_path,
+):
+    """Queued results for the same window flush as a single paste.
+
+    Each separate paste is its own clipboard set/paste/restore cycle and thus
+    its own race window against the target app; flushing six queued results as
+    six pastes meant six chances to lose one. Same-target results are joined
+    (space-separated) and inserted in one cycle instead.
+    """
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A.", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+    controller.start_recording()
+    controller._on_transcription_ready("transcript B.", request_token=token_b)
+    controller.stop_recording()
+    token_c = controller._active_request_token
+
+    assert len(controller._deferred_background_results) == 2
+    assert inserter.calls == []
+
+    controller._on_transcription_ready("transcript C.", request_token=token_c)
+
+    assert inserter.calls == [
+        ("transcript A. transcript B.", 321, "auto"),
+        ("transcript C.", 321, "auto"),
+    ]
+    assert [e.text for e in history.load()] == [
+        "transcript A.",
+        "transcript B.",
+        "transcript C.",
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_deferred_inserts_flush_per_target_window(monkeypatch, tmp_path):
+    """Queued results for different windows stay separate pastes."""
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    focus.captured = 111
+    focus.captured_focus = 222
+    focus.captured_caret = 333
+    controller.start_recording()
+    controller._on_transcription_ready("msg A", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+    focus.captured = 444
+    focus.captured_focus = 555
+    focus.captured_caret = 666
+    controller.start_recording()
+    controller._on_transcription_ready("msg B", request_token=token_b)
+    controller.stop_recording()
+    token_c = controller._active_request_token
+
+    controller._on_transcription_ready("msg C", request_token=token_c)
+
+    assert inserter.calls == [
+        ("msg A", 321, "auto"),
+        ("msg B", 333, "auto"),
+        ("msg C", 666, "auto"),
+    ]
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_during_pending_stream_finalize_unblocks_recording(
     monkeypatch,
     tmp_path,
