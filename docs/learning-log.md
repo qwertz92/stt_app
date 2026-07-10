@@ -5,6 +5,47 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-10
 
+- **Benchmark layout inverted after user feedback (design lesson).** The
+  slim-launcher tab shipped earlier today had the usage backwards: viewing
+  results/history is the frequent action, running a benchmark is rare. The tab
+  now hosts history + results directly (with a live status label next to a
+  "Run Benchmark..." button), and the pop-out window contains only the run
+  side; the model-list actions were compacted into one row of small buttons.
+  Lesson: derive UI structure from action frequency, not from "which parts are
+  heavy".
+- **Immediate insert folded into the "While transcribing" combo and the
+  mid-recording rule loosened.** The separate checkbox plus "Queue &" wording
+  confused more than it explained — the queue always exists; the options only
+  differ in what happens to the older transcription and when results insert.
+  The combo now offers finish-insert-when-idle / finish-insert-immediately /
+  finish-history-only / cancel (UI value `insert_immediate` maps back to the
+  unchanged settings keys). Immediate delivery also pastes during an active
+  batch recording again, restoring focus to the job's target — the original
+  queue behavior. The user correctly pushed back on the foreground-window
+  restriction added a day earlier: the historical "insert near a hotkey press
+  fails" bug was the held-modifier Ctrl+V corruption (now fixed at the root),
+  not the mid-recording insert itself. Streaming captures still block.
+- **Streaming abort no longer loses the partial transcript.** A focus-change
+  or cancel abort dropped everything already transcribed from UI and history
+  (only the text pasted so far survived in the target window). The abort now
+  saves the live transcript to history, keeps it for the overlay Copy action,
+  and shows it in the abort message.
+- **Custom vocabulary biasing added across providers.**
+  `custom_vocabulary` (General tab) is parsed once
+  (`config.parse_custom_vocabulary`) and wired per provider: faster-whisper
+  `initial_prompt` (batch + rolling-window streaming), OpenAI/Groq `prompt`,
+  AssemblyAI batch `word_boost` (the installed streaming v3 SDK exposes no
+  biasing parameter), Deepgram repeated `keyterm` (nova-3) / `keywords`
+  (nova-2) query params (batch + streaming, `doseq=True`). ElevenLabs, Azure,
+  Fun-ASR, Nemotron, and Cohere/Granite ONNX expose no biasing input.
+- **Multi-select lists switched to ExtendedSelection** (Shift ranges, Ctrl
+  toggles) for Local and Benchmark model lists, matching the History lists
+  and the file explorer.
+- **Stacked Model row spacing fixed.** The shorter stack page absorbed the
+  extra height into its word-wrapped note label, which centers text
+  vertically — producing equal empty bands above and below the note. Notes
+  are now top-aligned with a trailing stretch and a two-line reserve.
+
 - **Mid-recording insert + insert-target setting.** With
   `immediate_background_insert`, a finished queued result now pastes during an
   active *batch* recording when its captured target is already the foreground

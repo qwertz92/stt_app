@@ -73,7 +73,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
 | `settings_dialog_general.py` | General tab: engine/model/language/mode selection mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
 | `settings_dialog_local.py` | Local tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the General tab) |
-| `settings_dialog_benchmark.py` | Benchmark tab (slim launcher) plus the pop-out Benchmark window: run, results, and history mixin |
+| `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
 | `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
 | `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
@@ -170,19 +170,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   pastes each group as one space-joined text. Each separate paste is its own
   clipboard set/paste/restore race window, so N queued results used to mean N
   chances to lose one. Do not flush deferred results one paste per result.
-- **`immediate_background_insert` (default off)**: opt-in continuous queue
-  delivery — a finished queued transcription inserts into its captured window
-  as soon as it completes, even while another transcription is still running.
-  An in-progress recording start/stop always blocks insertion; the single
-  serial worker keeps insert order equal to recording order. The
-  modifier-release wait above is what makes this safe: it was the missing
-  piece that made "insert while I press the hotkey" fail in the past.
-  During an active **batch** capture a finished result may additionally paste
-  when its target is already the foreground window (no focus steal;
-  `_can_insert_during_active_recording`); a streaming capture never allows it
-  (live inserts write at the caret and a focus change aborts the stream), and
-  a result whose target is elsewhere stays deferred so focus is never stolen
-  mid-recording. Deferral is decided per job in the flush.
+- **`immediate_background_insert` (default off)**: continuous queue delivery —
+  a finished queued transcription inserts into its captured window as soon as
+  it completes, even while another transcription or an active **batch**
+  recording is running (focus is restored to the job's target window; the
+  original queue behavior). The modifier-release wait above is what makes this
+  safe: the historical "insert near a hotkey press fails" bug was the
+  held-modifier Ctrl+V corruption. A streaming capture never allows
+  mid-recording pastes (live inserts write at the caret and a focus change
+  aborts the stream); an in-progress recording start/stop always blocks.
+  Deferral is decided per job in the flush
+  (`_can_insert_during_active_recording`). In the UI this is folded into the
+  "While transcribing" combo as a fourth choice (`insert_immediate` UI value in
+  `_CONCURRENT_MODE_UI_CHOICES`); the stored settings stay
+  `concurrent_transcription_mode` + `immediate_background_insert`.
 - **`insert_target` setting**: `recording_window` (default) pastes into the
   window/control snapshotted at recording start; `current_window` pastes into
   whatever is focused when the transcript is ready. The caret position inside
@@ -238,18 +239,36 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the selected state. General-tab form sections share a measured label column so
   fields align across group boxes. Pressing Save with no effective setting or
   API-key changes must not emit `settings_changed`; otherwise the controller can
-  reload or preload local models unnecessarily. The Benchmark tab is a slim,
-  non-scrolling launcher page (intro label, most-recent-run summary, an
-  "Open Benchmark Window" button); the full benchmark UI (model selection, run
-  options, results, history) lives in a separate resizable, non-modal
-  `benchmark_window` (~980x720, owned by the settings dialog so it hides when
-  the dialog closes) built by `_build_benchmark_window`. Re-clicking the button
-  raises/activates the existing window rather than creating a second one via
-  `_open_benchmark_window`, which also refreshes the history list. Benchmark
-  Results tables use per-pixel scroll modes, and the window keeps History,
-  Results, and Run controls in a vertical splitter with Run Options collapsed
-  by default. All benchmark widget attribute names are unchanged from before
-  the split; only their container moved from the tab to the window.
+  reload or preload local models unnecessarily. The Benchmark tab hosts the
+  *viewing* side directly (viewing results/history is frequent, running a
+  benchmark is rare): a compact header row ("Run Benchmark..." button plus a
+  fixed-height live status label) above the History/Results vertical splitter.
+  The *run* side (audio sample picker, installed-model list with one compact
+  row of small Select all/Deselect all/Refresh buttons, collapsible Run
+  Options, Run/Cancel controls) lives only in the resizable, non-modal
+  `benchmark_window` ("Run Benchmark", ~640x560, owned by the settings dialog
+  so it hides when the dialog closes). Re-clicking the button raises/activates
+  the existing window rather than creating a second one via
+  `_open_benchmark_window`, which also refreshes the model list. Status is set
+  through the single `_set_benchmark_status`, which feeds both the tab label
+  and the window's own status line. Benchmark Results tables use per-pixel
+  scroll modes. All benchmark widget attribute names are unchanged; only
+  containers moved.
+- **Streaming abort keeps the partial transcript**: `_abort_streaming_session`
+  saves the best-known live transcript to history, keeps it as the last
+  transcript for the overlay Copy action, shows it in the abort message, and
+  reveals the overlay. An aborted stream must never lose already-transcribed
+  text from UI/history.
+- **Custom vocabulary** (`custom_vocabulary`, General tab): user terms parsed
+  by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
+  case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
+  `initial_prompt` (batch + rolling-window streaming), OpenAI/Groq `prompt`,
+  AssemblyAI batch `word_boost` (streaming v3 has no biasing parameter),
+  Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) query params with
+  `doseq` encoding. ElevenLabs, Azure, Fun-ASR, Nemotron, and Cohere/Granite
+  ONNX expose no biasing input and stay unwired.
+- **Multi-select lists use ExtendedSelection**: Shift selects ranges, Ctrl
+  toggles, matching the file explorer. Do not reintroduce `MultiSelection`.
 - **Remote connection test persistence**: last-known provider connection test
   results live in `provider_connection_tests.json`, not `settings.json`, because
   they are diagnostic UI state rather than configuration. The Remote tab should
