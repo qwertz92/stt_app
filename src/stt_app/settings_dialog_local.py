@@ -146,8 +146,10 @@ class _LocalModelsMixin:
         local_models_layout.addWidget(download_hint)
 
         self.local_models_list = QtWidgets.QListWidget()
+        # Explorer-style selection (Shift for ranges, Ctrl for toggles), like
+        # every other multi-select list in the app.
         self.local_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.MultiSelection
+            QtWidgets.QAbstractItemView.ExtendedSelection
         )
         self._configure_compact_list_widget(
             self.local_models_list,

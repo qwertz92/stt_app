@@ -222,11 +222,10 @@ class _BenchmarkMixin:
         )
         models_layout = QtWidgets.QVBoxLayout(models_box)
         self.benchmark_models_list = QtWidgets.QListWidget()
-        # Match the Local tab's model list (MultiSelection): click or click-drag
-        # toggles items. Bulk changes are handled by the Select/Deselect buttons
-        # below.
+        # Explorer-style selection (Shift for ranges, Ctrl for toggles), like
+        # every other multi-select list in the app.
         self.benchmark_models_list.setSelectionMode(
-            QtWidgets.QAbstractItemView.MultiSelection
+            QtWidgets.QAbstractItemView.ExtendedSelection
         )
         self._configure_compact_list_widget(
             self.benchmark_models_list,
