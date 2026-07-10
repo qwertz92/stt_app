@@ -28,7 +28,6 @@ from .config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     VAD_ENERGY_THRESHOLD_MAX,
     VAD_ENERGY_THRESHOLD_MIN,
-    VALID_CONCURRENT_TRANSCRIPTION_MODES,
     VALID_DISPLAY_TIMEZONES,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
@@ -42,7 +41,7 @@ from .config import (
     supports_streaming,
 )
 from .settings_dialog_helpers import (
-    _CONCURRENT_MODE_LABELS,
+    _CONCURRENT_MODE_UI_CHOICES,
     _INSERT_TARGET_LABELS,
     _ENGINE_LABELS,
     _HISTORY_TIMEZONE_LABELS,
@@ -277,58 +276,29 @@ class _GeneralTabMixin:
         )
 
         self.concurrent_mode_combo = _WheelPassthroughComboBox()
-        for value in VALID_CONCURRENT_TRANSCRIPTION_MODES:
-            self.concurrent_mode_combo.addItem(
-                _CONCURRENT_MODE_LABELS.get(value, value), value
-            )
+        for value, label in _CONCURRENT_MODE_UI_CHOICES:
+            self.concurrent_mode_combo.addItem(label, value)
         self.concurrent_mode_combo.setToolTip(
-            "What happens to a transcription that is still running when you start "
-            "a new recording. A finished transcription is never discarded.\n"
-            "- Insert: keep it running, insert its result into the window that "
-            "was focused when it was recorded, and save it to history.\n"
-            "- History only: keep it running, save its result to history without "
-            "inserting it.\n"
-            "- Cancel: request a real stop (local compute is aborted; a remote "
-            "upload that has not started yet never starts). If it still finishes, "
-            "it is saved to history."
+            "What happens to a transcription that is still running when you "
+            "start a new recording, and when finished results are inserted. "
+            "A finished transcription is never discarded.\n"
+            "- Insert when idle: results are inserted once no transcription "
+            "is running anymore.\n"
+            "- Insert immediately: each result is inserted the moment it is "
+            "ready, into the window captured for its recording.\n"
+            "- History only: results are saved to history without inserting.\n"
+            "- Cancel: stop the older transcription (a result that still "
+            "finishes is kept in history)."
         )
         concurrent_mode_hint = QtWidgets.QLabel(
-            "Local and remote engines share one transcription worker, so jobs run "
-            "one at a time. Use the overlay queue (with per-item cancel) to stop a "
-            "specific transcription; canceling a local transcription stops its "
-            "compute between segments, a not-yet-started one never starts, and a "
-            "result that still completes is kept in history."
+            "Transcriptions run one at a time and results keep their "
+            "recording order. Use the overlay queue to cancel a specific one."
         )
         concurrent_mode_hint.setWordWrap(True)
         self._style_note_label(concurrent_mode_hint)
         engine_form.addRow(
             "While transcribing",
             self._field_with_hint(self.concurrent_mode_combo, concurrent_mode_hint),
-        )
-
-        self.immediate_background_insert_checkbox = QtWidgets.QCheckBox(
-            "Insert queued transcripts as soon as they finish"
-        )
-        self.immediate_background_insert_checkbox.setToolTip(
-            "When enabled, a finished queued transcription is inserted into "
-            "the window that was focused when it was recorded as soon as it "
-            "completes, even while another transcription is still running.\n"
-            "When disabled, queued results are inserted only after no "
-            "transcription is running anymore."
-        )
-        immediate_insert_hint = QtWidgets.QLabel(
-            "Only affects the Insert mode above. An active recording always "
-            "blocks insertion; results are inserted in recording order either "
-            "way."
-        )
-        immediate_insert_hint.setWordWrap(True)
-        self._style_note_label(immediate_insert_hint)
-        engine_form.addRow(
-            "",
-            self._field_with_hint(
-                self.immediate_background_insert_checkbox,
-                immediate_insert_hint,
-            ),
         )
         layout.addWidget(engine_box)
 

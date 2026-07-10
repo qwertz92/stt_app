@@ -6,6 +6,7 @@ from dataclasses import replace
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .config import (
+    CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_AZURE_ENDPOINT,
     DEFAULT_AZURE_SPEECH_MODEL,
@@ -27,6 +28,7 @@ from .config import (
 )
 from .hotkey import parse_hotkey
 from .settings_dialog_helpers import (
+    _CONCURRENT_MODE_IMMEDIATE_UI_VALUE,
     _REMOTE_API_KEY_PROVIDERS,
     _app_hotkey_to_qt_hotkey_text,
     _hotkeys_conflict,
@@ -97,19 +99,18 @@ class _PersistenceMixin:
         self.streaming_full_final_check.setChecked(
             bool(getattr(settings, "streaming_full_final_transcript", False))
         )
-        self._select_combo_data(
-            self.concurrent_mode_combo,
-            str(
-                getattr(
-                    settings,
-                    "concurrent_transcription_mode",
-                    DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
-                )
-            ),
+        concurrent_mode = str(
+            getattr(
+                settings,
+                "concurrent_transcription_mode",
+                DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+            )
         )
-        self.immediate_background_insert_checkbox.setChecked(
-            bool(getattr(settings, "immediate_background_insert", False))
-        )
+        if concurrent_mode == CONCURRENT_TRANSCRIPTION_MODE_INSERT and bool(
+            getattr(settings, "immediate_background_insert", False)
+        ):
+            concurrent_mode = _CONCURRENT_MODE_IMMEDIATE_UI_VALUE
+        self._select_combo_data(self.concurrent_mode_combo, concurrent_mode)
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
         self._update_local_model_runtime_warning()
@@ -363,6 +364,10 @@ class _PersistenceMixin:
         latest_overlay_opacity = int(
             self._settings_store.load().overlay_opacity_percent
         )
+        selected_concurrent_mode = str(
+            self.concurrent_mode_combo.currentData()
+            or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
+        )
         if key_states is None:
             has_openai_key = self._loaded_settings.has_openai_key
             has_deepgram_key = self._loaded_settings.has_deepgram_key
@@ -437,12 +442,13 @@ class _PersistenceMixin:
             streaming_full_final_transcript=(
                 self.streaming_full_final_check.isChecked()
             ),
-            concurrent_transcription_mode=str(
-                self.concurrent_mode_combo.currentData()
-                or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
+            concurrent_transcription_mode=(
+                CONCURRENT_TRANSCRIPTION_MODE_INSERT
+                if selected_concurrent_mode == _CONCURRENT_MODE_IMMEDIATE_UI_VALUE
+                else selected_concurrent_mode
             ),
             immediate_background_insert=(
-                self.immediate_background_insert_checkbox.isChecked()
+                selected_concurrent_mode == _CONCURRENT_MODE_IMMEDIATE_UI_VALUE
             ),
             paste_mode=str(
                 self.paste_mode_combo.currentData() or DEFAULT_PASTE_MODE

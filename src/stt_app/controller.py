@@ -2245,30 +2245,18 @@ class DictationController(QtCore.QObject):
 
         Requires ``immediate_background_insert``. A streaming recording never
         allows it: live partial inserts already write at the caret and a
-        focus change aborts the stream. A batch recording allows it only when
-        the job's captured target window is already the foreground window, so
-        the paste lands where the user is dictating anyway and no focus steal
-        happens mid-recording (stealing focus while the user types or dictates
-        into another window would misroute their input).
+        focus change aborts the stream. A batch recording allows it — the
+        microphone does not care about a paste, the new recording's own
+        target was already snapshotted at its start, and focus is restored to
+        the finished job's window like in any other delivery. The historical
+        failures around inserting near a hotkey press were the held-modifier
+        Ctrl+V corruption, which the inserter's modifier-release wait fixed.
         """
         if job is None:
             return False
         if not bool(getattr(self._settings, "immediate_background_insert", False)):
             return False
-        if self._streaming_recording:
-            return False
-        if self._insert_target_is_current_window():
-            # The paste goes to the current foreground window by definition,
-            # so it never needs a focus steal.
-            return True
-        current = self._current_foreground_window()
-        if not current:
-            return False
-        job_window = None
-        if job.target_signature is not None:
-            job_window = job.target_signature[0]
-        job_window = job_window or job.target_handle
-        return job_window == current
+        return not self._streaming_recording
 
     def _insert_target_is_current_window(self) -> bool:
         return (
@@ -2309,9 +2297,7 @@ class DictationController(QtCore.QObject):
         )
         inserted = self._insert_text_at_target(
             text,
-            # During an active recording the insert is only allowed when the
-            # target is already the foreground window; never touch focus then.
-            restore_focus=self._audio_capture is None,
+            restore_focus=True,
             copy_on_error=False,
             target_handle=target_handle,
             target_signature=target_signature,

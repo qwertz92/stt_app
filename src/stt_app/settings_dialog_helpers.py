@@ -134,11 +134,16 @@ _MODE_LABELS: dict[str, str] = {
 }
 
 
-_CONCURRENT_MODE_LABELS: dict[str, str] = {
-    "insert": "Queue & insert into its window",
-    "history": "Queue & save to history only",
-    "cancel": "Cancel the running transcription",
-}
+# UI choices for the "While transcribing" combo. The first element is the
+# stored value: "insert"/"history"/"cancel" map to concurrent_transcription_mode
+# directly; "insert_immediate" is Insert mode with immediate_background_insert.
+_CONCURRENT_MODE_UI_CHOICES: tuple[tuple[str, str], ...] = (
+    ("insert", "Finish it; insert results when nothing is running"),
+    ("insert_immediate", "Finish it; insert each result as soon as it is ready"),
+    ("history", "Finish it; save results to history only"),
+    ("cancel", "Cancel it (a finished result still goes to history)"),
+)
+_CONCURRENT_MODE_IMMEDIATE_UI_VALUE = "insert_immediate"
 
 
 _PASTE_MODE_LABELS: dict[str, str] = {

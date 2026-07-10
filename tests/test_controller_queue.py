@@ -694,13 +694,10 @@ def test_immediate_background_insert_delivers_while_transcribing(
     _ = app
 
 
-def test_immediate_insert_during_batch_recording_into_foreground_window(
-    monkeypatch,
-    tmp_path,
-):
-    """A finished result pastes mid-recording when its target is already the
-    foreground window: the paste lands where the user is dictating anyway and
-    no focus steal happens."""
+def test_immediate_insert_during_batch_recording(monkeypatch, tmp_path):
+    """A finished result pastes the moment it is ready, even while a new batch
+    recording is running: focus is restored to the finished job's window (the
+    original queue behavior; the held-modifier Ctrl+V fix made it safe)."""
     controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
@@ -711,40 +708,13 @@ def test_immediate_insert_during_batch_recording_into_foreground_window(
     token_a = _record_and_stop(controller)
     controller.start_recording()
     assert controller._audio_capture is not None
+    focus.current = 555  # even after switching windows mid-recording
 
     controller._on_transcription_ready("msg A", request_token=token_a)
 
     assert inserter.calls == [("msg A", 321, "auto")]
     assert controller._deferred_background_results == []
-    # No focus restore mid-recording: the target was already foreground.
-    assert focus.restore_calls == []
-    controller.shutdown()
-    _ = app
-
-
-def test_immediate_insert_defers_when_foreground_differs_mid_recording(
-    monkeypatch,
-    tmp_path,
-):
-    """Mid-recording insert is skipped when it would require a focus steal."""
-    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
-        monkeypatch, tmp_path, mode="insert"
-    )
-    controller._settings = replace(
-        controller._settings, immediate_background_insert=True
-    )
-
-    token_a = _record_and_stop(controller)
-    controller.start_recording()
-    focus.current = 555  # the user switched windows mid-recording
-
-    controller._on_transcription_ready("msg A", request_token=token_a)
-    assert inserter.calls == []
-    assert controller._deferred_background_results
-
-    controller.stop_recording()
-    # The capture is gone; the deferred result is delivered on the stop flush.
-    assert inserter.calls == [("msg A", 321, "auto")]
+    assert focus.restore_calls == [987]
     controller.shutdown()
     _ = app
 
