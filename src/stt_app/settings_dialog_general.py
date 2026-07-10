@@ -181,10 +181,16 @@ class _GeneralTabMixin:
         # Reserve a stable three-line note area so switching between models
         # with and without runtime notes never shifts the widgets below.
         self.local_model_runtime_warning_label.setMinimumHeight(
-            self.fontMetrics().height() * 3 + 4
+            self.fontMetrics().height() * 2 + 4
+        )
+        self.local_model_runtime_warning_label.setAlignment(
+            QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft
         )
         local_model_layout.addWidget(self.model_combo)
         local_model_layout.addWidget(self.local_model_runtime_warning_label)
+        # Collect the stack's extra height below the note instead of letting
+        # the layout pad the gaps between combo and note.
+        local_model_layout.addStretch(1)
         self.model_selector_stack.addWidget(local_model_widget)
 
         remote_model_widget = QtWidgets.QWidget()
@@ -203,11 +209,15 @@ class _GeneralTabMixin:
         # Reserve roughly the same note height as the local page's three-line
         # runtime note so switching engines does not shift the rows below.
         self.remote_model_note_label.setMinimumHeight(
-            self.fontMetrics().height() * 3 + 4
+            self.fontMetrics().height() * 2 + 4
+        )
+        self.remote_model_note_label.setAlignment(
+            QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft
         )
         remote_model_layout.addWidget(self.remote_model_provider_label)
         remote_model_layout.addWidget(self.remote_model_combo)
         remote_model_layout.addWidget(self.remote_model_note_label)
+        remote_model_layout.addStretch(1)
         self.model_selector_stack.addWidget(remote_model_widget)
 
         engine_form.addRow("Model", self.model_selector_stack)
@@ -907,24 +917,22 @@ class _GeneralTabMixin:
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(
-                "ONNX model: Batch mode only. Auto tries WebGPU, then DirectML, "
-                "then falls back to CPU. The active device appears in the "
-                "overlay/import status."
+                "Batch mode only. Auto tries WebGPU, then DirectML, then "
+                "falls back to CPU (active device shown in the overlay)."
             )
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(
-                "Nemotron streams with a fixed 560 ms ONNX chunk. Auto tries "
-                "DirectML, then falls back to CPU. Other latency profiles are "
-                "not exposed by the published graph."
+                "Streams with a fixed 560 ms ONNX chunk. Auto tries DirectML, "
+                "then falls back to CPU."
             )
             return
         self.local_model_runtime_warning_label.setStyleSheet(note_style)
         if engine == "local" and model_name:
             self.local_model_runtime_warning_label.setText(
-                "faster-whisper model: batch and streaming supported; runs "
-                "via CTranslate2."
+                "faster-whisper model: batch and streaming, runs via "
+                "CTranslate2."
             )
             return
         self.local_model_runtime_warning_label.setText(" ")
