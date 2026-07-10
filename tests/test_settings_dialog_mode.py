@@ -1780,29 +1780,46 @@ def test_benchmark_results_table_and_summary_are_resizable():
     _ = app
 
 
-def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
+def test_benchmark_tab_hosts_history_and_results_directly():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
-    dialog._open_benchmark_window()
     app.processEvents()
 
+    # History and results are viewed directly in the Benchmark tab (no
+    # pop-out window needed): the tab's splitter hosts exactly those two
+    # sections, so they stay visible while a benchmark runs.
     splitter = dialog.benchmark_main_splitter
     assert isinstance(splitter, QtWidgets.QSplitter)
     assert splitter.orientation() == QtCore.Qt.Vertical
     assert splitter.childrenCollapsible() is False
+    assert splitter.count() == 2
     assert splitter.indexOf(dialog.benchmark_history_list.parentWidget()) == 0
     assert splitter.indexOf(dialog.benchmark_results_splitter.parentWidget()) == 1
-    assert splitter.widget(2) is dialog.benchmark_setup_scroll
-    assert dialog.benchmark_setup_scroll.widget() is dialog.benchmark_setup_box
-    assert dialog.benchmark_setup_box.title() == "Run Benchmark"
     assert dialog.benchmark_history_list.minimumHeight() >= 120
-    assert dialog.benchmark_setup_scroll.minimumHeight() >= 360
-    assert splitter.sizes()[2] >= splitter.sizes()[1]
+
+    # The Benchmark tab itself is a plain widget (not a scroll area) so the
+    # splitter manages available space directly.
+    tab_widget = dialog.tabs.widget(dialog._benchmark_tab_index)
+    assert not isinstance(tab_widget, QtWidgets.QScrollArea)
+
+    # The header row exposes a button to open the "Run Benchmark" window and
+    # a status label that is visible without opening that window.
+    assert dialog.open_benchmark_window_button.text() == "Run Benchmark..."
+    assert dialog.benchmark_status_label.isVisible() is True
+
+    # Run controls (model selection, run options, run/cancel) live only in
+    # the pop-out window, not in the tab.
+    dialog._open_benchmark_window()
+    app.processEvents()
+
+    assert dialog.benchmark_window.windowTitle() == "Run Benchmark"
+    assert dialog.benchmark_setup_scroll.widget() is dialog.benchmark_setup_box
     assert dialog.benchmark_options_box.isVisible() is False
     assert dialog.benchmark_options_toggle.text().endswith("Show Run Options")
 
@@ -1810,7 +1827,6 @@ def test_benchmark_tab_prioritizes_history_and_results_above_run_controls():
 
     assert dialog.benchmark_options_box.isVisible() is True
     assert dialog.benchmark_options_toggle.text().endswith("Hide Run Options")
-    assert splitter.sizes()[2] >= splitter.sizes()[1]
     _ = app
 
 
@@ -1864,10 +1880,12 @@ def test_benchmark_history_double_click_loads_entry(tmp_path):
     )
     dialog._benchmark_history_store = benchmark_store
     dialog._refresh_benchmark_history_list()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
-    dialog._open_benchmark_window()
     app.processEvents()
 
+    # History and results live directly in the tab, so loading a history
+    # entry works without opening the "Run Benchmark" window.
     item = dialog.benchmark_history_list.item(0)
     dialog.benchmark_history_list.itemDoubleClicked.emit(item)
     app.processEvents()
@@ -1877,7 +1895,6 @@ def test_benchmark_history_double_click_loads_entry(tmp_path):
     assert dialog.benchmark_summary_text.toPlainText() == entry.summary
     main_sizes = dialog.benchmark_main_splitter.sizes()
     assert main_sizes[1] > main_sizes[0]
-    assert main_sizes[2] > main_sizes[0]
     _ = app
 
 

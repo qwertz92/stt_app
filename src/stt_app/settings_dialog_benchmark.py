@@ -33,7 +33,8 @@ from .settings_dialog_helpers import (
 )
 from .ui_feedback import restore_vertical_scrollbar
 
-_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(980, 720)
+_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(640, 560)
+_BENCHMARK_COMPACT_BUTTON_WIDTH_PX = 110
 
 
 def _facade():
@@ -50,77 +51,164 @@ def _facade():
 
 class _BenchmarkMixin:
     def _build_benchmark_tab(self) -> None:
-        """Build the slim Benchmark tab: a launcher for the benchmark window.
+        """Build the Benchmark tab: history and results, viewed directly.
 
-        The full benchmark UI (model selection, run options, results, history)
-        lives in a separate resizable window built by
-        ``_build_benchmark_window`` so the tab itself never scrolls or gets
-        cramped. This tab only explains what benchmarking does, summarizes the
-        most recent run, and offers a button to open that window.
+        Viewing results/history is the frequent action; running a benchmark
+        is rare. So the tab shows the viewing parts (history + results)
+        directly, filling the tab via a vertical splitter, with a compact
+        header row to open the "Run Benchmark" window and to show live
+        status while a run is in progress. The run side (model selection,
+        run options, run/cancel controls) lives only in that pop-out window,
+        built by ``_build_benchmark_window``.
         """
         tab = QtWidgets.QWidget()
         layout = QtWidgets.QVBoxLayout(tab)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
 
-        intro = QtWidgets.QLabel(
-            "Benchmark installed local models against one audio file to compare "
-            "load time, average speed, and real-time factor on this machine."
-        )
-        intro.setWordWrap(True)
-        self._style_note_label(intro)
-        layout.addWidget(intro)
-
-        self.benchmark_summary_label = QtWidgets.QLabel("")
-        self.benchmark_summary_label.setWordWrap(True)
-        self._style_note_label(self.benchmark_summary_label, bold=True)
-        layout.addWidget(self.benchmark_summary_label)
-        self._refresh_benchmark_tab_summary()
-
+        header_row = QtWidgets.QHBoxLayout()
+        self._configure_button_row(header_row)
         self.open_benchmark_window_button = QtWidgets.QPushButton(
-            "Open Benchmark Window"
+            "Run Benchmark..."
         )
         self.open_benchmark_window_button.clicked.connect(
             self._open_benchmark_window
         )
-        layout.addWidget(
-            self.open_benchmark_window_button,
-            0,
-            QtCore.Qt.AlignLeft,
+        header_row.addWidget(self.open_benchmark_window_button)
+        self.benchmark_status_label = QtWidgets.QLabel("")
+        self.benchmark_status_label.setWordWrap(False)
+        self.benchmark_status_label.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
         )
-        layout.addStretch(1)
+        self.benchmark_status_label.setFixedHeight(
+            self.open_benchmark_window_button.sizeHint().height()
+        )
+        header_row.addWidget(self.benchmark_status_label, 1)
+        layout.addLayout(header_row)
+
+        self.benchmark_main_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.benchmark_main_splitter.setChildrenCollapsible(False)
+
+        history_box = self._build_benchmark_history_box()
+        results_box = self._build_benchmark_results_box()
+
+        self.benchmark_main_splitter.addWidget(history_box)
+        self.benchmark_main_splitter.addWidget(results_box)
+        self.benchmark_main_splitter.setSizes([240, 330])
+        layout.addWidget(self.benchmark_main_splitter, 1)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
         self._build_benchmark_window()
 
-    def _refresh_benchmark_tab_summary(self) -> None:
-        """Update the slim tab's most-recent-run summary line."""
-        if not hasattr(self, "benchmark_summary_label"):
-            return
-        entries = self._benchmark_history_store.recent_entries(1)
-        if not entries:
-            self.benchmark_summary_label.setText("No benchmarks yet.")
-            return
-        entry = entries[0]
-        model_count = len(entry.options.model_names)
-        model_word = "model" if model_count == 1 else "models"
-        status = _benchmark_status_text(entry.status)
-        self.benchmark_summary_label.setText(
-            f"Last run: {entry.created_at} - {status} - "
-            f"{model_count} {model_word}"
+    def _build_benchmark_history_box(self) -> QtWidgets.QGroupBox:
+        history_box = QtWidgets.QGroupBox("Benchmark History")
+        history_box.setMinimumHeight(210)
+        history_layout = QtWidgets.QVBoxLayout(history_box)
+        history_layout.setContentsMargins(10, 10, 10, 10)
+        history_layout.setSpacing(6)
+        self.benchmark_history_list = QtWidgets.QListWidget()
+        self.benchmark_history_list.setMinimumHeight(120)
+        self._configure_compact_list_widget(self.benchmark_history_list, expand=True)
+        self.benchmark_history_list.itemSelectionChanged.connect(
+            self._update_benchmark_history_actions
         )
+        self.benchmark_history_list.itemDoubleClicked.connect(
+            self._load_benchmark_history_item
+        )
+        history_layout.addWidget(self.benchmark_history_list, 1)
+
+        benchmark_history_actions = QtWidgets.QHBoxLayout()
+        self._configure_button_row(benchmark_history_actions)
+        self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
+        self.load_benchmark_history_button.setEnabled(False)
+        self.load_benchmark_history_button.clicked.connect(
+            self._load_selected_benchmark_history
+        )
+        self.export_benchmark_history_button = QtWidgets.QPushButton("Export Selected...")
+        self.export_benchmark_history_button.setEnabled(False)
+        self.export_benchmark_history_button.clicked.connect(
+            self._export_selected_benchmark_history
+        )
+        self.delete_benchmark_history_button = QtWidgets.QPushButton("Delete Selected")
+        self.delete_benchmark_history_button.setEnabled(False)
+        self.delete_benchmark_history_button.clicked.connect(
+            self._delete_selected_benchmark_history
+        )
+        self.clear_benchmark_history_button = QtWidgets.QPushButton("Clear History")
+        self.clear_benchmark_history_button.clicked.connect(
+            self._clear_benchmark_history
+        )
+        benchmark_history_actions.addWidget(self.load_benchmark_history_button)
+        benchmark_history_actions.addWidget(self.export_benchmark_history_button)
+        benchmark_history_actions.addStretch(1)
+        benchmark_history_actions.addWidget(self.delete_benchmark_history_button)
+        benchmark_history_actions.addWidget(self.clear_benchmark_history_button)
+        history_layout.addLayout(benchmark_history_actions)
+        return history_box
+
+    def _build_benchmark_results_box(self) -> QtWidgets.QGroupBox:
+        results_box = QtWidgets.QGroupBox("Results")
+        results_box.setMinimumHeight(360)
+        results_box.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        results_layout = QtWidgets.QVBoxLayout(results_box)
+        self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self.benchmark_results_splitter.setChildrenCollapsible(False)
+        self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
+        self.benchmark_results_table.setMinimumHeight(110)
+        self.benchmark_results_table.setHorizontalHeaderLabels(
+            ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
+        )
+        self.benchmark_results_table.verticalHeader().setVisible(False)
+        benchmark_row_height = self._compact_table_row_height(
+            self.benchmark_results_table
+        )
+        self.benchmark_results_table.verticalHeader().setMinimumSectionSize(
+            benchmark_row_height
+        )
+        self.benchmark_results_table.verticalHeader().setDefaultSectionSize(
+            benchmark_row_height
+        )
+        self.benchmark_results_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.benchmark_results_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.NoSelection
+        )
+        self.benchmark_results_table.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        self.benchmark_results_table.setVerticalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
+        self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
+
+        self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
+        self.benchmark_summary_text.setReadOnly(True)
+        self.benchmark_summary_text.setMinimumHeight(110)
+        self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
+        self.benchmark_results_splitter.setSizes([150, 170])
+        results_layout.addWidget(self.benchmark_results_splitter)
+        return results_box
 
     def _build_benchmark_window(self) -> None:
-        """Build the resizable pop-out window that hosts the full benchmark UI.
+        """Build the resizable pop-out window that hosts the "run" UI.
 
         Owned by the settings dialog (parent=self) so it hides/closes together
-        with it; re-clicking "Open Benchmark Window" raises the existing
+        with it; re-opening the "Run Benchmark..." button raises the existing
         window instead of creating a second one (see
-        ``_open_benchmark_window``).
+        ``_open_benchmark_window``). Only the model selection, audio picker,
+        run options, and run/cancel controls live here; history and results
+        stay in the Benchmark tab so they remain visible while a benchmark
+        runs.
         """
         window = QtWidgets.QDialog(self)
         self.benchmark_window = window
-        window.setWindowTitle("Benchmark")
+        window.setWindowTitle("Run Benchmark")
         window.setWindowIcon(load_app_icon())
         window.setModal(False)
         window.setWindowFlag(QtCore.Qt.Window, True)
@@ -129,31 +217,22 @@ class _BenchmarkMixin:
         window.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
         window.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
         window.resize(_BENCHMARK_WINDOW_DEFAULT_SIZE)
-        window.setMinimumSize(640, 480)
+        window.setMinimumSize(560, 480)
 
-        layout = QtWidgets.QVBoxLayout(window)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(6)
-        self.benchmark_main_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self.benchmark_main_splitter.setChildrenCollapsible(False)
+        outer_layout = QtWidgets.QVBoxLayout(window)
+        outer_layout.setContentsMargins(10, 10, 10, 10)
+        outer_layout.setSpacing(6)
 
-        setup_box = QtWidgets.QGroupBox("Run Benchmark")
-        setup_box.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
-        )
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.benchmark_setup_scroll = scroll
+
+        setup_box = QtWidgets.QWidget()
         self.benchmark_setup_box = setup_box
-        self.benchmark_setup_scroll = QtWidgets.QScrollArea()
-        self.benchmark_setup_scroll.setWidgetResizable(True)
-        self.benchmark_setup_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
-        self.benchmark_setup_scroll.setMinimumHeight(360)
-        self.benchmark_setup_scroll.setHorizontalScrollBarPolicy(
-            QtCore.Qt.ScrollBarAsNeeded
-        )
-        self.benchmark_setup_scroll.setVerticalScrollBarPolicy(
-            QtCore.Qt.ScrollBarAsNeeded
-        )
-        self.benchmark_setup_scroll.setWidget(setup_box)
+        scroll.setWidget(setup_box)
         setup_layout = QtWidgets.QVBoxLayout(setup_box)
         setup_layout.setContentsMargins(10, 10, 10, 10)
         setup_layout.setSpacing(6)
@@ -237,28 +316,40 @@ class _BenchmarkMixin:
         )
         models_layout.addWidget(self.benchmark_models_list, 1)
 
-        # Quality-of-life: bulk select/clear so the user does not have to click
-        # each model individually (all models are selected by default).
+        # Quality-of-life: bulk select/clear/refresh in one compact row, so
+        # the user does not have to click each model individually (all
+        # models are selected by default) and this area does not sprawl into
+        # multiple oversized button rows.
         select_buttons_row = QtWidgets.QHBoxLayout()
-        self.benchmark_select_all_button = QtWidgets.QPushButton("Select All")
+        self._configure_button_row(select_buttons_row)
+        self.benchmark_select_all_button = QtWidgets.QPushButton("Select all")
         self.benchmark_select_all_button.clicked.connect(
             self.benchmark_models_list.selectAll
         )
-        self.benchmark_deselect_all_button = QtWidgets.QPushButton("Deselect All")
+        self.benchmark_deselect_all_button = QtWidgets.QPushButton("Deselect all")
         self.benchmark_deselect_all_button.clicked.connect(
             self.benchmark_models_list.clearSelection
         )
-        select_buttons_row.addWidget(self.benchmark_select_all_button)
-        select_buttons_row.addWidget(self.benchmark_deselect_all_button)
-        models_layout.addLayout(select_buttons_row)
-
-        self.refresh_benchmark_models_button = QtWidgets.QPushButton(
-            "Refresh Installed Models"
-        )
+        self.refresh_benchmark_models_button = QtWidgets.QPushButton("Refresh")
         self.refresh_benchmark_models_button.clicked.connect(
             self._refresh_local_model_views
         )
-        models_layout.addWidget(self.refresh_benchmark_models_button)
+        for button in (
+            self.benchmark_select_all_button,
+            self.benchmark_deselect_all_button,
+            self.refresh_benchmark_models_button,
+        ):
+            button.setFixedWidth(_BENCHMARK_COMPACT_BUTTON_WIDTH_PX)
+        self._match_field_button_height(
+            self.benchmark_select_all_button,
+            self.benchmark_deselect_all_button,
+            self.refresh_benchmark_models_button,
+        )
+        select_buttons_row.addWidget(self.benchmark_select_all_button)
+        select_buttons_row.addWidget(self.benchmark_deselect_all_button)
+        select_buttons_row.addWidget(self.refresh_benchmark_models_button)
+        select_buttons_row.addStretch(1)
+        models_layout.addLayout(select_buttons_row)
         models_help = QtWidgets.QLabel(
             "Only locally available models can be benchmarked here. Download missing models on the Local tab first."
         )
@@ -443,110 +534,16 @@ class _BenchmarkMixin:
         benchmark_actions.addStretch(1)
         setup_layout.addLayout(benchmark_actions)
 
-        self.benchmark_status_label = QtWidgets.QLabel("")
-        self.benchmark_status_label.setWordWrap(True)
-        setup_layout.addWidget(self.benchmark_status_label)
+        outer_layout.addWidget(scroll, 1)
 
-        results_box = QtWidgets.QGroupBox("Results")
-        results_box.setMinimumHeight(360)
-        results_box.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Expanding,
-        )
-        results_layout = QtWidgets.QVBoxLayout(results_box)
-        self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self.benchmark_results_splitter.setChildrenCollapsible(False)
-        self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
-        self.benchmark_results_table.setMinimumHeight(110)
-        self.benchmark_results_table.setHorizontalHeaderLabels(
-            ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
-        )
-        self.benchmark_results_table.verticalHeader().setVisible(False)
-        benchmark_row_height = self._compact_table_row_height(
-            self.benchmark_results_table
-        )
-        self.benchmark_results_table.verticalHeader().setMinimumSectionSize(
-            benchmark_row_height
-        )
-        self.benchmark_results_table.verticalHeader().setDefaultSectionSize(
-            benchmark_row_height
-        )
-        self.benchmark_results_table.setEditTriggers(
-            QtWidgets.QAbstractItemView.NoEditTriggers
-        )
-        self.benchmark_results_table.setSelectionMode(
-            QtWidgets.QAbstractItemView.NoSelection
-        )
-        self.benchmark_results_table.setHorizontalScrollMode(
-            QtWidgets.QAbstractItemView.ScrollPerPixel
-        )
-        self.benchmark_results_table.setVerticalScrollMode(
-            QtWidgets.QAbstractItemView.ScrollPerPixel
-        )
-        self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
-        self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
-
-        self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
-        self.benchmark_summary_text.setReadOnly(True)
-        self.benchmark_summary_text.setMinimumHeight(110)
-        self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
-        self.benchmark_results_splitter.setSizes([150, 170])
-        results_layout.addWidget(self.benchmark_results_splitter)
-
-        history_box = QtWidgets.QGroupBox("Benchmark History")
-        history_box.setMinimumHeight(210)
-        history_layout = QtWidgets.QVBoxLayout(history_box)
-        history_layout.setContentsMargins(10, 10, 10, 10)
-        history_layout.setSpacing(6)
-        self.benchmark_history_list = QtWidgets.QListWidget()
-        self.benchmark_history_list.setMinimumHeight(120)
-        self._configure_compact_list_widget(self.benchmark_history_list, expand=True)
-        self.benchmark_history_list.itemSelectionChanged.connect(
-            self._update_benchmark_history_actions
-        )
-        self.benchmark_history_list.itemDoubleClicked.connect(
-            self._load_benchmark_history_item
-        )
-        history_layout.addWidget(self.benchmark_history_list, 1)
-
-        benchmark_history_actions = QtWidgets.QHBoxLayout()
-        self._configure_button_row(benchmark_history_actions)
-        self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
-        self.load_benchmark_history_button.setEnabled(False)
-        self.load_benchmark_history_button.clicked.connect(
-            self._load_selected_benchmark_history
-        )
-        self.export_benchmark_history_button = QtWidgets.QPushButton("Export Selected...")
-        self.export_benchmark_history_button.setEnabled(False)
-        self.export_benchmark_history_button.clicked.connect(
-            self._export_selected_benchmark_history
-        )
-        self.delete_benchmark_history_button = QtWidgets.QPushButton("Delete Selected")
-        self.delete_benchmark_history_button.setEnabled(False)
-        self.delete_benchmark_history_button.clicked.connect(
-            self._delete_selected_benchmark_history
-        )
-        self.clear_benchmark_history_button = QtWidgets.QPushButton("Clear History")
-        self.clear_benchmark_history_button.clicked.connect(
-            self._clear_benchmark_history
-        )
-        benchmark_history_actions.addWidget(self.load_benchmark_history_button)
-        benchmark_history_actions.addWidget(self.export_benchmark_history_button)
-        benchmark_history_actions.addStretch(1)
-        benchmark_history_actions.addWidget(self.delete_benchmark_history_button)
-        benchmark_history_actions.addWidget(self.clear_benchmark_history_button)
-        history_layout.addLayout(benchmark_history_actions)
-
-        self.benchmark_main_splitter.addWidget(history_box)
-        self.benchmark_main_splitter.addWidget(results_box)
-        self.benchmark_main_splitter.addWidget(self.benchmark_setup_scroll)
-        self.benchmark_main_splitter.setSizes([240, 330, 430])
-        layout.addWidget(self.benchmark_main_splitter, 1)
+        self.benchmark_window_status_label = QtWidgets.QLabel("")
+        self.benchmark_window_status_label.setWordWrap(True)
+        outer_layout.addWidget(self.benchmark_window_status_label)
 
     def _open_benchmark_window(self) -> None:
         """Show the benchmark window, raising the existing one if already open."""
         window = self.benchmark_window
-        self._refresh_benchmark_history_list()
+        self._refresh_benchmark_model_list()
         if window.isMinimized():
             window.showNormal()
         else:
@@ -664,8 +661,21 @@ class _BenchmarkMixin:
         )
 
     def _set_benchmark_status(self, text: str, color: str) -> None:
-        self.benchmark_status_label.setText(text)
-        self.benchmark_status_label.setStyleSheet(f"color: {color};")
+        """Update every visible benchmark status label from one place.
+
+        The tab's header status label is always present; the pop-out
+        window's own status label only exists while the window has been
+        built (always true after ``_build_benchmark_window`` runs, but the
+        ``hasattr`` guard keeps this safe to call before that or in tests
+        that build a bare mixin instance).
+        """
+        style = f"color: {color};"
+        if hasattr(self, "benchmark_status_label"):
+            self.benchmark_status_label.setText(text)
+            self.benchmark_status_label.setStyleSheet(style)
+        if hasattr(self, "benchmark_window_status_label"):
+            self.benchmark_window_status_label.setText(text)
+            self.benchmark_window_status_label.setStyleSheet(style)
 
     def _set_benchmark_options_visible(self, visible: bool) -> None:
         if hasattr(self, "benchmark_options_box"):
@@ -675,15 +685,11 @@ class _BenchmarkMixin:
             self.benchmark_options_toggle.setText(
                 "▾  Hide Run Options" if visible else "▸  Show Run Options"
             )
-        if hasattr(self, "benchmark_main_splitter"):
-            self.benchmark_main_splitter.setSizes(
-                [220, 300, 500] if visible else [240, 330, 430]
-            )
 
     def _expand_benchmark_results_area(self) -> None:
         if not hasattr(self, "benchmark_main_splitter"):
             return
-        self.benchmark_main_splitter.setSizes([220, 420, 360])
+        self.benchmark_main_splitter.setSizes([220, 420])
 
     def _update_benchmark_actions(self) -> None:
         if not hasattr(self, "run_benchmark_button"):
@@ -1089,7 +1095,6 @@ class _BenchmarkMixin:
         if selected_row >= 0:
             self.benchmark_history_list.setCurrentRow(selected_row)
         self._update_benchmark_history_actions()
-        self._refresh_benchmark_tab_summary()
 
     def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
         if not hasattr(self, "benchmark_history_list"):
