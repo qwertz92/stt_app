@@ -9,10 +9,12 @@ import urllib.request
 from pathlib import Path
 
 from ..config import (
+    DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_OPENAI_MODEL,
     OPENAI_MODELS,
     language_modes_for_selection,
+    parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from ._http_utils import (
@@ -38,6 +40,7 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         language_mode: str = DEFAULT_LANGUAGE_MODE,
         model: str = DEFAULT_OPENAI_MODEL,
         request_timeout_s: int = 120,
+        custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -54,6 +57,13 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
         ):
             self._language_mode = DEFAULT_LANGUAGE_MODE
         self._request_timeout_s = max(5, int(request_timeout_s))
+        self._prompt = self._build_prompt(custom_vocabulary)
+
+    @staticmethod
+    def _build_prompt(custom_vocabulary: str) -> str:
+        """Build the OpenAI ``prompt`` field from the custom vocabulary setting."""
+        terms = parse_custom_vocabulary(custom_vocabulary)
+        return ", ".join(terms)
 
     def _auth_header(self) -> str:
         return f"Bearer {self._api_key}"
@@ -79,6 +89,8 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             fields: list[tuple[str, str]] = [("model", self._model)]
             if self._language_mode != DEFAULT_LANGUAGE_MODE:
                 fields.append(("language", self._language_mode))
+            if self._prompt:
+                fields.append(("prompt", self._prompt))
             fields.append(("response_format", "json"))
 
             body, content_type = multipart_form_data(

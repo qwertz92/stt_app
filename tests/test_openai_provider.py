@@ -47,6 +47,14 @@ class TestOpenAIProviderInit:
         t = OpenAITranscriber(api_key="k", language_mode="am")
         assert t._language_mode == "auto"
 
+    def test_custom_vocabulary_builds_prompt(self):
+        t = OpenAITranscriber(api_key="k", custom_vocabulary="Kubernetes, Splunk SOAR")
+        assert t._prompt == "Kubernetes, Splunk SOAR"
+
+    def test_empty_custom_vocabulary_gives_empty_prompt(self):
+        t = OpenAITranscriber(api_key="k")
+        assert t._prompt == ""
+
 
 class TestOpenAIBatchTranscription:
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
@@ -80,6 +88,29 @@ class TestOpenAIBatchTranscription:
         assert 'name="language"' in body
         assert "gpt-4o-mini-transcribe" in body
         assert "de" in body
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_custom_vocabulary_included_in_request(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
+        t = OpenAITranscriber(
+            api_key="key", custom_vocabulary="Kubernetes, Splunk SOAR"
+        )
+        t.transcribe_batch(b"RIFF fake")
+
+        req = mock_urlopen.call_args[0][0]
+        body = req.data.decode("utf-8", errors="ignore")
+        assert 'name="prompt"' in body
+        assert "Kubernetes, Splunk SOAR" in body
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_empty_custom_vocabulary_omits_prompt_field(self, mock_urlopen):
+        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
+        t = OpenAITranscriber(api_key="key")
+        t.transcribe_batch(b"RIFF fake")
+
+        req = mock_urlopen.call_args[0][0]
+        body = req.data.decode("utf-8", errors="ignore")
+        assert 'name="prompt"' not in body
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_progress_callback_reports_remote_wait(self, mock_urlopen):

@@ -44,6 +44,7 @@ from .config import (
     DEFAULT_START_BEEP_ENABLED,
     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
     DEFAULT_INSERT_TARGET,
     DEFAULT_KEEP_MICROPHONE_WARM,
@@ -91,6 +92,7 @@ DEFAULTS = {
     "cancel_hotkey": DEFAULT_CANCEL_HOTKEY,
     "model_size": DEFAULT_MODEL_SIZE,
     "language_mode": DEFAULT_LANGUAGE_MODE,
+    "custom_vocabulary": DEFAULT_CUSTOM_VOCABULARY,
     "vad_enabled": DEFAULT_VAD_ENABLED,
     "keep_microphone_warm": DEFAULT_KEEP_MICROPHONE_WARM,
     "silence_gate_enabled": DEFAULT_SILENCE_GATE_ENABLED,
@@ -151,6 +153,7 @@ class AppSettings:
     cancel_hotkey: str = DEFAULT_CANCEL_HOTKEY
     model_size: str = DEFAULT_MODEL_SIZE
     language_mode: str = DEFAULT_LANGUAGE_MODE
+    custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY
     vad_enabled: bool = DEFAULT_VAD_ENABLED
     keep_microphone_warm: bool = DEFAULT_KEEP_MICROPHONE_WARM
     silence_gate_enabled: bool = DEFAULT_SILENCE_GATE_ENABLED
@@ -363,6 +366,9 @@ class AppSettings:
             cancel_hotkey=cancel_hotkey,
             model_size=model_size,
             language_mode=language_mode,
+            custom_vocabulary=str(
+                merged.get("custom_vocabulary", DEFAULT_CUSTOM_VOCABULARY)
+            ),
             vad_enabled=bool(merged.get("vad_enabled", DEFAULT_VAD_ENABLED)),
             vad_energy_threshold=vad_energy_threshold,
             save_last_wav=bool(merged.get("save_last_wav", DEFAULT_SAVE_LAST_WAV)),

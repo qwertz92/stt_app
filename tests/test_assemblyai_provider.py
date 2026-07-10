@@ -353,6 +353,22 @@ class TestAssemblyAILanguageConfig:
         with pytest.raises(TranscriptionError, match="Unsupported AssemblyAI model"):
             t._build_config()
 
+    def test_custom_vocabulary_sets_word_boost(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(
+            api_key="key",
+            aai_module=fake_aai,
+            custom_vocabulary="Kubernetes, Splunk SOAR",
+        )
+        config = t._build_config()
+        assert config.kwargs.get("word_boost") == ["Kubernetes", "Splunk SOAR"]
+
+    def test_empty_custom_vocabulary_omits_word_boost(self):
+        fake_aai = _make_fake_aai()
+        t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
+        config = t._build_config()
+        assert "word_boost" not in config.kwargs
+
     def test_progress_callback_splits_upload_and_polling_phases(self, tmp_path):
         fake_aai = _make_fake_aai(transcript_text="done")
         t = AssemblyAITranscriber(api_key="test-key", aai_module=fake_aai)

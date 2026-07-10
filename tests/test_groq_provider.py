@@ -225,6 +225,33 @@ class TestGroqTranscribeBatch:
         # No assertion on internal API call args because we can't easily
         # inspect them through the class wrapping. Core logic test: no crash.
 
+    def test_custom_vocabulary_passed_as_prompt(self, tmp_path):
+        """custom_vocabulary is forwarded as the Whisper-compatible prompt."""
+        cls = _make_fake_groq_class(text="ok")
+        t = GroqTranscriber(
+            api_key="key",
+            groq_client_class=cls,
+            custom_vocabulary="Kubernetes, Splunk SOAR",
+        )
+        wav = tmp_path / "test.wav"
+        wav.write_bytes(b"RIFF fake")
+        t.transcribe_batch(str(wav))
+
+        client = t._get_client()
+        assert client.audio.transcriptions.calls[-1]["prompt"] == (
+            "Kubernetes, Splunk SOAR"
+        )
+
+    def test_empty_custom_vocabulary_omits_prompt(self, tmp_path):
+        cls = _make_fake_groq_class(text="ok")
+        t = GroqTranscriber(api_key="key", groq_client_class=cls)
+        wav = tmp_path / "test.wav"
+        wav.write_bytes(b"RIFF fake")
+        t.transcribe_batch(str(wav))
+
+        client = t._get_client()
+        assert "prompt" not in client.audio.transcriptions.calls[-1]
+
 
 # ---------------------------------------------------------------------------
 # Tests: error handling

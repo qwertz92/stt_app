@@ -21,9 +21,11 @@ from pathlib import Path
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
+    DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
     DOC_SSL_PROXY_PATH,
     language_modes_for_selection,
+    parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import (
@@ -59,6 +61,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         api_key: str,
         language_mode: str = "auto",
         model: str = DEFAULT_DEEPGRAM_MODEL,
+        custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -74,6 +77,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             self._model,
         ):
             self._language_mode = "auto"
+        self._vocabulary_terms = parse_custom_vocabulary(custom_vocabulary)
         self._stream_lock = threading.Lock()
         self._stream_ws = None
         self._stream_thread: threading.Thread | None = None
@@ -95,6 +99,19 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         if self._stream_partial_text:
             parts.append(self._stream_partial_text)
         return " ".join(p for p in parts if p).strip()
+
+    def _vocabulary_query_param_name(self) -> str:
+        """Return the biasing query param name for the selected model.
+
+        nova-3 models use the repeated ``keyterm`` parameter; nova-2 (and
+        earlier) models use the repeated ``keywords`` parameter instead.
+        """
+        return "keyterm" if self._model.strip().lower().startswith("nova-3") else "keywords"
+
+    def _apply_vocabulary_params(self, params: dict[str, object]) -> None:
+        if not self._vocabulary_terms:
+            return
+        params[self._vocabulary_query_param_name()] = list(self._vocabulary_terms)
 
     def _format_stream_error(self, error: Exception) -> str:
         detail = str(error)
@@ -130,7 +147,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 audio_data = file_path.read_bytes()
 
             # Build query parameters.
-            params: dict[str, str] = {
+            params: dict[str, object] = {
                 "model": self._model,
                 "smart_format": "true",
             }
@@ -139,8 +156,12 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 params["detect_language"] = "true"
             else:
                 params["language"] = self._language_mode
+            self._apply_vocabulary_params(params)
 
-            url = f"{DEEPGRAM_API_BASE}/listen?{urllib.parse.urlencode(params)}"
+            url = (
+                f"{DEEPGRAM_API_BASE}/listen?"
+                f"{urllib.parse.urlencode(params, doseq=True)}"
+            )
 
             req = urllib.request.Request(url, data=audio_data, method="POST")
             req.add_header("Authorization", f"Token {self._api_key}")
@@ -270,7 +291,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 raise TranscriptionError("Streaming session already active.")
 
         websocket = self._get_websocket_module()
-        params: dict[str, str] = {
+        params: dict[str, object] = {
             "model": self._model,
             "encoding": "linear16",
             "sample_rate": str(AUDIO_SAMPLE_RATE),
@@ -285,8 +306,12 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             params["language"] = "multi"
         else:
             params["language"] = self._language_mode
+        self._apply_vocabulary_params(params)
 
-        url = f"wss://api.deepgram.com/v1/listen?{urllib.parse.urlencode(params)}"
+        url = (
+            f"wss://api.deepgram.com/v1/listen?"
+            f"{urllib.parse.urlencode(params, doseq=True)}"
+        )
 
         self._stream_connected.clear()
         self._stream_closed.clear()

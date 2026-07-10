@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 # Global configuration values. Keep defaults and tunables centralized here.
 
 APP_NAME = "stt_app"
@@ -89,6 +91,11 @@ DEFAULT_START_BEEP_ENABLED = False
 DEFAULT_START_BEEP_TONE = "soft"
 DEFAULT_OVERLAY_ALWAYS_ON_TOP = True
 VALID_START_BEEP_TONES = ("soft", "high", "chime", "system")
+# User-defined technical terms/names to bias transcription toward. Applies to
+# local faster-whisper, OpenAI, Groq, AssemblyAI, and Deepgram; see
+# parse_custom_vocabulary() for the raw-text parsing rules.
+DEFAULT_CUSTOM_VOCABULARY = ""
+CUSTOM_VOCABULARY_MAX_TERMS = 100
 
 # --- Model directory configuration ---
 # How faster-whisper resolves models (WhisperModel constructor):
@@ -882,6 +889,33 @@ def language_modes_for_selection(
     if model_key in MODEL_LANGUAGE_MODES:
         return MODEL_LANGUAGE_MODES[model_key]
     return ENGINE_LANGUAGE_MODES.get(normalized_engine, VALID_LANGUAGE_MODES)
+
+
+def parse_custom_vocabulary(raw: str) -> list[str]:
+    """Parse the raw custom-vocabulary setting into a list of terms.
+
+    Terms are split on newlines, commas, and semicolons, stripped of
+    surrounding whitespace, and empties are dropped. Duplicates are removed
+    case-insensitively while preserving the first-seen order and casing.
+    The result is capped at ``CUSTOM_VOCABULARY_MAX_TERMS`` terms (silently).
+    """
+    text = str(raw or "")
+    candidates = re.split(r"[\n,;]+", text)
+
+    terms: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        term = candidate.strip()
+        if not term:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+        if len(terms) >= CUSTOM_VOCABULARY_MAX_TERMS:
+            break
+    return terms
 
 GROQ_MODELS = ("whisper-large-v3", "whisper-large-v3-turbo")
 DEFAULT_GROQ_MODEL = "whisper-large-v3-turbo"

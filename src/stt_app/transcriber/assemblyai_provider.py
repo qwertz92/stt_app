@@ -21,8 +21,10 @@ from ..app_paths import temp_audio_dir
 from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_CUSTOM_VOCABULARY,
     DOC_SSL_PROXY_PATH,
     language_modes_for_selection,
+    parse_custom_vocabulary,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import (
@@ -71,6 +73,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         *,
         aai_module=None,
         streaming_client_factory=None,
+        custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -83,6 +86,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         self._model = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
         self._aai = aai_module  # None → lazy import on first use
         self._streaming_client_factory = streaming_client_factory
+        self._word_boost = parse_custom_vocabulary(custom_vocabulary)
         self._stream_lock = threading.Lock()
         self._stream_client = None
         self._stream_on_partial: StreamingCallback | None = None
@@ -122,6 +126,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             else:
                 # Unknown language code → fall back to auto detection.
                 kwargs["language_detection"] = True
+
+        if self._word_boost:
+            kwargs["word_boost"] = self._word_boost
 
         return aai.TranscriptionConfig(**kwargs)
 
@@ -339,6 +346,10 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 )
             client.on(StreamingEvents.Turn, self._on_turn_event)
             client.on(StreamingEvents.Error, self._on_stream_error_event)
+            # custom_vocabulary is intentionally not wired here: the installed
+            # SDK's streaming.v3.StreamingParameters has no word_boost/keyterms
+            # field (unlike the batch TranscriptionConfig), so there is no
+            # supported way to bias Universal-Streaming recognition.
             client.connect(
                 StreamingParameters(
                     sample_rate=AUDIO_SAMPLE_RATE,

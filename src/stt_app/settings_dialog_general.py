@@ -235,6 +235,26 @@ class _GeneralTabMixin:
             self._field_with_hint(self.language_combo, self.language_note_label),
         )
 
+        self.custom_vocabulary_edit = QtWidgets.QPlainTextEdit()
+        self.custom_vocabulary_edit.setTabChangesFocus(True)
+        self.custom_vocabulary_edit.setFixedHeight(
+            self.custom_vocabulary_edit.fontMetrics().height() * 3 + 12
+        )
+        self.custom_vocabulary_edit.setPlaceholderText(
+            "e.g. Kubernetes, Splunk SOAR"
+        )
+        vocabulary_hint = QtWidgets.QLabel(
+            "Technical terms and names, separated by commas or new lines. "
+            "Applies to local faster-whisper, OpenAI, Groq, AssemblyAI, and "
+            "Deepgram."
+        )
+        vocabulary_hint.setWordWrap(True)
+        self._style_note_label(vocabulary_hint)
+        engine_form.addRow(
+            "Vocabulary",
+            self._field_with_hint(self.custom_vocabulary_edit, vocabulary_hint),
+        )
+
         self.mode_combo = _WheelPassthroughComboBox()
         for value in VALID_MODES:
             self.mode_combo.addItem(_MODE_LABELS.get(value, value), value)

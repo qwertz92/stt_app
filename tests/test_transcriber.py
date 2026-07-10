@@ -17,12 +17,15 @@ class FakeModel:
         self.calls = []
         self.next_text = "hello world"
 
-    def transcribe(self, audio_source, language=None, vad_filter=True):
+    def transcribe(
+        self, audio_source, language=None, vad_filter=True, initial_prompt=None
+    ):
         self.calls.append(
             {
                 "audio_source": audio_source,
                 "language": language,
                 "vad_filter": vad_filter,
+                "initial_prompt": initial_prompt,
             }
         )
         words = self.next_text.split(" ")
@@ -30,12 +33,16 @@ class FakeModel:
 
 
 class ExplodingModel:
-    def transcribe(self, audio_source, language=None, vad_filter=True):
+    def transcribe(
+        self, audio_source, language=None, vad_filter=True, initial_prompt=None
+    ):
         raise RuntimeError("model failed")
 
 
 class MissingDependencyModel:
-    def transcribe(self, audio_source, language=None, vad_filter=True):
+    def transcribe(
+        self, audio_source, language=None, vad_filter=True, initial_prompt=None
+    ):
         exc = ModuleNotFoundError("No module named 'requests'")
         exc.name = "requests"
         raise exc
@@ -76,7 +83,9 @@ class _GeneratorModel:
     def __init__(self):
         self.yielded = []
 
-    def transcribe(self, audio_source, language=None, vad_filter=True):
+    def transcribe(
+        self, audio_source, language=None, vad_filter=True, initial_prompt=None
+    ):
         def gen():
             for word in ("one", "two", "three"):
                 self.yielded.append(word)
@@ -383,7 +392,9 @@ def test_transcribe_current_stream_buffer_trims_to_window_size(monkeypatch):
 
 
 class HubOfflineModel:
-    def transcribe(self, audio_source, language=None, vad_filter=True):
+    def transcribe(
+        self, audio_source, language=None, vad_filter=True, initial_prompt=None
+    ):
         raise OSError(
             "An error happened while trying to locate the files on the Hub "
             "and we cannot find the appropriate snapshot folder for the "
@@ -463,3 +474,51 @@ def test_default_model_dir_omits_download_root():
     transcriber.transcribe_batch(_build_wav_bytes())
 
     assert "download_root" not in captured_kwargs
+
+
+def test_custom_vocabulary_passes_initial_prompt_to_batch_transcribe():
+    model = FakeModel()
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=lambda *args, **kwargs: model,
+        custom_vocabulary="Kubernetes, Splunk SOAR",
+    )
+
+    transcriber.transcribe_batch(_build_wav_bytes())
+
+    assert model.calls[0]["initial_prompt"] == "Kubernetes, Splunk SOAR"
+
+
+def test_custom_vocabulary_passes_initial_prompt_to_streaming_transcribe():
+    model = FakeModel()
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        model_factory=lambda *args, **kwargs: model,
+        custom_vocabulary="Kubernetes, Splunk SOAR",
+    )
+
+    transcriber.start_stream(on_partial=lambda _text: None)
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+    transcriber.stop_stream()
+
+    assert model.calls
+    assert all(
+        call["initial_prompt"] == "Kubernetes, Splunk SOAR" for call in model.calls
+    )
+
+
+def test_empty_custom_vocabulary_omits_initial_prompt():
+    model = FakeModel()
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=lambda *args, **kwargs: model,
+        custom_vocabulary="",
+    )
+
+    transcriber.transcribe_batch(_build_wav_bytes())
+
+    assert model.calls[0]["initial_prompt"] is None

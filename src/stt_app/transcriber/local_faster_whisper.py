@@ -14,6 +14,7 @@ from typing import Callable
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
+    DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODEL_SIZE,
     DOC_MODELS_PATH,
@@ -27,6 +28,7 @@ from ..config import (
     STREAMING_PARTIAL_WINDOW_S,
     VALID_MODEL_SIZES,
     language_modes_for_selection,
+    parse_custom_vocabulary,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ..streaming_text import append_only_stream_partial_candidate
@@ -370,6 +372,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         model_factory=None,
         offline_mode: bool = False,
         model_dir: str = "",
+        custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
     ) -> None:
         self.model_size = model_size
         self.language_mode = language_mode
@@ -386,6 +389,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self._model_lock = threading.Lock()
         self._offline_mode = offline_mode
         self._model_dir = (model_dir or "").strip()
+        self._initial_prompt = self._build_initial_prompt(custom_vocabulary)
 
         self._stream_lock = threading.Lock()
         self._stream_active = False
@@ -454,6 +458,20 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             return None
         return mode
 
+    @staticmethod
+    def _build_initial_prompt(custom_vocabulary: str) -> str | None:
+        """Build the Whisper ``initial_prompt`` from the custom vocabulary setting.
+
+        Whisper's biasing convention treats ``initial_prompt`` as prior context
+        text; a plain comma-separated term list nudges recognition toward those
+        terms. Returns ``None`` when no terms are configured so the parameter
+        is omitted entirely.
+        """
+        terms = parse_custom_vocabulary(custom_vocabulary)
+        if not terms:
+            return None
+        return ", ".join(terms)
+
     def _format_transcription_error(self, exc: Exception) -> str:
         if isinstance(exc, ModuleNotFoundError):
             missing = exc.name or "unknown"
@@ -509,11 +527,13 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 raise TranscriptionCanceled()
 
             model = self._ensure_model()
-            segments, _info = model.transcribe(
-                input_for_model,
-                language=self._language_arg(),
-                vad_filter=self.vad_filter,
-            )
+            transcribe_kwargs: dict = {
+                "language": self._language_arg(),
+                "vad_filter": self.vad_filter,
+            }
+            if self._initial_prompt:
+                transcribe_kwargs["initial_prompt"] = self._initial_prompt
+            segments, _info = model.transcribe(input_for_model, **transcribe_kwargs)
 
             parts = []
             for segment in segments:

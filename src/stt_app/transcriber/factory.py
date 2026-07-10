@@ -31,6 +31,8 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
     unknown-engine fallback so the two cannot drift.
     """
     if settings.model_size in LOCAL_NEMOTRON_MODEL_SIZES:
+        # Nemotron's cache-aware ONNX Runtime GenAI streaming has no prompt/
+        # biasing input, so custom_vocabulary does not apply here.
         return LocalNemotronTranscriber(
             model_size=settings.model_size,
             language_mode=settings.language_mode,
@@ -39,6 +41,7 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             use_runtime_vad=settings.vad_enabled,
         )
     if settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
+        # Cohere/Granite ONNX/WebGPU models have no biasing input either.
         return LocalOnnxWebGpuTranscriber(
             model_size=settings.model_size,
             language_mode=settings.language_mode,
@@ -52,6 +55,7 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
         stream_final_full_pass=settings.streaming_full_final_transcript,
         offline_mode=settings.offline_mode,
         model_dir=settings.model_dir,
+        custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
     )
 
 
@@ -72,24 +76,28 @@ def create_transcriber(
             api_key=_api_key(secret_store, "assemblyai"),
             language_mode=settings.language_mode,
             model=settings.assemblyai_model,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
         )
     if settings.engine == "groq":
         return GroqTranscriber(
             api_key=_api_key(secret_store, "groq"),
             language_mode=settings.language_mode,
             model=settings.groq_model,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
         )
     if settings.engine == "openai":
         return OpenAITranscriber(
             api_key=_api_key(secret_store, "openai"),
             language_mode=settings.language_mode,
             model=settings.openai_model,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
         )
     if settings.engine == "deepgram":
         return DeepgramTranscriber(
             api_key=_api_key(secret_store, "deepgram"),
             language_mode=settings.language_mode,
             model=settings.deepgram_model,
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
         )
     if settings.engine == "elevenlabs":
         return ElevenLabsTranscriber(

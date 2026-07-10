@@ -13,7 +13,13 @@ import tempfile
 from pathlib import Path
 
 from ..app_paths import temp_audio_dir
-from ..config import DEFAULT_GROQ_MODEL, DOC_SSL_PROXY_PATH, language_modes_for_selection
+from ..config import (
+    DEFAULT_CUSTOM_VOCABULARY,
+    DEFAULT_GROQ_MODEL,
+    DOC_SSL_PROXY_PATH,
+    language_modes_for_selection,
+    parse_custom_vocabulary,
+)
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from .base import (
     AudioInput,
@@ -61,6 +67,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
         model: str = DEFAULT_GROQ_MODEL,
         *,
         groq_client_class=None,
+        custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
     ) -> None:
         ProgressReporter.__init__(self)
         if not api_key:
@@ -78,6 +85,7 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
             self._language_mode = "auto"
         self._groq_class = groq_client_class  # None → lazy import on first use
         self._client = None
+        self._prompt = ", ".join(parse_custom_vocabulary(custom_vocabulary))
 
     def _get_groq_class(self):
         if self._groq_class is None:
@@ -146,6 +154,8 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
 
             if self._language_mode != "auto":
                 kwargs["language"] = self._language_mode
+            if self._prompt:
+                kwargs["prompt"] = self._prompt
 
             with open(file_path, "rb") as audio_file:
                 kwargs["file"] = (Path(file_path).name, audio_file)

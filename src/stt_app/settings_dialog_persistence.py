@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
+    DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_ELEVENLABS_MODEL,
@@ -113,6 +114,9 @@ class _PersistenceMixin:
         self._select_combo_data(self.concurrent_mode_combo, concurrent_mode)
         self._update_mode_availability()
         self._update_language_availability(preferred_mode=settings.language_mode)
+        self.custom_vocabulary_edit.setPlainText(
+            str(getattr(settings, "custom_vocabulary", DEFAULT_CUSTOM_VOCABULARY))
+        )
         self._update_local_model_runtime_warning()
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(
@@ -403,6 +407,7 @@ class _PersistenceMixin:
             language_mode=str(
                 self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
             ),
+            custom_vocabulary=self.custom_vocabulary_edit.toPlainText(),
             vad_enabled=self.vad_checkbox.isChecked(),
             keep_microphone_warm=(
                 self.keep_microphone_warm_checkbox.isChecked()

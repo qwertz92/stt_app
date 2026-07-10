@@ -23,6 +23,7 @@ from stt_app.config import (
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
 )
+from stt_app.config import parse_custom_vocabulary
 from stt_app.persistence import backup_path
 from stt_app.settings_store import AppSettings, CURRENT_SCHEMA_VERSION, SettingsStore
 
@@ -516,6 +517,27 @@ def test_corrupt_primary_and_backup_are_both_quarantined(tmp_path):
     assert list(tmp_path.glob("settings.json.bak.corrupt.*"))
 
 
+def test_custom_vocabulary_defaults_to_empty(tmp_path):
+    settings = SettingsStore(tmp_path / "settings.json").load()
+
+    assert settings.custom_vocabulary == ""
+
+
+def test_custom_vocabulary_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"custom_vocabulary": "Kubernetes, Splunk SOAR"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.custom_vocabulary == "Kubernetes, Splunk SOAR"
+
+    persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+    assert persisted["custom_vocabulary"] == "Kubernetes, Splunk SOAR"
+
+
 def test_save_succeeds_when_backup_write_fails(tmp_path, monkeypatch):
     import stt_app.persistence as persistence_module
     from stt_app.persistence import atomic_write_text as real_atomic_write_text
@@ -536,3 +558,67 @@ def test_save_succeeds_when_backup_write_fails(tmp_path, monkeypatch):
     SettingsStore(settings_path).save(AppSettings())
 
     assert settings_path.exists() is True
+
+
+class TestParseCustomVocabulary:
+    def test_empty_string_gives_empty_list(self):
+        assert parse_custom_vocabulary("") == []
+
+    def test_none_gives_empty_list(self):
+        assert parse_custom_vocabulary(None) == []
+
+    def test_splits_on_commas(self):
+        assert parse_custom_vocabulary("Kubernetes, Splunk SOAR") == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+
+    def test_splits_on_newlines(self):
+        assert parse_custom_vocabulary("Kubernetes\nSplunk SOAR") == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+
+    def test_splits_on_semicolons(self):
+        assert parse_custom_vocabulary("Kubernetes; Splunk SOAR") == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+
+    def test_splits_on_mixed_delimiters(self):
+        assert parse_custom_vocabulary("Kubernetes,\nSplunk SOAR; Terraform") == [
+            "Kubernetes",
+            "Splunk SOAR",
+            "Terraform",
+        ]
+
+    def test_strips_whitespace_around_terms(self):
+        assert parse_custom_vocabulary("  Kubernetes  ,  Splunk SOAR  ") == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+
+    def test_drops_empty_entries(self):
+        assert parse_custom_vocabulary("Kubernetes,,, Splunk SOAR,") == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+
+    def test_dedupes_case_insensitively_preserving_first_seen_casing(self):
+        assert parse_custom_vocabulary("Kubernetes, kubernetes, KUBERNETES") == [
+            "Kubernetes",
+        ]
+
+    def test_preserves_order(self):
+        assert parse_custom_vocabulary("Splunk SOAR, Kubernetes, Terraform") == [
+            "Splunk SOAR",
+            "Kubernetes",
+            "Terraform",
+        ]
+
+    def test_caps_at_100_terms(self):
+        raw = ", ".join(f"term{i}" for i in range(150))
+        result = parse_custom_vocabulary(raw)
+        assert len(result) == 100
+        assert result[0] == "term0"
+        assert result[-1] == "term99"
