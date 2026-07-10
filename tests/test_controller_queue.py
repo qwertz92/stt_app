@@ -744,6 +744,35 @@ def test_immediate_insert_blocked_during_streaming_recording(
     _ = app
 
 
+def test_streaming_abort_preserves_partial_transcript(monkeypatch, tmp_path):
+    """An aborted stream keeps its partial transcript in history and overlay.
+
+    Regression: a focus-change or cancel abort dropped everything already
+    transcribed from the UI and history; only the text pasted so far survived
+    in the target window.
+    """
+    controller, app, overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    assert controller._streaming_recording is True
+
+    controller._on_transcription_partial("hello world this is a partial")
+    controller._abort_streaming_session(
+        "Streaming aborted: target window focus changed.",
+        beep=False,
+        finalize_stream=False,
+    )
+
+    assert [e.text for e in history.load()] == ["hello world this is a partial"]
+    assert overlay.states[-1][0] == "Error"
+    assert "Partial transcript" in overlay.states[-1][1]
+    assert controller._last_transcript == "hello world this is a partial"
+    controller.shutdown()
+    _ = app
+
+
 def test_silence_gate_skips_transcription_of_silent_recording(
     monkeypatch,
     tmp_path,

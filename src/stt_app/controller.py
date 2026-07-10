@@ -2565,6 +2565,17 @@ class DictationController(QtCore.QObject):
         if beep:
             self._play_abort_beep()
 
+        # Capture the best-known live transcript before the state reset wipes
+        # it: an aborted stream used to lose everything already transcribed
+        # from the UI and history (only the text pasted so far survived in
+        # the target window). A finished transcription is never discarded —
+        # the same applies to an aborted one's partial text.
+        partial_transcript = normalize_stream_text(
+            self._stream_text_state.live_text
+            or self._stream_text_state.last_partial_text
+        )
+        partial_settings = self._active_stream_settings or replace(self._settings)
+
         self._focus_poll_timer.stop()
         capture = self._audio_capture
         self._audio_capture = None
@@ -2599,7 +2610,19 @@ class DictationController(QtCore.QObject):
         self._streaming_recording = False
         self._active_stream_settings = None
         self._reset_streaming_state()
-        self._overlay.set_state("Error", reason)
+        if partial_transcript.strip():
+            self._append_transcript_history(
+                partial_transcript, partial_settings, "streaming"
+            )
+            self._last_transcript = partial_transcript
+            self._overlay.set_state(
+                "Error",
+                f"{reason} Partial transcript (saved to history): "
+                f"{partial_transcript}",
+            )
+        else:
+            self._overlay.set_state("Error", reason)
+        self._reveal_overlay_result(is_error=True)
         # Aborting this session removed the capture that was blocking any
         # deferred background inserts; deliver every completed one now — even if
         # another transcription is still running — instead of leaving them stuck.
