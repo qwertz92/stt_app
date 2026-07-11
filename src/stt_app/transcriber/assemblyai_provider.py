@@ -1,7 +1,7 @@
 """AssemblyAI remote transcription provider.
 
 Batch transcription via the AssemblyAI Python SDK.
-Real-time streaming via AssemblyAI's Universal-Streaming (v3) WebSocket API
+Real-time streaming via AssemblyAI's Universal-3 Pro (v3) WebSocket API
 (``assemblyai.streaming.v3.StreamingClient``); the legacy v2
 ``RealtimeTranscriber`` API has been retired by AssemblyAI.
 Requires: pip install assemblyai
@@ -331,7 +331,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        """Start a Universal-Streaming (v3) session.
+        """Start a Universal-3 Pro (v3) streaming session.
 
         The ``on_partial`` callback receives the accumulated transcript text
         (all completed turns + the current turn) each time an update arrives
@@ -392,19 +392,17 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     error,
                 ),
             )
-            # custom_vocabulary is intentionally not wired here: the installed
-            # SDK's streaming.v3.StreamingParameters has no word_boost/keyterms
-            # field (unlike the batch TranscriptionConfig), so there is no
-            # supported way to bias Universal-Streaming recognition.
-            client.connect(
-                StreamingParameters(
-                    sample_rate=AUDIO_SAMPLE_RATE,
-                    encoding=Encoding.pcm_s16le,
-                    speech_model=SpeechModel.universal_streaming_multilingual,
-                    language_detection=True,
-                    format_turns=True,
-                )
-            )
+            stream_kwargs = {
+                "sample_rate": AUDIO_SAMPLE_RATE,
+                "encoding": Encoding.pcm_s16le,
+                "speech_model": SpeechModel.u3_rt_pro,
+                "language_detection": True,
+            }
+            if self._word_boost:
+                # U3 Pro accepts up to 100 terms (up to six words each). The
+                # shared vocabulary parser already caps the app input at 100.
+                stream_kwargs["keyterms_prompt"] = self._word_boost
+            client.connect(StreamingParameters(**stream_kwargs))
         except Exception as exc:
             with self._stream_lock:
                 if (

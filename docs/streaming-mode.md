@@ -6,7 +6,7 @@ This document explains how streaming mode is implemented in this project, how it
 
 - `Batch` mode: stable default.
 - `Streaming` mode: implemented for local provider (`faster-whisper` and
-  Nemotron 3.5), AssemblyAI (Universal-Streaming v3 `StreamingClient`), and
+  Nemotron 3.5), AssemblyAI (Universal-3 Pro v3 `StreamingClient`), and
   Deepgram (WebSocket API).
 - Supported streaming engines are defined in `config.py` as `STREAMING_ENGINES`.
 - OpenAI and Groq are batch-only in this app. ElevenLabs offers real-time STT publicly, but the current integration is still batch-only.
@@ -106,11 +106,15 @@ Characteristics:
 
 ### AssemblyAI transcriber
 
-- `AssemblyAITranscriber` implements streaming via the Universal-Streaming v3
+- `AssemblyAITranscriber` implements streaming via Universal-3 Pro
+  (`speech_model="u3-rt-pro"`) in
   `assemblyai.streaming.v3.StreamingClient`; the legacy v2 realtime API was
   retired by AssemblyAI.
-- `start_stream()` connects with the `universal-streaming-multilingual`
-  model, language detection, and formatted turns.
+- `start_stream()` enables native six-language code switching and language
+  detection. Formatting is built into U3 Pro rather than enabled with the
+  legacy `format_turns` parameter.
+- General-tab vocabulary is sent through U3 Pro `keyterms_prompt` (up to 100
+  app terms); a multi-word phrase remains one keyterm.
 - `push_audio_chunk()` enqueues raw PCM16 through `client.stream()` (the SDK
   sends from its own writer thread).
 - Turn events carry the finalized words of one turn; text is keyed by
@@ -174,8 +178,9 @@ streaming. Its current ONNX export is fixed to 560 ms latency. The app's normal
 dependency lock currently provides CPU execution; DirectML is attempted when a
 compatible runtime becomes available.
 
-AssemblyAI streaming uses the Universal-Streaming multilingual model (the
-batch model selection does not apply to streaming).
+AssemblyAI streaming uses Universal-3 Pro Streaming. The batch selector still
+controls only pre-recorded routing (`universal-3-pro` with optional
+`universal-2` fallback).
 Deepgram streaming uses the selected Deepgram model.
 
 ## 7) Tuning points

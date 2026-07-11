@@ -409,10 +409,34 @@ class TestAssemblyAIStreaming:
         params = client.connect_params
         assert params.sample_rate == 16000
         assert str(params.encoding) == "pcm_s16le"
-        assert str(params.speech_model) == "universal-streaming-multilingual"
+        assert str(params.speech_model) == "u3-rt-pro"
         assert params.language_detection is True
-        assert params.format_turns is True
+        assert params.format_turns is None
         t.abort_stream()
+
+    def test_start_stream_passes_custom_vocabulary_as_u3_keyterms(self):
+        fake_aai = _make_fake_aai()
+        clients: list[FakeStreamingClient] = []
+
+        def factory(key):
+            client = FakeStreamingClient(api_key=key)
+            clients.append(client)
+            return client
+
+        transcriber = AssemblyAITranscriber(
+            api_key="key",
+            aai_module=fake_aai,
+            streaming_client_factory=factory,
+            custom_vocabulary="Kubernetes, Splunk SOAR",
+        )
+
+        transcriber.start_stream()
+
+        assert clients[0].connect_params.keyterms_prompt == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+        transcriber.abort_stream()
 
     def test_push_audio_chunk_forwards_data(self):
         """push_audio_chunk sends data to the streaming client."""
