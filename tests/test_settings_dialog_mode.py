@@ -2886,7 +2886,7 @@ def test_settings_dialog_logs_local_tab_timing(caplog, monkeypatch):
     _ = app
 
 
-def test_settings_dialog_show_expands_to_remote_tab_width():
+def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
     dialog = SettingsDialog(
@@ -2912,7 +2912,13 @@ def test_settings_dialog_show_expands_to_remote_tab_width():
         available_width,
     )
     assert dialog.width() >= expected_width
-    assert remote_tab.horizontalScrollBar().maximum() == 0
+    preferred_width = dialog._preferred_dialog_size().width()
+    if available_width >= preferred_width:
+        assert remote_tab.horizontalScrollBar().maximum() == 0
+    else:
+        # On a very small or strongly scaled screen, preserve readable field
+        # widths and expose horizontal scrolling instead of growing off-screen.
+        assert dialog.width() == available_width
     _ = app
 
 
