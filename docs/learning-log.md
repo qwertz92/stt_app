@@ -1676,6 +1676,12 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-11
 
+- **Repository quality gates now run before release time:**
+  - Added a read-only GitHub Actions workflow that installs the locked Python
+    environment and runs Ruff plus the complete pytest suite on Windows.
+  - Added a separate fast JavaScript lockfile audit so vulnerable WebGPU runtime
+    dependencies fail review branches and pull requests without downloading
+    model assets or executing package install scripts.
 - **JavaScript runtime dependency audit:**
   - `npm audit` found high/moderate advisories in the transitive `protobufjs`
     tree used by `onnxruntime-web`.

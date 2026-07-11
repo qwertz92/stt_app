@@ -1,3 +1,4 @@
+---
 name: Windows Release
 
 on:
@@ -28,7 +29,7 @@ jobs:
           python-version: "3.12"
 
       - name: Set up uv
-        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b  # v8.1.0
         with:
           enable-cache: true
 
@@ -81,7 +82,8 @@ jobs:
             Portable bundle. Extract it anywhere and run `stt_app.exe` from the extracted folder.
 
           - `Source code (zip/tar.gz)`
-            GitHub adds these archives automatically. They contain the repository source for developers, not the built Windows app.
+            GitHub adds these archives automatically. They contain the repository
+            source for developers, not the built Windows app.
           '@ | Set-Content -Encoding UTF8 $notesPath
 
           gh release view $tag *> $null

@@ -366,6 +366,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   changed, pushes, tags, and pushes the tag. GitHub Actions release notes that
   contain Markdown backticks must use a literal PowerShell here-string (`@'`) so
   asset-name backticks are not consumed as PowerShell escapes.
+- **Continuous quality gates**: `.github/workflows/quality.yml` runs Ruff and
+  the complete pytest suite on Windows for `main`, review branches, and pull
+  requests. It also audits the locked production JavaScript dependency tree on
+  Linux. Keep release publishing separate in `windows-release.yml`.
 - **Portable Node bootstrap security**: `scripts/setup_node_windows.py` accepts
   numeric `major.minor.patch` versions only, verifies every downloaded archive
   against that release directory's `SHASUMS256.txt`, and rejects ZIP members
