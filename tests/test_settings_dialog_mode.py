@@ -1963,6 +1963,9 @@ def test_save_with_key_error_does_not_mutate_settings_history_or_emit_signal():
         def count(self) -> int:
             return 0
 
+        def recent_entries_with_count(self, _limit: int):
+            return [], 0
+
         def apply_max_items(self, value: int) -> int:
             self.applied_limits.append(int(value))
             return 0
@@ -2037,6 +2040,9 @@ def test_settings_save_failure_does_not_trim_history_or_emit_signal():
         def count(self) -> int:
             return 0
 
+        def recent_entries_with_count(self, _limit: int):
+            return [], 0
+
         def apply_max_items(self, value: int) -> int:
             self.applied_limits.append(value)
             return 0
@@ -2066,6 +2072,9 @@ def test_history_cleanup_failure_keeps_saved_settings_and_reports_error():
     class _FailingHistoryStore:
         def count(self) -> int:
             return 0
+
+        def recent_entries_with_count(self, _limit: int):
+            return [], 0
 
         def apply_max_items(self, _value: int) -> int:
             raise OSError("history file is locked")

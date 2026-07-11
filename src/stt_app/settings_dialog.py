@@ -735,22 +735,40 @@ class SettingsDialog(
 
     def _schedule_settings_tab_prewarm(self) -> None:
         if self._local_tab_index not in self._settings_perf_prewarmed_tab_indexes:
-            QtCore.QTimer.singleShot(
+            self._schedule_owned_callback(
                 25,
                 lambda: self._prewarm_settings_tabs((self._local_tab_index,)),
             )
         if self._benchmark_tab_index not in self._settings_perf_prewarmed_tab_indexes:
-            QtCore.QTimer.singleShot(
+            self._schedule_owned_callback(
                 800,
                 lambda: self._prewarm_settings_tabs((self._benchmark_tab_index,)),
             )
+
+    def _schedule_owned_callback(
+        self,
+        delay_ms: int,
+        callback: Callable[[], None],
+    ) -> None:
+        """Run a delayed callback only while this dialog still exists."""
+        timer = QtCore.QTimer(self)
+        timer.setSingleShot(True)
+
+        def invoke() -> None:
+            try:
+                callback()
+            finally:
+                timer.deleteLater()
+
+        timer.timeout.connect(invoke)
+        timer.start(max(0, int(delay_ms)))
 
     def prepare_for_first_show(self) -> None:
         self._prewarm_settings_tabs(
             (self._local_tab_index,),
             require_visible=False,
         )
-        QtCore.QTimer.singleShot(
+        self._schedule_owned_callback(
             800,
             lambda: self._prewarm_settings_tabs(
                 (self._benchmark_tab_index,),
@@ -892,7 +910,7 @@ class SettingsDialog(
         self._log_settings_timing("show_event", started_at)
         if not self._settings_perf_logged_first_show:
             self._settings_perf_logged_first_show = True
-            QtCore.QTimer.singleShot(
+            self._schedule_owned_callback(
                 0,
                 lambda started_at=started_at: self._log_settings_timing(
                     "first_show_paint",
@@ -927,7 +945,7 @@ class SettingsDialog(
             tab=tab_name,
             first_visit=first_visit,
         )
-        QtCore.QTimer.singleShot(
+        self._schedule_owned_callback(
             0,
             lambda index=_index, started_at=started_at: self._log_tab_paint_timing(
                 index,

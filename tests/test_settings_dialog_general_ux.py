@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import pytest
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
@@ -222,3 +222,16 @@ def test_dynamic_notes_fit_their_reserved_area(
             assert required_height <= label.height(), (engine, label.text())
 
     assert dialog.language_note_label.text().strip()
+
+
+def test_owned_delayed_callback_is_cancelled_with_its_dialog() -> None:
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    owner = QtWidgets.QDialog()
+    calls: list[str] = []
+
+    SettingsDialog._schedule_owned_callback(owner, 10, lambda: calls.append("called"))
+    owner.deleteLater()
+    app.sendPostedEvents(owner, QtCore.QEvent.DeferredDelete)
+    QtTest.QTest.qWait(25)
+
+    assert calls == []
