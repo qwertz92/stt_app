@@ -1676,6 +1676,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-11
 
+- **JavaScript runtime dependency audit:**
+  - `npm audit` found high/moderate advisories in the transitive `protobufjs`
+    tree used by `onnxruntime-web`.
+  - Refreshed the lockfile to patched `protobufjs` 7.6.5 and
+    `@protobufjs/utf8` 1.1.2 without changing the direct runtime versions.
+  - The three WebGPU runtime imports still load successfully and the production
+    dependency audit reports no known vulnerabilities.
 - **Portable Node bootstrap supply-chain hardening:**
   - The bootstrap previously trusted any non-empty archive returned by either
     configured mirror and passed it directly to `ZipFile.extractall`.
