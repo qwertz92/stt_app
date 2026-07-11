@@ -17,6 +17,9 @@ GITHUB_LATEST_RELEASE_API = (
 
 _UrlOpen = Callable[..., Any]
 _MAX_RELEASE_RESPONSE_BYTES = 1_000_000
+INSTALLER_ASSET_NAME = "stt_app-win-x64-setup.exe"
+INSTALLER_CHECKSUM_ASSET_NAME = f"{INSTALLER_ASSET_NAME}.sha256"
+_MAX_INSTALLER_BYTES = 1_000_000_000
 _SEMVER_RE = re.compile(
     r"^v?(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)"
     r"(?:-([0-9A-Za-z.-]+))?$"
@@ -31,6 +34,18 @@ class UpdateCheckResult:
     release_url: str = GITHUB_RELEASES_URL
     update_available: bool = False
     error: str = ""
+    installer_url: str = ""
+    installer_size: int = 0
+    installer_checksum_url: str = ""
+
+    @property
+    def supports_in_app_update(self) -> bool:
+        return bool(
+            self.update_available
+            and self.installer_url
+            and self.installer_checksum_url
+            and 0 < self.installer_size <= _MAX_INSTALLER_BYTES
+        )
 
 
 def _version_parts(value: str) -> tuple[tuple[int, int, int], tuple] | None:
@@ -80,6 +95,76 @@ def _trusted_release_url(value: object) -> str:
     return urllib.parse.urlunsplit(("https", "github.com", parsed.path, "", ""))
 
 
+def trusted_release_asset_url(
+    value: object,
+    *,
+    release_tag: str,
+    asset_name: str,
+) -> str:
+    candidate = str(value or "").strip()
+    expected_path = (
+        f"/qwertz92/stt_app/releases/download/"
+        f"{urllib.parse.quote(release_tag, safe='')}/{asset_name}"
+    )
+    try:
+        parsed = urllib.parse.urlsplit(candidate)
+        port = parsed.port
+    except ValueError:
+        return ""
+    if (
+        parsed.scheme.lower() != "https"
+        or str(parsed.hostname or "").lower() != "github.com"
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in (None, 443)
+        or parsed.path != expected_path
+        or parsed.query
+        or parsed.fragment
+    ):
+        return ""
+    return urllib.parse.urlunsplit(("https", "github.com", expected_path, "", ""))
+
+
+def _installer_assets(
+    payload: dict[str, Any],
+    *,
+    release_tag: str,
+) -> tuple[str, int, str]:
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        return "", 0, ""
+    installer_url = ""
+    installer_size = 0
+    checksum_url = ""
+    for raw_asset in assets:
+        if not isinstance(raw_asset, dict):
+            continue
+        name = str(raw_asset.get("name", ""))
+        if name not in {INSTALLER_ASSET_NAME, INSTALLER_CHECKSUM_ASSET_NAME}:
+            continue
+        url = trusted_release_asset_url(
+            raw_asset.get("browser_download_url"),
+            release_tag=release_tag,
+            asset_name=name,
+        )
+        if not url:
+            continue
+        if name == INSTALLER_ASSET_NAME:
+            try:
+                size = int(raw_asset.get("size", 0))
+            except (TypeError, ValueError):
+                continue
+            if not 0 < size <= _MAX_INSTALLER_BYTES:
+                continue
+            installer_url = url
+            installer_size = size
+        else:
+            checksum_url = url
+    if not installer_url or not checksum_url:
+        return "", 0, ""
+    return installer_url, installer_size, checksum_url
+
+
 def _latest_release_payload(
     *,
     timeout_s: float,
@@ -125,12 +210,19 @@ def check_for_updates(
             latest_tag[1:] if latest_tag.lower().startswith("v") else latest_tag
         )
         release_url = _trusted_release_url(payload.get("html_url"))
+        installer_url, installer_size, checksum_url = _installer_assets(
+            payload,
+            release_tag=latest_tag,
+        )
         return UpdateCheckResult(
             current_version=current_version,
             latest_version=latest_version,
             latest_tag=latest_tag,
             release_url=release_url,
             update_available=is_newer_version(latest_version, current_version),
+            installer_url=installer_url,
+            installer_size=installer_size,
+            installer_checksum_url=checksum_url,
         )
     except urllib.error.URLError as exc:
         return UpdateCheckResult(

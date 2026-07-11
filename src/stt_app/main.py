@@ -29,7 +29,7 @@ from .ssl_utils import inject_system_trust_store, sync_ca_bundle_env_vars
 from .text_inserter import TextInserter
 from .transcript_history import TranscriptHistoryStore
 from .update_checker import UpdateCheckResult, check_for_updates
-from .update_ui import show_update_available_dialog
+from .update_ui import show_update_available_dialog, show_update_status_dialog
 from .app_paths import appdata_root
 
 
@@ -411,18 +411,22 @@ class _TrayUpdateChecker(QtCore.QObject):
                 except Exception:
                     pass
             if manual:
-                QtWidgets.QMessageBox.warning(
-                    self._parent_widget,
-                    "Update check failed",
-                    result.error,
+                show_update_status_dialog(
+                    parent=self._parent_widget,
+                    title="Update check failed",
+                    text=result.error,
+                    icon=QtWidgets.QMessageBox.Warning,
                 )
             return
 
         if manual:
-            QtWidgets.QMessageBox.information(
-                self._parent_widget,
-                "No update available",
-                f"Version {result.current_version} is up to date.",
+            show_update_status_dialog(
+                parent=self._parent_widget,
+                title="You're up to date",
+                text=(
+                    f"Version {result.current_version} is installed. "
+                    "No newer release is available."
+                ),
             )
 
 

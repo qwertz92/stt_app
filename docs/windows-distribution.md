@@ -107,6 +107,7 @@ Candidate outputs:
 
 - `stt_app-win-x64.zip`
 - `stt_app-win-x64-setup.exe`
+- `stt_app-win-x64-setup.exe.sha256`
 
 The workflow uploads the ZIP and installer together as one short-lived
 candidate artifact. It does not upload the extracted portable folder a second
@@ -145,6 +146,7 @@ tag, and pushes the tag.
 Release pages intentionally publish both user-facing Windows assets:
 
 - `stt_app-win-x64-setup.exe` is the recommended installer for most users.
+- `stt_app-win-x64-setup.exe.sha256` lets the app verify an installer download.
 - `stt_app-win-x64.zip` is the portable bundle for users who do not want an
   installer.
 
@@ -181,24 +183,78 @@ This gives you a clean separation:
 
 ### Phase 3: Code signing
 
-Before broader rollout, sign the built executable and DLLs. This matters for:
+Before broader rollout, sign the built executable and installer with Windows
+Authenticode. This matters for:
 
 - SmartScreen reputation
 - antivirus / EDR
 - corporate deployment acceptance
 
+A GitHub **Verified** commit and a signed Windows executable solve different
+problems:
+
+- a [verified commit or tag](https://docs.github.com/en/authentication/managing-commit-signature-verification/about-commit-signature-verification)
+  proves which Git identity created that Git object;
+- an [Authenticode signature](https://learn.microsoft.com/en-us/windows/win32/seccrypto/signtool)
+  lets Windows verify who published the downloaded `.exe` and whether it
+  changed after signing.
+
+The former does not automatically sign release assets. The current release
+workflow creates a checksum, but it does not yet own a code-signing certificate.
+Until that prerequisite is configured, the app can download and checksum an
+update but deliberately refuses to launch it automatically.
+
+Recommended signing rollout:
+
+1. Obtain a publicly trusted code-signing identity from a certificate authority
+   or a managed service such as
+   [Azure Artifact Signing](https://learn.microsoft.com/en-us/azure/artifact-signing/how-to-signing-integrations).
+   Keep private signing keys out of the repository and ordinary GitHub secrets.
+2. Add a GitHub Actions signing step after the installer build and before
+   `Create installer checksum`. A managed signing action or hardware-backed key
+   is preferable to exporting a reusable private key into the runner.
+3. Sign at least `stt_app.exe` and `stt_app-win-x64-setup.exe`, using an RFC 3161
+   timestamp so existing releases remain valid after certificate expiry.
+4. Verify both signatures in CI and fail the release if Windows does not report
+   `Valid`.
+5. Add the exact certificate subject reported by
+   `Get-AuthenticodeSignature` to
+   `TRUSTED_WINDOWS_PUBLISHER_SUBJECTS` in `update_installer.py`. This pins the
+   updater to the expected publisher instead of accepting any valid signer.
+6. Generate the SHA-256 file only after signing, then publish the installer and
+   checksum together.
+
+### In-app update behavior
+
+The update checker reads the latest GitHub Release asynchronously. For a
+one-click-capable release, it requires the exact installer asset and its exact
+`.sha256` companion. The download dialog then:
+
+1. downloads without blocking the Qt UI,
+2. keeps incomplete bytes in a `.partial` file,
+3. enforces the size declared by GitHub,
+4. verifies SHA-256 before publishing the local installer,
+5. asks Windows to verify the Authenticode signature and pinned publisher,
+6. shows **Install update** only after every check succeeds.
+
+Installation is always a separate user click. Unsigned, unpinned, redirected,
+oversized, truncated, or checksum-mismatched installers are never launched by
+the app. Older releases without the checksum asset retain the safe **Open
+release** fallback.
+
 ### Phase 4: Optional installer polish
 
-Once the bundle is stable, consider adding a lightweight Windows installer.
+The repository already wraps the portable bundle in an Inno Setup installer.
+After signing is in place, continue polishing that established path instead of
+introducing a second installer format without a concrete distribution need.
 
 Recommended options:
 
 - **Inno Setup** for a pragmatic traditional installer
 - **MSIX** only if you specifically need enterprise packaging policies
 
-For the current app, Inno Setup is the simpler next step. The repository now
-contains that installer path already; further work here mainly means polish
-(branding, code signing, upgrade handling, and optional auto-start settings).
+For the current app, Inno Setup remains the simpler path; further work mainly
+means branding, upgrade handling, and optional auto-start settings.
 
 ### Phase 5: Optional `winget`
 

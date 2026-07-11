@@ -86,7 +86,7 @@ from .transcript_history import (
 )
 from .ui_feedback import BUTTON_FEEDBACK_STYLESHEET, reserve_button_width_for_texts
 from .update_checker import UpdateCheckResult, check_for_updates
-from .update_ui import show_update_available_dialog
+from .update_ui import show_update_available_dialog, show_update_status_dialog
 
 if TYPE_CHECKING:
     from .controller import DictationController
@@ -978,10 +978,11 @@ class SettingsDialog(
 
         if result.error:
             self._set_bottom_status("Update check failed", "#b71c1c")
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Update check failed",
-                result.error,
+            show_update_status_dialog(
+                parent=self,
+                title="Update check failed",
+                text=result.error,
+                icon=QtWidgets.QMessageBox.Warning,
             )
             return
         self._set_bottom_status("Already up to date")

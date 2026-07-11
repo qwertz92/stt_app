@@ -292,9 +292,9 @@ def test_tray_update_action_runs_manual_check_without_update(monkeypatch):
     messages: list[tuple[str, str]] = []
     monkeypatch.setattr(main_module.threading, "Thread", ImmediateThread)
     monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "information",
-        lambda _parent, title, text: messages.append((title, text)),
+        main_module,
+        "show_update_status_dialog",
+        lambda **kwargs: messages.append((kwargs["title"], kwargs["text"])),
     )
     tray = FakeTrayIcon()
     action = QtGui.QAction("Check for updates")
@@ -310,7 +310,12 @@ def test_tray_update_action_runs_manual_check_without_update(monkeypatch):
     checker.start(manual=True, action=action)
 
     assert action.isEnabled() is True
-    assert messages == [("No update available", "Version 0.4.1 is up to date.")]
+    assert messages == [
+        (
+            "You're up to date",
+            "Version 0.4.1 is installed. No newer release is available.",
+        )
+    ]
     assert tray.messages == []
     _ = app
 
@@ -329,9 +334,9 @@ def test_manual_update_request_promotes_active_startup_check(monkeypatch):
 
     monkeypatch.setattr(main_module.threading, "Thread", DeferredThread)
     monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "information",
-        lambda _parent, title, text: dialogs.append((title, text)),
+        main_module,
+        "show_update_status_dialog",
+        lambda **kwargs: dialogs.append((kwargs["title"], kwargs["text"])),
     )
     checker = _TrayUpdateChecker(
         tray_icon=FakeTrayIcon(),
@@ -347,7 +352,12 @@ def test_manual_update_request_promotes_active_startup_check(monkeypatch):
     pending_targets[0]()
     app.processEvents()
 
-    assert dialogs == [("No update available", "Version 0.6.0 is up to date.")]
+    assert dialogs == [
+        (
+            "You're up to date",
+            "Version 0.6.0 is installed. No newer release is available.",
+        )
+    ]
     assert action.isEnabled() is True
     _ = app
 

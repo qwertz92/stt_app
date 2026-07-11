@@ -3,7 +3,12 @@ from __future__ import annotations
 import json
 import urllib.error
 
-from stt_app.update_checker import check_for_updates, is_newer_version
+from stt_app.update_checker import (
+    INSTALLER_ASSET_NAME,
+    INSTALLER_CHECKSUM_ASSET_NAME,
+    check_for_updates,
+    is_newer_version,
+)
 
 
 class _FakeResponse:
@@ -48,6 +53,63 @@ def test_check_for_updates_reports_available_release():
     assert result.latest_tag == "v0.4.2"
     assert result.latest_version == "0.4.2"
     assert result.error == ""
+
+
+def test_check_for_updates_exposes_matching_installer_and_checksum_assets():
+    base = "https://github.com/qwertz92/stt_app/releases/download/v0.4.2/"
+    result = check_for_updates(
+        current_version="0.4.1",
+        urlopen=lambda *_args, **_kwargs: _FakeResponse(
+            {
+                "tag_name": "v0.4.2",
+                "assets": [
+                    {
+                        "name": INSTALLER_ASSET_NAME,
+                        "browser_download_url": base + INSTALLER_ASSET_NAME,
+                        "size": 123456,
+                    },
+                    {
+                        "name": INSTALLER_CHECKSUM_ASSET_NAME,
+                        "browser_download_url": base + INSTALLER_CHECKSUM_ASSET_NAME,
+                        "size": 99,
+                    },
+                ],
+            }
+        ),
+    )
+
+    assert result.supports_in_app_update is True
+    assert result.installer_url == base + INSTALLER_ASSET_NAME
+    assert result.installer_size == 123456
+    assert result.installer_checksum_url == base + INSTALLER_CHECKSUM_ASSET_NAME
+
+
+def test_check_for_updates_requires_both_trusted_update_assets():
+    base = "https://github.com/qwertz92/stt_app/releases/download/v0.4.2/"
+    result = check_for_updates(
+        current_version="0.4.1",
+        urlopen=lambda *_args, **_kwargs: _FakeResponse(
+            {
+                "tag_name": "v0.4.2",
+                "assets": [
+                    {
+                        "name": INSTALLER_ASSET_NAME,
+                        "browser_download_url": base + INSTALLER_ASSET_NAME,
+                        "size": 123456,
+                    },
+                    {
+                        "name": INSTALLER_CHECKSUM_ASSET_NAME,
+                        "browser_download_url": "https://attacker.example/file.sha256",
+                        "size": 99,
+                    },
+                ],
+            }
+        ),
+    )
+
+    assert result.update_available is True
+    assert result.supports_in_app_update is False
+    assert result.installer_url == ""
 
 
 def test_check_for_updates_reports_up_to_date_release():
