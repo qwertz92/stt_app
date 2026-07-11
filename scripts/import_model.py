@@ -30,12 +30,14 @@ import hashlib
 import os
 import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from stt_app.config import FASTER_WHISPER_MODEL_SIZES, MODEL_REPO_MAP  # noqa: E402
+from stt_app.persistence import atomic_write_text  # noqa: E402
 
 IMPORTABLE_MODEL_REPO_MAP = {
     name: MODEL_REPO_MAP[name] for name in FASTER_WHISPER_MODEL_SIZES
@@ -167,20 +169,23 @@ def compute_fake_hash(source_dir: Path) -> str:
     """Compute a deterministic hash for the snapshot directory name.
 
     HuggingFace uses git commit hashes for snapshot directories. Since we
-    don't have one for manually downloaded files, we create a deterministic
-    hash from the model.bin file size and config.json content. This ensures
-    the same files always produce the same snapshot directory name.
+    don't have one for manually downloaded files, hash every imported file's
+    name and content. Reading the weights is unavoidable during import anyway,
+    and content hashing prevents different same-sized models from sharing a
+    snapshot directory accidentally.
     """
     hasher = hashlib.sha256()
 
-    config_path = source_dir / "config.json"
-    if config_path.is_file():
-        hasher.update(config_path.read_bytes())
-
-    model_path = source_dir / "model.bin"
-    if model_path.is_file():
-        # Use file size (not content) to avoid reading multi-GB files
-        hasher.update(str(model_path.stat().st_size).encode())
+    all_relevant = REQUIRED_FILES | VOCABULARY_FILES | OPTIONAL_FILES
+    for filename in sorted(all_relevant):
+        path = source_dir / filename
+        if not path.is_file():
+            continue
+        hasher.update(filename.encode("utf-8"))
+        hasher.update(b"\0")
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                hasher.update(chunk)
 
     return hasher.hexdigest()[:40]
 
@@ -226,32 +231,67 @@ def import_model(
     refs_dir = model_root / "refs"
     snapshots_dir = model_root / "snapshots"
 
-    snapshot_hash = compute_fake_hash(source_dir)
-    snapshot_dir = snapshots_dir / snapshot_hash
-
     if dry_run:
+        snapshot_hash = compute_fake_hash(source_dir)
+        snapshot_dir = snapshots_dir / snapshot_hash
         print(f"[DRY RUN] Would create: {snapshot_dir}")
         print(f"[DRY RUN] Would copy files from: {source_dir}")
         return snapshot_dir
 
-    # Create directory structure
-    snapshot_dir.mkdir(parents=True, exist_ok=True)
+    # Stage the entire snapshot beside its final location. Publishing the
+    # directory and refs/main happens only after every copy and hash succeeds.
+    snapshots_dir.mkdir(parents=True, exist_ok=True)
     refs_dir.mkdir(parents=True, exist_ok=True)
 
-    # Copy model files
-    all_relevant = REQUIRED_FILES | VOCABULARY_FILES | OPTIONAL_FILES
-    copied = []
-    for filename in sorted(all_relevant):
-        src = source_dir / filename
-        if src.is_file():
-            dst = snapshot_dir / filename
-            shutil.copy2(src, dst)
-            size_mb = src.stat().st_size / (1024 * 1024)
-            copied.append(f"  {filename} ({size_mb:.1f} MB)")
+    staging_dir = Path(
+        tempfile.mkdtemp(prefix=".import-incomplete-", dir=snapshots_dir)
+    )
+    try:
+        all_relevant = REQUIRED_FILES | VOCABULARY_FILES | OPTIONAL_FILES
+        for filename in sorted(all_relevant):
+            src = source_dir / filename
+            if src.is_file():
+                shutil.copy2(src, staging_dir / filename)
+
+        snapshot_hash = compute_fake_hash(staging_dir)
+        snapshot_dir = snapshots_dir / snapshot_hash
+        if snapshot_dir.exists():
+            is_valid, _found, _missing = validate_model_files(snapshot_dir)
+            existing_hash = compute_fake_hash(snapshot_dir)
+            if is_valid and existing_hash == snapshot_hash:
+                shutil.rmtree(staging_dir)
+            else:
+                # Older versions could expose a partial snapshot directly at
+                # its final path. Replace such a stale directory while keeping
+                # it available for rollback until the staged snapshot is live.
+                displaced_dir = Path(
+                    tempfile.mkdtemp(
+                        prefix=f".{snapshot_hash}.displaced-",
+                        dir=snapshots_dir,
+                    )
+                )
+                displaced_dir.rmdir()
+                snapshot_dir.replace(displaced_dir)
+                try:
+                    staging_dir.replace(snapshot_dir)
+                except Exception:
+                    displaced_dir.replace(snapshot_dir)
+                    raise
+                else:
+                    shutil.rmtree(displaced_dir)
+        else:
+            try:
+                staging_dir.replace(snapshot_dir)
+            except FileExistsError:
+                # Another importer may have published the identical content.
+                shutil.rmtree(staging_dir)
+    finally:
+        if staging_dir.exists():
+            shutil.rmtree(staging_dir)
 
     # Write refs/main to point to our snapshot
     refs_main = refs_dir / "main"
-    refs_main.write_text(snapshot_hash, encoding="utf-8")
+    atomic_write_text(refs_main, snapshot_hash)
 
     return snapshot_dir
 
