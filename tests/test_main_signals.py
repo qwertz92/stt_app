@@ -413,6 +413,9 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
             self.set_window_state_calls += 1
             super().setWindowState(state)
 
+        def prepare_for_first_show(self):
+            return None
+
     monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
 
     tray = _create_tray_icon(

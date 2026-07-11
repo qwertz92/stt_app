@@ -417,6 +417,19 @@ def test_partial_sendinput_sends_keyup_cleanup_without_replaying(monkeypatch):
         text_inserter_module.ctypes,
         "WinDLL",
         lambda *_args, **_kwargs: FakeUser32(),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        text_inserter_module.ctypes,
+        "set_last_error",
+        lambda _value: None,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        text_inserter_module.ctypes,
+        "get_last_error",
+        lambda: 0,
+        raising=False,
     )
 
     with pytest.raises(TextInsertionError, match="sent 2/4"):
