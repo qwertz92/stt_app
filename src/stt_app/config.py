@@ -606,7 +606,27 @@ NEMOTRON_LANGUAGE_IDS: dict[str, int] = {
     "et": 60,
 }
 NEMOTRON_LANGUAGE_MODES = tuple(NEMOTRON_LANGUAGE_IDS)
-ASSEMBLYAI_UNIVERSAL_3_LANGUAGE_MODES = WHISPER_LANGUAGE_MODES
+ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES = (
+    "auto",
+    "de",
+    "en",
+    "ar",
+    "da",
+    "nl",
+    "fi",
+    "fr",
+    "he",
+    "hi",
+    "it",
+    "ja",
+    "no",
+    "pt",
+    "es",
+    "sv",
+    "tr",
+    "vi",
+    "zh",
+)
 DEEPGRAM_NOVA_3_LANGUAGE_MODES = (
     "auto",
     "de",
@@ -846,7 +866,10 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "granite-speech-4.1-2b-plus"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
     ("local", "granite-speech-4.1-2b-nar"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
     ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
-    ("assemblyai", "universal-3-pro"): ASSEMBLYAI_UNIVERSAL_3_LANGUAGE_MODES,
+    (
+        "assemblyai",
+        "universal-3-5-pro",
+    ): ASSEMBLYAI_UNIVERSAL_3_5_LANGUAGE_MODES,
     ("assemblyai", "universal-2"): WHISPER_LANGUAGE_MODES,
     ("deepgram", "nova-3"): DEEPGRAM_NOVA_3_LANGUAGE_MODES,
     ("deepgram", "nova-2"): DEEPGRAM_NOVA_2_LANGUAGE_MODES,
@@ -934,10 +957,10 @@ DEEPGRAM_MODELS = (
 DEFAULT_DEEPGRAM_MODEL = "nova-3"
 
 ASSEMBLYAI_MODELS = (
-    "universal-3-pro",
+    "universal-3-5-pro",
     "universal-2",
 )
-DEFAULT_ASSEMBLYAI_MODEL = "universal-3-pro"
+DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
 
 ELEVENLABS_MODELS = (
     "scribe_v2",

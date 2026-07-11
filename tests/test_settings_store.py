@@ -375,6 +375,18 @@ def test_legacy_assemblyai_model_falls_back_to_default(tmp_path):
     assert settings.assemblyai_model == DEFAULT_ASSEMBLYAI_MODEL
 
 
+def test_universal_3_pro_migrates_to_universal_3_5_pro(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"assemblyai_model": "universal-3-pro"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.assemblyai_model == "universal-3-5-pro"
+
+
 def test_invalid_hotkey_falls_back_to_default(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(

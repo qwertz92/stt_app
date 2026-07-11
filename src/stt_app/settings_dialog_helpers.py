@@ -65,7 +65,7 @@ _REMOTE_MODEL_LABELS: dict[str, str] = {
     "whisper-1": "whisper-1 (legacy whisper model)",
     "nova-3": "nova-3 (current default)",
     "nova-2": "nova-2 (older generation)",
-    "universal-3-pro": "universal-3-pro (highest accuracy, falls back to universal-2)",
+    "universal-3-5-pro": "universal-3-5-pro (latest, highest accuracy; 18 languages)",
     "universal-2": "universal-2 (fast, broad language coverage)",
     "scribe_v2": "scribe_v2 (current default, highest published accuracy)",
     "mai-transcribe-1.5": "mai-transcribe-1.5 (current default, 42 languages)",

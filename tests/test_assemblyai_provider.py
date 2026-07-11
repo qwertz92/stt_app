@@ -331,18 +331,15 @@ class TestAssemblyAILanguageConfig:
         config = t._build_config()
         assert config.kwargs.get("speech_models") == ["universal-2"]
 
-    def test_batch_model_uses_universal_3_with_fallback(self):
+    def test_batch_model_uses_only_universal_3_5_when_selected(self):
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(
             api_key="key",
-            model="universal-3-pro",
+            model="universal-3-5-pro",
             aai_module=fake_aai,
         )
         config = t._build_config()
-        assert config.kwargs.get("speech_models") == [
-            "universal-3-pro",
-            "universal-2",
-        ]
+        assert config.kwargs.get("speech_models") == ["universal-3-5-pro"]
 
     def test_legacy_batch_model_is_rejected(self):
         fake_aai = _make_fake_aai()
@@ -354,7 +351,7 @@ class TestAssemblyAILanguageConfig:
         with pytest.raises(TranscriptionError, match="Unsupported AssemblyAI model"):
             t._build_config()
 
-    def test_custom_vocabulary_sets_word_boost(self):
+    def test_custom_vocabulary_sets_keyterms_prompt(self):
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(
             api_key="key",
@@ -362,13 +359,17 @@ class TestAssemblyAILanguageConfig:
             custom_vocabulary="Kubernetes, Splunk SOAR",
         )
         config = t._build_config()
-        assert config.kwargs.get("word_boost") == ["Kubernetes", "Splunk SOAR"]
+        assert config.kwargs.get("keyterms_prompt") == [
+            "Kubernetes",
+            "Splunk SOAR",
+        ]
+        assert "word_boost" not in config.kwargs
 
-    def test_empty_custom_vocabulary_omits_word_boost(self):
+    def test_empty_custom_vocabulary_omits_keyterms_prompt(self):
         fake_aai = _make_fake_aai()
         t = AssemblyAITranscriber(api_key="key", aai_module=fake_aai)
         config = t._build_config()
-        assert "word_boost" not in config.kwargs
+        assert "keyterms_prompt" not in config.kwargs
 
     def test_progress_callback_splits_upload_and_polling_phases(self, tmp_path):
         fake_aai = _make_fake_aai(transcript_text="done")
@@ -409,12 +410,12 @@ class TestAssemblyAIStreaming:
         params = client.connect_params
         assert params.sample_rate == 16000
         assert str(params.encoding) == "pcm_s16le"
-        assert str(params.speech_model) == "u3-rt-pro"
-        assert params.language_detection is True
+        assert str(params.speech_model) == "universal-3-5-pro"
+        assert params.language_detection is None
         assert params.format_turns is None
         t.abort_stream()
 
-    def test_start_stream_passes_custom_vocabulary_as_u3_keyterms(self):
+    def test_start_stream_passes_custom_vocabulary_as_u3_5_keyterms(self):
         fake_aai = _make_fake_aai()
         clients: list[FakeStreamingClient] = []
 

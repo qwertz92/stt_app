@@ -787,9 +787,8 @@ class _GeneralTabMixin:
         if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
             self.remote_model_combo.setEnabled(False)
             note = (
-                "AssemblyAI streaming uses the Universal-Streaming multilingual "
-                "model. The selected model applies to batch transcription and "
-                "imports."
+                "Streaming always uses Universal-3.5 Pro Realtime. The selected "
+                "model applies to batch transcription and audio imports."
             )
         elif provider == "deepgram":
             note = "Deepgram uses the selected model for batch and streaming transcription."
@@ -877,8 +876,8 @@ class _GeneralTabMixin:
 
         if engine == "assemblyai":
             return (
-                "Batch requests use Universal-3 Pro with Universal-2 fallback, "
-                "providing the broad Universal-2 language list."
+                "Universal-3.5 Pro supports 18 languages at the highest accuracy. "
+                "Universal-2 is the lower-cost choice for broader coverage."
             )
 
         if engine == "azure":

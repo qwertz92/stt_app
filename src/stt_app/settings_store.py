@@ -283,7 +283,9 @@ class AppSettings:
         assemblyai_model = str(
             merged.get("assemblyai_model", DEFAULT_ASSEMBLYAI_MODEL)
         )
-        if assemblyai_model not in ASSEMBLYAI_MODELS:
+        if assemblyai_model == "universal-3-pro":
+            assemblyai_model = DEFAULT_ASSEMBLYAI_MODEL
+        elif assemblyai_model not in ASSEMBLYAI_MODELS:
             assemblyai_model = DEFAULT_ASSEMBLYAI_MODEL
         elevenlabs_model = str(
             merged.get("elevenlabs_model", DEFAULT_ELEVENLABS_MODEL)
