@@ -125,6 +125,78 @@ def test_controller_restores_target_focus_before_insert():
     _ = app
 
 
+def test_consecutive_transcripts_in_same_control_receive_one_separator():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    inserter = FakeTextInserter()
+    focus = FakeWindowFocusHelper()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings()),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus,
+    )
+    signature = focus.capture_target_signature()
+
+    assert controller._insert_text_at_target(
+        "first transcript",
+        restore_focus=False,
+        target_handle=focus.captured,
+        target_signature=signature,
+        separate_from_previous_transcript=True,
+    )
+    assert controller._insert_text_at_target(
+        "second transcript",
+        restore_focus=False,
+        target_handle=focus.captured,
+        target_signature=signature,
+        separate_from_previous_transcript=True,
+    )
+
+    assert [call[0] for call in inserter.calls] == [
+        "first transcript",
+        " second transcript",
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_transcript_separator_does_not_cross_target_controls():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    inserter = FakeTextInserter()
+    focus = FakeWindowFocusHelper()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings()),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus,
+    )
+
+    assert controller._insert_text_at_target(
+        "first",
+        restore_focus=False,
+        target_handle=100,
+        target_signature=(100, 101, 102),
+        separate_from_previous_transcript=True,
+    )
+    assert controller._insert_text_at_target(
+        "second",
+        restore_focus=False,
+        target_handle=100,
+        target_signature=(100, 101, 103),
+        separate_from_previous_transcript=True,
+    )
+
+    assert [call[0] for call in inserter.calls] == ["first", "second"]
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_does_not_paste_when_target_focus_restore_fails(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
