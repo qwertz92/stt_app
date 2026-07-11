@@ -483,6 +483,72 @@ def test_controller_edits_last_transcript_history_entry(monkeypatch, tmp_path):
     _ = app
 
 
+def test_background_and_import_history_do_not_replace_edit_target(
+    monkeypatch,
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+    )
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+        history_store=history_store,
+    )
+    controller._last_transcript = "foreground transcript"
+    foreground_entry = controller._append_transcript_history(
+        "foreground transcript",
+        settings,
+        "batch",
+    )
+    assert foreground_entry is not None
+
+    background_job = controller._register_transcription_job(77, settings, "batch")
+    background_job.background_delivery = "history"
+    controller._handle_background_transcription_ready(
+        background_job,
+        "background transcript",
+    )
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _source):
+            return "import transcript"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF")
+    assert controller.transcribe_audio_file(str(audio_path)) == (
+        True,
+        "import transcript",
+    )
+
+    assert controller._last_transcript == "foreground transcript"
+    assert controller._last_history_entry == foreground_entry
+    monkeypatch.setattr(
+        "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+        lambda _parent, _text: "corrected foreground",
+    )
+    assert controller.edit_last_transcript() is True
+    assert [entry.text for entry in history_store.load()] == [
+        "corrected foreground",
+        "background transcript",
+        "import transcript",
+    ]
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(

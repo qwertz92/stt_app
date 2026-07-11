@@ -318,14 +318,12 @@ class _ImportTabMixin:
             self.import_engine_combo.currentData() or DEFAULT_ENGINE
         )
         import_model = str(self.import_model_combo.currentData() or "")
-        if not self._import_engine_has_api_key(import_engine):
+        credential_issue = self._import_engine_credential_issue(import_engine)
+        if credential_issue is not None:
             self._import_progress_timer.stop()
             self._import_progress_message = ""
             self._import_progress_started_at = None
-            detail = (
-                "Failed: no API key configured for "
-                f"{self._provider_label(import_engine)}."
-            )
+            detail = f"Failed: {credential_issue}"
             if self._last_recording_store.is_managed_audio_path(path):
                 detail = (
                     f"{detail} The last recording stays available. "
@@ -424,7 +422,14 @@ class _ImportTabMixin:
             text = transcriber.transcribe_batch(path)
         finally:
             if hasattr(transcriber, "close"):
-                transcriber.close()
+                try:
+                    transcriber.close()
+                except Exception:
+                    logger = getattr(self, "_settings_perf_logger", None)
+                    if logger is not None:
+                        logger.exception(
+                            "Failed to close imported-transcription runtime"
+                        )
         return True, str(text or "").strip()
 
     def _finish_import_transcription(self, ok: bool, text: str) -> None:

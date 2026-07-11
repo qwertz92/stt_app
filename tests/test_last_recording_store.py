@@ -36,6 +36,61 @@ def test_save_and_complete_with_keep_preserves_audio(tmp_path):
     assert store.has_recoverable_recording() is False
 
 
+def test_conditional_transition_does_not_modify_a_newer_recording(tmp_path):
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    first = store.save_recording(b"RIFF-first", keep_after_success=False)
+    snapshot = store.snapshot_managed_recording(store.audio_path)
+    assert snapshot is not None
+    assert snapshot.recording_id == first.recording_id
+    assert snapshot.audio_bytes == b"RIFF-first"
+
+    second = store.save_recording(b"RIFF-second", keep_after_success=False)
+
+    assert (
+        store.mark_failed(
+            "stale failure",
+            expected_recording_id=snapshot.recording_id,
+        )
+        is False
+    )
+    assert (
+        store.mark_transcribing(
+            engine="openai",
+            model="gpt-4o-transcribe",
+            mode="import",
+            expected_recording_id=snapshot.recording_id,
+        )
+        is False
+    )
+    assert (
+        store.mark_completed(expected_recording_id=snapshot.recording_id) is False
+    )
+    current = store.load()
+    assert current is not None
+    assert current.recording_id == second.recording_id
+    assert current.status == "captured"
+    assert store.audio_path.read_bytes() == b"RIFF-second"
+
+
+def test_clear_failure_preserves_state_for_a_later_retry(tmp_path):
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    state = store.save_recording(b"RIFF-audio", keep_after_success=False)
+    store.audio_path.unlink()
+    store.audio_path.mkdir()
+
+    assert store.clear(expected_recording_id=state.recording_id) is False
+    assert store.state_path.is_file()
+    loaded = store.load()
+    assert loaded is not None
+    assert loaded.recording_id == state.recording_id
+
+
 def test_orphaned_audio_without_state_is_treated_as_recoverable(tmp_path):
     store = LastRecordingStore(
         audio_path=tmp_path / "last_recording.wav",

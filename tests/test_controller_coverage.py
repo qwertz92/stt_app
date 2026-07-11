@@ -8,6 +8,7 @@ import threading
 from unittest.mock import MagicMock
 
 from stt_app.config import FALLBACK_HOTKEY
+from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -1029,6 +1030,37 @@ def test_stop_recording_persists_last_recording_and_marks_transcribing(monkeypat
     _ = app
 
 
+def test_vad_auto_stop_marshals_stop_recording_to_qt_thread():
+    controller, app = _make_controller()
+    main_thread_id = threading.get_ident()
+
+    class _ThreadTrackingCapture(FakeCapture):
+        def __init__(self):
+            super().__init__()
+            self._wav_bytes = b""
+            self.stop_thread_id = None
+
+        def stop(self):
+            self.stop_thread_id = threading.get_ident()
+            return super().stop()
+
+    capture = _ThreadTrackingCapture()
+    controller._audio_capture = capture
+    worker = threading.Thread(target=controller._auto_stop_from_vad)
+
+    worker.start()
+    worker.join(timeout=2)
+    assert not worker.is_alive()
+    assert capture.stop_thread_id is None
+
+    app.processEvents()
+
+    assert capture.stop_thread_id == main_thread_id
+    assert controller._audio_capture is None
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_stops_active_batch_recording():
     overlay = FakeOverlay()
     last_recording_store = FakeLastRecordingStore()
@@ -1163,6 +1195,137 @@ def test_transcribe_audio_file_marks_managed_last_recording_failed(
     assert ok is False
     assert "provider failed" in text
     assert last_recording_store.failed == ["provider failed"]
+    controller.shutdown()
+    _ = app
+
+
+def test_transcribe_audio_file_waits_for_controller_transcription_lane(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app = _make_controller()
+    release_lane = threading.Event()
+    lane_started = threading.Event()
+    import_started = threading.Event()
+    result: list[tuple[bool, str]] = []
+
+    def _occupy_lane():
+        lane_started.set()
+        assert release_lane.wait(timeout=2)
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _source):
+            import_started.set()
+            return "serialized import"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+    controller._executor.submit(_occupy_lane)
+    assert lane_started.wait(timeout=2)
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF")
+    import_thread = threading.Thread(
+        target=lambda: result.append(controller.transcribe_audio_file(str(audio_path)))
+    )
+
+    import_thread.start()
+    assert not import_started.wait(timeout=0.1)
+    release_lane.set()
+    import_thread.join(timeout=2)
+
+    assert not import_thread.is_alive()
+    assert import_started.is_set()
+    assert result == [(True, "serialized import")]
+    controller.shutdown()
+    _ = app
+
+
+def test_managed_import_snapshot_cannot_complete_a_newer_recording(
+    monkeypatch,
+    tmp_path,
+):
+    history = TranscriptHistoryStore(tmp_path / "history.json")
+    last_store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    first = last_store.save_recording(b"RIFF-first", keep_after_success=False)
+    controller, app = _make_controller(
+        history_store=history,
+        last_recording_store=last_store,
+    )
+    inference_started = threading.Event()
+    release_inference = threading.Event()
+    received_sources: list[bytes] = []
+    result: list[tuple[bool, str]] = []
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, source):
+            received_sources.append(bytes(source))
+            inference_started.set()
+            assert release_inference.wait(timeout=2)
+            return "first recording transcript"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+    import_thread = threading.Thread(
+        target=lambda: result.append(
+            controller.transcribe_audio_file(str(last_store.audio_path))
+        )
+    )
+
+    import_thread.start()
+    assert inference_started.wait(timeout=2)
+    second = last_store.save_recording(b"RIFF-second", keep_after_success=False)
+    release_inference.set()
+    import_thread.join(timeout=2)
+
+    assert result == [(True, "first recording transcript")]
+    assert received_sources == [b"RIFF-first"]
+    current = last_store.load()
+    assert current is not None
+    assert current.recording_id == second.recording_id
+    assert current.status == "captured"
+    assert last_store.audio_path.read_bytes() == b"RIFF-second"
+    entries = history.load()
+    assert [entry.source_recording_id for entry in entries] == [first.recording_id]
+    controller.shutdown()
+    _ = app
+
+
+def test_import_runtime_close_failure_keeps_successful_transcript(
+    monkeypatch,
+    tmp_path,
+):
+    controller, app = _make_controller()
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _source):
+            return "successful transcript"
+
+        def close(self):
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+    audio_path = tmp_path / "external.wav"
+    audio_path.write_bytes(b"RIFF")
+
+    result = controller.transcribe_audio_file(
+        str(audio_path),
+        settings_override=AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            model_size="cohere-transcribe-03-2026",
+        ),
+    )
+
+    assert result == (True, "successful transcript")
     controller.shutdown()
     _ = app
 

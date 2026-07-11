@@ -166,6 +166,7 @@ class _TranscriberRuntimeLease:
 
 
 class DictationController(QtCore.QObject):
+    vad_auto_stop_requested = QtCore.Signal()
     transcription_ready = QtCore.Signal(int, str)
     transcription_failed = QtCore.Signal(int, str)
     transcription_canceled = QtCore.Signal(int)
@@ -275,6 +276,7 @@ class DictationController(QtCore.QObject):
         self._jobs: dict[int, _TranscriptionJob] = {}
         self._deferred_background_results: list[tuple[_TranscriptionJob, str]] = []
 
+        self.vad_auto_stop_requested.connect(self.stop_recording)
         self.transcription_ready.connect(self._on_transcription_ready_result)
         self.transcription_failed.connect(self._on_transcription_failed_result)
         self.transcription_canceled.connect(self._on_transcription_canceled_result)
@@ -928,7 +930,7 @@ class DictationController(QtCore.QObject):
         return True
 
     def _auto_stop_from_vad(self) -> None:
-        QtCore.QTimer.singleShot(0, self.stop_recording)
+        self.vad_auto_stop_requested.emit()
 
     def _play_start_beep(self) -> None:
         if not self._settings.start_beep_enabled:
@@ -1308,6 +1310,7 @@ class DictationController(QtCore.QObject):
         mode: str,
         *,
         source_recording_id: str | None = None,
+        track_for_edit: bool = True,
     ) -> TranscriptHistoryEntry | None:
         if not text.strip():
             return None
@@ -1328,7 +1331,8 @@ class DictationController(QtCore.QObject):
                 entry,
                 settings.history_max_items,
             )
-            self._last_history_entry = entry
+            if track_for_edit:
+                self._last_history_entry = entry
             return entry
         except Exception:
             self._logger.exception("Failed to append transcript history")
@@ -2488,6 +2492,7 @@ class DictationController(QtCore.QObject):
             job.settings,
             job.mode,
             source_recording_id=job.source_recording_id,
+            track_for_edit=False,
         )
         if (
             job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
@@ -3250,7 +3255,7 @@ class DictationController(QtCore.QObject):
         settings_override: AppSettings | None = None,
         progress_callback: Callable[[str], None] | None = None,
     ) -> tuple[bool, str]:
-        """Transcribe a file directly without live recording."""
+        """Transcribe a file through the controller's serialized worker lane."""
         path = str(file_path or "").strip()
         if not path:
             return False, "No file path provided."
@@ -3258,6 +3263,34 @@ class DictationController(QtCore.QObject):
             return False, "Selected file does not exist."
         managed_last_recording = self._last_recording_store.is_managed_audio_path(
             path
+        )
+        managed_snapshot = None
+        if managed_last_recording:
+            snapshotter = getattr(
+                self._last_recording_store,
+                "snapshot_managed_recording",
+                None,
+            )
+            if callable(snapshotter):
+                managed_snapshot = snapshotter(path)
+                if managed_snapshot is None:
+                    return False, "The last recording is no longer available."
+        recording_id = (
+            str(getattr(managed_snapshot, "recording_id", "") or "").strip()
+            if managed_snapshot is not None
+            else self._current_last_recording_id()
+            if managed_last_recording
+            else ""
+        )
+        audio_source: str | bytes = (
+            bytes(managed_snapshot.audio_bytes)
+            if managed_snapshot is not None
+            else path
+        )
+        conditional_transition = (
+            {"expected_recording_id": recording_id}
+            if managed_snapshot is not None
+            else {}
         )
         try:
             base_settings = settings_override or self._settings
@@ -3267,51 +3300,83 @@ class DictationController(QtCore.QObject):
                     engine=settings.engine,
                     model=self._selected_model_name(settings),
                     mode="import",
+                    **conditional_transition,
                 )
-            transcriber = create_transcriber(
+            future = self._executor.submit(
+                self._transcribe_import_worker,
+                audio_source,
                 settings,
-                secret_store=self._secret_store,
+                progress_callback,
             )
-            try:
-                if progress_callback is not None:
-                    self._set_transcriber_progress_callback(
-                        transcriber,
-                        progress_callback,
-                    )
-                text = transcriber.transcribe_batch(path).strip()
-            finally:
-                if hasattr(transcriber, "close"):
-                    transcriber.close()
+            text = future.result().strip()
             if text:
-                source_recording_id = (
-                    self._current_last_recording_id()
-                    if managed_last_recording
-                    else ""
-                )
                 self._append_transcript_history(
                     text,
                     settings,
                     "import",
-                    source_recording_id=source_recording_id,
+                    source_recording_id=recording_id,
+                    track_for_edit=False,
                 )
             if managed_last_recording:
-                self._last_recording_store.mark_completed()
+                self._last_recording_store.mark_completed(**conditional_transition)
             return True, text or "No speech detected."
         except Exception as exc:
             self._logger.exception("Failed to transcribe imported file")
             if managed_last_recording:
                 try:
-                    self._last_recording_store.mark_failed(str(exc))
+                    self._last_recording_store.mark_failed(
+                        str(exc),
+                        **conditional_transition,
+                    )
                 except Exception:
                     self._logger.exception(
                         "Failed to persist imported recording failure state"
                     )
             return False, str(exc)
 
+    def _transcribe_import_worker(
+        self,
+        audio_source: str | bytes,
+        settings: AppSettings,
+        progress_callback: Callable[[str], None] | None,
+    ) -> str:
+        """Run an import while owning the normal transcriber runtime lane."""
+        runtime_lease: _TranscriberRuntimeLease | None = None
+        transcriber = None
+        try:
+            runtime_lease = self._acquire_transcriber_runtime(
+                settings,
+                allow_isolated=False,
+            )
+            transcriber = runtime_lease.transcriber
+            if progress_callback is not None:
+                self._set_transcriber_progress_callback(
+                    transcriber,
+                    progress_callback,
+                )
+            return str(transcriber.transcribe_batch(audio_source) or "")
+        finally:
+            if transcriber is not None:
+                try:
+                    self._set_transcriber_progress_callback(transcriber, None)
+                except Exception:
+                    self._logger.exception(
+                        "Failed to clear imported-transcription progress hook"
+                    )
+            if runtime_lease is not None:
+                try:
+                    runtime_lease.release()
+                except Exception:
+                    # Runtime cleanup must not discard a transcript that the
+                    # provider already returned successfully.
+                    self._logger.exception(
+                        "Failed to release imported-transcription runtime"
+                    )
+
     @staticmethod
     def _set_transcriber_progress_callback(
         transcriber: object,
-        callback: Callable[[str], None],
+        callback: Callable[[str], None] | None,
     ) -> None:
         setter = getattr(transcriber, "set_progress_callback", None)
         if callable(setter):

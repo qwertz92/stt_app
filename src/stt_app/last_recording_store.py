@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -67,6 +68,14 @@ class LastRecordingState:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class ManagedRecordingSnapshot:
+    """Immutable audio and identity captured for a managed-file import."""
+
+    audio_bytes: bytes
+    recording_id: str
+
+
 class LastRecordingStore:
     def __init__(
         self,
@@ -78,6 +87,7 @@ class LastRecordingStore:
         self._state_path = state_path or last_recording_state_path()
         self._audio_path.parent.mkdir(parents=True, exist_ok=True)
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = threading.RLock()
 
     @property
     def audio_path(self) -> Path:
@@ -88,16 +98,20 @@ class LastRecordingStore:
         return self._state_path
 
     def load(self) -> LastRecordingState | None:
-        if not self._state_path.exists():
-            return self._orphaned_audio_state()
-        payload, _source = load_json_with_backup(self._state_path, expected_type=dict)
-        if payload is None:
-            quarantine_corrupt_file(self._state_path, include_backup=True)
-            return self._orphaned_audio_state()
-        state = LastRecordingState.from_dict(payload)
-        if not state.audio_path:
-            state.audio_path = str(self._audio_path)
-        return state
+        with self._lock:
+            if not self._state_path.exists():
+                return self._orphaned_audio_state()
+            payload, _source = load_json_with_backup(
+                self._state_path,
+                expected_type=dict,
+            )
+            if payload is None:
+                quarantine_corrupt_file(self._state_path, include_backup=True)
+                return self._orphaned_audio_state()
+            state = LastRecordingState.from_dict(payload)
+            if not state.audio_path:
+                state.audio_path = str(self._audio_path)
+            return state
 
     def save_recording(
         self,
@@ -105,16 +119,43 @@ class LastRecordingStore:
         *,
         keep_after_success: bool,
     ) -> LastRecordingState:
-        atomic_write_bytes(self._audio_path, bytes(wav_bytes))
-        state = LastRecordingState(
-            audio_path=str(self._audio_path),
-            recording_id=uuid4().hex,
-            created_at=_utc_now(),
-            status="captured",
-            keep_after_success=bool(keep_after_success),
-        )
-        self._save_state(state)
-        return state
+        with self._lock:
+            atomic_write_bytes(self._audio_path, bytes(wav_bytes))
+            state = LastRecordingState(
+                audio_path=str(self._audio_path),
+                recording_id=uuid4().hex,
+                created_at=_utc_now(),
+                status="captured",
+                keep_after_success=bool(keep_after_success),
+            )
+            self._save_state(state)
+            return state
+
+    def snapshot_managed_recording(
+        self,
+        path: str | Path,
+    ) -> ManagedRecordingSnapshot | None:
+        """Snapshot managed audio and its ID before an asynchronous import."""
+        if not self.is_managed_audio_path(path):
+            return None
+        with self._lock:
+            state = self.load()
+            if state is None or not self._audio_path.is_file():
+                return None
+            if not state.recording_id:
+                state.recording_id = uuid4().hex
+                if not state.created_at:
+                    state.created_at = _utc_now()
+                state.audio_path = str(self._audio_path)
+                self._save_state(state)
+            try:
+                audio_bytes = self._audio_path.read_bytes()
+            except OSError:
+                return None
+            return ManagedRecordingSnapshot(
+                audio_bytes=audio_bytes,
+                recording_id=state.recording_id,
+            )
 
     def mark_transcribing(
         self,
@@ -122,53 +163,88 @@ class LastRecordingStore:
         engine: str,
         model: str,
         mode: str,
-    ) -> None:
-        state = self.load()
-        if state is None:
-            if not self._audio_path.is_file():
-                return
-            state = LastRecordingState(
-                audio_path=str(self._audio_path),
-                recording_id=uuid4().hex,
-                created_at=_utc_now(),
-            )
-        elif not state.recording_id:
-            state.recording_id = uuid4().hex
-        state.status = "transcribing"
-        state.engine = str(engine or "").strip()
-        state.model = str(model or "").strip()
-        state.mode = str(mode or "").strip()
-        state.error = ""
-        state.transcription_started_at = _utc_now()
-        self._save_state(state)
-
-    def mark_failed(self, error: str) -> None:
-        state = self.load()
-        if state is None:
-            return
-        state.status = "failed"
-        state.error = str(error or "").strip()
-        self._save_state(state)
-
-    def mark_canceled(self, detail: str = "") -> None:
-        state = self.load()
-        if state is None:
-            return
-        state.status = "canceled"
-        state.error = str(detail or "").strip()
-        self._save_state(state)
-
-    def mark_completed(self) -> None:
-        state = self.load()
-        if state is None:
-            return
-        if state.keep_after_success:
-            state.status = "completed"
+        expected_recording_id: str | None = None,
+    ) -> bool:
+        with self._lock:
+            state = self.load()
+            if state is None:
+                if expected_recording_id is not None or not self._audio_path.is_file():
+                    return False
+                state = LastRecordingState(
+                    audio_path=str(self._audio_path),
+                    recording_id=uuid4().hex,
+                    created_at=_utc_now(),
+                )
+            elif expected_recording_id is not None and (
+                state.recording_id != expected_recording_id
+            ):
+                return False
+            elif not state.recording_id:
+                state.recording_id = uuid4().hex
+            state.status = "transcribing"
+            state.engine = str(engine or "").strip()
+            state.model = str(model or "").strip()
+            state.mode = str(mode or "").strip()
             state.error = ""
-            state.completed_at = _utc_now()
+            state.transcription_started_at = _utc_now()
             self._save_state(state)
-            return
-        self.clear()
+            return True
+
+    def mark_failed(
+        self,
+        error: str,
+        *,
+        expected_recording_id: str | None = None,
+    ) -> bool:
+        with self._lock:
+            state = self.load()
+            if state is None or (
+                expected_recording_id is not None
+                and state.recording_id != expected_recording_id
+            ):
+                return False
+            state.status = "failed"
+            state.error = str(error or "").strip()
+            self._save_state(state)
+            return True
+
+    def mark_canceled(
+        self,
+        detail: str = "",
+        *,
+        expected_recording_id: str | None = None,
+    ) -> bool:
+        with self._lock:
+            state = self.load()
+            if state is None or (
+                expected_recording_id is not None
+                and state.recording_id != expected_recording_id
+            ):
+                return False
+            state.status = "canceled"
+            state.error = str(detail or "").strip()
+            self._save_state(state)
+            return True
+
+    def mark_completed(
+        self,
+        *,
+        expected_recording_id: str | None = None,
+    ) -> bool:
+        with self._lock:
+            state = self.load()
+            if state is None or (
+                expected_recording_id is not None
+                and state.recording_id != expected_recording_id
+            ):
+                return False
+            if state.keep_after_success:
+                state.status = "completed"
+                state.error = ""
+                state.completed_at = _utc_now()
+                self._save_state(state)
+                return True
+            return self.clear(expected_recording_id=state.recording_id)
 
     def selectable_path(
         self,
@@ -245,15 +321,23 @@ class LastRecordingStore:
             managed = self._audio_path
         return candidate == managed
 
-    def clear(self) -> None:
-        try:
-            self._audio_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        try:
-            self._state_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+    def clear(self, *, expected_recording_id: str | None = None) -> bool:
+        with self._lock:
+            if expected_recording_id is not None:
+                state = self.load()
+                if state is None or state.recording_id != expected_recording_id:
+                    return False
+            try:
+                self._audio_path.unlink(missing_ok=True)
+            except OSError:
+                # Preserve the state file so the recording remains discoverable
+                # and a later retry can finish the cleanup.
+                return False
+            try:
+                self._state_path.unlink(missing_ok=True)
+            except OSError:
+                return False
+            return True
 
     def _save_state(self, state: LastRecordingState) -> None:
         atomic_write_json(
