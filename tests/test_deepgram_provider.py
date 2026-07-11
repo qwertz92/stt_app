@@ -166,9 +166,7 @@ class TestDeepgramTranscribeBatch:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_transcribe_empty_result(self, mock_urlopen):
         """Empty transcript text returns empty string."""
-        mock_urlopen.return_value = _make_fake_response(
-            _deepgram_response("")
-        )
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response(""))
         t = DeepgramTranscriber(api_key="test-key")
         result = t.transcribe_batch(b"RIFF fake")
         assert result == ""
@@ -186,9 +184,7 @@ class TestDeepgramTranscribeBatch:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_auto_language_sends_detect_language(self, mock_urlopen):
         """Auto language mode sends detect_language=true query param."""
-        mock_urlopen.return_value = _make_fake_response(
-            _deepgram_response("ok")
-        )
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="key", language_mode="auto")
         t.transcribe_batch(b"RIFF fake")
 
@@ -200,9 +196,7 @@ class TestDeepgramTranscribeBatch:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_explicit_language_sends_language_param(self, mock_urlopen):
         """Explicit language mode sends language=<code> query param."""
-        mock_urlopen.return_value = _make_fake_response(
-            _deepgram_response("ok")
-        )
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="key", language_mode="de")
         t.transcribe_batch(b"RIFF fake")
 
@@ -214,9 +208,7 @@ class TestDeepgramTranscribeBatch:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_model_sent_in_query_params(self, mock_urlopen):
         """The selected model is sent as a query parameter."""
-        mock_urlopen.return_value = _make_fake_response(
-            _deepgram_response("ok")
-        )
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="key", model="nova-2")
         t.transcribe_batch(b"RIFF fake")
 
@@ -271,9 +263,7 @@ class TestDeepgramTranscribeBatch:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_authorization_header_set(self, mock_urlopen):
         """Authorization header uses 'Token <key>' format."""
-        mock_urlopen.return_value = _make_fake_response(
-            _deepgram_response("ok")
-        )
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="my-secret-key")
         t.transcribe_batch(b"RIFF fake")
 
@@ -284,9 +274,7 @@ class TestDeepgramTranscribeBatch:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_content_type_header_set(self, mock_urlopen):
         """Content-Type header is set to audio/wav."""
-        mock_urlopen.return_value = _make_fake_response(
-            _deepgram_response("ok")
-        )
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
         t = DeepgramTranscriber(api_key="key")
         t.transcribe_batch(b"RIFF fake")
 
@@ -403,9 +391,7 @@ class TestDeepgramErrorHandling:
 class TestDeepgramConnectionTest:
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
     def test_successful_connection(self, mock_urlopen):
-        mock_urlopen.return_value = _make_fake_response(
-            {"projects": []}, status=200
-        )
+        mock_urlopen.return_value = _make_fake_response({"projects": []}, status=200)
         t = DeepgramTranscriber(api_key="key")
         ok, msg = t.test_connection()
         assert ok is True
@@ -474,6 +460,8 @@ class _FakeWebSocketApp:
     finalize_message = None
     finalize_delay_s = 0.0
     close_after_finalize = False
+    binary_send_started: threading.Event | None = None
+    release_binary_send: threading.Event | None = None
 
     def __init__(self, url, header, on_open, on_message, on_error, on_close):
         self.url = url
@@ -491,10 +479,19 @@ class _FakeWebSocketApp:
 
     def send(self, payload, opcode=None):
         self.send_calls.append((payload, opcode))
+        if opcode == _FakeABNF.OPCODE_BINARY:
+            if _FakeWebSocketApp.binary_send_started is not None:
+                _FakeWebSocketApp.binary_send_started.set()
+            if _FakeWebSocketApp.release_binary_send is not None:
+                assert _FakeWebSocketApp.release_binary_send.wait(timeout=2.0)
+        if payload == json.dumps({"type": "CloseStream"}):
+            self.close()
+            return
         if (
             payload == json.dumps({"type": "Finalize"})
             and _FakeWebSocketApp.finalize_message is not None
         ):
+
             def deliver():
                 if self.closed:
                     return
@@ -608,21 +605,23 @@ class TestDeepgramStreaming:
         assert ws.send_calls[-1][0] == b"abcd"
         assert ws.send_calls[-1][1] == _FakeABNF.OPCODE_BINARY
 
-        t._handle_stream_message(
+        ws.on_message(
+            ws,
             json.dumps(
                 {
                     "channel": {"alternatives": [{"transcript": "hello"}]},
                     "is_final": False,
                 }
-            )
+            ),
         )
-        t._handle_stream_message(
+        ws.on_message(
+            ws,
             json.dumps(
                 {
                     "channel": {"alternatives": [{"transcript": "hello world"}]},
                     "is_final": True,
                 }
-            )
+            ),
         )
 
         final = t.stop_stream()
@@ -678,13 +677,15 @@ class TestDeepgramStreaming:
         monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
 
         t.start_stream()
-        t._handle_stream_message(
+        ws = _FakeWebSocketApp.instances[-1]
+        ws.on_message(
+            ws,
             json.dumps(
                 {
                     "channel": {"alternatives": [{"transcript": "hello"}]},
                     "is_final": False,
                 }
-            )
+            ),
         )
 
         final = t.stop_stream()
@@ -693,6 +694,119 @@ class TestDeepgramStreaming:
         _FakeWebSocketApp.finalize_message = None
         _FakeWebSocketApp.finalize_delay_s = 0.0
         _FakeWebSocketApp.close_after_finalize = False
+
+    def test_stale_websocket_callbacks_cannot_mutate_new_session(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        old_partials: list[str] = []
+        old_errors: list[str] = []
+        t.start_stream(on_partial=old_partials.append, on_error=old_errors.append)
+        old_ws = _FakeWebSocketApp.instances[-1]
+        t.abort_stream()
+
+        new_partials: list[str] = []
+        new_errors: list[str] = []
+        t.start_stream(on_partial=new_partials.append, on_error=new_errors.append)
+        new_ws = _FakeWebSocketApp.instances[-1]
+
+        old_ws.on_message(
+            old_ws,
+            json.dumps(
+                {
+                    "channel": {"alternatives": [{"transcript": "stale"}]},
+                    "is_final": True,
+                }
+            ),
+        )
+        old_ws.on_error(old_ws, RuntimeError("stale error"))
+        old_ws.on_close(old_ws, 1006, "late close")
+
+        assert new_partials == []
+        assert new_errors == []
+        assert t._stream_state == "active"
+        new_ws.on_message(
+            new_ws,
+            json.dumps(
+                {
+                    "channel": {"alternatives": [{"transcript": "current"}]},
+                    "is_final": True,
+                }
+            ),
+        )
+        assert t.stop_stream() == "current"
+
+    def test_audio_queue_saturation_fails_without_blocking(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        monkeypatch.setattr(
+            "stt_app.transcriber.deepgram_provider._STREAM_AUDIO_QUEUE_MAX_CHUNKS",
+            1,
+        )
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        try:
+            t.start_stream()
+            t.push_audio_chunk(b"first")
+            assert send_started.wait(timeout=1.0)
+            t.push_audio_chunk(b"second")
+
+            started = time.monotonic()
+            with pytest.raises(TranscriptionError, match="queue is full"):
+                t.push_audio_chunk(b"third")
+            assert time.monotonic() - started < 0.1
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+
+    def test_stop_waits_for_audio_sender_before_finalize_and_close(self, monkeypatch):
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = json.dumps({"from_finalize": True})
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        result: list[str] = []
+
+        try:
+            t.start_stream()
+            ws = _FakeWebSocketApp.instances[-1]
+            t.push_audio_chunk(b"audio")
+            assert send_started.wait(timeout=1.0)
+
+            stopper = threading.Thread(target=lambda: result.append(t.stop_stream()))
+            stopper.start()
+            time.sleep(0.05)
+            assert ws.send_calls == [(b"audio", _FakeABNF.OPCODE_BINARY)]
+
+            release_send.set()
+            stopper.join(timeout=2.0)
+
+            assert not stopper.is_alive()
+            assert result == [""]
+            assert t._stream_finalize_received.is_set()
+            assert [payload for payload, _opcode in ws.send_calls] == [
+                b"audio",
+                json.dumps({"type": "Finalize"}),
+                json.dumps({"type": "CloseStream"}),
+            ]
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+            _FakeWebSocketApp.finalize_message = None
 
 
 # ---------------------------------------------------------------------------

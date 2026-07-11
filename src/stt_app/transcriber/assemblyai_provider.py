@@ -88,6 +88,8 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         self._streaming_client_factory = streaming_client_factory
         self._word_boost = parse_custom_vocabulary(custom_vocabulary)
         self._stream_lock = threading.Lock()
+        self._stream_generation = 0
+        self._stream_state = "idle"
         self._stream_client = None
         self._stream_on_partial: StreamingCallback | None = None
         self._stream_on_error: StreamingErrorCallback | None = None
@@ -262,8 +264,23 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             )
         return f"AssemblyAI streaming failed: {error}"
 
-    def _notify_stream_error(self, error: Exception) -> None:
+    def _stream_session_matches_locked(self, generation: int, client) -> bool:
+        return (
+            generation == self._stream_generation
+            and client is self._stream_client
+            and self._stream_state != "idle"
+        )
+
+    def _notify_stream_error(
+        self,
+        error: Exception,
+        *,
+        generation: int,
+        client,
+    ) -> None:
         with self._stream_lock:
+            if not self._stream_session_matches_locked(generation, client):
+                return
             callback = self._stream_on_error
             if callback is None or self._stream_error_reported:
                 return
@@ -279,6 +296,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         return " ".join(p for p in parts if p).strip()
 
     def _reset_stream_state_locked(self) -> None:
+        self._stream_state = "idle"
         self._stream_client = None
         self._stream_on_partial = None
         self._stream_on_error = None
@@ -329,23 +347,51 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         )
 
         with self._stream_lock:
-            if self._stream_client is not None:
+            if self._stream_state != "idle":
                 raise TranscriptionError("Streaming session already active.")
+            self._stream_generation += 1
+            generation = self._stream_generation
+            self._stream_state = "starting"
             self._stream_on_partial = on_partial
             self._stream_on_error = on_error
             self._stream_turns = {}
             self._stream_error = None
             self._stream_error_reported = False
 
+        client = None
         try:
             if self._streaming_client_factory is not None:
                 client = self._streaming_client_factory(self._api_key)
             else:
-                client = StreamingClient(
-                    StreamingClientOptions(api_key=self._api_key)
-                )
-            client.on(StreamingEvents.Turn, self._on_turn_event)
-            client.on(StreamingEvents.Error, self._on_stream_error_event)
+                client = StreamingClient(StreamingClientOptions(api_key=self._api_key))
+            with self._stream_lock:
+                if (
+                    generation != self._stream_generation
+                    or self._stream_state != "starting"
+                ):
+                    raise TranscriptionError(
+                        "AssemblyAI streaming session was stopped while connecting."
+                    )
+                self._stream_client = client
+
+            client.on(
+                StreamingEvents.Turn,
+                lambda callback_client, event: self._on_turn_event(
+                    generation,
+                    client,
+                    callback_client,
+                    event,
+                ),
+            )
+            client.on(
+                StreamingEvents.Error,
+                lambda callback_client, error: self._on_stream_error_event(
+                    generation,
+                    client,
+                    callback_client,
+                    error,
+                ),
+            )
             # custom_vocabulary is intentionally not wired here: the installed
             # SDK's streaming.v3.StreamingParameters has no word_boost/keyterms
             # field (unlike the batch TranscriptionConfig), so there is no
@@ -361,7 +407,24 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             )
         except Exception as exc:
             with self._stream_lock:
-                self._reset_stream_state_locked()
+                if (
+                    generation == self._stream_generation
+                    and self._stream_state == "starting"
+                ):
+                    self._stream_state = "retiring"
+                    self._stream_on_partial = None
+                    self._stream_on_error = None
+            if client is not None:
+                self._shutdown_streaming_client(client, join_timeout_s=1.0)
+            with self._stream_lock:
+                if (
+                    generation == self._stream_generation
+                    and self._stream_state == "retiring"
+                    and (client is None or client is self._stream_client)
+                ):
+                    self._reset_stream_state_locked()
+            if isinstance(exc, TranscriptionError):
+                raise
             if _is_ssl_error(exc):
                 raise TranscriptionError(
                     "AssemblyAI streaming: SSL certificate verification failed "
@@ -374,13 +437,29 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         # The SDK reports some connect failures through the error handler
         # instead of raising, so check for a recorded error before going live.
         with self._stream_lock:
-            connect_error = self._stream_error
-            if connect_error is None:
-                self._stream_client = client
+            session_matches = self._stream_session_matches_locked(generation, client)
+            connect_error = self._stream_error if session_matches else None
+            if session_matches and self._stream_state == "starting":
+                if connect_error is None:
+                    self._stream_state = "active"
+                else:
+                    self._stream_state = "retiring"
+                    self._stream_on_partial = None
+                    self._stream_on_error = None
+            connected = session_matches and self._stream_state == "active"
+        if not connected and connect_error is None:
+            self._shutdown_streaming_client(client, join_timeout_s=1.0)
+            with self._stream_lock:
+                if self._stream_session_matches_locked(generation, client):
+                    self._reset_stream_state_locked()
+            raise TranscriptionError(
+                "AssemblyAI streaming session was stopped while connecting."
+            )
         if connect_error is not None:
             self._shutdown_streaming_client(client, join_timeout_s=1.0)
             with self._stream_lock:
-                self._reset_stream_state_locked()
+                if self._stream_session_matches_locked(generation, client):
+                    self._reset_stream_state_locked()
             raise TranscriptionError(
                 self._format_stream_error(connect_error)
             ) from connect_error
@@ -396,7 +475,8 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             return
         with self._stream_lock:
             client = self._stream_client
-        if client is None:
+            active = self._stream_state == "active"
+        if client is None or not active:
             raise TranscriptionError("Streaming session is not active.")
         try:
             client.stream(payload)
@@ -409,16 +489,19 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         """Finalize the streaming session and return accumulated text."""
         with self._stream_lock:
             client = self._stream_client
-            self._stream_client = None
+            generation = self._stream_generation
             # Drop the error callback first; close events after a normal
             # stop must not surface as runtime failures.
             self._stream_on_error = None
-            if client is None:
+            if client is None or self._stream_state != "active":
                 raise TranscriptionError("Streaming session is not active.")
+            self._stream_state = "retiring"
 
         self._shutdown_streaming_client(client, join_timeout_s=5.0)
 
         with self._stream_lock:
+            if not self._stream_session_matches_locked(generation, client):
+                raise TranscriptionError("Streaming session is not active.")
             text = self._stream_combined_text_locked()
             error = self._stream_error
             self._reset_stream_state_locked()
@@ -432,18 +515,31 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         """Abort the streaming session immediately, discarding all text."""
         with self._stream_lock:
             client = self._stream_client
-            self._stream_client = None
+            generation = self._stream_generation
+            if self._stream_state == "idle":
+                return
+            if client is None:
+                self._reset_stream_state_locked()
+                return
+            self._stream_state = "retiring"
             self._stream_on_partial = None
             self._stream_on_error = None
         if client is not None:
             self._shutdown_streaming_client(client, join_timeout_s=0.5)
 
         with self._stream_lock:
-            self._reset_stream_state_locked()
+            if self._stream_session_matches_locked(generation, client):
+                self._reset_stream_state_locked()
 
     # -- Streaming callbacks (called from the SDK reader thread) ---------------
 
-    def _on_turn_event(self, _client, event) -> None:
+    def _on_turn_event(
+        self,
+        generation: int,
+        expected_client,
+        callback_client,
+        event,
+    ) -> None:
         """Handle a Turn event.
 
         ``transcript`` holds the finalized words of one turn and grows as the
@@ -456,6 +552,14 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         turn_order = int(getattr(event, "turn_order", 0) or 0)
 
         with self._stream_lock:
+            if (
+                callback_client is not expected_client
+                or not self._stream_session_matches_locked(
+                    generation,
+                    expected_client,
+                )
+            ):
+                return
             self._stream_turns[turn_order] = text
             callback = self._stream_on_partial
             combined = self._stream_combined_text_locked()
@@ -466,11 +570,29 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             except Exception:
                 pass
 
-    def _on_stream_error_event(self, _client, error) -> None:
+    def _on_stream_error_event(
+        self,
+        generation: int,
+        expected_client,
+        callback_client,
+        error,
+    ) -> None:
         """Handle errors from the streaming session."""
         if not isinstance(error, Exception):
             error = RuntimeError(str(error))
         with self._stream_lock:
+            if (
+                callback_client is not expected_client
+                or not self._stream_session_matches_locked(
+                    generation,
+                    expected_client,
+                )
+            ):
+                return
             if self._stream_error is None:
                 self._stream_error = error
-        self._notify_stream_error(error)
+        self._notify_stream_error(
+            error,
+            generation=generation,
+            client=expected_client,
+        )

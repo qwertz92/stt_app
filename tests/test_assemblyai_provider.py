@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import types
+import threading
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -580,14 +581,16 @@ class TestAssemblyAIStreaming:
             def connect(self, params):
                 raise ConnectionError("WebSocket refused")
 
+        client = FailingClient(api_key="key")
         t = AssemblyAITranscriber(
             api_key="key",
             aai_module=fake_aai,
-            streaming_client_factory=lambda key: FailingClient(api_key=key),
+            streaming_client_factory=lambda _key: client,
         )
         with pytest.raises(TranscriptionError, match="failed to connect"):
             t.start_stream()
         assert t._stream_client is None
+        assert client.terminated is True
 
     def test_connect_error_via_handler_raises(self):
         """Errors reported through the error handler during connect raise."""
@@ -605,6 +608,69 @@ class TestAssemblyAIStreaming:
         with pytest.raises(TranscriptionError, match="Not Authorized"):
             t.start_stream()
         assert t._stream_client is None
+
+    def test_old_client_callbacks_cannot_mutate_new_session(self):
+        t, clients = _make_streaming_transcriber()
+        old_partials: list[str] = []
+        old_errors: list[str] = []
+        t.start_stream(on_partial=old_partials.append, on_error=old_errors.append)
+        old_client = clients[-1]
+        t.abort_stream()
+
+        new_partials: list[str] = []
+        new_errors: list[str] = []
+        t.start_stream(on_partial=new_partials.append, on_error=new_errors.append)
+        new_client = clients[-1]
+
+        old_client.emit_turn("stale text", turn_order=0)
+        old_client.emit_error(RuntimeError("stale error"))
+
+        assert new_partials == []
+        assert new_errors == []
+        new_client.emit_turn("current text", turn_order=0)
+        assert new_partials == ["current text"]
+        assert t.stop_stream() == "current text"
+
+    def test_starting_session_blocks_reentry_and_abort_retires_client(self):
+        fake_aai = _make_fake_aai()
+        connect_entered = threading.Event()
+        release_connect = threading.Event()
+
+        class BarrierClient(FakeStreamingClient):
+            def connect(self, params):
+                connect_entered.set()
+                assert release_connect.wait(timeout=2.0)
+                super().connect(params)
+
+        client = BarrierClient(api_key="key")
+        t = AssemblyAITranscriber(
+            api_key="key",
+            aai_module=fake_aai,
+            streaming_client_factory=lambda _key: client,
+        )
+        start_errors: list[Exception] = []
+
+        def start() -> None:
+            try:
+                t.start_stream()
+            except Exception as exc:
+                start_errors.append(exc)
+
+        worker = threading.Thread(target=start)
+        worker.start()
+        assert connect_entered.wait(timeout=1.0)
+
+        with pytest.raises(TranscriptionError, match="already active"):
+            t.start_stream()
+        t.abort_stream()
+        release_connect.set()
+        worker.join(timeout=2.0)
+
+        assert not worker.is_alive()
+        assert len(start_errors) == 1
+        assert "stopped while connecting" in str(start_errors[0])
+        assert client.terminated is True
+        assert t._stream_state == "idle"
 
 
 # ---------------------------------------------------------------------------
