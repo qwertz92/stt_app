@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from stt_app.persistence import backup_path
@@ -49,6 +50,60 @@ def test_add_entry_persists_and_respects_max_items(tmp_path):
     assert len(payload) == 2
     assert payload[0]["text"] == "two"
     assert payload[1]["text"] == "three"
+
+
+def test_concurrent_store_instances_do_not_lose_read_modify_write_updates(tmp_path):
+    path = tmp_path / "history.json"
+    first_store = TranscriptHistoryStore(path=path)
+    second_store = TranscriptHistoryStore(path=path)
+    first_loaded = threading.Event()
+    release_first = threading.Event()
+    original_first_load = first_store.load
+
+    def _paused_first_load():
+        entries = original_first_load()
+        first_loaded.set()
+        assert release_first.wait(timeout=2)
+        return entries
+
+    first_store.load = _paused_first_load  # type: ignore[method-assign]
+    first_entry = TranscriptHistoryEntry.new(
+        text="first concurrent entry",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    second_entry = TranscriptHistoryEntry.new(
+        text="second concurrent entry",
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+    first_thread = threading.Thread(
+        target=first_store.add_entry,
+        args=(first_entry, 10),
+    )
+    second_thread = threading.Thread(
+        target=second_store.add_entry,
+        args=(second_entry, 10),
+    )
+
+    first_thread.start()
+    assert first_loaded.wait(timeout=2)
+    second_thread.start()
+    second_thread.join(timeout=0.1)
+    assert second_thread.is_alive()
+
+    release_first.set()
+    first_thread.join(timeout=2)
+    second_thread.join(timeout=2)
+
+    assert not first_thread.is_alive()
+    assert not second_thread.is_alive()
+    assert [entry.text for entry in TranscriptHistoryStore(path=path).load()] == [
+        "first concurrent entry",
+        "second concurrent entry",
+    ]
 
 
 def test_recent_entries_returns_newest_first(tmp_path):

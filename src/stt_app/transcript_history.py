@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import os
+import threading
 import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -17,6 +19,24 @@ HistoryStorageSignature = tuple[int, int] | None
 DISPLAY_TIMEZONE_LOCAL = "local"
 DISPLAY_TIMEZONE_UTC = "utc"
 VALID_HISTORY_DISPLAY_TIMEZONES = (DISPLAY_TIMEZONE_LOCAL, DISPLAY_TIMEZONE_UTC)
+
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[Path, threading.RLock] = {}
+
+
+def _lock_for_path(path: Path) -> threading.RLock:
+    """Return the in-process lock shared by every store for *path*."""
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        resolved = path.absolute()
+    key = Path(os.path.normcase(str(resolved)))
+    with _PATH_LOCKS_GUARD:
+        lock = _PATH_LOCKS.get(key)
+        if lock is None:
+            lock = threading.RLock()
+            _PATH_LOCKS[key] = lock
+        return lock
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +93,7 @@ class TranscriptHistoryStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or transcript_history_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = _lock_for_path(self._path)
 
     @property
     def path(self) -> Path:
@@ -88,14 +109,21 @@ class TranscriptHistoryStore:
         return (int(stat.st_mtime_ns), int(stat.st_size))
 
     def load(self) -> list[TranscriptHistoryEntry]:
-        return self._load_from_path(self._path)
+        with self._lock:
+            return self._load_from_path(self._path)
 
     def count(self) -> int:
         return len(self.load())
 
     def save(self, entries: list[TranscriptHistoryEntry]) -> None:
-        payload = [asdict(item) for item in entries]
-        atomic_write_json(self._path, payload, ensure_ascii=True, keep_backup=True)
+        with self._lock:
+            payload = [asdict(item) for item in entries]
+            atomic_write_json(
+                self._path,
+                payload,
+                ensure_ascii=True,
+                keep_backup=True,
+            )
 
     def add_entry(self, entry: TranscriptHistoryEntry, max_items: int) -> None:
         self.append_entries([entry], max_items=max_items)
@@ -109,24 +137,27 @@ class TranscriptHistoryStore:
         incoming = [item for item in entries if item.text.strip()]
         if not incoming:
             return 0
-        current = self.load()
-        merged = self._trim_entries(current + incoming, max_items=max_items)
-        self.save(merged)
+        with self._lock:
+            current = self.load()
+            merged = self._trim_entries(current + incoming, max_items=max_items)
+            self.save(merged)
         return len(incoming)
 
     def apply_max_items(self, max_items: int) -> int:
-        entries = self.load()
-        trimmed = self._trim_entries(entries, max_items=max_items)
-        removed = len(entries) - len(trimmed)
-        if removed > 0:
-            self.save(trimmed)
-        return removed
+        with self._lock:
+            entries = self.load()
+            trimmed = self._trim_entries(entries, max_items=max_items)
+            removed = len(entries) - len(trimmed)
+            if removed > 0:
+                self.save(trimmed)
+            return removed
 
     def clear(self) -> int:
-        removed = self.count()
-        if removed:
-            self.save([])
-        return removed
+        with self._lock:
+            removed = self.count()
+            if removed:
+                self.save([])
+            return removed
 
     def delete_entry(self, entry: TranscriptHistoryEntry) -> int:
         return self.delete_entries([entry])
@@ -134,18 +165,19 @@ class TranscriptHistoryStore:
     def delete_entries(self, entries: list[TranscriptHistoryEntry]) -> int:
         if not entries:
             return 0
-        current = self.load()
-        removed = 0
-        for entry in entries:
-            try:
-                index = current.index(entry)
-            except ValueError:
-                continue
-            current.pop(index)
-            removed += 1
-        if removed > 0:
-            self.save(current)
-        return removed
+        with self._lock:
+            current = self.load()
+            removed = 0
+            for entry in entries:
+                try:
+                    index = current.index(entry)
+                except ValueError:
+                    continue
+                current.pop(index)
+                removed += 1
+            if removed > 0:
+                self.save(current)
+            return removed
 
     def update_entry_text(self, entry: TranscriptHistoryEntry, text: str) -> int:
         next_text = str(text or "").strip()
@@ -160,14 +192,15 @@ class TranscriptHistoryStore:
     ) -> int:
         if not updated.text.strip():
             return 0
-        current = self.load()
-        try:
-            index = current.index(original)
-        except ValueError:
-            return 0
-        current[index] = updated
-        self.save(current)
-        return 1
+        with self._lock:
+            current = self.load()
+            try:
+                index = current.index(original)
+            except ValueError:
+                return 0
+            current[index] = updated
+            self.save(current)
+            return 1
 
     def recent_entries(self, limit: int = 10) -> list[TranscriptHistoryEntry]:
         entries = self.load()
