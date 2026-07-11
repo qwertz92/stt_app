@@ -8,6 +8,7 @@ from .app_paths import settings_path
 from .persistence import (
     atomic_write_json,
     load_json_with_backup,
+    parse_json_bool,
     quarantine_corrupt_file,
 )
 from .config import (
@@ -369,11 +370,16 @@ class AppSettings:
             custom_vocabulary=str(
                 merged.get("custom_vocabulary", DEFAULT_CUSTOM_VOCABULARY)
             ),
-            vad_enabled=bool(merged.get("vad_enabled", DEFAULT_VAD_ENABLED)),
+            vad_enabled=parse_json_bool(
+                merged.get("vad_enabled"), default=DEFAULT_VAD_ENABLED
+            ),
             vad_energy_threshold=vad_energy_threshold,
-            save_last_wav=bool(merged.get("save_last_wav", DEFAULT_SAVE_LAST_WAV)),
-            save_all_recordings=bool(
-                merged.get("save_all_recordings", DEFAULT_SAVE_ALL_RECORDINGS)
+            save_last_wav=parse_json_bool(
+                merged.get("save_last_wav"), default=DEFAULT_SAVE_LAST_WAV
+            ),
+            save_all_recordings=parse_json_bool(
+                merged.get("save_all_recordings"),
+                default=DEFAULT_SAVE_ALL_RECORDINGS,
             ),
             recordings_dir=str(
                 merged.get("recordings_dir", DEFAULT_RECORDINGS_DIR)
@@ -382,74 +388,85 @@ class AppSettings:
             history_max_items=history_max_items,
             display_timezone=display_timezone,
             overlay_opacity_percent=overlay_opacity_percent,
-            overlay_always_on_top=bool(
+            overlay_always_on_top=parse_json_bool(
                 merged.get(
                     "overlay_always_on_top",
                     DEFAULT_OVERLAY_ALWAYS_ON_TOP,
-                )
+                ),
+                default=DEFAULT_OVERLAY_ALWAYS_ON_TOP,
             ),
             engine=engine,
             mode=mode,
-            streaming_full_final_transcript=bool(
+            streaming_full_final_transcript=parse_json_bool(
                 merged.get(
                     "streaming_full_final_transcript",
                     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
-                )
+                ),
+                default=DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
             ),
             concurrent_transcription_mode=concurrent_transcription_mode,
-            immediate_background_insert=bool(
+            immediate_background_insert=parse_json_bool(
                 merged.get(
                     "immediate_background_insert",
                     DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
-                )
+                ),
+                default=DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
             ),
             insert_target=insert_target,
-            keep_microphone_warm=bool(
+            keep_microphone_warm=parse_json_bool(
                 merged.get(
                     "keep_microphone_warm",
                     DEFAULT_KEEP_MICROPHONE_WARM,
-                )
+                ),
+                default=DEFAULT_KEEP_MICROPHONE_WARM,
             ),
-            silence_gate_enabled=bool(
+            silence_gate_enabled=parse_json_bool(
                 merged.get(
                     "silence_gate_enabled",
                     DEFAULT_SILENCE_GATE_ENABLED,
-                )
+                ),
+                default=DEFAULT_SILENCE_GATE_ENABLED,
             ),
             silence_gate_threshold=silence_gate_threshold,
             paste_mode=paste_mode,
-            keep_transcript_in_clipboard=bool(
+            keep_transcript_in_clipboard=parse_json_bool(
                 merged.get(
                     "keep_transcript_in_clipboard",
                     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
-                )
+                ),
+                default=DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
             ),
-            allow_insecure_key_storage=bool(
+            allow_insecure_key_storage=parse_json_bool(
                 merged.get(
                     "allow_insecure_key_storage",
                     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
-                )
+                ),
+                default=DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
             ),
-            offline_mode=bool(merged.get("offline_mode", DEFAULT_OFFLINE_MODE)),
-            keep_onnx_model_loaded=bool(
+            offline_mode=parse_json_bool(
+                merged.get("offline_mode"), default=DEFAULT_OFFLINE_MODE
+            ),
+            keep_onnx_model_loaded=parse_json_bool(
                 merged.get(
                     "keep_onnx_model_loaded",
                     DEFAULT_KEEP_ONNX_MODEL_LOADED,
-                )
+                ),
+                default=DEFAULT_KEEP_ONNX_MODEL_LOADED,
             ),
-            start_beep_enabled=bool(
-                merged.get("start_beep_enabled", DEFAULT_START_BEEP_ENABLED)
+            start_beep_enabled=parse_json_bool(
+                merged.get("start_beep_enabled"),
+                default=DEFAULT_START_BEEP_ENABLED,
             ),
             start_beep_tone=start_beep_tone,
             overlay_corner=overlay_corner,
             model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
-            has_openai_key=bool(merged.get("has_openai_key", False)),
-            has_deepgram_key=bool(merged.get("has_deepgram_key", False)),
-            has_assemblyai_key=bool(merged.get("has_assemblyai_key", False)),
-            has_groq_key=bool(merged.get("has_groq_key", False)),
-            has_elevenlabs_key=bool(merged.get("has_elevenlabs_key", False)),
-            has_azure_key=bool(merged.get("has_azure_key", False)),
-            has_funasr_key=bool(merged.get("has_funasr_key", False)),
+            has_openai_key=parse_json_bool(merged.get("has_openai_key")),
+            has_deepgram_key=parse_json_bool(merged.get("has_deepgram_key")),
+            has_assemblyai_key=parse_json_bool(merged.get("has_assemblyai_key")),
+            has_groq_key=parse_json_bool(merged.get("has_groq_key")),
+            has_elevenlabs_key=parse_json_bool(merged.get("has_elevenlabs_key")),
+            has_azure_key=parse_json_bool(merged.get("has_azure_key")),
+            has_funasr_key=parse_json_bool(merged.get("has_funasr_key")),
             groq_model=groq_model,
             openai_model=openai_model,
             deepgram_model=deepgram_model,

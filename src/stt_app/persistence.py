@@ -10,6 +10,21 @@ from typing import Any
 _BACKUP_SUFFIX = ".bak"
 
 
+def parse_json_bool(value: Any, *, default: bool = False) -> bool:
+    """Parse persisted booleans without Python's truthy-string behavior."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1"}:
+            return True
+        if normalized in {"false", "0"}:
+            return False
+    return bool(default)
+
+
 def backup_path(path: Path) -> Path:
     return path.with_name(f"{path.name}{_BACKUP_SUFFIX}")
 

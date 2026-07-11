@@ -2,6 +2,7 @@ import json
 
 from stt_app.config import (
     DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
@@ -20,6 +21,7 @@ from stt_app.config import (
     DEFAULT_OVERLAY_CORNER,
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_MAX_COUNT,
+    DEFAULT_SAVE_LAST_WAV,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
 )
@@ -395,6 +397,44 @@ def test_keep_transcript_in_clipboard_flag_roundtrip(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.keep_transcript_in_clipboard is False
+
+
+def test_string_false_never_enables_insecure_key_storage(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "allow_insecure_key_storage": "false",
+                "offline_mode": "false",
+                "vad_enabled": "true",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.allow_insecure_key_storage is False
+    assert settings.offline_mode is False
+    assert settings.vad_enabled is True
+
+
+def test_invalid_boolean_values_fall_back_to_safe_defaults(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "allow_insecure_key_storage": "definitely",
+                "save_last_wav": {"unexpected": "object"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.allow_insecure_key_storage is DEFAULT_ALLOW_INSECURE_KEY_STORAGE
+    assert settings.save_last_wav is DEFAULT_SAVE_LAST_WAV
 
 
 def test_model_dir_roundtrip(tmp_path):

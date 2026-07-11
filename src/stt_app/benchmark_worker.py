@@ -19,6 +19,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from .local_benchmark import BenchmarkCancelled, run_benchmark_cases
+from .persistence import parse_json_bool
 
 # Prefix that frames a benchmark event line on stdout. Library noise printed to
 # stdout by faster-whisper / onnxruntime is ignored by the parent because it
@@ -54,8 +55,8 @@ def run_from_options(options: dict) -> int:
             runs=int(options.get("runs", 1)),
             beam_size=int(options.get("beam_size", 5)),
             language=options.get("language"),
-            vad_filter=bool(options.get("vad_filter", False)),
-            warmup=bool(options.get("warmup", False)),
+            vad_filter=parse_json_bool(options.get("vad_filter")),
+            warmup=parse_json_bool(options.get("warmup")),
             threads=int(options.get("threads", 0)),
             model_dir=str(options.get("model_dir", "")),
             webgpu_devices=webgpu_devices,

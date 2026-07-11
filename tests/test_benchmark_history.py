@@ -84,6 +84,19 @@ def test_benchmark_history_roundtrip(tmp_path):
     assert loaded[0].cases[0].runtime_details == "Fallback attempts: webgpu: unsupported"
 
 
+def test_benchmark_options_parse_explicit_string_booleans():
+    options = BenchmarkOptions.from_dict(
+        {
+            "model_names": ["small"],
+            "vad_filter": "false",
+            "warmup": "true",
+        }
+    )
+
+    assert options.vad_filter is False
+    assert options.warmup is True
+
+
 def test_benchmark_history_delete_handles_nan_case_values(tmp_path):
     store = BenchmarkHistoryStore(path=tmp_path / "benchmark_history.json")
     entry = _entry()

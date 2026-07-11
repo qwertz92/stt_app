@@ -12,7 +12,12 @@ from xml.sax.saxutils import escape
 from .app_paths import benchmark_history_path
 from .benchmark_environment import BenchmarkEnvironment
 from .local_benchmark import BenchmarkCase, _case_from_dict
-from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
+from .persistence import (
+    atomic_write_json,
+    load_json_with_backup,
+    parse_json_bool,
+    quarantine_corrupt_file,
+)
 
 MAX_BENCHMARK_HISTORY_ITEMS = 100
 
@@ -49,8 +54,8 @@ class BenchmarkOptions:
             runs=_safe_int(raw.get("runs"), default=1),
             beam_size=_safe_int(raw.get("beam_size"), default=5),
             language=str(raw.get("language", "auto") or "auto"),
-            vad_filter=bool(raw.get("vad_filter", False)),
-            warmup=bool(raw.get("warmup", False)),
+            vad_filter=parse_json_bool(raw.get("vad_filter")),
+            warmup=parse_json_bool(raw.get("warmup")),
             threads=_safe_int(raw.get("threads"), default=0),
             model_dir=str(raw.get("model_dir", "")),
         )

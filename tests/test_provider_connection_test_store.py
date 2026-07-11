@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 from stt_app.provider_connection_test_store import ProviderConnectionTestStore
 
 
@@ -47,3 +49,23 @@ def test_provider_connection_test_store_clears_result(tmp_path):
     store.clear_result("openai")
 
     assert store.load_all() == {}
+
+
+def test_provider_connection_string_false_is_not_truthy(tmp_path):
+    path = tmp_path / "provider_connection_tests.json"
+    path.write_text(
+        json.dumps(
+            {
+                "results": {
+                    "openai": {
+                        "checked_at": "2026-07-11T12:00:00+00:00",
+                        "ok": "false",
+                        "message": "failed",
+                    }
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert ProviderConnectionTestStore(path).load_all()["openai"].ok is False

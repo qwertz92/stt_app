@@ -91,6 +91,31 @@ def test_worker_emits_error_event_on_failure(monkeypatch, capsys):
     assert events == [{"event": "error", "message": "worker blew up"}]
 
 
+def test_worker_parses_explicit_string_booleans(monkeypatch, capsys):
+    captured = {}
+
+    def fake_run_benchmark_cases(**kwargs):
+        captured.update(kwargs)
+        return []
+
+    monkeypatch.setattr(
+        benchmark_worker, "run_benchmark_cases", fake_run_benchmark_cases
+    )
+
+    assert benchmark_worker.run_from_options(
+        {
+            "audio_path": "x.wav",
+            "model_names": ["small"],
+            "vad_filter": "false",
+            "warmup": "true",
+        }
+    ) == 0
+
+    assert captured["vad_filter"] is False
+    assert captured["warmup"] is True
+    _ = capsys.readouterr()
+
+
 # --- Event stream parsing --------------------------------------------------
 
 

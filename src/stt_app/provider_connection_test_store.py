@@ -7,7 +7,12 @@ from typing import Any
 
 from .app_paths import provider_connection_tests_path
 from .config import VALID_ENGINES
-from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
+from .persistence import (
+    atomic_write_json,
+    load_json_with_backup,
+    parse_json_bool,
+    quarantine_corrupt_file,
+)
 
 _CURRENT_SCHEMA_VERSION = 1
 _REMOTE_PROVIDERS = tuple(engine for engine in VALID_ENGINES if engine != "local")
@@ -32,7 +37,7 @@ class ProviderConnectionTestResult:
     def from_dict(cls, raw: dict[str, Any]) -> "ProviderConnectionTestResult":
         return cls(
             checked_at=str(raw.get("checked_at", "")).strip(),
-            ok=bool(raw.get("ok", False)),
+            ok=parse_json_bool(raw.get("ok")),
             message=str(raw.get("message", "")).strip(),
         )
 
