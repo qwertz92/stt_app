@@ -19,6 +19,27 @@ class AudioCaptureError(RuntimeError):
     pass
 
 
+def _close_input_stream(
+    stream,
+    *,
+    logger: logging.Logger | None,
+    context: str,
+    stop_first: bool = True,
+) -> None:
+    """Best-effort close that never skips close() when stop() fails."""
+    if stop_first:
+        try:
+            stream.stop()
+        except Exception:
+            if logger is not None:
+                logger.exception("Failed to stop %s", context)
+    try:
+        stream.close()
+    except Exception:
+        if logger is not None:
+            logger.exception("Failed to close %s", context)
+
+
 class WarmMicrophoneStream:
     """Keeps one PortAudio input stream open so recording starts instantly.
 
@@ -45,37 +66,69 @@ class WarmMicrophoneStream:
         self._lock = threading.Lock()
         self._stream = None
         self._consumer: Callable | None = None
+        self._starting = False
+        self._generation = 0
 
     @property
     def is_running(self) -> bool:
-        return self._stream is not None
+        with self._lock:
+            return self._stream is not None
 
     def ensure_started(self) -> bool:
         """Open and start the shared stream if needed. Safe off the UI thread."""
         with self._lock:
             if self._stream is not None:
                 return True
+            if self._starting:
+                return False
+            self._starting = True
+            generation = self._generation
+
+        stream = None
+        try:
+            stream = sd.InputStream(
+                samplerate=self.sample_rate,
+                channels=self.channels,
+                dtype="float32",
+                blocksize=self.block_size,
+                callback=self._dispatch,
+            )
             try:
-                stream = sd.InputStream(
-                    samplerate=self.sample_rate,
-                    channels=self.channels,
-                    dtype="float32",
-                    blocksize=self.block_size,
-                    callback=self._dispatch,
-                )
                 stream.start()
             except Exception:
-                if self._logger is not None:
-                    self._logger.exception("Failed to start warm microphone stream")
-                return False
-            self._stream = stream
-            if self._logger is not None:
-                self._logger.info(
-                    "warm_microphone_stream_started sample_rate=%d block_size=%d",
-                    self.sample_rate,
-                    self.block_size,
+                _close_input_stream(
+                    stream,
+                    logger=self._logger,
+                    context="warm microphone stream after start failure",
+                    stop_first=False,
                 )
-            return True
+                stream = None
+                raise
+        except Exception:
+            if self._logger is not None:
+                self._logger.exception("Failed to start warm microphone stream")
+        finally:
+            with self._lock:
+                self._starting = False
+                accepted = stream is not None and generation == self._generation
+                if accepted:
+                    self._stream = stream
+
+        if not accepted:
+            if stream is not None:
+                _close_input_stream(
+                    stream,
+                    logger=self._logger,
+                    context="superseded warm microphone stream",
+                )
+            return False
+        if self._logger is not None:
+            self._logger.info(
+                "warm_microphone_stream_started sample_rate=%d block_size=%d",
+                self.sample_rate,
+                self.block_size,
+            )
+        return True
 
     def attach(self, consumer: Callable) -> bool:
         """Route the running stream's audio to ``consumer``; False if not running."""
@@ -93,17 +146,17 @@ class WarmMicrophoneStream:
 
     def close(self) -> None:
         with self._lock:
+            self._generation += 1
             stream = self._stream
             self._stream = None
             self._consumer = None
         if stream is None:
             return
-        try:
-            stream.stop()
-            stream.close()
-        except Exception:
-            if self._logger is not None:
-                self._logger.exception("Failed to close warm microphone stream")
+        _close_input_stream(
+            stream,
+            logger=self._logger,
+            context="warm microphone stream",
+        )
 
     def _dispatch(self, indata, frames, time_info, status) -> None:
         consumer = self._consumer
@@ -142,6 +195,9 @@ class AudioCapture:
         self._lock = threading.Lock()
         self._chunks: list[np.ndarray] = []
         self._auto_stop_fired = False
+        self._capture_generation = 0
+        self._accepting_audio = False
+        self._active_callback: Callable | None = None
 
     @property
     def is_recording(self) -> bool:
@@ -151,8 +207,23 @@ class AudioCapture:
         if self._stream is not None or self._warm_attached:
             return
 
-        self._chunks = []
-        self._auto_stop_fired = False
+        with self._lock:
+            self._capture_generation += 1
+            generation = self._capture_generation
+            self._chunks = []
+            self._auto_stop_fired = False
+            self._accepting_audio = True
+
+        def session_callback(indata, frames, time_info, status) -> None:
+            self._on_audio_for_generation(
+                generation,
+                indata,
+                frames,
+                time_info,
+                status,
+            )
+
+        self._active_callback = session_callback
         if self.vad is not None:
             self.vad.reset()
 
@@ -161,7 +232,7 @@ class AudioCapture:
             warm is not None
             and warm.sample_rate == self.sample_rate
             and warm.block_size == self.block_size
-            and warm.attach(self._on_audio)
+            and warm.attach(session_callback)
         ):
             # The shared stream is already running; attaching is instant and
             # audio flows from the very next callback block.
@@ -174,7 +245,7 @@ class AudioCapture:
                 channels=self.channels,
                 dtype="float32",
                 blocksize=self.block_size,
-                callback=self._on_audio,
+                callback=session_callback,
             )
             try:
                 stream.start()
@@ -182,17 +253,27 @@ class AudioCapture:
                 # ``InputStream`` may have opened the device during
                 # construction; close it so PortAudio does not keep the
                 # device handle alive when ``start()`` fails.
-                try:
-                    stream.close()
-                except Exception:
-                    if self._logger is not None:
-                        self._logger.exception("Failed to close audio stream after start failure")
+                _close_input_stream(
+                    stream,
+                    logger=self._logger,
+                    context="audio stream after start failure",
+                    stop_first=False,
+                )
                 raise
             self._stream = stream
         except Exception as exc:
+            with self._lock:
+                if generation == self._capture_generation:
+                    self._accepting_audio = False
+                    self._active_callback = None
             raise AudioCaptureError(f"Failed to start microphone capture: {exc}") from exc
 
     def stop(self) -> bytes:
+        with self._lock:
+            self._accepting_audio = False
+            self._capture_generation += 1
+            active_callback = self._active_callback
+            self._active_callback = None
         stream = self._stream
         self._stream = None
         if self._warm_attached:
@@ -200,20 +281,21 @@ class AudioCapture:
             if self._warm_stream is not None:
                 # Only detach; the shared warm stream keeps running for the
                 # next recording.
-                self._warm_stream.detach(self._on_audio)
+                if active_callback is not None:
+                    self._warm_stream.detach(active_callback)
 
         if stream is not None:
-            try:
-                stream.stop()
-                stream.close()
-            except Exception:
-                if self._logger is not None:
-                    self._logger.exception("Failed to stop/close audio stream cleanly")
+            _close_input_stream(
+                stream,
+                logger=self._logger,
+                context="audio capture stream",
+            )
 
         with self._lock:
             if not self._chunks:
                 return b""
             audio = np.concatenate(self._chunks)
+            self._chunks = []
 
         return self._to_wav_bytes(audio)
 
@@ -222,6 +304,20 @@ class AudioCapture:
         atomic_write_bytes(output_path, wav_bytes)
 
     def _on_audio(self, indata, frames, _time, status) -> None:
+        """Process an unscoped callback, retained for direct callers and tests."""
+        self._process_audio(indata, frames, status, generation=None)
+
+    def _on_audio_for_generation(
+        self,
+        generation: int,
+        indata,
+        frames,
+        _time,
+        status,
+    ) -> None:
+        self._process_audio(indata, frames, status, generation=generation)
+
+    def _process_audio(self, indata, frames, status, *, generation: int | None) -> None:
         if status and self._logger is not None:
             self._logger.warning("Audio stream status: %s", status)
 
@@ -232,26 +328,29 @@ class AudioCapture:
             mono = data.reshape(-1)
 
         with self._lock:
+            if generation is not None and (
+                not self._accepting_audio or generation != self._capture_generation
+            ):
+                return
             self._chunks.append(np.copy(mono))
+            if self.chunk_callback is not None:
+                try:
+                    self.chunk_callback(self._to_pcm16_bytes(mono))
+                except Exception:
+                    if self._logger is not None:
+                        self._logger.exception("Streaming chunk callback failed")
 
-        if self.chunk_callback is not None:
-            try:
-                self.chunk_callback(self._to_pcm16_bytes(mono))
-            except Exception:
-                if self._logger is not None:
-                    self._logger.exception("Streaming chunk callback failed")
+            if self.vad is None:
+                return
 
-        if self.vad is None:
-            return
-
-        decision = self.vad.process_chunk(mono)
-        if (
-            decision.should_stop
-            and self.auto_stop_callback is not None
-            and not self._auto_stop_fired
-        ):
-            self._auto_stop_fired = True
-            threading.Thread(target=self.auto_stop_callback, daemon=True).start()
+            decision = self.vad.process_chunk(mono)
+            if (
+                decision.should_stop
+                and self.auto_stop_callback is not None
+                and not self._auto_stop_fired
+            ):
+                self._auto_stop_fired = True
+                threading.Thread(target=self.auto_stop_callback, daemon=True).start()
 
     def _to_wav_bytes(self, audio: np.ndarray) -> bytes:
         pcm = self._to_pcm16_array(audio)

@@ -1,4 +1,5 @@
 import threading
+import time
 import wave
 from io import BytesIO
 
@@ -145,3 +146,83 @@ def test_chunk_callback_receives_pcm16_bytes():
     payload = received["payload"]
     assert isinstance(payload, bytes)
     assert len(payload) == 6  # 3 samples * int16
+
+
+def test_cold_stream_close_runs_even_when_stop_fails(monkeypatch):
+    class StopFailingStream(FakeInputStream):
+        def stop(self):
+            raise RuntimeError("stop failed")
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", StopFailingStream)
+    FakeInputStream.instances = []
+    capture = AudioCapture()
+    capture.start()
+    stream = FakeInputStream.instances[0]
+
+    capture.stop()
+
+    assert stream.closed is True
+
+
+def test_warm_start_failure_closes_partially_opened_stream(monkeypatch):
+    class StartFailingStream(FakeInputStream):
+        def start(self):
+            raise RuntimeError("start failed")
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", StartFailingStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream()
+
+    assert warm.ensure_started() is False
+
+    assert FakeInputStream.instances[0].closed is True
+
+
+def test_attach_does_not_block_while_warm_stream_is_starting(monkeypatch):
+    start_entered = threading.Event()
+    allow_start = threading.Event()
+
+    class BlockingStartStream(FakeInputStream):
+        def start(self):
+            start_entered.set()
+            assert allow_start.wait(timeout=1.0)
+            super().start()
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", BlockingStartStream)
+    warm = WarmMicrophoneStream()
+    starter = threading.Thread(target=warm.ensure_started)
+    starter.start()
+    assert start_entered.wait(timeout=1.0)
+
+    started = time.perf_counter()
+    attached = warm.attach(lambda *_args: None)
+    elapsed = time.perf_counter() - started
+
+    assert attached is False
+    assert elapsed < 0.1
+    allow_start.set()
+    starter.join(timeout=1.0)
+    warm.close()
+
+
+def test_late_warm_callback_cannot_write_into_next_recording(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started()
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    chunk = np.ones((160, 1), dtype=np.float32) * 0.25
+
+    capture.start()
+    old_callback = warm._consumer
+    assert old_callback is not None
+    capture.stop()
+    capture.start()
+    new_callback = warm._consumer
+    assert new_callback is not None
+
+    old_callback(chunk, 160, None, None)
+    assert capture._chunks == []
+    new_callback(chunk, 160, None, None)
+    assert len(capture._chunks) == 1
+    capture.stop()
+    warm.close()
