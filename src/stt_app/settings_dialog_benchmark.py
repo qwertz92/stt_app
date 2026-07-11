@@ -113,8 +113,18 @@ class _BenchmarkMixin:
         history_layout = QtWidgets.QVBoxLayout(history_box)
         history_layout.setContentsMargins(10, 10, 10, 10)
         history_layout.setSpacing(6)
+
+        self.benchmark_history_note_label = QtWidgets.QLabel(
+            "Runs that produce results are saved here automatically, including "
+            "partial canceled runs. Export creates a separate file for sharing "
+            "or analysis."
+        )
+        self.benchmark_history_note_label.setWordWrap(True)
+        self._style_note_label(self.benchmark_history_note_label)
+        history_layout.addWidget(self.benchmark_history_note_label)
+
         self.benchmark_history_list = QtWidgets.QListWidget()
-        self.benchmark_history_list.setMinimumHeight(120)
+        self.benchmark_history_list.setMinimumHeight(90)
         self._configure_compact_list_widget(self.benchmark_history_list, expand=True)
         self.benchmark_history_list.itemSelectionChanged.connect(
             self._update_benchmark_history_actions
@@ -123,15 +133,6 @@ class _BenchmarkMixin:
             self._load_benchmark_history_item
         )
         history_layout.addWidget(self.benchmark_history_list, 1)
-
-        history_note = QtWidgets.QLabel(
-            "Runs that produce results are saved here automatically, including "
-            "partial canceled runs. Export creates a separate file for sharing "
-            "or analysis."
-        )
-        history_note.setWordWrap(True)
-        self._style_note_label(history_note)
-        history_layout.addWidget(history_note)
 
         benchmark_history_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_history_actions)

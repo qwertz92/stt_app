@@ -1787,6 +1787,7 @@ def test_benchmark_tab_hosts_history_and_results_directly():
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
     )
+    dialog.resize(900, 760)
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
     app.processEvents()
@@ -1801,7 +1802,23 @@ def test_benchmark_tab_hosts_history_and_results_directly():
     assert splitter.count() == 2
     assert splitter.indexOf(dialog.benchmark_history_list.parentWidget()) == 0
     assert splitter.indexOf(dialog.benchmark_results_splitter.parentWidget()) == 1
-    assert dialog.benchmark_history_list.minimumHeight() >= 120
+    assert dialog.benchmark_history_list.minimumHeight() >= 90
+
+    note_bottom = dialog.benchmark_history_note_label.mapTo(
+        dialog,
+        QtCore.QPoint(0, dialog.benchmark_history_note_label.height()),
+    ).y()
+    list_top = dialog.benchmark_history_list.mapTo(dialog, QtCore.QPoint()).y()
+    list_bottom = dialog.benchmark_history_list.mapTo(
+        dialog,
+        QtCore.QPoint(0, dialog.benchmark_history_list.height()),
+    ).y()
+    actions_top = dialog.load_benchmark_history_button.mapTo(
+        dialog,
+        QtCore.QPoint(),
+    ).y()
+    assert note_bottom <= list_top
+    assert list_bottom <= actions_top
 
     # The Benchmark tab itself is a plain widget (not a scroll area) so the
     # splitter manages available space directly.
