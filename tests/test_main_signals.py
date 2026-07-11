@@ -311,6 +311,43 @@ def test_tray_update_action_runs_manual_check_without_update(monkeypatch):
     _ = app
 
 
+def test_manual_update_request_promotes_active_startup_check(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    pending_targets = []
+    dialogs = []
+
+    class DeferredThread:
+        def __init__(self, target, **_kwargs):
+            pending_targets.append(target)
+
+        def start(self):
+            return None
+
+    monkeypatch.setattr(main_module.threading, "Thread", DeferredThread)
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        lambda _parent, title, text: dialogs.append((title, text)),
+    )
+    checker = _TrayUpdateChecker(
+        tray_icon=FakeTrayIcon(),
+        runner=lambda: UpdateCheckResult(current_version="0.6.0"),
+    )
+    action = QtGui.QAction("Check for updates")
+
+    checker.start(manual=False)
+    checker.start(manual=True, action=action)
+
+    assert len(pending_targets) == 1
+    assert action.isEnabled() is False
+    pending_targets[0]()
+    app.processEvents()
+
+    assert dialogs == [("No update available", "Version 0.6.0 is up to date.")]
+    assert action.isEnabled() is True
+    _ = app
+
+
 def test_tray_double_click_connected():
     """Double-clicking the tray icon should be connected to open settings."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

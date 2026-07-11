@@ -338,6 +338,7 @@ class _TrayUpdateChecker(QtCore.QObject):
         self._parent_widget = parent_widget
         self._active_thread: threading.Thread | None = None
         self._active_action: QtGui.QAction | None = None
+        self._manual_requested_while_active = False
         self.finished.connect(self._on_finished)
 
     def start(
@@ -347,6 +348,11 @@ class _TrayUpdateChecker(QtCore.QObject):
         action: QtGui.QAction | None = None,
     ) -> None:
         if self._active_thread is not None:
+            if manual:
+                self._manual_requested_while_active = True
+                if action is not None:
+                    self._active_action = action
+                    action.setEnabled(False)
             return
         self._active_action = action
         if action is not None:
@@ -372,6 +378,8 @@ class _TrayUpdateChecker(QtCore.QObject):
 
     @QtCore.Slot(object, bool)
     def _on_finished(self, result: object, manual: bool) -> None:
+        manual = bool(manual or self._manual_requested_while_active)
+        self._manual_requested_while_active = False
         self._active_thread = None
         if self._active_action is not None:
             self._active_action.setEnabled(True)
