@@ -40,7 +40,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
-- Remote providers: AssemblyAI (SDK batch + Universal-Streaming v3),
+- Remote providers: AssemblyAI (SDK batch + Universal-3 Pro streaming),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
   Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German)
@@ -173,6 +173,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   pastes each group as one space-joined text. Each separate paste is its own
   clipboard set/paste/restore race window, so N queued results used to mean N
   chances to lose one. Do not flush deferred results one paste per result.
+- **Consecutive transcript inserts are separated per target control**:
+  successful foreground, background, and first streaming inserts remember their
+  captured window/control signature. A later transcript to the same target gets
+  one leading space unless either side already supplies whitespace or the new
+  text starts with punctuation. Windows cannot reliably expose the character at
+  another application's caret, so do not infer spacing across different target
+  signatures or mutate streaming deltas.
 - **`immediate_background_insert` (default off)**: continuous queue delivery —
   a finished queued transcription inserts into its captured window as soon as
   it completes, even while another transcription or an active **batch**
@@ -254,14 +261,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   The *run* side (audio sample picker, installed-model list with one compact
   row of small Select all/Deselect all/Refresh buttons, collapsible Run
   Options, Run/Cancel controls) lives only in the resizable, non-modal
-  `benchmark_window` ("Run Benchmark", ~640x560, owned by the settings dialog
+  `benchmark_window` ("Run Benchmark", 820x720 default, owned by the settings dialog
   so it hides when the dialog closes). Re-clicking the button raises/activates
   the existing window rather than creating a second one via
   `_open_benchmark_window`, which also refreshes the model list. Status is set
   through the single `_set_benchmark_status`, which feeds both the tab label
   and the window's own status line. Benchmark Results tables use per-pixel
   scroll modes. All benchmark widget attribute names are unchanged; only
-  containers moved.
+  containers moved. Completed and partial canceled runs are saved to Benchmark
+  History automatically; Export only creates a shareable file. New
+  faster-whisper results store CTranslate2's resolved device instead of `auto`.
 - **Settings dialog persists for the app lifetime**: closing Settings hides the
   existing dialog instead of deleting it. The dialog owns background model
   downloads, benchmark work, imports, scans, and connection/update checks, so
@@ -275,6 +284,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   shutdown calls `SettingsDialog.shutdown()` before controller shutdown so
   active model-download and benchmark child-process work is canceled and given
   a bounded cleanup window.
+- **General-tab field hints have explicit visual ownership**: a control and its
+  descriptive hint use `_field_with_hint` with a 2 px internal gap; General
+  forms use a 10 px row gap before the next setting. Changing model/language
+  notes reserve two fixed lines so engine switches never move later fields.
+  Delayed paint/prewarm callbacks use dialog-owned `QTimer`s and must disappear
+  with the dialog instead of invoking deleted Qt objects.
 - **Streaming abort keeps the partial transcript**: `_abort_streaming_session`
   saves the best-known live transcript to history, keeps it as the last
   transcript for the overlay Copy action, shows it in the abort message, and
@@ -284,7 +299,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
   case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
   `initial_prompt` (batch + rolling-window streaming), OpenAI/Groq `prompt`,
-  AssemblyAI batch `word_boost` (streaming v3 has no biasing parameter),
+  AssemblyAI batch `word_boost` and Universal-3 Pro streaming
+  `keyterms_prompt`,
   Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) query params with
   `doseq` encoding. ElevenLabs, Azure, Fun-ASR, Nemotron, and Cohere/Granite
   ONNX expose no biasing input and stay unwired.
@@ -317,6 +333,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   size-bounded, tags use strict numeric SemVer, and release links are restricted
   to this repository's HTTPS GitHub release paths. A manual request during the
   startup check promotes the active request so its result remains visible.
+  Update dialogs use an explicit high-contrast stylesheet instead of platform
+  button hover colors. An in-app download requires the exact installer and
+  `.sha256` release assets, trusted HTTPS GitHub redirects, the declared byte
+  size, and a matching checksum; incomplete data stays in `.partial`. Launching
+  the installer additionally requires Windows to report a valid Authenticode
+  signature whose full subject is pinned in
+  `TRUSTED_WINDOWS_PUBLISHER_SUBJECTS`. Keep that set empty until the real
+  signing identity exists; a GitHub Verified commit does not sign release EXEs.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional
@@ -375,14 +399,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **ElevenLabs batch model selection**: `scribe_v2` is the only supported model.
   ElevenLabs removed `scribe_v1` on 2026-07-09; legacy stored selections migrate
   to `scribe_v2` and the removed identifier must not be sent to the API.
-- **AssemblyAI streaming (Universal-Streaming v3)**: the legacy v2 realtime
-  API is retired and must not be reintroduced. Streaming uses
-  `assemblyai.streaming.v3.StreamingClient` with the
-  `universal-streaming-multilingual` model, language detection, and formatted
-  turns; the batch model selection does not apply to streaming. Turn text is
-  keyed by `turn_order` because the formatted end-of-turn transcript arrives
-  as a second event for the same turn. Bound SDK `disconnect` joins with a
-  helper thread; they can hang on dead connections.
+- **AssemblyAI Universal-3 Pro streaming**: the legacy v2 realtime and earlier
+  Universal-Streaming model are retired paths and must not be reintroduced.
+  Streaming uses `assemblyai.streaming.v3.StreamingClient` with the
+  `u3_rt_pro` model, language detection, and optional `keyterms_prompt`; do not
+  send the removed `format_turns` option. The batch model selection does not
+  apply to streaming. Turn text is keyed by `turn_order` because later events
+  can refine the same turn. Bound SDK `disconnect` joins with a helper thread;
+  they can hang on dead connections.
 - **Streaming provider sends must not block the audio callback**:
   `push_audio_chunk` runs on the PortAudio callback thread. Providers must
   only enqueue there (Deepgram has a dedicated sender thread; the AssemblyAI
@@ -442,6 +466,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   changed, pushes, tags, and pushes the tag. GitHub Actions release notes that
   contain Markdown backticks must use a literal PowerShell here-string (`@'`) so
   asset-name backticks are not consumed as PowerShell escapes.
+  The release workflow publishes `stt_app-win-x64-setup.exe.sha256`, generated
+  only after the final installer bytes. Authenticode signing must run before
+  that checksum step once a managed signing identity is configured.
 - **Continuous quality gates**: `.github/workflows/quality.yml` runs Ruff and
   the complete pytest suite on Windows for `main`, review branches, and pull
   requests. It also audits the locked production JavaScript dependency tree on

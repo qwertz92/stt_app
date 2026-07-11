@@ -1818,3 +1818,43 @@ Agents and developers: use this as a knowledge base for past issues and solution
     later failure.
   - ElevenLabs `scribe_v1` was removed from runtime/UI after its 2026-07-09 API
     retirement; legacy settings migrate to `scribe_v2`.
+- **AssemblyAI Universal-3 Pro migration:**
+  - Pre-recorded transcription was already using `universal-3-pro` with the
+    documented `universal-2` fallback; no nonexistent "Universal Pro 3.5"
+    batch identifier was introduced.
+  - Streaming now uses the official `u3_rt_pro` model and removes the obsolete
+    `format_turns` option. Custom Vocabulary is sent as `keyterms_prompt`, so
+    AssemblyAI biasing now works in both batch and streaming modes.
+- **Consecutive insertion boundaries:**
+  - Successful transcript inserts remember the captured target control. A
+    later transcript into that same control receives one boundary space while
+    punctuation continuations, existing whitespace, different controls, and
+    live streaming deltas remain untouched.
+  - Queue and immediate-delivery regressions confirm that separation also
+    applies when transcriptions finish in different controller paths.
+- **General and benchmark UX pass:**
+  - General-tab hints now sit 2 px below their field and 10 px before the next
+    row. Dynamic model and language notes reserve two lines, keeping every
+    later row stationary across engine changes.
+  - Vocabulary guidance documents all separators, preserved multi-word
+    phrases, and the exact supported/unsupported provider and local-model paths.
+    The ambiguous "While transcribing" field is now "New Recording" and every
+    choice explicitly describes what happens to the previous job.
+  - The Benchmark runner defaults to 820x720, loaded-result actions live beside
+    Results, and the UI states that completed/partial results are saved to
+    history automatically. New faster-whisper cases record CTranslate2's
+    resolved device.
+  - The retained July 11 four-run Arc A750 benchmark documents a 32-39% first
+    WebGPU-run overhead without warm-up. Warm-up occurs after measured model
+    loading and primes inference compilation, pipelines, kernels, and caches.
+- **Secure in-app update foundation:**
+  - Update/no-update dialogs have explicit contrast-safe normal, hover,
+    pressed, disabled, and primary-button colors.
+  - Release builds publish a post-build SHA-256 companion. In-app downloads
+    require exact repository assets, trusted HTTPS redirects, bounded declared
+    size, atomic partial publication, and a matching checksum.
+  - Installer launch remains disabled until Windows validates Authenticode and
+    its full publisher subject matches an explicit pin. GitHub Verified commits
+    are source-history signatures and do not satisfy Windows code signing.
+  - Settings prewarm/paint callbacks are now owned timers, eliminating delayed
+    calls into already-deleted Qt dialog objects found during focused UI tests.
