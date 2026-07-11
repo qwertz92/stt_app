@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import queue
+import subprocess
 
 import pytest
 
@@ -150,6 +151,106 @@ def test_pump_events_ignores_non_prefixed_lines():
             break
         collected.append(item)
     assert [event["event"] for event in collected] == ["progress", "done"]
+
+
+# --- Command building ------------------------------------------------------
+
+
+class _FakeProcess:
+    def __init__(self, stdout_lines, *, return_code=None, stderr_lines=()):
+        self.stdout = iter(stdout_lines)
+        self.stderr = iter(stderr_lines)
+        self.return_code = return_code
+        self.pid = 1234
+        self.terminated = False
+        self.killed = False
+
+    def poll(self):
+        return self.return_code
+
+    def wait(self, timeout=None):
+        if self.return_code is None:
+            raise subprocess.TimeoutExpired("benchmark", timeout)
+        return self.return_code
+
+    def terminate(self):
+        self.terminated = True
+        self.return_code = -15
+
+    def kill(self):
+        self.killed = True
+        self.return_code = -9
+
+
+def _event_line(event):
+    return f"{benchmark_worker.BENCHMARK_EVENT_PREFIX}{json.dumps(event)}\n"
+
+
+def _case_payload():
+    return {
+        "model": "small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "download_seconds": 0.0,
+        "load_seconds": 0.1,
+        "runs": [],
+    }
+
+
+def test_stream_cleanup_runs_when_callback_raises(monkeypatch, tmp_path):
+    process = _FakeProcess(
+        [_event_line({"event": "progress", "text": "loading"})]
+    )
+    monkeypatch.setattr(benchmark_process, "start_benchmark_process", lambda _p: process)
+    monkeypatch.setattr(benchmark_process, "_terminate_process_tree", lambda p: p.terminate())
+
+    with pytest.raises(RuntimeError, match="callback failed"):
+        benchmark_process._stream_benchmark_process(
+            tmp_path / "options.json",
+            progress_callback=lambda _text: (_ for _ in ()).throw(
+                RuntimeError("callback failed")
+            ),
+            case_callback=None,
+            cancel_check=None,
+        )
+
+    assert process.terminated is True
+
+
+def test_nonzero_exit_is_error_even_after_streamed_case(monkeypatch, tmp_path):
+    process = _FakeProcess(
+        [_event_line({"event": "case", "case": _case_payload()})],
+        return_code=7,
+    )
+    monkeypatch.setattr(benchmark_process, "start_benchmark_process", lambda _p: process)
+
+    with pytest.raises(RuntimeError, match="code 7.*1 completed case"):
+        benchmark_process._stream_benchmark_process(
+            tmp_path / "options.json",
+            progress_callback=None,
+            case_callback=None,
+            cancel_check=None,
+        )
+
+
+def test_start_process_creates_posix_process_group(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(benchmark_process, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(benchmark_process.os, "name", "posix")
+    monkeypatch.setattr(
+        benchmark_process,
+        "benchmark_command",
+        lambda _path, _env: ["python", "worker"],
+    )
+    monkeypatch.setattr(
+        benchmark_process.subprocess,
+        "Popen",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs) or object(),
+    )
+
+    benchmark_process.start_benchmark_process(tmp_path / "options.json")
+
+    assert captured["kwargs"]["start_new_session"] is True
 
 
 # --- Command building ------------------------------------------------------

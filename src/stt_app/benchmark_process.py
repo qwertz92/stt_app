@@ -19,6 +19,7 @@ import collections
 import json
 import os
 import queue
+import signal
 import subprocess
 import sys
 import tempfile
@@ -117,43 +118,54 @@ def _stream_benchmark_process(
     error_message: str | None = None
     canceled = False
 
-    while True:
-        if cancel_check is not None and cancel_check():
-            canceled = True
-            break
-        try:
-            item = events.get(timeout=_EVENT_POLL_SECONDS)
-        except queue.Empty:
-            continue
-        if item is _EOF:
-            break
-        event = item.get("event") if isinstance(item, dict) else None
-        if event == "progress":
-            if progress_callback is not None:
-                progress_callback(str(item.get("text", "")))
-        elif event == "case":
-            case = _case_from_dict(item.get("case") or {})
-            cases.append(case)
-            if case_callback is not None:
-                case_callback(case)
-        elif event == "canceled":
-            canceled = True
-        elif event == "error":
-            error_message = str(item.get("message", "")) or "Benchmark failed."
-
-    _terminate_process_tree(process)
-    stdout_reader.join(timeout=1.0)
-    stderr_reader.join(timeout=1.0)
+    stream_finished = False
+    try:
+        while True:
+            if cancel_check is not None and cancel_check():
+                canceled = True
+                break
+            try:
+                item = events.get(timeout=_EVENT_POLL_SECONDS)
+            except queue.Empty:
+                continue
+            if item is _EOF:
+                stream_finished = True
+                break
+            event = item.get("event") if isinstance(item, dict) else None
+            if event == "progress":
+                if progress_callback is not None:
+                    progress_callback(str(item.get("text", "")))
+            elif event == "case":
+                case = _case_from_dict(item.get("case") or {})
+                cases.append(case)
+                if case_callback is not None:
+                    case_callback(case)
+            elif event == "canceled":
+                canceled = True
+            elif event == "error":
+                error_message = str(item.get("message", "")) or "Benchmark failed."
+    finally:
+        if stream_finished:
+            try:
+                process.wait(timeout=1.0)
+            except (subprocess.TimeoutExpired, OSError):
+                _terminate_process_tree(process)
+        else:
+            _terminate_process_tree(process)
+        stdout_reader.join(timeout=1.0)
+        stderr_reader.join(timeout=1.0)
 
     if canceled:
         raise BenchmarkCancelled("Benchmark canceled.")
     if error_message:
         raise RuntimeError(error_message)
     return_code = process.poll()
-    if return_code not in (0, None) and not cases:
+    if return_code not in (0, None):
         tail = "\n".join(stderr_tail).strip()
         raise RuntimeError(
-            tail or f"Benchmark worker exited with code {return_code}."
+            tail
+            or f"Benchmark worker exited with code {return_code} after "
+            f"streaming {len(cases)} completed case(s)."
         )
     return cases
 
@@ -197,6 +209,7 @@ def start_benchmark_process(options_path: Path) -> subprocess.Popen[str]:
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         creationflags=_subprocess_no_window_flags(),
+        start_new_session=os.name != "nt",
     )
 
 
@@ -237,12 +250,25 @@ def _terminate_process_tree(process: subprocess.Popen[str] | None) -> None:
             return
         except Exception:
             pass
+    else:
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            process.wait(timeout=3.0)
+            return
+        except Exception:
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+                process.wait(timeout=3.0)
+                return
+            except Exception:
+                pass
     try:
         process.terminate()
         process.wait(timeout=3.0)
     except Exception:
         try:
             process.kill()
+            process.wait(timeout=3.0)
         except Exception:
             pass
 
