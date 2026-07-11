@@ -58,6 +58,19 @@ class TestOpenAIProviderInit:
 
 class TestOpenAIBatchTranscription:
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
+    def test_imported_mp3_uses_matching_multipart_content_type(
+        self, mock_urlopen, tmp_path
+    ):
+        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
+        audio_path = tmp_path / "recording.mp3"
+        audio_path.write_bytes(b"mp3-data")
+
+        OpenAITranscriber(api_key="key").transcribe_batch(audio_path)
+
+        request = mock_urlopen.call_args[0][0]
+        assert b"Content-Type: audio/mpeg\r\n" in request.data
+
+    @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_transcribe_json_response(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response({"text": "hello world"}.__str__())
         t = OpenAITranscriber(api_key="key")

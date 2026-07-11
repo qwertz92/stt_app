@@ -23,6 +23,7 @@ from ..config import (
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from ._http_utils import (
+    audio_content_type,
     format_ssl_error_message,
     multipart_form_data,
     normalize_transcript_text,
@@ -216,7 +217,12 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
 
         body, content_type = multipart_form_data(
             fields=fields,
-            file_field=("file", filename, audio_bytes, "audio/wav"),
+            file_field=(
+                "file",
+                filename,
+                audio_bytes,
+                audio_content_type(filename),
+            ),
         )
 
         req = urllib.request.Request(

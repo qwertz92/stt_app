@@ -28,6 +28,7 @@ from ..config import (
     parse_custom_vocabulary,
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
+from ._http_utils import audio_content_type
 from .base import (
     AudioInput,
     ITranscriber,
@@ -142,9 +143,11 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         try:
             if isinstance(audio_source, bytes):
                 audio_data = audio_source
+                filename = "audio.wav"
             else:
                 file_path = Path(audio_source)
                 audio_data = file_path.read_bytes()
+                filename = file_path.name or "audio.wav"
 
             # Build query parameters.
             params: dict[str, object] = {
@@ -165,7 +168,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
 
             req = urllib.request.Request(url, data=audio_data, method="POST")
             req.add_header("Authorization", f"Token {self._api_key}")
-            req.add_header("Content-Type", "audio/wav")
+            req.add_header("Content-Type", audio_content_type(filename))
 
             ssl_ctx = create_ssl_context()
             self._emit_progress(

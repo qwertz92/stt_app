@@ -294,6 +294,17 @@ class TestDeepgramTranscribeBatch:
         req = call_args[0][0]
         assert req.get_header("Content-type") == "audio/wav"
 
+    @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
+    def test_imported_flac_uses_matching_content_type(self, mock_urlopen, tmp_path):
+        mock_urlopen.return_value = _make_fake_response(_deepgram_response("ok"))
+        audio_path = tmp_path / "recording.flac"
+        audio_path.write_bytes(b"flac-data")
+
+        DeepgramTranscriber(api_key="key").transcribe_batch(audio_path)
+
+        request = mock_urlopen.call_args[0][0]
+        assert request.get_header("Content-type") == "audio/flac"
+
 
 # ---------------------------------------------------------------------------
 # Tests: response parsing

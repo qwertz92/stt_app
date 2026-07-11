@@ -36,6 +36,7 @@ from ..config import (
 )
 from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
 from ._http_utils import (
+    audio_content_type,
     format_ssl_error_message,
     multipart_form_data,
     normalize_transcript_text,
@@ -49,18 +50,6 @@ from .base import (
 )
 
 _TRANSCRIBE_PATH = "/speechtotext/transcriptions:transcribe"
-
-_CONTENT_TYPE_BY_SUFFIX = {
-    ".wav": "audio/wav",
-    ".mp3": "audio/mpeg",
-    ".flac": "audio/flac",
-    ".ogg": "audio/ogg",
-    ".opus": "audio/ogg",
-    ".webm": "audio/webm",
-    ".m4a": "audio/mp4",
-    ".aac": "audio/aac",
-}
-
 
 def normalize_azure_endpoint(endpoint: str) -> str:
     """Return a clean ``https://host`` base URL for a Speech resource.
@@ -97,8 +86,7 @@ def build_transcribe_url(endpoint: str) -> str:
 
 
 def _content_type_for(filename: str) -> str:
-    suffix = Path(filename).suffix.lower()
-    return _CONTENT_TYPE_BY_SUFFIX.get(suffix, "audio/wav")
+    return audio_content_type(filename)
 
 
 def _silent_wav_bytes(duration_s: float = 1.0) -> bytes:

@@ -7,10 +7,36 @@ error formatting.
 
 from __future__ import annotations
 
-import os
-import time
+import secrets
+from pathlib import Path
 
 from ..config import DOC_SSL_PROXY_PATH
+
+_AUDIO_CONTENT_TYPE_BY_SUFFIX = {
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".flac": "audio/flac",
+    ".ogg": "audio/ogg",
+    ".opus": "audio/ogg",
+    ".webm": "audio/webm",
+    ".m4a": "audio/mp4",
+    ".aac": "audio/aac",
+}
+
+
+def audio_content_type(filename: str) -> str:
+    """Return a deterministic audio MIME type for supported import suffixes."""
+    return _AUDIO_CONTENT_TYPE_BY_SUFFIX.get(
+        Path(str(filename or "")).suffix.lower(),
+        "application/octet-stream",
+    )
+
+
+def _quoted_header_parameter(value: str, *, label: str) -> str:
+    normalized = str(value)
+    if "\r" in normalized or "\n" in normalized:
+        raise ValueError(f"Multipart {label} must not contain CR or LF characters.")
+    return normalized.replace("\\", "\\\\").replace('"', '\\"')
 
 
 def multipart_form_data(
@@ -23,29 +49,35 @@ def multipart_form_data(
     ``file_field`` is ``(form_field_name, filename, file_bytes, content_type)``.
     Returns ``(body_bytes, content_type_header_value)``.
     """
-    boundary = f"stt-app-{int(time.time() * 1000)}-{os.getpid()}"
+    boundary = f"stt-app-{secrets.token_hex(24)}"
     lines: list[bytes] = []
 
     for name, value in fields:
+        quoted_name = _quoted_header_parameter(name, label="field name")
         lines.extend(
             [
                 f"--{boundary}\r\n".encode("utf-8"),
-                f'Content-Disposition: form-data; name="{name}"\r\n\r\n'.encode(
-                    "utf-8"
-                ),
+                (
+                    f'Content-Disposition: form-data; name="{quoted_name}"\r\n\r\n'
+                ).encode("utf-8"),
                 f"{value}\r\n".encode("utf-8"),
             ]
         )
 
     field_name, filename, data, content_type = file_field
+    quoted_field_name = _quoted_header_parameter(field_name, label="file field name")
+    quoted_filename = _quoted_header_parameter(filename, label="filename")
+    safe_content_type = str(content_type).strip()
+    if not safe_content_type or "\r" in safe_content_type or "\n" in safe_content_type:
+        raise ValueError("Multipart content type must be a non-empty single line.")
     lines.extend(
         [
             f"--{boundary}\r\n".encode("utf-8"),
             (
-                f'Content-Disposition: form-data; name="{field_name}"; '
-                f'filename="{filename}"\r\n'
+                f'Content-Disposition: form-data; name="{quoted_field_name}"; '
+                f'filename="{quoted_filename}"\r\n'
             ).encode("utf-8"),
-            f"Content-Type: {content_type}\r\n\r\n".encode("utf-8"),
+            f"Content-Type: {safe_content_type}\r\n\r\n".encode("utf-8"),
             data,
             b"\r\n",
             f"--{boundary}--\r\n".encode("utf-8"),

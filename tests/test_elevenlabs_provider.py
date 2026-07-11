@@ -64,6 +64,19 @@ class TestElevenLabsInit:
 
 class TestElevenLabsBatchTranscription:
     @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
+    def test_imported_m4a_uses_matching_multipart_content_type(
+        self, mock_urlopen, tmp_path
+    ):
+        mock_urlopen.return_value = _fake_response(json.dumps({"text": "ok"}))
+        audio_path = tmp_path / "recording.m4a"
+        audio_path.write_bytes(b"m4a-data")
+
+        ElevenLabsTranscriber(api_key="key").transcribe_batch(audio_path)
+
+        request = mock_urlopen.call_args[0][0]
+        assert b"Content-Type: audio/mp4\r\n" in request.data
+
+    @patch("stt_app.transcriber.elevenlabs_provider.urllib.request.urlopen")
     def test_transcribe_json_payload(self, mock_urlopen):
         mock_urlopen.return_value = _fake_response(json.dumps({"text": "Hallo Welt"}))
         t = ElevenLabsTranscriber(
