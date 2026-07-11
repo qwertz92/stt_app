@@ -475,12 +475,12 @@ uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav --models
 ### Full benchmark with export
 
 ```powershell
-uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav \
-    --models tiny,base,small,medium \
-    --device cpu \
-    --compute-types int8,float32 \
-    --runs 3 --warmup \
-    --csv-out .\benchmark\result.csv \
+uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav `
+    --models tiny,base,small,medium `
+    --device cpu `
+    --compute-types int8,float32 `
+    --runs 3 --warmup `
+    --csv-out .\benchmark\result.csv `
     --json-out .\benchmark\result.json
 ```
 
@@ -488,7 +488,8 @@ uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav \
 
 | Column | Meaning |
 |--------|---------|
-| Load | Model initialization time (includes download on first run) |
+| Download | Time spent downloading before the measured cases (`-` when cached) |
+| Load | Model initialization time, measured after downloads are complete |
 | Avg | Average transcription time over `--runs` |
 | StdDev | Variation between runs |
 | RTF | Real-Time Factor: `transcription_time / audio_duration`. Below 1.0 = faster than real-time |
@@ -496,7 +497,9 @@ uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav \
 
 ### Why short audio can still take long
 
-Benchmark time is dominated by model loading, not audio length. Larger models take longer to load. The first run may also include a download step.
+Benchmark time is often dominated by model loading, not audio length. Larger
+models take longer to load. An uncached model also adds a separate download
+step before its measured cases begin.
 
 ### Parameters
 
@@ -586,25 +589,24 @@ A short delay after SendInput prevents race conditions where the target app read
 
 ```
 src/stt_app/
-  config.py           — centralized configuration constants
-  controller.py       — main orchestrator / state machine
-  audio_capture.py    — microphone recording + VAD auto-stop
-  overlay_ui.py       — always-on-top status overlay
-  hotkey.py           — Win32 hotkey registration
-  text_inserter.py    — clipboard-safe paste
-  window_focus.py     — foreground window tracking
-  settings_store.py   — JSON settings validation and persistence
-  settings_dialog.py  — Settings UI
-  secret_store.py     — keyring wrapper for API keys
-  logger.py           — rotating file logger
-  vad.py              — energy-based voice activity detection
+  config.py                  — centralized configuration constants
+  controller.py              — main orchestrator and state machine
+  audio_capture.py           — microphone recording, warm stream, and VAD
+  overlay_ui.py              — always-on-top status overlay
+  hotkey.py                  — Win32 hotkey registration
+  text_inserter.py           — clipboard-safe paste
+  window_focus.py            — foreground window tracking
+  settings_store.py          — JSON settings validation and persistence
+  settings_dialog.py         — Settings dialog facade
+  settings_dialog_*.py       — tab-specific Settings UI mixins
+  transcript_history.py      — persistent transcription history
+  benchmark_*.py             — isolated local benchmark execution
+  secret_store.py            — keyring wrapper for API keys
+  logger.py                  — rotating file logger
+  vad.py                     — energy-based voice activity detection
   transcriber/
-    base.py           — transcriber interface
-    factory.py        — engine selection
-    local_faster_whisper.py — local transcription (faster-whisper / CTranslate2)
-    assemblyai_provider.py  — AssemblyAI cloud transcription (batch + streaming)
-    openai_provider.py      — OpenAI cloud transcription (batch)
-    groq_provider.py        — Groq cloud transcription (batch)
-    deepgram_provider.py    — Deepgram cloud transcription (batch + streaming)
-    elevenlabs_provider.py  — ElevenLabs cloud transcription (batch)
+    base.py                  — transcriber interface
+    factory.py               — engine selection
+    local_*.py               — faster-whisper, Nemotron, and ONNX runtimes
+    *_provider.py            — remote batch and streaming providers
 ```

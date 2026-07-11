@@ -107,7 +107,10 @@ Candidate outputs:
 
 - `stt_app-win-x64.zip`
 - `stt_app-win-x64-setup.exe`
-- workflow artifact containing the extracted `stt_app-win-x64\` folder
+
+The workflow uploads the ZIP and installer together as one short-lived
+candidate artifact. It does not upload the extracted portable folder a second
+time because that duplicates the ZIP contents and consumes artifact storage.
 
 Local build commands:
 
@@ -134,7 +137,7 @@ python .\scripts\create_release.py
 The script fetches tags, shows the latest numeric release tag, and proposes the
 current project version when it is newer than the latest release tag; otherwise
 it proposes the next patch version. Press Enter to accept the default, or enter
-an explicit numeric version such as `0.4.0`. It then asks for an explicit `yes`
+an explicit numeric version such as `0.7.0`. It then asks for an explicit `yes`
 confirmation before it changes files, runs `uv lock`, runs checks, creates the
 release metadata commit when one is needed, pushes `main`, creates the annotated
 tag, and pushes the tag.
@@ -152,13 +155,13 @@ app builds.
 The lower-level manual path is still available when you intentionally need it:
 
 ```powershell
-python .\scripts\release_version.py bump 0.4.0
+python .\scripts\release_version.py bump 0.7.0
 uv lock
 git add pyproject.toml uv.lock src\stt_app\__init__.py installer\windows\stt_app.iss
 git commit
 git push origin main
-git tag -a v0.4.0 -m "Release v0.4.0"
-git push origin v0.4.0
+git tag -a v0.7.0 -m "Release v0.7.0"
+git push origin v0.7.0
 ```
 
 The workflow `.github/workflows/windows-release.yml` is wired so that:
@@ -167,7 +170,7 @@ The workflow `.github/workflows/windows-release.yml` is wired so that:
 - `v*` tags build the same artifacts and attach them to a GitHub Release.
 - tag builds fail fast unless the tag matches `pyproject.toml`,
   `stt_app.__version__`, the installer fallback version, and `uv.lock`
-  (`v0.4.0` requires `version = "0.4.0"`).
+  (`v0.7.0` requires `version = "0.7.0"`).
 - tag builds fail fast when the tag is older than an existing numeric release
   tag, so accidentally releasing `v0.3.0` after `v0.3.1` is blocked.
 

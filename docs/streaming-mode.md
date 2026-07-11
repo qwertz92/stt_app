@@ -27,14 +27,15 @@ Characteristics:
 - usually highest consistency for a final sentence,
 - higher perceived latency (you get text at the end).
 
-### Streaming mode (current local implementation)
+### Streaming mode
 
 Flow:
 
 1. Start stream session in transcriber.
 2. Audio callback pushes PCM chunks continuously.
-3. Transcriber periodically re-transcribes only a trailing audio window and emits partial text.
-4. Streaming text state reconciles rolling windows by safe word overlap.
+3. The selected transcriber processes new audio on a worker and emits partial text.
+4. For faster-whisper, streaming text state reconciles rolling windows by safe
+   word overlap. Nemotron and remote providers emit incremental session results.
 5. Controller inserts only stable append-only text deltas at the current caret.
 6. On stop hotkey, stream is finalized and only a safe remaining tail is appended.
 7. If target focus changes during streaming, session auto-aborts and plays a short alert beep.
@@ -116,6 +117,9 @@ Characteristics:
   `turn_order` because the formatted end-of-turn transcript arrives as a
   second event for the same turn.
 - Accumulated text = all turns joined in order, delivered to `on_partial`.
+- SDK events are generation-scoped and must match the exact active client, so
+  delayed callbacks from a retired connection cannot alter a replacement
+  session.
 - `stop_stream()` terminates the session (bounded join) and returns the full
   accumulated text; `abort_stream()` terminates and discards all text.
 
@@ -125,11 +129,16 @@ Characteristics:
 - Audio chunks are queued by `push_audio_chunk` and sent as binary
   `linear16` from a dedicated sender thread, so the PortAudio callback never
   blocks on socket writes.
+- The queue is bounded. Saturation fails the stream explicitly instead of
+  blocking PortAudio or silently dropping audio.
 - With language `auto`, streaming uses `language=multi` (multilingual
   code-switching); the live API does not support `detect_language`.
-- On stop, the sender queue is drained first, then the client sends
-  `Finalize` and gives the socket a short quiet-period drain window before
-  closing, reducing cases where the last final transcript tokens are lost.
+- On stop, a sender barrier drains queued audio before `Finalize`. The client
+  waits within a bounded budget for the optional final response, then sends
+  `CloseStream`. If the barrier or a control send fails, it closes the socket
+  without allowing control frames to overtake audio.
+- WebSocket callbacks are generation-scoped and must match the exact active
+  socket, so late events from an old connection are ignored.
 
 ## 4) Quality impact
 

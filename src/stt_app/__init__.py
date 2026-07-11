@@ -1,4 +1,4 @@
-"""Windows dictation app (Phase 1 MVP)."""
+"""Local and cloud speech-to-text dictation for Windows 11."""
 
 __all__ = [
     "__version__",

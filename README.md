@@ -169,4 +169,5 @@ uv run python -m pytest
 
 ## License
 
-See [pyproject.toml](pyproject.toml) for license details.
+No license file or package license metadata has been declared yet. Contact the
+repository owner before copying, redistributing, or reusing the project.
