@@ -79,6 +79,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
+| `persistence.py` | Atomic file writes, strict JSON booleans, recovery helpers, and shared path-scoped locks |
+| `csv_safety.py` | Spreadsheet-formula neutralization for user-controlled CSV cells |
 | `ui_feedback.py` | Shared Qt button feedback styles, stable feedback widths, scroll restoration helpers |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
@@ -99,6 +101,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `local_benchmark.py` | Pure benchmark runner (`run_benchmark_cases`) + result models; used by the CLI and the out-of-process worker |
 | `benchmark_worker.py` | Subprocess entry point: runs `run_benchmark_cases` and streams progress/case/done events as prefixed JSON lines |
 | `benchmark_process.py` | Launches/streams the benchmark worker; re-exports `run_benchmark_cases` (same signature) for the settings dialog so the UI never freezes |
+| `transcriber/_http_utils.py` | Safe multipart construction and audio MIME inference shared by REST providers |
 | `scripts/import_model.py` | Import manually downloaded models; validates for Git LFS pointers |
 | `scripts/download_model.py` | Automated model download for offline/corporate use |
 
@@ -198,6 +201,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   system resume, shutdown); a capture falls back to a cold stream when the
   warm one is not running. `recording_start_timing` logs beep and
   capture-start durations and warns above 500 ms.
+  Warm-device opening happens outside its state lock so recording start never
+  blocks behind an in-progress background open. Each capture installs a
+  generation-scoped callback; callbacks retained by PortAudio after detach are
+  ignored and cannot append audio to the next recording. Stream cleanup must
+  always attempt `close()` even when `stop()` fails.
 - **Silence gate (`silence_gate_enabled` + `silence_gate_threshold`, default
   off/0.004)**: batch recordings whose loudest 100 ms window stays below the
   threshold skip transcription entirely (speech models hallucinate words from
@@ -254,6 +262,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and the window's own status line. Benchmark Results tables use per-pixel
   scroll modes. All benchmark widget attribute names are unchanged; only
   containers moved.
+- **Settings dialog persists for the app lifetime**: closing Settings hides the
+  existing dialog instead of deleting it. The dialog owns background model
+  downloads, benchmark work, imports, scans, and connection/update checks, so
+  recreating it while an old worker was alive could start overlapping work and
+  discard the only UI tracking that worker. Reopening reloads stored settings
+  into the same object before showing it. Every hide path, including
+  `QDialog.reject()`, also hides the independent `Qt.Window` benchmark dialog.
+  Reopening while idle reloads stored settings and discards unsaved provider-key
+  edits; while dialog-owned work is active, that reload is deferred so the
+  operation's snapshotted controls and busy state stay intact. Application
+  shutdown calls `SettingsDialog.shutdown()` before controller shutdown so
+  active model-download and benchmark child-process work is canceled and given
+  a bounded cleanup window.
 - **Streaming abort keeps the partial transcript**: `_abort_streaming_session`
   saves the best-known live transcript to history, keeps it as the last
   transcript for the overlay Copy action, shows it in the abort message, and
@@ -275,12 +296,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   restore these labels on open and overwrite only the providers tested. Saving a
   new provider key or deleting a provider key must clear that provider's stored
   test result because the old result no longer describes the active credential.
+- **Settings and credential saves are explicit and failure-safe**: toggling the
+  insecure-storage checkbox changes only its pending UI until Save/Save API
+  Keys. Failed key operations retain the typed value or pending delete and must
+  stop unrelated settings/history mutations. Because credential backends are
+  not transactional, any provider changed before a later failure still emits
+  `settings_changed` to invalidate cached clients. Persist the settings file
+  before trimming history; a failed settings write must never delete history.
+- **Persistent JSON read-modify-write operations are path-serialized**:
+  `persistence.lock_for_path` is the single in-process lock registry. Stores for
+  history, benchmarks, settings, provider diagnostics, local inventory, last
+  recording, and insecure keys reuse it so separate store instances cannot
+  overwrite each other's concurrent updates. Keep writes atomic as well.
 - **Update checks**: update discovery uses GitHub Releases directly through
   `update_checker.py`; no custom domain or update server is required. The app
   schedules one asynchronous check after startup and shows a tray notification
   only when a newer release exists. Manual checks are available from Settings
   and the tray menu. Keep update checks non-blocking and avoid downloading or
-  executing installers automatically without a separate review.
+  executing installers automatically without a separate review. Release JSON is
+  size-bounded, tags use strict numeric SemVer, and release links are restricted
+  to this repository's HTTPS GitHub release paths. A manual request during the
+  startup check promotes the active request so its result remains visible.
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional
@@ -289,6 +325,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   later resume. Progress and its rolling transfer rate are approximate because
   they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
+- **ModelScope mirror downloads are transactional and path-contained**:
+  Treat every path in the remote file listing as untrusted. Only normalized
+  POSIX-relative repository paths contained by the requested destination are
+  accepted; absolute, drive-qualified, traversal, and backslash paths are
+  rejected. The endpoint and redirects stay on HTTPS. Downloads and resumes
+  write only to `*.incomplete`; a resume appends only after a matching HTTP 206
+  and `Content-Range`, while an ignored range restarts the incomplete file.
+  Publish a model file only after flushing, syncing, exact-size validation, and
+  atomic replacement. Never expose a partial download at its final filename.
+- **Manual model imports are transactional**: `scripts/import_model.py` hashes
+  every imported model file, stages a complete snapshot under a temporary name,
+  repairs legacy partial snapshots, publishes by atomic rename, and only then
+  atomically updates `refs/main`. Copy failures must leave neither a final
+  snapshot nor a reference to incomplete content.
 - **Transcript history retention**: history defaults to 500 saved entries, and
   legacy settings that still have the old 20-entry default are migrated upward.
   Successful transcriptions are added to history before text insertion, so a
@@ -302,6 +352,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   while the dialog is open re-presents the existing window and refreshes it
   once via `reload(force=True)` (selection and scroll position are preserved);
   it must not create another dialog.
+- **Managed audio imports snapshot content and identity**: importing the managed
+  last recording captures immutable bytes plus `recording_id` before submitting
+  work to the controller's serialized inference lane. Completion/failure state
+  uses compare-and-set transitions, so an old import cannot clear or relabel a
+  newer recording. Background/import history entries never replace the
+  foreground transcript's Edit target. VAD auto-stop crosses from the audio
+  worker through a Qt signal before touching controller/UI state.
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),
@@ -315,6 +372,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   parameter for batch/import requests. `universal-3-pro` is sent with
   `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
   current default in settings persistence and are not shown in the UI.
+- **ElevenLabs batch model selection**: `scribe_v2` is the only supported model.
+  ElevenLabs removed `scribe_v1` on 2026-07-09; legacy stored selections migrate
+  to `scribe_v2` and the removed identifier must not be sent to the API.
 - **AssemblyAI streaming (Universal-Streaming v3)**: the legacy v2 realtime
   API is retired and must not be reintroduced. Streaming uses
   `assemblyai.streaming.v3.StreamingClient` with the
@@ -328,12 +388,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   only enqueue there (Deepgram has a dedicated sender thread; the AssemblyAI
   SDK and local transcribers queue internally) and never perform blocking
   socket I/O.
+- **Remote streaming sessions are generation-scoped**: AssemblyAI SDK events
+  and Deepgram WebSocket callbacks must match both the current session
+  generation and the exact client/socket before changing transcript, error, or
+  lifecycle state. Starting and retiring are explicit states, so a partially
+  connected or bounded-shutdown session cannot overlap a replacement session.
+  Deepgram's sender queue is bounded and `push_audio_chunk` uses only
+  `put_nowait`; saturation fails the stream rather than dropping audio or
+  blocking PortAudio. Normal stop first drains queued binary audio through a
+  sender barrier, then sends `Finalize`, waits best-effort for the optional
+  `from_finalize` response, and sends the documented `CloseStream` command.
+  Control sends and all waits are bounded; a failed drain/control path closes
+  the socket without allowing control frames to overtake queued audio.
 - **Deepgram streaming language**: the live WebSocket API rejects
   `detect_language`; auto maps to `language=multi` (nova-2/nova-3
   multilingual code-switching). Batch keeps `detect_language=true`.
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.
+- **Hotkey state follows Win32 cleanup success**: a failed `UnregisterHotKey`
+  keeps the manager marked registered and blocks replacement registration.
+  Shutdown logs and continues, while disabling a cancel hotkey reports the
+  cleanup failure instead of pretending the key was released.
 - **Overlay visibility after activity/resume**: every recording start *and
   stop* (and a hotkey press while a streaming finalize is pending) re-presents
   the overlay without activation and reasserts native Windows topmost z-order,
@@ -370,6 +446,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the complete pytest suite on Windows for `main`, review branches, and pull
   requests. It also audits the locked production JavaScript dependency tree on
   Linux. Keep release publishing separate in `windows-release.yml`.
+- **Release builds are locked and prevalidated**: Windows builds use
+  `uv sync --locked` and `npm ci`, then run Ruff, all tests, and the production
+  dependency audit. Release creation rejects tracked and untracked worktree
+  changes. Version bumping prepares every metadata edit before writing and
+  rolls back earlier files if a later atomic write fails.
 - **Portable Node bootstrap security**: `scripts/setup_node_windows.py` accepts
   numeric `major.minor.patch` versions only, verifies every downloaded archive
   against that release directory's `SHASUMS256.txt`, and rejects ZIP members
@@ -515,9 +596,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   in-progress start, live stream, or in-flight transcription). Closing there can
   break a keep-loaded ONNX subprocess (its `close()` shares the worker's stdin
   and takes no batch lock) or tear down a live Nemotron stream. `reload_settings`
-  defers the reset via `_pending_transcriber_cache_reset`;
-  `_get_or_create_transcriber` applies it before the next build so new
-  settings/keys still take effect. The resume path shares the same guard.
+  defers the reset via `_pending_transcriber_cache_reset`. Preload, batch, and
+  streaming acquire a `_TranscriberRuntimeLease`: one lease owns the shared
+  cache, while overlapping normal work receives an isolated close-on-release
+  runtime so the Qt thread never waits behind inference. Preload waits off-thread
+  for the shared lease so a successful preload remains cached. A shared owner
+  applies deferred reset/close only on release; isolated owners leave it for the
+  next shared acquisition. Canceled workers count as active until their lease is
+  released. Worker terminal signals are emitted only after hooks are cleared and
+  the lease (including any deferred close) is finished. Shutdown marks the
+  controller closed before canceling work; late signals are ignored and an
+  in-use cache closes from its final owner rather than the shutdown thread. The
+  resume path uses the same shared-runtime admission lock.
 - **Overlay corner vs. dragged position**: after a settings save, apply the
   corner through `OverlayUI.apply_corner_setting`, which repositions only when
   the configured corner changed. Never call `move_to_corner` unconditionally
@@ -566,6 +656,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   during inference and the Cohere/Granite Node path is already its own
   subprocess, so dictation does not freeze the UI. Do not move it to a
   subprocess — that would break the preload latency guarantee and streaming.
+- **Local streaming/runtime state is generation-scoped**: faster-whisper and
+  Nemotron workers own immutable session objects, so a timed-out retired worker
+  cannot consume or publish into a replacement session. Nemotron keeps native
+  model/runtime objects alive until every retired worker exits. The ONNX Node
+  parent serializes lifecycle/stdin, uses process-local bounded reader state and
+  absolute deadlines, and kills a timed-out or protocol-poisoned child before
+  reuse. The JS server serializes requests and rejects oversized protocol lines
+  and malformed/out-of-bounds WAV layouts before allocation.
 - **Overlay reveal after a result**: a floating (non-pinned) overlay is a tool
   window (no Alt+Tab) and can hide behind other windows. The controller calls
   `_reveal_overlay_result` after a finished transcription — briefly on success

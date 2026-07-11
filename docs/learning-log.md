@@ -1676,6 +1676,56 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-11
 
+- **ModelScope fallback download hardening:**
+  - Mirror endpoints and redirects are HTTPS-only, and all remotely listed
+    paths are validated as normalized POSIX-relative paths whose resolved
+    destinations remain inside the requested model directory.
+  - Downloads now write and resume exclusively through `*.incomplete`. Resume
+    responses require a matching HTTP 206 `Content-Range`; a server that ignores
+    `Range` safely restarts the incomplete file instead of appending duplicate
+    data.
+  - Completed data is flushed, synced, checked against the expected byte size,
+    and atomically moved to the final filename. Interrupted data remains only as
+    a resumable incomplete artifact.
+  - Deterministic tests cover POSIX and Windows traversal forms, HTTP endpoint
+    rejection, interrupted/resumed transfers, ignored and mismatched ranges,
+    legacy partial-file migration, and successful atomic publication.
+- **Shared transcriber runtime ownership hardening:**
+  - Batch inference, model preload, and live streaming now hold explicit,
+    transferable runtime leases for their complete use of a transcriber.
+  - One lease owns the shared cache; overlapping normal work uses an isolated
+    close-on-release runtime, while preload waits off-thread so a successful
+    preload remains cached without blocking the Qt thread.
+  - Cache resets and shutdown closes are deferred until the shared owner exits;
+    canceled workers remain active until then. Terminal worker signals now emit
+    only after callback cleanup and lease release, and shutdown ignores late
+    queued results.
+  - Added real-thread barrier regressions for overlap isolation, canceled-worker
+    reset deferral, shutdown close ordering, and terminal-signal cleanup order.
+- **Microphone stream lifecycle hardening:**
+  - Warm-stream opening no longer holds the shared state lock while PortAudio
+    may spend seconds opening a device, so an attach attempt immediately falls
+    back instead of freezing the UI.
+  - Capture callbacks now carry a recording generation. A callback retained
+    after detach is rejected even if a new recording has already attached.
+  - Cold and warm cleanup always attempts `close()` after a failed `stop()`, and
+    partially opened streams are closed when startup fails.
+  - Added regression tests for stop/start failures, non-blocking attach, and a
+    delayed callback crossing a recording boundary.
+- **Settings worker ownership now survives window dismissal:**
+  - Settings is a single application-lifetime dialog that is hidden and reused
+    instead of deleted and recreated. This preserves the busy state for model
+    downloads, benchmarks, imports, scans, and remote checks, preventing a
+    reopened dialog from starting duplicate work while an orphan worker from
+    the previous instance is still active.
+  - Reopening while idle still reloads persisted settings and discards unsaved
+    provider-key edits before presentation. Reload is deferred while owned work
+    is active so operation inputs and disabled/busy controls remain intact.
+    Every hide/reject/close path hides the separate Run Benchmark window.
+  - Application shutdown explicitly cancels dialog-owned model-download and
+    benchmark process work and briefly joins their coordinator threads for
+    cleanup.
+
 - **Repository quality gates now run before release time:**
   - Added a read-only GitHub Actions workflow that installs the locked Python
     environment and runs Ruff plus the complete pytest suite on Windows.
@@ -1697,3 +1747,74 @@ Agents and developers: use this as a knowledge base for past issues and solution
     ZIP member is verified to remain inside the selected installation folder.
   - Regression tests cover valid downloads, checksum mismatch cleanup, version
     path injection, safe archives, and parent-directory traversal attempts.
+- **Remote streaming session and backpressure hardening:**
+  - AssemblyAI and Deepgram callbacks now carry a session generation and exact
+    client identity, so late reader, error, and close events from a retired
+    connection cannot mutate a later recording.
+  - Both providers explicitly reserve starting and retiring states. AssemblyAI
+    cleans up clients whose connect only partially succeeds, including bounded
+    disconnect when connect raises or reports an asynchronous error.
+  - Deepgram microphone chunks enter a bounded queue through `put_nowait`; a
+    saturated sender fails visibly without blocking PortAudio or silently
+    dropping speech.
+  - Deepgram stop uses a deterministic sender barrier before the documented
+    `Finalize` and `CloseStream` messages. Optional `from_finalize` responses,
+    server close, sender drain, and control-send waits are all bounded.
+  - Barrier, queue-saturation, partial-connect, and stale-callback regressions
+    cover the new lifecycle ordering.
+- **Provider, export, and update trust boundaries:**
+  - Imported audio now retains its real MIME type across OpenAI, Deepgram,
+    ElevenLabs, and Azure requests. Multipart boundaries are randomized and
+    field/header injection is rejected.
+  - Azure credential-bearing endpoints accept only documented HTTPS Azure host
+    suffixes with the expected path shape and reject userinfo, custom ports,
+    fragments, queries, and foreign hosts.
+  - GitHub release responses are size-bounded, tags use strict numeric SemVer,
+    and release links are restricted to this repository. Manual checks promote
+    an in-progress startup request so the visible result is not lost.
+  - Benchmark CSV exports neutralize spreadsheet formula prefixes in every
+    user-controlled cell.
+- **Controller, input, and import race hardening:**
+  - Clipboard insertion now aborts when modifier release or target focus cannot
+    be confirmed; partial `SendInput` failure releases injected keys and never
+    replays the paste sequence. Recording cleanup matches only managed filename
+    patterns.
+  - Imports run in the controller's single inference lane and snapshot managed
+    recording bytes plus identity. Conditional state transitions prevent an old
+    import from clearing a newer recording, and cleanup errors no longer discard
+    successful transcripts.
+  - VAD auto-stop is marshaled onto the Qt thread. Background/import history no
+    longer changes the foreground Edit target.
+  - Failed hotkey unregistration preserves the registered state and blocks an
+    unsafe replacement.
+- **Persistence and credential transaction hardening:**
+  - Persisted booleans use strict JSON parsing, preventing strings such as
+    `"false"` from enabling security-sensitive options.
+  - One normalized path-lock registry serializes read-modify-write operations
+    across history, benchmark, settings, diagnostics, model inventory, last
+    recording, and insecure-key store instances.
+  - Insecure fallback mode applies only on explicit save. Failed key edits stay
+    visible, partial credential success invalidates cached clients, and history
+    is trimmed only after settings persistence succeeds.
+  - Credential deletion surfaces inaccessible backends and stale plaintext
+    cleanup failures instead of reporting false success.
+- **Local inference process/session hardening:**
+  - faster-whisper and Nemotron stream workers now own immutable generation
+    state; timed-out old workers cannot consume or publish into a new stream.
+  - Nemotron defers native teardown until retired workers exit. The Node parent
+    uses per-process queues, bounded stderr, absolute deadlines, and restarts a
+    timed-out or poisoned child.
+  - The JS runner serializes stdin requests and validates protocol objects plus
+    RIFF/chunk/data/block bounds before typed-array allocation.
+  - Long-running model downloads spool diagnostics to a temporary file instead
+    of risking deadlock on an unread stderr pipe.
+- **Release and offline model workflow hardening:**
+  - Manual model imports hash complete content, stage snapshots, repair legacy
+    partial directories, publish atomically, and update `refs/main` only after
+    success.
+  - Release builds install locked Python/JavaScript dependencies and run lint,
+    full tests, and dependency audit. Release creation rejects untracked files;
+    version updates prevalidate all targets and roll back earlier writes after a
+    later failure.
+  - ElevenLabs `scribe_v1` was removed from runtime/UI after its 2026-07-09 API
+    retirement; legacy settings migrate to `scribe_v2`.
