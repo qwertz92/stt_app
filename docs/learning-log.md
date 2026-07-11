@@ -1673,3 +1673,14 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Added deterministic queue tests for all three defects plus coverage that a
     background failure cannot disturb a live recording session and that a late
     canceled-finalize transcript cannot reset a new live session.
+
+## 2026-07-11
+
+- **Portable Node bootstrap supply-chain hardening:**
+  - The bootstrap previously trusted any non-empty archive returned by either
+    configured mirror and passed it directly to `ZipFile.extractall`.
+  - Node versions are now strict numeric semantic versions, archives are
+    checked against the release directory's published SHA-256 list, and every
+    ZIP member is verified to remain inside the selected installation folder.
+  - Regression tests cover valid downloads, checksum mismatch cleanup, version
+    path injection, safe archives, and parent-directory traversal attempts.

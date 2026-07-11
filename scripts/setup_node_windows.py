@@ -34,8 +34,10 @@ the npmmirror.com mirror (useful when nodejs.org is also blocked).
 from __future__ import annotations
 
 import argparse
+import hashlib
 import os
 import platform
+import re
 import shutil
 import ssl
 import subprocess
@@ -45,12 +47,13 @@ import zipfile
 from pathlib import Path
 
 DEFAULT_VERSION = "24.18.0"
+_VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
-# Download hosts, tried in order. Both expose the same
-# node-v<ver>-win-x64.zip layout under /v<ver>/ (nodejs.org) or /<ver>/.
-_DOWNLOAD_TEMPLATES = (
-    "https://nodejs.org/dist/v{ver}/node-v{ver}-win-x64.zip",
-    "https://npmmirror.com/mirrors/node/v{ver}/node-v{ver}-win-x64.zip",
+# Download roots, tried in order. Each release directory publishes both the
+# archive and the authoritative SHASUMS256.txt file used to verify it.
+_DOWNLOAD_ROOT_TEMPLATES = (
+    "https://nodejs.org/dist/v{ver}",
+    "https://npmmirror.com/mirrors/node/v{ver}",
 )
 
 
@@ -68,23 +71,84 @@ def _existing_node() -> str | None:
     return None
 
 
+def _validated_version(value: str) -> str:
+    version = str(value or "").strip()
+    if not _VERSION_RE.fullmatch(version):
+        raise ValueError(
+            f"Invalid Node.js version {value!r}; expected a numeric version like "
+            f"{DEFAULT_VERSION}."
+        )
+    return version
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _expected_archive_sha256(checksums: str, archive_name: str) -> str:
+    for line in checksums.splitlines():
+        parts = line.strip().split(maxsplit=1)
+        if len(parts) != 2:
+            continue
+        checksum, filename = parts
+        if filename.lstrip("*") == archive_name and re.fullmatch(
+            r"[0-9a-fA-F]{64}", checksum
+        ):
+            return checksum.lower()
+    raise RuntimeError(f"No SHA-256 checksum found for {archive_name}.")
+
+
 def _download(version: str, dest_zip: Path) -> None:
+    version = _validated_version(version)
+    archive_name = f"node-v{version}-win-x64.zip"
     errors: list[str] = []
-    for template in _DOWNLOAD_TEMPLATES:
-        url = template.format(ver=version)
-        print(f"Downloading {url} ...")
+    for template in _DOWNLOAD_ROOT_TEMPLATES:
+        root_url = template.format(ver=version)
+        archive_url = f"{root_url}/{archive_name}"
+        checksums_url = f"{root_url}/SHASUMS256.txt"
+        print(f"Downloading {archive_url} ...")
         try:
-            with urllib.request.urlopen(url, timeout=120) as response, open(
+            with urllib.request.urlopen(archive_url, timeout=120) as response, open(
                 dest_zip, "wb"
             ) as handle:
                 shutil.copyfileobj(response, handle)
-            if dest_zip.stat().st_size > 0:
-                return
+            if dest_zip.stat().st_size <= 0:
+                raise RuntimeError("downloaded archive is empty")
+            with urllib.request.urlopen(checksums_url, timeout=30) as response:
+                checksums = response.read().decode("ascii")
+            expected = _expected_archive_sha256(checksums, archive_name)
+            actual = _sha256_file(dest_zip)
+            if actual != expected:
+                raise RuntimeError(
+                    f"SHA-256 mismatch for {archive_name}: expected {expected}, "
+                    f"received {actual}"
+                )
+            print(f"Verified SHA-256: {actual}")
+            return
         except Exception as exc:  # noqa: BLE001 (report and try the next mirror)
-            errors.append(f"{url}: {exc}")
+            dest_zip.unlink(missing_ok=True)
+            errors.append(f"{archive_url}: {exc}")
     raise RuntimeError(
         "Could not download Node.js from any mirror:\n  " + "\n  ".join(errors)
     )
+
+
+def _extract_zip_safely(archive: zipfile.ZipFile, target_dir: Path) -> None:
+    """Extract an archive only when every member remains below target_dir."""
+    target_root = target_dir.resolve()
+    for member in archive.infolist():
+        member_path = (target_root / member.filename).resolve()
+        try:
+            member_path.relative_to(target_root)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"Unsafe path in Node.js archive: {member.filename!r}."
+            ) from exc
+    archive.extractall(target_root)
 
 
 def _set_node_path_env(node_exe: Path) -> bool:
@@ -150,6 +214,7 @@ def configure_corporate_ca(target_dir: Path) -> None:
 
 
 def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) -> int:
+    version = _validated_version(version)
     existing = _existing_node()
     if existing and not force:
         print(f"Node.js already available: {existing}")
@@ -166,7 +231,7 @@ def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) 
             _download(version, zip_path)
             print(f"Extracting to {target_dir} ...")
             with zipfile.ZipFile(zip_path) as archive:
-                archive.extractall(target_dir)
+                _extract_zip_safely(archive, target_dir)
 
     if not node_exe.is_file():
         print(f"ERROR: node.exe not found at {node_exe} after extraction.")
@@ -226,7 +291,10 @@ def main() -> int:
 
     default_root = Path(os.environ.get("USERPROFILE", str(Path.home()))) / "programs"
     target_dir = Path(args.target_dir) if args.target_dir else default_root
-    return install(args.version, target_dir, args.force, skip_ca=args.skip_ca)
+    try:
+        return install(args.version, target_dir, args.force, skip_ca=args.skip_ca)
+    except (OSError, RuntimeError, ValueError, zipfile.BadZipFile) as exc:
+        parser.exit(1, f"ERROR: {exc}\n")
 
 
 if __name__ == "__main__":

@@ -366,6 +366,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   changed, pushes, tags, and pushes the tag. GitHub Actions release notes that
   contain Markdown backticks must use a literal PowerShell here-string (`@'`) so
   asset-name backticks are not consumed as PowerShell escapes.
+- **Portable Node bootstrap security**: `scripts/setup_node_windows.py` accepts
+  numeric `major.minor.patch` versions only, verifies every downloaded archive
+  against that release directory's `SHASUMS256.txt`, and rejects ZIP members
+  that escape the selected install directory. Keep all three checks when
+  changing download mirrors or extraction behavior.
 - **Local ONNX ASR**: Cohere Transcribe, IBM Granite Speech 4.0,
   and IBM Granite Speech 4.1 are selectable local models through
   `transcriber/local_webgpu_asr.py`. They are batch-only and require Node.js.
