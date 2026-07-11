@@ -576,6 +576,8 @@ def test_switching_assemblyai_mode_updates_language_options():
     assert _combo_item_enabled(dialog.language_combo, "de") is True
     assert _combo_item_enabled(dialog.language_combo, "en") is True
     assert _combo_item_enabled(dialog.language_combo, "ja") is True
+    assert _combo_item_enabled(dialog.language_combo, "tr") is True
+    assert _combo_item_enabled(dialog.language_combo, "pl") is False
     _ = app
 
 
@@ -639,7 +641,11 @@ def test_assemblyai_streaming_disables_remote_model_combo():
     )
 
     assert dialog.remote_model_combo.isEnabled() is False
-    assert "batch transcription and imports" in dialog.remote_model_note_label.text()
+    assert "Universal-3.5 Pro Realtime" in dialog.remote_model_note_label.text()
+    assert (
+        "batch transcription and audio imports"
+        in dialog.remote_model_note_label.text()
+    )
     _ = app
 
 
