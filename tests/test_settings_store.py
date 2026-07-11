@@ -340,7 +340,7 @@ def test_remote_provider_models_roundtrip(tmp_path):
             {
                 "deepgram_model": "nova-2",
                 "assemblyai_model": "universal-2",
-                "elevenlabs_model": "scribe_v1",
+                "elevenlabs_model": "scribe_v2",
             }
         ),
         encoding="utf-8",
@@ -348,7 +348,19 @@ def test_remote_provider_models_roundtrip(tmp_path):
     settings = SettingsStore(settings_path).load()
     assert settings.deepgram_model == "nova-2"
     assert settings.assemblyai_model == "universal-2"
-    assert settings.elevenlabs_model == "scribe_v1"
+    assert settings.elevenlabs_model == "scribe_v2"
+
+
+def test_removed_elevenlabs_model_falls_back_to_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"elevenlabs_model": "scribe_v1"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.elevenlabs_model == DEFAULT_ELEVENLABS_MODEL
 
 
 def test_legacy_assemblyai_model_falls_back_to_default(tmp_path):

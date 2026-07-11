@@ -45,9 +45,9 @@ class TestElevenLabsInit:
         t = ElevenLabsTranscriber(api_key="key")
         assert t._model == DEFAULT_ELEVENLABS_MODEL
 
-    def test_custom_model(self):
+    def test_removed_model_falls_back_to_default(self):
         t = ElevenLabsTranscriber(api_key="key", model="scribe_v1")
-        assert t._model == "scribe_v1"
+        assert t._model == "scribe_v2"
 
     def test_invalid_language_mode_falls_back_to_auto(self):
         t = ElevenLabsTranscriber(api_key="key", language_mode="zz")
@@ -82,7 +82,7 @@ class TestElevenLabsBatchTranscription:
         t = ElevenLabsTranscriber(
             api_key="xi-key",
             language_mode="de",
-            model="scribe_v1",
+            model="scribe_v2",
         )
 
         result = t.transcribe_batch(b"RIFF fake")
@@ -95,7 +95,7 @@ class TestElevenLabsBatchTranscription:
         assert "multipart/form-data" in headers["content-type"]
         body = req.data.decode("utf-8", errors="ignore")
         assert 'name="model_id"' in body
-        assert "scribe_v1" in body
+        assert "scribe_v2" in body
         assert 'name="language_code"' in body
         assert "deu" in body
 
@@ -188,7 +188,7 @@ class TestElevenLabsFactoryRouting:
         settings = SimpleNamespace(
             engine="elevenlabs",
             language_mode="de",
-            elevenlabs_model="scribe_v1",
+            elevenlabs_model="scribe_v2",
         )
 
         transcriber = create_transcriber(settings, secret_store=FakeSecretStore())
@@ -196,7 +196,7 @@ class TestElevenLabsFactoryRouting:
         assert isinstance(transcriber, ElevenLabsTranscriber)
         assert transcriber._api_key == "test-key"
         assert transcriber._language_mode == "de"
-        assert transcriber._model == "scribe_v1"
+        assert transcriber._model == "scribe_v2"
 
     def test_factory_uses_default_model_when_missing(self):
         from stt_app.transcriber.factory import create_transcriber

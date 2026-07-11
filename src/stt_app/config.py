@@ -941,7 +941,6 @@ DEFAULT_ASSEMBLYAI_MODEL = "universal-3-pro"
 
 ELEVENLABS_MODELS = (
     "scribe_v2",
-    "scribe_v1",
 )
 DEFAULT_ELEVENLABS_MODEL = "scribe_v2"
 
