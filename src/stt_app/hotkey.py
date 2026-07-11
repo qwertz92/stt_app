@@ -160,7 +160,21 @@ class HotkeyManager:
         if not self._is_registered:
             return
 
-        self._api.unregister_hotkey(self._hwnd, self._hotkey_id)
+        if not self._api.unregister_hotkey(self._hwnd, self._hotkey_id):
+            error_code = 0
+            if hasattr(self._api, "get_last_error"):
+                try:
+                    error_code = int(self._api.get_last_error() or 0)
+                except Exception:
+                    error_code = 0
+            detail = (
+                f"Windows error code: {error_code}."
+                if error_code
+                else "Unknown Windows hotkey unregistration error."
+            )
+            raise HotkeyRegistrationError(
+                f"Failed to unregister hotkey ID {self._hotkey_id}. {detail}"
+            )
         self._is_registered = False
         self._registered_modifiers = 0
         self._registered_vk = 0

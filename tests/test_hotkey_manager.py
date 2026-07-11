@@ -102,6 +102,19 @@ def test_re_register_unregisters_previous_first():
     assert len(api.register_calls) == 2
 
 
+def test_failed_unregister_preserves_registration_state_and_blocks_replacement():
+    api = FakeWin32HotkeyApi(unregister_ok=False, last_error=5)
+    manager = HotkeyManager(api=api, hotkey_id=7)
+    manager.register("Ctrl+Alt+Space")
+
+    with pytest.raises(HotkeyRegistrationError, match="error code: 5"):
+        manager.register("Ctrl+Shift+A")
+
+    assert manager.is_registered is True
+    assert api.unregister_calls == [(None, 7)]
+    assert len(api.register_calls) == 1
+
+
 def test_ctrl_alt_hotkey_ignores_altgr_alias():
     api = FakeWin32HotkeyApi()
     api.down_keys.add(VK_RMENU)

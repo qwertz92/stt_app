@@ -304,9 +304,15 @@ class DictationController(QtCore.QObject):
         if self._shutdown_started:
             return
         self._shutdown_started = True
-        self._hotkey_manager.unregister()
+        try:
+            self._hotkey_manager.unregister()
+        except Exception:
+            self._logger.exception("Failed to unregister recording hotkey")
         if self._cancel_hotkey_manager is not None:
-            self._cancel_hotkey_manager.unregister()
+            try:
+                self._cancel_hotkey_manager.unregister()
+            except Exception:
+                self._logger.exception("Failed to unregister cancel hotkey")
         self._focus_poll_timer.stop()
         self._preload_progress_timer.stop()
         self._preload_cancel_requested = True
@@ -3650,8 +3656,16 @@ class DictationController(QtCore.QObject):
         cancel_hotkey = (self._settings.cancel_hotkey or "").strip()
         if not cancel_hotkey:
             self._cancel_hotkey_notice = None
-            manager.unregister()
-            return True
+            try:
+                manager.unregister()
+                return True
+            except HotkeyRegistrationError:
+                self._logger.exception("Failed to unregister disabled cancel hotkey")
+                self._cancel_hotkey_notice = (
+                    "The disabled cancel hotkey could not be unregistered. "
+                    "Restart the app before reusing that key combination."
+                )
+                return False
 
         try:
             manager.register(cancel_hotkey)
