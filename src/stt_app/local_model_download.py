@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 LOCAL_MODEL_DOWNLOAD_WORKER_ARG = "--local-model-download-worker"
@@ -16,15 +17,26 @@ def start_model_download_process(
     env["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
     command = model_download_command(model_name, model_dir, env)
     cwd = None if getattr(sys, "frozen", False) else str(_repo_root())
-    return subprocess.Popen(
-        command,
-        cwd=cwd,
-        env=env,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        creationflags=_subprocess_no_window_flags(),
-    )
+    # The worker can run for minutes and third-party download libraries may
+    # write enough diagnostics to fill an unread pipe. A seekable temporary
+    # file keeps the polling callers non-blocking while preserving the final
+    # error message for display.
+    error_log = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    try:
+        process = subprocess.Popen(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=error_log,
+            creationflags=_subprocess_no_window_flags(),
+        )
+    except Exception:
+        error_log.close()
+        raise
+    process._stt_error_log = error_log  # type: ignore[attr-defined]
+    return process
 
 
 def model_download_command(
@@ -70,10 +82,24 @@ def terminate_model_download_process(process: subprocess.Popen[str] | None) -> N
 
 
 def model_download_process_error(process: subprocess.Popen[str]) -> str:
+    error_log = getattr(process, "_stt_error_log", None)
     try:
         _stdout, stderr = process.communicate()
     except Exception:
-        return ""
+        stderr = ""
+    if error_log is not None:
+        try:
+            error_log.flush()
+            error_log.seek(0)
+            stderr = error_log.read()
+        except Exception:
+            stderr = ""
+        finally:
+            try:
+                error_log.close()
+            except Exception:
+                pass
+            process._stt_error_log = None  # type: ignore[attr-defined]
     lines = [line.strip() for line in str(stderr or "").splitlines() if line.strip()]
     return lines[-1] if lines else ""
 

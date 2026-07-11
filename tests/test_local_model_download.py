@@ -1,4 +1,5 @@
 import subprocess
+from types import SimpleNamespace
 
 import stt_app.local_model_download as local_model_download
 
@@ -42,15 +43,37 @@ def test_start_model_download_process_disables_worker_progress(monkeypatch):
     def fake_popen(command, **kwargs):
         captured["command"] = command
         captured.update(kwargs)
-        return object()
+        return SimpleNamespace()
 
     monkeypatch.setattr(local_model_download.subprocess, "Popen", fake_popen)
 
     local_model_download.start_model_download_process("small")
 
     assert captured["env"]["HF_HUB_DISABLE_PROGRESS_BARS"] == "1"
-    assert captured["stdout"] is subprocess.PIPE
-    assert captured["stderr"] is subprocess.PIPE
+    assert captured["stdout"] is subprocess.DEVNULL
+    assert captured["stderr"].readable() is True
+    assert captured["stderr"].writable() is True
+
+
+def test_model_download_process_error_reads_and_closes_spooled_log():
+    class _Process:
+        def __init__(self):
+            self._stt_error_log = local_model_download.tempfile.TemporaryFile(
+                mode="w+t",
+                encoding="utf-8",
+            )
+            self._stt_error_log.write("first line\nlast useful detail\n")
+
+        def communicate(self):
+            return None, None
+
+    process = _Process()
+
+    assert (
+        local_model_download.model_download_process_error(process)
+        == "last useful detail"
+    )
+    assert process._stt_error_log is None
 
 
 def test_terminate_model_download_process_stops_running_process():
