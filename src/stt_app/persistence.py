@@ -3,11 +3,25 @@ from __future__ import annotations
 import json
 import os
 import tempfile
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 _BACKUP_SUFFIX = ".bak"
+_PATH_LOCKS_GUARD = threading.Lock()
+_PATH_LOCKS: dict[Path, threading.RLock] = {}
+
+
+def lock_for_path(path: Path) -> threading.RLock:
+    """Return one in-process reentrant lock for a normalized file path."""
+    try:
+        resolved = path.resolve(strict=False)
+    except OSError:
+        resolved = path.absolute()
+    key = Path(os.path.normcase(str(resolved)))
+    with _PATH_LOCKS_GUARD:
+        return _PATH_LOCKS.setdefault(key, threading.RLock())
 
 
 def parse_json_bool(value: Any, *, default: bool = False) -> bool:

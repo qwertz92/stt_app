@@ -1,23 +1,13 @@
 from __future__ import annotations
 
 import json
-import threading
 from pathlib import Path
 
 from typing import Protocol
 
 from .config import KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
 from .app_paths import insecure_keys_path
-from .persistence import atomic_write_json
-
-_INSECURE_STORE_LOCKS_GUARD = threading.Lock()
-_INSECURE_STORE_LOCKS: dict[Path, threading.RLock] = {}
-
-
-def _insecure_store_lock(path: Path) -> threading.RLock:
-    resolved = path.resolve()
-    with _INSECURE_STORE_LOCKS_GUARD:
-        return _INSECURE_STORE_LOCKS.setdefault(resolved, threading.RLock())
+from .persistence import atomic_write_json, lock_for_path
 
 
 class SecretStore(Protocol):
@@ -57,7 +47,7 @@ class KeyringSecretStore:
         )
         self._insecure_fallback_enabled = False
         self._insecure_path: Path = insecure_keys_path()
-        self._insecure_lock = _insecure_store_lock(self._insecure_path)
+        self._insecure_lock = lock_for_path(self._insecure_path)
 
     def set_insecure_fallback_enabled(self, enabled: bool) -> None:
         self._insecure_fallback_enabled = bool(enabled)

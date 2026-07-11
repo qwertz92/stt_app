@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
-import threading
 import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass
@@ -13,31 +11,17 @@ from pathlib import Path
 from typing import Any
 
 from .app_paths import transcript_history_path
-from .persistence import atomic_write_json, load_json_with_backup, quarantine_corrupt_file
+from .persistence import (
+    atomic_write_json,
+    load_json_with_backup,
+    lock_for_path,
+    quarantine_corrupt_file,
+)
 
 HistoryStorageSignature = tuple[int, int] | None
 DISPLAY_TIMEZONE_LOCAL = "local"
 DISPLAY_TIMEZONE_UTC = "utc"
 VALID_HISTORY_DISPLAY_TIMEZONES = (DISPLAY_TIMEZONE_LOCAL, DISPLAY_TIMEZONE_UTC)
-
-_PATH_LOCKS_GUARD = threading.Lock()
-_PATH_LOCKS: dict[Path, threading.RLock] = {}
-
-
-def _lock_for_path(path: Path) -> threading.RLock:
-    """Return the in-process lock shared by every store for *path*."""
-    try:
-        resolved = path.resolve(strict=False)
-    except OSError:
-        resolved = path.absolute()
-    key = Path(os.path.normcase(str(resolved)))
-    with _PATH_LOCKS_GUARD:
-        lock = _PATH_LOCKS.get(key)
-        if lock is None:
-            lock = threading.RLock()
-            _PATH_LOCKS[key] = lock
-        return lock
-
 
 @dataclass(frozen=True, slots=True)
 class HistoryEntryListChange:
@@ -93,7 +77,7 @@ class TranscriptHistoryStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or transcript_history_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = _lock_for_path(self._path)
+        self._lock = lock_for_path(self._path)
 
     @property
     def path(self) -> Path:
