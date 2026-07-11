@@ -11,6 +11,11 @@ from typing import Iterable
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC = REPO_ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
+
+from stt_app.persistence import atomic_write_text  # noqa: E402
 
 PROJECT_VERSION_RE = re.compile(
     r'(?ms)(^\[project\]\s*.*?^version\s*=\s*")[^"]+(")'
@@ -84,16 +89,45 @@ def read_version_files(root: Path = REPO_ROOT) -> VersionFiles:
 
 def bump_version(version: str, root: Path = REPO_ROOT) -> None:
     release_version = ReleaseVersion.parse(version)
-    _replace_version(root / "pyproject.toml", PROJECT_VERSION_RE, release_version.text)
-    _replace_version(root / "src/stt_app/__init__.py", INIT_VERSION_RE, release_version.text)
-    _replace_version(
-        root / "installer/windows/stt_app.iss",
-        INNO_VERSION_RE,
-        release_version.text,
-    )
+    targets = [
+        (root / "pyproject.toml", PROJECT_VERSION_RE),
+        (root / "src/stt_app/__init__.py", INIT_VERSION_RE),
+        (root / "installer/windows/stt_app.iss", INNO_VERSION_RE),
+    ]
     uv_lock_path = root / "uv.lock"
     if uv_lock_path.exists():
-        _replace_version(uv_lock_path, UV_LOCK_VERSION_RE, release_version.text)
+        targets.append((uv_lock_path, UV_LOCK_VERSION_RE))
+
+    # Validate and prepare every edit before replacing any file. A malformed
+    # final metadata file must not leave the earlier files at a new version.
+    updates = [
+        (
+            path,
+            path.read_text(encoding="utf-8"),
+            _replacement_text(path, pattern, release_version.text),
+        )
+        for path, pattern in targets
+    ]
+    written: list[tuple[Path, str]] = []
+    try:
+        for path, original, replacement in updates:
+            atomic_write_text(path, replacement)
+            written.append((path, original))
+    except OSError as exc:
+        rollback_errors: list[str] = []
+        for path, original in reversed(written):
+            try:
+                atomic_write_text(path, original)
+            except OSError as rollback_exc:
+                rollback_errors.append(f"{path}: {rollback_exc}")
+        detail = (
+            " Rollback also failed for: " + " | ".join(rollback_errors)
+            if rollback_errors
+            else ""
+        )
+        raise ReleaseVersionError(
+            f"Unable to update all release metadata: {exc}.{detail}"
+        ) from exc
 
 
 def verify_release(
@@ -167,12 +201,16 @@ def _read_regex_version(path: Path, pattern: re.Pattern[str]) -> str:
     return match.group(0).split('"')[-2]
 
 
-def _replace_version(path: Path, pattern: re.Pattern[str], version: str) -> None:
+def _replacement_text(
+    path: Path,
+    pattern: re.Pattern[str],
+    version: str,
+) -> str:
     text = path.read_text(encoding="utf-8")
     new_text, replacements = pattern.subn(rf"\g<1>{version}\2", text, count=1)
     if replacements != 1:
         raise ReleaseVersionError(f"Unable to update version in {path}.")
-    path.write_text(new_text, encoding="utf-8")
+    return new_text
 
 
 def _cmd_bump(args: argparse.Namespace) -> int:

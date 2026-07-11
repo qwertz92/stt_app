@@ -151,12 +151,12 @@ def _ensure_release_branch(*, root: Path, remote: str) -> None:
 
 def _ensure_no_tracked_changes(*, root: Path) -> None:
     status = _git_stdout(
-        ["git", "status", "--porcelain", "--untracked-files=no"],
+        ["git", "status", "--porcelain", "--untracked-files=normal"],
         root=root,
     )
     if status:
         raise CreateReleaseError(
-            "Tracked working tree changes are present. Commit, stash, or revert "
+            "Working tree changes are present. Commit, stash, remove, or ignore "
             "them before creating a release."
         )
 

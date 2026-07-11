@@ -113,3 +113,26 @@ def test_validate_new_release_version_accepts_next_patch():
         existing_tags=["v0.2.1"],
         latest=latest,
     )
+
+
+def test_release_rejects_untracked_worktree_files(monkeypatch, tmp_path):
+    module = _load_create_release_module()
+    captured_command = None
+
+    def fake_git_stdout(command, *, root):
+        nonlocal captured_command
+        captured_command = command
+        assert root == tmp_path
+        return "?? untracked.py"
+
+    monkeypatch.setattr(module, "_git_stdout", fake_git_stdout)
+
+    with pytest.raises(module.CreateReleaseError, match="Working tree changes"):
+        module._ensure_no_tracked_changes(root=tmp_path)
+
+    assert captured_command == [
+        "git",
+        "status",
+        "--porcelain",
+        "--untracked-files=normal",
+    ]

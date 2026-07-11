@@ -53,6 +53,47 @@ def test_bump_version_updates_release_metadata(tmp_path):
     assert versions.uv_lock == "0.2.2"
 
 
+def test_bump_validates_all_metadata_before_writing(tmp_path):
+    module = _load_release_version_module()
+    _write_version_project(tmp_path, "0.2.1")
+    (tmp_path / "uv.lock").write_text(
+        '[[package]]\nname = "different-project"\nversion = "0.2.1"\n',
+        encoding="utf-8",
+    )
+
+    with pytest.raises(module.ReleaseVersionError, match="uv.lock"):
+        module.bump_version("0.2.2", root=tmp_path)
+
+    assert module._read_project_version(tmp_path / "pyproject.toml") == "0.2.1"
+    assert '__version__ = "0.2.1"' in (
+        tmp_path / "src/stt_app/__init__.py"
+    ).read_text(encoding="utf-8")
+
+
+def test_bump_rolls_back_metadata_after_a_later_write_failure(
+    monkeypatch,
+    tmp_path,
+):
+    module = _load_release_version_module()
+    _write_version_project(tmp_path, "0.2.1")
+    real_atomic_write = module.atomic_write_text
+
+    def fail_package_write(path, text):
+        if path.name == "__init__.py":
+            raise OSError("package metadata is read-only")
+        real_atomic_write(path, text)
+
+    monkeypatch.setattr(module, "atomic_write_text", fail_package_write)
+
+    with pytest.raises(module.ReleaseVersionError, match="update all release metadata"):
+        module.bump_version("0.2.2", root=tmp_path)
+
+    versions = module.read_version_files(tmp_path)
+    assert versions.pyproject == "0.2.1"
+    assert versions.package == "0.2.1"
+    assert versions.installer == "0.2.1"
+
+
 def test_verify_release_allows_matching_newer_tag(tmp_path):
     module = _load_release_version_module()
     _write_version_project(tmp_path, "0.2.2")

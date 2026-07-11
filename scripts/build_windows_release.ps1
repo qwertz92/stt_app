@@ -14,7 +14,10 @@ if ([System.Environment]::OSVersion.Platform -ne [System.PlatformID]::Win32NT) {
 }
 
 Write-Host "==> Syncing project environment"
-uv sync --group dev
+uv sync --group dev --locked
+
+Write-Host "==> Installing locked JavaScript runtime dependencies"
+npm ci --omit=dev
 
 Write-Host "==> Cleaning old build outputs"
 Remove-Item -Recurse -Force build, dist, release -ErrorAction SilentlyContinue
