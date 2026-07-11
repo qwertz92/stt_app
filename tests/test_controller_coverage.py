@@ -3,6 +3,7 @@ transcription_worker error branches, streaming abort, focus poll."""
 
 from __future__ import annotations
 
+import threading
 from unittest.mock import MagicMock
 
 from stt_app.config import FALLBACK_HOTKEY
@@ -56,6 +57,204 @@ def test_shutdown_cancels_preload_future():
     controller._preload_future = mock_future
     controller.shutdown()
     mock_future.cancel.assert_called_once()
+    _ = app
+
+
+def test_shutdown_defers_cached_runtime_close_until_worker_exits(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingTranscriber:
+        def __init__(self):
+            self.closed = False
+
+        def set_progress_callback(self, _callback):
+            return None
+
+        def set_cancel_check(self, _callback):
+            return None
+
+        def transcribe_batch(self, _wav):
+            entered.set()
+            assert release.wait(timeout=2.0)
+            return "late result"
+
+        def close(self):
+            self.closed = True
+
+    transcriber = BlockingTranscriber()
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller()
+    controller._submit_batch_transcription(b"RIFF", controller.settings)
+    job = next(iter(controller._jobs.values()))
+    assert entered.wait(timeout=2.0)
+
+    states_before_shutdown = list(controller._overlay.states)
+    controller.shutdown()
+
+    assert transcriber.closed is False
+    release.set()
+    job.future.result(timeout=2.0)
+    assert transcriber.closed is True
+    # The worker finishes after shutdown but does not emit a terminal UI update.
+    assert controller._overlay.states == states_before_shutdown
+    _ = app
+
+
+def test_overlapping_runtime_uses_isolated_instance_without_closing_shared(
+    monkeypatch,
+):
+    entered = threading.Event()
+    release = threading.Event()
+
+    class BlockingTranscriber:
+        def __init__(self, *, blocking: bool):
+            self.blocking = blocking
+            self.closed = False
+
+        def set_progress_callback(self, _callback):
+            return None
+
+        def set_cancel_check(self, _callback):
+            return None
+
+        def transcribe_batch(self, _wav):
+            if self.blocking:
+                entered.set()
+                assert release.wait(timeout=2.0)
+            return "done"
+
+        def close(self):
+            self.closed = True
+
+    created = []
+
+    def create(_settings, **_kwargs):
+        transcriber = BlockingTranscriber(blocking=not created)
+        created.append(transcriber)
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", create)
+    controller, app = _make_controller()
+    controller._submit_batch_transcription(b"RIFF", controller.settings)
+    job = next(iter(controller._jobs.values()))
+    assert entered.wait(timeout=2.0)
+
+    controller.cancel_current_action()
+    assert controller._active_request_token is None
+    controller.reload_settings(re_register_hotkey=False)
+    isolated_lease = controller._acquire_transcriber_runtime(controller.settings)
+
+    assert len(created) == 2
+    assert isolated_lease.transcriber is created[1]
+    assert created[0].closed is False
+    isolated_lease.release()
+    assert created[1].closed is True
+    assert created[0].closed is False
+
+    release.set()
+    job.future.result(timeout=2.0)
+    assert created[0].closed is True
+    controller.shutdown()
+    _ = app
+
+
+def test_preload_runtime_waits_off_thread_for_shared_cache(monkeypatch):
+    class CachedTranscriber:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    transcriber = CachedTranscriber()
+    create_calls = []
+
+    def create(_settings, **_kwargs):
+        create_calls.append(True)
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", create)
+    controller, app = _make_controller()
+    shared_lease = controller._acquire_transcriber_runtime(controller.settings)
+    attempting = threading.Event()
+    acquired = threading.Event()
+    finished = threading.Event()
+
+    def acquire_preload_lease():
+        attempting.set()
+        preload_lease = controller._acquire_transcriber_runtime(
+            controller.settings,
+            allow_isolated=False,
+        )
+        acquired.set()
+        preload_lease.release()
+        finished.set()
+
+    thread = threading.Thread(target=acquire_preload_lease)
+    thread.start()
+    assert attempting.wait(timeout=2.0)
+    assert acquired.is_set() is False
+
+    shared_lease.release()
+
+    assert acquired.wait(timeout=2.0)
+    assert finished.wait(timeout=2.0)
+    thread.join(timeout=2.0)
+    assert create_calls == [True]
+    assert transcriber.closed is False
+    controller.shutdown()
+    assert transcriber.closed is True
+    _ = app
+
+
+def test_worker_terminal_signal_follows_cleanup_and_deferred_close(monkeypatch):
+    cleanup_state = {
+        "cancel": object(),
+        "progress": object(),
+        "closed": False,
+    }
+
+    class CleanupTranscriber:
+        def set_cancel_check(self, callback):
+            cleanup_state["cancel"] = callback
+
+        def set_progress_callback(self, callback):
+            cleanup_state["progress"] = callback
+
+        def transcribe_batch(self, _wav):
+            controller._reset_transcriber_cache()
+            return "done"
+
+        def close(self):
+            cleanup_state["closed"] = True
+
+    transcriber = CleanupTranscriber()
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller()
+    settings = controller.settings
+    job = controller._register_transcription_job(1, settings, "batch")
+    observed = []
+    controller.transcription_ready.connect(
+        lambda _token, _text: observed.append(dict(cleanup_state))
+    )
+
+    controller._transcribe_worker(1, b"RIFF", settings, job)
+
+    assert observed == [
+        {
+            "cancel": None,
+            "progress": None,
+            "closed": True,
+        }
+    ]
+    controller.shutdown()
     _ = app
 
 

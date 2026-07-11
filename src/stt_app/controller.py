@@ -120,6 +120,43 @@ class _TranscriptionJob:
     # start it if it has not begun.
     aborting: bool = False
     insertion_deferred: bool = False
+    runtime_transcriber: object | None = None
+    runtime_lease: object | None = None
+
+
+class _TranscriberRuntimeLease:
+    """Ownership of a shared or isolated transcriber runtime.
+
+    A lease may be acquired on the Qt thread for a live stream and released by
+    the finalize worker, so it deliberately uses an idempotent primitive-lock
+    guard rather than thread-affine ownership.
+    """
+
+    def __init__(
+        self,
+        controller: "DictationController",
+        transcriber: object,
+        *,
+        owns_shared_lock: bool,
+        close_on_release: bool,
+    ) -> None:
+        self.transcriber = transcriber
+        self._controller = controller
+        self._owns_shared_lock = owns_shared_lock
+        self._close_on_release = close_on_release
+        self._release_lock = threading.Lock()
+        self._released = False
+
+    def release(self) -> None:
+        with self._release_lock:
+            if self._released:
+                return
+            self._released = True
+        if self._close_on_release:
+            self._controller._close_cached_transcriber(self.transcriber)
+        self._controller._release_transcriber_runtime(
+            owns_shared_lock=self._owns_shared_lock
+        )
 
 
 class DictationController(QtCore.QObject):
@@ -164,14 +201,23 @@ class DictationController(QtCore.QObject):
         self._preload_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_future: concurrent.futures.Future | None = None
         self._transcriber_cache_lock = threading.Lock()
+        # Preload, batch inference, and a live stream may all request the cached
+        # transcriber. One lease owns that shared instance; overlapping work gets
+        # an isolated runtime instead of blocking the Qt thread or replacing an
+        # in-use cache. A plain Lock is intentional: a streaming lease can be
+        # acquired on the Qt thread and released by its finalize worker.
+        self._transcriber_runtime_lock = threading.Lock()
+        self._transcriber_runtime_state_lock = threading.Lock()
+        self._transcriber_runtime_in_use = threading.Event()
+        self._transcriber_runtime_active_count = 0
         self._transcriber_cache_key = None
         self._transcriber_cache = None
-        # Set when a settings reload happens while a transcription/stream is
-        # still using the cached transcriber. The reset is deferred and applied
-        # from ``_get_or_create_transcriber`` before the next transcriber is
-        # built, so the in-flight runtime is never closed out from under an
-        # active worker or stream while still picking up new settings/keys.
+        # Set when a settings reload happens while a lease owns the cached
+        # transcriber. The owner applies the reset on release; an isolated owner
+        # leaves it for the next shared-cache acquisition. Either way the
+        # in-flight runtime is never closed out from under active work.
         self._pending_transcriber_cache_reset = False
+        self._shutdown_started = False
         self._hotkey_registration_ok = False
         self._hotkey_notice: str | None = None
         self._cancel_hotkey_registration_ok = False
@@ -185,6 +231,7 @@ class DictationController(QtCore.QObject):
         self._active_batch_settings: AppSettings | None = None
         self._streaming_recording = False
         self._active_stream_transcriber = None
+        self._active_stream_runtime_lease: _TranscriberRuntimeLease | None = None
         self._active_stream_settings: AppSettings | None = None
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
@@ -246,6 +293,9 @@ class DictationController(QtCore.QObject):
             self.show_idle_status()
 
     def shutdown(self) -> None:
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
         self._hotkey_manager.unregister()
         if self._cancel_hotkey_manager is not None:
             self._cancel_hotkey_manager.unregister()
@@ -265,13 +315,30 @@ class DictationController(QtCore.QObject):
             except Exception:
                 pass
             self._warm_mic_stream = None
-        if self._active_stream_transcriber is not None:
-            try:
-                self._active_stream_transcriber.stop_stream()
-            except Exception:
-                pass
-            self._active_stream_transcriber = None
-            self._active_stream_settings = None
+        active_stream = self._active_stream_transcriber
+        self._active_stream_transcriber = None
+        active_stream_lease = self._active_stream_runtime_lease
+        self._active_stream_runtime_lease = None
+        try:
+            if active_stream is not None:
+                active_stream.stop_stream()
+        except Exception:
+            pass
+        finally:
+            if active_stream_lease is not None:
+                active_stream_lease.release()
+        self._active_stream_settings = None
+        for job in list(self._jobs.values()):
+            job.aborting = True
+            future = job.future
+            canceled_before_start = False
+            if future is not None:
+                try:
+                    canceled_before_start = bool(future.cancel())
+                except Exception:
+                    canceled_before_start = False
+            if canceled_before_start:
+                self._release_stream_job_runtime(job, abort=True)
         preload_future = self._preload_future
         self._preload_future = None
         if preload_future is not None:
@@ -306,10 +373,12 @@ class DictationController(QtCore.QObject):
             # A batch worker or an active stream still holds the cached
             # transcriber. Closing it now could break that in-flight run (e.g.
             # a keep-loaded ONNX subprocess or a live Nemotron stream). Defer the
-            # reset; ``_get_or_create_transcriber`` applies it before the next
-            # transcriber is built, once the serial worker has finished, so
-            # changed settings and API keys still take effect on the next run.
-            self._pending_transcriber_cache_reset = True
+            # reset. The active shared lease applies it during release; an
+            # isolated lease leaves it for the next shared-cache acquisition.
+            # Changed settings and API keys therefore take effect without
+            # closing a runtime that is still executing.
+            with self._transcriber_runtime_state_lock:
+                self._pending_transcriber_cache_reset = True
         else:
             self._reset_transcriber_cache()
         if re_register_hotkey:
@@ -576,19 +645,27 @@ class DictationController(QtCore.QObject):
 
     def _start_streaming_recording(self) -> None:
         settings_snapshot = replace(self._settings)
+        runtime_lease: _TranscriberRuntimeLease | None = None
         try:
-            transcriber = self._get_or_create_transcriber(settings_snapshot)
+            runtime_lease = self._acquire_transcriber_runtime(settings_snapshot)
+            transcriber = runtime_lease.transcriber
             transcriber.start_stream(
                 on_partial=self._emit_stream_partial,
                 on_error=self._emit_stream_runtime_failure,
             )
         except NotImplementedError as exc:
+            if runtime_lease is not None:
+                runtime_lease.release()
             self._overlay.set_state("Error", str(exc))
             return
         except TranscriptionError as exc:
+            if runtime_lease is not None:
+                runtime_lease.release()
             self._overlay.set_state("Error", str(exc))
             return
         except Exception as exc:
+            if runtime_lease is not None:
+                runtime_lease.release()
             self._logger.exception("Failed to start streaming transcriber")
             self._overlay.set_state("Error", f"Failed to start streaming: {exc}")
             return
@@ -612,6 +689,8 @@ class DictationController(QtCore.QObject):
                     transcriber.stop_stream()
             except Exception:
                 pass
+            if runtime_lease is not None:
+                runtime_lease.release()
             self._overlay.set_state("Error", str(exc))
             self._logger.exception("Audio capture failed to start")
             return
@@ -626,6 +705,7 @@ class DictationController(QtCore.QObject):
         self._stream_text_state.reset()
         self._active_session_mode = "streaming"
         self._active_stream_transcriber = transcriber
+        self._active_stream_runtime_lease = runtime_lease
         self._active_stream_settings = settings_snapshot
         self._audio_capture = capture
         if STREAMING_ABORT_ON_FOCUS_CHANGE:
@@ -989,16 +1069,126 @@ class DictationController(QtCore.QObject):
             self._audio_capture is not None
             or self._recording_start_in_progress
             or self._streaming_recording
-            or self._active_request_token is not None
+            or self._transcriber_runtime_in_use.is_set()
         )
 
     def _reset_transcriber_cache(self) -> None:
+        """Close the cache now when idle, otherwise defer until lease release."""
+        if not self._transcriber_runtime_lock.acquire(blocking=False):
+            with self._transcriber_runtime_state_lock:
+                self._pending_transcriber_cache_reset = True
+            return
+        try:
+            self._reset_transcriber_cache_locked()
+        finally:
+            self._transcriber_runtime_lock.release()
+
+    def _reset_transcriber_cache_locked(self) -> None:
+        """Close the cache while the caller owns the runtime admission lock."""
         with self._transcriber_cache_lock:
             cached = self._transcriber_cache
             self._close_cached_transcriber(cached)
             self._transcriber_cache = None
             self._transcriber_cache_key = None
+        with self._transcriber_runtime_state_lock:
             self._pending_transcriber_cache_reset = False
+
+    def _acquire_transcriber_runtime(
+        self,
+        settings: AppSettings,
+        *,
+        allow_isolated: bool = True,
+    ) -> _TranscriberRuntimeLease:
+        """Lease the shared cache or build an isolated overlapping runtime.
+
+        Waiting for the shared cache on a normal request would freeze the Qt
+        thread when a new stream starts while an older batch job is finishing.
+        Such overlapping work receives a close-on-release runtime. Preload
+        workers opt out and wait off-thread so a successful preload remains in
+        the shared cache.
+        """
+        owns_shared_lock = self._transcriber_runtime_lock.acquire(
+            blocking=not allow_isolated
+        )
+        if owns_shared_lock:
+            if self._shutdown_started:
+                self._transcriber_runtime_lock.release()
+                raise TranscriptionCanceled("Application shutdown is in progress.")
+            self._increment_transcriber_runtime_count()
+            try:
+                with self._transcriber_runtime_state_lock:
+                    reset_pending = self._pending_transcriber_cache_reset
+                if reset_pending:
+                    self._reset_transcriber_cache_locked()
+                transcriber = self._get_or_create_transcriber(settings)
+            except Exception:
+                self._decrement_transcriber_runtime_count()
+                self._transcriber_runtime_lock.release()
+                raise
+            close_on_release = (
+                settings.engine == DEFAULT_ENGINE
+                and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+                and not bool(getattr(settings, "keep_onnx_model_loaded", False))
+            )
+            return _TranscriberRuntimeLease(
+                self,
+                transcriber,
+                owns_shared_lock=True,
+                close_on_release=close_on_release,
+            )
+
+        if self._shutdown_started:
+            raise TranscriptionCanceled("Application shutdown is in progress.")
+        self._increment_transcriber_runtime_count()
+        try:
+            transcriber = create_transcriber(settings, secret_store=self._secret_store)
+            if self._shutdown_started:
+                self._close_cached_transcriber(transcriber)
+                raise TranscriptionCanceled("Application shutdown is in progress.")
+        except Exception:
+            self._decrement_transcriber_runtime_count()
+            raise
+        return _TranscriberRuntimeLease(
+            self,
+            transcriber,
+            owns_shared_lock=False,
+            close_on_release=True,
+        )
+
+    def _increment_transcriber_runtime_count(self) -> None:
+        with self._transcriber_runtime_state_lock:
+            self._transcriber_runtime_active_count += 1
+            self._transcriber_runtime_in_use.set()
+
+    def _decrement_transcriber_runtime_count(self) -> None:
+        with self._transcriber_runtime_state_lock:
+            self._transcriber_runtime_active_count = max(
+                0,
+                self._transcriber_runtime_active_count - 1,
+            )
+            if self._transcriber_runtime_active_count == 0:
+                self._transcriber_runtime_in_use.clear()
+
+    def _release_transcriber_runtime(self, *, owns_shared_lock: bool) -> None:
+        """Release a runtime lease and apply resets deferred behind the cache."""
+        try:
+            if owns_shared_lock:
+                with self._transcriber_runtime_state_lock:
+                    reset_pending = self._pending_transcriber_cache_reset
+                if reset_pending or self._shutdown_started:
+                    self._reset_transcriber_cache_locked()
+        finally:
+            if owns_shared_lock:
+                self._transcriber_runtime_lock.release()
+            self._decrement_transcriber_runtime_count()
+        if owns_shared_lock:
+            # A reset requester can set the pending flag after the pre-release
+            # check but before the admission lock is dropped. Recheck through
+            # the normal non-blocking path so shutdown cannot strand the cache.
+            with self._transcriber_runtime_state_lock:
+                reset_pending = self._pending_transcriber_cache_reset
+            if reset_pending or self._shutdown_started:
+                self._reset_transcriber_cache()
 
     def _reset_resume_sensitive_transcriber_cache(self) -> None:
         if self._transcription_runtime_active():
@@ -1008,32 +1198,41 @@ class DictationController(QtCore.QObject):
             )
             return
 
-        with self._transcriber_cache_lock:
-            cached = self._transcriber_cache
-            cache_key = self._transcriber_cache_key
-            cached_model = str(getattr(cached, "model_size", "") or "")
-            cached_device = str(getattr(cached, "runtime_device", "") or "")
-            cache_model = ""
-            if isinstance(cache_key, tuple) and len(cache_key) > 1:
-                cache_model = str(cache_key[1] or "")
-            should_reset = (
-                cached is not None
-                and (
-                    cached_model in LOCAL_WEBGPU_MODEL_SIZES
-                    or cache_model in LOCAL_WEBGPU_MODEL_SIZES
-                )
-            )
-            if not should_reset:
-                return
+        if not self._transcriber_runtime_lock.acquire(blocking=False):
             self._logger.info(
-                "System resume detected; closing cached ONNX/WebGPU runtime "
-                "model=%s device=%s so GPU backends are recreated.",
-                cached_model or cache_model,
-                cached_device or "unknown",
+                "System resume detected during an active shared runtime; keeping "
+                "the current transcriber cache."
             )
-            self._close_cached_transcriber(cached)
-            self._transcriber_cache = None
-            self._transcriber_cache_key = None
+            return
+        try:
+            with self._transcriber_cache_lock:
+                cached = self._transcriber_cache
+                cache_key = self._transcriber_cache_key
+                cached_model = str(getattr(cached, "model_size", "") or "")
+                cached_device = str(getattr(cached, "runtime_device", "") or "")
+                cache_model = ""
+                if isinstance(cache_key, tuple) and len(cache_key) > 1:
+                    cache_model = str(cache_key[1] or "")
+                should_reset = (
+                    cached is not None
+                    and (
+                        cached_model in LOCAL_WEBGPU_MODEL_SIZES
+                        or cache_model in LOCAL_WEBGPU_MODEL_SIZES
+                    )
+                )
+                if not should_reset:
+                    return
+                self._logger.info(
+                    "System resume detected; closing cached ONNX/WebGPU runtime "
+                    "model=%s device=%s so GPU backends are recreated.",
+                    cached_model or cache_model,
+                    cached_device or "unknown",
+                )
+                self._close_cached_transcriber(cached)
+                self._transcriber_cache = None
+                self._transcriber_cache_key = None
+        finally:
+            self._transcriber_runtime_lock.release()
 
     def handle_system_resume(self) -> None:
         """Refresh Windows integrations and drop GPU runtimes after resume."""
@@ -1295,6 +1494,7 @@ class DictationController(QtCore.QObject):
             except Exception:
                 canceled_before_start = False
         if canceled_before_start:
+            self._release_stream_job_runtime(job, abort=True)
             self._drop_request_audio(request_token)
             self._finish_transcription_job(request_token)
         else:
@@ -1408,7 +1608,11 @@ class DictationController(QtCore.QObject):
         self._last_transcribe_settings = replace(settings)
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
+        runtime_lease = self._active_stream_runtime_lease
+        self._active_stream_runtime_lease = None
         job = self._register_transcription_job(request_token, settings, "streaming")
+        job.runtime_transcriber = transcriber
+        job.runtime_lease = runtime_lease
         self._logger.info(
             "transcription_submitted token=%s mode=streaming engine=%s model=%s "
             "recording_id=%s",
@@ -1429,6 +1633,28 @@ class DictationController(QtCore.QObject):
             self._finalize_stream_worker, request_token, transcriber, job
         )
         self._flush_deferred_background_results()
+
+    def _release_stream_job_runtime(
+        self,
+        job: _TranscriptionJob,
+        *,
+        abort: bool,
+    ) -> None:
+        transcriber = job.runtime_transcriber
+        runtime_lease = job.runtime_lease
+        job.runtime_transcriber = None
+        job.runtime_lease = None
+        try:
+            if abort and transcriber is not None:
+                if hasattr(transcriber, "abort_stream"):
+                    transcriber.abort_stream()
+                else:
+                    transcriber.stop_stream()
+        except Exception:
+            self._logger.exception("Failed to abort queued streaming runtime")
+        finally:
+            if isinstance(runtime_lease, _TranscriberRuntimeLease):
+                runtime_lease.release()
 
     def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
         retry_available = (
@@ -1632,16 +1858,23 @@ class DictationController(QtCore.QObject):
             self._logger.warning("Model download failed: %s", exc)
 
         try:
-            transcriber = self._get_or_create_transcriber(settings)
-            if isinstance(
-                transcriber,
-                (
-                    LocalFasterWhisperTranscriber,
-                    LocalNemotronTranscriber,
-                    LocalOnnxWebGpuTranscriber,
-                ),
-            ):
-                transcriber.preload_model()
+            runtime_lease = self._acquire_transcriber_runtime(
+                settings,
+                allow_isolated=False,
+            )
+            try:
+                transcriber = runtime_lease.transcriber
+                if isinstance(
+                    transcriber,
+                    (
+                        LocalFasterWhisperTranscriber,
+                        LocalNemotronTranscriber,
+                        LocalOnnxWebGpuTranscriber,
+                    ),
+                ):
+                    transcriber.preload_model()
+            finally:
+                runtime_lease.release()
             self.model_preload_done.emit(True, f"Model loaded: {settings.model_size}")
             return
         except Exception as exc:
@@ -1670,16 +1903,23 @@ class DictationController(QtCore.QObject):
             try:
                 fallback_settings = replace(settings, model_size=fallback)
                 self._reset_transcriber_cache()
-                transcriber = self._get_or_create_transcriber(fallback_settings)
-                if isinstance(
-                    transcriber,
-                    (
-                        LocalFasterWhisperTranscriber,
-                        LocalNemotronTranscriber,
-                        LocalOnnxWebGpuTranscriber,
-                    ),
-                ):
-                    transcriber.preload_model()
+                runtime_lease = self._acquire_transcriber_runtime(
+                    fallback_settings,
+                    allow_isolated=False,
+                )
+                try:
+                    transcriber = runtime_lease.transcriber
+                    if isinstance(
+                        transcriber,
+                        (
+                            LocalFasterWhisperTranscriber,
+                            LocalNemotronTranscriber,
+                            LocalOnnxWebGpuTranscriber,
+                        ),
+                    ):
+                        transcriber.preload_model()
+                finally:
+                    runtime_lease.release()
                 # Do NOT mutate ``self._settings`` or call
                 # ``self._settings_store.save()`` here: this runs on the preload
                 # worker thread and would race with Qt-thread reads/writes of
@@ -1706,6 +1946,8 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot(bool, str)
     def _on_model_preload_done(self, success: bool, message: str) -> None:
+        if self._shutdown_started:
+            return
         self._preload_progress_timer.stop()
         self._preload_target_model = None
         self._terminate_preload_download_process()
@@ -1783,29 +2025,33 @@ class DictationController(QtCore.QObject):
         settings: AppSettings,
         job: _TranscriptionJob | None = None,
     ) -> None:
-        # Skip a job that was canceled before its compute/upload started.
-        if job is not None and job.aborting:
-            self._logger.info(
-                "transcription_skipped_before_start token=%s engine=%s model=%s "
-                "audio_bytes=%d",
-                request_token,
-                settings.engine,
-                self._selected_model_name(settings),
-                len(wav_bytes),
-            )
-            self.transcription_canceled.emit(request_token)
-            return
         worker_started_at = time.perf_counter()
         init_started_at = worker_started_at
-        close_after_transcription = (
-            settings.engine == DEFAULT_ENGINE
-            and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
-            and not bool(getattr(settings, "keep_onnx_model_loaded", False))
-        )
         transcriber = None
+        runtime_lease: _TranscriberRuntimeLease | None = None
         init_elapsed_ms = 0
+        transcribe_started_at: float | None = None
+        outcome = "initialization_error"
+        terminal_kind = "failed"
+        terminal_payload = "Transcriber initialization failed."
         try:
-            transcriber = self._get_or_create_transcriber(settings)
+            # Skip a job that was canceled before its compute/upload started.
+            if job is not None and job.aborting:
+                self._logger.info(
+                    "transcription_skipped_before_start token=%s engine=%s model=%s "
+                    "audio_bytes=%d",
+                    request_token,
+                    settings.engine,
+                    self._selected_model_name(settings),
+                    len(wav_bytes),
+                )
+                outcome = "canceled_before_start"
+                terminal_kind = "canceled"
+                terminal_payload = ""
+                raise TranscriptionCanceled()
+
+            runtime_lease = self._acquire_transcriber_runtime(settings)
+            transcriber = runtime_lease.transcriber
             init_elapsed_ms = round(
                 (time.perf_counter() - init_started_at) * 1000
             )
@@ -1820,50 +2066,53 @@ class DictationController(QtCore.QObject):
                 self._set_transcriber_cancel_check(
                     transcriber, lambda: job.aborting
                 )
-        except TranscriptionError as exc:
-            self.transcription_failed.emit(request_token, str(exc))
-            return
-        except Exception as exc:
-            self._logger.exception("Failed to create transcriber")
-            self.transcription_failed.emit(
-                request_token,
-                f"Transcriber initialization failed: {exc}"
-            )
-            return
-
-        transcribe_started_at = time.perf_counter()
-        outcome = "success"
-        try:
+            transcribe_started_at = time.perf_counter()
             text = transcriber.transcribe_batch(wav_bytes)
-            self.transcription_ready.emit(request_token, text)
+            outcome = "success"
+            terminal_kind = "ready"
+            terminal_payload = text
         except TranscriptionCanceled:
             outcome = "canceled"
-            self.transcription_canceled.emit(request_token)
+            terminal_kind = "canceled"
+            terminal_payload = ""
         except NotImplementedError as exc:
             outcome = "not_implemented"
-            self.transcription_failed.emit(request_token, str(exc))
+            terminal_kind = "failed"
+            terminal_payload = str(exc)
         except TranscriptionError as exc:
             outcome = "provider_error"
-            self.transcription_failed.emit(request_token, str(exc))
+            terminal_kind = "failed"
+            terminal_payload = str(exc)
         except FileNotFoundError as exc:
             outcome = "missing_file"
             self._logger.exception("Transcription failed due to missing file path")
-            self.transcription_failed.emit(
-                request_token,
+            terminal_kind = "failed"
+            terminal_payload = (
                 "Transcription failed: missing file path. "
                 "Check input path and TEMP/TMP folder configuration. "
                 f"({exc})"
             )
         except Exception as exc:
-            outcome = "unexpected_error"
-            self._logger.exception("Unexpected transcription failure")
-            self.transcription_failed.emit(
-                request_token,
-                f"Unexpected transcription error: {exc}",
+            initialization_failed = transcribe_started_at is None
+            outcome = (
+                "initialization_error" if initialization_failed else "unexpected_error"
+            )
+            self._logger.exception(
+                "Failed to create transcriber"
+                if initialization_failed
+                else "Unexpected transcription failure"
+            )
+            terminal_kind = "failed"
+            terminal_payload = (
+                f"Transcriber initialization failed: {exc}"
+                if initialization_failed
+                else f"Unexpected transcription error: {exc}"
             )
         finally:
-            transcribe_elapsed_ms = round(
-                (time.perf_counter() - transcribe_started_at) * 1000
+            transcribe_elapsed_ms = (
+                round((time.perf_counter() - transcribe_started_at) * 1000)
+                if transcribe_started_at is not None
+                else 0
             )
             total_elapsed_ms = round(
                 (time.perf_counter() - worker_started_at) * 1000
@@ -1893,10 +2142,27 @@ class DictationController(QtCore.QObject):
                 # leak into a cached transcriber's next request.  The closure
                 # captures ``request_token``; leaving it installed would let a
                 # later run surface stale progress or cancel state.
-                self._set_transcriber_cancel_check(transcriber, None)
-                self._set_transcriber_progress_callback(transcriber, None)
-            if close_after_transcription and transcriber is not None:
-                self._close_cached_transcriber(transcriber)
+                try:
+                    self._set_transcriber_cancel_check(transcriber, None)
+                except Exception:
+                    self._logger.exception("Failed to clear transcriber cancel hook")
+                try:
+                    self._set_transcriber_progress_callback(transcriber, None)
+                except Exception:
+                    self._logger.exception("Failed to clear transcriber progress hook")
+            if runtime_lease is not None:
+                runtime_lease.release()
+
+        # Cleanup, optional close, and runtime lease release must all complete
+        # before the Qt thread is allowed to clear this job's active state.
+        if self._shutdown_started:
+            return
+        if terminal_kind == "ready":
+            self.transcription_ready.emit(request_token, terminal_payload)
+        elif terminal_kind == "canceled":
+            self.transcription_canceled.emit(request_token)
+        else:
+            self.transcription_failed.emit(request_token, terminal_payload)
 
     def _finalize_stream_worker(
         self,
@@ -1904,30 +2170,63 @@ class DictationController(QtCore.QObject):
         transcriber,
         job: _TranscriptionJob | None = None,
     ) -> None:
-        if job is not None and job.aborting:
-            self._logger.info(
-                "stream_finalize_skipped_before_start token=%s engine=%s model=%s",
-                request_token,
-                job.engine,
-                job.model,
-            )
-            self.transcription_canceled.emit(request_token)
-            return
+        runtime_lease = (
+            job.runtime_lease
+            if job is not None
+            and isinstance(job.runtime_lease, _TranscriberRuntimeLease)
+            else None
+        )
+        terminal_kind = "failed"
+        terminal_payload = "Streaming session was not initialized."
         try:
-            if transcriber is None:
-                raise TranscriptionError("Streaming session was not initialized.")
-            text = transcriber.stop_stream()
-            self.transcription_ready.emit(request_token, text)
+            canceled_before_start = job is not None and job.aborting
+            if canceled_before_start:
+                self._logger.info(
+                    "stream_finalize_skipped_before_start token=%s engine=%s model=%s",
+                    request_token,
+                    job.engine,
+                    job.model,
+                )
+                if transcriber is not None:
+                    try:
+                        if hasattr(transcriber, "abort_stream"):
+                            transcriber.abort_stream()
+                        else:
+                            transcriber.stop_stream()
+                    except Exception:
+                        self._logger.exception(
+                            "Failed to abort canceled streaming finalization"
+                        )
+                terminal_kind = "canceled"
+                terminal_payload = ""
+            else:
+                if transcriber is None:
+                    raise TranscriptionError("Streaming session was not initialized.")
+                text = transcriber.stop_stream()
+                terminal_kind = "ready"
+                terminal_payload = text
         except NotImplementedError as exc:
-            self.transcription_failed.emit(request_token, str(exc))
+            terminal_payload = str(exc)
         except TranscriptionError as exc:
-            self.transcription_failed.emit(request_token, str(exc))
+            terminal_payload = str(exc)
         except Exception as exc:
             self._logger.exception("Unexpected streaming finalization failure")
-            self.transcription_failed.emit(
-                request_token,
-                f"Unexpected streaming error: {exc}",
-            )
+            terminal_payload = f"Unexpected streaming error: {exc}"
+        finally:
+            if runtime_lease is not None:
+                runtime_lease.release()
+            if job is not None:
+                job.runtime_lease = None
+                job.runtime_transcriber = None
+
+        if self._shutdown_started:
+            return
+        if terminal_kind == "ready":
+            self.transcription_ready.emit(request_token, terminal_payload)
+        elif terminal_kind == "canceled":
+            self.transcription_canceled.emit(request_token)
+        else:
+            self.transcription_failed.emit(request_token, terminal_payload)
 
     def _emit_stream_partial(self, text: str) -> None:
         self.transcription_partial.emit(text)
@@ -1958,14 +2257,19 @@ class DictationController(QtCore.QObject):
 
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
-        if transcriber is not None:
-            try:
+        runtime_lease = self._active_stream_runtime_lease
+        self._active_stream_runtime_lease = None
+        try:
+            if transcriber is not None:
                 if hasattr(transcriber, "abort_stream"):
                     transcriber.abort_stream()
                 else:
                     transcriber.stop_stream()
-            except Exception:
-                self._logger.exception("Failed to abort active streaming transcriber")
+        except Exception:
+            self._logger.exception("Failed to abort active streaming transcriber")
+        finally:
+            if runtime_lease is not None:
+                runtime_lease.release()
 
         return wav_bytes
 
@@ -1997,11 +2301,6 @@ class DictationController(QtCore.QObject):
             )
 
     def _get_or_create_transcriber(self, settings: AppSettings):
-        if self._pending_transcriber_cache_reset:
-            # A settings reload was deferred while the previous run still held
-            # the cached transcriber. Apply it now, before building the next one,
-            # so the new settings/keys take effect without racing that run.
-            self._reset_transcriber_cache()
         cache_key = (
             settings.engine,
             settings.model_size,
@@ -2044,6 +2343,8 @@ class DictationController(QtCore.QObject):
         request_token: int,
         detail: str,
     ) -> None:
+        if self._shutdown_started:
+            return
         if not self._is_foreground_transcription(request_token):
             return
         message = str(detail or "").strip()
@@ -2053,6 +2354,8 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot(int, str)
     def _on_transcription_ready_result(self, request_token: int, text: str) -> None:
+        if self._shutdown_started:
+            return
         self._on_transcription_ready(text, request_token=request_token)
 
     def _on_transcription_ready(
@@ -2399,6 +2702,8 @@ class DictationController(QtCore.QObject):
     @QtCore.Slot(int)
     def _on_transcription_canceled_result(self, request_token: int) -> None:
         """A worker confirmed it stopped before producing a transcript."""
+        if self._shutdown_started:
+            return
         self._drop_request_audio(request_token)
         if self._active_request_token == request_token:
             self._active_request_token = None
@@ -2412,6 +2717,8 @@ class DictationController(QtCore.QObject):
         request_token: int,
         error_text: str,
     ) -> None:
+        if self._shutdown_started:
+            return
         self._on_transcription_failed(error_text, request_token=request_token)
 
     def _on_transcription_failed(
@@ -2469,6 +2776,8 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot(str)
     def _on_transcription_partial(self, partial_text: str) -> None:
+        if self._shutdown_started:
+            return
         if not self._streaming_recording or self._audio_capture is None:
             return
         if self._stream_abort_requested:
@@ -2507,6 +2816,8 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot(str)
     def _on_stream_runtime_failed(self, error_text: str) -> None:
+        if self._shutdown_started:
+            return
         if not (
             self._audio_capture is not None
             or self._active_stream_transcriber is not None
@@ -2530,6 +2841,8 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot(str, bool)
     def _on_stream_abort_requested(self, reason: str, beep: bool) -> None:
+        if self._shutdown_started:
+            return
         self._abort_streaming_session(
             reason,
             beep=beep,
@@ -2596,16 +2909,21 @@ class DictationController(QtCore.QObject):
 
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
-        if transcriber is not None:
-            try:
+        runtime_lease = self._active_stream_runtime_lease
+        self._active_stream_runtime_lease = None
+        try:
+            if transcriber is not None:
                 if finalize_stream:
                     transcriber.stop_stream()
                 elif hasattr(transcriber, "abort_stream"):
                     transcriber.abort_stream()
                 else:
                     transcriber.stop_stream()
-            except Exception:
-                self._logger.exception("Failed to stop/abort streaming transcriber during abort")
+        except Exception:
+            self._logger.exception("Failed to stop/abort streaming transcriber during abort")
+        finally:
+            if runtime_lease is not None:
+                runtime_lease.release()
 
         self._streaming_recording = False
         self._active_stream_settings = None

@@ -1094,11 +1094,15 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
         monkeypatch, tmp_path, mode="insert"
     )
 
-    # Simulate an in-flight transcription still holding the cached transcriber.
-    _record_and_stop(controller)
     sentinel = object()
     closed: list[object] = []
     monkeypatch.setattr(controller, "_close_cached_transcriber", closed.append)
+    monkeypatch.setattr(
+        controller,
+        "_get_or_create_transcriber",
+        lambda _settings: sentinel,
+    )
+    runtime_lease = controller._acquire_transcriber_runtime(controller.settings)
     controller._transcriber_cache = sentinel
     controller._transcriber_cache_key = ("local", "small")
 
@@ -1109,18 +1113,12 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     assert controller._transcriber_cache is sentinel
     assert closed == []
 
-    # The deferred reset is applied before the next transcriber is built, once
-    # the active job is gone, so new settings/keys still take effect.
-    monkeypatch.setattr(
-        "stt_app.controller.create_transcriber",
-        lambda _s, **kw: FakeStreamingTranscriber(),
-    )
-    controller._active_request_token = None
-    built = controller._get_or_create_transcriber(controller.settings)
+    # Releasing the actual runtime lease applies the deferred reset before a
+    # later transcriber can be built.
+    runtime_lease.release()
 
-    # The stale runtime is closed exactly once; the real close no-ops on None.
-    assert [c for c in closed if c is not None] == [sentinel]
+    assert closed == [sentinel]
     assert controller._pending_transcriber_cache_reset is False
-    assert built is controller._transcriber_cache
+    assert controller._transcriber_cache is None
     controller.shutdown()
     _ = app
