@@ -1858,3 +1858,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
     are source-history signatures and do not satisfy Windows code signing.
   - Settings prewarm/paint callbacks are now owned timers, eliminating delayed
     calls into already-deleted Qt dialog objects found during focused UI tests.
+- **Final dependency audit refresh:**
+  - A fresh July 11 audit found newly disclosed advisories in the locked
+    `cryptography`, `idna`, `pygments`, and `pytest` versions.
+  - The lock now resolves `cryptography` 49.0.0, `idna` 3.18, `pygments`
+    2.20.0, and `pytest` 9.0.3. The synchronized Python environment reports no
+    known vulnerabilities, and the complete 1,063-test suite remains green.
