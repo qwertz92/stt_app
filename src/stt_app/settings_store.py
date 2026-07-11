@@ -8,6 +8,7 @@ from .app_paths import settings_path
 from .persistence import (
     atomic_write_json,
     load_json_with_backup,
+    lock_for_path,
     parse_json_bool,
     quarantine_corrupt_file,
 )
@@ -487,46 +488,57 @@ class SettingsStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or settings_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = lock_for_path(self._path)
 
     @property
     def path(self) -> Path:
         return self._path
 
     def load(self) -> AppSettings:
-        if not self._path.exists():
-            settings = AppSettings()
-            self.save(settings)
+        with self._lock:
+            if not self._path.exists():
+                settings = AppSettings()
+                self.save(settings)
+                return settings
+
+            payload, source = load_json_with_backup(
+                self._path,
+                expected_type=dict,
+            )
+            if payload is None:
+                quarantine_corrupt_file(self._path, include_backup=True)
+                settings = AppSettings()
+                return settings
+
+            raw = dict(payload)
+
+            settings = AppSettings.from_dict(raw)
+            if source == "backup" or raw != settings.to_dict():
+                self.save(settings)
+
             return settings
-
-        payload, source = load_json_with_backup(self._path, expected_type=dict)
-        if payload is None:
-            quarantine_corrupt_file(self._path, include_backup=True)
-            settings = AppSettings()
-            return settings
-
-        raw = dict(payload)
-
-        settings = AppSettings.from_dict(raw)
-        if source == "backup" or raw != settings.to_dict():
-            self.save(settings)
-
-        return settings
 
     def save(self, settings: AppSettings) -> None:
-        payload = settings.to_dict()
+        with self._lock:
+            payload = settings.to_dict()
 
-        for secret_key in (
-            "openai_api_key",
-            "deepgram_api_key",
-            "assemblyai_api_key",
-            "groq_api_key",
-            "elevenlabs_api_key",
-            "azure_api_key",
-            "funasr_api_key",
-        ):
-            payload.pop(secret_key, None)
+            for secret_key in (
+                "openai_api_key",
+                "deepgram_api_key",
+                "assemblyai_api_key",
+                "groq_api_key",
+                "elevenlabs_api_key",
+                "azure_api_key",
+                "funasr_api_key",
+            ):
+                payload.pop(secret_key, None)
 
-        atomic_write_json(self._path, payload, ensure_ascii=True, keep_backup=True)
+            atomic_write_json(
+                self._path,
+                payload,
+                ensure_ascii=True,
+                keep_backup=True,
+            )
 
 
 def _normalize_hotkey(value: str, *, default: str) -> str:

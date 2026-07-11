@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import threading
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -12,6 +11,7 @@ from .persistence import (
     atomic_write_bytes,
     atomic_write_json,
     load_json_with_backup,
+    lock_for_path,
     quarantine_corrupt_file,
 )
 
@@ -87,7 +87,7 @@ class LastRecordingStore:
         self._state_path = state_path or last_recording_state_path()
         self._audio_path.parent.mkdir(parents=True, exist_ok=True)
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._lock = lock_for_path(self._state_path)
 
     @property
     def audio_path(self) -> Path:
@@ -250,17 +250,18 @@ class LastRecordingStore:
         self,
         archived_recordings_dir: str | Path | None = None,
     ) -> Path | None:
-        candidates: list[Path] = []
-        if self._audio_path.is_file():
-            if self._managed_recording_is_recoverable():
-                return self._audio_path
-            candidates.append(self._audio_path)
-        archived = self._latest_archived_recording(archived_recordings_dir)
-        if archived is not None and not self.is_managed_audio_path(archived):
-            candidates.append(archived)
-        if not candidates:
-            return None
-        return max(candidates, key=self._recording_sort_key)
+        with self._lock:
+            candidates: list[Path] = []
+            if self._audio_path.is_file():
+                if self._managed_recording_is_recoverable():
+                    return self._audio_path
+                candidates.append(self._audio_path)
+            archived = self._latest_archived_recording(archived_recordings_dir)
+            if archived is not None and not self.is_managed_audio_path(archived):
+                candidates.append(archived)
+            if not candidates:
+                return None
+            return max(candidates, key=self._recording_sort_key)
 
     def _managed_recording_is_recoverable(self) -> bool:
         state = self.load()
@@ -303,12 +304,13 @@ class LastRecordingStore:
         return (mtime_ns, path.name)
 
     def has_recoverable_recording(self) -> bool:
-        state = self.load()
-        if state is None:
-            return False
-        if state.status not in RECOVERABLE_RECORDING_STATUSES:
-            return False
-        return self._audio_path.is_file()
+        with self._lock:
+            state = self.load()
+            if state is None:
+                return False
+            if state.status not in RECOVERABLE_RECORDING_STATUSES:
+                return False
+            return self._audio_path.is_file()
 
     def is_managed_audio_path(self, path: str | Path) -> bool:
         try:

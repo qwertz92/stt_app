@@ -16,6 +16,7 @@ from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
     atomic_write_json,
     load_json_with_backup,
+    lock_for_path,
     parse_json_bool,
     quarantine_corrupt_file,
 )
@@ -155,20 +156,28 @@ class BenchmarkHistoryStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or benchmark_history_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
+        self._lock = lock_for_path(self._path)
 
     @property
     def path(self) -> Path:
         return self._path
 
     def load(self) -> list[BenchmarkHistoryEntry]:
-        return self._load_from_path(self._path)
+        with self._lock:
+            return self._load_from_path(self._path)
 
     def count(self) -> int:
         return len(self.load())
 
     def save(self, entries: list[BenchmarkHistoryEntry]) -> None:
-        payload = [entry.to_dict() for entry in entries]
-        atomic_write_json(self._path, payload, ensure_ascii=True, keep_backup=True)
+        with self._lock:
+            payload = [entry.to_dict() for entry in entries]
+            atomic_write_json(
+                self._path,
+                payload,
+                ensure_ascii=True,
+                keep_backup=True,
+            )
 
     def add_entry(
         self,
@@ -176,12 +185,13 @@ class BenchmarkHistoryStore:
         *,
         max_items: int = MAX_BENCHMARK_HISTORY_ITEMS,
     ) -> None:
-        entries = self.load()
-        entries.append(entry)
-        keep = _normalize_limit(max_items)
-        if keep > 0 and len(entries) > keep:
-            entries = entries[-keep:]
-        self.save(entries)
+        with self._lock:
+            entries = self.load()
+            entries.append(entry)
+            keep = _normalize_limit(max_items)
+            if keep > 0 and len(entries) > keep:
+                entries = entries[-keep:]
+            self.save(entries)
 
     def recent_entries(self, limit: int = 20) -> list[BenchmarkHistoryEntry]:
         entries = self.load()
@@ -190,27 +200,29 @@ class BenchmarkHistoryStore:
         return list(reversed(selected))
 
     def delete_entry(self, entry: BenchmarkHistoryEntry) -> int:
-        entries = self.load()
-        target_key = entry.identity_key()
-        index = next(
-            (
-                row
-                for row, candidate in enumerate(entries)
-                if candidate.identity_key() == target_key
-            ),
-            -1,
-        )
-        if index < 0:
-            return 0
-        entries.pop(index)
-        self.save(entries)
-        return 1
+        with self._lock:
+            entries = self.load()
+            target_key = entry.identity_key()
+            index = next(
+                (
+                    row
+                    for row, candidate in enumerate(entries)
+                    if candidate.identity_key() == target_key
+                ),
+                -1,
+            )
+            if index < 0:
+                return 0
+            entries.pop(index)
+            self.save(entries)
+            return 1
 
     def clear(self) -> int:
-        removed = self.count()
-        if removed:
-            self.save([])
-        return removed
+        with self._lock:
+            removed = self.count()
+            if removed:
+                self.save([])
+            return removed
 
     @staticmethod
     def _entries_from_payload(payload: Any) -> list[BenchmarkHistoryEntry]:
