@@ -54,6 +54,7 @@ from .settings_dialog_helpers import (
     _DEFAULT_SETTINGS_DIALOG_SIZE,
     _DIALOG_SCREEN_MARGIN,
     _emit_background_signal,
+    _FIELD_HINT_MIN_WIDTH_PX,
     _GENERAL_FORM_LABEL_EXTRA_PX,
     _LOCAL_MODEL_AUTO_REFRESH_DELAY_MS,
     _LOCAL_MODEL_SCAN_SESSION_CACHE,
@@ -540,6 +541,23 @@ class SettingsDialog(
         label.setStyleSheet(style)
 
     @staticmethod
+    def _style_field_hint_label(label: QtWidgets.QLabel) -> None:
+        """Style a note that belongs directly to the control above it.
+
+        Field hints intentionally have no internal bottom padding. Their
+        wrapper owns the small control-to-hint gap, while the form layout owns
+        the larger gap before the next field. This makes the association
+        visually unambiguous without relying on platform stylesheet defaults.
+        """
+        label.setProperty("fieldHint", True)
+        # QLabel's default word-wrapped size hint is intentionally narrow and
+        # tall. Giving form hints a realistic readable width prevents the form
+        # from reserving phantom lines that appear as unrelated blank space.
+        label.setMinimumWidth(_FIELD_HINT_MIN_WIDTH_PX)
+        label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        label.setStyleSheet("color: #555; font-size: 11px; padding: 0;")
+
+    @staticmethod
     def _configure_button_row(
         layout: QtWidgets.QHBoxLayout,
         *,
@@ -569,6 +587,7 @@ class SettingsDialog(
     ) -> QtWidgets.QWidget:
         """Wrap *control* and its *hint* label in a tight vertical group."""
         wrapper = QtWidgets.QWidget()
+        wrapper.setProperty("fieldWithHint", True)
         layout = QtWidgets.QVBoxLayout(wrapper)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(2)

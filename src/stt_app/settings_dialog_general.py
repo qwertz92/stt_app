@@ -60,6 +60,30 @@ from .settings_store import AppSettings
 
 
 class _GeneralTabMixin:
+    _GENERAL_FORM_ROW_SPACING_PX = 10
+    _DYNAMIC_HINT_LINE_COUNT = 2
+
+    @classmethod
+    def _general_form_box(
+        cls,
+        title: str,
+    ) -> tuple[QtWidgets.QGroupBox, QtWidgets.QFormLayout]:
+        """Create a consistently spaced form section for the General tab."""
+        box = QtWidgets.QGroupBox(title)
+        form = QtWidgets.QFormLayout(box)
+        form.setContentsMargins(10, 10, 10, 10)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(cls._GENERAL_FORM_ROW_SPACING_PX)
+        form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        return box, form
+
+    @classmethod
+    def _reserve_dynamic_hint_height(cls, label: QtWidgets.QLabel) -> None:
+        """Reserve a compact, stable two-line area for changing hint text."""
+        height = label.fontMetrics().lineSpacing() * cls._DYNAMIC_HINT_LINE_COUNT + 2
+        label.setFixedHeight(height)
+        label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+
     def _build_general_tab(self) -> None:
         tab, content = self._create_scroll_tab()
         layout = QtWidgets.QVBoxLayout(content)
@@ -67,12 +91,7 @@ class _GeneralTabMixin:
         layout.setSpacing(6)
 
         # --- Hotkeys section ---
-        hotkey_box = QtWidgets.QGroupBox("Hotkeys")
-        hotkey_form = QtWidgets.QFormLayout(hotkey_box)
-        hotkey_form.setContentsMargins(10, 10, 10, 10)
-        hotkey_form.setHorizontalSpacing(10)
-        hotkey_form.setVerticalSpacing(6)
-        hotkey_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        hotkey_box, hotkey_form = self._general_form_box("Hotkeys")
 
         self.hotkey_edit = QtWidgets.QKeySequenceEdit()
         self.hotkey_edit.setMaximumSequenceLength(1)
@@ -81,7 +100,7 @@ class _GeneralTabMixin:
         hotkey_hint = QtWidgets.QLabel(
             "Click the hotkey field and press the combination to record it."
         )
-        self._style_note_label(hotkey_hint)
+        self._style_field_hint_label(hotkey_hint)
         hotkey_form.addRow("Hotkey", self._field_with_hint(self.hotkey_edit, hotkey_hint))
 
         self.cancel_hotkey_edit = QtWidgets.QKeySequenceEdit()
@@ -91,7 +110,7 @@ class _GeneralTabMixin:
         cancel_hotkey_hint = QtWidgets.QLabel(
             "Cancel hotkey stops current recording/transcription (must differ from main hotkey)."
         )
-        self._style_note_label(cancel_hotkey_hint)
+        self._style_field_hint_label(cancel_hotkey_hint)
         hotkey_form.addRow(
             "Cancel Hotkey",
             self._field_with_hint(self.cancel_hotkey_edit, cancel_hotkey_hint),
@@ -99,12 +118,7 @@ class _GeneralTabMixin:
         layout.addWidget(hotkey_box)
 
         # --- Display section ---
-        display_box = QtWidgets.QGroupBox("Display")
-        display_form = QtWidgets.QFormLayout(display_box)
-        display_form.setContentsMargins(10, 10, 10, 10)
-        display_form.setHorizontalSpacing(10)
-        display_form.setVerticalSpacing(6)
-        display_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        display_box, display_form = self._general_form_box("Display")
 
         self.history_timezone_combo = _WheelPassthroughComboBox()
         for value in VALID_DISPLAY_TIMEZONES:
@@ -123,7 +137,7 @@ class _GeneralTabMixin:
             "are shown in Settings and the History window."
         )
         history_timezone_hint.setWordWrap(True)
-        self._style_note_label(history_timezone_hint)
+        self._style_field_hint_label(history_timezone_hint)
         display_form.addRow(
             "History Time",
             self._field_with_hint(
@@ -137,27 +151,30 @@ class _GeneralTabMixin:
             self.overlay_corner_combo.addItem(
                 _OVERLAY_CORNER_LABELS.get(value, value), value
             )
-        display_form.addRow("Overlay Corner", self.overlay_corner_combo)
+        overlay_corner_hint = QtWidgets.QLabel(
+            "Choose where the always-on-top recording overlay appears."
+        )
+        self._style_field_hint_label(overlay_corner_hint)
+        display_form.addRow(
+            "Overlay Corner",
+            self._field_with_hint(self.overlay_corner_combo, overlay_corner_hint),
+        )
         layout.addWidget(display_box)
 
         # --- Engine / Mode section ---
-        engine_box = QtWidgets.QGroupBox("Engine && Mode")
-        engine_form = QtWidgets.QFormLayout(engine_box)
-        engine_form.setContentsMargins(10, 10, 10, 10)
-        engine_form.setHorizontalSpacing(10)
-        engine_form.setVerticalSpacing(6)
-        engine_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        engine_box, engine_form = self._general_form_box("Engine && Mode")
 
         self.engine_combo = _WheelPassthroughComboBox()
         for value in VALID_ENGINES:
             self.engine_combo.addItem(_ENGINE_LABELS.get(value, value), value)
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
         engine_hint = QtWidgets.QLabel(
-            "Local keeps audio on your machine. Local models can use either "
-            "faster-whisper, ONNX/WebGPU, or ORT GenAI."
+            "Local keeps audio on this computer and uses faster-whisper, "
+            "ONNX/WebGPU, or ONNX Runtime GenAI. Remote engines upload audio "
+            "to the selected provider."
         )
         engine_hint.setWordWrap(True)
-        self._style_note_label(engine_hint)
+        self._style_field_hint_label(engine_hint)
         engine_form.addRow("Engine", self._field_with_hint(self.engine_combo, engine_hint))
 
         # --- Unified model selector: one "Model" row, one page per engine kind ---
@@ -165,6 +182,10 @@ class _GeneralTabMixin:
         # sizeHint contributing to the stack's sizeHint regardless of which
         # page is current), so switching pages never shifts the rows below.
         self.model_selector_stack = QtWidgets.QStackedWidget()
+        self.model_selector_stack.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Fixed,
+        )
 
         local_model_widget = QtWidgets.QWidget()
         local_model_layout = QtWidgets.QVBoxLayout(local_model_widget)
@@ -177,46 +198,27 @@ class _GeneralTabMixin:
         self.local_model_runtime_warning_label.setStyleSheet(
             "color: #b71c1c; font-size: 11px;"
         )
-        # Reserve a stable three-line note area so switching between models
-        # with and without runtime notes never shifts the widgets below.
-        self.local_model_runtime_warning_label.setMinimumHeight(
-            self.fontMetrics().height() * 2 + 4
-        )
-        self.local_model_runtime_warning_label.setAlignment(
-            QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft
-        )
+        # Reserve a stable two-line note area so switching between models with
+        # and without runtime notes never shifts the widgets below.
+        self._reserve_dynamic_hint_height(self.local_model_runtime_warning_label)
         local_model_layout.addWidget(self.model_combo)
         local_model_layout.addWidget(self.local_model_runtime_warning_label)
-        # Collect the stack's extra height below the note instead of letting
-        # the layout pad the gaps between combo and note.
-        local_model_layout.addStretch(1)
         self.model_selector_stack.addWidget(local_model_widget)
 
         remote_model_widget = QtWidgets.QWidget()
         remote_model_layout = QtWidgets.QVBoxLayout(remote_model_widget)
         remote_model_layout.setContentsMargins(0, 0, 0, 0)
         remote_model_layout.setSpacing(3)
-        self.remote_model_provider_label = QtWidgets.QLabel("Local engine selected")
-        self._style_note_label(self.remote_model_provider_label, bold=True)
         self.remote_model_combo = _WheelPassthroughComboBox()
         self.remote_model_combo.currentIndexChanged.connect(
             self._on_remote_model_changed
         )
         self.remote_model_note_label = QtWidgets.QLabel("")
         self.remote_model_note_label.setWordWrap(True)
-        self._style_note_label(self.remote_model_note_label)
-        # Reserve roughly the same note height as the local page's three-line
-        # runtime note so switching engines does not shift the rows below.
-        self.remote_model_note_label.setMinimumHeight(
-            self.fontMetrics().height() * 2 + 4
-        )
-        self.remote_model_note_label.setAlignment(
-            QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft
-        )
-        remote_model_layout.addWidget(self.remote_model_provider_label)
+        self._style_field_hint_label(self.remote_model_note_label)
+        self._reserve_dynamic_hint_height(self.remote_model_note_label)
         remote_model_layout.addWidget(self.remote_model_combo)
         remote_model_layout.addWidget(self.remote_model_note_label)
-        remote_model_layout.addStretch(1)
         self.model_selector_stack.addWidget(remote_model_widget)
 
         engine_form.addRow("Model", self.model_selector_stack)
@@ -228,7 +230,8 @@ class _GeneralTabMixin:
             )
         self.language_note_label = QtWidgets.QLabel("")
         self.language_note_label.setWordWrap(True)
-        self._style_note_label(self.language_note_label)
+        self._style_field_hint_label(self.language_note_label)
+        self._reserve_dynamic_hint_height(self.language_note_label)
         self.language_note_label.setVisible(True)
         engine_form.addRow(
             "Language",
@@ -243,16 +246,22 @@ class _GeneralTabMixin:
         self.custom_vocabulary_edit.setPlaceholderText(
             "e.g. Kubernetes, Splunk SOAR"
         )
-        vocabulary_hint = QtWidgets.QLabel(
-            "Technical terms and names, separated by commas or new lines. "
-            "Applies to local faster-whisper, OpenAI, Groq, AssemblyAI, and "
-            "Deepgram."
+        self.vocabulary_hint_label = QtWidgets.QLabel(
+            "Enter up to 100 terms or phrases, separated by commas, semicolons, "
+            "or new lines. Spaces inside a phrase are kept (for example, "
+            "Splunk SOAR). Supported in both modes by faster-whisper, "
+            "AssemblyAI, and Deepgram, and in batch mode by OpenAI and Groq. "
+            "Nemotron, Cohere/Granite ONNX, ElevenLabs, Azure, and Fun-ASR "
+            "ignore it."
         )
-        vocabulary_hint.setWordWrap(True)
-        self._style_note_label(vocabulary_hint)
+        self.vocabulary_hint_label.setWordWrap(True)
+        self._style_field_hint_label(self.vocabulary_hint_label)
         engine_form.addRow(
             "Vocabulary",
-            self._field_with_hint(self.custom_vocabulary_edit, vocabulary_hint),
+            self._field_with_hint(
+                self.custom_vocabulary_edit,
+                self.vocabulary_hint_label,
+            ),
         )
 
         self.mode_combo = _WheelPassthroughComboBox()
@@ -268,7 +277,7 @@ class _GeneralTabMixin:
             "text while you speak, but it never rewrites already inserted text."
         )
         mode_hint.setWordWrap(True)
-        self._style_note_label(mode_hint)
+        self._style_field_hint_label(mode_hint)
         engine_form.addRow("Mode", self._field_with_hint(self.mode_combo, mode_hint))
 
         self.streaming_full_final_check = QtWidgets.QCheckBox(
@@ -286,7 +295,7 @@ class _GeneralTabMixin:
             "finishes faster."
         )
         streaming_full_final_hint.setWordWrap(True)
-        self._style_note_label(streaming_full_final_hint)
+        self._style_field_hint_label(streaming_full_final_hint)
         engine_form.addRow(
             "",
             self._field_with_hint(
@@ -299,8 +308,8 @@ class _GeneralTabMixin:
         for value, label in _CONCURRENT_MODE_UI_CHOICES:
             self.concurrent_mode_combo.addItem(label, value)
         self.concurrent_mode_combo.setToolTip(
-            "What happens to a transcription that is still running when you "
-            "start a new recording, and when finished results are inserted. "
+            "What happens to the previous transcription when you press the "
+            "recording hotkey again, and when finished results are inserted. "
             "A finished transcription is never discarded.\n"
             "- Insert when idle: results are inserted once no transcription "
             "is running anymore.\n"
@@ -310,25 +319,24 @@ class _GeneralTabMixin:
             "- Cancel: stop the older transcription (a result that still "
             "finishes is kept in history)."
         )
-        concurrent_mode_hint = QtWidgets.QLabel(
-            "Transcriptions run one at a time and results keep their "
-            "recording order. Use the overlay queue to cancel a specific one."
+        self.concurrent_mode_hint_label = QtWidgets.QLabel(
+            "If you press the recording hotkey again before the previous "
+            "transcription finishes, this controls the previous job. Jobs run "
+            "one at a time and finished results keep their recording order."
         )
-        concurrent_mode_hint.setWordWrap(True)
-        self._style_note_label(concurrent_mode_hint)
+        self.concurrent_mode_hint_label.setWordWrap(True)
+        self._style_field_hint_label(self.concurrent_mode_hint_label)
         engine_form.addRow(
-            "While transcribing",
-            self._field_with_hint(self.concurrent_mode_combo, concurrent_mode_hint),
+            "New Recording",
+            self._field_with_hint(
+                self.concurrent_mode_combo,
+                self.concurrent_mode_hint_label,
+            ),
         )
         layout.addWidget(engine_box)
 
         # --- Text Insertion section ---
-        paste_box = QtWidgets.QGroupBox("Text Insertion")
-        paste_form = QtWidgets.QFormLayout(paste_box)
-        paste_form.setContentsMargins(10, 10, 10, 10)
-        paste_form.setHorizontalSpacing(10)
-        paste_form.setVerticalSpacing(6)
-        paste_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        paste_box, paste_form = self._general_form_box("Text Insertion")
 
         self.paste_mode_combo = _WheelPassthroughComboBox()
         for value in VALID_PASTE_MODES:
@@ -342,14 +350,12 @@ class _GeneralTabMixin:
             "some modern apps ignore it."
         )
         self.paste_mode_hint_label = QtWidgets.QLabel(
-            "Paste Mode controls how the paste command reaches the target app. "
-            "SendInput behaves like pressing Ctrl+V and works in most apps; "
-            "WM_PASTE bypasses keyboard simulation and can help when simulated "
-            "keys are blocked, but some modern apps ignore that message. "
-            "Auto tries SendInput first, then WM_PASTE."
+            "SendInput behaves like pressing Ctrl+V; WM_PASTE bypasses keyboard "
+            "simulation, but some modern apps ignore it. Auto tries SendInput "
+            "first, then WM_PASTE."
         )
         self.paste_mode_hint_label.setWordWrap(True)
-        self._style_note_label(self.paste_mode_hint_label)
+        self._style_field_hint_label(self.paste_mode_hint_label)
         paste_form.addRow(
             "Paste Mode",
             self._field_with_hint(self.paste_mode_combo, self.paste_mode_hint_label),
@@ -372,7 +378,7 @@ class _GeneralTabMixin:
             "insert time; Windows cannot paste at a remembered caret offset."
         )
         insert_target_hint.setWordWrap(True)
-        self._style_note_label(insert_target_hint)
+        self._style_field_hint_label(insert_target_hint)
         paste_form.addRow(
             "Insert Into",
             self._field_with_hint(self.insert_target_combo, insert_target_hint),
@@ -386,11 +392,11 @@ class _GeneralTabMixin:
             "When disabled, the previous clipboard contents are restored."
         )
         keep_clipboard_hint = QtWidgets.QLabel(
-            "Clipboard retention is separate from Paste Mode: this only controls whether "
-            "the final transcript stays in the clipboard after insertion completes."
+            "This only controls whether the finished transcript replaces your "
+            "previous clipboard contents after insertion."
         )
         keep_clipboard_hint.setWordWrap(True)
-        self._style_note_label(keep_clipboard_hint)
+        self._style_field_hint_label(keep_clipboard_hint)
         paste_form.addRow(
             "",
             self._field_with_hint(self.keep_clipboard_checkbox, keep_clipboard_hint),
@@ -398,12 +404,7 @@ class _GeneralTabMixin:
         layout.addWidget(paste_box)
 
         # --- Audio / VAD section ---
-        audio_box = QtWidgets.QGroupBox("Audio && Voice Detection")
-        audio_form = QtWidgets.QFormLayout(audio_box)
-        audio_form.setContentsMargins(10, 10, 10, 10)
-        audio_form.setHorizontalSpacing(10)
-        audio_form.setVerticalSpacing(6)
-        audio_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        audio_box, audio_form = self._general_form_box("Audio && Voice Detection")
 
         self.keep_microphone_warm_checkbox = QtWidgets.QCheckBox(
             "Keep microphone warm for instant recording start"
@@ -414,23 +415,29 @@ class _GeneralTabMixin:
             "where opening the microphone takes seconds and the first words "
             "get cut off."
         )
-        keep_microphone_warm_hint = QtWidgets.QLabel(
+        self.keep_microphone_warm_hint_label = QtWidgets.QLabel(
             "The microphone stays open while the app runs, so Windows shows "
             "the microphone-in-use indicator permanently. Audio is discarded "
             "unless a recording is active."
         )
-        keep_microphone_warm_hint.setWordWrap(True)
-        self._style_note_label(keep_microphone_warm_hint)
+        self.keep_microphone_warm_hint_label.setWordWrap(True)
+        self._style_field_hint_label(self.keep_microphone_warm_hint_label)
         audio_form.addRow(
             "",
             self._field_with_hint(
                 self.keep_microphone_warm_checkbox,
-                keep_microphone_warm_hint,
+                self.keep_microphone_warm_hint_label,
             ),
         )
 
         self.vad_checkbox = QtWidgets.QCheckBox("Enable energy-based auto-stop")
-        audio_form.addRow("", self.vad_checkbox)
+        vad_hint = QtWidgets.QLabel(
+            "After speech starts, recording stops automatically when the "
+            "configured silence period is reached."
+        )
+        vad_hint.setWordWrap(True)
+        self._style_field_hint_label(vad_hint)
+        audio_form.addRow("", self._field_with_hint(self.vad_checkbox, vad_hint))
 
         self.vad_threshold_spin = _WheelPassthroughDoubleSpinBox()
         self.vad_threshold_spin.setDecimals(3)
@@ -443,7 +450,15 @@ class _GeneralTabMixin:
         self.vad_threshold_spin.setToolTip(
             "Lower value = more sensitive for quiet speech/whispering."
         )
-        audio_form.addRow("VAD Threshold", self.vad_threshold_spin)
+        vad_threshold_hint = QtWidgets.QLabel(
+            "Lower values detect quieter speech; higher values require louder audio."
+        )
+        vad_threshold_hint.setWordWrap(True)
+        self._style_field_hint_label(vad_threshold_hint)
+        audio_form.addRow(
+            "VAD Threshold",
+            self._field_with_hint(self.vad_threshold_spin, vad_threshold_hint),
+        )
 
         self.silence_gate_checkbox = QtWidgets.QCheckBox(
             "Skip transcription when the recording is silent"
@@ -460,7 +475,7 @@ class _GeneralTabMixin:
             "(recording_peak_level) to make tuning easy."
         )
         silence_gate_hint.setWordWrap(True)
-        self._style_note_label(silence_gate_hint)
+        self._style_field_hint_label(silence_gate_hint)
         audio_form.addRow(
             "",
             self._field_with_hint(self.silence_gate_checkbox, silence_gate_hint),
@@ -478,7 +493,18 @@ class _GeneralTabMixin:
             "Loudest-window RMS level below which a recording counts as "
             "silent. Lower value = more sensitive (whispers pass more easily)."
         )
-        audio_form.addRow("Silence Gate", self.silence_gate_threshold_spin)
+        silence_threshold_hint = QtWidgets.QLabel(
+            "Recordings below this loudest-window RMS level are treated as silent."
+        )
+        silence_threshold_hint.setWordWrap(True)
+        self._style_field_hint_label(silence_threshold_hint)
+        audio_form.addRow(
+            "Silence Gate",
+            self._field_with_hint(
+                self.silence_gate_threshold_spin,
+                silence_threshold_hint,
+            ),
+        )
 
         self.start_beep_checkbox = QtWidgets.QCheckBox("Play start tone on recording")
         audio_form.addRow("", self.start_beep_checkbox)
@@ -492,12 +518,7 @@ class _GeneralTabMixin:
         layout.addWidget(audio_box)
 
         # --- Recordings section ---
-        recordings_box = QtWidgets.QGroupBox("Recordings")
-        recordings_form = QtWidgets.QFormLayout(recordings_box)
-        recordings_form.setContentsMargins(10, 10, 10, 10)
-        recordings_form.setHorizontalSpacing(10)
-        recordings_form.setVerticalSpacing(6)
-        recordings_form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
+        recordings_box, recordings_form = self._general_form_box("Recordings")
 
         self.save_wav_checkbox = QtWidgets.QCheckBox(
             "Keep last recording after successful transcription"
@@ -507,7 +528,7 @@ class _GeneralTabMixin:
             f"finishes. When enabled, the latest recording remains at: {debug_audio_path()}"
         )
         self.save_wav_path_label.setWordWrap(True)
-        self._style_note_label(self.save_wav_path_label)
+        self._style_field_hint_label(self.save_wav_path_label)
         recordings_form.addRow(
             "",
             self._field_with_hint(self.save_wav_checkbox, self.save_wav_path_label),
@@ -516,7 +537,19 @@ class _GeneralTabMixin:
         self.save_all_recordings_checkbox = QtWidgets.QCheckBox(
             "Archive every recording to folder"
         )
-        recordings_form.addRow("", self.save_all_recordings_checkbox)
+        archive_recordings_hint = QtWidgets.QLabel(
+            "Writes every original WAV file to the recordings folder for "
+            "later retry or inspection."
+        )
+        archive_recordings_hint.setWordWrap(True)
+        self._style_field_hint_label(archive_recordings_hint)
+        recordings_form.addRow(
+            "",
+            self._field_with_hint(
+                self.save_all_recordings_checkbox,
+                archive_recordings_hint,
+            ),
+        )
 
         self.recordings_dir_edit = QtWidgets.QLineEdit()
         self.recordings_dir_edit.setPlaceholderText(
@@ -549,10 +582,10 @@ class _GeneralTabMixin:
             "Keep only the newest N archived recordings."
         )
         recordings_hint = QtWidgets.QLabel(
-            "Archiving stores the original WAV files so you can retry or inspect recordings later."
+            "Maximum number of archived WAV files; the oldest files are removed first."
         )
         recordings_hint.setWordWrap(True)
-        self._style_note_label(recordings_hint)
+        self._style_field_hint_label(recordings_hint)
         recordings_form.addRow(
             "Keep Recordings",
             self._field_with_hint(self.recordings_max_spin, recordings_hint),
@@ -726,7 +759,6 @@ class _GeneralTabMixin:
         self.remote_model_combo.clear()
 
         if provider == DEFAULT_ENGINE:
-            self.remote_model_provider_label.setText("Local engine selected")
             self.remote_model_combo.addItem("Not applicable for local engine", "")
             self.remote_model_combo.setEnabled(False)
             self.remote_model_note_label.setText(
@@ -742,11 +774,11 @@ class _GeneralTabMixin:
             self.remote_model_combo,
             self._remote_model_value_for_provider(provider),
         )
-        self.remote_model_provider_label.setText(self._provider_label(provider))
         self.remote_model_combo.setEnabled(True)
 
         note = (
-            f"The selected API key is reused across {self._provider_label(provider)} models."
+            f"The selected {self._provider_label(provider)} model is used for "
+            "batch dictation and audio imports; its stored API key is reused."
         )
         if provider == "assemblyai" and self.mode_combo.currentData() == "streaming":
             self.remote_model_combo.setEnabled(False)
@@ -759,21 +791,18 @@ class _GeneralTabMixin:
             note = "Deepgram uses the selected model for batch and streaming transcription."
         elif provider == "elevenlabs":
             note = (
-                "ElevenLabs currently uses the selected model for batch transcription "
-                "and imports. Realtime Scribe is documented, but not yet wired into "
-                "this app's streaming mode."
+                "The selected model applies to batch dictation and audio imports. "
+                "Realtime Scribe exists, but is not yet wired into this app."
             )
         elif provider == "azure":
             note = (
-                "Azure LLM Speech (MAI-Transcribe) is a cloud, batch-only service. "
-                "Set the Azure Endpoint and key under Remote Provider API Keys. "
-                "mai-transcribe-1.5 covers the most languages."
+                "Cloud, batch-only. Configure the endpoint and key on the Remote "
+                "tab; MAI-Transcribe 1.5 supports the most languages."
             )
         elif provider == "funasr":
             note = (
-                "Fun-ASR (Alibaba/DashScope) is a cloud, batch-only service used "
-                "here for its 31-language coverage (Chinese + East/SE-Asian). "
-                "It does NOT support German; use Azure or local for German."
+                "Cloud, batch-only, with 31 languages focused on Chinese and "
+                "East/Southeast Asia, but no German. Use Azure or local for German."
             )
 
         self.remote_model_note_label.setText(note)
@@ -884,11 +913,15 @@ class _GeneralTabMixin:
         self.language_combo.blockSignals(False)
 
         note = self._language_constraint_note()
-        self.language_note_label.setText(note or " ")
+        default_note = (
+            "Auto lets the selected engine detect the language; choosing one "
+            "sends an explicit recognition hint. The choices update with the "
+            "selected engine and model."
+        )
+        self.language_note_label.setText(note or default_note)
         self.language_combo.setEnabled(len(supported_modes) > 1)
         self.language_combo.setToolTip(
-            note
-            or "Choose the recognition language for the selected engine."
+            note or default_note
         )
 
     def _update_local_model_runtime_warning(self) -> None:
@@ -921,8 +954,8 @@ class _GeneralTabMixin:
         self.local_model_runtime_warning_label.setStyleSheet(note_style)
         if engine == "local" and model_name:
             self.local_model_runtime_warning_label.setText(
-                "faster-whisper model: batch and streaming, runs via "
-                "CTranslate2."
+                "faster-whisper runs via CTranslate2 in batch and streaming. "
+                "Vocabulary biasing is available in both modes."
             )
             return
         self.local_model_runtime_warning_label.setText(" ")

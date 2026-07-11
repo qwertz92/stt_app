@@ -133,14 +133,14 @@ _MODE_LABELS: dict[str, str] = {
 }
 
 
-# UI choices for the "While transcribing" combo. The first element is the
+# UI choices for the "New Recording" combo. The first element is the
 # stored value: "insert"/"history"/"cancel" map to concurrent_transcription_mode
 # directly; "insert_immediate" is Insert mode with immediate_background_insert.
 _CONCURRENT_MODE_UI_CHOICES: tuple[tuple[str, str], ...] = (
-    ("insert", "Finish it; insert results when nothing is running"),
-    ("insert_immediate", "Finish it; insert each result as soon as it is ready"),
-    ("history", "Finish it; save results to history only"),
-    ("cancel", "Cancel it (a finished result still goes to history)"),
+    ("insert", "Finish previous; insert all results when idle"),
+    ("insert_immediate", "Finish previous; insert each result when ready"),
+    ("history", "Finish previous; save its result to history only"),
+    ("cancel", "Cancel previous; keep any result that already finished"),
 )
 _CONCURRENT_MODE_IMMEDIATE_UI_VALUE = "insert_immediate"
 
@@ -205,6 +205,9 @@ _REMOTE_PROVIDER_GRID_SPACING_PX = 12
 
 
 _GENERAL_FORM_LABEL_EXTRA_PX = 12
+
+
+_FIELD_HINT_MIN_WIDTH_PX = 460
 
 
 _ACTION_ROW_SPACING_PX = 8
