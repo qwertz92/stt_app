@@ -279,6 +279,7 @@ class SettingsDialog(
         self._deferred_local_model_refresh_pending = False
         self._deferred_local_model_refresh_force = False
         self._initial_dialog_size_applied = False
+        self._shutdown_started = False
 
         self.setWindowTitle("Dictation Settings")
         self.setWindowIcon(load_app_icon())
@@ -740,9 +741,64 @@ class SettingsDialog(
 
     def reload_from_store(self) -> None:
         started_at = time.perf_counter()
+        if self._background_work_active():
+            self._log_settings_timing(
+                "reload_from_store_deferred_busy",
+                started_at,
+            )
+            return
         self._loaded_settings = self._settings_store.load()
+        self._discard_unsaved_provider_key_edits()
         self._populate(self._loaded_settings)
         self._log_settings_timing("reload_from_store", started_at)
+
+    def _background_work_active(self) -> bool:
+        return bool(
+            self._active_local_model_scan_thread is not None
+            or self._local_model_download_is_running()
+            or self._active_benchmark_thread is not None
+            or self._active_connection_test_thread is not None
+            or self._active_update_check_thread is not None
+            or self._import_progress_started_at is not None
+        )
+
+    def _discard_unsaved_provider_key_edits(self) -> None:
+        self._provider_pending_clear.clear()
+        for field in self._provider_key_edits.values():
+            blocker = QtCore.QSignalBlocker(field)
+            field.clear()
+            del blocker
+
+    def shutdown(self) -> None:
+        """Stop dialog-owned child-process work before the application exits."""
+        if self._shutdown_started:
+            return
+        self._shutdown_started = True
+
+        for timer in self.findChildren(QtCore.QTimer):
+            timer.stop()
+
+        if self._local_model_download_is_running():
+            self._cancel_local_model_downloads()
+        if self._benchmark_cancel_event is not None:
+            self._benchmark_cancel_event.set()
+
+        self._hide_benchmark_window()
+
+        # The cancellation paths above terminate the model-download process
+        # directly and make the benchmark runner terminate its process tree on
+        # its next short poll. Give those daemon threads a bounded opportunity
+        # to finish their cleanup before Python tears the process down.
+        current_thread = threading.current_thread()
+        for thread in (
+            self._active_local_model_download_thread,
+            self._active_benchmark_thread,
+        ):
+            if thread is None or thread is current_thread:
+                continue
+            join = getattr(thread, "join", None)
+            if callable(join):
+                join(timeout=2.5)
 
     def _prewarm_settings_tabs(
         self,
@@ -826,12 +882,20 @@ class SettingsDialog(
             )
         self._schedule_settings_tab_prewarm()
 
-    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
-        # The benchmark window is an independent top-level window (Qt.Window
-        # flag), so Qt does not hide it automatically when this dialog closes.
+    def _hide_benchmark_window(self) -> None:
         window = getattr(self, "benchmark_window", None)
         if window is not None:
             window.hide()
+
+    def hideEvent(self, event: QtGui.QHideEvent) -> None:
+        # QDialog.reject()/done() hide the dialog without sending closeEvent.
+        # The benchmark window has Qt.Window and therefore must be hidden
+        # explicitly for every dismissal path, including the Close button.
+        self._hide_benchmark_window()
+        super().hideEvent(event)
+
+    def closeEvent(self, event: QtGui.QCloseEvent) -> None:
+        self._hide_benchmark_window()
         super().closeEvent(event)
 
     def _on_settings_tab_changed(self, _index: int) -> None:

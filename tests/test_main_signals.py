@@ -391,6 +391,59 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
     assert instances[0].activate_calls == 2
 
 
+def test_tray_reuses_hidden_settings_dialog_and_retains_busy_state(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    instances = []
+
+    class FakeSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.busy_token = object()
+            self.reload_calls = 0
+            self.shutdown_calls = 0
+            instances.append(self)
+
+        def prepare_for_first_show(self):
+            return None
+
+        def reload_from_store(self):
+            self.reload_calls += 1
+
+        def shutdown(self):
+            self.shutdown_calls += 1
+
+    monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
+
+    tray = _create_tray_icon(
+        app=app,
+        controller=FakeController(),
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    first = tray._open_settings_dialog()
+    busy_token = first.busy_token
+    first.reject()
+    app.processEvents()
+
+    second = tray._open_settings_dialog()
+
+    assert second is first
+    assert len(instances) == 1
+    assert second.busy_token is busy_token
+    assert second.reload_calls == 1
+
+    tray._shutdown_settings_dialog()
+    assert second.shutdown_calls == 1
+    second.close()
+
+
 def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     instances = []

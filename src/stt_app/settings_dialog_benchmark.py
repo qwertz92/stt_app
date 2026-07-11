@@ -901,6 +901,11 @@ class _BenchmarkMixin:
                 return cancel_event.is_set()
 
             try:
+                # Shutdown may arrive while environment metadata is still being
+                # collected. Do not launch a new benchmark child process after
+                # cancellation has already been requested.
+                if cancel_event.is_set():
+                    raise BenchmarkCancelled("Benchmark canceled.")
                 cases = _facade().run_benchmark_cases(
                     audio_path=audio_path,
                     model_names=model_names,

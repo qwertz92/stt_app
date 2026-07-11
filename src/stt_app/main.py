@@ -179,6 +179,7 @@ def run() -> int:
         ),
     )
 
+    app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
     app.aboutToQuit.connect(controller.shutdown)
     signal_timer = _install_signal_handlers(app)
 
@@ -254,13 +255,6 @@ def _create_tray_icon(
         dialog.settings_changed.connect(
             lambda: _restore_overlay_after_settings_save(overlay, settings_store)
         )
-        dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
-
-        def _on_dialog_finished():
-            nonlocal _active_settings_dialog
-            _active_settings_dialog = None
-
-        dialog.finished.connect(_on_dialog_finished)
         _active_settings_dialog = dialog
         return dialog
 
@@ -281,6 +275,13 @@ def _create_tray_icon(
                 reloader()
         present_settings_dialog(_active_settings_dialog)
         return _active_settings_dialog
+
+    def shutdown_settings_dialog() -> None:
+        if _active_settings_dialog is None:
+            return
+        shutdown = getattr(_active_settings_dialog, "shutdown", None)
+        if callable(shutdown):
+            shutdown()
 
     def copy_diagnostics() -> None:
         QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())
@@ -314,6 +315,7 @@ def _create_tray_icon(
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
+    tray_icon._shutdown_settings_dialog = shutdown_settings_dialog
     QtCore.QTimer.singleShot(2500, prepare_settings_dialog)
     return tray_icon
 

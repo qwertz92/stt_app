@@ -1830,6 +1830,95 @@ def test_benchmark_tab_hosts_history_and_results_directly():
     _ = app
 
 
+def test_rejecting_settings_hides_benchmark_window():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.show()
+    dialog._open_benchmark_window()
+    app.processEvents()
+    assert dialog.benchmark_window.isVisible() is True
+
+    dialog.reject()
+    app.processEvents()
+
+    assert dialog.isVisible() is False
+    assert dialog.benchmark_window.isVisible() is False
+
+
+def test_reopen_reload_is_deferred_while_dialog_work_is_busy():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(mode="batch")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    streaming_index = dialog.mode_combo.findData("streaming")
+    dialog.mode_combo.setCurrentIndex(streaming_index)
+    dialog.openai_key_edit.setText("unsaved-key")
+    dialog._provider_pending_clear.add("groq")
+    dialog._active_benchmark_thread = object()
+
+    dialog.reload_from_store()
+
+    assert dialog.mode_combo.currentData() == "streaming"
+    assert dialog.openai_key_edit.text() == "unsaved-key"
+    assert "groq" in dialog._provider_pending_clear
+
+    dialog._active_benchmark_thread = None
+    dialog.reload_from_store()
+
+    assert dialog.mode_combo.currentData() == "batch"
+    assert dialog.openai_key_edit.text() == ""
+    assert dialog._provider_pending_clear == set()
+    _ = app
+
+
+def test_settings_shutdown_cancels_child_process_work(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    class _JoinableThread:
+        def __init__(self):
+            self.join_timeouts = []
+
+        def join(self, timeout=None):
+            self.join_timeouts.append(timeout)
+
+    terminated = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: terminated.append(process),
+    )
+    download_thread = _JoinableThread()
+    benchmark_thread = _JoinableThread()
+    download_process = object()
+    benchmark_cancel_event = threading.Event()
+    with dialog._local_model_download_lock:
+        dialog._local_model_download_worker_running = True
+        dialog._local_model_download_process = download_process
+    dialog._active_local_model_download_thread = download_thread
+    dialog._active_benchmark_thread = benchmark_thread
+    dialog._benchmark_cancel_event = benchmark_cancel_event
+
+    dialog.shutdown()
+    dialog.shutdown()
+
+    assert dialog._local_model_download_cancel_event.is_set()
+    assert benchmark_cancel_event.is_set()
+    assert terminated == [download_process]
+    assert download_thread.join_timeouts == [2.5]
+    assert benchmark_thread.join_timeouts == [2.5]
+    _ = app
+
+
 def test_benchmark_history_double_click_loads_entry(tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     case = BenchmarkCase(
