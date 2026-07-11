@@ -1,18 +1,28 @@
-import {
-  AutoProcessor,
-  GraniteSpeechForConditionalGeneration,
-  env,
-  pipeline,
-} from "@huggingface/transformers";
-import { Tokenizer } from "@huggingface/tokenizers";
-import * as ort from "onnxruntime-node";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { createInterface } from "node:readline";
+import { pathToFileURL } from "node:url";
 
-env.allowLocalModels = true;
-env.allowRemoteModels = false;
-env.useBrowserCache = false;
-env.useFSCache = true;
+let AutoProcessor;
+let GraniteSpeechForConditionalGeneration;
+let pipeline;
+let Tokenizer;
+let ort;
+
+async function loadRuntimeDependencies() {
+  const transformers = await import("@huggingface/transformers");
+  const tokenizers = await import("@huggingface/tokenizers");
+  AutoProcessor = transformers.AutoProcessor;
+  GraniteSpeechForConditionalGeneration =
+    transformers.GraniteSpeechForConditionalGeneration;
+  pipeline = transformers.pipeline;
+  Tokenizer = tokenizers.Tokenizer;
+  ort = await import("onnxruntime-node");
+  transformers.env.allowLocalModels = true;
+  transformers.env.allowRemoteModels = false;
+  transformers.env.useBrowserCache = false;
+  transformers.env.useFSCache = true;
+}
 
 const TARGET_SAMPLE_RATE = 16000;
 const GRANITE_MAX_CHUNK_SECONDS = 30;
@@ -29,6 +39,9 @@ const GRANITE_4_1_NAR_EMBEDDING_MULTIPLIER = 12;
 const GRANITE_4_1_NAR_CTC_BLANK_ID = 0;
 const GRANITE_4_1_NAR_CTC_TOKEN_OFFSET = 1;
 const ORT_NEG_INF = -3.4028234663852886e38;
+const MAX_WAV_DATA_BYTES = 512 * 1024 * 1024;
+const MAX_WAV_FRAMES = 16000 * 60 * 60 * 8;
+const MAX_PROTOCOL_LINE_CHARS = 1024 * 1024;
 
 // Models that load through the high-level Transformers.js
 // GraniteSpeechForConditionalGeneration pipeline (q4 packages). Granite 4.1 2B
@@ -104,6 +117,26 @@ function conciseError(error) {
   return String(firstLine || error || "unknown error").slice(0, 600);
 }
 
+export function parseProtocolRequestLine(rawLine) {
+  if (rawLine.length > MAX_PROTOCOL_LINE_CHARS) {
+    throw new Error("Protocol request line is too large.");
+  }
+  const line = rawLine.trim();
+  if (!line) {
+    return null;
+  }
+  let request;
+  try {
+    request = JSON.parse(line);
+  } catch (error) {
+    throw new Error(`Invalid JSON request: ${formatError(error)}`);
+  }
+  if (!request || typeof request !== "object" || Array.isArray(request)) {
+    throw new Error("Protocol request must be a JSON object.");
+  }
+  return request;
+}
+
 function modelPathForTransformers(modelPath) {
   return String(modelPath || "").replaceAll("\\", "/");
 }
@@ -112,16 +145,25 @@ function readAscii(buffer, offset, length) {
   return buffer.toString("ascii", offset, offset + length);
 }
 
-function findChunk(buffer, chunkId) {
+export function findChunk(buffer, chunkId) {
   let offset = 12;
   while (offset + 8 <= buffer.length) {
     const id = readAscii(buffer, offset, 4);
     const size = buffer.readUInt32LE(offset + 4);
     const dataOffset = offset + 8;
+    const dataEnd = dataOffset + size;
+    if (dataEnd > buffer.length) {
+      throw new Error(
+        `Invalid WAV file: ${id || "unknown"} chunk exceeds the file bounds.`,
+      );
+    }
     if (id === chunkId) {
       return { offset: dataOffset, size };
     }
-    offset = dataOffset + size + (size % 2);
+    offset = dataEnd + (size % 2);
+    if (offset > buffer.length && dataEnd !== buffer.length) {
+      throw new Error(`Invalid WAV file: ${id || "unknown"} chunk padding is truncated.`);
+    }
   }
   return null;
 }
@@ -174,7 +216,7 @@ function resampleLinear(audio, sourceRate, targetRate) {
   return output;
 }
 
-function decodeWavFile(audioPath, targetSampleRate) {
+export function decodeWavFile(audioPath, targetSampleRate) {
   const buffer = readFileSync(audioPath);
   if (
     buffer.length < 44 ||
@@ -185,11 +227,18 @@ function decodeWavFile(audioPath, targetSampleRate) {
       "The ONNX runtime can decode WAV input only. Use a WAV benchmark sample or the app's last recording.",
     );
   }
+  const riffEnd = buffer.readUInt32LE(4) + 8;
+  if (riffEnd < 12 || riffEnd > buffer.length) {
+    throw new Error("Invalid WAV file: RIFF size exceeds the file bounds.");
+  }
 
   const fmt = findChunk(buffer, "fmt ");
   const data = findChunk(buffer, "data");
   if (!fmt || !data) {
     throw new Error("Invalid WAV file: missing fmt or data chunk.");
+  }
+  if (fmt.offset + fmt.size > riffEnd || data.offset + data.size > riffEnd) {
+    throw new Error("Invalid WAV file: chunk exceeds the declared RIFF size.");
   }
   if (fmt.size < 16) {
     throw new Error("Invalid WAV file: fmt chunk is too small.");
@@ -203,21 +252,43 @@ function decodeWavFile(audioPath, targetSampleRate) {
   if (channelCount <= 0 || blockAlign <= 0) {
     throw new Error("Invalid WAV file: channel count or block alignment is zero.");
   }
-
+  if (data.size > MAX_WAV_DATA_BYTES) {
+    throw new Error("WAV input is too large for the local ONNX runtime.");
+  }
+  if (!Number.isInteger(blockAlign / channelCount)) {
+    throw new Error("Invalid WAV file: block alignment does not match channel count.");
+  }
   const bytesPerSample = Math.ceil(bitsPerSample / 8);
+  const bytesPerChannel = blockAlign / channelCount;
+  if (bytesPerSample <= 0 || bytesPerChannel < bytesPerSample) {
+    throw new Error("Invalid WAV file: sample width exceeds block alignment.");
+  }
   const frameCount = Math.floor(data.size / blockAlign);
-  const mono = new Float32Array(frameCount);
+  if (data.size % blockAlign !== 0) {
+    throw new Error("Invalid WAV file: data chunk ends with a partial audio frame.");
+  }
   const isPcm = audioFormat === 1 || audioFormat === 65534;
   const isFloat = audioFormat === 3;
   if (!isPcm && !isFloat) {
     throw new Error(`Unsupported WAV encoding: ${audioFormat}. Use PCM or float WAV.`);
   }
+  const supportedBits = isFloat ? [32, 64] : [8, 16, 24, 32];
+  if (!supportedBits.includes(bitsPerSample)) {
+    throw new Error(`Unsupported WAV bit depth: ${bitsPerSample}.`);
+  }
+  if (frameCount <= 0) {
+    throw new Error("Invalid WAV file: data chunk contains no complete audio frame.");
+  }
+  if (frameCount > MAX_WAV_FRAMES) {
+    throw new Error("WAV input contains too many audio frames.");
+  }
+  const mono = new Float32Array(frameCount);
 
   for (let frame = 0; frame < frameCount; frame += 1) {
     const frameOffset = data.offset + frame * blockAlign;
     let sum = 0;
     for (let channel = 0; channel < channelCount; channel += 1) {
-      const sampleOffset = frameOffset + channel * bytesPerSample;
+      const sampleOffset = frameOffset + channel * bytesPerChannel;
       const sample = isFloat
         ? decodeFloatSample(buffer, sampleOffset, bitsPerSample)
         : decodePcmSample(buffer, sampleOffset, bitsPerSample);
@@ -1154,6 +1225,7 @@ async function runServer(options) {
   let webgpuAvailable = false;
   let fallbackErrors = [];
   try {
+    await loadRuntimeDependencies();
     const loaded = await loadRuntime(options);
     runtime = loaded.runtime;
     candidateDevices = loaded.candidateDevices;
@@ -1208,62 +1280,67 @@ async function runServer(options) {
     }
   }
 
-  let buffer = "";
-  process.stdin.setEncoding("utf8");
-  process.stdin.on("data", async (chunk) => {
-    buffer += chunk;
-    while (buffer.includes("\n")) {
-      const newlineIndex = buffer.indexOf("\n");
-      const line = buffer.slice(0, newlineIndex).trim();
-      buffer = buffer.slice(newlineIndex + 1);
-      if (!line) {
-        continue;
-      }
-
-      let request;
-      try {
-        request = JSON.parse(line);
-      } catch (error) {
-        writeJson({ ok: false, error: `Invalid JSON request: ${formatError(error)}` });
-        continue;
-      }
-
-      if (request.command === "shutdown") {
-        process.exit(0);
-        return;
-      }
-
-      if (request.command !== "transcribe") {
-        writeJson({
-          id: request.id,
-          ok: false,
-          error: `Unsupported command: ${request.command}`,
-        });
-        continue;
-      }
-
-      try {
-        const result = await transcribeWithFallback(request);
-        writeJson({
-          id: request.id,
-          ok: true,
-          text: result.text,
-          device: runtime.device,
-          gpuAvailable: runtime.gpuAvailable,
-          webgpuAvailable: runtime.webgpuAvailable,
-          fallbackErrors: result.fallbackErrors,
-        });
-      } catch (error) {
-        writeJson({ id: request.id, ok: false, error: formatError(error) });
-      }
+  // The async iterator provides strict request serialization. A second stdin
+  // line cannot enter inference or mutate fallback runtime state until the
+  // first request has produced its response.
+  const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
+  for await (const rawLine of lines) {
+    let request;
+    try {
+      request = parseProtocolRequestLine(rawLine);
+    } catch (error) {
+      writeJson({ ok: false, error: formatError(error) });
+      continue;
     }
-  });
+    if (request === null) {
+      continue;
+    }
+
+    if (request.command === "shutdown") {
+      break;
+    }
+
+    if (request.command !== "transcribe") {
+      writeJson({
+        id: request.id,
+        ok: false,
+        error: `Unsupported command: ${request.command}`,
+      });
+      continue;
+    }
+
+    try {
+      const result = await transcribeWithFallback(request);
+      writeJson({
+        id: request.id,
+        ok: true,
+        text: result.text,
+        device: runtime.device,
+        gpuAvailable: runtime.gpuAvailable,
+        webgpuAvailable: runtime.webgpuAvailable,
+        fallbackErrors: result.fallbackErrors,
+      });
+    } catch (error) {
+      writeJson({ id: request.id, ok: false, error: formatError(error) });
+    }
+  }
 }
 
-const args = parseArgs(process.argv.slice(2));
-if (!args.server) {
-  writeJson({ ok: false, error: "Only --server mode is supported." });
-  process.exit(2);
+async function main() {
+  const args = parseArgs(process.argv.slice(2));
+  if (!args.server) {
+    writeJson({ ok: false, error: "Only --server mode is supported." });
+    process.exitCode = 2;
+    return;
+  }
+
+  await runServer(args);
 }
 
-await runServer(args);
+if (
+  !process.execArgv.includes("-e") &&
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  await main();
+}

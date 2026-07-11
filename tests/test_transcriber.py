@@ -1,9 +1,11 @@
 import io
+import threading
 import wave
 
 import pytest
 
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
+from stt_app.transcriber import local_faster_whisper
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
 
@@ -258,6 +260,52 @@ def test_local_transcriber_abort_stream_ends_session_without_error():
         transcriber.stop_stream()
 
 
+def test_timed_out_stale_stream_worker_cannot_mutate_next_session(monkeypatch):
+    entered = threading.Event()
+    release = threading.Event()
+    first_partials = []
+    second_partials = []
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+
+    def fake_transcribe(max_window_seconds=None, *, session=None):
+        assert session is not None
+        if session.generation == 1:
+            entered.set()
+            assert release.wait(timeout=2)
+            return "retired text"
+        return "current text"
+
+    monkeypatch.setattr(
+        transcriber,
+        "_transcribe_current_stream_buffer",
+        fake_transcribe,
+    )
+    monkeypatch.setattr(local_faster_whisper, "STREAMING_ABORT_JOIN_TIMEOUT_S", 0.01)
+
+    transcriber.start_stream(on_partial=first_partials.append)
+    with transcriber._stream_lock:
+        retired_thread = transcriber._stream_thread
+    assert retired_thread is not None
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+    assert entered.wait(timeout=1)
+    transcriber.abort_stream()
+
+    transcriber.start_stream(on_partial=second_partials.append)
+    transcriber.push_audio_chunk(_build_pcm16_chunk())
+    assert transcriber.stop_stream() == "current text"
+
+    release.set()
+    retired_thread.join(timeout=1)
+    assert retired_thread.is_alive() is False
+    assert first_partials == []
+    assert second_partials == ["current text"]
+
+
 def test_local_transcriber_streaming_reports_runtime_error_immediately():
     transcriber = LocalFasterWhisperTranscriber(
         model_size="small",
@@ -291,7 +339,7 @@ def test_stream_partial_uses_configured_window(monkeypatch):
     )
     calls = []
 
-    def fake_transcribe(max_window_seconds=None):
+    def fake_transcribe(max_window_seconds=None, *, session=None):
         calls.append(max_window_seconds)
         return "partial text"
 
@@ -321,7 +369,7 @@ def test_local_streaming_fast_finalize_merges_live_text(monkeypatch):
     calls = []
     responses = iter(["hello there my", "there my friend"])
 
-    def fake_transcribe(max_window_seconds=None):
+    def fake_transcribe(max_window_seconds=None, *, session=None):
         calls.append(max_window_seconds)
         return next(responses)
 
@@ -351,7 +399,7 @@ def test_local_streaming_fast_finalize_without_partials_uses_tail(monkeypatch):
         model_factory=lambda *args, **kwargs: FakeModel(),
     )
 
-    def fake_transcribe(max_window_seconds=None):
+    def fake_transcribe(max_window_seconds=None, *, session=None):
         return "short note"
 
     monkeypatch.setattr(

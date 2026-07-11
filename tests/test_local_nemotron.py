@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import io
 import json
+import threading
+import time
 import wave
 
 import pytest
@@ -13,6 +15,7 @@ from stt_app.config import (
     supports_streaming,
 )
 from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber import local_nemotron
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
 
 
@@ -171,6 +174,82 @@ def test_true_streaming_emits_incremental_text(monkeypatch, tmp_path):
     assert text == "hello"
     assert partials == ["hello"]
     assert runtime.generators[0].runtime_options["lang_id"] == "101"
+
+
+def test_retired_stream_worker_cannot_consume_or_publish_into_next_session(
+    monkeypatch,
+    tmp_path,
+):
+    transcriber = _transcriber(monkeypatch, tmp_path, _FakeRuntime())
+    entered = threading.Event()
+    release = threading.Event()
+    first_partials = []
+    second_partials = []
+    original_process = transcriber._process_stream_pcm
+
+    def blocking_process(session, payload, run):
+        if run.generation == 1:
+            entered.set()
+            assert release.wait(timeout=2)
+        return original_process(session, payload, run)
+
+    monkeypatch.setattr(transcriber, "_process_stream_pcm", blocking_process)
+    monkeypatch.setattr(local_nemotron, "STREAMING_ABORT_JOIN_TIMEOUT_S", 0.01)
+
+    transcriber.start_stream(on_partial=first_partials.append)
+    with transcriber._stream_lock:
+        retired_thread = transcriber._stream_thread
+    assert retired_thread is not None
+    transcriber.push_audio_chunk(b"\x01\x00" * 8_960)
+    assert entered.wait(timeout=1)
+    transcriber.abort_stream()
+
+    transcriber.start_stream(on_partial=second_partials.append)
+    transcriber.push_audio_chunk(b"\x01\x00" * 8_960)
+    release.set()
+    assert transcriber.stop_stream() == "hello"
+    retired_thread.join(timeout=1)
+
+    assert retired_thread.is_alive() is False
+    assert first_partials == []
+    assert second_partials == ["hello"]
+
+
+def test_close_defers_runtime_teardown_until_retired_worker_exits(
+    monkeypatch,
+    tmp_path,
+):
+    transcriber = _transcriber(monkeypatch, tmp_path, _FakeRuntime())
+    entered = threading.Event()
+    release = threading.Event()
+    original_process = transcriber._process_stream_pcm
+
+    def blocking_process(session, payload, run):
+        entered.set()
+        assert release.wait(timeout=2)
+        return original_process(session, payload, run)
+
+    monkeypatch.setattr(transcriber, "_process_stream_pcm", blocking_process)
+    monkeypatch.setattr(local_nemotron, "STREAMING_ABORT_JOIN_TIMEOUT_S", 0.01)
+
+    transcriber.start_stream()
+    with transcriber._stream_lock:
+        retired_thread = transcriber._stream_thread
+    assert retired_thread is not None
+    transcriber.push_audio_chunk(b"\x01\x00" * 8_960)
+    assert entered.wait(timeout=1)
+    transcriber.abort_stream()
+    transcriber.close()
+
+    assert transcriber.is_model_loaded is True
+    release.set()
+    retired_thread.join(timeout=1)
+    deadline = time.monotonic() + 1
+    while transcriber.is_model_loaded:
+        assert time.monotonic() < deadline
+        time.sleep(0.001)
+
+    assert retired_thread.is_alive() is False
 
 
 def test_streaming_requires_active_session(monkeypatch, tmp_path):

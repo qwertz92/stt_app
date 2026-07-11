@@ -11,7 +11,7 @@ import tempfile
 import threading
 import time
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -28,6 +28,28 @@ from ..config import (
 from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
 
 logger = logging.getLogger(__name__)
+
+_STDERR_MAX_LINES = 256
+_MAX_NON_JSON_MESSAGES = 8
+
+
+class _RuntimeProtocolError(TranscriptionError):
+    """The child protocol is no longer safe to reuse."""
+
+
+@dataclass(frozen=True)
+class _NodeProcessState:
+    """Reader state that must never be shared across child generations."""
+
+    process: subprocess.Popen[str]
+    stdout_queue: queue.Queue[str]
+    stderr_lines: deque[str]
+    stderr_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        compare=False,
+        repr=False,
+    )
+
 
 @dataclass(frozen=True)
 class _OnnxModelLayout:
@@ -301,7 +323,9 @@ def _valid_snapshot_path(model_name: str, cache_dir: Path) -> Path | None:
     return None
 
 
-def resolve_cached_webgpu_model_path(model_name: str, model_dir: str = "") -> Path | None:
+def resolve_cached_webgpu_model_path(
+    model_name: str, model_dir: str = ""
+) -> Path | None:
     for root in _model_cache_dirs(model_name, model_dir):
         snapshot = _valid_snapshot_path(model_name, root)
         if snapshot is not None:
@@ -523,9 +547,8 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
                 elif install.stderr or install.stdout:
                     probe_error = (install.stderr or install.stdout).strip()
 
-        detail = (
-            probe_error
-            or ((probe.stderr or probe.stdout or "").strip() if probe is not None else "")
+        detail = probe_error or (
+            (probe.stderr or probe.stdout or "").strip() if probe is not None else ""
         )
         install_hint = (
             "The app tried to install the JavaScript runtime automatically, but "
@@ -535,8 +558,7 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
         )
         raise TranscriptionError(
             "The ONNX JavaScript runtime is not available. "
-            f"{install_hint}"
-            + (f"\n{detail}" if detail else "")
+            f"{install_hint}" + (f"\n{detail}" if detail else "")
         )
 
 
@@ -576,13 +598,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self.startup_timeout_s = max(1.0, float(startup_timeout_s))
         self.request_timeout_s = max(1.0, float(request_timeout_s))
 
-        self._lock = threading.Lock()
-        self._process: subprocess.Popen[str] | None = None
-        self._stdout_queue: queue.Queue[str] = queue.Queue()
-        # Cap retained stderr to avoid unbounded memory growth in a
-        # long-running tray app with a chatty Node.js runtime. Only the last
-        # few lines are ever consumed (``_stderr_tail``).
-        self._stderr_lines: deque[str] = deque(maxlen=256)
+        # Serializes process lifecycle and stdin requests. ``close`` can be
+        # called by another thread, so protecting writes only in
+        # ``transcribe_batch`` is insufficient.
+        self._lock = threading.RLock()
+        self._process_state: _NodeProcessState | None = None
         self._request_id = 0
         self._runtime_device = ""
         self._gpu_available = False
@@ -701,12 +721,14 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             raise TranscriptionError(f"ONNX/WebGPU runner not found: {runner}")
         return runner
 
-    def _start_reader_threads(self, process: subprocess.Popen[str]) -> None:
+    def _start_reader_threads(self, state: _NodeProcessState) -> None:
+        process = state.process
+
         def _read_stdout() -> None:
             if process.stdout is None:
                 return
             for line in process.stdout:
-                self._stdout_queue.put(line.rstrip("\r\n"))
+                state.stdout_queue.put(line.rstrip("\r\n"))
 
         def _read_stderr() -> None:
             if process.stderr is None:
@@ -714,7 +736,8 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             for line in process.stderr:
                 stripped = line.rstrip("\r\n")
                 if stripped:
-                    self._stderr_lines.append(stripped)
+                    with state.stderr_lock:
+                        state.stderr_lines.append(stripped)
 
         threading.Thread(
             target=_read_stdout,
@@ -727,29 +750,38 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             daemon=True,
         ).start()
 
-    def _stderr_tail(self) -> str:
+    def _stderr_tail(self, state: _NodeProcessState | None = None) -> str:
+        state = state or self._process_state
+        if state is None:
+            return ""
         # ``deque`` has no slice support; take the last 12 via list().
-        return "\n".join(list(self._stderr_lines)[-12:]).strip()
+        with state.stderr_lock:
+            return "\n".join(list(state.stderr_lines)[-12:]).strip()
 
-    def _read_json_message(self, timeout_s: float) -> dict[str, Any]:
-        deadline = time.monotonic() + timeout_s
+    def _read_json_message(
+        self,
+        state: _NodeProcessState,
+        deadline: float,
+    ) -> dict[str, Any]:
         skipped: list[str] = []
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                detail = self._stderr_tail()
+                detail = self._stderr_tail(state)
                 if skipped:
-                    detail = f"{detail}\nNon-JSON output: {' | '.join(skipped[-3:])}".strip()
-                raise TranscriptionError(
+                    detail = (
+                        f"{detail}\nNon-JSON output: {' | '.join(skipped[-3:])}".strip()
+                    )
+                raise _RuntimeProtocolError(
                     "Timed out waiting for ONNX/WebGPU runtime response."
                     + (f"\n{detail}" if detail else "")
                 )
             try:
-                line = self._stdout_queue.get(timeout=min(0.25, remaining))
+                line = state.stdout_queue.get(timeout=min(0.25, remaining))
             except queue.Empty:
-                if self._process is not None and self._process.poll() is not None:
-                    detail = self._stderr_tail()
-                    raise TranscriptionError(
+                if state.process.poll() is not None:
+                    detail = self._stderr_tail(state)
+                    raise _RuntimeProtocolError(
                         "ONNX/WebGPU runtime exited unexpectedly."
                         + (f"\n{detail}" if detail else "")
                     ) from None
@@ -760,10 +792,20 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 payload = json.loads(line)
             except json.JSONDecodeError:
                 skipped.append(line)
+                if len(skipped) >= _MAX_NON_JSON_MESSAGES:
+                    detail = " | ".join(skipped[-3:])
+                    raise _RuntimeProtocolError(
+                        "ONNX/WebGPU runtime protocol was poisoned by repeated "
+                        f"non-JSON output: {detail}"
+                    ) from None
                 continue
             if isinstance(payload, dict):
                 return payload
             skipped.append(line)
+            if len(skipped) >= _MAX_NON_JSON_MESSAGES:
+                raise _RuntimeProtocolError(
+                    "ONNX/WebGPU runtime protocol returned repeated non-object messages."
+                )
 
     def _start_process(self) -> None:
         snapshot = self._ensure_snapshot()
@@ -797,21 +839,29 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 bufsize=1,
             )
         except Exception as exc:
-            raise TranscriptionError(f"Failed to start ONNX/WebGPU runtime: {exc}") from exc
+            raise TranscriptionError(
+                f"Failed to start ONNX/WebGPU runtime: {exc}"
+            ) from exc
 
-        self._process = process
-        self._stdout_queue = queue.Queue()
-        self._stderr_lines = []
-        self._start_reader_threads(process)
+        state = _NodeProcessState(
+            process=process,
+            stdout_queue=queue.Queue(maxsize=128),
+            stderr_lines=deque(maxlen=_STDERR_MAX_LINES),
+        )
+        self._process_state = state
+        self._start_reader_threads(state)
 
         try:
-            ready = self._read_json_message(self.startup_timeout_s)
+            ready = self._read_json_message(
+                state,
+                time.monotonic() + self.startup_timeout_s,
+            )
         except Exception:
-            self.close()
+            self._discard_process_locked(state)
             raise
         if not bool(ready.get("ok")):
-            detail = str(ready.get("error") or self._stderr_tail())
-            self.close()
+            detail = str(ready.get("error") or self._stderr_tail(state))
+            self._discard_process_locked(state)
             raise TranscriptionError(f"ONNX/WebGPU runtime failed to load: {detail}")
 
         self._set_runtime_status(
@@ -822,9 +872,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self._emit_progress(self.runtime_status_text())
 
     def _ensure_process(self) -> None:
-        if self._process is not None and self._process.poll() is None:
+        state = self._process_state
+        if state is not None and state.process.poll() is None:
             return
-        self.close()
+        if state is not None:
+            self._discard_process_locked(state)
         self._start_process()
 
     def preload_model(self) -> None:
@@ -833,7 +885,8 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
     @property
     def is_model_loaded(self) -> bool:
-        return self._process is not None and self._process.poll() is None
+        state = self._process_state
+        return state is not None and state.process.poll() is None
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         temp_path: Path | None = None
@@ -849,12 +902,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
             with self._lock:
                 self._ensure_process()
-                process = self._process
-                if process is None or process.stdin is None:
+                state = self._process_state
+                if state is None or state.process.stdin is None:
                     raise TranscriptionError("ONNX/WebGPU runtime is not available.")
-                self._emit_progress(
-                    f"Transcribing with {self.runtime_status_text()}"
-                )
+                process = state.process
+                self._emit_progress(f"Transcribing with {self.runtime_status_text()}")
 
                 self._request_id += 1
                 request_id = self._request_id
@@ -865,39 +917,53 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                     "language": self._language_arg(),
                     "maxNewTokens": 1024,
                 }
-                process.stdin.write(json.dumps(request) + "\n")
-                process.stdin.flush()
+                try:
+                    process.stdin.write(json.dumps(request) + "\n")
+                    process.stdin.flush()
+                except Exception as exc:
+                    self._discard_process_locked(state)
+                    raise TranscriptionError(
+                        f"ONNX/WebGPU runtime request write failed: {exc}"
+                    ) from exc
 
-                while True:
-                    response = self._read_json_message(self.request_timeout_s)
+                deadline = time.monotonic() + self.request_timeout_s
+                try:
+                    response = self._read_json_message(state, deadline)
                     if response.get("id") != request_id:
-                        continue
-                    if not bool(response.get("ok")):
-                        raise TranscriptionError(
-                            "ONNX/WebGPU transcription failed: "
-                            f"{response.get('error') or self._stderr_tail()}"
+                        raise _RuntimeProtocolError(
+                            "ONNX/WebGPU runtime returned an unexpected response id "
+                            f"({response.get('id')!r}, expected {request_id})."
                         )
-                    previous_device = self._runtime_device
-                    self._set_runtime_status(
-                        response.get("device") or self._runtime_device,
-                        response.get("gpuAvailable", self._gpu_available),
-                        response.get("fallbackErrors"),
+                except _RuntimeProtocolError:
+                    self._discard_process_locked(state)
+                    raise
+
+                if not bool(response.get("ok")):
+                    raise TranscriptionError(
+                        "ONNX/WebGPU transcription failed: "
+                        f"{response.get('error') or self._stderr_tail(state)}"
                     )
-                    if self._runtime_device != previous_device:
-                        self._emit_progress(self.runtime_status_text())
-                    restart_after_cpu_fallback = (
-                        self._should_restart_after_cpu_fallback()
+                previous_device = self._runtime_device
+                self._set_runtime_status(
+                    response.get("device") or self._runtime_device,
+                    response.get("gpuAvailable", self._gpu_available),
+                    response.get("fallbackErrors"),
+                )
+                if self._runtime_device != previous_device:
+                    self._emit_progress(self.runtime_status_text())
+                restart_after_cpu_fallback = self._should_restart_after_cpu_fallback()
+                if restart_after_cpu_fallback:
+                    self._emit_progress(
+                        "ONNX runtime fell back to CPU; restarting before "
+                        "the next request so WebGPU/DirectML can be retried."
                     )
-                    if restart_after_cpu_fallback:
-                        self._emit_progress(
-                            "ONNX runtime fell back to CPU; restarting before "
-                            "the next request so WebGPU/DirectML can be retried."
-                        )
-                    return str(response.get("text") or "").strip()
+                return str(response.get("text") or "").strip()
         except TranscriptionError:
             raise
         except Exception as exc:
-            raise TranscriptionError(f"Local ONNX/WebGPU transcription failed: {exc}") from exc
+            raise TranscriptionError(
+                f"Local ONNX/WebGPU transcription failed: {exc}"
+            ) from exc
         finally:
             if restart_after_cpu_fallback:
                 self.close()
@@ -908,28 +974,45 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                     pass
 
     def close(self) -> None:
-        process = self._process
-        self._process = None
-        if process is None:
+        with self._lock:
+            state = self._process_state
+            if state is None:
+                return
+            self._process_state = None
+            self._terminate_process(state, graceful=True)
+
+    def _discard_process_locked(self, state: _NodeProcessState) -> None:
+        """Kill a process whose request/response stream cannot be trusted."""
+        if self._process_state is state:
+            self._process_state = None
+        self._terminate_process(state, graceful=False)
+
+    @staticmethod
+    def _terminate_process(state: _NodeProcessState, *, graceful: bool) -> None:
+        process = state.process
+        if process.poll() is not None:
             return
-        if process.poll() is None:
+        if graceful:
             try:
                 if process.stdin is not None:
                     process.stdin.write(json.dumps({"command": "shutdown"}) + "\n")
                     process.stdin.flush()
             except Exception:
                 pass
-            try:
+        try:
+            if graceful:
                 process.wait(timeout=2.0)
-            except Exception:
-                try:
-                    process.terminate()
-                    process.wait(timeout=2.0)
-                except Exception:
-                    try:
-                        process.kill()
-                    except Exception:
-                        pass
+            else:
+                process.terminate()
+                process.wait(timeout=2.0)
+            return
+        except Exception:
+            pass
+        try:
+            process.kill()
+            process.wait(timeout=2.0)
+        except Exception:
+            pass
 
     def __del__(self) -> None:
         try:

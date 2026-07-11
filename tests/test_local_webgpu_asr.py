@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import queue
+import shutil
+import subprocess
 import sys
+import time
+import wave
+from collections import deque
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -16,6 +22,7 @@ from stt_app.config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
+from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.local_webgpu_asr import (
     LocalOnnxWebGpuTranscriber,
@@ -29,10 +36,7 @@ def _write_required_snapshot(base: Path, model_name: str, snapshot_id: str = "ab
     repo_id = local_webgpu_asr._repo_id_for_model(model_name)
     assert repo_id is not None
     snapshot = (
-        base
-        / f"models--{repo_id.replace('/', '--')}"
-        / "snapshots"
-        / snapshot_id
+        base / f"models--{repo_id.replace('/', '--')}" / "snapshots" / snapshot_id
     )
     for relative in local_webgpu_asr._REQUIRED_FILES[model_name]:
         path = snapshot / relative
@@ -49,12 +53,14 @@ class _FakeProcess:
         self.wait_calls = 0
         self.terminated = False
         self.killed = False
+        self.returncode = None
 
     def poll(self):
-        return None
+        return self.returncode
 
     def wait(self, timeout=None):
         self.wait_calls += 1
+        self.returncode = 0
         return 0
 
     def terminate(self):
@@ -222,9 +228,7 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_plus_int8_patterns(
     assert result == str(tmp_path / "snapshot")
     repo_id, kwargs = calls[0]
     assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b-plus"]
-    assert kwargs["local_dir"] == str(
-        tmp_path / "ibm-granite-speech-4.1-2b-plus-onnx"
-    )
+    assert kwargs["local_dir"] == str(tmp_path / "ibm-granite-speech-4.1-2b-plus-onnx")
     assert kwargs["max_workers"] == 2
     assert "int8/*.onnx" in kwargs["allow_patterns"]
     assert "int8/*.onnx_data" in kwargs["allow_patterns"]
@@ -252,9 +256,7 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_nar_int8_patterns(
 
     repo_id, kwargs = calls[0]
     assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b-nar"]
-    assert kwargs["local_dir"] == str(
-        tmp_path / "ibm-granite-speech-4.1-2b-nar-onnx"
-    )
+    assert kwargs["local_dir"] == str(tmp_path / "ibm-granite-speech-4.1-2b-nar-onnx")
     assert "int8/editor.onnx" not in kwargs["allow_patterns"]
     assert "int8/*.onnx" in kwargs["allow_patterns"]
     assert "int8/*.onnx_data" in kwargs["allow_patterns"]
@@ -287,10 +289,13 @@ def test_required_file_validation_rejects_incomplete_granite_4_1_snapshot(tmp_pa
     snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
     (snapshot / "onnx/decoder_model_merged_q4.onnx_data").unlink()
 
-    assert resolve_cached_webgpu_model_path(
-        "granite-speech-4.1-2b",
-        str(tmp_path),
-    ) is None
+    assert (
+        resolve_cached_webgpu_model_path(
+            "granite-speech-4.1-2b",
+            str(tmp_path),
+        )
+        is None
+    )
 
 
 def test_webgpu_transcriber_defaults_auto_language_to_german():
@@ -378,7 +383,7 @@ def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(
     monkeypatch.setattr(
         LocalOnnxWebGpuTranscriber,
         "_read_json_message",
-        lambda self, timeout_s: messages.pop(0),
+        lambda self, state, deadline: messages.pop(0),
     )
     monkeypatch.setattr(
         local_webgpu_asr,
@@ -454,7 +459,7 @@ def test_granite_4_1_2b_transcriber_passes_q4_precision_to_node(
     monkeypatch.setattr(
         LocalOnnxWebGpuTranscriber,
         "_read_json_message",
-        lambda self, timeout_s: messages.pop(0),
+        lambda self, state, deadline: messages.pop(0),
     )
     monkeypatch.setattr(
         local_webgpu_asr,
@@ -504,7 +509,7 @@ def test_webgpu_transcriber_closes_process_when_startup_response_fails(
     monkeypatch.setattr(
         LocalOnnxWebGpuTranscriber,
         "_read_json_message",
-        lambda self, timeout_s: (_ for _ in ()).throw(
+        lambda self, state, deadline: (_ for _ in ()).throw(
             local_webgpu_asr.TranscriptionError("startup timeout")
         ),
     )
@@ -530,7 +535,8 @@ def test_webgpu_transcriber_closes_process_when_startup_response_fails(
         transcriber.preload_model()
 
     assert fake_process.wait_calls == 1
-    assert json.loads(fake_process.stdin.getvalue().strip()) == {"command": "shutdown"}
+    assert fake_process.terminated is True
+    assert fake_process.stdin.getvalue() == ""
     assert transcriber.is_model_loaded is False
 
 
@@ -577,7 +583,7 @@ def test_webgpu_transcriber_restarts_after_auto_cpu_fallback(
     monkeypatch.setattr(
         LocalOnnxWebGpuTranscriber,
         "_read_json_message",
-        lambda self, timeout_s: messages.pop(0),
+        lambda self, state, deadline: messages.pop(0),
     )
     monkeypatch.setattr(
         local_webgpu_asr,
@@ -613,3 +619,178 @@ def test_webgpu_transcriber_restarts_after_auto_cpu_fallback(
     ]
     assert requests[-1] == {"command": "shutdown"}
     assert any("restarting before the next request" in item for item in progress)
+
+
+def test_json_reader_uses_process_local_queue_and_absolute_deadline():
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="cohere-transcribe-03-2026")
+    stale_process = _FakeProcess()
+    current_process = _FakeProcess()
+    stale = local_webgpu_asr._NodeProcessState(
+        stale_process,
+        queue.Queue(),
+        deque(maxlen=local_webgpu_asr._STDERR_MAX_LINES),
+    )
+    current = local_webgpu_asr._NodeProcessState(
+        current_process,
+        queue.Queue(),
+        deque(maxlen=local_webgpu_asr._STDERR_MAX_LINES),
+    )
+    stale.stdout_queue.put('{"id": 1, "ok": true}')
+    current.stdout_queue.put('{"id": 2, "ok": true}')
+
+    message = transcriber._read_json_message(current, time.monotonic() + 0.2)
+
+    assert message["id"] == 2
+    assert stale.stdout_queue.qsize() == 1
+
+    started = time.monotonic()
+    with pytest.raises(TranscriptionError, match="Timed out"):
+        transcriber._read_json_message(current, time.monotonic() + 0.02)
+    assert time.monotonic() - started < 0.2
+
+
+def test_reader_retains_only_bounded_process_local_stderr():
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="cohere-transcribe-03-2026")
+    process = _FakeProcess()
+    process.stdout = io.StringIO('{"ok": true}\n')
+    process.stderr = io.StringIO(
+        "".join(f"diagnostic-{index}\n" for index in range(400))
+    )
+    state = local_webgpu_asr._NodeProcessState(
+        process,
+        queue.Queue(),
+        deque(maxlen=local_webgpu_asr._STDERR_MAX_LINES),
+    )
+
+    transcriber._start_reader_threads(state)
+    assert transcriber._read_json_message(state, time.monotonic() + 1)["ok"] is True
+    deadline = time.monotonic() + 1
+    while len(state.stderr_lines) < local_webgpu_asr._STDERR_MAX_LINES:
+        assert time.monotonic() < deadline
+        time.sleep(0.001)
+
+    assert len(state.stderr_lines) == local_webgpu_asr._STDERR_MAX_LINES
+    assert state.stderr_lines[0] == "diagnostic-144"
+    assert state.stderr_lines[-1] == "diagnostic-399"
+    assert "diagnostic-388" in transcriber._stderr_tail(state)
+    assert "diagnostic-387" not in transcriber._stderr_tail(state)
+
+
+def test_protocol_timeout_kills_child_and_next_request_starts_fresh(
+    monkeypatch,
+    tmp_path,
+):
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    processes = [_FakeProcess(), _FakeProcess()]
+    process_iter = iter(processes)
+    read_count = 0
+
+    def fake_read(self, state, deadline):
+        nonlocal read_count
+        read_count += 1
+        if read_count in {1, 3}:
+            return {"ok": True, "device": "cpu", "gpuAvailable": False}
+        if read_count == 2:
+            raise local_webgpu_asr._RuntimeProtocolError("request timeout")
+        return {"id": 2, "ok": True, "text": "recovered"}
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_ensure_snapshot",
+        lambda self: tmp_path,
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_start_reader_threads",
+        lambda self, state: None,
+    )
+    monkeypatch.setattr(LocalOnnxWebGpuTranscriber, "_read_json_message", fake_read)
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner: None,
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess,
+        "Popen",
+        lambda command, **kwargs: next(process_iter),
+    )
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        device="cpu",
+        node_path="node",
+        runner_path=runner,
+    )
+
+    with pytest.raises(TranscriptionError, match="request timeout"):
+        transcriber.transcribe_batch(b"RIFF")
+    assert processes[0].terminated is True
+    assert processes[0].stdin.getvalue().count("transcribe") == 1
+
+    try:
+        assert transcriber.transcribe_batch(b"RIFF") == "recovered"
+    finally:
+        transcriber.close()
+
+    assert processes[1].stdin.getvalue().count("transcribe") == 1
+    assert '"id": 2' in processes[1].stdin.getvalue()
+
+
+def test_node_wav_and_protocol_parsers_reject_malformed_bounds(tmp_path):
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed.")
+    runner = (
+        Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
+    )
+    valid = tmp_path / "valid.wav"
+    with wave.open(str(valid), "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16_000)
+        wav_file.writeframes(b"\x01\x00" * 160)
+    truncated = tmp_path / "truncated.wav"
+    malformed = bytearray(valid.read_bytes())
+    data_offset = malformed.index(b"data")
+    declared_size = int.from_bytes(
+        malformed[data_offset + 4 : data_offset + 8], "little"
+    )
+    malformed[data_offset + 4 : data_offset + 8] = (declared_size + 100).to_bytes(
+        4, "little"
+    )
+    truncated.write_bytes(malformed)
+
+    script = """
+      import { pathToFileURL } from 'node:url';
+      const runtime = await import(pathToFileURL(process.argv[1]).href);
+      const result = {};
+      result.validSamples = runtime.decodeWavFile(process.argv[2], 16000).length;
+      try { runtime.decodeWavFile(process.argv[3], 16000); }
+      catch (error) { result.wavError = String(error.message); }
+      result.command = runtime.parseProtocolRequestLine('{"command":"shutdown"}').command;
+      try { runtime.parseProtocolRequestLine('[]'); }
+      catch (error) { result.protocolError = String(error.message); }
+      console.log(JSON.stringify(result));
+    """
+    completed = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            script,
+            str(runner),
+            str(valid),
+            str(truncated),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    result = json.loads(completed.stdout)
+
+    assert result["validSamples"] == 160
+    assert "exceeds the file bounds" in result["wavError"]
+    assert result["command"] == "shutdown"
+    assert result["protocolError"] == "Protocol request must be a JSON object."

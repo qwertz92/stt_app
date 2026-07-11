@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import wave
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
@@ -54,6 +55,35 @@ _DOWNLOAD_ALLOW_PATTERNS: list[str] = [
 
 # --- HuggingFace repo mapping (imported from config) ---
 _MODEL_REPO_MAP = MODEL_REPO_MAP
+
+
+@dataclass
+class _StreamResult:
+    error: Exception | None = None
+    final_text: str = ""
+    merged_text: str = ""
+    last_partial_at: float = 0.0
+    last_partial_size: int = 0
+    error_reported: bool = False
+
+
+@dataclass(frozen=True)
+class _StreamingSession:
+    """State owned by exactly one streaming worker.
+
+    A timed-out abort may leave its daemon worker alive briefly. Keeping every
+    mutable input and output on this generation-scoped object prevents that
+    retired worker from reading audio or publishing results into a later
+    session.
+    """
+
+    generation: int
+    audio_queue: queue.Queue[bytes | object]
+    on_partial: StreamingCallback | None
+    on_error: StreamingErrorCallback | None
+    pcm_buffer: bytearray = field(default_factory=bytearray)
+    abort_requested: threading.Event = field(default_factory=threading.Event)
+    result: _StreamResult = field(default_factory=_StreamResult)
 
 
 def _default_hf_cache_dir() -> str:
@@ -227,7 +257,9 @@ def download_model_snapshot(model_name: str, model_dir: str = "") -> str:
     try:
         return str(snapshot_download(repo_id, **kwargs))
     except Exception as exc:
-        return _download_faster_whisper_via_modelscope(repo_id, model_dir, model_name, exc)
+        return _download_faster_whisper_via_modelscope(
+            repo_id, model_dir, model_name, exc
+        )
 
 
 def _download_faster_whisper_via_modelscope(
@@ -246,7 +278,9 @@ def _download_faster_whisper_via_modelscope(
     from . import modelscope_mirror as ms
 
     if not ms.modelscope_fallback_enabled() or not ms.repo_available(repo_id):
-        raise RuntimeError(format_model_download_error(model_name, hf_error)) from hf_error
+        raise RuntimeError(
+            format_model_download_error(model_name, hf_error)
+        ) from hf_error
 
     cache_dir = (
         model_dir.strip()
@@ -393,18 +427,12 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         self._stream_lock = threading.Lock()
         self._stream_active = False
-        self._stream_on_partial: StreamingCallback | None = None
-        self._stream_on_error: StreamingErrorCallback | None = None
-        self._stream_queue: queue.Queue[bytes | object] | None = None
+        self._stream_generation = 0
+        self._stream_session: _StreamingSession | None = None
         self._stream_thread: threading.Thread | None = None
+        # Kept as a test/debug convenience for inspecting a non-running buffer.
+        # Live workers never read this alias; they receive their session object.
         self._stream_pcm_buffer = bytearray()
-        self._stream_error: Exception | None = None
-        self._stream_final_text: str = ""
-        self._stream_merged_text: str = ""
-        self._stream_last_partial_at = 0.0
-        self._stream_last_partial_size = 0
-        self._stream_abort_requested = False
-        self._stream_error_reported = False
         self._cancel_check: Callable[[], bool] | None = None
 
     def set_cancel_check(self, cancel_check: Callable[[], bool] | None) -> None:
@@ -569,20 +597,20 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         with self._stream_lock:
             if self._stream_active:
                 raise TranscriptionError("Streaming session already active.")
+            self._stream_generation += 1
+            session = _StreamingSession(
+                generation=self._stream_generation,
+                audio_queue=queue.Queue(),
+                on_partial=on_partial,
+                on_error=on_error,
+            )
+            session.result.last_partial_at = time.monotonic()
             self._stream_active = True
-            self._stream_on_partial = on_partial
-            self._stream_on_error = on_error
-            self._stream_queue = queue.Queue()
-            self._stream_pcm_buffer = bytearray()
-            self._stream_error = None
-            self._stream_final_text = ""
-            self._stream_merged_text = ""
-            self._stream_last_partial_at = time.monotonic()
-            self._stream_last_partial_size = 0
-            self._stream_abort_requested = False
-            self._stream_error_reported = False
+            self._stream_session = session
+            self._stream_pcm_buffer = session.pcm_buffer
             thread = threading.Thread(
                 target=self._stream_worker,
+                args=(session,),
                 name="stt_app_stream_worker",
                 daemon=True,
             )
@@ -594,29 +622,28 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if not payload:
             return
         with self._stream_lock:
-            stream_active = self._stream_active
-            stream_queue = self._stream_queue
-        if not stream_active or stream_queue is None:
+            session = self._stream_session if self._stream_active else None
+        if session is None:
             raise TranscriptionError("Streaming session is not active.")
-        stream_queue.put(payload)
+        session.audio_queue.put(payload)
 
     def stop_stream(self) -> str:
         with self._stream_lock:
-            if not self._stream_active:
+            session = self._stream_session if self._stream_active else None
+            if session is None:
                 raise TranscriptionError("Streaming session is not active.")
-            stream_queue = self._stream_queue
             stream_thread = self._stream_thread
 
-        if stream_queue is None or stream_thread is None:
+        if stream_thread is None:
             raise TranscriptionError("Streaming session was not initialized correctly.")
 
-        stream_queue.put(_STREAM_SENTINEL)
+        session.audio_queue.put(_STREAM_SENTINEL)
         stream_thread.join()
 
         with self._stream_lock:
-            stream_error = self._stream_error
-            text = self._stream_final_text
-            self._reset_stream_fields()
+            stream_error = session.result.error
+            text = session.result.final_text
+            self._reset_stream_fields(session)
 
         if stream_error is not None:
             detail = self._format_transcription_error(
@@ -631,42 +658,34 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
     def abort_stream(self) -> None:
         with self._stream_lock:
-            if not self._stream_active:
+            session = self._stream_session if self._stream_active else None
+            if session is None:
                 return
-            self._stream_abort_requested = True
-            stream_queue = self._stream_queue
             stream_thread = self._stream_thread
+            session.abort_requested.set()
 
-        if stream_queue is not None:
-            stream_queue.put(_STREAM_SENTINEL)
+        session.audio_queue.put(_STREAM_SENTINEL)
         if stream_thread is not None:
             stream_thread.join(timeout=STREAMING_ABORT_JOIN_TIMEOUT_S)
 
         with self._stream_lock:
-            self._reset_stream_fields()
+            self._reset_stream_fields(session)
 
-    def _reset_stream_fields(self) -> None:
+    def _reset_stream_fields(self, session: _StreamingSession) -> None:
         """Reset all streaming state. Must be called with ``_stream_lock`` held."""
+        if self._stream_session is not session:
+            return
         self._stream_active = False
-        self._stream_on_partial = None
-        self._stream_on_error = None
-        self._stream_queue = None
+        self._stream_session = None
         self._stream_thread = None
         self._stream_pcm_buffer = bytearray()
-        self._stream_error = None
-        self._stream_final_text = ""
-        self._stream_merged_text = ""
-        self._stream_last_partial_size = 0
-        self._stream_last_partial_at = 0.0
-        self._stream_abort_requested = False
-        self._stream_error_reported = False
 
-    def _notify_stream_error(self, exc: Exception) -> None:
+    def _notify_stream_error(self, session: _StreamingSession, exc: Exception) -> None:
         with self._stream_lock:
-            callback = self._stream_on_error
-            if callback is None or self._stream_error_reported:
+            callback = session.on_error
+            if callback is None or session.result.error_reported:
                 return
-            self._stream_error_reported = True
+            session.result.error_reported = True
 
         detail = self._format_transcription_error(exc)
         try:
@@ -674,102 +693,91 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         except Exception:
             pass
 
-    def _stream_worker(self) -> None:
+    def _stream_worker(self, session: _StreamingSession) -> None:
         while True:
-            with self._stream_lock:
-                stream_queue = self._stream_queue
-                if self._stream_abort_requested:
-                    return
-            if stream_queue is None:
+            if session.abort_requested.is_set():
                 return
 
-            item = stream_queue.get()
+            item = session.audio_queue.get()
             if item is _STREAM_SENTINEL:
                 break
 
             if isinstance(item, (bytes, bytearray)) and item:
-                with self._stream_lock:
-                    self._stream_pcm_buffer.extend(item)
+                session.pcm_buffer.extend(item)
 
-            self._maybe_emit_partial()
+            self._maybe_emit_partial(session)
 
         # Capture abort flag under lock before it can be reset by
         # abort_stream / _reset_stream_fields on another thread.
-        with self._stream_lock:
-            aborted = self._stream_abort_requested
-
-        if aborted:
-            with self._stream_lock:
-                # Fields may already be reset by abort_stream(); write
-                # only if the session is still ours to finalize.
-                if self._stream_final_text == "":
-                    self._stream_final_text = self._stream_merged_text
+        if session.abort_requested.is_set():
+            if session.result.final_text == "":
+                session.result.final_text = session.result.merged_text
             return
 
         try:
             if self.stream_final_full_pass:
-                final_text = self._transcribe_current_stream_buffer()
+                final_text = self._transcribe_current_stream_buffer(session=session)
             else:
                 # Fast finalization: transcribe only the trailing window to
                 # cover audio after the last partial, then merge it into the
                 # accumulated live text instead of re-transcribing everything.
                 tail_text = self._transcribe_current_stream_buffer(
-                    max_window_seconds=self.stream_partial_window_s
+                    max_window_seconds=self.stream_partial_window_s,
+                    session=session,
                 )
-                with self._stream_lock:
-                    final_text = append_only_stream_partial_candidate(
-                        self._stream_merged_text,
-                        tail_text,
-                    )
+                final_text = append_only_stream_partial_candidate(
+                    session.result.merged_text,
+                    tail_text,
+                )
         except Exception as exc:
-            with self._stream_lock:
-                self._stream_error = exc
+            session.result.error = exc
             return
 
-        with self._stream_lock:
-            self._stream_final_text = final_text
+        session.result.final_text = final_text
 
-    def _maybe_emit_partial(self) -> None:
-        with self._stream_lock:
-            callback = self._stream_on_partial
-            if self._stream_abort_requested:
-                return
-            now = time.monotonic()
-            elapsed = now - self._stream_last_partial_at
-            min_audio_bytes = int(
-                self.stream_partial_min_audio_s * self.stream_sample_rate * 2
-            )
-            current_size = len(self._stream_pcm_buffer)
-            has_new_audio = current_size > self._stream_last_partial_size
-            should_emit = (
-                callback is not None
-                and has_new_audio
-                and current_size >= min_audio_bytes
-                and elapsed >= self.stream_partial_interval_s
-            )
+    def _maybe_emit_partial(self, session: _StreamingSession | None = None) -> None:
+        if session is None:
+            with self._stream_lock:
+                session = self._stream_session
+        if session is None or session.abort_requested.is_set():
+            return
+        callback = session.on_partial
+        now = time.monotonic()
+        elapsed = now - session.result.last_partial_at
+        min_audio_bytes = int(
+            self.stream_partial_min_audio_s * self.stream_sample_rate * 2
+        )
+        current_size = len(session.pcm_buffer)
+        has_new_audio = current_size > session.result.last_partial_size
+        should_emit = (
+            callback is not None
+            and has_new_audio
+            and current_size >= min_audio_bytes
+            and elapsed >= self.stream_partial_interval_s
+        )
 
         if not should_emit:
             return
 
         try:
             text = self._transcribe_current_stream_buffer(
-                max_window_seconds=self.stream_partial_window_s
+                max_window_seconds=self.stream_partial_window_s,
+                session=session,
             )
         except Exception as exc:
-            with self._stream_lock:
-                self._stream_error = exc
-                self._stream_abort_requested = True
-            self._notify_stream_error(exc)
+            was_aborted = session.abort_requested.is_set()
+            session.result.error = exc
+            session.abort_requested.set()
+            if not was_aborted:
+                self._notify_stream_error(session, exc)
             return
 
-        with self._stream_lock:
-            if self._stream_abort_requested:
-                return
-            callback = self._stream_on_partial
-            self._stream_merged_text = append_only_stream_partial_candidate(
-                self._stream_merged_text,
-                text,
-            )
+        if session.abort_requested.is_set():
+            return
+        session.result.merged_text = append_only_stream_partial_candidate(
+            session.result.merged_text,
+            text,
+        )
 
         if callback is not None and text.strip():
             try:
@@ -777,16 +785,25 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             except Exception:
                 pass
 
-        with self._stream_lock:
-            self._stream_last_partial_at = time.monotonic()
-            self._stream_last_partial_size = len(self._stream_pcm_buffer)
+        session.result.last_partial_at = time.monotonic()
+        session.result.last_partial_size = len(session.pcm_buffer)
 
     def _transcribe_current_stream_buffer(
         self,
         max_window_seconds: float | None = None,
+        *,
+        session: _StreamingSession | None = None,
     ) -> str:
-        with self._stream_lock:
-            snapshot = bytes(self._stream_pcm_buffer)
+        if session is None:
+            with self._stream_lock:
+                current = self._stream_session
+                snapshot = bytes(
+                    current.pcm_buffer
+                    if current is not None
+                    else self._stream_pcm_buffer
+                )
+        else:
+            snapshot = bytes(session.pcm_buffer)
         if not snapshot:
             return ""
         if max_window_seconds is not None and max_window_seconds > 0:

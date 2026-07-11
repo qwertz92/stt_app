@@ -5,7 +5,7 @@ import json
 import queue
 import threading
 import wave
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dataclass_field
 from pathlib import Path
 from typing import Any
 
@@ -39,11 +39,29 @@ _DEFAULT_CHUNK_SAMPLES = 8_960
 
 
 @dataclass
-class _StreamingSession:
+class _InferenceSession:
     processor: Any
     generator: Any
     tokenizer_stream: Any
     text: str = ""
+
+
+@dataclass
+class _StreamResult:
+    error: Exception | None = None
+    final_text: str = ""
+
+
+@dataclass(frozen=True)
+class _StreamRun:
+    """All state that belongs to one immutable stream generation."""
+
+    generation: int
+    audio_queue: queue.Queue[bytes | object]
+    on_partial: StreamingCallback | None
+    on_error: StreamingErrorCallback | None
+    abort_requested: threading.Event = dataclass_field(default_factory=threading.Event)
+    result: _StreamResult = dataclass_field(default_factory=_StreamResult)
 
 
 def _default_runtime_module():
@@ -92,13 +110,11 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
 
         self._stream_lock = threading.Lock()
         self._stream_active = False
-        self._stream_queue: queue.Queue[bytes | object] | None = None
+        self._stream_generation = 0
+        self._stream_run: _StreamRun | None = None
         self._stream_thread: threading.Thread | None = None
-        self._stream_on_partial: StreamingCallback | None = None
-        self._stream_on_error: StreamingErrorCallback | None = None
-        self._stream_abort_requested = False
-        self._stream_error: Exception | None = None
-        self._stream_final_text = ""
+        self._stream_workers: dict[int, threading.Thread] = {}
+        self._close_requested = False
 
     @property
     def runtime_device(self) -> str:
@@ -203,7 +219,7 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         mode = self.language_mode if self.language_mode in supported else "auto"
         return NEMOTRON_LANGUAGE_IDS.get(mode, NEMOTRON_LANGUAGE_IDS["auto"])
 
-    def _create_session(self) -> _StreamingSession:
+    def _create_session(self) -> _InferenceSession:
         model = self._ensure_model()
         runtime = self._runtime
         if runtime is None:
@@ -220,14 +236,14 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         params = runtime.GeneratorParams(model)
         generator = runtime.Generator(model, params)
         generator.set_runtime_option("lang_id", str(self._language_id()))
-        return _StreamingSession(
+        return _InferenceSession(
             processor=processor,
             generator=generator,
             tokenizer_stream=tokenizer.create_stream(),
         )
 
     @staticmethod
-    def _decode_available(session: _StreamingSession) -> str:
+    def _decode_available(session: _InferenceSession) -> str:
         text = ""
         while not session.generator.is_done():
             session.generator.generate_next_token()
@@ -239,14 +255,14 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         session.text += text
         return text
 
-    def _process_samples(self, session: _StreamingSession, samples: np.ndarray) -> str:
+    def _process_samples(self, session: _InferenceSession, samples: np.ndarray) -> str:
         inputs = session.processor.process(samples.astype(np.float32, copy=False))
         if inputs is None:
             return ""
         session.generator.set_inputs(inputs)
         return self._decode_available(session)
 
-    def _flush_session(self, session: _StreamingSession) -> str:
+    def _flush_session(self, session: _InferenceSession) -> str:
         inputs = session.processor.flush()
         if inputs is None:
             return ""
@@ -282,19 +298,24 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         with self._stream_lock:
             if self._stream_active:
                 raise TranscriptionError("Streaming session already active.")
+            self._stream_generation += 1
+            run = _StreamRun(
+                generation=self._stream_generation,
+                audio_queue=queue.Queue(),
+                on_partial=on_partial,
+                on_error=on_error,
+            )
             self._stream_active = True
-            self._stream_queue = queue.Queue()
-            self._stream_on_partial = on_partial
-            self._stream_on_error = on_error
-            self._stream_abort_requested = False
-            self._stream_error = None
-            self._stream_final_text = ""
+            self._stream_run = run
+            self._close_requested = False
             thread = threading.Thread(
                 target=self._stream_worker,
+                args=(run,),
                 name="stt_app_nemotron_stream",
                 daemon=True,
             )
             self._stream_thread = thread
+            self._stream_workers[run.generation] = thread
         thread.start()
 
     def push_audio_chunk(self, chunk: bytes) -> None:
@@ -302,122 +323,137 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         if not payload:
             return
         with self._stream_lock:
-            active = self._stream_active
-            stream_queue = self._stream_queue
-        if not active or stream_queue is None:
+            run = self._stream_run if self._stream_active else None
+        if run is None:
             raise TranscriptionError("Streaming session is not active.")
-        stream_queue.put(payload)
+        run.audio_queue.put(payload)
 
     def stop_stream(self) -> str:
         with self._stream_lock:
-            if not self._stream_active:
+            run = self._stream_run if self._stream_active else None
+            if run is None:
                 raise TranscriptionError("Streaming session is not active.")
-            stream_queue = self._stream_queue
             thread = self._stream_thread
-        if stream_queue is None or thread is None:
+        if thread is None:
             raise TranscriptionError("Streaming session was not initialized correctly.")
-        stream_queue.put(_STREAM_SENTINEL)
+        run.audio_queue.put(_STREAM_SENTINEL)
         thread.join()
         with self._stream_lock:
-            error = self._stream_error
-            text = self._stream_final_text
-            self._reset_stream_fields()
+            error = run.result.error
+            text = run.result.final_text
+            self._reset_stream_fields(run)
         if error is not None:
             raise TranscriptionError(f"Nemotron streaming failed: {error}") from error
         return text.strip()
 
     def abort_stream(self) -> None:
         with self._stream_lock:
-            if not self._stream_active:
+            run = self._stream_run if self._stream_active else None
+            if run is None:
                 return
-            self._stream_abort_requested = True
-            stream_queue = self._stream_queue
             thread = self._stream_thread
-        if stream_queue is not None:
-            stream_queue.put(_STREAM_SENTINEL)
+            run.abort_requested.set()
+        run.audio_queue.put(_STREAM_SENTINEL)
         if thread is not None:
             thread.join(timeout=STREAMING_ABORT_JOIN_TIMEOUT_S)
         with self._stream_lock:
-            self._reset_stream_fields()
+            self._reset_stream_fields(run)
 
     def close(self) -> None:
         self.abort_stream()
+        with self._stream_lock:
+            if any(thread.is_alive() for thread in self._stream_workers.values()):
+                # A timed-out abort can leave inference inside native code. Its
+                # model/runtime must remain alive until that retired worker
+                # exits; the worker performs the deferred clear in ``finally``.
+                self._close_requested = True
+                return
+            self._clear_runtime()
+
+    def _clear_runtime(self) -> None:
         with self._model_lock:
             self._model = None
             self._runtime = None
             self._runtime_device = ""
 
-    def _stream_worker(self) -> None:
+    def _stream_worker(self, run: _StreamRun) -> None:
         pcm_buffer = bytearray()
         try:
             with self._inference_lock:
                 session = self._create_session()
                 chunk_bytes = self._chunk_samples * 2
                 while True:
-                    with self._stream_lock:
-                        stream_queue = self._stream_queue
-                        aborted = self._stream_abort_requested
-                    if aborted or stream_queue is None:
+                    if run.abort_requested.is_set():
                         return
-                    item = stream_queue.get()
+                    item = run.audio_queue.get()
                     if item is _STREAM_SENTINEL:
                         break
                     pcm_buffer.extend(item)
                     while len(pcm_buffer) >= chunk_bytes:
                         payload = bytes(pcm_buffer[:chunk_bytes])
                         del pcm_buffer[:chunk_bytes]
-                        self._process_stream_pcm(session, payload)
+                        self._process_stream_pcm(session, payload, run)
 
-                with self._stream_lock:
-                    if self._stream_abort_requested:
-                        return
+                if run.abort_requested.is_set():
+                    return
                 if pcm_buffer:
-                    self._process_stream_pcm(session, bytes(pcm_buffer))
+                    self._process_stream_pcm(session, bytes(pcm_buffer), run)
                 self._flush_session(session)
-                with self._stream_lock:
-                    self._stream_final_text = session.text
+                run.result.final_text = session.text
         except Exception as exc:
-            with self._stream_lock:
-                self._stream_error = exc
-                callback = self._stream_on_error
+            run.result.error = exc
+            callback = run.on_error
             if callback is not None:
                 try:
                     callback(f"Nemotron streaming failed: {exc}")
                 except Exception:
                     pass
+        finally:
+            with self._stream_lock:
+                self._stream_workers.pop(run.generation, None)
+                if self._close_requested and not self._stream_workers:
+                    self._close_requested = False
+                    # Keep the stream lock through the clear so a new stream
+                    # cannot adopt the soon-to-be-retired model in between the
+                    # decision and the actual teardown.
+                    self._clear_runtime()
 
-    def _process_stream_pcm(self, session: _StreamingSession, pcm_bytes: bytes) -> None:
+    def _process_stream_pcm(
+        self,
+        session: _InferenceSession,
+        pcm_bytes: bytes,
+        run: _StreamRun,
+    ) -> None:
         usable = len(pcm_bytes) - (len(pcm_bytes) % 2)
         if usable <= 0:
             return
         samples = (
-            np.frombuffer(pcm_bytes[:usable], dtype="<i2").astype(np.float32)
-            / 32768.0
+            np.frombuffer(pcm_bytes[:usable], dtype="<i2").astype(np.float32) / 32768.0
         )
         piece = self._process_samples(session, samples)
-        if not piece:
+        if not piece or run.abort_requested.is_set():
             return
-        with self._stream_lock:
-            callback = self._stream_on_partial
-            text = session.text.strip()
+        callback = run.on_partial
+        text = session.text.strip()
         if callback is not None and text:
             try:
                 callback(text)
             except Exception:
                 pass
 
-    def _reset_stream_fields(self) -> None:
+    def _reset_stream_fields(self, run: _StreamRun) -> None:
+        if self._stream_run is not run:
+            return
         self._stream_active = False
-        self._stream_queue = None
+        self._stream_run = None
         self._stream_thread = None
-        self._stream_on_partial = None
-        self._stream_on_error = None
-        self._stream_abort_requested = False
-        self._stream_error = None
-        self._stream_final_text = ""
 
     def _load_wav_samples(self, audio_source: AudioInput) -> np.ndarray:
-        source = io.BytesIO(audio_source) if isinstance(audio_source, bytes) else str(audio_source)
+        source = (
+            io.BytesIO(audio_source)
+            if isinstance(audio_source, bytes)
+            else str(audio_source)
+        )
         try:
             with wave.open(source, "rb") as wav_file:
                 channels = wav_file.getnchannels()
