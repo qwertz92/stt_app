@@ -511,7 +511,7 @@ step before its measured cases begin.
 | `--webgpu-devices` | ONNX targets for Cohere/Granite: `auto`, `gpu`, `cpu`, `gpu,cpu`, `dml`, `webgpu`, or `all` |
 | `--compute-types` | Precision: `int8`, `float32`, `float16` |
 | `--runs` | Number of measured runs per case |
-| `--warmup` | Run one unmeasured pass first |
+| `--warmup` | After loading, run one complete unmeasured transcription to prime compilation, kernels, and runtime caches before measured runs |
 | `--beam-size` | faster-whisper decoding beam size; ignored by Cohere/Granite/Nemotron ONNX models |
 | `--language` | Force language code (e.g. `de`, `en`) |
 | `--vad-filter` | Enable built-in VAD filtering |
@@ -524,6 +524,22 @@ Node ONNX Runtime versions, ORT GenAI provider capability, and detected CUDA
 driver/toolkit versions. Nemotron currently uses DirectML or CPU, not CUDA. If
 a newly added model is incorrectly reported as an invalid faster-whisper model,
 restart the app so the updated runtime catalog is loaded.
+
+The Settings benchmark window saves every run that produces at least one result
+to **Benchmark History** automatically, including partial results from a
+canceled run. **Export** is optional: it writes the loaded history entry to CSV,
+XLSX, or Markdown for sharing or further analysis; it is not required to keep
+the result in the app.
+
+Model loading and warm-up answer different questions. Load time is always
+measured and reported separately. With warm-up enabled, the app then performs
+one full transcription that is not included in the run average. This primes
+first-use work such as ONNX graph compilation, GPU pipeline creation, and
+runtime caches. Enable it for steady-state model comparisons. Disable it when
+the first inference after loading is part of the experience you want to
+measure. The [July 2026 Arc A750 benchmark](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-07-11.md)
+shows the first WebGPU run taking 32-39% longer than the mean of runs 2-4 even
+though model loading had already completed.
 
 ### Sample audio
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import importlib.util
 import sys
+from types import SimpleNamespace
 from pathlib import Path
 
 import pytest
@@ -342,6 +343,49 @@ def test_run_benchmark_cases_can_cancel_between_cases(monkeypatch, tmp_path):
         )
 
     assert [case.model for case in completed] == ["tiny"]
+
+
+def test_faster_whisper_case_reports_resolved_runtime_device(monkeypatch, tmp_path):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    progress: list[str] = []
+
+    class FakeWhisperModel:
+        def __init__(self, _model_name, **_kwargs):
+            self.model = SimpleNamespace(device="cpu")
+
+        def transcribe(self, _audio_path, **_kwargs):
+            segments = [SimpleNamespace(text="hello world")]
+            info = SimpleNamespace(
+                duration=2.0,
+                language="en",
+                language_probability=0.99,
+            )
+            return segments, info
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+    monkeypatch.setattr(local_benchmark, "_audio_duration_seconds", lambda _path: 2.0)
+
+    case = local_benchmark._run_case(
+        audio_path=audio_path,
+        model_name="tiny",
+        device="auto",
+        compute_type="int8",
+        runs=1,
+        beam_size=5,
+        language=None,
+        vad_filter=False,
+        warmup=False,
+        threads=0,
+        progress_callback=progress.append,
+    )
+
+    assert case.device == "cpu"
+    assert any("loaded on cpu" in message for message in progress)
 
 
 def test_webgpu_benchmark_case_closes_transcriber_when_preload_fails(

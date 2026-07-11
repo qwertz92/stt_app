@@ -184,10 +184,14 @@ def _run_case(
         model_kwargs["download_root"] = model_dir
     model = WhisperModel(model_name, **model_kwargs)
     load_seconds = time.perf_counter() - model_start
+    runtime_model = getattr(model, "model", None)
+    resolved_device = str(getattr(runtime_model, "device", "") or device)
     _raise_if_canceled(cancel_check)
 
     if progress_callback is not None:
-        progress_callback(f"Model loaded ({_format_seconds(load_seconds)})")
+        progress_callback(
+            f"Model loaded on {resolved_device} ({_format_seconds(load_seconds)})"
+        )
 
     if warmup:
         step += 1
@@ -253,7 +257,7 @@ def _run_case(
 
     return BenchmarkCase(
         model=model_name,
-        device=device,
+        device=resolved_device,
         compute_type=compute_type,
         download_seconds=download_seconds,
         load_seconds=load_seconds,

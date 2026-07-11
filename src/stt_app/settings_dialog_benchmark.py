@@ -33,8 +33,14 @@ from .settings_dialog_helpers import (
 )
 from .ui_feedback import restore_vertical_scrollbar
 
-_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(640, 560)
+_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(820, 720)
+_BENCHMARK_WINDOW_MINIMUM_SIZE = QtCore.QSize(680, 560)
 _BENCHMARK_COMPACT_BUTTON_WIDTH_PX = 110
+_BENCHMARK_RESULT_SURFACE_STYLESHEET = """
+    border: 1px solid #b8c2d2;
+    border-radius: 4px;
+    background-color: #ffffff;
+"""
 
 
 def _facade():
@@ -118,6 +124,15 @@ class _BenchmarkMixin:
         )
         history_layout.addWidget(self.benchmark_history_list, 1)
 
+        history_note = QtWidgets.QLabel(
+            "Runs that produce results are saved here automatically, including "
+            "partial canceled runs. Export creates a separate file for sharing "
+            "or analysis."
+        )
+        history_note.setWordWrap(True)
+        self._style_note_label(history_note)
+        history_layout.addWidget(history_note)
+
         benchmark_history_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_history_actions)
         self.load_benchmark_history_button = QtWidgets.QPushButton("Load Selected")
@@ -155,12 +170,31 @@ class _BenchmarkMixin:
             QtWidgets.QSizePolicy.Expanding,
         )
         results_layout = QtWidgets.QVBoxLayout(results_box)
+        results_layout.setContentsMargins(10, 10, 10, 10)
+        results_layout.setSpacing(6)
         self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.benchmark_results_splitter.setChildrenCollapsible(False)
         self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
         self.benchmark_results_table.setMinimumHeight(110)
         self.benchmark_results_table.setHorizontalHeaderLabels(
-            ["Model", "Device", "Compute", "Load", "Avg", "RTF", "Status"]
+            [
+                "Model",
+                "Resolved Device",
+                "Compute",
+                "Load",
+                "Avg",
+                "RTF",
+                "Status",
+            ]
+        )
+        device_header = self.benchmark_results_table.horizontalHeaderItem(1)
+        if device_header is not None:
+            device_header.setToolTip(
+                "The device actually used by the runtime. Older stored "
+                "faster-whisper results may show the configured value 'auto'."
+            )
+        self.benchmark_results_table.setStyleSheet(
+            _BENCHMARK_RESULT_SURFACE_STYLESHEET
         )
         self.benchmark_results_table.verticalHeader().setVisible(False)
         benchmark_row_height = self._compact_table_row_height(
@@ -190,9 +224,36 @@ class _BenchmarkMixin:
         self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
         self.benchmark_summary_text.setReadOnly(True)
         self.benchmark_summary_text.setMinimumHeight(110)
+        self.benchmark_summary_text.setStyleSheet(
+            _BENCHMARK_RESULT_SURFACE_STYLESHEET
+        )
         self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
         self.benchmark_results_splitter.setSizes([150, 170])
         results_layout.addWidget(self.benchmark_results_splitter)
+
+        results_actions = QtWidgets.QHBoxLayout()
+        self._configure_button_row(results_actions)
+        self.clear_benchmark_results_button = QtWidgets.QPushButton("Clear Loaded")
+        self.clear_benchmark_results_button.setToolTip(
+            "Clear the displayed result without deleting its saved history entry."
+        )
+        self.clear_benchmark_results_button.clicked.connect(
+            self._clear_benchmark_results
+        )
+        self.export_benchmark_results_button = QtWidgets.QPushButton(
+            "Export Loaded..."
+        )
+        self.export_benchmark_results_button.setEnabled(False)
+        self.export_benchmark_results_button.setToolTip(
+            "Export the displayed result. Runs are already saved in Benchmark History."
+        )
+        self.export_benchmark_results_button.clicked.connect(
+            self._export_current_benchmark_results
+        )
+        results_actions.addWidget(self.clear_benchmark_results_button)
+        results_actions.addWidget(self.export_benchmark_results_button)
+        results_actions.addStretch(1)
+        results_layout.addLayout(results_actions)
         return results_box
 
     def _build_benchmark_window(self) -> None:
@@ -217,7 +278,7 @@ class _BenchmarkMixin:
         window.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
         window.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
         window.resize(_BENCHMARK_WINDOW_DEFAULT_SIZE)
-        window.setMinimumSize(560, 480)
+        window.setMinimumSize(_BENCHMARK_WINDOW_MINIMUM_SIZE)
 
         outer_layout = QtWidgets.QVBoxLayout(window)
         outer_layout.setContentsMargins(10, 10, 10, 10)
@@ -239,9 +300,9 @@ class _BenchmarkMixin:
 
         intro = QtWidgets.QLabel(
             "Benchmark installed local models against one audio file. "
-            "Cohere and Granite 4.0 use q4 ONNX weights; Granite 4.1 uses "
-            "INT8 ONNX weights. Test Auto, GPU-only, CPU-only, DirectML, or "
-            "WebGPU targets on this machine."
+            "Results appear live on the Benchmark tab and are saved to history "
+            "automatically. Test Auto, GPU-only, CPU-only, DirectML, or WebGPU "
+            "targets on this machine."
         )
         intro.setWordWrap(True)
         self._style_note_label(intro)
@@ -481,10 +542,13 @@ class _BenchmarkMixin:
             "Run one warmup pass before measurements"
         )
         self.benchmark_warmup_checkbox.setToolTip(
-            "Runs one unmeasured pass first so model loading and first-run caches affect the final numbers less."
+            "Runs one complete, unmeasured transcription after model loading to "
+            "prime runtime compilation, kernels, and first-run caches. Model "
+            "load time is still measured separately."
         )
         warmup_note = QtWidgets.QLabel(
-            "Useful when you want cleaner timings after the first cold run."
+            "Enable for steady-state comparisons; disable to include first-use "
+            "inference overhead in the measured runs."
         )
         warmup_note.setWordWrap(True)
         self._style_note_label(warmup_note)
@@ -518,19 +582,8 @@ class _BenchmarkMixin:
         self.cancel_benchmark_button = QtWidgets.QPushButton("Cancel Benchmark")
         self.cancel_benchmark_button.setEnabled(False)
         self.cancel_benchmark_button.clicked.connect(self._cancel_local_benchmark)
-        self.clear_benchmark_results_button = QtWidgets.QPushButton("Clear Results")
-        self.clear_benchmark_results_button.clicked.connect(
-            self._clear_benchmark_results
-        )
-        self.export_benchmark_results_button = QtWidgets.QPushButton("Export Results...")
-        self.export_benchmark_results_button.setEnabled(False)
-        self.export_benchmark_results_button.clicked.connect(
-            self._export_current_benchmark_results
-        )
         benchmark_actions.addWidget(self.run_benchmark_button)
         benchmark_actions.addWidget(self.cancel_benchmark_button)
-        benchmark_actions.addWidget(self.clear_benchmark_results_button)
-        benchmark_actions.addWidget(self.export_benchmark_results_button)
         benchmark_actions.addStretch(1)
         setup_layout.addLayout(benchmark_actions)
 
@@ -1070,11 +1123,15 @@ class _BenchmarkMixin:
                 )
         elif any(case.error for case in cases):
             self._set_benchmark_status(
-                "Benchmark completed with errors. See the summary for details.",
+                "Benchmark completed with errors and was saved to history. "
+                "See the summary for details.",
                 "#b26a00",
             )
         else:
-            self._set_benchmark_status("Benchmark finished.", "#1b5e20")
+            self._set_benchmark_status(
+                "Benchmark finished and saved to history.",
+                "#1b5e20",
+            )
         self._expand_benchmark_results_area()
         self._update_benchmark_actions()
 
