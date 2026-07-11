@@ -125,6 +125,36 @@ def test_controller_restores_target_focus_before_insert():
     _ = app
 
 
+def test_controller_does_not_paste_when_target_focus_restore_fails(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    focus_helper.restore_target_window = lambda _hwnd: False
+    clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: clipboard)
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._target_window_handle = 555
+
+    controller._on_transcription_ready("sensitive transcript")
+
+    assert inserter.calls == []
+    assert clipboard.text() == "sensitive transcript"
+    assert overlay.states[-1][0] == "Error"
+    assert "could not be restored" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
 class FakeClipboard:
     def __init__(self):
         self.value = ""

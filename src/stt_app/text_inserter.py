@@ -102,7 +102,7 @@ class Win32ClipboardBackend:
         user's Ctrl/Alt/Shift/Win keys can still be down when Ctrl+V is
         injected; the target would then receive e.g. Ctrl+Alt+V (AltGr+V on
         German layouts), which is not a paste. Returns False when a modifier
-        is still held after the timeout; the caller proceeds anyway.
+        is still held after the timeout; the caller then aborts the paste.
         """
         get_state = getattr(self._user32, "GetAsyncKeyState", None)
         if get_state is None:
@@ -372,7 +372,14 @@ class TextInserter:
         if not callable(waiter):
             return
         try:
-            waiter()
+            released = waiter()
+            if released is False:
+                raise TextInsertionError(
+                    "Paste canceled because a Ctrl, Alt, Shift, or Windows key "
+                    "remained held. Release the keys and retry."
+                )
+        except TextInsertionError:
+            raise
         except Exception:
             # Never let modifier probing break the paste itself.
             pass
@@ -526,7 +533,11 @@ def _keyboard_input(vk: int, keyup: bool = False) -> INPUT:
     return INPUT(type=INPUT_KEYBOARD, union=_INPUTUNION(ki=KEYBDINPUT(vk, 0, flags, 0, 0)))
 
 
-def _send_input_batch(events: list[INPUT]) -> None:
+def _send_input_batch(
+    events: list[INPUT],
+    *,
+    cleanup_events: list[INPUT] | None = None,
+) -> None:
     if not events:
         return
 
@@ -554,6 +565,21 @@ def _send_input_batch(events: list[INPUT]) -> None:
         if last_sent == expected:
             return
         last_error = int(ctypes.get_last_error() or 0)
+        if last_sent > 0:
+            # Some key-down events may already have reached the target. Replaying
+            # the full batch can duplicate input and leave keys logically held.
+            # Send key-up cleanup once, then report the indeterminate paste.
+            if cleanup_events:
+                cleanup_inputs = (INPUT * len(cleanup_events))(*cleanup_events)
+                try:
+                    send_input(
+                        len(cleanup_inputs),
+                        ctypes.cast(cleanup_inputs, ctypes.POINTER(INPUT)),
+                        ctypes.sizeof(INPUT),
+                    )
+                except Exception:
+                    pass
+            break
         time.sleep(SENDINPUT_RETRY_SLEEP_S)
 
     detail = _format_sendinput_failure(last_sent, expected, last_error)
@@ -570,7 +596,13 @@ def _modified_key_inputs(modifier_vk: int, key_vk: int) -> list[INPUT]:
 
 
 def _send_ctrl_v_input() -> None:
-    _send_input_batch(_modified_key_inputs(VK_CONTROL, VK_V))
+    _send_input_batch(
+        _modified_key_inputs(VK_CONTROL, VK_V),
+        cleanup_events=[
+            _keyboard_input(VK_V, keyup=True),
+            _keyboard_input(VK_CONTROL, keyup=True),
+        ],
+    )
 
 
 def _format_sendinput_failure(sent: int, expected: int, error_code: int) -> str:

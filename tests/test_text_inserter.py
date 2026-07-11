@@ -144,6 +144,21 @@ def test_text_inserter_waits_for_modifier_release_before_touching_clipboard():
     ]
 
 
+def test_text_inserter_aborts_before_clipboard_when_modifiers_stay_held():
+    backend = GatedPasteBackend()
+    backend.wait_for_modifier_release = lambda: False
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextInsertionError, match="remained held"):
+        inserter.insert_text_with_options(
+            "hello",
+            target_hwnd=123,
+            paste_mode="send_input",
+        )
+
+    assert backend.calls == []
+
+
 def test_text_inserter_skips_gates_for_wm_paste_mode():
     """WM_PASTE is message-based: held modifiers cannot corrupt it and the
     synchronous SendMessageTimeout already proves the target processed it."""
@@ -380,6 +395,34 @@ def test_text_inserter_tolerates_sequence_change_when_text_is_unchanged():
 def test_format_sendinput_failure_uipi_message():
     msg = _format_sendinput_failure(sent=0, expected=4, error_code=5)
     assert "UIPI" in msg
+
+
+def test_partial_sendinput_sends_keyup_cleanup_without_replaying(monkeypatch):
+    import stt_app.text_inserter as text_inserter_module
+
+    calls = []
+
+    class FakeSendInput:
+        argtypes = None
+        restype = None
+
+        def __call__(self, count, _inputs, _size):
+            calls.append(int(count))
+            return 2 if len(calls) == 1 else int(count)
+
+    class FakeUser32:
+        SendInput = FakeSendInput()
+
+    monkeypatch.setattr(
+        text_inserter_module.ctypes,
+        "WinDLL",
+        lambda *_args, **_kwargs: FakeUser32(),
+    )
+
+    with pytest.raises(TextInsertionError, match="sent 2/4"):
+        text_inserter_module._send_ctrl_v_input()
+
+    assert calls == [4, 2]
 
 
 def test_format_sendinput_failure_nonzero_error():

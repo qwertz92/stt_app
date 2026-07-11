@@ -3,6 +3,7 @@ transcription_worker error branches, streaming abort, focus poll."""
 
 from __future__ import annotations
 
+import os
 import threading
 from unittest.mock import MagicMock
 
@@ -57,6 +58,26 @@ def test_shutdown_cancels_preload_future():
     controller._preload_future = mock_future
     controller.shutdown()
     mock_future.cancel.assert_called_once()
+    _ = app
+
+
+def test_recording_prune_leaves_unmanaged_wav_files_untouched(tmp_path):
+    controller, app = _make_controller()
+    managed_old = tmp_path / "recording_20260711_100000_000001.wav"
+    managed_new = tmp_path / "recording_20260711_100001_000002.wav"
+    unrelated = tmp_path / "family-interview.wav"
+    for path in (managed_old, managed_new, unrelated):
+        path.write_bytes(b"audio")
+    os.utime(managed_old, (1, 1))
+    os.utime(unrelated, (2, 2))
+    os.utime(managed_new, (3, 3))
+
+    controller._prune_recordings(str(tmp_path), keep_count=1)
+
+    assert unrelated.exists()
+    assert not managed_old.exists()
+    assert managed_new.exists()
+    controller.shutdown()
     _ = app
 
 

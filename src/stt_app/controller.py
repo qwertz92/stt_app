@@ -3,6 +3,7 @@ from __future__ import annotations
 import concurrent.futures
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -77,6 +78,11 @@ from .transcriber import create_transcriber
 from .transcriber.base import TranscriptionCanceled, TranscriptionError
 from .vad import EnergyVad, peak_windowed_rms_from_wav
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
+
+_ARCHIVED_RECORDING_NAME_RE = re.compile(
+    r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
+    re.IGNORECASE,
+)
 
 
 def _join_transcripts(texts: list[str]) -> str:
@@ -1011,7 +1017,7 @@ class DictationController(QtCore.QObject):
             files = [
                 os.path.join(directory, name)
                 for name in os.listdir(directory)
-                if name.lower().endswith(".wav")
+                if _ARCHIVED_RECORDING_NAME_RE.fullmatch(name)
             ]
         except OSError:
             return
@@ -3058,13 +3064,34 @@ class DictationController(QtCore.QObject):
             if target_signature is self._UNSET_TARGET
             else target_signature
         )
-        if restore_focus:
-            try:
-                self._window_focus_helper.restore_target_window(handle)
-            except Exception:
-                self._logger.exception("Failed to restore target window focus")
         insert_hwnd = self._target_insert_window(signature, handle)
         try:
+            if restore_focus and handle:
+                try:
+                    restored = bool(
+                        self._window_focus_helper.restore_target_window(handle)
+                    )
+                except Exception as exc:
+                    self._logger.exception("Failed to restore target window focus")
+                    raise TextInsertionError(
+                        "Target window focus could not be restored; transcript was "
+                        "not pasted into another window."
+                    ) from exc
+                expected_foreground = (
+                    signature[0]
+                    if isinstance(signature, tuple) and signature
+                    else handle
+                )
+                current_foreground = self._current_foreground_window()
+                if not restored or (
+                    expected_foreground
+                    and current_foreground is not None
+                    and current_foreground != expected_foreground
+                ):
+                    raise TextInsertionError(
+                        "Target window focus could not be restored; transcript was "
+                        "not pasted into another window."
+                    )
             self._text_inserter.insert_text_with_options(
                 text,
                 target_hwnd=insert_hwnd,

@@ -148,6 +148,13 @@ class FakeWindowFocusHelper:
 
     def restore_target_window(self, hwnd):
         self.restore_calls.append(hwnd)
+        self.current = hwnd
+        if hwnd == self.captured:
+            self.current_focus = self.captured_focus
+            self.current_caret = self.captured_caret
+        else:
+            self.current_focus = hwnd
+            self.current_caret = hwnd
         return True
 
 
