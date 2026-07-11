@@ -1,4 +1,7 @@
+import os
 import signal
+from datetime import datetime, timezone
+from types import SimpleNamespace
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -11,6 +14,7 @@ from stt_app.main import (
     _create_tray_icon,
     _refresh_local_model_inventory_in_background,
     _install_signal_handlers,
+    _last_recording_already_transcribed,
     _prompt_recoverable_last_recording,
     _restore_after_system_resume,
     _restore_overlay_after_settings_save,
@@ -639,10 +643,13 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
     store.save_recording(b"RIFF", keep_after_success=False)
     store.mark_failed("network")
 
+    prompts = []
     monkeypatch.setattr(
         QtWidgets.QMessageBox,
         "question",
-        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+        lambda _parent, _title, text, *_args, **_kwargs: (
+            prompts.append(text) or QtWidgets.QMessageBox.Yes
+        ),
     )
 
     opened = []
@@ -654,6 +661,7 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
     _prompt_recoverable_last_recording(store, lambda: _FakeDialog())
 
     assert opened == [True]
+    assert "Settings -> Import Audio" in prompts[0]
     _ = app
 
 
@@ -692,6 +700,47 @@ def test_prompt_recoverable_last_recording_skips_completed_history_match(
     assert asked == []
     assert store.has_recoverable_recording() is False
     _ = app
+
+
+def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    store.save_recording(b"RIFF", keep_after_success=False)
+    audio_mtime = 1_800_000_000
+    os.utime(store.audio_path, (audio_mtime, audio_mtime))
+    history = TranscriptHistoryStore(path=tmp_path / "history.json")
+    matching_time = datetime.fromtimestamp(audio_mtime + 60, timezone.utc).isoformat()
+    newer_time = datetime.fromtimestamp(audio_mtime + 600, timezone.utc).isoformat()
+    history.add_entry(
+        TranscriptHistoryEntry(
+            text="matching legacy transcript",
+            created_at=matching_time,
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+        max_items=20,
+    )
+    history.add_entry(
+        TranscriptHistoryEntry(
+            text="newer unrelated transcript",
+            created_at=newer_time,
+            engine="local",
+            model="small",
+            mode="batch",
+        ),
+        max_items=20,
+    )
+    legacy_state = SimpleNamespace(recording_id="", created_at="")
+
+    assert _last_recording_already_transcribed(
+        store,
+        history,
+        state=legacy_state,
+    ) is True
+    assert store.has_recoverable_recording() is False
 
 
 def test_load_app_icon_uses_bundled_asset():

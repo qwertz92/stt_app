@@ -580,7 +580,7 @@ def _prompt_recoverable_last_recording(
         "Recover last recording",
         (
             f"{description}\n\n"
-            "Open Settings -> History and load it for transcription now?"
+            "Open Settings -> Import Audio and load it for transcription now?"
         ),
         QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
         QtWidgets.QMessageBox.Yes,
@@ -640,7 +640,8 @@ def _last_recording_already_transcribed(
             except Exception:
                 pass
             return True
-        break
+        if history_ts < audio_mtime:
+            break
     return False
 
 
