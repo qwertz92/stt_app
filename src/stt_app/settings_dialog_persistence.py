@@ -372,6 +372,8 @@ class _PersistenceMixin:
             self.key_storage_status_label.setText(
                 f"API keys were saved, but key metadata could not be persisted: {exc}"
             )
+            if changed:
+                self.settings_changed.emit()
             return
         self._loaded_settings = updated
         self._refresh_secret_store_options_ui()
@@ -619,12 +621,33 @@ class _PersistenceMixin:
                 self._save_status_timer.start()
             return
 
-        if history_limit_changed and requested_history_limit > 0:
-            self._history_store.apply_max_items(requested_history_limit)
         if settings_changed:
-            self._settings_store.save(settings)
+            try:
+                self._settings_store.save(settings)
+            except Exception as exc:
+                logger = getattr(self, "_settings_perf_logger", None)
+                if logger is not None:
+                    logger.exception("Failed to persist settings")
+                self._set_bottom_status(f"Failed to save settings: {exc}")
+                self._save_status_timer.start()
+                if key_storage_changed:
+                    self.settings_changed.emit()
+                return
             self._loaded_settings = settings
             self._refresh_secret_store_options_ui()
+        if history_limit_changed and requested_history_limit > 0:
+            try:
+                self._history_store.apply_max_items(requested_history_limit)
+            except Exception as exc:
+                logger = getattr(self, "_settings_perf_logger", None)
+                if logger is not None:
+                    logger.exception("Failed to apply transcript history limit")
+                self._set_bottom_status(
+                    f"Settings saved, but history cleanup failed: {exc}"
+                )
+                self._save_status_timer.start()
+                self.settings_changed.emit()
+                return
         self._set_bottom_status(
             "\u2713 Settings saved" if settings_changed else "\u2713 API keys saved"
         )

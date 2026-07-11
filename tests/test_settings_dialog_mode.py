@@ -2024,6 +2024,73 @@ def test_partial_key_save_error_invalidates_cached_transcribers():
     _ = app
 
 
+def test_settings_save_failure_does_not_trim_history_or_emit_signal():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _FailingSettingsStore(_FakeSettingsStore):
+        def save(self, settings: AppSettings) -> None:
+            raise OSError("settings path is read-only")
+
+    class _TrackingHistoryStore:
+        applied_limits: list[int] = []
+
+        def count(self) -> int:
+            return 0
+
+        def apply_max_items(self, value: int) -> int:
+            self.applied_limits.append(value)
+            return 0
+
+    history = _TrackingHistoryStore()
+    dialog = SettingsDialog(
+        settings_store=_FailingSettingsStore(AppSettings(history_max_items=500)),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history
+    dialog.history_max_spin.setValue(100)
+    emitted: list[bool] = []
+    dialog.settings_changed.connect(lambda: emitted.append(True))
+
+    dialog._save()
+
+    assert history.applied_limits == []
+    assert emitted == []
+    assert "Failed to save settings" in dialog._save_status_label.text()
+    _ = app
+
+
+def test_history_cleanup_failure_keeps_saved_settings_and_reports_error():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _FailingHistoryStore:
+        def count(self) -> int:
+            return 0
+
+        def apply_max_items(self, _value: int) -> int:
+            raise OSError("history file is locked")
+
+    settings_store = _FakeSettingsStore(AppSettings(history_max_items=500))
+    dialog = SettingsDialog(
+        settings_store=settings_store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = _FailingHistoryStore()
+    dialog.history_max_spin.setValue(100)
+    emitted: list[bool] = []
+    dialog.settings_changed.connect(lambda: emitted.append(True))
+
+    dialog._save()
+
+    assert settings_store.saved is not None
+    assert settings_store.saved.history_max_items == 100
+    assert dialog._loaded_settings.history_max_items == 100
+    assert emitted == [True]
+    assert "history cleanup failed" in dialog._save_status_label.text()
+    _ = app
+
+
 def test_settings_shutdown_cancels_child_process_work(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
