@@ -1,3 +1,8 @@
+import json
+import threading
+
+import pytest
+
 from stt_app.secret_store import KeyringSecretStore
 
 
@@ -116,7 +121,8 @@ def test_insecure_fallback_stores_and_reads_key(tmp_path, monkeypatch):
     assert store.get_api_key("groq") == "gsk_test"
     assert store.has_api_key("groq") is True
 
-    store.delete_api_key("groq")
+    with pytest.raises(RuntimeError, match="Could not confirm deletion"):
+        store.delete_api_key("groq")
     assert store.get_api_key("groq") is None
 
 
@@ -133,6 +139,59 @@ def test_delete_api_key_also_removes_insecure_copy_when_fallback_disabled(
     store.set_api_key("openai", "sk-test")
     store.set_insecure_fallback_enabled(False)
 
-    store.delete_api_key("openai")
+    with pytest.raises(RuntimeError, match="Could not confirm deletion"):
+        store.delete_api_key("openai")
 
     assert store.get_api_key_source("openai") == "none"
+
+
+def test_delete_api_key_reports_backend_failure_for_existing_key(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    class _DeleteFailureBackend(FakeKeyringBackend):
+        def delete_password(self, service_name, username):
+            raise OSError("credential vault is locked")
+
+    backend = _DeleteFailureBackend()
+    backend.set_password("stt-app-test", "openai", "secret")
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+
+    with pytest.raises(RuntimeError, match="credential vault is locked"):
+        store.delete_api_key("openai")
+
+    assert backend.get_password("stt-app-test", "openai") == "secret"
+
+
+def test_insecure_store_preserves_parallel_provider_updates(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    stores = [
+        KeyringSecretStore(
+            keyring_backend=FailingKeyringBackend(),
+            service_name="stt-app-test",
+            legacy_service_names=(),
+        )
+        for _index in range(8)
+    ]
+    for store in stores:
+        store.set_insecure_fallback_enabled(True)
+    barrier = threading.Barrier(len(stores))
+
+    def save(index):
+        barrier.wait(timeout=2.0)
+        stores[index].set_api_key(f"provider-{index}", f"secret-{index}")
+
+    threads = [threading.Thread(target=save, args=(index,)) for index in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=2.0)
+
+    assert all(not thread.is_alive() for thread in threads)
+    payload = json.loads(stores[0]._insecure_path.read_text(encoding="utf-8"))
+    assert payload == {
+        f"provider-{index}": f"secret-{index}" for index in range(8)
+    }

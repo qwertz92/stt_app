@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 from pathlib import Path
 
 from typing import Protocol
@@ -8,6 +9,15 @@ from typing import Protocol
 from .config import KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
 from .app_paths import insecure_keys_path
 from .persistence import atomic_write_json
+
+_INSECURE_STORE_LOCKS_GUARD = threading.Lock()
+_INSECURE_STORE_LOCKS: dict[Path, threading.RLock] = {}
+
+
+def _insecure_store_lock(path: Path) -> threading.RLock:
+    resolved = path.resolve()
+    with _INSECURE_STORE_LOCKS_GUARD:
+        return _INSECURE_STORE_LOCKS.setdefault(resolved, threading.RLock())
 
 
 class SecretStore(Protocol):
@@ -47,15 +57,17 @@ class KeyringSecretStore:
         )
         self._insecure_fallback_enabled = False
         self._insecure_path: Path = insecure_keys_path()
+        self._insecure_lock = _insecure_store_lock(self._insecure_path)
 
     def set_insecure_fallback_enabled(self, enabled: bool) -> None:
         self._insecure_fallback_enabled = bool(enabled)
 
     def _read_insecure_store(self) -> dict[str, str]:
-        try:
-            payload = json.loads(self._insecure_path.read_text(encoding="utf-8"))
-        except Exception:
-            return {}
+        with self._insecure_lock:
+            try:
+                payload = json.loads(self._insecure_path.read_text(encoding="utf-8"))
+            except Exception:
+                return {}
         if not isinstance(payload, dict):
             return {}
         result: dict[str, str] = {}
@@ -73,9 +85,10 @@ class KeyringSecretStore:
         )
 
     def _set_insecure_api_key(self, provider: str, api_key: str) -> None:
-        payload = self._read_insecure_store()
-        payload[provider] = api_key
-        self._write_insecure_store(payload)
+        with self._insecure_lock:
+            payload = self._read_insecure_store()
+            payload[provider] = api_key
+            self._write_insecure_store(payload)
 
     def _get_insecure_api_key(self, provider: str) -> str | None:
         payload = self._read_insecure_store()
@@ -85,11 +98,12 @@ class KeyringSecretStore:
         return str(value)
 
     def _delete_insecure_api_key(self, provider: str) -> None:
-        payload = self._read_insecure_store()
-        if provider not in payload:
-            return
-        payload.pop(provider, None)
-        self._write_insecure_store(payload)
+        with self._insecure_lock:
+            payload = self._read_insecure_store()
+            if provider not in payload:
+                return
+            payload.pop(provider, None)
+            self._write_insecure_store(payload)
 
     def _get_keyring_value(self, service_name: str, provider: str) -> str | None:
         try:
@@ -120,8 +134,11 @@ class KeyringSecretStore:
             # the old plaintext copy, which will be retried on the next write.
             try:
                 self._delete_insecure_api_key(provider)
-            except Exception:
-                pass
+            except Exception as exc:
+                raise RuntimeError(
+                    "The API key was stored securely, but its stale insecure "
+                    "fallback copy could not be removed."
+                ) from exc
             return
         self._set_insecure_api_key(provider, api_key)
 
@@ -166,15 +183,28 @@ class KeyringSecretStore:
         return "none"
 
     def delete_api_key(self, provider: str) -> None:
+        errors: list[str] = []
         for service_name in (self._service_name, *self._legacy_service_names):
             try:
+                existing = self._keyring.get_password(service_name, provider)
+            except Exception as exc:
+                errors.append(f"{service_name}: {exc}")
+                continue
+            if existing is None:
+                continue
+            try:
                 self._keyring.delete_password(service_name, provider)
-            except Exception:
-                pass
+            except Exception as exc:
+                errors.append(f"{service_name}: {exc}")
         try:
             self._delete_insecure_api_key(provider)
-        except Exception:
-            pass
+        except Exception as exc:
+            errors.append(f"insecure fallback: {exc}")
+        if errors:
+            raise RuntimeError(
+                "Could not confirm deletion from all credential stores: "
+                + " | ".join(errors)
+            )
 
     def has_api_key(self, provider: str) -> bool:
         return self.get_api_key(provider) is not None
