@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .benchmark_environment import BenchmarkEnvironment
+from .csv_safety import spreadsheet_safe_mapping
 from .config import (
     LOCAL_MODEL_RUNTIME,
     LOCAL_NEMOTRON_MODEL_SIZES,
@@ -640,20 +641,53 @@ def _write_csv(
             status = "ok" if case.error is None else "error"
             for run in case.runs:
                 writer.writerow(
+                    spreadsheet_safe_mapping(
+                        {
+                            **environment_row,
+                            "row_type": "run",
+                            "model": case.model,
+                            "device": case.device,
+                            "compute_type": case.compute_type,
+                            "run_index": run.run_index,
+                            "seconds": run.seconds,
+                            "audio_duration_seconds": run.audio_duration_seconds,
+                            "real_time_factor": run.real_time_factor,
+                            "transcript_chars": run.transcript_chars,
+                            "transcript_words": run.transcript_words,
+                            "detected_language": run.detected_language,
+                            "language_probability": run.language_probability,
+                            "download_seconds": case.download_seconds,
+                            "load_seconds": case.load_seconds,
+                            "avg_seconds": case.avg_seconds,
+                            "stdev_seconds": case.stdev_seconds,
+                            "avg_rtf": case.avg_rtf,
+                            "status": status,
+                            "runtime_details": case.runtime_details,
+                            "error": case.error or "",
+                        }
+                    )
+                )
+
+            writer.writerow(
+                spreadsheet_safe_mapping(
                     {
                         **environment_row,
-                        "row_type": "run",
+                        "row_type": "summary",
                         "model": case.model,
                         "device": case.device,
                         "compute_type": case.compute_type,
-                        "run_index": run.run_index,
-                        "seconds": run.seconds,
-                        "audio_duration_seconds": run.audio_duration_seconds,
-                        "real_time_factor": run.real_time_factor,
-                        "transcript_chars": run.transcript_chars,
-                        "transcript_words": run.transcript_words,
-                        "detected_language": run.detected_language,
-                        "language_probability": run.language_probability,
+                        "run_index": "",
+                        "seconds": "",
+                        "audio_duration_seconds": "",
+                        "real_time_factor": "",
+                        "transcript_chars": "",
+                        "transcript_words": "",
+                        "detected_language": (
+                            case.runs[0].detected_language if case.runs else ""
+                        ),
+                        "language_probability": (
+                            case.runs[0].language_probability if case.runs else ""
+                        ),
                         "download_seconds": case.download_seconds,
                         "load_seconds": case.load_seconds,
                         "avg_seconds": case.avg_seconds,
@@ -664,35 +698,6 @@ def _write_csv(
                         "error": case.error or "",
                     }
                 )
-
-            writer.writerow(
-                {
-                    **environment_row,
-                    "row_type": "summary",
-                    "model": case.model,
-                    "device": case.device,
-                    "compute_type": case.compute_type,
-                    "run_index": "",
-                    "seconds": "",
-                    "audio_duration_seconds": "",
-                    "real_time_factor": "",
-                    "transcript_chars": "",
-                    "transcript_words": "",
-                    "detected_language": (
-                        case.runs[0].detected_language if case.runs else ""
-                    ),
-                    "language_probability": (
-                        case.runs[0].language_probability if case.runs else ""
-                    ),
-                    "download_seconds": case.download_seconds,
-                    "load_seconds": case.load_seconds,
-                    "avg_seconds": case.avg_seconds,
-                    "stdev_seconds": case.stdev_seconds,
-                    "avg_rtf": case.avg_rtf,
-                    "status": status,
-                    "runtime_details": case.runtime_details,
-                    "error": case.error or "",
-                }
             )
 
 

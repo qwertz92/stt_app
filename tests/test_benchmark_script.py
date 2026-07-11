@@ -56,6 +56,28 @@ def test_benchmark_csv_writer_creates_run_and_summary_rows(tmp_path):
     assert rows[1]["model"] == "small"
 
 
+def test_benchmark_csv_writer_neutralizes_spreadsheet_formulas(tmp_path):
+    module = _load_benchmark_module()
+    case = module.BenchmarkCase(
+        model="@SUM(1,1)",
+        device="auto",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=0.1,
+        runs=[],
+        runtime_details="-danger",
+        error="=1+1",
+    )
+    out_path = tmp_path / "bench.csv"
+
+    module._write_csv(out_path, [case])
+
+    row = next(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
+    assert row["model"] == "'@SUM(1,1)"
+    assert row["runtime_details"] == "'-danger"
+    assert row["error"] == "'=1+1"
+
+
 def test_successful_cases_filters_errors():
     module = _load_benchmark_module()
     ok_case = module.BenchmarkCase(

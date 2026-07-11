@@ -193,3 +193,16 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
     assert "| CPU | AMD Ryzen |" in markdown
     assert "## Result Rows" in markdown
     assert "| created_at | benchmark_status | audio_path |" in markdown
+
+
+def test_benchmark_csv_export_neutralizes_spreadsheet_formulas(tmp_path):
+    entry = _entry()
+    entry.options.audio_path = '=HYPERLINK("https://example.invalid")'
+    entry.cases[0].error = "+cmd|' /C calc'!A0"
+    csv_path = tmp_path / "benchmark.csv"
+
+    export_benchmark_entry(csv_path, entry)
+
+    rows = list(csv.DictReader(csv_path.read_text(encoding="utf-8").splitlines()))
+    assert rows[0]["audio_path"].startswith("'=HYPERLINK")
+    assert rows[0]["error"].startswith("'+cmd")

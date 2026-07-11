@@ -11,6 +11,7 @@ from xml.sax.saxutils import escape
 
 from .app_paths import benchmark_history_path
 from .benchmark_environment import BenchmarkEnvironment
+from .csv_safety import spreadsheet_safe_cell
 from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
     atomic_write_json,
@@ -264,7 +265,10 @@ def _write_csv(path: Path, entry: BenchmarkHistoryEntry) -> None:
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.writer(handle)
         writer.writerow(_export_headers())
-        writer.writerows(_export_rows(entry))
+        writer.writerows(
+            [spreadsheet_safe_cell(value) for value in row]
+            for row in _export_rows(entry)
+        )
 
 
 def _write_xlsx(path: Path, entry: BenchmarkHistoryEntry) -> None:
