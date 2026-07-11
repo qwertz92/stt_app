@@ -275,7 +275,7 @@ class _RemoteProvidersMixin:
             "Keys are then stored unencrypted in the app-data folder."
         )
         self.insecure_key_storage_checkbox.toggled.connect(
-            lambda _checked: self._apply_secret_store_options()
+            lambda _checked: self._refresh_secret_store_options_ui()
         )
         provider_grid.addWidget(self.insecure_key_storage_checkbox, grid_row, 1, 1, 3)
         grid_row += 1
@@ -489,14 +489,27 @@ class _RemoteProvidersMixin:
         self._refresh_provider_key_status(provider)
         self._update_import_engine_note()
 
-    def _import_engine_has_api_key(self, engine: str) -> bool:
+    def _import_engine_credential_issue(self, engine: str) -> str | None:
+        """Explain why an import cannot safely use this provider credential."""
         engine_name = str(engine or "").strip().lower()
         if engine_name == DEFAULT_ENGINE:
-            return True
+            return None
         key_field = self._provider_key_edits.get(engine_name)
         if key_field is None:
-            return False
-        return bool(self._resolve_api_key(engine_name, key_field))
+            return f"No API key configured for {self._provider_label(engine_name)}."
+        if key_field.text().strip():
+            return (
+                f"A new {self._provider_label(engine_name)} API key is typed but "
+                "not saved. Save API keys before starting the import."
+            )
+        if engine_name in self._provider_pending_clear:
+            return (
+                f"The stored {self._provider_label(engine_name)} API key is marked "
+                "for deletion. Save or re-enter the key before starting the import."
+            )
+        if self._resolve_api_key(engine_name, key_field):
+            return None
+        return f"No API key configured for {self._provider_label(engine_name)}."
 
     def _update_import_engine_note(self) -> None:
         if not hasattr(self, "import_engine_combo"):
@@ -513,7 +526,8 @@ class _RemoteProvidersMixin:
                 "Local import transcription stays independent from the main Local tab selection."
             )
             return
-        if self._import_engine_has_api_key(engine):
+        credential_issue = self._import_engine_credential_issue(engine)
+        if credential_issue is None:
             self.import_engine_note.setStyleSheet("color: #555;")
             model_text = (
                 f" using model '{selected_model}'."
@@ -525,9 +539,7 @@ class _RemoteProvidersMixin:
             )
             return
         self.import_engine_note.setStyleSheet("color: #b71c1c;")
-        self.import_engine_note.setText(
-            f"No API key configured for {self._provider_label(engine)}."
-        )
+        self.import_engine_note.setText(credential_issue)
 
     def _test_connection(self) -> None:
         """Test connectivity for one provider or all configured providers."""

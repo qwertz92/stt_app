@@ -228,7 +228,7 @@ def test_elevenlabs_connection_runs_in_background_worker(monkeypatch):
     dialog.elevenlabs_key_edit.setText("el-key")
     engine_index = dialog.engine_combo.findData("elevenlabs")
     dialog.engine_combo.setCurrentIndex(engine_index)
-    model_index = dialog.remote_model_combo.findData("scribe_v1")
+    model_index = dialog.remote_model_combo.findData("scribe_v2")
     dialog.remote_model_combo.setCurrentIndex(model_index)
 
     dialog._test_connection()
@@ -443,11 +443,11 @@ def test_save_persists_only_supported_remote_keys():
         "universal-3-pro",
         "universal-2",
     }
-    assert dialog._loaded_settings.elevenlabs_model in {"scribe_v2", "scribe_v1"}
+    assert dialog._loaded_settings.elevenlabs_model == "scribe_v2"
     _ = app
 
 
-def test_save_api_keys_only_does_not_emit_settings_changed():
+def test_save_api_keys_only_emits_settings_changed_for_effective_key_change():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
     secret_store = _FakeSecretStore()
@@ -466,7 +466,7 @@ def test_save_api_keys_only_does_not_emit_settings_changed():
     assert store.saved is not None
     assert store.saved.has_openai_key is True
     assert dialog.openai_key_edit.text() == ""
-    assert changed == []
+    assert changed == [True]
     _ = app
 
 

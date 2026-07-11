@@ -1877,6 +1877,153 @@ def test_reopen_reload_is_deferred_while_dialog_work_is_busy():
     _ = app
 
 
+def test_insecure_storage_checkbox_only_mutates_secret_store_on_save():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _TrackingSecretStore(_FakeSecretStore):
+        def __init__(self):
+            super().__init__()
+            self.option_calls: list[bool] = []
+
+        def set_insecure_fallback_enabled(self, enabled: bool) -> None:
+            self.option_calls.append(bool(enabled))
+
+    settings_store = _FakeSettingsStore(AppSettings())
+    secrets = _TrackingSecretStore()
+    dialog = SettingsDialog(
+        settings_store=settings_store,
+        secret_store=secrets,
+        app_logger=_FakeLogger(),
+    )
+
+    dialog.insecure_key_storage_checkbox.setChecked(True)
+    emitted: list[bool] = []
+    dialog.settings_changed.connect(lambda: emitted.append(True))
+
+    assert secrets.option_calls == []
+    assert settings_store.saved is None
+    assert "when you save" in dialog.key_storage_status_label.text()
+
+    dialog._save_api_keys_only()
+
+    assert secrets.option_calls == [True]
+    assert settings_store.saved is not None
+    assert settings_store.saved.allow_insecure_key_storage is True
+    assert "is enabled" in dialog.key_storage_status_label.text()
+    assert emitted == [True]
+    _ = app
+
+
+def test_failed_key_set_and_delete_are_not_reported_as_changes():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _FailingSecretStore(_FakeSecretStore):
+        def set_api_key(self, provider: str, key: str) -> None:
+            raise RuntimeError("set blocked")
+
+        def delete_api_key(self, provider: str) -> None:
+            raise RuntimeError("delete blocked")
+
+    secrets = _FailingSecretStore()
+    secrets._values["groq"] = "stored-key"
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=secrets,
+        app_logger=_FakeLogger(),
+    )
+    dialog.openai_key_edit.setText("new-key")
+
+    _states, errors, changed = dialog._persist_provider_key_changes()
+
+    assert changed is False
+    assert errors == ["OpenAI: set blocked"]
+    assert dialog.openai_key_edit.text() == "new-key"
+
+    dialog.openai_key_edit.clear()
+    dialog._mark_provider_key_for_clear("groq")
+    _states, errors, changed = dialog._persist_provider_key_changes()
+
+    assert changed is False
+    assert errors == ["Groq delete: delete blocked"]
+    assert "groq" in dialog._provider_pending_clear
+    _ = app
+
+
+def test_save_with_key_error_does_not_mutate_settings_history_or_emit_signal():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _FailingSecretStore(_FakeSecretStore):
+        def set_api_key(self, provider: str, key: str) -> None:
+            raise RuntimeError("credential manager unavailable")
+
+    class _TrackingHistoryStore:
+        def __init__(self):
+            self.applied_limits: list[int] = []
+
+        def count(self) -> int:
+            return 0
+
+        def apply_max_items(self, value: int) -> int:
+            self.applied_limits.append(int(value))
+            return 0
+
+    settings_store = _FakeSettingsStore(AppSettings(history_max_items=500))
+    dialog = SettingsDialog(
+        settings_store=settings_store,
+        secret_store=_FailingSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    history = _TrackingHistoryStore()
+    dialog._history_store = history
+    dialog.history_max_spin.setValue(100)
+    dialog.keep_clipboard_checkbox.setChecked(
+        not dialog.keep_clipboard_checkbox.isChecked()
+    )
+    dialog.openai_key_edit.setText("new-key")
+    emitted: list[bool] = []
+    dialog.settings_changed.connect(lambda: emitted.append(True))
+
+    dialog._save()
+
+    assert settings_store.saved is None
+    assert history.applied_limits == []
+    assert emitted == []
+    assert "Could not store" in dialog.key_storage_status_label.text()
+    _ = app
+
+
+def test_partial_key_save_error_invalidates_cached_transcribers():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _PartiallyFailingSecretStore(_FakeSecretStore):
+        def delete_api_key(self, provider: str) -> None:
+            if provider == "groq":
+                raise RuntimeError("delete blocked")
+            super().delete_api_key(provider)
+
+    secrets = _PartiallyFailingSecretStore()
+    secrets._values["groq"] = "stored-key"
+    settings_store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=settings_store,
+        secret_store=secrets,
+        app_logger=_FakeLogger(),
+    )
+    dialog.openai_key_edit.setText("new-openai-key")
+    dialog._mark_provider_key_for_clear("groq")
+    emitted: list[bool] = []
+    dialog.settings_changed.connect(lambda: emitted.append(True))
+
+    dialog._save()
+
+    assert secrets.get_api_key("openai") == "new-openai-key"
+    assert secrets.get_api_key("groq") == "stored-key"
+    assert settings_store.saved is None
+    assert emitted == [True]
+    assert "Could not store" in dialog.key_storage_status_label.text()
+    _ = app
+
+
 def test_settings_shutdown_cancels_child_process_work(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
@@ -3023,6 +3170,70 @@ def test_import_start_transcribes_without_confirmation(monkeypatch, tmp_path):
 
     assert dialog.import_result_label.text() == "Transcription finished."
     assert dialog.import_result_text.toPlainText() == "imported text"
+    _ = app
+
+
+def test_import_blocks_typed_unsaved_remote_key_instead_of_using_stored_key(
+    monkeypatch,
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
+
+    class _Controller:
+        calls = 0
+
+        def transcribe_audio_file(self, *_args, **_kwargs):
+            self.calls += 1
+            return True, "must not run"
+
+    secrets = _FakeSecretStore()
+    secrets.set_api_key("openai", "stored-old-key")
+    controller = _Controller()
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(engine="local")),
+        secret_store=secrets,
+        app_logger=_FakeLogger(),
+        controller=controller,
+    )
+    openai_idx = dialog.import_engine_combo.findData("openai")
+    dialog.import_engine_combo.setCurrentIndex(openai_idx)
+    dialog.openai_key_edit.setText("typed-new-key")
+    import_path = tmp_path / "dummy.wav"
+    import_path.write_bytes(b"RIFF")
+    dialog._set_selected_import_file(str(import_path))
+
+    dialog._transcribe_selected_import_file()
+
+    assert controller.calls == 0
+    assert "typed but not saved" in dialog.import_result_text.toPlainText()
+    assert "Save API keys" in dialog.import_result_text.toPlainText()
+    _ = app
+
+
+def test_standalone_import_keeps_success_when_transcriber_close_fails(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class _Transcriber:
+        def transcribe_batch(self, _path):
+            return "successful transcript"
+
+        def close(self):
+            raise RuntimeError("close failed")
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.create_transcriber",
+        lambda *_args, **_kwargs: _Transcriber(),
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    result = dialog._transcribe_import_file("dummy.wav", AppSettings())
+
+    assert result == (True, "successful transcript")
     _ = app
 
 

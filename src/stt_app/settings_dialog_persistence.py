@@ -206,7 +206,7 @@ class _PersistenceMixin:
         self._update_engine_indicator()
         self._refresh_history_list(force=True)
         self._refresh_benchmark_history_list()
-        self._apply_secret_store_options()
+        self._refresh_secret_store_options_ui()
         self._refresh_provider_key_statuses()
         self._restore_provider_connection_test_labels()
 
@@ -228,14 +228,20 @@ class _PersistenceMixin:
             recordings_dir=self._recordings_dir_compare_value(loaded.recordings_dir),
         )
 
-    def _apply_secret_store_options(self) -> None:
+    def _refresh_secret_store_options_ui(self) -> None:
+        """Preview the selected storage mode without mutating SecretStore."""
         enabled = self.insecure_key_storage_checkbox.isChecked()
-        setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
-        if callable(setter):
-            try:
-                setter(enabled)
-            except Exception:
-                pass
+        persisted = bool(
+            getattr(self._loaded_settings, "allow_insecure_key_storage", False)
+        )
+        if enabled != persisted:
+            action = "enabled" if enabled else "disabled"
+            self.key_storage_status_label.setStyleSheet("color: #b26a00;")
+            self.key_storage_status_label.setText(
+                f"Insecure key fallback will be {action} when you save."
+            )
+            self._refresh_provider_key_statuses()
+            return
         if enabled:
             self.key_storage_status_label.setStyleSheet("color: #b26a00;")
             self.key_storage_status_label.setText(
@@ -248,6 +254,18 @@ class _PersistenceMixin:
                 "Credential Manager only (recommended)."
             )
         self._refresh_provider_key_statuses()
+
+    def _apply_secret_store_options(self) -> str | None:
+        """Apply the selected storage mode as part of an explicit save."""
+        enabled = self.insecure_key_storage_checkbox.isChecked()
+        setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
+        if callable(setter):
+            try:
+                setter(enabled)
+            except Exception as exc:
+                return f"Storage mode: {exc}"
+        self._refresh_secret_store_options_ui()
+        return None
 
     def _stored_provider_key_states(self) -> dict[str, bool]:
         states: dict[str, bool] = {}
@@ -263,8 +281,14 @@ class _PersistenceMixin:
         return states
 
     def _persist_provider_key_changes(self) -> tuple[dict[str, bool], list[str], bool]:
-        self._apply_secret_store_options()
         errors: list[str] = []
+        option_error = self._apply_secret_store_options()
+        if option_error is not None:
+            errors.append(option_error)
+            states = self._stored_provider_key_states()
+            self._refresh_provider_key_statuses()
+            self._update_import_engine_note()
+            return states, errors, False
         changed = False
         pending_clear = set(self._provider_pending_clear)
 
@@ -275,18 +299,18 @@ class _PersistenceMixin:
             label = self._provider_label(provider)
             value = key_field.text().strip()
             if value:
-                changed = True
                 try:
                     self._secret_store.set_api_key(provider, value)
+                    changed = True
                     key_field.clear()
                     self._provider_pending_clear.discard(provider)
                     self._clear_provider_connection_test(provider)
                 except Exception as exc:
                     errors.append(f"{label}: {exc}")
             elif provider in pending_clear:
-                changed = True
                 try:
                     self._secret_store.delete_api_key(provider)
+                    changed = True
                     self._provider_pending_clear.discard(provider)
                     self._clear_provider_connection_test(provider)
                 except Exception as exc:
@@ -314,6 +338,7 @@ class _PersistenceMixin:
             self.key_storage_status_label.setText("No API key changes to save.")
 
     def _save_api_keys_only(self) -> None:
+        previous_settings = self._loaded_settings
         key_states, key_storage_errors, changed = self._persist_provider_key_changes()
         metadata_changed = (
             self.insecure_key_storage_checkbox.isChecked()
@@ -321,6 +346,11 @@ class _PersistenceMixin:
         )
         self._show_key_storage_result(key_storage_errors, changed or metadata_changed)
         if key_storage_errors:
+            # Credential backends are not transactional. If another provider
+            # was updated before a later operation failed, invalidate cached
+            # transcribers even though settings metadata is left untouched.
+            if changed:
+                self.settings_changed.emit()
             return
 
         updated = replace(
@@ -344,6 +374,9 @@ class _PersistenceMixin:
             )
             return
         self._loaded_settings = updated
+        self._refresh_secret_store_options_ui()
+        if changed or updated != previous_settings:
+            self.settings_changed.emit()
 
     def _construct_settings_from_widgets(
         self,
@@ -566,6 +599,10 @@ class _PersistenceMixin:
         )
         if key_storage_errors or key_storage_changed:
             self._show_key_storage_result(key_storage_errors, key_storage_changed)
+        if key_storage_errors:
+            if key_storage_changed:
+                self.settings_changed.emit()
+            return
 
         settings = self._construct_settings_from_widgets(
             hotkey=hotkey,
@@ -587,6 +624,7 @@ class _PersistenceMixin:
         if settings_changed:
             self._settings_store.save(settings)
             self._loaded_settings = settings
+            self._refresh_secret_store_options_ui()
         self._set_bottom_status(
             "\u2713 Settings saved" if settings_changed else "\u2713 API keys saved"
         )
