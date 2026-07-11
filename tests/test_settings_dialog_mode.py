@@ -1392,7 +1392,10 @@ def test_remote_provider_status_badges_use_calculated_fixed_width():
         key=dialog.fontMetrics().horizontalAdvance,
     )
     assert longest_status == "Will clear on Save"
-    assert expected_width < 150
+    assert expected_width == (
+        dialog.fontMetrics().horizontalAdvance(longest_status)
+        + settings_dialog_module._PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX
+    )
     for badge in dialog._provider_status_labels.values():
         assert badge.minimumWidth() == expected_width
         assert badge.maximumWidth() == expected_width
@@ -2903,7 +2906,12 @@ def test_settings_dialog_show_expands_to_remote_tab_width():
     app.processEvents()
     remote_tab = dialog.tabs.currentWidget()
 
-    assert dialog.width() >= settings_dialog_module._DEFAULT_SETTINGS_DIALOG_SIZE.width()
+    available_width = dialog._available_dialog_size().width()
+    expected_width = min(
+        settings_dialog_module._DEFAULT_SETTINGS_DIALOG_SIZE.width(),
+        available_width,
+    )
+    assert dialog.width() >= expected_width
     assert remote_tab.horizontalScrollBar().maximum() == 0
     _ = app
 

@@ -80,7 +80,11 @@ class _GeneralTabMixin:
     @classmethod
     def _reserve_dynamic_hint_height(cls, label: QtWidgets.QLabel) -> None:
         """Reserve a compact, stable two-line area for changing hint text."""
-        height = label.fontMetrics().lineSpacing() * cls._DYNAMIC_HINT_LINE_COUNT + 2
+        # Windows' offscreen/high-DPI font backend can need several pixels more
+        # than two nominal line spacings for the same wrapped glyph bounds.
+        # Keep that platform padding inside the fixed area so text never clips
+        # while all following rows still remain stationary.
+        height = label.fontMetrics().lineSpacing() * cls._DYNAMIC_HINT_LINE_COUNT + 10
         label.setFixedHeight(height)
         label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
 

@@ -179,7 +179,7 @@ def test_dynamic_notes_reserve_exactly_two_text_lines(
 
     assert len(reserved_heights) == 1
     reserved_height = reserved_heights.pop()
-    assert reserved_height <= dialog.fontMetrics().lineSpacing() * 2 + 6
+    assert reserved_height <= dialog.fontMetrics().lineSpacing() * 2 + 10
     for label in (
         dialog.local_model_runtime_warning_label,
         dialog.remote_model_note_label,
