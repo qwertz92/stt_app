@@ -20,6 +20,7 @@ from __future__ import annotations
 import io
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 import wave
 from pathlib import Path
@@ -50,6 +51,10 @@ from .base import (
 )
 
 _TRANSCRIBE_PATH = "/speechtotext/transcriptions:transcribe"
+_AZURE_SPEECH_HOST_SUFFIXES = (
+    ".cognitiveservices.azure.com",
+    ".api.cognitive.microsoft.com",
+)
 
 def normalize_azure_endpoint(endpoint: str) -> str:
     """Return a clean ``https://host`` base URL for a Speech resource.
@@ -69,7 +74,43 @@ def normalize_azure_endpoint(endpoint: str) -> str:
         if "." not in value:
             value = f"{value}.cognitiveservices.azure.com"
         value = f"https://{value}"
-    return value.rstrip("/")
+    try:
+        parsed = urllib.parse.urlsplit(value)
+        port = parsed.port
+    except ValueError as exc:
+        raise TranscriptionError(f"Azure endpoint is invalid: {exc}") from exc
+    hostname = str(parsed.hostname or "").lower().rstrip(".")
+    if parsed.scheme.lower() != "https":
+        raise TranscriptionError("Azure endpoint must use HTTPS.")
+    if parsed.username is not None or parsed.password is not None:
+        raise TranscriptionError("Azure endpoint must not contain user credentials.")
+    if port not in (None, 443):
+        raise TranscriptionError("Azure endpoint must use the standard HTTPS port.")
+    if not any(
+        hostname.endswith(suffix) and hostname != suffix.lstrip(".")
+        for suffix in _AZURE_SPEECH_HOST_SUFFIXES
+    ):
+        raise TranscriptionError(
+            "Azure endpoint host must be an Azure Speech resource "
+            "(*.cognitiveservices.azure.com) or regional Speech endpoint "
+            "(*.api.cognitive.microsoft.com)."
+        )
+    if parsed.fragment:
+        raise TranscriptionError("Azure endpoint must not contain a URL fragment.")
+    path = parsed.path.rstrip("/")
+    if path not in {"", _TRANSCRIBE_PATH}:
+        raise TranscriptionError(
+            f"Azure endpoint path must be empty or {_TRANSCRIBE_PATH}."
+        )
+    query_items = urllib.parse.parse_qsl(parsed.query, keep_blank_values=True)
+    if any(name != "api-version" for name, _value in query_items):
+        raise TranscriptionError(
+            "Azure endpoint query may contain only the api-version parameter."
+        )
+    if len(query_items) > 1:
+        raise TranscriptionError("Azure endpoint contains duplicate query parameters.")
+    netloc = hostname if port is None else f"{hostname}:{port}"
+    return urllib.parse.urlunsplit(("https", netloc, path, parsed.query, ""))
 
 
 def build_transcribe_url(endpoint: str) -> str:

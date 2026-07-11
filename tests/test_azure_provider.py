@@ -62,6 +62,33 @@ class TestEndpointNormalization:
     def test_resource_name_expands_to_full_host(self):
         assert normalize_azure_endpoint("my-res") == _ENDPOINT
 
+    def test_regional_endpoint_is_allowed(self):
+        endpoint = "https://westeurope.api.cognitive.microsoft.com"
+        assert normalize_azure_endpoint(endpoint) == endpoint
+
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "http://my-res.cognitiveservices.azure.com",
+            "https://attacker.example",
+            "https://key@my-res.cognitiveservices.azure.com",
+            "https://my-res.cognitiveservices.azure.com:8443",
+            "https://my-res.cognitiveservices.azure.com/other/path",
+            "https://my-res.cognitiveservices.azure.com#fragment",
+            "https://my-res.cognitiveservices.azure.com?redirect=evil",
+        ],
+    )
+    def test_untrusted_endpoint_shapes_are_rejected(self, endpoint):
+        with pytest.raises(TranscriptionError, match="Azure endpoint"):
+            normalize_azure_endpoint(endpoint)
+
+    def test_full_transcription_path_and_api_version_are_allowed(self):
+        endpoint = (
+            f"{_ENDPOINT}/speechtotext/transcriptions:transcribe"
+            "?api-version=2025-10-15"
+        )
+        assert normalize_azure_endpoint(endpoint) == endpoint
+
     def test_empty_endpoint_raises(self):
         with pytest.raises(TranscriptionError, match="endpoint is missing"):
             normalize_azure_endpoint("")
