@@ -38,7 +38,9 @@ class OverlayUI(QtWidgets.QWidget):
 
         self._always_on_top = True
         self._temporary_foreground_active = False
-        self.setWindowFlags(self._base_window_flags())
+        initial_flags = self._base_window_flags()
+        self.setWindowFlags(initial_flags)
+        self._applied_window_flags = initial_flags
         self.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground, True)
 

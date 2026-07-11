@@ -392,6 +392,17 @@ def test_overlay_always_on_top_toggle_updates_state_and_signal():
     assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
 
+def test_overlay_initial_window_flags_are_not_reapplied(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    reapplied = []
+    monkeypatch.setattr(overlay, "setWindowFlags", reapplied.append)
+
+    overlay._apply_window_flags()
+
+    assert reapplied == []
+
+
 def test_overlay_reveal_temporarily_restores_non_pinned_mode():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
