@@ -1,7 +1,9 @@
 """Settings dialog: history mixin (split from settings_dialog.py)."""
+
 from __future__ import annotations
 
 from dataclasses import replace
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -93,9 +95,7 @@ class _HistoryTabMixin:
         self.history_detail = QtWidgets.QPlainTextEdit()
         self.history_detail.setReadOnly(True)
         self.history_detail.setFont(history_font)
-        self.history_detail.setMinimumHeight(
-            self.fontMetrics().height() * 4
-        )
+        self.history_detail.setMinimumHeight(self.fontMetrics().height() * 4)
         self.history_detail.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -110,8 +110,8 @@ class _HistoryTabMixin:
         self.history_splitter.setSizes([400, 200])
         history_layout.addWidget(self.history_splitter, 1)
 
-        history_buttons = QtWidgets.QHBoxLayout()
-        self._configure_button_row(history_buttons)
+        history_management_buttons = QtWidgets.QHBoxLayout()
+        self._configure_button_row(history_management_buttons)
         self.history_refresh_button = QtWidgets.QPushButton("Refresh")
         self.history_refresh_button.clicked.connect(self._refresh_history_list)
         self.history_export_button = QtWidgets.QPushButton("Export...")
@@ -126,18 +126,42 @@ class _HistoryTabMixin:
         self.history_edit_button = QtWidgets.QPushButton("Edit selected")
         self.history_edit_button.clicked.connect(self._edit_selected_history)
         self.history_edit_button.setEnabled(False)
+        self.history_retranscribe_button = QtWidgets.QPushButton("Retranscribe...")
+        self.history_retranscribe_button.setToolTip(
+            "Open this entry's retained audio on Import Audio, where you can "
+            "choose a different engine or model before transcribing it again."
+        )
+        self.history_retranscribe_button.clicked.connect(
+            self._prepare_selected_history_retranscription
+        )
+        self.history_retranscribe_button.setEnabled(False)
+        self.history_show_audio_button = QtWidgets.QPushButton("Show audio file")
+        self.history_show_audio_button.setToolTip(
+            "Open File Explorer and select the retained audio for this entry."
+        )
+        self.history_show_audio_button.clicked.connect(
+            self._show_selected_history_audio_file
+        )
+        self.history_show_audio_button.setEnabled(False)
         self.history_delete_button = QtWidgets.QPushButton("Delete selected")
         self.history_delete_button.clicked.connect(self._delete_selected_history)
         self.history_delete_button.setEnabled(False)
-        history_buttons.addWidget(self.history_refresh_button)
-        history_buttons.addWidget(self.history_export_button)
-        history_buttons.addWidget(self.history_import_button)
-        history_buttons.addWidget(self.history_clear_button)
-        history_buttons.addStretch(1)
-        history_buttons.addWidget(self.history_copy_button)
-        history_buttons.addWidget(self.history_edit_button)
-        history_buttons.addWidget(self.history_delete_button)
-        history_layout.addLayout(history_buttons)
+        history_management_buttons.addWidget(self.history_refresh_button)
+        history_management_buttons.addWidget(self.history_export_button)
+        history_management_buttons.addWidget(self.history_import_button)
+        history_management_buttons.addWidget(self.history_clear_button)
+        history_management_buttons.addStretch(1)
+        history_layout.addLayout(history_management_buttons)
+
+        history_entry_buttons = QtWidgets.QHBoxLayout()
+        self._configure_button_row(history_entry_buttons)
+        history_entry_buttons.addWidget(self.history_copy_button)
+        history_entry_buttons.addWidget(self.history_edit_button)
+        history_entry_buttons.addWidget(self.history_retranscribe_button)
+        history_entry_buttons.addWidget(self.history_show_audio_button)
+        history_entry_buttons.addWidget(self.history_delete_button)
+        history_entry_buttons.addStretch(1)
+        history_layout.addLayout(history_entry_buttons)
 
         self.history_status_label = QtWidgets.QLabel("")
         self.history_status_label.setWordWrap(True)
@@ -146,7 +170,7 @@ class _HistoryTabMixin:
         history_layout.addWidget(self.history_status_label)
 
         layout.addWidget(history_box, 1)
-        self.tabs.addTab(tab, "History")
+        self._history_tab_index = self.tabs.addTab(tab, "History")
 
     def _set_history_status(self, message: str, *, error: bool = False) -> None:
         text = str(message or "").strip()
@@ -344,12 +368,12 @@ class _HistoryTabMixin:
                 elif change.kind == "insert":
                     self._insert_history_items(
                         change.previous_start,
-                        entries[change.current_start:change.current_stop],
+                        entries[change.current_start : change.current_stop],
                     )
                 elif change.kind == "update":
                     for row, entry in zip(
                         range(change.previous_start, change.previous_stop),
-                        entries[change.current_start:change.current_stop],
+                        entries[change.current_start : change.current_stop],
                     ):
                         self._update_history_item(row, entry)
                 elif change.kind == "replace":
@@ -359,7 +383,7 @@ class _HistoryTabMixin:
                     )
                     self._insert_history_items(
                         change.previous_start,
-                        entries[change.current_start:change.current_stop],
+                        entries[change.current_start : change.current_stop],
                     )
                 else:
                     return False
@@ -437,6 +461,8 @@ class _HistoryTabMixin:
         self.history_detail.clear()
         self.history_copy_button.setEnabled(False)
         self.history_edit_button.setEnabled(False)
+        self.history_retranscribe_button.setEnabled(False)
+        self.history_show_audio_button.setEnabled(False)
         self.history_delete_button.setEnabled(False)
         self._reset_history_copy_feedback()
 
@@ -458,23 +484,103 @@ class _HistoryTabMixin:
         if not entries:
             self.history_copy_button.setEnabled(False)
             self.history_edit_button.setEnabled(False)
+            self.history_retranscribe_button.setEnabled(False)
+            self.history_show_audio_button.setEnabled(False)
             self.history_delete_button.setEnabled(False)
             self.history_detail.clear()
             self._reset_history_copy_feedback()
             return
         if len(entries) == 1:
             text = str(getattr(entries[0], "text", "") or "")
+            has_audio = self._history_audio_path(entries[0]) is not None
             self.history_copy_button.setEnabled(bool(text))
             self.history_edit_button.setEnabled(bool(text))
+            self.history_retranscribe_button.setEnabled(has_audio)
+            self.history_show_audio_button.setEnabled(has_audio)
             self.history_detail.setPlainText(text)
         else:
             has_text = any(str(getattr(e, "text", "") or "") for e in entries)
             self.history_copy_button.setEnabled(has_text)
             # Editing is only meaningful for a single entry.
             self.history_edit_button.setEnabled(False)
+            self.history_retranscribe_button.setEnabled(False)
+            self.history_show_audio_button.setEnabled(False)
             self.history_detail.setPlainText(f"{len(entries)} entries selected.")
         self.history_delete_button.setEnabled(True)
         self._reset_history_copy_feedback()
+
+    def _history_audio_path(self, entry: TranscriptHistoryEntry) -> Path | None:
+        stored_path = str(getattr(entry, "source_audio_path", "") or "").strip()
+        if stored_path:
+            path = Path(stored_path)
+            if path.is_file():
+                return path
+
+        source_id = str(getattr(entry, "source_recording_id", "") or "").strip()
+        if not source_id:
+            return None
+        try:
+            state = self._last_recording_store.load()
+        except Exception:
+            return None
+        if state is None or str(getattr(state, "recording_id", "")) != source_id:
+            return None
+        path = Path(str(getattr(state, "audio_path", "") or ""))
+        return path if path.is_file() else None
+
+    def _prepare_selected_history_retranscription(self) -> None:
+        entries = self._selected_history_entries()
+        if len(entries) != 1:
+            return
+        entry = entries[0]
+        audio_path = self._history_audio_path(entry)
+        if audio_path is None:
+            self._set_history_status(
+                "The audio for this history entry is no longer available.",
+                error=True,
+            )
+            self._on_history_item_selected()
+            return
+
+        engine_index = self.import_engine_combo.findData(entry.engine)
+        if engine_index >= 0:
+            self.import_engine_combo.setCurrentIndex(engine_index)
+        model_index = self.import_model_combo.findData(entry.model)
+        if model_index >= 0:
+            self.import_model_combo.setCurrentIndex(model_index)
+        self._set_selected_import_file(str(audio_path))
+        self.import_result_label.setText(
+            "History audio loaded. Choose the engine and model, then start "
+            "transcription. The new result will be saved as a separate entry."
+        )
+        self.import_result_label.setStyleSheet("color: #555;")
+        import_index = self.tabs.indexOf(self._import_tab)
+        if import_index >= 0:
+            self.tabs.setCurrentIndex(import_index)
+
+    def _show_selected_history_audio_file(self) -> None:
+        entries = self._selected_history_entries()
+        if len(entries) != 1:
+            return
+        audio_path = self._history_audio_path(entries[0])
+        if audio_path is None:
+            self._set_history_status(
+                "The audio for this history entry is no longer available.",
+                error=True,
+            )
+            self._on_history_item_selected()
+            return
+        native_path = QtCore.QDir.toNativeSeparators(str(audio_path.resolve()))
+        started = QtCore.QProcess.startDetached(
+            "explorer.exe",
+            [f"/select,{native_path}"],
+        )
+        if isinstance(started, tuple):
+            started = started[0]
+        if not started:
+            QtGui.QDesktopServices.openUrl(
+                QtCore.QUrl.fromLocalFile(str(audio_path.parent))
+            )
 
     def _copy_selected_history(self) -> None:
         text = join_recent_entries_for_clipboard(self._selected_history_entries())
@@ -513,7 +619,9 @@ class _HistoryTabMixin:
             return
         updated = self._history_store.update_entry_text(entry, next_text)
         if updated <= 0:
-            self._set_history_status("Selected history entry was not found.", error=True)
+            self._set_history_status(
+                "Selected history entry was not found.", error=True
+            )
             return
         self._set_history_status("")
         self._refresh_history_list(force=True)

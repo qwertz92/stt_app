@@ -52,6 +52,36 @@ def test_add_entry_persists_and_respects_max_items(tmp_path):
     assert payload[1]["text"] == "three"
 
 
+def test_source_audio_path_round_trips_and_old_entries_remain_compatible(tmp_path):
+    path = tmp_path / "history.json"
+    audio = tmp_path / "recording.wav"
+    entry = TranscriptHistoryEntry.new(
+        text="retained audio",
+        engine="local",
+        model="cohere-transcribe-03-2026",
+        mode="batch",
+        source_recording_id="recording-id",
+        source_audio_path=str(audio),
+    )
+    store = TranscriptHistoryStore(path=path)
+    store.save([entry])
+
+    loaded = store.load()[0]
+    legacy = TranscriptHistoryEntry.from_dict(
+        {
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "text": "legacy",
+            "engine": "local",
+            "model": "small",
+            "mode": "batch",
+        }
+    )
+
+    assert loaded.source_recording_id == "recording-id"
+    assert loaded.source_audio_path == str(audio)
+    assert legacy.source_audio_path == ""
+
+
 def test_concurrent_store_instances_do_not_lose_read_modify_write_updates(tmp_path):
     path = tmp_path / "history.json"
     first_store = TranscriptHistoryStore(path=path)

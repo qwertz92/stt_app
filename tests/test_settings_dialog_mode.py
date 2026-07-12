@@ -978,6 +978,80 @@ def test_settings_history_edit_updates_item_without_rebuilding_others(
     _ = app
 
 
+def test_history_retranscribe_prepares_retained_audio_on_import_tab(tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "retained.wav"
+    audio.write_bytes(b"RIFF retained audio")
+    entry = TranscriptHistoryEntry.new(
+        text="original transcript",
+        engine="local",
+        model="small",
+        mode="batch",
+        source_audio_path=str(audio),
+    )
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([entry])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    dialog.history_list.item(0).setSelected(True)
+
+    assert dialog.history_retranscribe_button.isEnabled() is True
+    assert dialog.history_show_audio_button.isEnabled() is True
+
+    dialog._prepare_selected_history_retranscription()
+
+    assert dialog.tabs.currentWidget() is dialog._import_tab
+    assert dialog._selected_import_file_path == str(audio)
+    assert dialog.import_engine_combo.currentData() == "local"
+    assert dialog.import_model_combo.currentData() == "small"
+    assert "separate entry" in dialog.import_result_label.text()
+    _ = app
+
+
+def test_history_show_audio_selects_file_in_explorer(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "retained.wav"
+    audio.write_bytes(b"RIFF retained audio")
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(
+        [
+            TranscriptHistoryEntry.new(
+                text="transcript",
+                engine="local",
+                model="small",
+                mode="batch",
+                source_audio_path=str(audio),
+            )
+        ]
+    )
+    starts: list[tuple[str, list[str]]] = []
+    monkeypatch.setattr(
+        QtCore.QProcess,
+        "startDetached",
+        lambda program, args: starts.append((program, args)) or True,
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    dialog.history_list.item(0).setSelected(True)
+
+    dialog._show_selected_history_audio_file()
+
+    assert starts[0][0] == "explorer.exe"
+    assert starts[0][1][0].startswith("/select,")
+    assert "retained.wav" in starts[0][1][0]
+    _ = app
+
+
 def test_settings_history_tab_has_export_import_clear_buttons_and_count_label(
     tmp_path,
 ):
@@ -2288,8 +2362,31 @@ def test_import_audio_picker_starts_in_recordings_dir(tmp_path):
         QtWidgets.QFileDialog.DontUseNativeDialog
     )
     assert dialog._import_file_dialog.isModal() is False
+    assert dialog._import_file_dialog.width() >= 720
+    assert dialog._import_file_dialog.height() >= 500
     assert recordings_path.is_dir()
     dialog._on_import_file_dialog_finished(0)
+    _ = app
+
+
+def test_switching_to_history_refreshes_automatically(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    refresh_calls: list[bool] = []
+    monkeypatch.setattr(
+        dialog,
+        "_refresh_history_list",
+        lambda force=False: refresh_calls.append(bool(force)),
+    )
+
+    dialog.tabs.setCurrentIndex(dialog._history_tab_index)
+    app.processEvents()
+
+    assert refresh_calls == [True]
     _ = app
 
 

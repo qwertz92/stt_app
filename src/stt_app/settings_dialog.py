@@ -955,6 +955,8 @@ class SettingsDialog(
         self._schedule_local_model_auto_refresh(
             delay_ms=_LOCAL_MODEL_AUTO_REFRESH_DELAY_MS
         )
+        if _index == getattr(self, "_history_tab_index", None):
+            self._refresh_history_list(force=True)
 
     def _log_tab_paint_timing(self, index: int, started_at: float) -> None:
         if not hasattr(self, "tabs") or index != self.tabs.currentIndex():

@@ -247,6 +247,15 @@ class _ImportTabMixin:
         dialog.setOption(QtWidgets.QFileDialog.DontUseNativeDialog, True)
         dialog.setModal(False)
         dialog.setWindowModality(QtCore.Qt.NonModal)
+        available = dialog.screen().availableGeometry()
+        target = QtCore.QSize(1000, 700).boundedTo(
+            QtCore.QSize(
+                max(720, available.width() - 80),
+                max(500, available.height() - 80),
+            )
+        )
+        dialog.setMinimumSize(720, 500)
+        dialog.resize(target)
         dialog.fileSelected.connect(self._set_selected_import_file)
         dialog.finished.connect(self._on_import_file_dialog_finished)
         self._import_file_dialog = dialog
