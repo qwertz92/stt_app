@@ -2521,7 +2521,9 @@ def test_settings_dialog_scans_local_models_once_after_local_tab_is_selected(mon
 
     assert calls == []
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
-    QtTest.QTest.qWait(250)
+    deadline = time.monotonic() + 2.0
+    while calls != ["/tmp/models"] and time.monotonic() < deadline:
+        QtTest.QTest.qWait(25)
     assert calls == ["/tmp/models"]
     assert "small" in dialog.local_models_label.text()
     _ = app
