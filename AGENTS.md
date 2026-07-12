@@ -40,7 +40,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
-- Remote providers: AssemblyAI (SDK batch + Universal-3 Pro streaming),
+- Remote providers: AssemblyAI (SDK batch + Universal-3.5 Pro realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
   Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German)
@@ -75,7 +75,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_dialog_local.py` | Local tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the General tab) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
 | `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
-| `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete mixin |
+| `settings_dialog_history.py` | History tab: transcript list, edit, copy, delete, retained-audio reveal/retranscription mixin |
 | `settings_dialog_import.py` | Import Audio tab and recordings-directory helpers mixin |
 | `settings_dialog_persistence.py` | Settings load/populate/build/save and key persistence mixin |
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
@@ -299,8 +299,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
   case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
   `initial_prompt` (batch + rolling-window streaming), OpenAI/Groq `prompt`,
-  AssemblyAI batch `word_boost` and Universal-3 Pro streaming
-  `keyterms_prompt`,
+  AssemblyAI Universal-3.5 Pro batch/streaming `keyterms_prompt`,
   Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) query params with
   `doseq` encoding. ElevenLabs, Azure, Fun-ASR, Nemotron, and Cohere/Granite
   ONNX expose no biasing input and stay unwired.
@@ -393,20 +392,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `dataclasses.replace` on `_loaded_settings`), the same way the dialog does,
   so a later Save does not see it as a phantom change.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
-  parameter for batch/import requests. `universal-3-pro` is sent with
-  `universal-2` fallback; legacy `best`/`nano` settings are migrated to the
-  current default in settings persistence and are not shown in the UI.
+  parameter for batch/import requests. `universal-3-5-pro` is sent alone when
+  selected; never silently add `universal-2` as a fallback. Legacy
+  `universal-3-pro`/`best`/`nano` settings migrate to the current default and
+  are not shown in the UI.
 - **ElevenLabs batch model selection**: `scribe_v2` is the only supported model.
   ElevenLabs removed `scribe_v1` on 2026-07-09; legacy stored selections migrate
   to `scribe_v2` and the removed identifier must not be sent to the API.
-- **AssemblyAI Universal-3 Pro streaming**: the legacy v2 realtime and earlier
+- **AssemblyAI Universal-3.5 Pro realtime**: the legacy v2 realtime and earlier
   Universal-Streaming model are retired paths and must not be reintroduced.
   Streaming uses `assemblyai.streaming.v3.StreamingClient` with the
-  `u3_rt_pro` model, language detection, and optional `keyterms_prompt`; do not
-  send the removed `format_turns` option. The batch model selection does not
-  apply to streaming. Turn text is keyed by `turn_order` because later events
-  can refine the same turn. Bound SDK `disconnect` joins with a helper thread;
-  they can hang on dead connections.
+  explicit `universal-3-5-pro` model and optional `keyterms_prompt`; its native
+  18-language code switching needs no legacy `language_detection` or
+  `format_turns` parameter. The batch selector does not alter realtime routing.
+  Turn text is keyed by `turn_order` because later events can refine the same
+  turn. Bound SDK `disconnect` joins with a helper thread; they can hang on dead
+  connections.
 - **Streaming provider sends must not block the audio callback**:
   `push_audio_chunk` runs on the PortAudio callback thread. Providers must
   only enqueue there (Deepgram has a dedicated sender thread; the AssemblyAI
@@ -677,6 +678,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and kept. Keep the pure in-process function for the CLI and the worker; only
   the settings dialog goes through the process path. Wire new worker args into
   the frozen entry point (`main.py`) and the PyInstaller `hiddenimports`.
+- **Benchmark transcripts are first-class results**: every measured run stores
+  and exports its complete transcript. The Benchmark tab renders History as a
+  column table and compares each model/device run with run 1; keep all runs
+  because GPU/runtime numeric differences can occasionally change decoded
+  text. Legacy entries without transcript text remain readable.
+- **Selected local models are strict**: recording may start while the selected
+  runtime preloads, but transcription waits off the Qt thread for that exact
+  settings snapshot. Never choose, persist, or transcribe with a fallback
+  model. Preload results and cancellation are generation-scoped; a canceled or
+  stale worker cannot publish failure/readiness into a newer preload. Batch may
+  use an isolated runtime with the same settings when a live stream leases the
+  shared runtime, preventing a stream-finalizer/executor deadlock.
 - **Normal transcription stays threaded, not isolated**: batch/stream
   transcription runs in the shared `max_workers=1` executor with models
   preloaded; faster-whisper (CTranslate2) and ONNX Runtime release the GIL

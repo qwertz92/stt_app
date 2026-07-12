@@ -2,7 +2,7 @@
 
 This document compares pricing, free-tier availability, and quality signals for providers currently available in `stt_app`.
 
-- Pricing and model availability last verified: **2026-07-11**
+- Pricing and model availability last verified: **2026-07-12**
 - Prices and limits can change at any time. Confirm on official pricing pages before production use.
 
 ---
@@ -14,8 +14,8 @@ This document compares pricing, free-tier availability, and quality signals for 
 | Local (`faster-whisper`) | Batch + Streaming | `tiny`..`distil-large-v3.5` | No API fee | $0 API cost (hardware/power only) |
 | Local GPU/ONNX | Batch | `cohere-transcribe-03-2026`, `granite-4.0-1b-speech`, Granite Speech 4.1 variants | No API fee | $0 API cost (hardware/power only) |
 | Local (Nemotron 3.5) | Batch + Streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | No API fee | $0 API cost (hardware/power only) |
-| AssemblyAI | Batch | Universal-3 Pro (primary), Universal-2 fallback | U3 Pro: $0.21/hour, U2: $0.15/hour | $0.15-$0.21/hour |
-| AssemblyAI | Streaming | Universal Streaming | $0.15/hour | $0.15/hour |
+| AssemblyAI | Batch | Universal-3.5 Pro or Universal-2 (explicit selection; no fallback) | U3.5 Pro: $0.21/hour, U2: $0.15/hour | $0.15-$0.21/hour |
+| AssemblyAI | Streaming | Universal-3.5 Pro Realtime | $0.45/hour | $0.45/hour |
 | OpenAI | Batch | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | Mini: est. $0.003/min, 4o: est. $0.006/min, Whisper: $0.006/min | $0.18/hour, $0.36/hour, $0.36/hour |
 | Groq | Batch | `whisper-large-v3`, `whisper-large-v3-turbo` | v3: $0.111/hour, turbo: $0.040/hour | $0.111/hour, $0.040/hour |
 | Deepgram | Batch | `nova-3` | Mono: $0.0043/min, Multi: $0.0052/min | $0.258/hour, $0.312/hour |
@@ -59,7 +59,7 @@ No single apples-to-apples benchmark is maintained by all providers under identi
 
 | Provider | Models used in this app | Public quality signal | Interpretation |
 |----------|--------------------------|------------------------|----------------|
-| AssemblyAI | Universal-3 Pro / Universal-2 | AssemblyAI benchmark page reports U3 mean WER: **5.9 (EN)** / **8.7 (multilingual)** | Strong published accuracy, but vendor-run benchmark |
+| AssemblyAI | Universal-3.5 Pro / Universal-2 | AssemblyAI reports Universal-3.5 Pro as its current 18-language flagship for async and realtime, with native code switching; published comparisons are vendor-run | Strong current multilingual option; validate on your own audio |
 | OpenAI | `gpt-4o-mini-transcribe`, `gpt-4o-transcribe`, `whisper-1` | OpenAI reports `gpt-4o-transcribe` has lower WER than Whisper v2/v3 across FLEURS and competitive multilingual performance | Strong qualitative claim; OpenAI does not publish one global WER number per model on pricing page |
 | Groq | `whisper-large-v3`, `whisper-large-v3-turbo` | Groq speech docs list WER: **10.3%** (v3) and **12%** (v3-turbo) | Useful baseline; values come from Groq model table |
 | Deepgram | `nova-3` | Deepgram Nova-3 changelog reports median WER **5.26** (batch) and **6.84** (streaming) in its benchmark setup | Good signal for Nova-3; vendor-run benchmark |

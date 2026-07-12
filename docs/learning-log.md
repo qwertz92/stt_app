@@ -1818,13 +1818,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
     later failure.
   - ElevenLabs `scribe_v1` was removed from runtime/UI after its 2026-07-09 API
     retirement; legacy settings migrate to `scribe_v2`.
-- **AssemblyAI Universal-3 Pro migration:**
-  - Pre-recorded transcription was already using `universal-3-pro` with the
-    documented `universal-2` fallback; no nonexistent "Universal Pro 3.5"
-    batch identifier was introduced.
-  - Streaming now uses the official `u3_rt_pro` model and removes the obsolete
-    `format_turns` option. Custom Vocabulary is sent as `keyterms_prompt`, so
-    AssemblyAI biasing now works in both batch and streaming modes.
+- **AssemblyAI Universal-3.5 Pro correction and migration:**
+  - Universal-3.5 Pro exists for both async and realtime transcription under
+    the current `universal-3-5-pro` model identifier. The earlier review that
+    denied the async model was incorrect and resulted from not verifying the
+    newly published AssemblyAI release before changing the integration.
+  - Batch and realtime now request Universal-3.5 Pro explicitly. Batch no
+    longer appends Universal-2 as a silent fallback, and stored Universal-3 Pro
+    selections migrate to the current model.
+  - Both paths use the current `keyterms_prompt`; realtime relies on native
+    18-language code switching and does not send retired legacy parameters.
 - **Consecutive insertion boundaries:**
   - Successful transcript inserts remember the captured target control. A
     later transcript into that same control receives one boundary space while
@@ -1864,3 +1867,24 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - The lock now resolves `cryptography` 49.0.0, `idna` 3.18, `pygments`
     2.20.0, and `pytest` 9.0.3. The synchronized Python environment reports no
     known vulnerabilities, and the complete 1,063-test suite remains green.
+- **Strict selected-model preload semantics:**
+  - Local recordings may begin while the selected model loads, but the worker
+    waits for that exact immutable settings snapshot and never substitutes or
+    persists a faster-whisper fallback.
+  - A second review found and closed a stream/batch lease deadlock, three
+    cancellation races, and a preload-completion overlay race. Cancellation and
+    completion are generation-scoped, and exact-model isolated runtimes remain
+    available when a live stream owns the shared runtime.
+- **History audio provenance and retranscription:**
+  - New history entries can retain an immutable archive/external source path;
+    managed last-recording paths continue to be checked by recording ID so an
+    overwritten debug WAV is never associated with an older transcript.
+  - History refreshes on tab activation. A selected entry can be reopened on
+    Import Audio with its original engine/model preselected or revealed in File
+    Explorer when the audio still exists.
+- **Benchmark output quality is inspectable:**
+  - Every measured run now persists and exports its real transcript. Benchmark
+    History uses a structured table, and the Transcripts view shows full text
+    plus exact-match/difference status against run 1 for each model/device case.
+  - Older benchmark entries remain compatible and clearly show that their
+    transcript text was not stored.
