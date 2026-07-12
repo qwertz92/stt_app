@@ -385,6 +385,7 @@ def test_faster_whisper_case_reports_resolved_runtime_device(monkeypatch, tmp_pa
     )
 
     assert case.device == "cpu"
+    assert case.runs[0].transcript == "hello world"
     assert any("loaded on cpu" in message for message in progress)
 
 

@@ -102,6 +102,10 @@ class BenchmarkRun:
     transcript_words: int
     detected_language: str
     language_probability: float
+    # Keep the actual model output so benchmarks can compare recognition
+    # quality as well as speed.  The default preserves compatibility with
+    # history written before transcript capture was introduced.
+    transcript: str = ""
 
 
 @dataclass
@@ -252,6 +256,7 @@ def _run_case(
                 language_probability=_safe_float(
                     getattr(info, "language_probability", math.nan)
                 ),
+                transcript=transcript,
             )
         )
 
@@ -369,6 +374,7 @@ def _run_onnx_case(
                     transcript_words=transcript_words,
                     detected_language=language_mode,
                     language_probability=math.nan,
+                    transcript=str(transcript or "").strip(),
                 )
             )
     finally:
@@ -626,6 +632,7 @@ def _write_csv(
                 "real_time_factor",
                 "transcript_chars",
                 "transcript_words",
+                "transcript",
                 "detected_language",
                 "language_probability",
                 "download_seconds",
@@ -658,6 +665,7 @@ def _write_csv(
                             "real_time_factor": run.real_time_factor,
                             "transcript_chars": run.transcript_chars,
                             "transcript_words": run.transcript_words,
+                            "transcript": run.transcript,
                             "detected_language": run.detected_language,
                             "language_probability": run.language_probability,
                             "download_seconds": case.download_seconds,
@@ -686,6 +694,7 @@ def _write_csv(
                         "real_time_factor": "",
                         "transcript_chars": "",
                         "transcript_words": "",
+                        "transcript": "",
                         "detected_language": (
                             case.runs[0].detected_language if case.runs else ""
                         ),

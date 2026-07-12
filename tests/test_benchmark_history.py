@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import math
 import zipfile
 
@@ -31,6 +32,7 @@ def _entry() -> BenchmarkHistoryEntry:
                 transcript_words=2,
                 detected_language="en",
                 language_probability=0.98,
+                transcript="hello world",
             )
         ],
         runtime_details="Fallback attempts: webgpu: unsupported",
@@ -81,6 +83,7 @@ def test_benchmark_history_roundtrip(tmp_path):
     assert loaded[0].environment.cpu == "AMD Ryzen"
     assert loaded[0].environment.gpus == ["Intel Arc A750"]
     assert loaded[0].cases[0].avg_rtf == 0.6
+    assert loaded[0].cases[0].runs[0].transcript == "hello world"
     assert loaded[0].cases[0].runtime_details == "Fallback attempts: webgpu: unsupported"
 
 
@@ -154,6 +157,7 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "real_time_factor",
         "transcript_chars",
         "transcript_words",
+        "transcript",
         "detected_language",
         "language_probability",
         "download_seconds",
@@ -178,6 +182,7 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "v22.0.0",
     ]
     assert rows[1][23:28] == ["run", "small", "auto", "int8", "1"]
+    assert rows[1][33] == "hello world"
 
     with zipfile.ZipFile(xlsx_path) as archive:
         names = set(archive.namelist())
@@ -193,6 +198,18 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
     assert "| CPU | AMD Ryzen |" in markdown
     assert "## Result Rows" in markdown
     assert "| created_at | benchmark_status | audio_path |" in markdown
+    assert "hello world" in markdown
+
+
+def test_benchmark_history_loads_legacy_runs_without_transcripts(tmp_path):
+    path = tmp_path / "benchmark_history.json"
+    entry = _entry().to_dict()
+    entry["cases"][0]["runs"][0].pop("transcript")
+    path.write_text(json.dumps([entry]), encoding="utf-8")
+
+    loaded = BenchmarkHistoryStore(path=path).load()
+
+    assert loaded[0].cases[0].runs[0].transcript == ""
 
 
 def test_benchmark_csv_export_neutralizes_spreadsheet_formulas(tmp_path):

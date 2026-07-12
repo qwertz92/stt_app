@@ -494,6 +494,7 @@ uv run python scripts/benchmark_local.py .\samples\benchmark_sample.wav `
 | StdDev | Variation between runs |
 | RTF | Real-Time Factor: `transcription_time / audio_duration`. Below 1.0 = faster than real-time |
 | Lang | Detected language |
+| Transcript | The actual recognized text for that measured run |
 
 ### Why short audio can still take long
 
@@ -530,6 +531,24 @@ to **Benchmark History** automatically, including partial results from a
 canceled run. **Export** is optional: it writes the loaded history entry to CSV,
 XLSX, or Markdown for sharing or further analysis; it is not required to keep
 the result in the app.
+
+Benchmark History is a real column-based table rather than a text summary. Load
+an entry and open the **Transcripts** result tab to compare the complete output
+from every model, device target, and measured run. Selecting a row shows the
+full transcript below the comparison table. The consistency column compares
+each model/device case with its first measured run:
+
+- **Identical to run 1** means the text matches exactly.
+- **Differs from run 1** means at least one character differs; review the two
+  rows to decide whether the variation is meaningful.
+- **Not stored (legacy)** identifies history saved by an older app version.
+
+Local decoding is normally deterministic for a fixed model, runtime, device,
+audio file, and decoding configuration, but exact repeatability is not a safe
+universal assumption. GPU kernels, runtime upgrades, numerical precision,
+language detection, and tie-breaking can produce small differences. Therefore
+the app stores and displays **all** measured transcripts instead of retaining
+only run 1. Performance averages continue to include every measured run.
 
 Model loading and warm-up answer different questions. Load time is always
 measured and reported separately. With warm-up enabled, the app then performs

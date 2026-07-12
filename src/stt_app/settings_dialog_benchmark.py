@@ -5,7 +5,7 @@ import threading
 from datetime import datetime
 from pathlib import Path
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
 from .benchmark_environment import BenchmarkEnvironment, collect_benchmark_environment
@@ -24,7 +24,6 @@ from .local_benchmark import (
     normalize_webgpu_benchmark_devices,
 )
 from .settings_dialog_helpers import (
-    _benchmark_history_label,
     _benchmark_status_text,
     _emit_background_signal,
     _INLINE_FIELD_BUTTON_SPACING_PX,
@@ -41,6 +40,257 @@ _BENCHMARK_RESULT_SURFACE_STYLESHEET = """
     border-radius: 4px;
     background-color: #ffffff;
 """
+
+
+def _benchmark_created_label(value: str) -> str:
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone()
+        return parsed.strftime("%Y-%m-%d %H:%M")
+    except (TypeError, ValueError):
+        return str(value or "-")
+
+
+class _BenchmarkHistoryTable(QtWidgets.QTableWidget):
+    """Column-based benchmark history with small QListWidget compatibility.
+
+    A few existing integration seams refer to the widget as
+    ``benchmark_history_list``.  Keeping the attribute and these tiny aliases
+    avoids needless churn while the visible control is now a proper table.
+    """
+
+    def count(self) -> int:
+        return self.rowCount()
+
+    def item(
+        self,
+        row: int,
+        column: int = 0,
+    ) -> QtWidgets.QTableWidgetItem | None:
+        return super().item(row, column)
+
+    def setCurrentRow(self, row: int) -> None:
+        if row < 0:
+            self.clearSelection()
+            return
+        self.selectRow(row)
+        first = super().item(row, 0)
+        if first is not None:
+            self.setCurrentItem(first)
+
+
+class _BenchmarkDetailsView(QtWidgets.QTabWidget):
+    """Rendered benchmark context and clickable per-run transcripts."""
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._plain_text = ""
+
+        self.overview_table = QtWidgets.QTableWidget(0, 2)
+        self.overview_table.setHorizontalHeaderLabels(["Field", "Value"])
+        self._configure_table(self.overview_table)
+        self.overview_table.horizontalHeader().setSectionResizeMode(
+            0, QtWidgets.QHeaderView.ResizeToContents
+        )
+        self.overview_table.horizontalHeader().setSectionResizeMode(
+            1, QtWidgets.QHeaderView.Stretch
+        )
+        self.addTab(self.overview_table, "Details")
+
+        transcript_page = QtWidgets.QWidget()
+        transcript_layout = QtWidgets.QVBoxLayout(transcript_page)
+        transcript_layout.setContentsMargins(0, 0, 0, 0)
+        transcript_layout.setSpacing(6)
+        transcript_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        transcript_splitter.setChildrenCollapsible(False)
+
+        self.transcripts_table = QtWidgets.QTableWidget(0, 6)
+        self.transcripts_table.setHorizontalHeaderLabels(
+            ["Model", "Device", "Run", "Consistency", "Words", "Preview"]
+        )
+        self._configure_table(self.transcripts_table)
+        self.transcripts_table.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.transcripts_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+        transcript_header = self.transcripts_table.horizontalHeader()
+        for column in range(5):
+            transcript_header.setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeToContents
+            )
+        transcript_header.setSectionResizeMode(5, QtWidgets.QHeaderView.Stretch)
+        self.transcripts_table.itemSelectionChanged.connect(
+            self._show_selected_transcript
+        )
+        transcript_splitter.addWidget(self.transcripts_table)
+
+        self.transcript_text = QtWidgets.QPlainTextEdit()
+        self.transcript_text.setReadOnly(True)
+        self.transcript_text.setPlaceholderText(
+            "Select a model run above to inspect its complete transcript."
+        )
+        transcript_splitter.addWidget(self.transcript_text)
+        transcript_splitter.setSizes([150, 130])
+        transcript_layout.addWidget(transcript_splitter)
+        self.addTab(transcript_page, "Transcripts")
+
+    @staticmethod
+    def _configure_table(table: QtWidgets.QTableWidget) -> None:
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        table.setAlternatingRowColors(True)
+        table.setWordWrap(False)
+        table.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.setStyleSheet(_BENCHMARK_RESULT_SURFACE_STYLESHEET)
+
+    def toPlainText(self) -> str:
+        """Compatibility accessor for tests and older dialog integrations."""
+        return self._plain_text
+
+    def setPlainText(self, text: str) -> None:
+        """Show an interim status before a complete entry is available."""
+        self._plain_text = str(text or "")
+        self._set_overview_rows(
+            [("Status", self._plain_text or "No benchmark loaded.")]
+        )
+        self._set_transcript_rows([])
+
+    def clear(self) -> None:
+        self._plain_text = ""
+        self.overview_table.setRowCount(0)
+        self._set_transcript_rows([])
+
+    def set_entry(self, entry: BenchmarkHistoryEntry) -> None:
+        self._plain_text = entry.summary
+        options = entry.options
+        rows: list[tuple[str, object]] = [
+            ("Status", _benchmark_status_text(entry.status)),
+            ("Recorded", entry.created_at),
+            ("Audio", options.audio_path or options.audio_name or "-"),
+            ("Models", ", ".join(options.model_names) or "-"),
+            ("Runs per model/device", options.runs),
+            ("Language", options.language),
+            ("Warmup", "Enabled" if options.warmup else "Disabled"),
+            ("Beam size", options.beam_size),
+            ("VAD filter", "Enabled" if options.vad_filter else "Disabled"),
+            ("Standard device", options.device),
+            ("ONNX targets", ", ".join(options.webgpu_devices) or "-"),
+        ]
+        rows.extend(
+            (name, value)
+            for name, value in entry.environment.summary_details().items()
+            if value not in (None, "", [], {})
+        )
+        self._set_overview_rows(rows)
+        self._set_transcript_rows(entry.cases)
+
+    def set_live_results(self, summary: str, cases: list[BenchmarkCase]) -> None:
+        """Render completed cases while the remaining benchmark is running."""
+        self._plain_text = str(summary or "")
+        self._set_overview_rows(
+            [
+                ("Status", "Running"),
+                ("Completed cases", len(cases)),
+                (
+                    "Transcript capture",
+                    "Available below as soon as each model/device case finishes.",
+                ),
+            ]
+        )
+        self._set_transcript_rows(cases)
+
+    def _set_overview_rows(self, rows: list[tuple[str, object]]) -> None:
+        self.overview_table.setRowCount(len(rows))
+        for row, (name, value) in enumerate(rows):
+            self.overview_table.setItem(row, 0, QtWidgets.QTableWidgetItem(str(name)))
+            if isinstance(value, (list, tuple)):
+                display = ", ".join(str(item) for item in value)
+            else:
+                display = str(value)
+            item = QtWidgets.QTableWidgetItem(display)
+            item.setToolTip(display)
+            self.overview_table.setItem(row, 1, item)
+
+    def _set_transcript_rows(self, cases: list[BenchmarkCase]) -> None:
+        transcript_rows: list[tuple[BenchmarkCase, object, str]] = []
+        for case in cases:
+            reference = case.runs[0].transcript if case.runs else ""
+            available = [run.transcript for run in case.runs if run.transcript]
+            all_identical = bool(available) and len(available) == len(case.runs) and all(
+                transcript == reference for transcript in available
+            )
+            for run in case.runs:
+                if not run.transcript:
+                    consistency = "Not stored (legacy)"
+                elif run.run_index == case.runs[0].run_index:
+                    consistency = (
+                        "Reference · all identical"
+                        if all_identical and len(case.runs) > 1
+                        else "Reference"
+                    )
+                elif run.transcript == reference:
+                    consistency = "Identical to run 1"
+                else:
+                    consistency = "Differs from run 1"
+                transcript_rows.append((case, run, consistency))
+
+        self.transcripts_table.setRowCount(len(transcript_rows))
+        for row, (case, run, consistency) in enumerate(transcript_rows):
+            transcript = run.transcript
+            preview = " ".join(transcript.split())
+            if len(preview) > 140:
+                preview = f"{preview[:137].rstrip()}..."
+            values = [
+                case.model,
+                case.device,
+                str(run.run_index),
+                consistency,
+                str(run.transcript_words),
+                preview or "Transcript not available in this older result.",
+            ]
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setToolTip(value)
+                if column == 0:
+                    item.setData(QtCore.Qt.UserRole, transcript)
+                    item.setData(
+                        QtCore.Qt.UserRole + 1,
+                        f"{case.model} · {case.device} · run {run.run_index}",
+                    )
+                if column == 3:
+                    if consistency.startswith("Differs"):
+                        item.setBackground(QtGui.QColor("#fff4cc"))
+                    elif consistency.startswith("Not stored"):
+                        item.setForeground(QtGui.QColor("#6b7280"))
+                    else:
+                        item.setBackground(QtGui.QColor("#e8f5e9"))
+                self.transcripts_table.setItem(row, column, item)
+
+        if transcript_rows:
+            self.transcripts_table.selectRow(0)
+            self._show_selected_transcript()
+        else:
+            self.transcript_text.clear()
+
+    def _show_selected_transcript(self) -> None:
+        row = self.transcripts_table.currentRow()
+        item = self.transcripts_table.item(row, 0) if row >= 0 else None
+        if item is None:
+            self.transcript_text.clear()
+            return
+        transcript = str(item.data(QtCore.Qt.UserRole) or "")
+        label = str(item.data(QtCore.Qt.UserRole + 1) or "Transcript")
+        if transcript:
+            self.transcript_text.setPlainText(f"{label}\n\n{transcript}")
+        else:
+            self.transcript_text.setPlainText(
+                f"{label}\n\nThis benchmark predates transcript capture. "
+                "Run it again to compare recognition quality."
+            )
 
 
 def _facade():
@@ -101,7 +351,7 @@ class _BenchmarkMixin:
 
         self.benchmark_main_splitter.addWidget(history_box)
         self.benchmark_main_splitter.addWidget(results_box)
-        self.benchmark_main_splitter.setSizes([240, 330])
+        self.benchmark_main_splitter.setSizes([220, 420])
         layout.addWidget(self.benchmark_main_splitter, 1)
 
         self._benchmark_tab_index = self.tabs.addTab(tab, "Benchmark")
@@ -123,9 +373,36 @@ class _BenchmarkMixin:
         self._style_note_label(self.benchmark_history_note_label)
         history_layout.addWidget(self.benchmark_history_note_label)
 
-        self.benchmark_history_list = QtWidgets.QListWidget()
+        self.benchmark_history_list = _BenchmarkHistoryTable(0, 6)
+        self.benchmark_history_list.setHorizontalHeaderLabels(
+            ["Recorded", "Audio", "Models", "Runs", "Best RTF", "Status"]
+        )
         self.benchmark_history_list.setMinimumHeight(90)
-        self._configure_compact_list_widget(self.benchmark_history_list, expand=True)
+        self.benchmark_history_list.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self.benchmark_history_list.setSelectionBehavior(
+            QtWidgets.QAbstractItemView.SelectRows
+        )
+        self.benchmark_history_list.setSelectionMode(
+            QtWidgets.QAbstractItemView.SingleSelection
+        )
+        self.benchmark_history_list.setAlternatingRowColors(True)
+        self.benchmark_history_list.verticalHeader().setVisible(False)
+        self.benchmark_history_list.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        self.benchmark_history_list.setVerticalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        history_header = self.benchmark_history_list.horizontalHeader()
+        history_header.setSectionResizeMode(0, QtWidgets.QHeaderView.ResizeToContents)
+        history_header.setSectionResizeMode(1, QtWidgets.QHeaderView.Stretch)
+        history_header.setSectionResizeMode(2, QtWidgets.QHeaderView.Stretch)
+        for column in (3, 4, 5):
+            history_header.setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeToContents
+            )
         self.benchmark_history_list.itemSelectionChanged.connect(
             self._update_benchmark_history_actions
         )
@@ -165,7 +442,7 @@ class _BenchmarkMixin:
 
     def _build_benchmark_results_box(self) -> QtWidgets.QGroupBox:
         results_box = QtWidgets.QGroupBox("Results")
-        results_box.setMinimumHeight(360)
+        results_box.setMinimumHeight(400)
         results_box.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
             QtWidgets.QSizePolicy.Expanding,
@@ -222,14 +499,14 @@ class _BenchmarkMixin:
         self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
         self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
 
-        self.benchmark_summary_text = QtWidgets.QPlainTextEdit()
-        self.benchmark_summary_text.setReadOnly(True)
-        self.benchmark_summary_text.setMinimumHeight(110)
-        self.benchmark_summary_text.setStyleSheet(
-            _BENCHMARK_RESULT_SURFACE_STYLESHEET
+        self.benchmark_summary_text = _BenchmarkDetailsView()
+        self.benchmark_transcripts_table = (
+            self.benchmark_summary_text.transcripts_table
         )
+        self.benchmark_transcript_text = self.benchmark_summary_text.transcript_text
+        self.benchmark_summary_text.setMinimumHeight(220)
         self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
-        self.benchmark_results_splitter.setSizes([150, 170])
+        self.benchmark_results_splitter.setSizes([130, 260])
         results_layout.addWidget(self.benchmark_results_splitter)
 
         results_actions = QtWidgets.QHBoxLayout()
@@ -1042,11 +1319,13 @@ class _BenchmarkMixin:
             return
         self._current_benchmark_cases.append(payload)
         self._populate_benchmark_results(self._current_benchmark_cases)
-        self.benchmark_summary_text.setPlainText(
-            self._benchmark_summary(
-                self._current_benchmark_cases,
-                status="running",
-            )
+        summary = self._benchmark_summary(
+            self._current_benchmark_cases,
+            status="running",
+        )
+        self.benchmark_summary_text.set_live_results(
+            summary,
+            self._current_benchmark_cases,
         )
 
     def _on_benchmark_finished(
@@ -1083,7 +1362,6 @@ class _BenchmarkMixin:
         self._current_benchmark_cases = cases
         self._current_benchmark_options = options
         self._populate_benchmark_results(cases)
-        self.benchmark_summary_text.setPlainText(text)
         history_error = ""
 
         if cases and options is not None:
@@ -1095,6 +1373,7 @@ class _BenchmarkMixin:
                 environment=self._current_benchmark_environment,
             )
             self._current_benchmark_entry = entry
+            self.benchmark_summary_text.set_entry(entry)
             try:
                 self._benchmark_history_store.add_entry(entry)
             except Exception as exc:
@@ -1104,6 +1383,7 @@ class _BenchmarkMixin:
                 self._refresh_benchmark_history_list(select_entry=entry)
         else:
             self._current_benchmark_entry = None
+            self.benchmark_summary_text.setPlainText(text)
             self._refresh_benchmark_history_list()
 
         if history_error:
@@ -1143,13 +1423,33 @@ class _BenchmarkMixin:
     ) -> None:
         if not hasattr(self, "benchmark_history_list"):
             return
-        self.benchmark_history_list.clear()
+        previous_scroll = self.benchmark_history_list.verticalScrollBar().value()
+        self.benchmark_history_list.setRowCount(0)
         selected_row = -1
         for row, entry in enumerate(self._benchmark_history_store.recent_entries(20)):
-            item = QtWidgets.QListWidgetItem(_benchmark_history_label(entry))
-            item.setData(QtCore.Qt.UserRole, entry)
-            self._apply_compact_list_item_size(self.benchmark_history_list, item)
-            self.benchmark_history_list.addItem(item)
+            self.benchmark_history_list.insertRow(row)
+            successful = [
+                case for case in entry.cases if case.error is None and case.runs
+            ]
+            best_rtf = min(
+                (case.avg_rtf for case in successful),
+                default=float("nan"),
+            )
+            actual_runs = sum(len(case.runs) for case in entry.cases)
+            values = [
+                _benchmark_created_label(entry.created_at),
+                entry.options.audio_name or Path(entry.options.audio_path).name or "-",
+                ", ".join(entry.options.model_names) or "-",
+                str(actual_runs),
+                _format_number(best_rtf),
+                _benchmark_status_text(entry.status),
+            ]
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setToolTip(value)
+                if column == 0:
+                    item.setData(QtCore.Qt.UserRole, entry)
+                self.benchmark_history_list.setItem(row, column, item)
             if (
                 select_entry is not None
                 and entry.identity_key() == select_entry.identity_key()
@@ -1157,15 +1457,19 @@ class _BenchmarkMixin:
                 selected_row = row
         if selected_row >= 0:
             self.benchmark_history_list.setCurrentRow(selected_row)
+        restore_vertical_scrollbar(self.benchmark_history_list, previous_scroll)
         self._update_benchmark_history_actions()
 
     def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
         if not hasattr(self, "benchmark_history_list"):
             return None
-        items = self.benchmark_history_list.selectedItems()
-        if not items:
+        row = self.benchmark_history_list.currentRow()
+        if row < 0:
             return None
-        entry = items[0].data(QtCore.Qt.UserRole)
+        item = self.benchmark_history_list.item(row, 0)
+        if item is None:
+            return None
+        entry = item.data(QtCore.Qt.UserRole)
         return entry if isinstance(entry, BenchmarkHistoryEntry) else None
 
     def _update_benchmark_history_actions(self) -> None:
@@ -1186,8 +1490,14 @@ class _BenchmarkMixin:
             return
         self._load_benchmark_history_entry(entry)
 
-    def _load_benchmark_history_item(self, item: QtWidgets.QListWidgetItem) -> None:
+    def _load_benchmark_history_item(
+        self,
+        item: QtWidgets.QTableWidgetItem,
+    ) -> None:
         entry = item.data(QtCore.Qt.UserRole)
+        if not isinstance(entry, BenchmarkHistoryEntry):
+            first = self.benchmark_history_list.item(item.row(), 0)
+            entry = first.data(QtCore.Qt.UserRole) if first is not None else None
         if isinstance(entry, BenchmarkHistoryEntry):
             self._load_benchmark_history_entry(entry)
 
@@ -1197,7 +1507,7 @@ class _BenchmarkMixin:
         self._current_benchmark_environment = entry.environment
         self._current_benchmark_cases = list(entry.cases)
         self._populate_benchmark_results(entry.cases)
-        self.benchmark_summary_text.setPlainText(entry.summary)
+        self.benchmark_summary_text.set_entry(entry)
         self._set_benchmark_status("Loaded benchmark history entry.", "#555")
         self._expand_benchmark_results_area()
         self._update_benchmark_actions()
