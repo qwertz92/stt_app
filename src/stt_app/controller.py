@@ -31,9 +31,7 @@ from .config import (
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
     FALLBACK_HOTKEY,
-    FASTER_WHISPER_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
-    MODEL_ESTIMATED_SIZE_MB,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
@@ -47,7 +45,6 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
     OVERLAY_ERROR_REVEAL_MS,
-    VALID_MODEL_SIZES,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_START_BEEP_TONES,
     VAD_MAX_SILENCE_MS,
@@ -117,6 +114,7 @@ class _TranscriptionJob:
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
     source_recording_id: str = ""
+    source_audio_path: str = ""
     future: object | None = None
     # How a non-foreground (queued/background) result is delivered:
     # "insert" -> save to history and insert into target_handle;
@@ -175,7 +173,7 @@ class DictationController(QtCore.QObject):
     transcription_partial = QtCore.Signal(str)
     stream_runtime_failed = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
-    model_preload_done = QtCore.Signal(bool, str)  # (success, message)
+    model_preload_done = QtCore.Signal(int, bool, str)  # generation, success, message
 
     def __init__(
         self,
@@ -208,6 +206,11 @@ class DictationController(QtCore.QObject):
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_future: concurrent.futures.Future | None = None
+        self._preload_generation = 0
+        self._preload_target_key: tuple[object, ...] | None = None
+        self._preload_result_lock = threading.Lock()
+        self._preload_canceled_generations: set[int] = set()
+        self._preload_results: dict[tuple[object, ...], tuple[int, str | None]] = {}
         self._transcriber_cache_lock = threading.Lock()
         # Preload, batch inference, and a live stream may all request the cached
         # transcriber. One lease owns that shared instance; overlapping work gets
@@ -263,11 +266,6 @@ class DictationController(QtCore.QObject):
         self._preload_target_model: str | None = None
         self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
-        # Fallback model resolved by the preload worker (background thread).
-        # Applied to ``self._settings`` from the Qt thread in
-        # ``_on_model_preload_done`` so settings mutation and JSON persistence
-        # never race with the main thread.
-        self._pending_preload_fallback: str | None = None
         self._preload_download_process: subprocess.Popen | None = None
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
@@ -319,6 +317,7 @@ class DictationController(QtCore.QObject):
         self._focus_poll_timer.stop()
         self._preload_progress_timer.stop()
         self._preload_cancel_requested = True
+        self._cancel_preload_generation(self._preload_generation)
         self._terminate_preload_download_process()
         if self._audio_capture is not None:
             try:
@@ -377,7 +376,9 @@ class DictationController(QtCore.QObject):
         setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
         if callable(setter):
             try:
-                setter(bool(getattr(self._settings, "allow_insecure_key_storage", False)))
+                setter(
+                    bool(getattr(self._settings, "allow_insecure_key_storage", False))
+                )
             except Exception:
                 self._logger.exception("Failed to apply insecure key fallback setting")
         self._overlay.set_opacity_percent(self._settings.overlay_opacity_percent)
@@ -421,6 +422,7 @@ class DictationController(QtCore.QObject):
             self._preload_future = None
             self._preload_progress_timer.stop()
             self._preload_target_model = None
+            self._cancel_preload_generation(self._preload_generation)
             self._preload_cancel_requested = False
             self._terminate_preload_download_process()
             if preload is not None and not preload.done():
@@ -440,8 +442,7 @@ class DictationController(QtCore.QObject):
         if not self._cancel_hotkey_registration_ok:
             self._overlay.set_state(
                 "Error",
-                self._cancel_hotkey_notice
-                or "Cancel hotkey registration failed.",
+                self._cancel_hotkey_notice or "Cancel hotkey registration failed.",
             )
             return
 
@@ -496,7 +497,9 @@ class DictationController(QtCore.QObject):
             # toggle-parity drain) fires after the user already started a new
             # recording via the hotkey. Bail out instead of clobbering the
             # active capture.
-            self._logger.info("Ignored start_recording while a capture is already active.")
+            self._logger.info(
+                "Ignored start_recording while a capture is already active."
+            )
             return
         if self._audio_capture is None and self._streaming_recording:
             # Surface the overlay so this feedback is visible even when the
@@ -526,10 +529,12 @@ class DictationController(QtCore.QObject):
                 25,
             )
             preload = self._preload_future
-            preload_running = preload is not None and not preload.done()
+            preload_running = (
+                preload is not None
+                and not preload.done()
+                and self._matching_model_preload_running(self._settings)
+            )
 
-            batch_settings: AppSettings | None = None
-            fallback_notice = ""
             if preload_running and self._settings.engine == DEFAULT_ENGINE:
                 if self._settings.mode == "streaming":
                     self._overlay.set_state(
@@ -539,25 +544,10 @@ class DictationController(QtCore.QObject):
                     )
                     return
 
-                fallback_settings = self._resolve_preload_fallback_settings()
-                if fallback_settings is None:
-                    try:
-                        detail = self._preload_progress_detail(
-                            include_fallback_hint=False
-                        )
-                    except Exception:
-                        detail = "Selected model is still loading."
-                    self._overlay.set_state(
-                        "Error",
-                        f"{detail} No cached fallback model available yet.",
-                    )
-                    return
-
-                batch_settings = fallback_settings
-                fallback_notice = (
-                    f"Using fallback '{fallback_settings.model_size}' "
-                    f"while '{self._settings.model_size}' loads."
-                )
+            preload_failure = self._model_preload_failure(self._settings)
+            if preload_failure is not None:
+                self._overlay.set_state("Error", preload_failure)
+                return
             # Check if the selected engine supports streaming mode.
             if self._settings.mode == "streaming" and not supports_streaming(
                 self._settings.engine,
@@ -602,8 +592,8 @@ class DictationController(QtCore.QObject):
                 return
 
             self._start_batch_recording(
-                batch_settings or replace(self._settings),
-                fallback_notice=fallback_notice,
+                replace(self._settings),
+                waiting_for_model=preload_running,
             )
         finally:
             pending_toggles = self._pending_toggle_after_start_count
@@ -620,7 +610,7 @@ class DictationController(QtCore.QObject):
         self,
         settings_snapshot: AppSettings,
         *,
-        fallback_notice: str = "",
+        waiting_for_model: bool = False,
     ) -> None:
         capture = self._build_audio_capture()
         self._active_batch_settings = settings_snapshot
@@ -642,9 +632,7 @@ class DictationController(QtCore.QObject):
             self._overlay.set_state("Error", str(exc))
             self._logger.exception("Audio capture failed to start")
             return
-        self._log_recording_start_timing(
-            "batch", beep_ms, capture_started_at, capture
-        )
+        self._log_recording_start_timing("batch", beep_ms, capture_started_at, capture)
 
         self._audio_capture = capture
         self._overlay.set_state(
@@ -652,7 +640,12 @@ class DictationController(QtCore.QObject):
             " ".join(
                 part
                 for part in (
-                    fallback_notice.strip(),
+                    (
+                        f"Selected model '{settings_snapshot.model_size}' is still "
+                        "loading. You can record now; transcription will wait for it."
+                        if waiting_for_model
+                        else ""
+                    ),
                     "Speak now. Press hotkey again to stop.",
                 )
                 if part
@@ -849,7 +842,7 @@ class DictationController(QtCore.QObject):
             self._audio_capture = None
             wav_bytes = capture.stop()
             self._persist_last_recording_audio(wav_bytes)
-            self._save_recording_artifacts(capture, wav_bytes)
+            source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
 
             if self._streaming_recording:
                 self._focus_poll_timer.stop()
@@ -863,7 +856,7 @@ class DictationController(QtCore.QObject):
                 self._overlay.set_state(
                     "Processing", "Finalizing streaming transcript..."
                 )
-                self._submit_stream_finalize()
+                self._submit_stream_finalize(source_audio_path=source_audio_path)
                 return
 
             if not wav_bytes:
@@ -877,8 +870,19 @@ class DictationController(QtCore.QObject):
 
             settings_snapshot = self._active_batch_settings or replace(self._settings)
             self._active_batch_settings = None
-            self._overlay.set_state("Processing", "Transcribing audio...")
-            self._submit_batch_transcription(wav_bytes, settings_snapshot)
+            if self._matching_model_preload_running(settings_snapshot):
+                self._overlay.set_state(
+                    "Processing",
+                    f"Waiting for selected model '{settings_snapshot.model_size}' "
+                    "to finish loading, then transcribing audio...",
+                )
+            else:
+                self._overlay.set_state("Processing", "Transcribing audio...")
+            self._submit_batch_transcription(
+                wav_bytes,
+                settings_snapshot,
+                source_audio_path=source_audio_path,
+            )
         finally:
             pending_toggles = self._pending_toggle_after_stop_count
             self._pending_toggle_after_stop_count = 0
@@ -914,8 +918,7 @@ class DictationController(QtCore.QObject):
             )
         )
         self._logger.info(
-            "recording_peak_level level=%.4f silence_gate_enabled=%s "
-            "threshold=%.4f",
+            "recording_peak_level level=%.4f silence_gate_enabled=%s threshold=%.4f",
             peak_level,
             enabled,
             threshold,
@@ -944,7 +947,9 @@ class DictationController(QtCore.QObject):
     def _play_start_beep(self) -> None:
         if not self._settings.start_beep_enabled:
             return
-        tone = (self._settings.start_beep_tone or DEFAULT_START_BEEP_TONE).strip().lower()
+        tone = (
+            (self._settings.start_beep_tone or DEFAULT_START_BEEP_TONE).strip().lower()
+        )
         if tone not in VALID_START_BEEP_TONES:
             tone = DEFAULT_START_BEEP_TONE
         try:
@@ -1004,12 +1009,16 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to persist last recording audio")
             return False
 
-    def _save_recording_artifacts(self, capture: AudioCapture, wav_bytes: bytes) -> None:
+    def _save_recording_artifacts(
+        self,
+        capture: AudioCapture,
+        wav_bytes: bytes,
+    ) -> str:
         if not wav_bytes:
-            return
+            return ""
 
         if not self._settings.save_all_recordings:
-            return
+            return ""
 
         try:
             root = self._resolve_recordings_dir()
@@ -1019,8 +1028,10 @@ class DictationController(QtCore.QObject):
             path = os.path.join(target_dir, f"recording_{stamp}.wav")
             capture.save_wav(Path(path), wav_bytes)
             self._prune_recordings(target_dir, self._settings.recordings_max_count)
+            return path
         except Exception:
             self._logger.exception("Failed to archive recording")
+            return ""
 
     def _prune_recordings(self, directory: str, keep_count: int) -> None:
         keep = max(1, int(keep_count or 1))
@@ -1230,12 +1241,9 @@ class DictationController(QtCore.QObject):
                 cache_model = ""
                 if isinstance(cache_key, tuple) and len(cache_key) > 1:
                     cache_model = str(cache_key[1] or "")
-                should_reset = (
-                    cached is not None
-                    and (
-                        cached_model in LOCAL_WEBGPU_MODEL_SIZES
-                        or cache_model in LOCAL_WEBGPU_MODEL_SIZES
-                    )
+                should_reset = cached is not None and (
+                    cached_model in LOCAL_WEBGPU_MODEL_SIZES
+                    or cache_model in LOCAL_WEBGPU_MODEL_SIZES
                 )
                 if not should_reset:
                     return
@@ -1308,8 +1316,7 @@ class DictationController(QtCore.QObject):
         if state is None:
             return ""
         return str(
-            getattr(state, "recording_id", "")
-            or getattr(state, "created_at", "")
+            getattr(state, "recording_id", "") or getattr(state, "created_at", "")
         ).strip()
 
     def _append_transcript_history(
@@ -1319,6 +1326,7 @@ class DictationController(QtCore.QObject):
         mode: str,
         *,
         source_recording_id: str | None = None,
+        source_audio_path: str = "",
         track_for_edit: bool = True,
     ) -> TranscriptHistoryEntry | None:
         if not text.strip():
@@ -1335,6 +1343,7 @@ class DictationController(QtCore.QObject):
                 model=self._selected_model_name(settings),
                 mode=mode,
                 source_recording_id=source_id,
+                source_audio_path=source_audio_path,
             )
             self._history_store.add_entry(
                 entry,
@@ -1373,10 +1382,7 @@ class DictationController(QtCore.QObject):
         its result is handled, so that flag must not count here; only an active
         capture or an in-progress recording start marks a queued job background.
         """
-        return (
-            self._audio_capture is not None
-            or self._recording_start_in_progress
-        )
+        return self._audio_capture is not None or self._recording_start_in_progress
 
     def _is_foreground_transcription(
         self,
@@ -1405,6 +1411,8 @@ class DictationController(QtCore.QObject):
         request_token: int,
         settings: AppSettings,
         mode: str,
+        *,
+        source_audio_path: str = "",
     ) -> _TranscriptionJob:
         """Track a submitted transcription for the queue and target insertion.
 
@@ -1421,6 +1429,7 @@ class DictationController(QtCore.QObject):
             target_handle=self._target_window_handle,
             target_signature=self._target_focus_signature,
             source_recording_id=self._current_last_recording_id(),
+            source_audio_path=str(source_audio_path or "").strip(),
         )
         self._jobs[request_token] = job
         self._update_queue_overlay()
@@ -1576,9 +1585,9 @@ class DictationController(QtCore.QObject):
             )
         )
         if mode == CONCURRENT_TRANSCRIPTION_MODE_HISTORY:
-            self._jobs[token].background_delivery = (
-                CONCURRENT_TRANSCRIPTION_MODE_HISTORY
-            )
+            self._jobs[
+                token
+            ].background_delivery = CONCURRENT_TRANSCRIPTION_MODE_HISTORY
         elif mode == CONCURRENT_TRANSCRIPTION_MODE_CANCEL:
             self._request_job_stop(
                 token,
@@ -1589,12 +1598,19 @@ class DictationController(QtCore.QObject):
         self,
         wav_bytes: bytes,
         settings: AppSettings,
+        *,
+        source_audio_path: str = "",
     ) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
         self._last_transcribe_settings = replace(settings)
         self._store_request_audio(request_token, wav_bytes, settings)
-        job = self._register_transcription_job(request_token, settings, "batch")
+        job = self._register_transcription_job(
+            request_token,
+            settings,
+            "batch",
+            source_audio_path=source_audio_path,
+        )
         self._logger.info(
             "transcription_submitted token=%s mode=batch engine=%s model=%s "
             "audio_bytes=%d recording_id=%s",
@@ -1620,7 +1636,7 @@ class DictationController(QtCore.QObject):
             job,
         )
 
-    def _submit_stream_finalize(self) -> None:
+    def _submit_stream_finalize(self, *, source_audio_path: str = "") -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
         settings = self._active_stream_settings or replace(self._settings)
@@ -1629,7 +1645,12 @@ class DictationController(QtCore.QObject):
         self._active_stream_transcriber = None
         runtime_lease = self._active_stream_runtime_lease
         self._active_stream_runtime_lease = None
-        job = self._register_transcription_job(request_token, settings, "streaming")
+        job = self._register_transcription_job(
+            request_token,
+            settings,
+            "streaming",
+            source_audio_path=source_audio_path,
+        )
         job.runtime_transcriber = transcriber
         job.runtime_lease = runtime_lease
         self._logger.info(
@@ -1701,20 +1722,128 @@ class DictationController(QtCore.QObject):
 
     # -- Model preloading -----------------------------------------------------
 
+    @staticmethod
+    def _model_preload_key(settings: AppSettings) -> tuple[object, ...]:
+        """Identity of the selected local runtime that preload prepares."""
+        return (
+            settings.engine,
+            settings.model_size,
+            settings.language_mode,
+            settings.vad_enabled,
+            bool(getattr(settings, "offline_mode", False)),
+            getattr(settings, "model_dir", ""),
+            bool(getattr(settings, "keep_onnx_model_loaded", False)),
+            bool(getattr(settings, "streaming_full_final_transcript", False)),
+        )
+
+    def _matching_model_preload_running(self, settings: AppSettings) -> bool:
+        if settings.engine != DEFAULT_ENGINE:
+            return False
+        key = self._model_preload_key(settings)
+        with self._preload_result_lock:
+            target_matches = self._preload_target_key == key
+            preload = self._preload_future
+        return bool(target_matches and preload is not None and not preload.done())
+
+    def _model_preload_failure(self, settings: AppSettings) -> str | None:
+        if settings.engine != DEFAULT_ENGINE:
+            return None
+        key = self._model_preload_key(settings)
+        with self._preload_result_lock:
+            result = self._preload_results.get(key)
+        if result is None:
+            return None
+        _generation, failure = result
+        return failure
+
+    def _record_model_preload_result(
+        self,
+        key: tuple[object, ...],
+        generation: int,
+        failure: str | None,
+    ) -> None:
+        with self._preload_result_lock:
+            current = self._preload_results.get(key)
+            if current is None or current[0] <= generation:
+                self._preload_results[key] = (generation, failure)
+            if len(self._preload_results) > 64:
+                oldest_keys = sorted(
+                    self._preload_results,
+                    key=lambda result_key: self._preload_results[result_key][0],
+                )
+                for stale_key in oldest_keys[: len(self._preload_results) - 64]:
+                    if stale_key != self._preload_target_key:
+                        self._preload_results.pop(stale_key, None)
+
+    def _cancel_preload_generation(self, generation: int) -> None:
+        with self._preload_result_lock:
+            self._preload_canceled_generations.add(generation)
+
+    def _preload_generation_was_canceled(self, generation: int) -> bool:
+        with self._preload_result_lock:
+            return generation in self._preload_canceled_generations
+
+    def _wait_for_selected_model_preload(
+        self,
+        settings: AppSettings,
+        *,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> None:
+        """Wait off the Qt thread for the exact selected local model preload.
+
+        Batch transcription must never race a matching preload by constructing
+        a second runtime, and must never silently substitute another model.
+        """
+        if settings.engine != DEFAULT_ENGINE:
+            return
+        key = self._model_preload_key(settings)
+        with self._preload_result_lock:
+            preload = self._preload_future if self._preload_target_key == key else None
+        if preload is not None and hasattr(preload, "result"):
+            try:
+                while True:
+                    if cancel_check is not None and cancel_check():
+                        raise TranscriptionCanceled()
+                    try:
+                        if hasattr(preload, "done") and preload.done():
+                            preload.result()
+                        else:
+                            preload.result(timeout=0.1)
+                        break
+                    except concurrent.futures.TimeoutError:
+                        continue
+            except concurrent.futures.CancelledError:
+                pass
+            except TranscriptionCanceled:
+                raise
+            except Exception as exc:
+                self._logger.warning("Selected model preload worker failed: %s", exc)
+
+        if cancel_check is not None and cancel_check():
+            raise TranscriptionCanceled()
+
+        failure = self._model_preload_failure(settings)
+        if failure is not None:
+            raise TranscriptionError(failure)
+
     def _start_local_model_preload(self) -> None:
-        if (
-            self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
-            and not bool(getattr(self._settings, "keep_onnx_model_loaded", False))
+        if self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES and not bool(
+            getattr(self._settings, "keep_onnx_model_loaded", False)
         ):
             self._preload_progress_timer.stop()
             self._preload_target_model = None
             self._preload_future = None
+            with self._preload_result_lock:
+                self._preload_canceled_generations.add(self._preload_generation)
+                self._preload_generation += 1
+                self._preload_target_key = None
             self._preload_cancel_requested = False
             self._terminate_preload_download_process()
             self.show_idle_status()
             return
 
         previous = self._preload_future
+        self._cancel_preload_generation(self._preload_generation)
         self._preload_cancel_requested = False
         self._terminate_preload_download_process()
         if previous is not None and not previous.done():
@@ -1722,8 +1851,16 @@ class DictationController(QtCore.QObject):
                 previous.cancel()
             except Exception:
                 pass
-        self._overlay.set_state("Processing", "Loading model...")
-        self._preload_target_model = self._settings.model_size
+        settings = replace(self._settings)
+        key = self._model_preload_key(settings)
+        with self._preload_result_lock:
+            self._preload_generation += 1
+            generation = self._preload_generation
+            self._preload_canceled_generations.discard(generation)
+            self._preload_target_key = key
+            self._preload_results[key] = (generation, None)
+        self._overlay.set_state("Processing", "Loading selected model...")
+        self._preload_target_model = settings.model_size
         try:
             from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
@@ -1737,81 +1874,21 @@ class DictationController(QtCore.QObject):
             self._preload_target_model,
             preload_cached_bytes,
         )
-        self._preload_future = self._preload_executor.submit(
-            self._preload_model_worker
+        preload_future = self._preload_executor.submit(
+            self._preload_model_worker,
+            settings,
+            generation,
+            key,
         )
-        self._preload_progress_timer.start()
+        with self._preload_result_lock:
+            if generation == self._preload_generation:
+                self._preload_future = preload_future
+        if preload_future is not None and not preload_future.done():
+            self._preload_progress_timer.start()
+        else:
+            self._preload_progress_timer.stop()
 
-    def _select_cached_fallback_model(
-        self,
-        selected_model: str,
-        cached_models: list[str],
-    ) -> str | None:
-        candidates = [
-            m
-            for m in cached_models
-            if m != selected_model and m in FASTER_WHISPER_MODEL_SIZES
-        ]
-        if not candidates:
-            return None
-
-        selected_size = MODEL_ESTIMATED_SIZE_MB.get(selected_model)
-        candidates_sorted = sorted(
-            candidates,
-            key=lambda name: MODEL_ESTIMATED_SIZE_MB.get(name, 0),
-        )
-
-        if selected_size is not None:
-            smaller = [
-                name
-                for name in candidates_sorted
-                if MODEL_ESTIMATED_SIZE_MB.get(name, 0) < selected_size
-            ]
-            if smaller:
-                return smaller[-1]
-
-        for name in reversed(VALID_MODEL_SIZES):
-            if name in candidates:
-                return name
-        return candidates_sorted[-1]
-
-    def _resolve_preload_fallback_settings(self) -> AppSettings | None:
-        from .transcriber.local_faster_whisper import find_cached_models
-
-        model_dir = getattr(self._settings, "model_dir", "")
-        cached = find_cached_models(model_dir)
-        fallback_model = self._select_cached_fallback_model(
-            self._settings.model_size, cached
-        )
-        if fallback_model is None:
-            return None
-        return replace(self._settings, model_size=fallback_model)
-
-    def _fallback_candidates_for_model(
-        self,
-        selected_model: str,
-        cached_models: list[str],
-    ) -> list[str]:
-        candidates = [m for m in cached_models if m != selected_model]
-        if not candidates:
-            return []
-
-        ordered: list[str] = []
-        best = self._select_cached_fallback_model(selected_model, candidates)
-        if best is not None:
-            ordered.append(best)
-
-        by_quality = sorted(
-            candidates,
-            key=lambda name: MODEL_ESTIMATED_SIZE_MB.get(name, 0),
-            reverse=True,
-        )
-        for name in by_quality:
-            if name not in ordered:
-                ordered.append(name)
-        return ordered
-
-    def _preload_progress_detail(self, include_fallback_hint: bool = True) -> str:
+    def _preload_progress_detail(self) -> str:
         from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
         model_name = self._preload_target_model or self._settings.model_size
@@ -1829,12 +1906,10 @@ class DictationController(QtCore.QObject):
             include_progress_bar=True,
         )
 
-        if include_fallback_hint:
-            detail = (
-                f"{detail} Until it is ready, recordings use a cached fallback model "
-                "if available. Use Cancel to abort download."
-            )
-        return detail
+        return (
+            f"{detail} Recordings keep using the selected model and wait for it "
+            "before transcription. Use Cancel to abort download."
+        )
 
     @QtCore.Slot()
     def _on_preload_progress_poll(self) -> None:
@@ -1857,116 +1932,114 @@ class DictationController(QtCore.QObject):
             detail = "Loading model..."
         self._overlay.set_state("Processing", detail, compact=False)
 
-    def _preload_model_worker(self) -> None:
+    def _preload_model_worker(
+        self,
+        settings: AppSettings,
+        generation: int,
+        key: tuple[object, ...],
+    ) -> None:
         """Background worker: eagerly load the configured local model."""
-        from .transcriber.local_faster_whisper import (
-            LocalFasterWhisperTranscriber,
-            find_cached_models,
-        )
+        from .transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
         from .transcriber.local_nemotron import LocalNemotronTranscriber
         from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
-        settings = self._settings
         try:
-            self._download_model_for_preload(settings)
+            self._download_model_for_preload(settings, generation)
         except RuntimeError as exc:
-            if self._preload_cancel_requested:
-                self.model_preload_done.emit(False, str(exc))
+            if self._preload_generation_was_canceled(generation):
+                self._record_model_preload_result(key, generation, None)
+                self.model_preload_done.emit(generation, False, str(exc))
                 return
             # Download failed but cached models may still be usable.
             self._logger.warning("Model download failed: %s", exc)
 
+        if self._preload_generation_was_canceled(generation):
+            self._record_model_preload_result(key, generation, None)
+            self.model_preload_done.emit(generation, False, "Model preload canceled.")
+            return
+
+        runtime_lease: _TranscriberRuntimeLease | None = None
         try:
             runtime_lease = self._acquire_transcriber_runtime(
                 settings,
                 allow_isolated=False,
             )
-            try:
-                transcriber = runtime_lease.transcriber
-                if isinstance(
-                    transcriber,
-                    (
-                        LocalFasterWhisperTranscriber,
-                        LocalNemotronTranscriber,
-                        LocalOnnxWebGpuTranscriber,
-                    ),
-                ):
-                    transcriber.preload_model()
-            finally:
-                runtime_lease.release()
-            self.model_preload_done.emit(True, f"Model loaded: {settings.model_size}")
-            return
+            if self._preload_generation_was_canceled(generation):
+                self._record_model_preload_result(key, generation, None)
+                self.model_preload_done.emit(
+                    generation,
+                    False,
+                    "Model preload canceled.",
+                )
+                return
+            transcriber = runtime_lease.transcriber
+            if isinstance(
+                transcriber,
+                (
+                    LocalFasterWhisperTranscriber,
+                    LocalNemotronTranscriber,
+                    LocalOnnxWebGpuTranscriber,
+                ),
+            ):
+                transcriber.preload_model()
         except Exception as exc:
+            if self._preload_generation_was_canceled(generation):
+                self._record_model_preload_result(key, generation, None)
+                self.model_preload_done.emit(
+                    generation,
+                    False,
+                    "Model preload canceled.",
+                )
+                return
             self._logger.warning(
                 "Model preload failed for %s: %s", settings.model_size, exc
             )
-
-        # Attempt fallback: check for any locally cached model.
-        model_dir = getattr(settings, "model_dir", "")
-        cached = find_cached_models(model_dir)
-
-        if not cached:
-            self.model_preload_done.emit(
-                False,
-                f"Model '{settings.model_size}' could not be loaded and no "
-                f"local models found. See {DOC_MODELS_PATH}",
+            # Ensure the failed/partially initialized runtime is closed before
+            # another waiter can acquire the shared cache admission lock.
+            if runtime_lease is not None:
+                with self._transcriber_runtime_state_lock:
+                    self._pending_transcriber_cache_reset = True
+            failure = (
+                f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
+                "No fallback model was used. Open Settings to retry or select "
+                f"another model. See {DOC_MODELS_PATH}"
             )
+            self._record_model_preload_result(key, generation, failure)
+            self.model_preload_done.emit(generation, False, failure)
             return
+        finally:
+            if runtime_lease is not None:
+                runtime_lease.release()
 
-        # Try fallback candidates from closest-smaller to best available quality.
-        preferred_fallback_order = self._fallback_candidates_for_model(
-            settings.model_size, cached
-        )
-
-        for fallback in preferred_fallback_order:
-            try:
-                fallback_settings = replace(settings, model_size=fallback)
-                self._reset_transcriber_cache()
-                runtime_lease = self._acquire_transcriber_runtime(
-                    fallback_settings,
-                    allow_isolated=False,
-                )
-                try:
-                    transcriber = runtime_lease.transcriber
-                    if isinstance(
-                        transcriber,
-                        (
-                            LocalFasterWhisperTranscriber,
-                            LocalNemotronTranscriber,
-                            LocalOnnxWebGpuTranscriber,
-                        ),
-                    ):
-                        transcriber.preload_model()
-                finally:
-                    runtime_lease.release()
-                # Do NOT mutate ``self._settings`` or call
-                # ``self._settings_store.save()`` here: this runs on the preload
-                # worker thread and would race with Qt-thread reads/writes of
-                # ``self._settings`` and concurrent JSON writes. Stage the
-                # fallback model name for ``_on_model_preload_done`` to apply
-                # on the Qt thread instead.
-                self._pending_preload_fallback = fallback
-                self.model_preload_done.emit(
-                    True,
-                    f"Fallback: using '{fallback}' model "
-                    f"('{settings.model_size}' unavailable). "
-                    f"Available local models: {', '.join(cached)}",
-                )
-                return
-            except Exception:
-                self._logger.warning("Fallback model %s also failed", fallback)
-                continue
-
+        if self._preload_generation_was_canceled(generation):
+            self._record_model_preload_result(key, generation, None)
+            self.model_preload_done.emit(generation, False, "Model preload canceled.")
+            return
+        self._record_model_preload_result(key, generation, None)
         self.model_preload_done.emit(
-            False,
-            f"Model '{settings.model_size}' unavailable. "
-            f"Found models ({', '.join(cached)}) but none could be loaded.",
+            generation,
+            True,
+            f"Model loaded: {settings.model_size}",
         )
 
-    @QtCore.Slot(bool, str)
-    def _on_model_preload_done(self, success: bool, message: str) -> None:
+    @QtCore.Slot(int, bool, str)
+    def _on_model_preload_done(
+        self,
+        generation: int,
+        success: bool,
+        message: str,
+    ) -> None:
         if self._shutdown_started:
             return
+        with self._preload_result_lock:
+            self._preload_canceled_generations.discard(generation)
+            if generation != self._preload_generation:
+                self._logger.info(
+                    "Ignoring stale model preload completion generation=%s current=%s",
+                    generation,
+                    self._preload_generation,
+                )
+                return
         self._preload_progress_timer.stop()
         self._preload_target_model = None
         self._terminate_preload_download_process()
@@ -1974,23 +2047,11 @@ class DictationController(QtCore.QObject):
             self._audio_capture is not None
             or self._streaming_recording
             or self._recording_start_in_progress
+            or self._recording_stop_in_progress
+            or self._active_request_token is not None
         )
 
-        # Apply a fallback model resolved by the preload worker. This runs on
-        # the Qt thread, so mutating ``self._settings`` and persisting it is
-        # safe and cannot race with Qt-thread reads or concurrent JSON writes.
-        pending_fallback = self._pending_preload_fallback
-        self._pending_preload_fallback = None
-        ready_model = pending_fallback or self._settings.model_size
-        if pending_fallback is not None:
-            self._settings = replace(self._settings, model_size=pending_fallback)
-            try:
-                self._settings_store.save(self._settings)
-            except Exception:
-                self._logger.exception(
-                    "Failed to persist fallback model setting: %s",
-                    pending_fallback,
-                )
+        ready_model = self._settings.model_size
 
         if self._preload_cancel_requested:
             self._preload_cancel_requested = False
@@ -2001,25 +2062,16 @@ class DictationController(QtCore.QObject):
 
         if success:
             self._logger.info("Model preload: %s", message)
-            if "Fallback" in message:
-                if session_active:
-                    self._logger.info(
-                        "Suppressing preload fallback notice during active session: %s",
-                        message,
-                    )
-                else:
-                    self._overlay.set_state("Error", message)
+            if not session_active:
+                self._overlay.set_state(
+                    "Done",
+                    f"Model '{ready_model}' is ready. Next transcription uses it.",
+                )
+                QtCore.QTimer.singleShot(1800, self.show_idle_status)
             else:
-                if not session_active:
-                    self._overlay.set_state(
-                        "Done",
-                        f"Model '{ready_model}' is ready. Next transcription uses it.",
-                    )
-                    QtCore.QTimer.singleShot(1800, self.show_idle_status)
-                else:
-                    self._logger.info(
-                        "Model '%s' became ready during active recording.", ready_model
-                    )
+                self._logger.info(
+                    "Model '%s' became ready during active recording.", ready_model
+                )
         else:
             self._logger.warning("Model preload failed: %s", message)
             if "canceled" in message.lower():
@@ -2069,11 +2121,19 @@ class DictationController(QtCore.QObject):
                 terminal_payload = ""
                 raise TranscriptionCanceled()
 
+            self._wait_for_selected_model_preload(
+                settings,
+                cancel_check=lambda: bool(
+                    self._shutdown_started or (job is not None and job.aborting)
+                ),
+            )
+            # A live stream can still lease the shared runtime while this batch
+            # job runs on the single worker lane. Allowing an exact-settings
+            # isolated runtime avoids a cycle where the batch waits for the
+            # stream lease while the queued stream finalizer waits for this job.
             runtime_lease = self._acquire_transcriber_runtime(settings)
             transcriber = runtime_lease.transcriber
-            init_elapsed_ms = round(
-                (time.perf_counter() - init_started_at) * 1000
-            )
+            init_elapsed_ms = round((time.perf_counter() - init_started_at) * 1000)
             self._set_transcriber_progress_callback(
                 transcriber,
                 lambda detail: self.transcription_progress.emit(
@@ -2082,9 +2142,7 @@ class DictationController(QtCore.QObject):
                 ),
             )
             if job is not None:
-                self._set_transcriber_cancel_check(
-                    transcriber, lambda: job.aborting
-                )
+                self._set_transcriber_cancel_check(transcriber, lambda: job.aborting)
             transcribe_started_at = time.perf_counter()
             text = transcriber.transcribe_batch(wav_bytes)
             outcome = "success"
@@ -2133,9 +2191,7 @@ class DictationController(QtCore.QObject):
                 if transcribe_started_at is not None
                 else 0
             )
-            total_elapsed_ms = round(
-                (time.perf_counter() - worker_started_at) * 1000
-            )
+            total_elapsed_ms = round((time.perf_counter() - worker_started_at) * 1000)
             runtime_device = str(getattr(transcriber, "runtime_device", "") or "")
             gpu_available = getattr(transcriber, "gpu_available", "")
             runtime_details = str(
@@ -2315,9 +2371,7 @@ class DictationController(QtCore.QObject):
             self._stream_chunk_error_reported = True
             self._stream_abort_requested = True
             self._logger.exception("Failed to push streaming audio chunk")
-            self._emit_stream_runtime_failure(
-                f"Streaming chunk push failed: {exc}"
-            )
+            self._emit_stream_runtime_failure(f"Streaming chunk push failed: {exc}")
 
     def _get_or_create_transcriber(self, settings: AppSettings):
         cache_key = (
@@ -2433,11 +2487,15 @@ class DictationController(QtCore.QObject):
             return
 
         used_settings = (
-            self._last_transcribe_settings
-            or stream_settings
-            or self._settings
+            self._last_transcribe_settings or stream_settings or self._settings
         )
-        self._append_transcript_history(text, used_settings, session_mode)
+        self._append_transcript_history(
+            text,
+            used_settings,
+            session_mode,
+            source_recording_id=(job.source_recording_id if job is not None else None),
+            source_audio_path=(job.source_audio_path if job is not None else ""),
+        )
 
         if session_mode == "streaming":
             first_stream_insertion = not bool(self._stream_text_state.committed_text)
@@ -2504,6 +2562,7 @@ class DictationController(QtCore.QObject):
             job.settings,
             job.mode,
             source_recording_id=job.source_recording_id,
+            source_audio_path=job.source_audio_path,
             track_for_edit=False,
         )
         if (
@@ -2550,10 +2609,7 @@ class DictationController(QtCore.QObject):
         inserted as soon as it completes. Jobs run serially on the single
         worker, so results still arrive (and insert) in token order.
         """
-        if (
-            self._recording_start_in_progress
-            or self._recording_stop_in_progress
-        ):
+        if self._recording_start_in_progress or self._recording_stop_in_progress:
             return True
         if self._audio_capture is not None:
             return not self._can_insert_during_active_recording(job)
@@ -2718,10 +2774,7 @@ class DictationController(QtCore.QObject):
             else:
                 groups[index][0].append(job)
                 groups[index][1].append(text)
-        return [
-            (jobs, _join_transcripts(texts))
-            for jobs, texts in groups
-        ]
+        return [(jobs, _join_transcripts(texts)) for jobs, texts in groups]
 
     @QtCore.Slot(int)
     def _on_transcription_canceled_result(self, request_token: int) -> None:
@@ -2924,8 +2977,9 @@ class DictationController(QtCore.QObject):
                 wav_bytes = capture.stop()
             except Exception:
                 self._logger.exception("Failed to stop audio capture during abort")
+        source_audio_path = ""
         if capture is not None:
-            self._save_recording_artifacts(capture, wav_bytes)
+            source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
         if preserve_audio and wav_bytes:
             self._persist_last_recording_audio(wav_bytes)
             try:
@@ -2946,7 +3000,9 @@ class DictationController(QtCore.QObject):
                 else:
                     transcriber.stop_stream()
         except Exception:
-            self._logger.exception("Failed to stop/abort streaming transcriber during abort")
+            self._logger.exception(
+                "Failed to stop/abort streaming transcriber during abort"
+            )
         finally:
             if runtime_lease is not None:
                 runtime_lease.release()
@@ -2956,13 +3012,15 @@ class DictationController(QtCore.QObject):
         self._reset_streaming_state()
         if partial_transcript.strip():
             self._append_transcript_history(
-                partial_transcript, partial_settings, "streaming"
+                partial_transcript,
+                partial_settings,
+                "streaming",
+                source_audio_path=source_audio_path,
             )
             self._last_transcript = partial_transcript
             self._overlay.set_state(
                 "Error",
-                f"{reason} Partial transcript (saved to history): "
-                f"{partial_transcript}",
+                f"{reason} Partial transcript (saved to history): {partial_transcript}",
             )
         else:
             self._overlay.set_state("Error", reason)
@@ -3294,9 +3352,7 @@ class DictationController(QtCore.QObject):
 
     def recent_transcriptions(self, limit: int | None = None):
         max_items = (
-            int(self._settings.history_max_items)
-            if limit is None
-            else int(limit)
+            int(self._settings.history_max_items) if limit is None else int(limit)
         )
         return self._history_store.recent_entries(max_items)
 
@@ -3312,9 +3368,7 @@ class DictationController(QtCore.QObject):
             return False, "No file path provided."
         if not os.path.isfile(path):
             return False, "Selected file does not exist."
-        managed_last_recording = self._last_recording_store.is_managed_audio_path(
-            path
-        )
+        managed_last_recording = self._last_recording_store.is_managed_audio_path(path)
         managed_snapshot = None
         if managed_last_recording:
             snapshotter = getattr(
@@ -3366,6 +3420,9 @@ class DictationController(QtCore.QObject):
                     settings,
                     "import",
                     source_recording_id=recording_id,
+                    source_audio_path=(
+                        "" if managed_last_recording else os.path.abspath(path)
+                    ),
                     track_for_edit=False,
                 )
             if managed_last_recording:
@@ -3443,9 +3500,6 @@ class DictationController(QtCore.QObject):
             setter(cancel_check)
 
     def cancel_current_action(self) -> None:
-        if self._cancel_model_preload_if_running():
-            return
-
         # Cancel active recording first.
         if self._audio_capture is not None:
             if self._streaming_recording:
@@ -3505,13 +3559,21 @@ class DictationController(QtCore.QObject):
             if not had_job:
                 self._drop_request_audio(request_token)
             try:
-                self._last_recording_store.mark_canceled("Transcription canceled by user.")
+                self._last_recording_store.mark_canceled(
+                    "Transcription canceled by user."
+                )
             except Exception:
                 self._logger.exception("Failed to mark canceled transcription")
             # Clearing the active transcription may unblock deferred background
             # inserts that were waiting behind it; deliver every completed one now.
             self._flush_deferred_background_results(ignore_active_transcription=True)
             self._overlay.set_state("Done", "Transcription canceled.")
+            return
+
+        # Preloading can intentionally overlap a recording or a queued batch
+        # transcription. It is therefore lower priority than the user's active
+        # session and is canceled only when there is no recording/job to stop.
+        if self._cancel_model_preload_if_running():
             return
 
         # Nothing active to cancel, but the hotkey should still deliver any
@@ -3593,6 +3655,7 @@ class DictationController(QtCore.QObject):
             return False
 
         self._preload_cancel_requested = True
+        self._cancel_preload_generation(self._preload_generation)
         self._terminate_preload_download_process()
         self._overlay.set_state("Processing", "Canceling model download...")
         return True
@@ -3613,10 +3676,18 @@ class DictationController(QtCore.QObject):
             return
         terminate_model_download_process(process)
 
-    def _download_model_for_preload(self, settings: AppSettings) -> None:
+    def _download_model_for_preload(
+        self,
+        settings: AppSettings,
+        generation: int | None = None,
+    ) -> None:
         from .transcriber.local_faster_whisper import find_cached_models
 
-        if self._preload_cancel_requested:
+        use_legacy_cancel_flag = generation is None
+        generation = self._preload_generation if generation is None else generation
+        if self._preload_generation_was_canceled(generation) or (
+            use_legacy_cancel_flag and self._preload_cancel_requested
+        ):
             raise RuntimeError("Model download canceled.")
         if getattr(settings, "offline_mode", False):
             return
@@ -3635,7 +3706,9 @@ class DictationController(QtCore.QObject):
         self._set_preload_download_process(process)
         try:
             while True:
-                if self._preload_cancel_requested:
+                if self._preload_generation_was_canceled(generation) or (
+                    use_legacy_cancel_flag and self._preload_cancel_requested
+                ):
                     self._terminate_preload_download_process()
                     from .transcriber.local_faster_whisper import (
                         cleanup_incomplete_model_download,

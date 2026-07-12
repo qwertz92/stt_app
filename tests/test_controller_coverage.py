@@ -374,7 +374,7 @@ class _RunningFuture:
         return False
 
 
-def test_start_recording_uses_cached_fallback_while_preloading(monkeypatch):
+def test_start_recording_keeps_selected_model_while_preloading(monkeypatch):
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         engine="local",
@@ -388,26 +388,15 @@ def test_start_recording_uses_cached_fallback_while_preloading(monkeypatch):
         overlay=overlay,
     )
     controller._preload_future = _RunningFuture()
-    fallback_settings = AppSettings(
-        hotkey=settings.hotkey,
-        engine=settings.engine,
-        mode=settings.mode,
-        model_size="small",
-    )
-    controller._resolve_preload_fallback_settings = (  # type: ignore[method-assign]
-        lambda: fallback_settings
-    )
-    controller._preload_progress_detail = (  # type: ignore[method-assign]
-        lambda include_fallback_hint=False: "Downloading 'large-v3-turbo' 20%"
-    )
+    controller._preload_target_key = controller._model_preload_key(settings)
 
     controller.start_recording()
 
     assert controller._audio_capture is not None
     assert controller._active_batch_settings is not None
-    assert controller._active_batch_settings.model_size == "small"
+    assert controller._active_batch_settings.model_size == "large-v3-turbo"
     assert overlay.states[-1][0] == "Listening"
-    assert "fallback 'small'" in overlay.states[-1][1]
+    assert "transcription will wait" in overlay.states[-1][1]
     controller.shutdown()
     _ = app
 
@@ -429,7 +418,7 @@ def test_set_overlay_always_on_top_persists_setting():
     _ = app
 
 
-def test_start_recording_preload_without_fallback_shows_error():
+def test_start_recording_preload_never_requires_fallback(monkeypatch):
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         engine="local",
@@ -441,16 +430,15 @@ def test_start_recording_preload_without_fallback_shows_error():
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
     )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller._preload_future = _RunningFuture()
-    controller._resolve_preload_fallback_settings = lambda: None  # type: ignore[method-assign]
-    controller._preload_progress_detail = (  # type: ignore[method-assign]
-        lambda include_fallback_hint=False: "Downloading 'large-v3-turbo' 20%"
-    )
+    controller._preload_target_key = controller._model_preload_key(settings)
 
     controller.start_recording()
 
-    assert overlay.states[-1][0] == "Error"
-    assert "No cached fallback model available yet" in overlay.states[-1][1]
+    assert controller._audio_capture is not None
+    assert controller._active_batch_settings.model_size == "large-v3-turbo"
+    assert "fallback" not in overlay.states[-1][1].lower()
     controller.shutdown()
     _ = app
 
@@ -555,7 +543,9 @@ def test_start_streaming_audio_capture_error_stops_transcriber(monkeypatch):
     transcriber = FakeStreamingTranscriber()
 
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCaptureFails)
-    monkeypatch.setattr("stt_app.controller.create_transcriber", lambda _s, **kw: transcriber)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
 
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
@@ -992,7 +982,9 @@ def test_retry_last_transcription_resubmits_failed_audio():
     )
 
     def fake_worker(request_token, wav_bytes, snapshot, job=None):
-        captured.append((request_token, wav_bytes, snapshot.engine, snapshot.openai_model))
+        captured.append(
+            (request_token, wav_bytes, snapshot.engine, snapshot.openai_model)
+        )
 
     controller._transcribe_worker = fake_worker  # type: ignore[method-assign]
 
@@ -1071,6 +1063,7 @@ def test_cancel_current_action_stops_active_batch_recording():
     capture = FakeCapture()
     controller._audio_capture = capture
     controller._streaming_recording = False
+    controller._preload_future = _RunningFuture()
 
     controller.cancel_current_action()
 
@@ -1080,9 +1073,8 @@ def test_cancel_current_action_stops_active_batch_recording():
     assert "canceled" in overlay.states[-1][1].lower()
     assert "last recording" in overlay.states[-1][1].lower()
     assert last_recording_store.saved == [(b"RIFF", False)]
-    assert last_recording_store.canceled == [
-        "Recording canceled before transcription."
-    ]
+    assert last_recording_store.canceled == ["Recording canceled before transcription."]
+    assert controller._preload_cancel_requested is False
     controller.shutdown()
     _ = app
 
@@ -1097,6 +1089,7 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
     controller._active_request_token = 7
     controller._register_transcription_job(7, settings, "batch")
+    controller._preload_future = _RunningFuture()
     last_recording_store._available = True
 
     controller.cancel_current_action()
@@ -1105,6 +1098,7 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     assert controller._jobs[7].aborting is True
     assert controller._active_request_token is None
     assert last_recording_store.canceled == ["Transcription canceled by user."]
+    assert controller._preload_cancel_requested is False
     controller.shutdown()
     _ = app
 
@@ -1293,6 +1287,7 @@ def test_managed_import_snapshot_cannot_complete_a_newer_recording(
     assert last_store.audio_path.read_bytes() == b"RIFF-second"
     entries = history.load()
     assert [entry.source_recording_id for entry in entries] == [first.recording_id]
+    assert [entry.source_audio_path for entry in entries] == [""]
     controller.shutdown()
     _ = app
 
@@ -1330,7 +1325,9 @@ def test_import_runtime_close_failure_keeps_successful_transcript(
     _ = app
 
 
-def test_canceled_stale_transcription_result_is_ignored_during_new_recording(monkeypatch):
+def test_canceled_stale_transcription_result_is_ignored_during_new_recording(
+    monkeypatch,
+):
     overlay = FakeOverlay()
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller, app = _make_controller(overlay=overlay)
@@ -1494,7 +1491,9 @@ def test_register_cancel_hotkey_failure_sets_notice():
     ok = controller._register_cancel_hotkey()
 
     assert ok is False
-    assert "Cancel hotkey registration failed" in (controller._cancel_hotkey_notice or "")
+    assert "Cancel hotkey registration failed" in (
+        controller._cancel_hotkey_notice or ""
+    )
     controller.shutdown()
     _ = app
 

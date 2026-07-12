@@ -1,3 +1,4 @@
+import concurrent.futures
 import logging
 
 from PySide6 import QtGui, QtWidgets
@@ -409,7 +410,9 @@ def test_stream_finalize_keeps_settings_snapshot_for_queued_result(tmp_path):
     controller._submit_stream_finalize()
     request_token = controller._active_request_token
     controller._active_stream_settings = None
-    controller._on_transcription_ready("stream settings snapshot", request_token=request_token)
+    controller._on_transcription_ready(
+        "stream settings snapshot", request_token=request_token
+    )
 
     entries = history_store.load()
     assert entries[0].model == "base"
@@ -472,7 +475,7 @@ def test_controller_reveals_overlay_briefly_after_successful_result():
     _ = app
 
 
-def test_controller_reveals_overlay_longer_when_insertion_fails():
+def test_controller_reveals_overlay_longer_when_insertion_fails(monkeypatch):
     from stt_app.config import OVERLAY_ERROR_REVEAL_MS
 
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
@@ -487,6 +490,8 @@ def test_controller_reveals_overlay_longer_when_insertion_fails():
         window_focus_helper=FakeWindowFocusHelper(),
     )
     controller._target_window_handle = 123
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
 
     controller._on_transcription_ready("insertion will fail")
 
@@ -494,6 +499,7 @@ def test_controller_reveals_overlay_longer_when_insertion_fails():
     # the transcript can still be copied from it.
     assert overlay.states[-1][0] == "Error"
     assert overlay.reveal_durations[-1:] == [OVERLAY_ERROR_REVEAL_MS]
+    assert fake_clipboard.text() == "insertion will fail"
 
     controller.shutdown()
     _ = app
@@ -612,11 +618,13 @@ def test_background_and_import_history_do_not_replace_edit_target(
         lambda _parent, _text: "corrected foreground",
     )
     assert controller.edit_last_transcript() is True
-    assert [entry.text for entry in history_store.load()] == [
+    history_entries = history_store.load()
+    assert [entry.text for entry in history_entries] == [
         "corrected foreground",
         "background transcript",
         "import transcript",
     ]
+    assert history_entries[-1].source_audio_path == str(audio_path.resolve())
     controller.shutdown()
     _ = app
 
@@ -1054,10 +1062,10 @@ def test_controller_initialize_triggers_preload_for_local_engine():
     # Mock out the preload worker to verify it gets called.
     preload_called = []
 
-    def mock_preload():
+    def mock_preload(_settings, generation, _key):
         preload_called.append(True)
         # Emit success signal directly.
-        controller.model_preload_done.emit(True, "Model loaded: small")
+        controller.model_preload_done.emit(generation, True, "Model loaded: small")
 
     controller._preload_model_worker = mock_preload
     controller.initialize()
@@ -1084,7 +1092,7 @@ def test_controller_initialize_skips_preload_for_remote_engine():
     controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
-    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
     controller.initialize()
 
     assert len(preload_called) == 0
@@ -1114,7 +1122,7 @@ def test_controller_initialize_skips_preload_for_webgpu_local_model():
     controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
-    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
     controller.initialize()
 
     assert preload_called == []
@@ -1142,7 +1150,7 @@ def test_controller_initialize_preloads_nemotron_for_prompt_streaming_start():
     controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
-    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
     controller.initialize()
 
     assert preload_called == [True]
@@ -1170,7 +1178,7 @@ def test_controller_initialize_preloads_webgpu_when_keep_loaded_enabled():
     controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
-    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
     controller.initialize()
 
     assert preload_called == [True]
@@ -1196,9 +1204,9 @@ def test_controller_initialize_local_uses_preload_executor_only():
 
     preload_called = []
 
-    def mock_preload():
+    def mock_preload(_settings, generation, _key):
         preload_called.append(True)
-        controller.model_preload_done.emit(True, "Model loaded: small")
+        controller.model_preload_done.emit(generation, True, "Model loaded: small")
 
     controller._preload_model_worker = mock_preload
     controller.initialize()
@@ -1208,8 +1216,7 @@ def test_controller_initialize_local_uses_preload_executor_only():
     _ = app
 
 
-def test_controller_preload_fallback_on_failure():
-    """Preload failure should trigger fallback to available cached model."""
+def test_controller_preload_failure_is_reported_without_fallback():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
     overlay = FakeOverlay()
@@ -1227,14 +1234,11 @@ def test_controller_preload_fallback_on_failure():
     controller._hotkey_registration_ok = (
         True  # Simulate successful hotkey registration.
     )
-    controller._on_model_preload_done(True, "Model loaded: small")
+    controller._on_model_preload_done(0, True, "Model loaded: small")
     assert overlay.states[-1][0] != "Error"
 
-    controller._on_model_preload_done(False, "No models found")
+    controller._on_model_preload_done(0, False, "No models found")
     assert overlay.states[-1][0] == "Error"
-
-    controller._on_model_preload_done(True, "Fallback: using 'tiny'")
-    assert overlay.states[-1][0] == "Error"  # Fallback still shows warning
 
     controller.shutdown()
     _ = app
@@ -1336,7 +1340,7 @@ def test_webgpu_batch_transcriber_is_cached_when_keep_loaded(monkeypatch):
     _ = app
 
 
-def test_preload_worker_persists_fallback_model(monkeypatch):
+def test_preload_worker_failure_never_changes_selected_model(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
     store = FakeSettingsStore(settings)
@@ -1359,42 +1363,36 @@ def test_preload_worker_persists_fallback_model(monkeypatch):
                 raise RuntimeError("load failed")
 
     mediums = DummyLocalTranscriber(should_fail=True)
-    tiny = DummyLocalTranscriber(should_fail=False)
-
     monkeypatch.setattr(
         "stt_app.transcriber.local_faster_whisper.LocalFasterWhisperTranscriber",
         DummyLocalTranscriber,
-    )
-    monkeypatch.setattr(
-        "stt_app.transcriber.local_faster_whisper.find_cached_models",
-        lambda _model_dir="": ["tiny"],
     )
 
     def fake_get_or_create(s: AppSettings):
         if s.model_size == "medium":
             return mediums
-        if s.model_size == "tiny":
-            return tiny
         raise AssertionError("unexpected model size")
 
     controller._get_or_create_transcriber = fake_get_or_create  # type: ignore[method-assign]
     emitted = []
-    controller.model_preload_done.connect(lambda ok, msg: emitted.append((ok, msg)))
+    controller.model_preload_done.connect(
+        lambda generation, ok, msg: emitted.append((generation, ok, msg))
+    )
 
-    controller._preload_model_worker()
+    key = controller._model_preload_key(settings)
+    controller._preload_model_worker(settings, 1, key)
 
     assert emitted
-    assert emitted[-1][0] is True
-    assert "Fallback" in emitted[-1][1]
-    assert controller.settings.model_size == "tiny"
-    assert store.saved is not None
-    assert store.saved.model_size == "tiny"
+    assert emitted[-1][1] is False
+    assert "No fallback model was used" in emitted[-1][2]
+    assert controller.settings.model_size == "medium"
+    assert store.saved is None
 
     controller.shutdown()
     _ = app
 
 
-def test_select_cached_fallback_model_prefers_closest_smaller():
+def test_stale_preload_completion_does_not_override_active_progress():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
@@ -1406,18 +1404,41 @@ def test_select_cached_fallback_model_prefers_closest_smaller():
         window_focus_helper=FakeWindowFocusHelper(),
     )
 
-    result = controller._select_cached_fallback_model(
-        "large-v3-turbo", ["tiny", "small", "medium", "large-v3"]
-    )
+    controller._preload_generation = 2
+    controller._preload_target_model = "medium"
 
-    # large-v3-turbo is 809 MB, so "small" (484 MB) is the closest smaller.
-    # "medium" (1400 MB) is actually bigger than the turbo variant.
-    assert result == "small"
+    controller._on_model_preload_done(1, False, "old model failed")
+
+    assert controller._preload_target_model == "medium"
+    assert controller._overlay.states == []
     controller.shutdown()
     _ = app
 
 
-def test_select_cached_fallback_model_uses_best_available_when_no_smaller():
+def test_preload_completion_does_not_overwrite_active_transcription_status():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_generation = 3
+    controller._active_request_token = 42
+    overlay.set_state("Processing", "Transcribing audio...")
+
+    controller._on_model_preload_done(3, True, "Model loaded: small")
+
+    assert overlay.states[-1] == ("Processing", "Transcribing audio...")
+    controller.shutdown()
+    _ = app
+
+
+def test_matching_preload_failure_blocks_selected_model_transcription():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = DictationController(
         settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
@@ -1429,9 +1450,150 @@ def test_select_cached_fallback_model_uses_best_available_when_no_smaller():
         window_focus_helper=FakeWindowFocusHelper(),
     )
 
-    result = controller._select_cached_fallback_model("tiny", ["base", "small"])
+    settings = controller.settings
+    key = controller._model_preload_key(settings)
+    controller._record_model_preload_result(
+        key,
+        1,
+        "Selected model 'small' could not be loaded. No fallback model was used.",
+    )
 
-    assert result == "small"
+    assert "No fallback model" in controller._model_preload_failure(settings)
+    controller.shutdown()
+    _ = app
+
+
+def test_batch_worker_waits_for_matching_preload_before_runtime_acquisition():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="small", hotkey=FALLBACK_HOTKEY)
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    order = []
+
+    class WaitingFuture:
+        def done(self):
+            return False
+
+        def result(self, timeout=None):
+            assert timeout == 0.1
+            order.append("preload-finished")
+
+    class Transcriber:
+        def transcribe_batch(self, _wav_bytes):
+            order.append("transcribed")
+            return "selected model result"
+
+    class Lease:
+        transcriber = Transcriber()
+
+        def release(self):
+            order.append("released")
+
+    key = controller._model_preload_key(settings)
+    controller._preload_target_key = key
+    controller._preload_future = WaitingFuture()
+
+    def acquire(acquired_settings, *, allow_isolated=True):
+        assert acquired_settings.model_size == "small"
+        assert allow_isolated is True
+        order.append("runtime-acquired")
+        return Lease()
+
+    controller._acquire_transcriber_runtime = acquire  # type: ignore[method-assign]
+    emitted = []
+    controller.transcription_ready.connect(
+        lambda token, text: emitted.append((token, text))
+    )
+
+    controller._transcribe_worker(4, b"RIFF", settings)
+
+    assert order == [
+        "preload-finished",
+        "runtime-acquired",
+        "transcribed",
+        "released",
+    ]
+    assert emitted == [(4, "selected model result")]
+    controller.shutdown()
+    _ = app
+
+
+def test_batch_worker_cancels_while_waiting_without_acquiring_runtime():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="small", hotkey=FALLBACK_HOTKEY)
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    job = controller._register_transcription_job(6, settings, "batch")
+
+    class CancelingFuture:
+        def done(self):
+            return False
+
+        def result(self, timeout=None):
+            assert timeout == 0.1
+            job.aborting = True
+            raise concurrent.futures.TimeoutError()
+
+    key = controller._model_preload_key(settings)
+    controller._preload_target_key = key
+    controller._preload_future = CancelingFuture()
+    controller._acquire_transcriber_runtime = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a canceled wait must not acquire a runtime")
+        )
+    )
+    canceled = []
+    controller.transcription_canceled.connect(canceled.append)
+
+    controller._transcribe_worker(6, b"RIFF", settings, job)
+
+    assert canceled == [6]
+    controller.shutdown()
+    _ = app
+
+
+def test_batch_worker_reports_preload_failure_without_creating_fallback():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="small", hotkey=FALLBACK_HOTKEY)
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    key = controller._model_preload_key(settings)
+    failure = "Selected model 'small' could not be loaded. No fallback model was used."
+    controller._record_model_preload_result(key, 1, failure)
+    controller._acquire_transcriber_runtime = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("a failed selected model must not create a fallback")
+        )
+    )
+    emitted = []
+    controller.transcription_failed.connect(
+        lambda token, message: emitted.append((token, message))
+    )
+
+    controller._transcribe_worker(5, b"RIFF", settings)
+
+    assert emitted == [(5, failure)]
     controller.shutdown()
     _ = app
 
@@ -1460,9 +1622,9 @@ def test_on_settings_changed_preloads_for_local_engine():
 
     preload_called = []
 
-    def mock_preload():
+    def mock_preload(_settings, generation, _key):
         preload_called.append(True)
-        controller.model_preload_done.emit(True, "Model loaded: small")
+        controller.model_preload_done.emit(generation, True, "Model loaded: small")
 
     controller._preload_model_worker = mock_preload
     controller.on_settings_changed()
@@ -1492,7 +1654,7 @@ def test_on_settings_changed_skips_preload_for_remote_engine():
     controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
-    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
     controller.on_settings_changed()
 
     assert len(preload_called) == 0
@@ -1524,7 +1686,7 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
     controller._preload_executor = ImmediateExecutor()
 
     preload_called = []
-    controller._preload_model_worker = lambda: preload_called.append(True)
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
     controller.on_settings_changed()
 
     assert preload_called == []
@@ -1593,7 +1755,22 @@ def test_overlay_language_change_rejects_unsupported_cohere_auto():
     assert controller.settings.language_mode == "de"
     assert store.saved is None
     assert overlay.language_options[-1] == (
-        ("de", "en", "fr", "it", "es", "pt", "el", "nl", "pl", "ar", "vi", "zh", "ja", "ko"),
+        (
+            "de",
+            "en",
+            "fr",
+            "it",
+            "es",
+            "pt",
+            "el",
+            "nl",
+            "pl",
+            "ar",
+            "vi",
+            "zh",
+            "ja",
+            "ko",
+        ),
         "de",
     )
     controller.shutdown()
