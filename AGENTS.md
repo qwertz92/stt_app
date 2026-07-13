@@ -512,12 +512,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   English (verified with the valoomba build).
   The raw Granite 4.1 Plus/NAR graphs run through `onnxruntime-node` execution
   providers: `webgpu_asr_runner.mjs` `ortExecutionProviders` returns
-  `webgpu`/`dml`/`cpu`, so `auto`/`gpu` mode tries WebGPU, then DirectML, then
-  CPU. DirectML ships with `onnxruntime-node` on Windows. GPU acceleration of
-  these raw graphs is unverified (WebGPU `Einsum` shader bug, DirectML operator
-  gaps) and they usually run on CPU; the active device is reported in the runtime
-  status. This raw path is separate from the Cohere / Granite 4.0 / Granite 4.1
-  2B Transformers.js pipeline path.
+  `webgpu`/`dml`/`cpu`. DirectML ships with `onnxruntime-node` on Windows. NAR's
+  conformer encoder is verified CPU-only in this runtime (WebGPU `Einsum` shader
+  failure; DirectML cannot execute its 5-D attention MatMuls), so NAR normalizes
+  the normal `auto` policy to CPU and avoids retrying known-broken GPU paths on
+  every dictation. Explicit WebGPU/DirectML benchmark targets still bypass this
+  preference so a future runtime or graph fix can be detected. Plus retains the generic
+  WebGPU -> DirectML -> CPU auto path. The active device is reported in runtime
+  status. These raw paths are separate from the Cohere / Granite 4.0 / Granite
+  4.1 2B Transformers.js pipeline path.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.
   The resolved runtime device is reported through transcriber progress messages

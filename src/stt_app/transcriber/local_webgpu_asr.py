@@ -18,6 +18,7 @@ from typing import Any
 from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
+    LOCAL_ONNX_AUTO_CPU_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_DEVICE_POLICIES,
@@ -586,6 +587,8 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 "Unsupported ONNX/WebGPU device policy "
                 f"'{device}'. Use one of: {', '.join(LOCAL_WEBGPU_DEVICE_POLICIES)}."
             )
+        if device == "auto" and model_size in LOCAL_ONNX_AUTO_CPU_MODELS:
+            device = "cpu"
         ProgressReporter.__init__(self)
         self.model_size = model_size
         self.language_mode = language_mode

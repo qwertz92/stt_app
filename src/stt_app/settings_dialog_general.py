@@ -22,6 +22,7 @@ from .config import (
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_ONNX_AUTO_CPU_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_ONNX_MODEL_SIZES,
@@ -940,6 +941,13 @@ class _GeneralTabMixin:
         # text and color change, so model switches never shift the layout.
         warning_style = "color: #b71c1c; font-size: 11px;"
         note_style = "color: #666666; font-size: 11px;"
+        if engine == "local" and model_name in LOCAL_ONNX_AUTO_CPU_MODELS:
+            self.local_model_runtime_warning_label.setStyleSheet(warning_style)
+            self.local_model_runtime_warning_label.setText(
+                "Batch mode only. NAR uses CPU by default because its encoder "
+                "is not currently compatible with WebGPU or DirectML."
+            )
+            return
         if engine == "local" and model_name in LOCAL_WEBGPU_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(

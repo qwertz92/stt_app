@@ -337,6 +337,17 @@ def test_granite_4_1_transcriber_defaults_to_int8_dtype():
     )
 
     assert transcriber.dtype == "int8"
+    assert transcriber.device == "cpu"
+
+
+def test_granite_4_1_nar_explicit_gpu_target_bypasses_cpu_preference():
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b-nar",
+        language_mode="en",
+        device="dml",
+    )
+
+    assert transcriber.device == "dml"
 
 
 def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(

@@ -462,6 +462,29 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     _ = app
 
 
+def test_granite_nar_runtime_note_explains_cpu_preference():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(
+        AppSettings(
+            engine="local",
+            mode="batch",
+            model_size="granite-speech-4.1-2b-nar",
+            language_mode="de",
+        )
+    )
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    note = dialog.local_model_runtime_warning_label.text()
+    assert "Batch mode only" in note
+    assert "uses CPU by default" in note
+    assert "WebGPU or DirectML" in note
+    _ = app
+
+
 def test_local_model_labels_show_onnx_precision_tags():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(

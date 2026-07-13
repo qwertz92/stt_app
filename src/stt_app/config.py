@@ -187,6 +187,10 @@ GRANITE_4_1_REPO_MAP: dict[str, str] = {
 
 LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
 
+# Models whose known-fastest compatible path is CPU. Explicit non-auto benchmark
+# targets still bypass this policy so future runtime fixes can be re-evaluated.
+LOCAL_ONNX_AUTO_CPU_MODELS = ("granite-speech-4.1-2b-nar",)
+
 LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
     "auto": ("auto",),
     "gpu": ("gpu",),

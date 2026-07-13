@@ -3,6 +3,17 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-14
+
+- **Granite Speech 4.1 NAR now prefers its verified CPU path.** The normal
+  `auto` policy previously retried WebGPU and DirectML even though the NAR
+  encoder is known to fail on both providers, then discarded the CPU fallback
+  so the same attempts could recur on the next dictation. NAR now resolves
+  `auto` directly to CPU. Explicit WebGPU/DirectML benchmark targets still
+  bypass the preference so future runtime or graph improvements remain testable.
+  The General-tab note explains this model-specific behavior instead of
+  promising a useful GPU fallback.
+
 ## 2026-07-10
 
 - **Benchmark layout inverted after user feedback (design lesson).** The
