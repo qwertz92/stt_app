@@ -20,6 +20,16 @@ Quality has the highest priority. Take as much time as needed.
 
 - After validated code changes, commit the agent's own changes and push the
   commit unless the user explicitly asks not to.
+- Repository-wide improvement work is not complete while it exists only on a
+  feature/review branch. Unless the user requested a PR-only or review-first
+  workflow, merge validated work into `main` and push `main` before reporting
+  completion.
+- Every final handoff must state the current branch and whether the work is in
+  `main`. If it is intentionally not merged, place a conspicuous
+  **NOT MERGED TO MAIN** warning at both the beginning and end of the final
+  response so the publication state cannot be overlooked.
+- Delete local and remote branches only after proving they are fully contained
+  in the pushed `main`; preserve and explicitly report every unmerged branch.
 - Use logical commits for distinct bugfix/feature/refactor units.
 - Match the existing history: short conventional subject line, blank line, then concise `-` bullet points.
 - Hard-wrap every commit body line at a maximum of 100 characters.
