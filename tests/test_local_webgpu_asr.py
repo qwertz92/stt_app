@@ -338,6 +338,13 @@ def test_granite_4_1_transcriber_defaults_to_int8_dtype():
 
     assert transcriber.dtype == "int8"
     assert transcriber.device == "cpu"
+    assert "CPU preferred for this model" in transcriber.runtime_status_text()
+
+    transcriber._set_runtime_status("cpu", False, [])
+
+    assert "preferred for this model" in transcriber.runtime_status_text()
+    assert "intentionally uses CPU" in transcriber.runtime_warning
+    assert "fallback was not available" not in transcriber.runtime_status_text()
 
 
 def test_granite_4_1_nar_explicit_gpu_target_bypasses_cpu_preference():
@@ -348,6 +355,22 @@ def test_granite_4_1_nar_explicit_gpu_target_bypasses_cpu_preference():
     )
 
     assert transcriber.device == "dml"
+
+
+def test_explicit_cpu_policy_does_not_report_failed_gpu_fallback():
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b-plus",
+        language_mode="en",
+        device="cpu",
+    )
+
+    transcriber._set_runtime_status("cpu", False, [])
+
+    assert transcriber.runtime_status_text() == (
+        "ONNX runtime active on CPU (selected device policy)."
+    )
+    assert "CPU device policy is selected" in transcriber.runtime_warning
+    assert "fallback was not available" not in transcriber.runtime_status_text()
 
 
 def test_webgpu_transcriber_reuses_process_and_reports_cpu_fallback(

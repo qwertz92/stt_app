@@ -49,8 +49,9 @@ Agents and developers: use this as a knowledge base for past issues and solution
   so the same attempts could recur on the next dictation. NAR now resolves
   `auto` directly to CPU. Explicit WebGPU/DirectML benchmark targets still
   bypass the preference so future runtime or graph improvements remain testable.
-  The General-tab note explains this model-specific behavior instead of
-  promising a useful GPU fallback.
+  The General-tab note and runtime diagnostics explain this model-specific
+  behavior instead of claiming that a GPU fallback failed. Explicit CPU policy
+  selections are likewise reported as intentional, not as unavailable GPUs.
 
 ## 2026-07-10
 

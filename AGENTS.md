@@ -540,7 +540,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   every dictation. Explicit WebGPU/DirectML benchmark targets still bypass this
   preference so a future runtime or graph fix can be detected. Plus retains the generic
   WebGPU -> DirectML -> CPU auto path. The active device is reported in runtime
-  status. These raw paths are separate from the Cohere / Granite 4.0 / Granite
+  status, and diagnostics must distinguish this intentional NAR CPU preference
+  (or an explicit CPU policy) from a real failed GPU fallback. These raw paths
+  are separate from the Cohere / Granite 4.0 / Granite
   4.1 2B Transformers.js pipeline path.
   They are not preloaded and are closed after normal batch dictation to avoid
   idle ONNX/Node CPU load.

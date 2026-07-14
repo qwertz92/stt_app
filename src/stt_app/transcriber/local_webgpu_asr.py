@@ -587,12 +587,16 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 "Unsupported ONNX/WebGPU device policy "
                 f"'{device}'. Use one of: {', '.join(LOCAL_WEBGPU_DEVICE_POLICIES)}."
             )
-        if device == "auto" and model_size in LOCAL_ONNX_AUTO_CPU_MODELS:
+        auto_cpu_preferred = (
+            device == "auto" and model_size in LOCAL_ONNX_AUTO_CPU_MODELS
+        )
+        if auto_cpu_preferred:
             device = "cpu"
         ProgressReporter.__init__(self)
         self.model_size = model_size
         self.language_mode = language_mode
         self.device = device
+        self._auto_cpu_preferred = auto_cpu_preferred
         self.dtype = str(dtype or LOCAL_ONNX_MODEL_PRECISION.get(model_size) or "q4")
         self.offline_mode = offline_mode
         self.model_dir = (model_dir or "").strip()
@@ -628,11 +632,23 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
     def runtime_status_text(self) -> str:
         if not self._runtime_device:
+            if self._auto_cpu_preferred:
+                return (
+                    "ONNX runtime not loaded yet. Device policy: CPU preferred "
+                    "for this model."
+                )
             policy = _DEVICE_POLICY_LABELS.get(self.device, self.device)
             return f"ONNX runtime not loaded yet. Device policy: {policy}."
         label = _RUNTIME_DEVICE_LABELS.get(self._runtime_device, self._runtime_device)
         if self._runtime_device in _ACCELERATED_DEVICES:
             return f"ONNX runtime active on {label}."
+        if self._auto_cpu_preferred:
+            return (
+                "ONNX runtime active on CPU (preferred for this model because "
+                "its encoder is incompatible with WebGPU and DirectML)."
+            )
+        if self.device == "cpu":
+            return "ONNX runtime active on CPU (selected device policy)."
         return (
             "ONNX runtime active on CPU. WebGPU/DirectML GPU fallback was not "
             "available or did not load."
@@ -690,11 +706,22 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 if str(detail).strip()
             ]
         if self._runtime_device not in _ACCELERATED_DEVICES:
-            self.runtime_warning = (
-                "No WebGPU or DirectML GPU runtime was selected. This model is "
-                "running on CPU and may be much slower than the CTranslate2 "
-                "Whisper models."
-            )
+            if self._auto_cpu_preferred:
+                self.runtime_warning = (
+                    "This model intentionally uses CPU because its encoder is "
+                    "incompatible with WebGPU and DirectML in the current runtime."
+                )
+            elif self.device == "cpu":
+                self.runtime_warning = (
+                    "The CPU device policy is selected. This model may be much "
+                    "slower than the CTranslate2 Whisper models."
+                )
+            else:
+                self.runtime_warning = (
+                    "No WebGPU or DirectML GPU runtime was selected. This model is "
+                    "running on CPU and may be much slower than the CTranslate2 "
+                    "Whisper models."
+                )
             if self.runtime_details_text:
                 self.runtime_warning = (
                     f"{self.runtime_warning} {self.runtime_details_text}"
