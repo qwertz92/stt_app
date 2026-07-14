@@ -1,5 +1,6 @@
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
+import stt_app.overlay_ui as overlay_ui_module
 from stt_app.config import (
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
@@ -272,18 +273,27 @@ def test_overlay_clear_button_restores_initial_hint_and_resets_compact_height():
     assert overlay.height() < large_height
 
 
-def test_overlay_restore_visibility_reasserts_foreground_mode():
+def test_overlay_restore_visibility_reasserts_foreground_mode(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     overlay.show()
     app.processEvents()
     overlay.set_always_on_top(False)
+    z_order_calls: list[bool] = []
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    monkeypatch.setattr(
+        overlay,
+        "_apply_native_z_order",
+        lambda: z_order_calls.append(overlay._temporary_foreground_active),
+    )
 
     overlay.hide()
     overlay.restore_visibility()
 
     assert overlay.isVisible() is True
-    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+    assert overlay._temporary_foreground_active is True
+    assert z_order_calls == [True]
+    assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
 
 def test_overlay_clear_button_restores_last_idle_detail_text():
@@ -424,19 +434,25 @@ def test_overlay_initial_window_flags_are_not_reapplied(monkeypatch):
     assert reapplied == []
 
 
-def test_overlay_reveal_temporarily_restores_non_pinned_mode():
+def test_overlay_reveal_temporarily_does_not_rebuild_non_pinned_window(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     overlay.show()
     app.processEvents()
     overlay.set_always_on_top(False)
+    rebuilt_flags: list[QtCore.Qt.WindowType] = []
+    monkeypatch.setattr(overlay, "setWindowFlags", rebuilt_flags.append)
 
     overlay.reveal_temporarily(duration_ms=50)
 
-    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+    assert overlay._temporary_foreground_active is True
+    assert rebuilt_flags == []
+    assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
     QtTest.QTest.qWait(80)
     app.processEvents()
     assert overlay.always_on_top is False
+    assert overlay._temporary_foreground_active is False
+    assert rebuilt_flags == []
     assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
 

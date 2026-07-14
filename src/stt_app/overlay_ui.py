@@ -255,7 +255,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _base_window_flags(self) -> QtCore.Qt.WindowType:
         flags = QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint
-        if self._always_on_top or self._temporary_foreground_active:
+        if self._always_on_top:
             flags |= QtCore.Qt.WindowStaysOnTopHint
         if hasattr(QtCore.Qt, "WindowDoesNotAcceptFocus"):
             flags |= QtCore.Qt.WindowDoesNotAcceptFocus

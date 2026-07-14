@@ -14,12 +14,20 @@ Agents and developers: use this as a knowledge base for past issues and solution
   model-aware batch-language selector and passes its value through the GUI-thread
   settings snapshot. It never implicitly uses or mutates the General-tab
   language, and constrained models only offer their supported import languages.
-- **Recording start renders the normal listening state once.** The preliminary
+- **Overlay start and reveal avoid native-window rebuilds.** The preliminary
   "Starting recording..." update was immediately replaced by a second green
-  listening update, causing unnecessary layout/style work and visible flicker.
-  Successful batch and streaming starts now draw their final listening detail
-  once; the overlay also avoids reapplying its full stylesheet when its state
-  color is unchanged.
+  listening update, so successful batch and streaming starts now draw their
+  final listening detail once and unchanged state colors do not reapply the
+  full stylesheet. A separate delayed flicker remained for floating overlays:
+  their temporary foreground timer switched `WindowStaysOnTopHint` back off,
+  forcing Qt to recreate the native window after 1.8 seconds. Temporary
+  foreground now uses native `HWND_TOPMOST` / `HWND_NOTOPMOST` Z-order only;
+  permanent pinning remains the sole reason to change Qt window flags.
+- **Settings combobox arrows are painted by the widget.** Windows styles can
+  ignore QSS subcontrol placement and draw the native arrow at the lower edge.
+  `_WheelPassthroughComboBox` hides that native arrow and paints its own
+  triangle in a fixed, vertically centered right-side area. The regression
+  renders the visible Language combobox and verifies the arrow pixels.
 
 ## 2026-07-14
 

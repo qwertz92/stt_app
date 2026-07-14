@@ -233,9 +233,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   width derived from the target window width (never the live scroll
   viewport, which changes with deferred queue resizes and scrollbar
   visibility) and pre-measures the scrollbar case; `_apply_window_flags`
-  calls `setWindowFlags` only when the flags actually change because it
-  recreates the native window (a visible blink on every hotkey reveal
-  otherwise). The Local/General model runtime note keeps a reserved
+  calls `setWindowFlags` only when permanent pinning flags actually change
+  because it recreates the native window. Temporary foreground reveals must
+  use `_apply_native_z_order` (`HWND_TOPMOST` / `HWND_NOTOPMOST`) without
+  changing Qt window flags; the reveal timer must never recreate the native
+  window. The Local/General model runtime note keeps a reserved
   three-line area and shows a neutral gray note for faster-whisper models so
   model switches never shift the layout.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.

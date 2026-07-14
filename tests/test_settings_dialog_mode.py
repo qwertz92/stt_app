@@ -3044,7 +3044,7 @@ def test_import_language_options_follow_import_model_constraints():
     _ = app
 
 
-def test_settings_combo_style_centers_dropdown_arrow():
+def test_settings_combo_draws_dropdown_arrow_in_centered_area():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -3052,11 +3052,32 @@ def test_settings_combo_style_centers_dropdown_arrow():
         app_logger=_FakeLogger(),
     )
 
-    style = dialog.styleSheet()
+    combo = dialog.language_combo
+    dialog.show()
+    app.processEvents()
+    combo.resize(180, 32)
+    app.processEvents()
+    arrow_rect = combo._arrow_rect()
+    content_rect = combo.contentsRect()
+    arrow_color = combo.palette().color(
+        QtGui.QPalette.Active,
+        QtGui.QPalette.ButtonText,
+    )
+    image = QtGui.QImage(combo.size(), QtGui.QImage.Format_ARGB32)
+    image.fill(QtCore.Qt.transparent)
+    combo.render(image)
+    arrow_pixels = [
+        QtCore.QPoint(x, y)
+        for y in range(image.height())
+        for x in range(image.width())
+        if arrow_rect.contains(x, y) and image.pixelColor(x, y) == arrow_color
+    ]
 
-    assert "QComboBox::drop-down" in style
-    assert "QComboBox::down-arrow" in style
-    assert "subcontrol-position: center" in style
+    assert arrow_rect.center().y() == content_rect.center().y()
+    assert arrow_rect.right() == content_rect.right()
+    assert arrow_pixels
+    assert "QComboBox::down-arrow" in dialog.styleSheet()
+    assert "image: none" in dialog.styleSheet()
     _ = app
 
 

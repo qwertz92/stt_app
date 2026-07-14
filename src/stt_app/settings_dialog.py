@@ -696,8 +696,9 @@ class SettingsDialog(
             border-left: 1px solid #c4cdd8;
         }
         QComboBox::down-arrow {
-            subcontrol-origin: padding;
-            subcontrol-position: center;
+            image: none;
+            width: 0px;
+            height: 0px;
         }
         """
         )
