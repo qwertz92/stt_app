@@ -701,6 +701,7 @@ class DictationController(QtCore.QObject):
         self._stream_abort_requested = False
         self._stream_text_state.reset()
         self._active_session_mode = "streaming"
+        self._streaming_recording = True
         self._active_stream_transcriber = transcriber
         self._active_stream_runtime_lease = runtime_lease
         self._active_stream_settings = settings_snapshot
@@ -737,14 +738,17 @@ class DictationController(QtCore.QObject):
         self._log_recording_start_timing(
             "streaming", beep_ms, capture_started_at, capture
         )
-        self._streaming_recording = True
         self._active_batch_settings = None
         self._arm_audio_callback_watchdog(capture)
         if STREAMING_ABORT_ON_FOCUS_CHANGE:
             self._focus_poll_timer.start()
-        self._set_listening_overlay(
-            "Streaming active. Speak now, press hotkey to finalize."
-        )
+        if not (
+            self._stream_text_state.live_text
+            or self._stream_text_state.last_partial_text
+        ):
+            self._set_listening_overlay(
+                "Streaming active. Speak now, press hotkey to finalize."
+            )
 
     @staticmethod
     def _audio_capture_runtime_context(capture: AudioCapture) -> tuple[bool, int]:

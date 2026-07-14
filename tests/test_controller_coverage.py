@@ -556,6 +556,7 @@ def test_start_streaming_forwards_audio_delivered_inside_capture_start(monkeypat
     controller.start_recording()
 
     assert transcriber.chunks == [b"first audio block"]
+    assert overlay.states[-1] == ("Listening", "Live: stream")
     controller.shutdown()
     _ = app
 
