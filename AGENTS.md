@@ -221,7 +221,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   blocks behind an in-progress background open. Each capture installs a
   generation-scoped callback; callbacks retained by PortAudio after detach are
   ignored and cannot append audio to the next recording. Stream cleanup must
-  always attempt `close()` even when `stop()` fails.
+  always attempt `close()` even when `stop()` fails. The overlay must not show
+  the ready-to-speak instruction until `capture.start()` has succeeded; its
+  preceding wait message keeps slow cold opens from inviting speech that cannot
+  yet be recorded. A streaming controller session is published before
+  `capture.start()` so a first callback delivered from inside that call reaches
+  the active transcriber instead of being discarded.
+- **First audio callback watchdog**: after a successful capture start, a bounded
+  Qt timer verifies that PortAudio actually delivered a callback. A timeout is
+  an abort, never a normal stop/transcription: a callback can race just after
+  the timeout check, so any late bytes are retained for Retry but are not
+  submitted automatically while an Error is shown. Snapshot warm-stream and
+  callback-count diagnostics before `capture.stop()` mutates them.
 - **Silence gate (`silence_gate_enabled` + `silence_gate_threshold`, default
   off/0.004)**: batch recordings whose loudest 100 ms window stays below the
   threshold skip transcription entirely (speech models hallucinate words from

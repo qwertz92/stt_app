@@ -466,10 +466,17 @@ def test_start_recording_remote_not_blocked_by_stale_local_preload(monkeypatch):
     _ = app
 
 
-def test_start_recording_forces_compact_listening_state(monkeypatch):
+def test_start_recording_waits_to_invite_speech_until_capture_started(monkeypatch):
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
     overlay = FakeOverlay()
-    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    states_at_capture_start: list[tuple[str, str]] = []
+
+    class StateAwareCapture(FakeCapture):
+        def start(self):
+            states_at_capture_start.append(overlay.states[-1])
+            super().start()
+
+    monkeypatch.setattr("stt_app.controller.AudioCapture", StateAwareCapture)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -477,19 +484,29 @@ def test_start_recording_forces_compact_listening_state(monkeypatch):
 
     controller.start_recording()
 
-    # Qt can apply pending style/layout work while start_recording() drains
-    # events. Reassert the compact geometry after that drain as well.
-    assert overlay.compact_calls == 2
+    # The compact geometry is asserted before and after the event drain, then
+    # once more for the ready-to-speak detail after capture.start() succeeds.
+    assert overlay.compact_calls == 3
+    assert states_at_capture_start == [
+        (
+            "Listening",
+            "Starting dictation. Please wait for the 'Speak now' message.",
+        )
+    ]
     assert overlay.states[0][0] == "Listening"
     assert overlay.state_kwargs[0].get("compact") is True
     assert [state for state in overlay.states if state[0] == "Listening"] == [
+        (
+            "Listening",
+            "Starting dictation. Please wait for the 'Speak now' message.",
+        ),
         ("Listening", "Speak now. Press hotkey again to stop.")
     ]
     controller.shutdown()
     _ = app
 
 
-def test_start_streaming_renders_one_listening_state(monkeypatch):
+def test_start_streaming_waits_to_invite_speech_until_capture_started(monkeypatch):
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
     overlay = FakeOverlay()
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
@@ -505,8 +522,40 @@ def test_start_streaming_renders_one_listening_state(monkeypatch):
     controller.start_recording()
 
     assert [state for state in overlay.states if state[0] == "Listening"] == [
+        (
+            "Listening",
+            "Starting dictation. Please wait for the 'Speak now' message.",
+        ),
         ("Listening", "Streaming active. Speak now, press hotkey to finalize.")
     ]
+    controller.shutdown()
+    _ = app
+
+
+def test_start_streaming_forwards_audio_delivered_inside_capture_start(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+
+    class ImmediateCallbackCapture(FakeCapture):
+        def start(self):
+            super().start()
+            assert self.chunk_callback is not None
+            self.chunk_callback(b"first audio block")
+
+    monkeypatch.setattr("stt_app.controller.AudioCapture", ImmediateCallbackCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert transcriber.chunks == [b"first audio block"]
     controller.shutdown()
     _ = app
 
@@ -641,7 +690,7 @@ def test_stop_recording_no_audio_shows_error(monkeypatch):
     _ = app
 
 
-def test_audio_callback_watchdog_logs_and_stops_empty_batch_capture(
+def test_audio_callback_watchdog_aborts_batch_without_transcribing_late_audio(
     monkeypatch,
     caplog,
 ):
@@ -656,7 +705,9 @@ def test_audio_callback_watchdog_logs_and_stops_empty_batch_capture(
     with caplog.at_level(logging.ERROR, logger="test.controller"):
         controller.start_recording()
         capture = FakeCapture.instances[-1]
-        capture._wav_bytes = b""
+        # Simulate the exact timeout race: bytes arrive after the watchdog's
+        # callback-count check but before capture.stop() snapshots the buffer.
+        capture._wav_bytes = b"late audio"
 
         controller._on_audio_callback_watchdog_timeout()
 
@@ -667,7 +718,62 @@ def test_audio_callback_watchdog_logs_and_stops_empty_batch_capture(
         "Microphone capture started but did not deliver audio. Please retry.",
     )
     assert "audio_capture_callback_timeout mode=batch" in caplog.text
-    assert "audio_capture_empty mode=batch" in caplog.text
+    assert "audio_capture_empty mode=batch" not in caplog.text
+    assert controller._jobs == {}
+    assert controller._last_failed_wav_bytes == b"late audio"
+    controller.shutdown()
+    _ = app
+
+
+def test_audio_callback_watchdog_ignores_capture_that_received_audio(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller.start_recording()
+    capture = FakeCapture.instances[-1]
+    capture.has_received_audio = True
+
+    controller._on_audio_callback_watchdog_timeout()
+
+    assert capture.stopped is False
+    assert controller._audio_capture is capture
+    controller.shutdown()
+    _ = app
+
+
+def test_stop_recording_logs_pre_stop_warm_stream_context(caplog):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    overlay = FakeOverlay()
+
+    class WarmCapture(FakeCapture):
+        def __init__(self):
+            super().__init__()
+            self.uses_warm_stream = True
+            self.callback_count = 7
+            self._wav_bytes = b""
+
+        def stop(self):
+            self.uses_warm_stream = False
+            return super().stop()
+
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    capture = WarmCapture()
+    controller._audio_capture = capture
+
+    with caplog.at_level(logging.ERROR, logger="test.controller"):
+        controller.stop_recording()
+
+    assert "audio_capture_empty mode=batch warm_stream=True callback_count=7" in (
+        caplog.text
+    )
     controller.shutdown()
     _ = app
 

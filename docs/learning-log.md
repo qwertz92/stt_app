@@ -14,6 +14,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
   model-aware batch-language selector and passes its value through the GUI-thread
   settings snapshot. It never implicitly uses or mutates the General-tab
   language, and constrained models only offer their supported import languages.
+- **Capture readiness and the first-callback watchdog are race-safe.** The
+  overlay previously said "Speak now" before a slow microphone or streaming
+  session had started, which could lose every word spoken during device open.
+  It now shows an explicit wait message and publishes the ready-to-speak detail
+  only after capture succeeds. Streaming session references are installed
+  before `capture.start()` so an immediate callback is forwarded. A callback
+  timeout aborts instead of entering the normal transcription path; bytes that
+  arrive at the timeout boundary stay available for Retry without producing a
+  simultaneous transcript and Error. Stop diagnostics snapshot the warm-stream
+  state before capture teardown resets it.
 - **Overlay start and reveal preserve visibility.** The preliminary
   "Starting recording..." update was immediately replaced by a second green
   listening update, so successful batch and streaming starts now draw their
@@ -28,8 +38,6 @@ Agents and developers: use this as a knowledge base for past issues and solution
   The button therefore opens its menu explicitly and paints a centered arrow;
   Settings comboboxes retain their native appearance. The regression renders
   that exact overlay button and verifies its arrow pixels and menu popup.
-
-## 2026-07-14
 
 - **Granite Speech 4.1 NAR now prefers its verified CPU path.** The normal
   `auto` policy previously retried WebGPU and DirectML even though the NAR
