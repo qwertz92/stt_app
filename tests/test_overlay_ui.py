@@ -355,6 +355,27 @@ def test_overlay_control_buttons_follow_state():
     assert overlay._cancel_button.isEnabled() is True
 
 
+def test_overlay_does_not_reapply_stylesheet_for_same_state():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class CountingOverlay(OverlayUI):
+        def __init__(self):
+            self.stylesheet_calls = 0
+            super().__init__()
+
+        def setStyleSheet(self, stylesheet: str) -> None:
+            self.stylesheet_calls += 1
+            super().setStyleSheet(stylesheet)
+
+    overlay = CountingOverlay()
+    initial_calls = overlay.stylesheet_calls
+
+    overlay.set_state("Listening", "First", compact=True)
+    overlay.set_state("Listening", "Second", compact=True)
+
+    assert overlay.stylesheet_calls == initial_calls + 1
+
+
 def test_overlay_control_signals_are_emitted():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

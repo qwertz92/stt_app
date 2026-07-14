@@ -198,6 +198,14 @@ class HistoryDialog(QtWidgets.QDialog):
         if autoload:
             self.reload()
 
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if (
+            event.type() == QtCore.QEvent.ActivationChange
+            and self.isActiveWindow()
+        ):
+            self.reload(force=True)
+
     def reload(self, force: bool = False) -> None:
         signature = self._current_history_reload_signature()
         if (

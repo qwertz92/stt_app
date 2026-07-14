@@ -9,7 +9,11 @@ from typing import Callable
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import recordings_dir
-from .config import DEFAULT_ENGINE, VALID_ENGINES
+from .config import (
+    DEFAULT_ENGINE,
+    DEFAULT_LANGUAGE_MODE,
+    VALID_ENGINES,
+)
 from .settings_dialog_helpers import (
     _emit_background_signal,
     _ENGINE_LABELS,
@@ -74,6 +78,19 @@ class _ImportTabMixin:
         import_controls_layout.addWidget(QtWidgets.QLabel("Import Model"))
         import_controls_layout.addWidget(self.import_model_combo)
         import_controls_layout.addWidget(self.import_model_note)
+
+        self.import_language_combo = _WheelPassthroughComboBox()
+        self.import_language_note = QtWidgets.QLabel(
+            "Used only for this imported file; it does not change the General tab."
+        )
+        self.import_language_note.setWordWrap(True)
+        self._style_note_label(self.import_language_note)
+        self.import_language_combo.currentIndexChanged.connect(
+            self._on_import_language_changed
+        )
+        import_controls_layout.addWidget(QtWidgets.QLabel("Import Language"))
+        import_controls_layout.addWidget(self.import_language_combo)
+        import_controls_layout.addWidget(self.import_language_note)
 
         import_buttons = QtWidgets.QHBoxLayout()
         self._configure_button_row(import_buttons)
@@ -319,6 +336,7 @@ class _ImportTabMixin:
         self.import_start_button.setEnabled(False)
         self.import_engine_combo.setEnabled(False)
         self.import_model_combo.setEnabled(False)
+        self.import_language_combo.setEnabled(False)
         self._import_progress_timer.start()
 
         # Build settings on the GUI thread — widgets must not be accessed
@@ -327,6 +345,9 @@ class _ImportTabMixin:
             self.import_engine_combo.currentData() or DEFAULT_ENGINE
         )
         import_model = str(self.import_model_combo.currentData() or "")
+        import_language = str(
+            self.import_language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+        )
         credential_issue = self._import_engine_credential_issue(import_engine)
         if credential_issue is not None:
             self._import_progress_timer.stop()
@@ -349,10 +370,14 @@ class _ImportTabMixin:
             )
             self.import_engine_combo.setEnabled(True)
             self.import_model_combo.setEnabled(True)
+            self.import_language_combo.setEnabled(
+                self.import_language_combo.count() > 1
+            )
             return
         settings = self._build_current_settings(
             engine_override=import_engine,
             model_override=import_model,
+            language_override=import_language,
         )
 
         def _run() -> None:
@@ -450,6 +475,7 @@ class _ImportTabMixin:
         self.import_start_button.setEnabled(bool(self._selected_import_file_path))
         self.import_engine_combo.setEnabled(True)
         self.import_model_combo.setEnabled(True)
+        self.import_language_combo.setEnabled(self.import_language_combo.count() > 1)
         if ok:
             self.import_result_label.setText("Transcription finished.")
             self.import_result_label.setStyleSheet("color: #1b5e20;")

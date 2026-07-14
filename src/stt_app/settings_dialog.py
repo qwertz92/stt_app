@@ -251,6 +251,7 @@ class SettingsDialog(
             "azure": self._remote_model_values["azure"],
             "funasr": self._remote_model_values["funasr"],
         }
+        self._import_language_values: dict[tuple[str, str], str] = {}
         self._active_connection_test_thread: threading.Thread | None = None
         self._active_update_check_thread: threading.Thread | None = None
         self._import_progress_message = ""
@@ -685,6 +686,19 @@ class SettingsDialog(
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
             background: transparent;
         }
+        QComboBox {
+            padding-right: 30px;
+        }
+        QComboBox::drop-down {
+            subcontrol-origin: padding;
+            subcontrol-position: top right;
+            width: 28px;
+            border-left: 1px solid #c4cdd8;
+        }
+        QComboBox::down-arrow {
+            subcontrol-origin: padding;
+            subcontrol-position: center;
+        }
         """
         )
 
@@ -918,6 +932,15 @@ class SettingsDialog(
                 ),
             )
         self._schedule_settings_tab_prewarm()
+
+    def changeEvent(self, event: QtCore.QEvent) -> None:
+        super().changeEvent(event)
+        if (
+            event.type() == QtCore.QEvent.ActivationChange
+            and self.isActiveWindow()
+            and self.tabs.currentIndex() == getattr(self, "_history_tab_index", None)
+        ):
+            self._refresh_history_list(force=True)
 
     def _hide_benchmark_window(self) -> None:
         window = getattr(self, "benchmark_window", None)

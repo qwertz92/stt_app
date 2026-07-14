@@ -197,6 +197,9 @@ class _PersistenceMixin:
         if hasattr(self, "import_engine_combo"):
             self._select_combo_data(self.import_engine_combo, settings.engine)
             self._update_import_model_selector()
+            self._update_import_language_selector(
+                preferred_mode=settings.language_mode
+            )
             self._update_import_engine_note()
 
         if not self._prime_local_model_views_from_available_cache():
@@ -389,6 +392,7 @@ class _PersistenceMixin:
         key_states: dict[str, bool] | None = None,
         model_size: str | None = None,
         engine: str | None = None,
+        language_mode: str | None = None,
     ) -> AppSettings:
         """Construct an ``AppSettings`` from current widget state.
 
@@ -440,7 +444,9 @@ class _PersistenceMixin:
                 )
             ),
             language_mode=str(
-                self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+                language_mode
+                or self.language_combo.currentData()
+                or DEFAULT_LANGUAGE_MODE
             ),
             custom_vocabulary=self.custom_vocabulary_edit.toPlainText(),
             vad_enabled=self.vad_checkbox.isChecked(),
@@ -518,13 +524,17 @@ class _PersistenceMixin:
         *,
         engine_override: str | None = None,
         model_override: str | None = None,
+        language_override: str | None = None,
     ) -> AppSettings:
         """Construct an ``AppSettings`` from current widget state.
 
         Delegates the widget reads to ``_construct_settings_from_widgets``
         and then applies the engine/model override resolution.
         """
-        settings = self._construct_settings_from_widgets(engine=engine_override)
+        settings = self._construct_settings_from_widgets(
+            engine=engine_override,
+            language_mode=language_override,
+        )
         effective_engine = str(
             engine_override or self.engine_combo.currentData() or DEFAULT_ENGINE
         )

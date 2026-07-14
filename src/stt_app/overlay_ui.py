@@ -66,6 +66,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
         self._manual_positioned = False
         self._screen_change_connected = False
+        self._state_background = ""
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -353,8 +354,9 @@ class OverlayUI(QtWidgets.QWidget):
         )
 
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
-        self.setStyleSheet(
-            f"""
+        if bg != self._state_background:
+            self.setStyleSheet(
+                f"""
             QFrame#overlayContainer {{
                 background-color: {bg};
                 border: 1px solid rgba(255,255,255,0.25);
@@ -431,8 +433,9 @@ class OverlayUI(QtWidgets.QWidget):
                 color: rgba(255,255,255,0.55);
                 border-color: rgba(255,255,255,0.2);
             }}
-            """
-        )
+                """
+            )
+            self._state_background = bg
 
     def set_language_options(
         self,

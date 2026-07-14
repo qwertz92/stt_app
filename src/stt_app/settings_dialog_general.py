@@ -707,6 +707,8 @@ class _GeneralTabMixin:
         self.import_model_combo.setEnabled(self.import_model_combo.count() > 0)
         self.import_model_combo.blockSignals(False)
 
+        self._update_import_language_selector()
+
         if engine == DEFAULT_ENGINE:
             self.import_model_note.setText(
                 "This import uses the selected local model only for the imported file."
@@ -715,6 +717,55 @@ class _GeneralTabMixin:
         self.import_model_note.setText(
             f"This import uses the selected {self._provider_label(engine)} model only for the imported file."
         )
+
+    @staticmethod
+    def _import_language_key(engine: str, model: str) -> tuple[str, str]:
+        return (str(engine or "").strip().lower(), str(model or "").strip())
+
+    def _update_import_language_selector(
+        self,
+        *,
+        preferred_mode: str | None = None,
+    ) -> None:
+        if not hasattr(self, "import_language_combo"):
+            return
+
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        model = str(
+            self.import_model_combo.currentData()
+            or self._import_model_value_for_engine(engine)
+        )
+        supported_modes = language_modes_for_selection(engine, model, "batch")
+        key = self._import_language_key(engine, model)
+        selected_mode = (
+            preferred_mode
+            or self._import_language_values.get(key)
+            or str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
+        )
+        target_mode = (
+            selected_mode
+            if selected_mode in supported_modes
+            else (
+                DEFAULT_LANGUAGE_MODE
+                if DEFAULT_LANGUAGE_MODE in supported_modes
+                else supported_modes[0]
+            )
+        )
+
+        self.import_language_combo.blockSignals(True)
+        self.import_language_combo.clear()
+        for value in supported_modes:
+            self.import_language_combo.addItem(
+                LANGUAGE_MODE_LABELS.get(value, value), value
+            )
+        self._select_combo_data(self.import_language_combo, target_mode)
+        self.import_language_combo.setEnabled(len(supported_modes) > 1)
+        self.import_language_combo.blockSignals(False)
+        self._import_language_values[key] = target_mode
+        self.import_language_note.setText(
+            "Used only for this imported file; it does not change the General tab."
+        )
+        self.import_language_combo.setToolTip(self.import_language_note.text())
 
     def _apply_engine_model_selection(
         self,
@@ -1093,4 +1144,18 @@ class _GeneralTabMixin:
         if not value:
             value = self._import_model_value_for_engine(engine)
         self._import_model_values[engine] = value
+        self._update_import_language_selector()
         self._update_import_engine_note()
+
+    def _on_import_language_changed(self, _index: int = 0) -> None:
+        if not hasattr(self, "import_language_combo"):
+            return
+        engine = str(self.import_engine_combo.currentData() or DEFAULT_ENGINE)
+        model = str(
+            self.import_model_combo.currentData()
+            or self._import_model_value_for_engine(engine)
+        )
+        language = str(
+            self.import_language_combo.currentData() or DEFAULT_LANGUAGE_MODE
+        )
+        self._import_language_values[self._import_language_key(engine, model)] = language

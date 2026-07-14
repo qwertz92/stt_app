@@ -5,6 +5,24 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-14
 
+- **Persistent history views refresh on activation, not only on navigation.** A
+  settings/history dialog can remain open while transcripts arrive elsewhere,
+  so switching to its tab was insufficient. Both history surfaces now force a
+  reconciliation when the window becomes active; the existing refresh path
+  retains the selected entry and scroll position whenever that entry remains.
+- **Audio-import choices form an independent job snapshot.** Import now owns a
+  model-aware batch-language selector and passes its value through the GUI-thread
+  settings snapshot. It never implicitly uses or mutates the General-tab
+  language, and constrained models only offer their supported import languages.
+- **Recording start renders the normal listening state once.** The preliminary
+  "Starting recording..." update was immediately replaced by a second green
+  listening update, causing unnecessary layout/style work and visible flicker.
+  Successful batch and streaming starts now draw their final listening detail
+  once; the overlay also avoids reapplying its full stylesheet when its state
+  color is unchanged.
+
+## 2026-07-14
+
 - **Granite Speech 4.1 NAR now prefers its verified CPU path.** The normal
   `auto` policy previously retried WebGPU and DirectML even though the NAR
   encoder is known to fail on both providers, then discarded the CPU fallback

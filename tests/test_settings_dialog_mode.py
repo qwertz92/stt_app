@@ -2413,6 +2413,28 @@ def test_switching_to_history_refreshes_automatically(monkeypatch):
     _ = app
 
 
+def test_activating_settings_history_refreshes_automatically(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.tabs.setCurrentIndex(dialog._history_tab_index)
+    refresh_calls: list[bool] = []
+    monkeypatch.setattr(dialog, "isActiveWindow", lambda: True)
+    monkeypatch.setattr(
+        dialog,
+        "_refresh_history_list",
+        lambda force=False: refresh_calls.append(bool(force)),
+    )
+
+    dialog.changeEvent(QtCore.QEvent(QtCore.QEvent.ActivationChange))
+
+    assert refresh_calls == [True]
+    _ = app
+
+
 def test_open_recordings_dir_refreshes_global_hotkeys(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     recordings_path = tmp_path / "recordings"
@@ -2475,7 +2497,7 @@ def test_import_audio_picker_reuses_selected_file_directory(tmp_path):
     _ = app
 
 
-def test_clear_benchmark_results_restores_initial_dialog_size():
+def test_clear_benchmark_results_preserves_current_dialog_size():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
     dialog = SettingsDialog(
@@ -2487,7 +2509,11 @@ def test_clear_benchmark_results_restores_initial_dialog_size():
     app.processEvents()
 
     initial_size = dialog.size()
-    dialog.resize(initial_size.width() + 180, initial_size.height() + 140)
+    expanded_size = QtCore.QSize(
+        initial_size.width() + 180,
+        initial_size.height() + 140,
+    )
+    dialog.resize(expanded_size)
     dialog.benchmark_results_table.setRowCount(1)
     for column in range(dialog.benchmark_results_table.columnCount()):
         dialog.benchmark_results_table.setItem(
@@ -2501,7 +2527,7 @@ def test_clear_benchmark_results_restores_initial_dialog_size():
     dialog._clear_benchmark_results()
     app.processEvents()
 
-    assert dialog.size() == initial_size
+    assert dialog.size() == expanded_size
     assert dialog.benchmark_results_table.rowCount() == 0
     assert dialog.benchmark_summary_text.toPlainText() == ""
     assert dialog.benchmark_status_label.text() == ""
@@ -2959,6 +2985,81 @@ def test_import_model_selector_tracks_selected_import_engine():
     _ = app
 
 
+def test_import_language_selection_is_independent_from_general_settings(
+    monkeypatch,
+    tmp_path,
+):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)
+
+    class _Controller:
+        def __init__(self):
+            self.received_language = ""
+
+        def transcribe_audio_file(
+            self,
+            _path: str,
+            settings_override=None,
+            progress_callback=None,
+        ):
+            self.received_language = settings_override.language_mode
+            return True, "imported text"
+
+    controller = _Controller()
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings(language_mode="de")),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=controller,
+    )
+    english_index = dialog.import_language_combo.findData("en")
+    dialog.import_language_combo.setCurrentIndex(english_index)
+    import_path = tmp_path / "audio.wav"
+    import_path.write_bytes(b"RIFF")
+    dialog._set_selected_import_file(str(import_path))
+
+    dialog._transcribe_selected_import_file()
+
+    assert controller.received_language == "en"
+    assert dialog.language_combo.currentData() == "de"
+    _ = app
+
+
+def test_import_language_options_follow_import_model_constraints():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(
+            AppSettings(language_mode="de", model_size="small")
+        ),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    english_only_model_index = dialog.import_model_combo.findData("distil-large-v3.5")
+
+    dialog.import_model_combo.setCurrentIndex(english_only_model_index)
+
+    assert _combo_data(dialog.import_language_combo) == ["auto", "en"]
+    assert dialog.import_language_combo.currentData() == "auto"
+    assert dialog.language_combo.currentData() == "de"
+    _ = app
+
+
+def test_settings_combo_style_centers_dropdown_arrow():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    style = dialog.styleSheet()
+
+    assert "QComboBox::drop-down" in style
+    assert "QComboBox::down-arrow" in style
+    assert "subcontrol-position: center" in style
+    _ = app
+
+
 def test_local_model_lists_use_compact_item_spacing():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())
@@ -3050,7 +3151,7 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     _ = app
 
 
-def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
+def test_local_models_box_keeps_free_space_outside_the_group(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small", "medium"]
@@ -3069,14 +3170,11 @@ def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     app.processEvents()
 
-    initial_box_height = dialog.local_models_box.height()
-    initial_list_height = dialog.local_models_list.height()
-
-    dialog.resize(dialog.width() + 120, dialog.height() + 220)
-    app.processEvents()
-
-    assert dialog.local_models_box.height() > initial_box_height
-    assert dialog.local_models_list.height() > initial_list_height
+    local_layout = dialog.local_models_box.parentWidget().layout()
+    assert dialog.local_models_box.sizePolicy().verticalPolicy() == (
+        QtWidgets.QSizePolicy.Preferred
+    )
+    assert local_layout.itemAt(local_layout.count() - 1).spacerItem() is not None
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
 

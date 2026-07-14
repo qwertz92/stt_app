@@ -526,16 +526,6 @@ class DictationController(QtCore.QObject):
             )
             self._apply_concurrent_mode_to_active_job()
             self._overlay.reveal_temporarily()
-            self._overlay.set_state(
-                "Listening",
-                "Starting recording...",
-                compact=True,
-            )
-            self._overlay.ensure_compact_size()
-            QtCore.QCoreApplication.processEvents(
-                QtCore.QEventLoop.ExcludeUserInputEvents,
-                25,
-            )
             preload = self._preload_future
             preload_running = (
                 preload is not None
@@ -581,6 +571,25 @@ class DictationController(QtCore.QObject):
                     detail,
                 )
                 return
+
+            if self._settings.mode == "streaming":
+                listening_detail = (
+                    "Streaming active. Speak now, press hotkey to finalize."
+                )
+            elif preload_running:
+                listening_detail = (
+                    f"Selected model '{self._settings.model_size}' is still loading. "
+                    "You can record now; transcription will wait for it. "
+                    "Speak now. Press hotkey again to stop."
+                )
+            else:
+                listening_detail = "Speak now. Press hotkey again to stop."
+            self._overlay.set_state("Listening", listening_detail, compact=True)
+            self._overlay.ensure_compact_size()
+            QtCore.QCoreApplication.processEvents(
+                QtCore.QEventLoop.ExcludeUserInputEvents,
+                25,
+            )
 
             self._target_window_handle = start_target_handle
             self._target_focus_signature = start_target_signature
@@ -644,23 +653,6 @@ class DictationController(QtCore.QObject):
 
         self._audio_capture = capture
         self._arm_audio_callback_watchdog(capture)
-        self._overlay.set_state(
-            "Listening",
-            " ".join(
-                part
-                for part in (
-                    (
-                        f"Selected model '{settings_snapshot.model_size}' is still "
-                        "loading. You can record now; transcription will wait for it."
-                        if waiting_for_model
-                        else ""
-                    ),
-                    "Speak now. Press hotkey again to stop.",
-                )
-                if part
-            ),
-            compact=True,
-        )
 
     def _start_streaming_recording(self) -> None:
         settings_snapshot = replace(self._settings)
@@ -730,11 +722,6 @@ class DictationController(QtCore.QObject):
         self._arm_audio_callback_watchdog(capture)
         if STREAMING_ABORT_ON_FOCUS_CHANGE:
             self._focus_poll_timer.start()
-        self._overlay.set_state(
-            "Listening",
-            "Streaming active. Speak now, press hotkey to finalize.",
-            compact=True,
-        )
 
     def _log_recording_start_timing(
         self,

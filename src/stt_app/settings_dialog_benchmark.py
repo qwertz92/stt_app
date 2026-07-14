@@ -1066,7 +1066,6 @@ class _BenchmarkMixin:
         self.benchmark_summary_text.clear()
         self._set_benchmark_status("", "#555")
         self._update_benchmark_actions()
-        self._restore_default_dialog_size()
 
     def _populate_benchmark_results(self, cases: list[BenchmarkCase]) -> None:
         self.benchmark_results_table.setRowCount(len(cases))

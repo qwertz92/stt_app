@@ -421,6 +421,29 @@ def test_history_dialog_refresh_skips_unchanged_history(tmp_path):
     _ = app
 
 
+def test_history_dialog_activation_forces_refresh(monkeypatch, tmp_path):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    refresh_calls: list[bool] = []
+    monkeypatch.setattr(dialog, "isActiveWindow", lambda: True)
+    monkeypatch.setattr(
+        dialog,
+        "reload",
+        lambda force=False: refresh_calls.append(bool(force)),
+    )
+
+    dialog.changeEvent(QtCore.QEvent(QtCore.QEvent.ActivationChange))
+
+    assert refresh_calls == [True]
+    _ = app
+
+
 def test_history_dialog_refresh_prepends_new_entries_without_rebuilding_old_rows(
     tmp_path,
 ):

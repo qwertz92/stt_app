@@ -480,6 +480,31 @@ def test_start_recording_forces_compact_listening_state(monkeypatch):
     assert overlay.compact_calls >= 1
     assert overlay.states[0][0] == "Listening"
     assert overlay.state_kwargs[0].get("compact") is True
+    assert [state for state in overlay.states if state[0] == "Listening"] == [
+        ("Listening", "Speak now. Press hotkey again to stop.")
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_start_streaming_renders_one_listening_state(monkeypatch):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert [state for state in overlay.states if state[0] == "Listening"] == [
+        ("Listening", "Streaming active. Speak now, press hotkey to finalize.")
+    ]
     controller.shutdown()
     _ = app
 
