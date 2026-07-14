@@ -198,10 +198,24 @@ class AudioCapture:
         self._capture_generation = 0
         self._accepting_audio = False
         self._active_callback: Callable | None = None
+        self._callback_count = 0
 
     @property
     def is_recording(self) -> bool:
         return self._stream is not None or self._warm_attached
+
+    @property
+    def callback_count(self) -> int:
+        with self._lock:
+            return self._callback_count
+
+    @property
+    def has_received_audio(self) -> bool:
+        return self.callback_count > 0
+
+    @property
+    def uses_warm_stream(self) -> bool:
+        return self._warm_attached
 
     def start(self) -> None:
         if self._stream is not None or self._warm_attached:
@@ -213,6 +227,7 @@ class AudioCapture:
             self._chunks = []
             self._auto_stop_fired = False
             self._accepting_audio = True
+            self._callback_count = 0
 
         def session_callback(indata, frames, time_info, status) -> None:
             self._on_audio_for_generation(
@@ -333,6 +348,7 @@ class AudioCapture:
             ):
                 return
             self._chunks.append(np.copy(mono))
+            self._callback_count += 1
             if self.chunk_callback is not None:
                 try:
                     self.chunk_callback(self._to_pcm16_bytes(mono))

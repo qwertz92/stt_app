@@ -18,6 +18,7 @@ from .app_paths import recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .config import (
     AUDIO_CHANNELS,
+    AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
     AUDIO_SAMPLE_RATE,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -260,6 +261,12 @@ class DictationController(QtCore.QObject):
         self._focus_poll_timer = QtCore.QTimer(self)
         self._focus_poll_timer.setInterval(STREAMING_FOCUS_POLL_MS)
         self._focus_poll_timer.timeout.connect(self._on_stream_focus_poll)
+        self._audio_callback_watchdog_timer = QtCore.QTimer(self)
+        self._audio_callback_watchdog_timer.setSingleShot(True)
+        self._audio_callback_watchdog_timer.timeout.connect(
+            self._on_audio_callback_watchdog_timeout
+        )
+        self._audio_callback_watchdog_capture: AudioCapture | None = None
         self._preload_progress_timer = QtCore.QTimer(self)
         self._preload_progress_timer.setInterval(600)
         self._preload_progress_timer.timeout.connect(self._on_preload_progress_poll)
@@ -315,6 +322,7 @@ class DictationController(QtCore.QObject):
             except Exception:
                 self._logger.exception("Failed to unregister cancel hotkey")
         self._focus_poll_timer.stop()
+        self._cancel_audio_callback_watchdog()
         self._preload_progress_timer.stop()
         self._preload_cancel_requested = True
         self._cancel_preload_generation(self._preload_generation)
@@ -635,6 +643,7 @@ class DictationController(QtCore.QObject):
         self._log_recording_start_timing("batch", beep_ms, capture_started_at, capture)
 
         self._audio_capture = capture
+        self._arm_audio_callback_watchdog(capture)
         self._overlay.set_state(
             "Listening",
             " ".join(
@@ -718,6 +727,7 @@ class DictationController(QtCore.QObject):
         self._active_stream_runtime_lease = runtime_lease
         self._active_stream_settings = settings_snapshot
         self._audio_capture = capture
+        self._arm_audio_callback_watchdog(capture)
         if STREAMING_ABORT_ON_FOCUS_CHANGE:
             self._focus_poll_timer.start()
         self._overlay.set_state(
@@ -757,6 +767,61 @@ class DictationController(QtCore.QObject):
                 else ""
             ),
         )
+
+    def _arm_audio_callback_watchdog(self, capture: AudioCapture) -> None:
+        self._audio_callback_watchdog_capture = capture
+        self._audio_callback_watchdog_timer.start(
+            AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS
+        )
+
+    def _cancel_audio_callback_watchdog(
+        self,
+        capture: AudioCapture | None = None,
+    ) -> None:
+        if (
+            capture is not None
+            and self._audio_callback_watchdog_capture is not capture
+        ):
+            return
+        self._audio_callback_watchdog_timer.stop()
+        self._audio_callback_watchdog_capture = None
+
+    def _on_audio_callback_watchdog_timeout(self) -> None:
+        capture = self._audio_callback_watchdog_capture
+        self._audio_callback_watchdog_capture = None
+        if (
+            self._shutdown_started
+            or capture is None
+            or capture is not self._audio_capture
+            or bool(getattr(capture, "has_received_audio", False))
+        ):
+            return
+
+        warm_stream = bool(
+            getattr(capture, "uses_warm_stream", getattr(capture, "_warm_attached", False))
+        )
+        callback_count = int(getattr(capture, "callback_count", 0))
+        self._logger.error(
+            "audio_capture_callback_timeout mode=%s timeout_ms=%d "
+            "warm_stream=%s callback_count=%d",
+            self._active_session_mode,
+            AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+            warm_stream,
+            callback_count,
+        )
+        detail = "Microphone capture started but did not deliver audio. Please retry."
+        if warm_stream:
+            detail = f"{detail} Disable Keep microphone warm if it repeats."
+        if self._streaming_recording:
+            self._abort_streaming_session(
+                detail,
+                beep=False,
+                finalize_stream=False,
+            )
+            return
+
+        self.stop_recording()
+        self._overlay.set_state("Error", detail)
 
     def _build_audio_capture(self, chunk_callback=None) -> AudioCapture:
         vad = None
@@ -839,8 +904,35 @@ class DictationController(QtCore.QObject):
             # recording start, so focus stays on the target window and the
             # pending insertion is unaffected.
             self._overlay.reveal_temporarily()
+            self._cancel_audio_callback_watchdog(capture)
             self._audio_capture = None
-            wav_bytes = capture.stop()
+            try:
+                wav_bytes = capture.stop()
+            except Exception as exc:
+                self._logger.exception(
+                    "Audio capture failed to stop mode=%s warm_stream=%s "
+                    "callback_count=%d",
+                    self._active_session_mode,
+                    bool(
+                        getattr(
+                            capture,
+                            "uses_warm_stream",
+                            getattr(capture, "_warm_attached", False),
+                        )
+                    ),
+                    int(getattr(capture, "callback_count", 0)),
+                )
+                self._active_batch_settings = None
+                detail = f"Failed to stop microphone capture: {exc}"
+                if self._streaming_recording:
+                    self._abort_streaming_session(
+                        detail,
+                        beep=False,
+                        finalize_stream=False,
+                    )
+                else:
+                    self._overlay.set_state("Error", detail)
+                return
             self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
 
@@ -860,6 +952,18 @@ class DictationController(QtCore.QObject):
                 return
 
             if not wav_bytes:
+                self._logger.error(
+                    "audio_capture_empty mode=%s warm_stream=%s callback_count=%d",
+                    self._active_session_mode,
+                    bool(
+                        getattr(
+                            capture,
+                            "uses_warm_stream",
+                            getattr(capture, "_warm_attached", False),
+                        )
+                    ),
+                    int(getattr(capture, "callback_count", 0)),
+                )
                 self._overlay.set_state("Error", "No audio captured.")
                 self._active_batch_settings = None
                 return
@@ -2313,6 +2417,7 @@ class DictationController(QtCore.QObject):
     def _stop_active_capture(self, *, persist_audio: bool) -> bytes:
         capture = self._audio_capture
         self._audio_capture = None
+        self._cancel_audio_callback_watchdog(capture)
         if capture is None:
             return b""
 
@@ -2971,6 +3076,7 @@ class DictationController(QtCore.QObject):
         self._focus_poll_timer.stop()
         capture = self._audio_capture
         self._audio_capture = None
+        self._cancel_audio_callback_watchdog(capture)
         wav_bytes = b""
         if capture is not None:
             try:
@@ -3512,6 +3618,7 @@ class DictationController(QtCore.QObject):
                 return
             capture = self._audio_capture
             self._audio_capture = None
+            self._cancel_audio_callback_watchdog(capture)
             wav_bytes = b""
             try:
                 wav_bytes = capture.stop()

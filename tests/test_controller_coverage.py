@@ -3,6 +3,7 @@ transcription_worker error branches, streaming abort, focus poll."""
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from unittest.mock import MagicMock
@@ -609,6 +610,65 @@ def test_stop_recording_no_audio_shows_error(monkeypatch):
     controller.stop_recording()
     assert overlay.states[-1][0] == "Error"
     assert "No audio captured" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_audio_callback_watchdog_logs_and_stops_empty_batch_capture(
+    monkeypatch,
+    caplog,
+):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    with caplog.at_level(logging.ERROR, logger="test.controller"):
+        controller.start_recording()
+        capture = FakeCapture.instances[-1]
+        capture._wav_bytes = b""
+
+        controller._on_audio_callback_watchdog_timeout()
+
+    assert capture.stopped is True
+    assert controller._audio_capture is None
+    assert overlay.states[-1] == (
+        "Error",
+        "Microphone capture started but did not deliver audio. Please retry.",
+    )
+    assert "audio_capture_callback_timeout mode=batch" in caplog.text
+    assert "audio_capture_empty mode=batch" in caplog.text
+    controller.shutdown()
+    _ = app
+
+
+def test_audio_callback_watchdog_aborts_streaming_capture(monkeypatch, caplog):
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _settings, **_kwargs: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    with caplog.at_level(logging.ERROR, logger="test.controller"):
+        controller.start_recording()
+        capture = FakeCapture.instances[-1]
+        controller._on_audio_callback_watchdog_timeout()
+
+    assert capture.stopped is True
+    assert transcriber.aborted is True
+    assert controller._audio_capture is None
+    assert overlay.states[-1][0] == "Error"
+    assert "Microphone capture started but did not deliver audio" in overlay.states[-1][1]
+    assert "audio_capture_callback_timeout mode=streaming" in caplog.text
     controller.shutdown()
     _ = app
 

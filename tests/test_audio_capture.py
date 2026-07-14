@@ -148,6 +148,19 @@ def test_chunk_callback_receives_pcm16_bytes():
     assert len(payload) == 6  # 3 samples * int16
 
 
+def test_capture_tracks_received_callback_state():
+    capture = AudioCapture()
+    chunk = np.ones((160, 1), dtype=np.float32) * 0.1
+
+    assert capture.callback_count == 0
+    assert capture.has_received_audio is False
+
+    capture._on_audio(chunk, 160, None, None)
+
+    assert capture.callback_count == 1
+    assert capture.has_received_audio is True
+
+
 def test_cold_stream_close_runs_even_when_stop_fails(monkeypatch):
     class StopFailingStream(FakeInputStream):
         def stop(self):
