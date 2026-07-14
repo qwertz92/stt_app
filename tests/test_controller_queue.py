@@ -259,7 +259,7 @@ def test_background_insert_waits_until_active_recording_stops(
 
     assert inserter.calls == [
         ("transcript A", 321, "auto"),
-        (" transcript B", 321, "auto"),
+        ("transcript B", 321, "auto"),
     ]
     assert controller._deferred_background_results == []
     assert token_a not in controller._jobs
@@ -616,7 +616,7 @@ def test_cancel_recording_delivers_deferred_insert_despite_active_transcription(
 
     # msg2 finishing later still delivers itself, with no duplicate msg1.
     controller._on_transcription_ready("msg2", request_token=token2)
-    assert inserter.calls == [("msg1", 321, "auto"), (" msg2", 321, "auto")]
+    assert inserter.calls == [("msg1", 321, "auto"), ("msg2", 321, "auto")]
     assert [e.text for e in history.load()] == ["msg1", "msg2"]
     controller.shutdown()
     _ = app
@@ -688,7 +688,7 @@ def test_immediate_background_insert_delivers_while_transcribing(
     assert controller._deferred_background_results == []
 
     controller._on_transcription_ready("msg B", request_token=token_b)
-    assert inserter.calls[-1] == (" msg B", 321, "auto")
+    assert inserter.calls[-1] == ("msg B", 321, "auto")
     assert [e.text for e in history.load()] == ["msg A", "msg B"]
     controller.shutdown()
     _ = app
@@ -887,7 +887,7 @@ def test_deferred_inserts_coalesce_into_one_paste_per_target(
 
     assert inserter.calls == [
         ("transcript A. transcript B.", 321, "auto"),
-        (" transcript C.", 321, "auto"),
+        ("transcript C.", 321, "auto"),
     ]
     assert [e.text for e in history.load()] == [
         "transcript A.",

@@ -284,7 +284,7 @@ def test_overlay_restore_visibility_reasserts_foreground_mode(monkeypatch):
     monkeypatch.setattr(
         overlay,
         "_apply_native_z_order",
-        lambda: z_order_calls.append(overlay._temporary_foreground_active),
+        lambda: z_order_calls.append(overlay._temporary_foreground_active) or True,
     )
 
     overlay.hide()
@@ -441,6 +441,8 @@ def test_overlay_reveal_temporarily_does_not_rebuild_non_pinned_window(monkeypat
     app.processEvents()
     overlay.set_always_on_top(False)
     rebuilt_flags: list[QtCore.Qt.WindowType] = []
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    monkeypatch.setattr(overlay, "_apply_native_z_order", lambda: True)
     monkeypatch.setattr(overlay, "setWindowFlags", rebuilt_flags.append)
 
     overlay.reveal_temporarily(duration_ms=50)
@@ -453,6 +455,25 @@ def test_overlay_reveal_temporarily_does_not_rebuild_non_pinned_window(monkeypat
     assert overlay.always_on_top is False
     assert overlay._temporary_foreground_active is False
     assert rebuilt_flags == []
+
+
+def test_overlay_reveal_falls_back_to_temporary_topmost_flag(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    overlay.set_always_on_top(False)
+    monkeypatch.setattr(overlay_ui_module.sys, "platform", "win32")
+    monkeypatch.setattr(overlay, "_apply_native_z_order", lambda: False)
+
+    overlay.reveal_temporarily(duration_ms=50)
+
+    assert overlay._temporary_foreground_uses_window_flag is True
+    assert bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
+    QtTest.QTest.qWait(80)
+    app.processEvents()
+    assert overlay._temporary_foreground_uses_window_flag is False
+    assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
     assert not bool(overlay.windowFlags() & QtCore.Qt.WindowStaysOnTopHint)
 
 
@@ -641,6 +662,39 @@ def test_overlay_language_button_selects_supported_language():
 
     assert emitted == ["en"]
     assert overlay._language_button.text() == "Lang: English"
+
+
+def test_overlay_language_button_draws_centered_arrow_and_opens_menu(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_language_options(("auto", "de", "en"), "de")
+    overlay.show()
+    app.processEvents()
+    button = overlay._language_button
+    arrow_rect = button._menu_arrow_rect()
+    popup_positions: list[QtCore.QPoint] = []
+    monkeypatch.setattr(overlay._language_menu, "popup", popup_positions.append)
+
+    image = QtGui.QImage(button.size(), QtGui.QImage.Format_ARGB32)
+    image.fill(QtCore.Qt.transparent)
+    button.render(image)
+    arrow_pixels = [
+        QtCore.QPoint(x, y)
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y) == button._ARROW_COLOR
+    ]
+
+    button.click()
+
+    assert button.menu() is None
+    assert arrow_pixels
+    assert all(arrow_rect.contains(point) for point in arrow_pixels)
+    assert min(point.y() for point in arrow_pixels) <= arrow_rect.center().y()
+    assert max(point.y() for point in arrow_pixels) >= arrow_rect.center().y()
+    assert popup_positions == [
+        button.mapToGlobal(QtCore.QPoint(0, button.height()))
+    ]
 
 
 def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():

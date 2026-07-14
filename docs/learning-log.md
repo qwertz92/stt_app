@@ -14,20 +14,20 @@ Agents and developers: use this as a knowledge base for past issues and solution
   model-aware batch-language selector and passes its value through the GUI-thread
   settings snapshot. It never implicitly uses or mutates the General-tab
   language, and constrained models only offer their supported import languages.
-- **Overlay start and reveal avoid native-window rebuilds.** The preliminary
+- **Overlay start and reveal preserve visibility.** The preliminary
   "Starting recording..." update was immediately replaced by a second green
   listening update, so successful batch and streaming starts now draw their
   final listening detail once and unchanged state colors do not reapply the
-  full stylesheet. A separate delayed flicker remained for floating overlays:
-  their temporary foreground timer switched `WindowStaysOnTopHint` back off,
-  forcing Qt to recreate the native window after 1.8 seconds. Temporary
-  foreground now uses native `HWND_TOPMOST` / `HWND_NOTOPMOST` Z-order only;
-  permanent pinning remains the sole reason to change Qt window flags.
-- **Settings combobox arrows are painted by the widget.** Windows styles can
-  ignore QSS subcontrol placement and draw the native arrow at the lower edge.
-  `_WheelPassthroughComboBox` hides that native arrow and paints its own
-  triangle in a fixed, vertically centered right-side area. The regression
-  renders the visible Language combobox and verifies the arrow pixels.
+  full stylesheet. Compact size is reasserted after the bounded Qt event drain,
+  because deferred layout work could otherwise leave the previous expanded
+  result geometry visible. Floating overlays first use a typed native
+  `SetWindowPos(HWND_TOPMOST)` call; when Windows rejects that call, a temporary
+  `WindowStaysOnTopHint` fallback keeps the overlay visible instead of hidden.
+- **The overlay Language control owns its arrow.** The arrow next to `Reset Pos`
+  belongs to the draggable overlay's `Lang: ...` menu button, not to Settings.
+  The button therefore opens its menu explicitly and paints a centered arrow;
+  Settings comboboxes retain their native appearance. The regression renders
+  that exact overlay button and verifies its arrow pixels and menu popup.
 
 ## 2026-07-14
 

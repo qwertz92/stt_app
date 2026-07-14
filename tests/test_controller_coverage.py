@@ -477,7 +477,9 @@ def test_start_recording_forces_compact_listening_state(monkeypatch):
 
     controller.start_recording()
 
-    assert overlay.compact_calls >= 1
+    # Qt can apply pending style/layout work while start_recording() drains
+    # events. Reassert the compact geometry after that drain as well.
+    assert overlay.compact_calls == 2
     assert overlay.states[0][0] == "Listening"
     assert overlay.state_kwargs[0].get("compact") is True
     assert [state for state in overlay.states if state[0] == "Listening"] == [

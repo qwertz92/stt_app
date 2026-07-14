@@ -686,20 +686,6 @@ class SettingsDialog(
         QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {
             background: transparent;
         }
-        QComboBox {
-            padding-right: 30px;
-        }
-        QComboBox::drop-down {
-            subcontrol-origin: padding;
-            subcontrol-position: top right;
-            width: 28px;
-            border-left: 1px solid #c4cdd8;
-        }
-        QComboBox::down-arrow {
-            image: none;
-            width: 0px;
-            height: 0px;
-        }
         """
         )
 

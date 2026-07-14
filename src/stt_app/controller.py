@@ -81,7 +81,6 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
     r"^recording_[0-9]{8}_[0-9]{6}_[0-9]{6}\.wav$",
     re.IGNORECASE,
 )
-_NO_TRANSCRIPT_SPACE_BEFORE = frozenset(".,;:!?)]}")
 
 
 def _join_transcripts(texts: list[str]) -> str:
@@ -238,8 +237,6 @@ class DictationController(QtCore.QObject):
         self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
         self._last_history_entry: TranscriptHistoryEntry | None = None
-        self._last_insert_target_key: tuple[object, object] | None = None
-        self._last_insert_ended_with_whitespace = True
         self._last_failed_wav_bytes: bytes = b""
         self._last_transcribe_settings: AppSettings | None = None
         self._active_batch_settings: AppSettings | None = None
@@ -590,6 +587,8 @@ class DictationController(QtCore.QObject):
                 QtCore.QEventLoop.ExcludeUserInputEvents,
                 25,
             )
+            # Qt can settle pending stylesheet/layout work while events drain.
+            self._overlay.ensure_compact_size()
 
             self._target_window_handle = start_target_handle
             self._target_focus_signature = start_target_signature
@@ -2590,7 +2589,6 @@ class DictationController(QtCore.QObject):
         )
 
         if session_mode == "streaming":
-            first_stream_insertion = not bool(self._stream_text_state.committed_text)
             final_insertion, final_text = self._stream_text_state.finalize_append_only(
                 text
             )
@@ -2600,7 +2598,6 @@ class DictationController(QtCore.QObject):
                     restore_focus=True,
                     target_handle=target_handle,
                     target_signature=target_signature,
-                    separate_from_previous_transcript=first_stream_insertion,
                 ):
                     self._reveal_overlay_result(is_error=True)
                     self._mark_last_recording_completed()
@@ -2614,7 +2611,6 @@ class DictationController(QtCore.QObject):
                 restore_focus=True,
                 target_handle=target_handle,
                 target_signature=target_signature,
-                separate_from_previous_transcript=True,
             ):
                 self._reveal_overlay_result(is_error=True)
                 self._mark_last_recording_completed()
@@ -2776,7 +2772,6 @@ class DictationController(QtCore.QObject):
             target_handle=target_handle,
             target_signature=target_signature,
             show_overlay_error=False,
-            separate_from_previous_transcript=True,
         )
         if not inserted:
             self._logger.warning(
@@ -2962,7 +2957,6 @@ class DictationController(QtCore.QObject):
             )
             return
         if STREAMING_LIVE_INSERT_ENABLED:
-            first_stream_insertion = not bool(self._stream_text_state.committed_text)
             append = self._stream_text_state.apply_partial_append_only(text)
             display_text = append.display_text
             if append.insertion:
@@ -2971,7 +2965,6 @@ class DictationController(QtCore.QObject):
                     restore_focus=False,
                     copy_on_error=False,
                     show_overlay_error=False,
-                    separate_from_previous_transcript=first_stream_insertion,
                 ):
                     self._request_stream_abort(
                         "Streaming aborted: failed to insert live text.",
@@ -3220,7 +3213,6 @@ class DictationController(QtCore.QObject):
         restore_focus: bool,
         copy_on_error: bool = True,
         show_overlay_error: bool = True,
-        separate_from_previous_transcript: bool = False,
         target_handle=_UNSET_TARGET,
         target_signature=_UNSET_TARGET,
     ) -> bool:
@@ -3237,12 +3229,7 @@ class DictationController(QtCore.QObject):
             else target_signature
         )
         insert_hwnd = self._target_insert_window(signature, handle)
-        target_key = (handle or insert_hwnd, signature or insert_hwnd)
-        insertion_text = self._with_transcript_separator(
-            text,
-            target_key=target_key,
-            enabled=separate_from_previous_transcript,
-        )
+        insertion_text = str(text)
         try:
             if restore_focus and handle:
                 try:
@@ -3300,8 +3287,6 @@ class DictationController(QtCore.QObject):
                 self._overlay.set_state("Error", detail)
             self._logger.exception("Text insertion failed")
             return False
-        self._last_insert_target_key = target_key
-        self._last_insert_ended_with_whitespace = insertion_text[-1:].isspace()
         self._logger.info(
             "text_insertion outcome=success chars=%d target_hwnd=%s "
             "restore_focus=%s paste_mode=%s",
@@ -3311,33 +3296,6 @@ class DictationController(QtCore.QObject):
             self._settings.paste_mode,
         )
         return True
-
-    def _with_transcript_separator(
-        self,
-        text: str,
-        *,
-        target_key: tuple[object, object],
-        enabled: bool,
-    ) -> str:
-        """Separate consecutive app transcripts inserted into one target.
-
-        Windows exposes neither a reliable cross-application caret offset nor
-        the character immediately before it. The controller can, however,
-        identify consecutive successful app inserts into the same focused
-        control. Prefix exactly one space at that transcript boundary while
-        leaving streaming deltas and punctuation continuations untouched.
-        """
-        insertion = str(text or "")
-        if (
-            enabled
-            and self._last_insert_target_key == target_key
-            and not self._last_insert_ended_with_whitespace
-            and insertion
-            and not insertion[0].isspace()
-            and insertion[0] not in _NO_TRANSCRIPT_SPACE_BEFORE
-        ):
-            return f" {insertion}"
-        return insertion
 
     def _target_insert_window(
         self,

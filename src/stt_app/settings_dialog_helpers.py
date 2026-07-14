@@ -39,51 +39,12 @@ def _emit_background_signal(
 
 
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):
-    _ARROW_AREA_WIDTH = 28
-    _ARROW_WIDTH = 8
-    _ARROW_HEIGHT = 5
-
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         view = self.view()
         if view is not None and view.isVisible():
             super().wheelEvent(event)
             return
         event.ignore()
-
-    def _arrow_rect(self) -> QtCore.QRect:
-        content_rect = self.contentsRect()
-        return QtCore.QRect(
-            max(content_rect.left(), content_rect.right() - self._ARROW_AREA_WIDTH + 1),
-            content_rect.top(),
-            min(self._ARROW_AREA_WIDTH, content_rect.width()),
-            content_rect.height(),
-        )
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        super().paintEvent(event)
-        arrow_rect = self._arrow_rect()
-        if arrow_rect.isEmpty():
-            return
-
-        palette_group = (
-            QtGui.QPalette.Active if self.isEnabled() else QtGui.QPalette.Disabled
-        )
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(self.palette().color(palette_group, QtGui.QPalette.ButtonText))
-        center = arrow_rect.center()
-        half_width = self._ARROW_WIDTH // 2
-        top = center.y() - self._ARROW_HEIGHT // 2
-        painter.drawPolygon(
-            QtGui.QPolygon(
-                (
-                    QtCore.QPoint(center.x() - half_width, top),
-                    QtCore.QPoint(center.x() + half_width, top),
-                    QtCore.QPoint(center.x(), top + self._ARROW_HEIGHT),
-                )
-            )
-        )
 
 
 class _WheelPassthroughSpinBox(QtWidgets.QSpinBox):

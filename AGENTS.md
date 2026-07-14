@@ -183,13 +183,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   pastes each group as one space-joined text. Each separate paste is its own
   clipboard set/paste/restore race window, so N queued results used to mean N
   chances to lose one. Do not flush deferred results one paste per result.
-- **Consecutive transcript inserts are separated per target control**:
-  successful foreground, background, and first streaming inserts remember their
-  captured window/control signature. A later transcript to the same target gets
-  one leading space unless either side already supplies whitespace or the new
-  text starts with punctuation. Windows cannot reliably expose the character at
-  another application's caret, so do not infer spacing across different target
-  signatures or mutate streaming deltas.
+- **Transcript spacing is local to one coalesced queue paste**: normal
+  foreground, background, and streaming inserts preserve their supplied text
+  exactly. `_flush_deferred_background_results` is the only path that joins
+  separate completed queue messages, using `_join_transcripts` to place one
+  space between adjacent messages in that one paste. Do not infer or prepend
+  whitespace across separate pastes.
 - **`immediate_background_insert` (default off)**: continuous queue delivery —
   a finished queued transcription inserts into its captured window as soon as
   it completes, even while another transcription or an active **batch**
@@ -234,10 +233,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   viewport, which changes with deferred queue resizes and scrollbar
   visibility) and pre-measures the scrollbar case; `_apply_window_flags`
   calls `setWindowFlags` only when permanent pinning flags actually change
-  because it recreates the native window. Temporary foreground reveals must
+  because it recreates the native window. Temporary foreground reveals first
   use `_apply_native_z_order` (`HWND_TOPMOST` / `HWND_NOTOPMOST`) without
-  changing Qt window flags; the reveal timer must never recreate the native
-  window. The Local/General model runtime note keeps a reserved
+  changing Qt window flags; if that native call fails, use a temporary
+  `WindowStaysOnTopHint` fallback rather than leave a floating overlay hidden.
+  Successful recording start confirms `ensure_compact_size()` before and after
+  its bounded Qt event drain; pending layout work can otherwise leave the
+  previous expanded result geometry visible.
+  The Local/General model runtime note keeps a reserved
   three-line area and shows a neutral gray note for faster-whisper models so
   model switches never shift the layout.
 - **Local model inventory cache**: last-known local model lists are stored in a dedicated JSON cache file, not `settings.json`, so the Local tab can render immediately without silently mutating user settings.

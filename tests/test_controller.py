@@ -126,7 +126,7 @@ def test_controller_restores_target_focus_before_insert():
     _ = app
 
 
-def test_consecutive_transcripts_in_same_control_receive_one_separator():
+def test_consecutive_transcripts_in_same_control_do_not_receive_separator():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     inserter = FakeTextInserter()
     focus = FakeWindowFocusHelper()
@@ -146,25 +146,23 @@ def test_consecutive_transcripts_in_same_control_receive_one_separator():
         restore_focus=False,
         target_handle=focus.captured,
         target_signature=signature,
-        separate_from_previous_transcript=True,
     )
     assert controller._insert_text_at_target(
         "second transcript",
         restore_focus=False,
         target_handle=focus.captured,
         target_signature=signature,
-        separate_from_previous_transcript=True,
     )
 
     assert [call[0] for call in inserter.calls] == [
         "first transcript",
-        " second transcript",
+        "second transcript",
     ]
     controller.shutdown()
     _ = app
 
 
-def test_transcript_separator_does_not_cross_target_controls():
+def test_separate_transcript_pastes_never_depend_on_target_control():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     inserter = FakeTextInserter()
     focus = FakeWindowFocusHelper()
@@ -183,14 +181,12 @@ def test_transcript_separator_does_not_cross_target_controls():
         restore_focus=False,
         target_handle=100,
         target_signature=(100, 101, 102),
-        separate_from_previous_transcript=True,
     )
     assert controller._insert_text_at_target(
         "second",
         restore_focus=False,
         target_handle=100,
         target_signature=(100, 101, 103),
-        separate_from_previous_transcript=True,
     )
 
     assert [call[0] for call in inserter.calls] == ["first", "second"]

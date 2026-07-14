@@ -21,6 +21,50 @@ from .config import (
     OVERLAY_WIDTH,
 )
 
+
+class _OverlayLanguageButton(QtWidgets.QPushButton):
+    _ARROW_AREA_WIDTH = 22
+    _ARROW_WIDTH = 8
+    _ARROW_HEIGHT = 5
+    _ARROW_COLOR = QtGui.QColor("#f0f4f8")
+    _DISABLED_ARROW_COLOR = QtGui.QColor("#8894a2")
+
+    def _menu_arrow_rect(self) -> QtCore.QRect:
+        content_rect = self.contentsRect()
+        width = min(self._ARROW_AREA_WIDTH, content_rect.width())
+        return QtCore.QRect(
+            content_rect.right() - width + 1,
+            content_rect.top(),
+            width,
+            content_rect.height(),
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        arrow_rect = self._menu_arrow_rect()
+        if arrow_rect.isEmpty():
+            return
+
+        center = arrow_rect.center()
+        half_width = self._ARROW_WIDTH // 2
+        top = center.y() - self._ARROW_HEIGHT // 2
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing, False)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(
+            self._ARROW_COLOR if self.isEnabled() else self._DISABLED_ARROW_COLOR
+        )
+        painter.drawPolygon(
+            QtGui.QPolygon(
+                (
+                    QtCore.QPoint(center.x() - half_width, top),
+                    QtCore.QPoint(center.x() + half_width, top),
+                    QtCore.QPoint(center.x(), top + self._ARROW_HEIGHT),
+                )
+            )
+        )
+
+
 class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
     edit_requested = QtCore.Signal()
@@ -38,6 +82,7 @@ class OverlayUI(QtWidgets.QWidget):
 
         self._always_on_top = True
         self._temporary_foreground_active = False
+        self._temporary_foreground_uses_window_flag = False
         initial_flags = self._base_window_flags()
         self.setWindowFlags(initial_flags)
         self._applied_window_flags = initial_flags
@@ -143,12 +188,13 @@ class OverlayUI(QtWidgets.QWidget):
         self._reset_pos_button.setFixedSize(74, 22)
         self._reset_pos_button.clicked.connect(self.reset_position)
 
-        self._language_button = QtWidgets.QPushButton("")
+        self._language_button = _OverlayLanguageButton("")
+        self._language_button.setObjectName("overlayLanguageButton")
         self._language_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._language_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._language_button.setFixedSize(130, 22)
         self._language_menu = QtWidgets.QMenu(self._language_button)
-        self._language_button.setMenu(self._language_menu)
+        self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
 
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
@@ -255,7 +301,7 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _base_window_flags(self) -> QtCore.Qt.WindowType:
         flags = QtCore.Qt.Tool | QtCore.Qt.FramelessWindowHint
-        if self._always_on_top:
+        if self._always_on_top or self._temporary_foreground_uses_window_flag:
             flags |= QtCore.Qt.WindowStaysOnTopHint
         if hasattr(QtCore.Qt, "WindowDoesNotAcceptFocus"):
             flags |= QtCore.Qt.WindowDoesNotAcceptFocus
@@ -271,7 +317,7 @@ class OverlayUI(QtWidgets.QWidget):
             else "Allow the overlay to stay behind other windows."
         )
 
-    def _apply_window_flags(self, *, raise_window: bool = False) -> None:
+    def _apply_window_flags(self, *, raise_window: bool = False) -> bool | None:
         desired_flags = self._base_window_flags()
         if getattr(self, "_applied_window_flags", None) != desired_flags:
             # ``setWindowFlags`` destroys and recreates the native window,
@@ -288,7 +334,8 @@ class OverlayUI(QtWidgets.QWidget):
             self.raise_()
         if sys.platform == "win32":
             self._apply_noactivate_style()
-            self._apply_native_z_order()
+            return self._apply_native_z_order()
+        return None
 
     def _on_always_on_top_clicked(self, checked: bool) -> None:
         self.set_always_on_top(checked, emit_signal=True)
@@ -306,6 +353,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._always_on_top = normalized
         if normalized:
             self._temporary_foreground_active = False
+            self._temporary_foreground_uses_window_flag = False
             self._temporary_foreground_timer.stop()
         self._sync_always_on_top_button()
         self._apply_window_flags(raise_window=normalized)
@@ -316,7 +364,14 @@ class OverlayUI(QtWidgets.QWidget):
         if not self._always_on_top:
             self._temporary_foreground_active = True
             self._temporary_foreground_timer.start(max(1, int(duration_ms)))
-        self._apply_window_flags(raise_window=True)
+        native_z_order_applied = self._apply_window_flags(raise_window=True)
+        if (
+            not self._always_on_top
+            and sys.platform == "win32"
+            and native_z_order_applied is False
+        ):
+            self._temporary_foreground_uses_window_flag = True
+            self._apply_window_flags(raise_window=True)
         self._reposition_within_current_screen()
 
     def restore_visibility(self) -> None:
@@ -327,6 +382,7 @@ class OverlayUI(QtWidgets.QWidget):
         if self._always_on_top or not self._temporary_foreground_active:
             return
         self._temporary_foreground_active = False
+        self._temporary_foreground_uses_window_flag = False
         self._apply_window_flags()
 
     def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
@@ -418,6 +474,9 @@ class OverlayUI(QtWidgets.QWidget):
                 color: #ffffff;
                 padding: 0 8px;
             }}
+            QPushButton#overlayLanguageButton {{
+                padding: 0 26px 0 8px;
+            }}
             QPushButton:hover {{
                 background-color: rgba(255,255,255,0.18);
             }}
@@ -478,6 +537,15 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_mode = mode
         self._rebuild_language_menu()
         self.language_changed.emit(mode)
+
+    def _show_language_menu(self) -> None:
+        if not self._language_button.isEnabled():
+            return
+        self._language_menu.popup(
+            self._language_button.mapToGlobal(
+                QtCore.QPoint(0, self._language_button.height())
+            )
+        )
 
     def _sync_language_button(self) -> None:
         label = LANGUAGE_MODE_LABELS.get(self._language_mode, self._language_mode)
@@ -619,17 +687,31 @@ class OverlayUI(QtWidgets.QWidget):
         except Exception:
             pass
 
-    def _apply_native_z_order(self) -> None:
+    def _apply_native_z_order(self) -> bool:
         """Reassert topmost state without activating the overlay on Windows."""
+        if sys.platform != "win32":
+            return False
         try:
             import ctypes
+            import ctypes.wintypes
 
-            hwnd = int(self.winId())
-            insert_after = -1 if (
+            set_window_pos = ctypes.WinDLL("user32", use_last_error=True).SetWindowPos
+            set_window_pos.argtypes = (
+                ctypes.wintypes.HWND,
+                ctypes.wintypes.HWND,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.c_int,
+                ctypes.wintypes.UINT,
+            )
+            set_window_pos.restype = ctypes.wintypes.BOOL
+            hwnd = ctypes.wintypes.HWND(int(self.winId()))
+            insert_after = ctypes.wintypes.HWND(-1 if (
                 self._always_on_top or self._temporary_foreground_active
-            ) else -2
+            ) else -2)
             flags = 0x0001 | 0x0002 | 0x0010 | 0x0040
-            ctypes.windll.user32.SetWindowPos(
+            return bool(set_window_pos(
                 hwnd,
                 insert_after,
                 0,
@@ -637,9 +719,9 @@ class OverlayUI(QtWidgets.QWidget):
                 0,
                 0,
                 flags,
-            )
+            ))
         except Exception:
-            pass
+            return False
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)
