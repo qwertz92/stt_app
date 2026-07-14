@@ -251,6 +251,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Successful recording start confirms `ensure_compact_size()` before and after
   its bounded Qt event drain; pending layout work can otherwise leave the
   previous expanded result geometry visible.
+  The overlay Language button uses `QPushButton.setMenu()` and the native
+  Qt/Windows menu indicator; do not replace it with fixed-pixel custom arrow
+  painting, which scales and renders inconsistently across displays.
   The Local/General model runtime note keeps a reserved
   three-line area and shows a neutral gray note for faster-whisper models so
   model switches never shift the layout.
@@ -293,7 +296,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_open_benchmark_window`, which also refreshes the model list. Status is set
   through the single `_set_benchmark_status`, which feeds both the tab label
   and the window's own status line. Benchmark Results tables use per-pixel
-  scroll modes. All benchmark widget attribute names are unchanged; only
+  scroll modes. The Local Models group and its inventory list expand into
+  available vertical space instead of leaving an unusable blank area below the
+  group. All benchmark widget attribute names are unchanged; only
   containers moved. Completed and partial canceled runs are saved to Benchmark
   History automatically; Export only creates a shareable file. New
   faster-whisper results store CTranslate2's resolved device instead of `auto`.

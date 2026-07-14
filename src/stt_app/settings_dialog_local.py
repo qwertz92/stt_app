@@ -122,7 +122,7 @@ class _LocalModelsMixin:
         self.local_models_box = QtWidgets.QGroupBox("Local Models")
         self.local_models_box.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Expanding,
         )
         local_models_layout = QtWidgets.QVBoxLayout(self.local_models_box)
         local_models_layout.setSpacing(4)
@@ -210,8 +210,7 @@ class _LocalModelsMixin:
             "Open this tab to verify local model availability in the background."
         )
 
-        layout.addWidget(self.local_models_box)
-        layout.addStretch(1)
+        layout.addWidget(self.local_models_box, 1)
         self._local_tab_index = self.tabs.addTab(tab, "Local")
 
     def _local_model_cache_key(self, model_dir: str | None = None) -> str:

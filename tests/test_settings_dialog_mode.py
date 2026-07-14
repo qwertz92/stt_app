@@ -3149,7 +3149,7 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     _ = app
 
 
-def test_local_models_box_keeps_free_space_outside_the_group(monkeypatch):
+def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE[""] = ["small", "medium"]
@@ -3168,11 +3168,14 @@ def test_local_models_box_keeps_free_space_outside_the_group(monkeypatch):
     dialog.tabs.setCurrentIndex(dialog._local_tab_index)
     app.processEvents()
 
-    local_layout = dialog.local_models_box.parentWidget().layout()
-    assert dialog.local_models_box.sizePolicy().verticalPolicy() == (
-        QtWidgets.QSizePolicy.Preferred
-    )
-    assert local_layout.itemAt(local_layout.count() - 1).spacerItem() is not None
+    initial_box_height = dialog.local_models_box.height()
+    initial_list_height = dialog.local_models_list.height()
+
+    dialog.resize(dialog.width() + 120, dialog.height() + 220)
+    app.processEvents()
+
+    assert dialog.local_models_box.height() > initial_box_height
+    assert dialog.local_models_list.height() > initial_list_height
     settings_dialog_module._LOCAL_MODEL_SCAN_SESSION_CACHE.clear()
     _ = app
 

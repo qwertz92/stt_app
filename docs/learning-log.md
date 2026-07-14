@@ -24,20 +24,24 @@ Agents and developers: use this as a knowledge base for past issues and solution
   arrive at the timeout boundary stay available for Retry without producing a
   simultaneous transcript and Error. Stop diagnostics snapshot the warm-stream
   state before capture teardown resets it.
-- **Overlay start and reveal preserve visibility.** The preliminary
-  "Starting recording..." update was immediately replaced by a second green
-  listening update, so successful batch and streaming starts now draw their
-  final listening detail once and unchanged state colors do not reapply the
-  full stylesheet. Compact size is reasserted after the bounded Qt event drain,
-  because deferred layout work could otherwise leave the previous expanded
-  result geometry visible. Floating overlays first use a typed native
+- **Overlay start and reveal preserve visibility without hiding readiness.**
+  The explicit wait and ready-to-speak messages share the same state color, so
+  changing between them no longer reapplies the full stylesheet. Compact size
+  is reasserted after the bounded Qt event drain, because deferred layout work
+  could otherwise leave the previous expanded result geometry visible.
+  Floating overlays first use a typed native
   `SetWindowPos(HWND_TOPMOST)` call; when Windows rejects that call, a temporary
   `WindowStaysOnTopHint` fallback keeps the overlay visible instead of hidden.
-- **The overlay Language control owns its arrow.** The arrow next to `Reset Pos`
-  belongs to the draggable overlay's `Lang: ...` menu button, not to Settings.
-  The button therefore opens its menu explicitly and paints a centered arrow;
-  Settings comboboxes retain their native appearance. The regression renders
-  that exact overlay button and verifies its arrow pixels and menu popup.
+- **The overlay Language control retains its native menu indicator.** An
+  attempted fixed-pixel custom triangle looked distorted under the user's
+  display/style combination even though an offscreen pixel test passed. The
+  button again uses `QPushButton.setMenu()`, allowing Qt/Windows to size, place,
+  scale, and operate the indicator. Settings comboboxes likewise retain their
+  native appearance.
+- **The Local Models inventory consumes available vertical space.** Changing
+  its group to a preferred fixed height left most of a resized Settings window
+  blank while the useful model list stayed short. The expanding policy and
+  stretch were restored so resizing exposes more inventory rows.
 
 - **Granite Speech 4.1 NAR now prefers its verified CPU path.** The normal
   `auto` policy previously retried WebGPU and DirectML even though the NAR
