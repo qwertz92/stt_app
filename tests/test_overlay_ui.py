@@ -663,17 +663,40 @@ def test_overlay_language_button_selects_supported_language():
     assert overlay._language_button.text() == "Lang: English"
 
 
-def test_overlay_language_button_uses_native_menu_indicator():
-    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+def test_overlay_language_button_draws_centered_chevron_and_opens_menu(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
     overlay.set_language_options(("auto", "de", "en"), "de")
+    overlay.show()
+    app.processEvents()
     button = overlay._language_button
-    option = QtWidgets.QStyleOptionButton()
-    button.initStyleOption(option)
+    arrow_rect = button._menu_arrow_rect()
+    popup_positions: list[QtCore.QPoint] = []
+    monkeypatch.setattr(overlay._language_menu, "popup", popup_positions.append)
+    image = QtGui.QImage(button.size(), QtGui.QImage.Format_ARGB32)
+    image.fill(QtCore.Qt.transparent)
+    button.render(image)
+    arrow_pixels = [
+        QtCore.QPoint(x, y)
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y) == button._ARROW_COLOR
+    ]
 
-    assert type(button).paintEvent is QtWidgets.QPushButton.paintEvent
-    assert button.menu() is overlay._language_menu
-    assert bool(option.features & QtWidgets.QStyleOptionButton.HasMenu)
+    button.click()
+
+    assert button.menu() is None
+    assert arrow_pixels
+    assert all(arrow_rect.contains(point) for point in arrow_pixels)
+    assert arrow_rect.center().y() == button.contentsRect().center().y()
+    assert abs(
+        min(point.y() for point in arrow_pixels)
+        + max(point.y() for point in arrow_pixels)
+        - 2 * arrow_rect.center().y()
+    ) <= 1
+    assert popup_positions == [
+        button.mapToGlobal(QtCore.QPoint(0, button.height()))
+    ]
 
 
 def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():

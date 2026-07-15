@@ -32,12 +32,13 @@ Agents and developers: use this as a knowledge base for past issues and solution
   Floating overlays first use a typed native
   `SetWindowPos(HWND_TOPMOST)` call; when Windows rejects that call, a temporary
   `WindowStaysOnTopHint` fallback keeps the overlay visible instead of hidden.
-- **The overlay Language control retains its native menu indicator.** An
-  attempted fixed-pixel custom triangle looked distorted under the user's
-  display/style combination even though an offscreen pixel test passed. The
-  button again uses `QPushButton.setMenu()`, allowing Qt/Windows to size, place,
-  scale, and operate the indicator. Settings comboboxes likewise retain their
-  native appearance.
+- **The overlay Language control owns its centered chevron.** The native
+  `QPushButton.setMenu()` indicator remained visibly misaligned in the target
+  Windows overlay. The button now opens its menu explicitly and paints an
+  antialiased chevron in a dedicated right-hand zone; Qt applies normal device
+  scaling to those logical painter coordinates. Its regression renders the
+  button, verifies the arrow pixels stay in that zone and centered, and checks
+  the explicit popup. Settings comboboxes retain their native appearance.
 - **The Local Models inventory consumes available vertical space.** Changing
   its group to a preferred fixed height left most of a resized Settings window
   blank while the useful model list stayed short. The expanding policy and

@@ -21,6 +21,54 @@ from .config import (
     OVERLAY_WIDTH,
 )
 
+
+class _OverlayLanguageButton(QtWidgets.QPushButton):
+    _ARROW_AREA_WIDTH = 22
+    _ARROW_HALF_WIDTH = 4
+    _ARROW_HALF_HEIGHT = 2
+    _ARROW_COLOR = QtGui.QColor("#f0f4f8")
+    _DISABLED_ARROW_COLOR = QtGui.QColor("#8894a2")
+
+    def _menu_arrow_rect(self) -> QtCore.QRect:
+        content_rect = self.contentsRect()
+        width = min(self._ARROW_AREA_WIDTH, content_rect.width())
+        return QtCore.QRect(
+            content_rect.right() - width + 1,
+            content_rect.top(),
+            width,
+            content_rect.height(),
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        arrow_rect = self._menu_arrow_rect()
+        if arrow_rect.isEmpty():
+            return
+
+        center = arrow_rect.center()
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(
+            QtGui.QPen(
+                self._ARROW_COLOR
+                if self.isEnabled()
+                else self._DISABLED_ARROW_COLOR,
+                1.5,
+            )
+        )
+        path = QtGui.QPainterPath()
+        path.moveTo(
+            center.x() - self._ARROW_HALF_WIDTH,
+            center.y() - self._ARROW_HALF_HEIGHT,
+        )
+        path.lineTo(center.x(), center.y() + self._ARROW_HALF_HEIGHT)
+        path.lineTo(
+            center.x() + self._ARROW_HALF_WIDTH,
+            center.y() - self._ARROW_HALF_HEIGHT,
+        )
+        painter.drawPath(path)
+
+
 class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
     edit_requested = QtCore.Signal()
@@ -144,15 +192,13 @@ class OverlayUI(QtWidgets.QWidget):
         self._reset_pos_button.setFixedSize(74, 22)
         self._reset_pos_button.clicked.connect(self.reset_position)
 
-        self._language_button = QtWidgets.QPushButton("")
+        self._language_button = _OverlayLanguageButton("")
+        self._language_button.setObjectName("overlayLanguageButton")
         self._language_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._language_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._language_button.setFixedSize(130, 22)
         self._language_menu = QtWidgets.QMenu(self._language_button)
-        # Let the active Qt/Windows style own both the menu interaction and its
-        # indicator. A hand-painted fixed-pixel triangle scaled poorly and was
-        # visibly distorted on the user's display.
-        self._language_button.setMenu(self._language_menu)
+        self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
 
         self._detail_label = QtWidgets.QLabel(OVERLAY_INITIAL_DETAIL)
@@ -432,6 +478,9 @@ class OverlayUI(QtWidgets.QWidget):
                 color: #ffffff;
                 padding: 0 8px;
             }}
+            QPushButton#overlayLanguageButton {{
+                padding: 0 26px 0 8px;
+            }}
             QPushButton:hover {{
                 background-color: rgba(255,255,255,0.18);
             }}
@@ -492,6 +541,15 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_mode = mode
         self._rebuild_language_menu()
         self.language_changed.emit(mode)
+
+    def _show_language_menu(self) -> None:
+        if not self._language_button.isEnabled():
+            return
+        self._language_menu.popup(
+            self._language_button.mapToGlobal(
+                QtCore.QPoint(0, self._language_button.height())
+            )
+        )
 
     def _sync_language_button(self) -> None:
         label = LANGUAGE_MODE_LABELS.get(self._language_mode, self._language_mode)

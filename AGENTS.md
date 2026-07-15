@@ -251,9 +251,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Successful recording start confirms `ensure_compact_size()` before and after
   its bounded Qt event drain; pending layout work can otherwise leave the
   previous expanded result geometry visible.
-  The overlay Language button uses `QPushButton.setMenu()` and the native
-  Qt/Windows menu indicator; do not replace it with fixed-pixel custom arrow
-  painting, which scales and renders inconsistently across displays.
+  The overlay Language button owns its `QMenu` popup and a centered chevron in
+  a reserved right-hand zone. Do not use `QPushButton.setMenu()` here: the
+  native Qt/Windows menu indicator can be vertically misaligned under the
+  overlay stylesheet. Its regression test renders the button and verifies that
+  the chevron pixels remain inside that zone and centered on it.
   The Local/General model runtime note keeps a reserved
   three-line area and shows a neutral gray note for faster-whisper models so
   model switches never shift the layout.
