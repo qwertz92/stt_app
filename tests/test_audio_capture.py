@@ -4,9 +4,24 @@ import wave
 from io import BytesIO
 
 import numpy as np
+import pytest
 
-from stt_app.audio_capture import AudioCapture, WarmMicrophoneStream
+from stt_app.audio_capture import (
+    AudioCapture,
+    AudioCaptureError,
+    WarmMicrophoneStream,
+)
+from stt_app.audio_devices import InputDeviceNotFoundError
 from stt_app.vad import VadDecision
+
+
+def _wait_until(condition, timeout=2.0):
+    deadline = time.perf_counter() + timeout
+    while time.perf_counter() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    return condition()
 
 
 class FakeInputStream:
@@ -216,6 +231,160 @@ def test_attach_does_not_block_while_warm_stream_is_starting(monkeypatch):
     allow_start.set()
     starter.join(timeout=1.0)
     warm.close()
+
+
+def test_warm_attach_requires_matching_device_key(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(
+        sample_rate=16000,
+        channels=1,
+        device_provider=lambda: ("mic-a", 3),
+    )
+    assert warm.ensure_started() is True
+    assert warm.opened_device_key == "mic-a"
+    assert FakeInputStream.instances[0].kwargs["device"] == 3
+
+    capture = AudioCapture(
+        sample_rate=16000,
+        channels=1,
+        warm_stream=warm,
+        device_key="mic-b",
+        device_resolver=lambda: 7,
+    )
+    capture.start()
+
+    # The warm stream serves a different device, so the capture opened its
+    # own cold stream on the selected one instead of attaching.
+    assert capture.uses_warm_stream is False
+    assert len(FakeInputStream.instances) == 2
+    assert FakeInputStream.instances[1].kwargs["device"] == 7
+    capture.stop()
+    warm.close()
+
+
+def test_cold_open_with_missing_selected_device_raises(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+
+    def _resolver():
+        raise InputDeviceNotFoundError("Gone Mic")
+
+    capture = AudioCapture(device_key="Gone Mic", device_resolver=_resolver)
+
+    with pytest.raises(AudioCaptureError) as excinfo:
+        capture.start()
+
+    assert "Gone Mic" in str(excinfo.value)
+    assert "not connected" in str(excinfo.value)
+    assert capture.is_recording is False
+    assert FakeInputStream.instances == []
+
+
+def test_warm_restart_is_deferred_while_a_recording_is_attached(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+    assert capture.uses_warm_stream is True
+
+    warm.request_restart()
+
+    # Still the original stream: the restart must not cut off the recording.
+    assert len(FakeInputStream.instances) == 1
+    assert FakeInputStream.instances[0].closed is False
+    chunk = np.ones((160, 1), dtype=np.float32) * 0.25
+    warm._dispatch(chunk, 160, None, None)
+    assert len(capture._chunks) == 1
+
+    capture.stop()
+    # Detach executes the deferred restart on a worker thread.
+    assert _wait_until(
+        lambda: len(FakeInputStream.instances) == 2
+        and FakeInputStream.instances[0].closed
+        and FakeInputStream.instances[1].started
+    )
+    assert warm.is_running is True
+    warm.close()
+
+
+def test_warm_request_close_is_deferred_until_detach(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    warm.request_close()
+
+    # The recording keeps its audio source until it stops.
+    assert FakeInputStream.instances[0].closed is False
+    chunk = np.ones((160, 1), dtype=np.float32) * 0.25
+    warm._dispatch(chunk, 160, None, None)
+    assert len(capture._chunks) == 1
+    # A pending close also refuses new consumers.
+    assert warm.attach(lambda *a: None) is False
+
+    capture.stop()
+    assert _wait_until(lambda: FakeInputStream.instances[0].closed)
+    assert warm.is_running is False
+
+
+def test_warm_request_close_without_consumer_closes(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+
+    warm.request_close()
+
+    assert _wait_until(lambda: FakeInputStream.instances[0].closed)
+    assert warm.is_running is False
+
+
+def test_warm_restart_reresolves_the_device(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    device = {"key": "mic-a", "index": 1}
+    warm = WarmMicrophoneStream(
+        sample_rate=16000,
+        channels=1,
+        device_provider=lambda: (device["key"], device["index"]),
+    )
+    assert warm.ensure_started() is True
+    assert FakeInputStream.instances[0].kwargs["device"] == 1
+
+    device["key"] = "mic-b"
+    device["index"] = 5
+    warm.request_restart()
+
+    assert _wait_until(
+        lambda: len(FakeInputStream.instances) == 2
+        and FakeInputStream.instances[0].closed
+        and warm.opened_device_key == "mic-b"
+    )
+    assert FakeInputStream.instances[1].kwargs["device"] == 5
+    warm.close()
+
+
+def test_warm_close_if_idle_refuses_while_attached(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    capture = AudioCapture(sample_rate=16000, channels=1, warm_stream=warm)
+    capture.start()
+
+    assert warm.close_if_idle() is False
+    assert FakeInputStream.instances[0].closed is False
+
+    capture.stop()
+    assert warm.close_if_idle() is True
+    assert FakeInputStream.instances[0].closed is True
+    assert warm.is_running is False
 
 
 def test_late_warm_callback_cannot_write_into_next_recording(monkeypatch):
