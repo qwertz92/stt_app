@@ -686,3 +686,43 @@ class TestParseCustomVocabulary:
         assert len(result) == 100
         assert result[0] == "term0"
         assert result[-1] == "term99"
+
+
+class TestInputDeviceName:
+    def test_defaults_to_system_default(self, tmp_path):
+        store = SettingsStore(tmp_path / "settings.json")
+
+        settings = store.load()
+
+        assert settings.input_device_name == ""
+
+    def test_round_trips_selected_device(self, tmp_path):
+        settings_path = tmp_path / "settings.json"
+        store = SettingsStore(settings_path)
+        settings = store.load()
+
+        store.save(
+            AppSettings(
+                **{
+                    **settings.to_dict(),
+                    "input_device_name": "Headset Microphone (USB)",
+                }
+            )
+        )
+
+        reloaded = SettingsStore(settings_path).load()
+        assert reloaded.input_device_name == "Headset Microphone (USB)"
+
+    def test_strips_whitespace_and_tolerates_null(self, tmp_path):
+        settings_path = tmp_path / "settings.json"
+        settings_path.write_text(
+            json.dumps({"input_device_name": "  USB Mic  "}),
+            encoding="utf-8",
+        )
+        assert SettingsStore(settings_path).load().input_device_name == "USB Mic"
+
+        settings_path.write_text(
+            json.dumps({"input_device_name": None}),
+            encoding="utf-8",
+        )
+        assert SettingsStore(settings_path).load().input_device_name == ""

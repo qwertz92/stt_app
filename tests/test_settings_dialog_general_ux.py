@@ -235,3 +235,45 @@ def test_owned_delayed_callback_is_cancelled_with_its_dialog() -> None:
     QtTest.QTest.qWait(25)
 
     assert calls == []
+
+
+def test_microphone_picker_lists_devices_and_keeps_missing_selection(
+    dialog: SettingsDialog,
+    monkeypatch,
+) -> None:
+    from stt_app.audio_devices import InputDeviceInfo
+
+    monkeypatch.setattr(
+        "stt_app.audio_devices.list_input_devices",
+        lambda: [InputDeviceInfo(name="USB Mic", index=3)],
+    )
+
+    dialog._populate_microphone_combo("Old Mic")
+
+    combo = dialog.microphone_combo
+    values = [combo.itemData(index) for index in range(combo.count())]
+    labels = [combo.itemText(index) for index in range(combo.count())]
+    assert values == ["", "USB Mic", "Old Mic"]
+    assert labels[0].startswith("System default")
+    assert labels[2] == "Old Mic (not connected)"
+    # The stored-but-disconnected device stays selected so saving cannot
+    # silently drop the user's choice.
+    assert combo.currentData() == "Old Mic"
+
+
+def test_microphone_refresh_requests_controller_reenumeration(
+    dialog: SettingsDialog,
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("stt_app.audio_devices.list_input_devices", lambda: [])
+    requests: list[bool] = []
+    dialog.audio_device_refresh_requested.connect(
+        lambda: requests.append(True)
+    )
+
+    dialog._on_microphone_refresh_clicked()
+
+    assert requests == [True]
+    # The delayed repopulate is armed so the list updates again after the
+    # controller's off-thread re-enumeration finished.
+    assert dialog._microphone_repopulate_timer.isActive()

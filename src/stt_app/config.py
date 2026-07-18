@@ -14,7 +14,7 @@ APP_LOGGER_NAME = "stt_app"
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
-SCHEMA_VERSION = 18
+SCHEMA_VERSION = 19
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -1003,6 +1003,8 @@ AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS = 2_000
 # role, per endpoint); coalesce them before re-enumerating devices and
 # restarting the warm microphone stream.
 AUDIO_DEVICE_CHANGE_SETTLE_MS = 600
+# Empty string = follow the Windows default input device at every stream open.
+DEFAULT_INPUT_DEVICE_NAME = ""
 STREAMING_PARTIAL_INTERVAL_S = 0.35
 STREAMING_PARTIAL_MIN_AUDIO_S = 0.25
 STREAMING_PARTIAL_WINDOW_S = 8.0

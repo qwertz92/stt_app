@@ -136,6 +136,9 @@ class SettingsDialog(
     benchmark_case_finished = QtCore.Signal(object)
     benchmark_finished = QtCore.Signal(bool, str, object)
     settings_changed = QtCore.Signal()
+    # Manual microphone-list refresh; the controller re-enumerates PortAudio
+    # because it owns the streams that must be idle for that.
+    audio_device_refresh_requested = QtCore.Signal()
 
     def __init__(
         self,

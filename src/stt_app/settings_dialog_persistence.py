@@ -57,6 +57,9 @@ class _PersistenceMixin:
         del blocker
         self._refresh_model_combo(selected=settings.model_size, cached=[])
         self.vad_checkbox.setChecked(settings.vad_enabled)
+        self._populate_microphone_combo(
+            str(getattr(settings, "input_device_name", "") or "")
+        )
         self.keep_microphone_warm_checkbox.setChecked(
             bool(getattr(settings, "keep_microphone_warm", False))
         )
@@ -450,6 +453,7 @@ class _PersistenceMixin:
             ),
             custom_vocabulary=self.custom_vocabulary_edit.toPlainText(),
             vad_enabled=self.vad_checkbox.isChecked(),
+            input_device_name=str(self.microphone_combo.currentData() or ""),
             keep_microphone_warm=(
                 self.keep_microphone_warm_checkbox.isChecked()
             ),

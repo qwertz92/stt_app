@@ -48,6 +48,7 @@ from .config import (
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_IMMEDIATE_BACKGROUND_INSERT,
+    DEFAULT_INPUT_DEVICE_NAME,
     DEFAULT_INSERT_TARGET,
     DEFAULT_KEEP_MICROPHONE_WARM,
     DEFAULT_SILENCE_GATE_ENABLED,
@@ -96,6 +97,7 @@ DEFAULTS = {
     "language_mode": DEFAULT_LANGUAGE_MODE,
     "custom_vocabulary": DEFAULT_CUSTOM_VOCABULARY,
     "vad_enabled": DEFAULT_VAD_ENABLED,
+    "input_device_name": DEFAULT_INPUT_DEVICE_NAME,
     "keep_microphone_warm": DEFAULT_KEEP_MICROPHONE_WARM,
     "silence_gate_enabled": DEFAULT_SILENCE_GATE_ENABLED,
     "silence_gate_threshold": DEFAULT_SILENCE_GATE_THRESHOLD,
@@ -157,6 +159,7 @@ class AppSettings:
     language_mode: str = DEFAULT_LANGUAGE_MODE
     custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY
     vad_enabled: bool = DEFAULT_VAD_ENABLED
+    input_device_name: str = DEFAULT_INPUT_DEVICE_NAME
     keep_microphone_warm: bool = DEFAULT_KEEP_MICROPHONE_WARM
     silence_gate_enabled: bool = DEFAULT_SILENCE_GATE_ENABLED
     silence_gate_threshold: float = DEFAULT_SILENCE_GATE_THRESHOLD
@@ -376,6 +379,9 @@ class AppSettings:
             vad_enabled=parse_json_bool(
                 merged.get("vad_enabled"), default=DEFAULT_VAD_ENABLED
             ),
+            input_device_name=str(
+                merged.get("input_device_name", DEFAULT_INPUT_DEVICE_NAME) or ""
+            ).strip(),
             vad_energy_threshold=vad_energy_threshold,
             save_last_wav=parse_json_bool(
                 merged.get("save_last_wav"), default=DEFAULT_SAVE_LAST_WAV

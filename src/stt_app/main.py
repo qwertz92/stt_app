@@ -255,6 +255,9 @@ def _create_tray_icon(
         dialog.settings_changed.connect(
             lambda: _restore_overlay_after_settings_save(overlay, settings_store)
         )
+        dialog.audio_device_refresh_requested.connect(
+            controller.request_audio_device_refresh
+        )
         _active_settings_dialog = dialog
         return dialog
 

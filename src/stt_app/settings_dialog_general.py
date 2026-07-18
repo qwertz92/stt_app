@@ -6,6 +6,7 @@ from typing import ClassVar
 
 from PySide6 import QtCore, QtWidgets
 
+from . import audio_devices
 from .app_paths import debug_audio_path, recordings_dir
 from .config import (
     DEFAULT_ENGINE,
@@ -410,6 +411,49 @@ class _GeneralTabMixin:
 
         # --- Audio / VAD section ---
         audio_box, audio_form = self._general_form_box("Audio && Voice Detection")
+
+        self.microphone_combo = _WheelPassthroughComboBox()
+        self.microphone_combo.setToolTip(
+            "Which microphone recordings use. 'System default' follows the "
+            "Windows default input device at every recording start."
+        )
+        self.microphone_refresh_button = QtWidgets.QPushButton("Refresh")
+        self.microphone_refresh_button.setToolTip(
+            "Re-scan connected microphones. The list also updates "
+            "automatically when devices are connected or removed."
+        )
+        self.microphone_refresh_button.clicked.connect(
+            self._on_microphone_refresh_clicked
+        )
+        self._match_field_button_height(
+            self.microphone_combo,
+            self.microphone_refresh_button,
+        )
+        microphone_row = QtWidgets.QWidget()
+        microphone_row_layout = QtWidgets.QHBoxLayout(microphone_row)
+        microphone_row_layout.setContentsMargins(0, 0, 0, 0)
+        microphone_row_layout.setSpacing(_INLINE_FIELD_BUTTON_SPACING_PX)
+        microphone_row_layout.addWidget(self.microphone_combo, 1)
+        microphone_row_layout.addWidget(self.microphone_refresh_button, 0)
+        microphone_hint = QtWidgets.QLabel(
+            "System default follows the Windows default microphone, also for "
+            "the warm stream. A selected microphone that is not connected "
+            "fails the recording instead of silently using another device."
+        )
+        microphone_hint.setWordWrap(True)
+        self._style_field_hint_label(microphone_hint)
+        audio_form.addRow(
+            "Microphone",
+            self._field_with_hint(microphone_row, microphone_hint),
+        )
+        # Dialog-owned so the delayed repopulate dies with the dialog instead
+        # of firing into deleted Qt objects.
+        self._microphone_repopulate_timer = QtCore.QTimer(self)
+        self._microphone_repopulate_timer.setSingleShot(True)
+        self._microphone_repopulate_timer.setInterval(1200)
+        self._microphone_repopulate_timer.timeout.connect(
+            self._on_microphone_repopulate_timeout
+        )
 
         self.keep_microphone_warm_checkbox = QtWidgets.QCheckBox(
             "Keep microphone warm for instant recording start"
@@ -1121,6 +1165,39 @@ class _GeneralTabMixin:
             self._show_local_model_unverified_state(status)
         if self._inventory_tab_is_visible():
             self._schedule_local_model_auto_refresh(delay_ms=250)
+
+    def _populate_microphone_combo(self, selected_name: str) -> None:
+        """Fill the picker: system default, connected devices, stored-but-
+        missing selection marked "(not connected)" so saving cannot silently
+        drop it."""
+        combo = self.microphone_combo
+        blocker = QtCore.QSignalBlocker(combo)
+        combo.clear()
+        combo.addItem("System default (follow Windows)", "")
+        try:
+            names = [info.name for info in audio_devices.list_input_devices()]
+        except Exception:
+            names = []
+        for name in names:
+            combo.addItem(name, name)
+        if selected_name and selected_name not in names:
+            combo.addItem(f"{selected_name} (not connected)", selected_name)
+        self._select_combo_data(combo, selected_name)
+        del blocker
+
+    def _on_microphone_refresh_clicked(self) -> None:
+        current = str(self.microphone_combo.currentData() or "")
+        # Ask the controller to re-enumerate PortAudio (it owns the streams
+        # that must be idle for that); show the current list immediately and
+        # again after the off-thread re-enumeration had time to finish.
+        self.audio_device_refresh_requested.emit()
+        self._populate_microphone_combo(current)
+        self._microphone_repopulate_timer.start()
+
+    def _on_microphone_repopulate_timeout(self) -> None:
+        self._populate_microphone_combo(
+            str(self.microphone_combo.currentData() or "")
+        )
 
     def _on_remote_model_changed(self, _index: int = 0) -> None:
         provider = str(self.engine_combo.currentData() or DEFAULT_ENGINE)

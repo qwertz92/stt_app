@@ -58,6 +58,7 @@ class FakeController:
         self.hotkey_refresh_calls = 0
         self.resume_calls = 0
         self.bring_overlay_calls = 0
+        self.audio_device_refresh_calls = 0
 
     def toggle_recording(self):
         self.toggle_calls += 1
@@ -79,6 +80,9 @@ class FakeController:
 
     def refresh_hotkey_registration(self):
         self.hotkey_refresh_calls += 1
+
+    def request_audio_device_refresh(self):
+        self.audio_device_refresh_calls += 1
 
     def handle_system_resume(self):
         self.resume_calls += 1
@@ -388,6 +392,7 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
 
     class FakeSettingsDialog(QtWidgets.QDialog):
         settings_changed = QtCore.Signal()
+        audio_device_refresh_requested = QtCore.Signal()
 
         def __init__(self, *args, **kwargs):
             super().__init__()
@@ -451,6 +456,7 @@ def test_tray_reuses_hidden_settings_dialog_and_retains_busy_state(monkeypatch):
 
     class FakeSettingsDialog(QtWidgets.QDialog):
         settings_changed = QtCore.Signal()
+        audio_device_refresh_requested = QtCore.Signal()
 
         def __init__(self, *args, **kwargs):
             super().__init__()
@@ -504,6 +510,7 @@ def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
 
     class FakeSettingsDialog(QtWidgets.QDialog):
         settings_changed = QtCore.Signal()
+        audio_device_refresh_requested = QtCore.Signal()
 
         def __init__(self, *args, **kwargs):
             super().__init__()
