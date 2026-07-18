@@ -55,6 +55,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
   Fun-ASR / Alibaba (DashScope WebSocket, batch-only, no German)
 - keyring for secret storage
+- comtypes for MMDevice audio endpoint change notifications (Windows)
 
 ## Architecture
 
@@ -65,7 +66,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `config.py` | All tunables/constants; `MODEL_REPO_MAP` (single source of truth) |
 | `controller.py` | Main orchestrator/state machine; hotkey, audio, transcriber, overlay, inserter, history, preload |
 | `streaming_text.py` | Pure streaming text normalization, locked-prefix, live-tail, and finalization logic |
-| `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback |
+| `audio_capture.py` | sounddevice mic recording + VAD auto-stop + streaming chunk callback; `WarmMicrophoneStream` with deferred restart/close and device-keyed attach |
+| `audio_devices.py` | Input-device inventory and name→index resolution (WASAPI-first); PortAudio re-enumeration guarded by a shared open-lock plus live-stream registry |
+| `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models) |
@@ -227,6 +230,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   yet be recorded. A streaming controller session is published before
   `capture.start()` so a first callback delivered from inside that call reaches
   the active transcriber instead of being discarded.
+- **Microphone selection and audio device changes**: `input_device_name`
+  (General-tab picker; empty = system default) is resolved to a PortAudio index
+  only at stream open via `audio_devices.resolve_input_device`; a selected but
+  missing microphone fails the recording with an actionable error — never
+  silently record from another device. PortAudio freezes its device list at
+  initialization, so `audio_devices.try_refresh_input_devices` re-initializes
+  PortAudio; a shared open-lock plus live-stream registry makes re-enumeration
+  impossible while any stream is open (it is refused and retried, never allowed
+  to invalidate a running capture). `audio_device_listener.py` registers an
+  `IMMNotificationClient` (comtypes, event-driven — no polling) so a Windows
+  default-capture switch or hot-plug immediately triggers the controller's
+  coalesced reaction: close the idle warm stream, re-enumerate, reopen. While
+  a recording is active the refresh defers and resumes on the stop/abort
+  paths. The warm stream owns its lifecycle races: `request_restart` /
+  `request_close` defer while a consumer is attached and execute on detach, so
+  disabling the setting, a resume, or a device event can never cut off a
+  running recording's audio source; `attach` additionally requires the warm
+  stream's `opened_device_key` to match the recording's selected device. A
+  first-callback watchdog timeout on a warm capture restarts the warm stream
+  automatically (self-heal) instead of only suggesting to disable the feature.
+  Without COM/comtypes the listener is inert and the Settings "Refresh" button
+  plus watchdog self-heal remain the manual/backstop paths.
 - **First audio callback watchdog**: after a successful capture start, a bounded
   Qt timer verifies that PortAudio actually delivered a callback. A timeout is
   an abort, never a normal stop/transcription: a callback can race just after

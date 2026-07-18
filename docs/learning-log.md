@@ -3,6 +3,38 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-18
+
+- **The warm microphone stream now follows device changes.** Root cause of
+  "I switched the Windows input device but the new microphone never became
+  active": the warm stream binds the default endpoint once at open and was
+  only ever reopened on settings toggle, system resume, or app restart — a
+  device switch kept recording from the old endpoint (or from a dead stream
+  that `is_running` still reported as healthy). New `audio_device_listener.py`
+  registers an MMDevice `IMMNotificationClient` via comtypes (event-driven, no
+  polling); default-capture switches and hot-plug events funnel into a
+  coalesced controller reaction that closes the idle warm stream,
+  re-initializes PortAudio (its device list is frozen at init), and reopens
+  the warm stream on the fresh list. A first-callback watchdog timeout on a
+  warm capture triggers the same refresh as a self-heal.
+- **Warm-stream lifecycle races closed.** Disabling `keep_microphone_warm`
+  during a recording used to hard-close the stream under the attached capture
+  (silent audio loss, since the watchdog had long passed); the resume restart
+  checked `_audio_capture` on the Qt thread but closed later on a worker,
+  racing a just-starting recording. `WarmMicrophoneStream.request_close` /
+  `request_restart` now defer under the stream's own lock while a consumer is
+  attached and execute on detach, which removes both races at the source.
+- **Microphone picker with strict resolution.** New `input_device_name`
+  setting (General tab; default "System default" follows Windows via the
+  PortAudio/MME sound mapper). Names are listed WASAPI-first (untruncated, one
+  entry per endpoint) and resolved to a PortAudio index only at stream open;
+  re-enumeration is guarded by a shared open-lock plus live-stream registry so
+  `Pa_Terminate` can never invalidate an open stream. A stored-but-missing
+  device stays visible as "(not connected)", and recording with it selected
+  fails with an actionable error instead of silently using another device.
+  The warm attach path is device-keyed so a stale warm stream on the wrong
+  device is bypassed with a cold open on the right one.
+
 ## 2026-07-14
 
 - **Persistent history views refresh on activation, not only on navigation.** A
