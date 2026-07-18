@@ -15,10 +15,13 @@ from typing import Callable
 from PySide6 import QtCore, QtGui
 
 from .app_paths import recordings_dir
+from . import audio_devices
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
+from .audio_device_listener import AudioDeviceChangeListener
 from .config import (
     AUDIO_CHANNELS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+    AUDIO_DEVICE_CHANGE_SETTLE_MS,
     AUDIO_SAMPLE_RATE,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
@@ -174,6 +177,9 @@ class DictationController(QtCore.QObject):
     stream_runtime_failed = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
     model_preload_done = QtCore.Signal(int, bool, str)  # generation, success, message
+    # Emitted from MMDevice API worker threads; the queued connection marshals
+    # the reaction onto the Qt thread.
+    audio_devices_changed = QtCore.Signal(str)
 
     def __init__(
         self,
@@ -203,6 +209,8 @@ class DictationController(QtCore.QObject):
         self._settings: AppSettings = self._settings_store.load()
         self._audio_capture: AudioCapture | None = None
         self._warm_mic_stream: WarmMicrophoneStream | None = None
+        self._audio_device_listener: AudioDeviceChangeListener | None = None
+        self._pending_audio_device_refresh = False
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_future: concurrent.futures.Future | None = None
@@ -264,6 +272,12 @@ class DictationController(QtCore.QObject):
             self._on_audio_callback_watchdog_timeout
         )
         self._audio_callback_watchdog_capture: AudioCapture | None = None
+        self._audio_device_change_timer = QtCore.QTimer(self)
+        self._audio_device_change_timer.setSingleShot(True)
+        self._audio_device_change_timer.setInterval(AUDIO_DEVICE_CHANGE_SETTLE_MS)
+        self._audio_device_change_timer.timeout.connect(
+            self._on_audio_device_change_settled
+        )
         self._preload_progress_timer = QtCore.QTimer(self)
         self._preload_progress_timer.setInterval(600)
         self._preload_progress_timer.timeout.connect(self._on_preload_progress_poll)
@@ -290,12 +304,14 @@ class DictationController(QtCore.QObject):
         self.stream_runtime_failed.connect(self._on_stream_runtime_failed)
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
         self.model_preload_done.connect(self._on_model_preload_done)
+        self.audio_devices_changed.connect(self._on_audio_devices_changed)
 
     @property
     def settings(self) -> AppSettings:
         return self._settings
 
     def initialize(self) -> None:
+        self._start_audio_device_listener()
         self.reload_settings(re_register_hotkey=True)
         if self._settings.engine == DEFAULT_ENGINE:
             self._start_local_model_preload()
@@ -320,6 +336,14 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to unregister cancel hotkey")
         self._focus_poll_timer.stop()
         self._cancel_audio_callback_watchdog()
+        self._audio_device_change_timer.stop()
+        listener = self._audio_device_listener
+        self._audio_device_listener = None
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception:
+                self._logger.exception("Failed to stop audio device listener")
         self._preload_progress_timer.stop()
         self._preload_cancel_requested = True
         self._cancel_preload_generation(self._preload_generation)
@@ -841,13 +865,22 @@ class DictationController(QtCore.QObject):
         )
         detail = "Microphone capture started but did not deliver audio. Please retry."
         if warm_stream:
-            detail = f"{detail} Disable Keep microphone warm if it repeats."
+            # A dead warm stream (its device was switched or removed) would
+            # otherwise fail every following recording too; restart it on the
+            # freshly enumerated device list so the next attempt works.
+            detail = (
+                "Microphone capture started but did not deliver audio. "
+                "Restarting the warm microphone stream - please retry. "
+                "Disable Keep microphone warm if it repeats."
+            )
         if self._streaming_recording:
             self._abort_streaming_session(
                 detail,
                 beep=False,
                 finalize_stream=False,
             )
+            if warm_stream:
+                self.request_audio_device_refresh()
             return
 
         # This is an abort, not a normal stop. A first callback can race with
@@ -866,6 +899,10 @@ class DictationController(QtCore.QObject):
         self._overlay.set_state("Error", detail)
         self._reveal_overlay_result(is_error=True)
         self._flush_deferred_background_results()
+        if warm_stream:
+            self.request_audio_device_refresh()
+        else:
+            self._maybe_resume_pending_audio_device_refresh()
 
     def _build_audio_capture(self, chunk_callback=None) -> AudioCapture:
         vad = None
@@ -880,6 +917,9 @@ class DictationController(QtCore.QObject):
                 min_speech_ms=VAD_MIN_SPEECH_MS,
                 max_silence_ms=VAD_MAX_SILENCE_MS,
             )
+        input_device_name = str(
+            getattr(self._settings, "input_device_name", "") or ""
+        )
         return AudioCapture(
             sample_rate=AUDIO_SAMPLE_RATE,
             channels=AUDIO_CHANNELS,
@@ -888,18 +928,48 @@ class DictationController(QtCore.QObject):
             chunk_callback=chunk_callback,
             logger=self._logger,
             warm_stream=self._warm_mic_stream,
+            device_key=input_device_name,
+            # Resolved at stream open, never earlier: indices are only valid
+            # until the next PortAudio re-enumeration.
+            device_resolver=lambda name=input_device_name: (
+                audio_devices.resolve_input_device(name)
+            ),
         )
 
     def _sync_warm_microphone_stream(self) -> None:
-        """Create or tear down the shared warm stream to match settings."""
+        """Create, retarget, or tear down the shared warm stream per settings."""
         enabled = bool(getattr(self._settings, "keep_microphone_warm", False))
         if enabled and self._warm_mic_stream is None:
-            self._warm_mic_stream = WarmMicrophoneStream(logger=self._logger)
+            self._warm_mic_stream = WarmMicrophoneStream(
+                logger=self._logger,
+                device_provider=self._warm_microphone_device,
+            )
             self._start_warm_microphone_stream_async()
         elif not enabled and self._warm_mic_stream is not None:
             stream = self._warm_mic_stream
             self._warm_mic_stream = None
-            stream.close()
+            # Deferred while a recording is attached (the global hotkey works
+            # with the settings dialog open); an immediate close would
+            # silently cut off that recording's audio source. Idle streams
+            # close on a worker thread so a slow audio stack cannot block Qt.
+            stream.request_close()
+        elif enabled and self._warm_mic_stream is not None:
+            stream = self._warm_mic_stream
+            opened = stream.opened_device_key
+            selected = str(
+                getattr(self._settings, "input_device_name", "") or ""
+            )
+            if opened is None:
+                # Not running (earlier open failed or still starting); a
+                # settings save is a natural retry point.
+                self._start_warm_microphone_stream_async()
+            elif opened != selected:
+                stream.request_restart()
+
+    def _warm_microphone_device(self) -> tuple[str, int | None]:
+        """Resolve the currently selected microphone for a warm-stream open."""
+        name = str(getattr(self._settings, "input_device_name", "") or "")
+        return name, audio_devices.resolve_input_device(name)
 
     def _start_warm_microphone_stream_async(self) -> None:
         """Open the warm stream off the UI thread; opening can take seconds
@@ -917,20 +987,89 @@ class DictationController(QtCore.QObject):
         stream = self._warm_mic_stream
         if stream is None:
             return
-        if self._audio_capture is not None:
-            # A recording is running on its own cold stream or the warm one;
-            # do not yank the device from under it.
+        # request_restart defers while a recording is attached to the warm
+        # stream and closes/reopens on a worker thread otherwise, so it cannot
+        # yank the device from under an active or just-starting capture (the
+        # old Qt-thread pre-check raced exactly that window).
+        stream.request_restart()
+
+    def request_audio_device_refresh(self) -> None:
+        """Re-enumerate audio devices and restart the warm stream when idle.
+
+        Public entry point for a manual refresh (settings dialog); device
+        change notifications funnel into the same coalescing timer.
+        """
+        if not self._shutdown_started:
+            self._audio_device_change_timer.start()
+
+    def _start_audio_device_listener(self) -> None:
+        if self._audio_device_listener is not None:
             return
+        listener = AudioDeviceChangeListener(
+            on_change=self.audio_devices_changed.emit,
+            logger=self._logger,
+        )
+        if listener.start():
+            self._audio_device_listener = listener
+        else:
+            self._logger.warning(
+                "Audio device change notifications unavailable; microphone "
+                "hot-plug and default-device switches need a manual refresh "
+                "from Settings or an app restart."
+            )
 
-        def _restart() -> None:
-            stream.close()
-            stream.ensure_started()
+    def _on_audio_devices_changed(self, kind: str) -> None:
+        # Runs on the Qt thread via the queued signal connection. One physical
+        # event raises several notifications (per role/endpoint), so coalesce
+        # before reacting.
+        if self._shutdown_started:
+            return
+        self._logger.info("audio_device_change kind=%s", kind)
+        self._audio_device_change_timer.start()
 
+    def _on_audio_device_change_settled(self) -> None:
+        if self._shutdown_started:
+            return
+        if (
+            self._audio_capture is not None
+            or self._recording_start_in_progress
+            or self._recording_stop_in_progress
+        ):
+            # Never touch devices mid-recording; retried once the capture
+            # stops via _maybe_resume_pending_audio_device_refresh.
+            self._pending_audio_device_refresh = True
+            return
+        self._pending_audio_device_refresh = False
         threading.Thread(
-            target=_restart,
-            name="stt_app_warm_mic_resume",
+            target=self._refresh_audio_devices_worker,
+            name="stt_app_audio_device_refresh",
             daemon=True,
         ).start()
+
+    def _refresh_audio_devices_worker(self) -> None:
+        """Close the idle warm stream, re-enumerate PortAudio, reopen warm.
+
+        Runs off the Qt thread because PortAudio calls can block for seconds
+        on locked-down audio stacks. ``try_refresh_input_devices`` refuses to
+        re-initialize while any stream is live, so a recording that slips in
+        concurrently is never torn down; the refresh is retried later instead.
+        """
+        warm = self._warm_mic_stream
+        if warm is not None and not warm.close_if_idle():
+            self._pending_audio_device_refresh = True
+            return
+        if not audio_devices.try_refresh_input_devices(self._logger):
+            self._pending_audio_device_refresh = True
+        if self._shutdown_started:
+            return
+        warm = self._warm_mic_stream
+        if warm is not None:
+            warm.ensure_started()
+
+    def _maybe_resume_pending_audio_device_refresh(self) -> None:
+        if self._pending_audio_device_refresh and not self._shutdown_started:
+            self._pending_audio_device_refresh = False
+            self._audio_device_change_timer.start()
 
     def stop_recording(self) -> None:
         if self._recording_stop_in_progress:
@@ -1025,6 +1164,7 @@ class DictationController(QtCore.QObject):
             self._pending_toggle_after_stop_count = 0
             self._recording_stop_in_progress = False
             self._flush_deferred_background_results()
+            self._maybe_resume_pending_audio_device_refresh()
             if pending_toggles % 2 == 1 and self._audio_capture is None:
                 self._logger.info(
                     "Applying queued hotkey start after recording stop completed."
@@ -3162,6 +3302,7 @@ class DictationController(QtCore.QObject):
         # deferred background inserts; deliver every completed one now — even if
         # another transcription is still running — instead of leaving them stuck.
         self._flush_deferred_background_results(ignore_active_transcription=True)
+        self._maybe_resume_pending_audio_device_refresh()
 
     def _play_abort_beep(self) -> None:
         try:

@@ -999,6 +999,10 @@ AUDIO_BLOCK_DURATION_MS = 100
 # A successfully started PortAudio input stream should deliver a callback well
 # before this. A longer delay means the device stream is stalled, not silent.
 AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS = 2_000
+# Windows raises several MMDevice notifications for one physical event (per
+# role, per endpoint); coalesce them before re-enumerating devices and
+# restarting the warm microphone stream.
+AUDIO_DEVICE_CHANGE_SETTLE_MS = 600
 STREAMING_PARTIAL_INTERVAL_S = 0.35
 STREAMING_PARTIAL_MIN_AUDIO_S = 0.25
 STREAMING_PARTIAL_WINDOW_S = 8.0

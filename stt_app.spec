@@ -17,6 +17,7 @@ hiddenimports = [
     'stt_app.benchmark_process',
     'stt_app.benchmark_worker',
     'onnxruntime_genai',
+    'comtypes',
 ]
 ort_genai_datas, ort_genai_binaries, ort_genai_hiddenimports = collect_all(
     'onnxruntime_genai'
