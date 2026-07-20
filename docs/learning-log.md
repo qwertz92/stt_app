@@ -3,6 +3,36 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-20
+
+- **Optional show-overlay hotkey.** New `show_overlay_hotkey` setting
+  (schema 20, empty default = disabled; e.g. Ctrl+Alt+F11) registers a third
+  global hotkey whose only action is `bring_overlay_to_front` — the same
+  reveal as the tray "Show overlay" — so a floating overlay can be brought up
+  to check the last transcript without the mouse. Empty stays empty (no
+  default combo is ever substituted, nothing is registered by default), the
+  Save flow validates the combo and rejects conflicts with the recording and
+  cancel hotkeys, and registration mirrors the cancel-hotkey model including
+  the resume-path refresh and disabled-state unregistration.
+- **Inline field buttons rendered taller than their fields or clipped.** The
+  reported symptom was the microphone Refresh button "slightly cut off at the
+  bottom" and field-adjacent buttons visibly taller than their inputs. Root
+  cause: the dialog-level `BUTTON_FEEDBACK_STYLESHEET` gives every QPushButton
+  a QSS box of min-height 24 px + 4 px vertical padding + 1 px borders
+  (~34 px), while `_match_field_button_height` fixes heights to the native
+  input hint (~24 px) *before* the widgets are reparented into the styled
+  dialog; after reparenting, the QSS minimum beats the fixed height (button
+  taller than its combo) or the style draws past the allocated rect (clipped
+  bottom), depending on layout context. Fix: matched buttons are tagged with
+  an `inlineFieldButton` stylesheet property whose rule shrinks the QSS box
+  (min-height 0, 1 px vertical padding) so the field's native height wins.
+  Verified with an offscreen windows11-style rendering; a regression test
+  asserts equal actual heights and that the QSS minimum fits the matched
+  height for all matched rows.
+- **Run Benchmark window opens larger.** 820x720 -> 860x880, bounded to the
+  available screen at build time, so expanding "Show Run Options" no longer
+  squeezes the installed-models list until the window is resized manually.
+
 ## 2026-07-18
 
 - **The warm microphone stream now follows device changes.** Root cause of

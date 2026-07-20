@@ -304,8 +304,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   use the shared scroll helper instead of rebuilding lists in a way that resets
   the user's place. Settings tabs use a session-stable default dialog size and
   `QScrollArea` `AdjustIgnored` to avoid small tab-switch resize jitter. Inline
-  field buttons match the corresponding input height; action rows keep explicit
-  spacing rather than relying on platform defaults. Settings tab selection must
+  field buttons match the corresponding input height via
+  `_match_field_button_height`, which also tags them with the
+  `inlineFieldButton` stylesheet property: the dialog-level base QPushButton
+  rule has a larger QSS box (min-height + padding) that would otherwise beat
+  the fixed height once the button is reparented into the styled dialog and
+  render it taller than its field or clipped at the bottom. Action rows keep
+  explicit spacing rather than relying on platform defaults. Settings tab selection must
   not change tab font weight or measured tab width; use color/border changes for
   the selected state. General-tab form sections share a measured label column so
   fields align across group boxes. Pressing Save with no effective setting or
@@ -317,8 +322,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   The *run* side (audio sample picker, installed-model list with one compact
   row of small Select all/Deselect all/Refresh buttons, collapsible Run
   Options, Run/Cancel controls) lives only in the resizable, non-modal
-  `benchmark_window` ("Run Benchmark", 820x720 default, owned by the settings dialog
-  so it hides when the dialog closes). Re-clicking the button raises/activates
+  `benchmark_window` ("Run Benchmark", 860x880 default bounded to the
+  available screen so expanding Run Options keeps the model list usable,
+  owned by the settings dialog so it hides when the dialog closes). Re-clicking the button raises/activates
   the existing window rather than creating a second one via
   `_open_benchmark_window`, which also refreshes the model list. Status is set
   through the single `_set_benchmark_status`, which feeds both the tab label
@@ -500,7 +506,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   than only after the transcript finishes. The reveal is non-activating
   (`reveal_temporarily`), so focus stays on the target window and the pending
   insertion is unaffected. `WM_POWERBROADCAST` resume events also restore
-  overlay visibility and refresh both global hotkey registrations after
+  overlay visibility and refresh all global hotkey registrations after
   display/session state has stabilized.
 - **Model-aware language selection**: `config.language_modes_for_selection()`
   is the shared source of truth for the General-tab language list, the overlay
@@ -775,6 +781,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   "Show overlay" action (`controller.bring_overlay_to_front`) is the manual
   escape hatch. Reveals are best-effort (wrapped so a missing overlay method
   never breaks delivery).
+- **Show-overlay hotkey (optional, default off)**: `show_overlay_hotkey`
+  (schema 20, empty string = disabled) registers a third global hotkey
+  (`DEFAULT_SHOW_OVERLAY_HOTKEY_ID`) whose only action is
+  `controller.bring_overlay_to_front` — the same reveal as the tray "Show
+  overlay" action, e.g. to check the last transcript on a floating overlay.
+  Empty must stay empty: saving never substitutes a default combo, and no
+  global key is registered by default so a fresh install cannot shadow other
+  apps. The Save flow validates the combo and rejects conflicts with the
+  recording and cancel hotkeys; registration mirrors the cancel hotkey
+  (disabled -> unregister, failure -> notice + Error idle state) and is
+  included in the resume-path `refresh_hotkey_registration`.
 - **Windows taskbar identity**: `main._set_windows_app_user_model_id` sets an
   explicit `APP_USER_MODEL_ID` before the first window is created. Without it
   Windows groups our windows under the host process (python.exe) and shows its
