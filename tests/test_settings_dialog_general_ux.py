@@ -261,6 +261,58 @@ def test_microphone_picker_lists_devices_and_keeps_missing_selection(
     assert combo.currentData() == "Old Mic"
 
 
+def test_inline_field_buttons_match_their_field_height(
+    dialog: SettingsDialog,
+) -> None:
+    """Inline buttons must render at their field's height, never taller.
+
+    The dialog stylesheet's base QPushButton rule has a larger vertical box
+    than native inputs. Without the inlineFieldButton stylesheet override,
+    that QSS minimum beats the fixed height set by
+    _match_field_button_height, so the button renders taller than its field
+    or clipped at the bottom (seen on the microphone Refresh button).
+    """
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    dialog.benchmark_window.show()
+    app.processEvents()
+
+    rows = (
+        (dialog.microphone_combo, dialog.microphone_refresh_button),
+        (
+            dialog.recordings_dir_edit,
+            dialog.recordings_dir_browse,
+            dialog.recordings_open_button,
+        ),
+        (
+            dialog.benchmark_audio_edit,
+            dialog.benchmark_audio_browse_button,
+            dialog.benchmark_audio_last_button,
+        ),
+        (
+            dialog.benchmark_select_all_button,
+            dialog.benchmark_deselect_all_button,
+            dialog.refresh_benchmark_models_button,
+        ),
+    )
+    for field, *buttons in rows:
+        for button in buttons:
+            assert button.property("inlineFieldButton") is True
+            assert button.height() == field.height(), (
+                button.text(),
+                button.height(),
+                field.height(),
+            )
+            # The stylesheet minimum must fit inside the matched height, or
+            # the style would draw the button clipped at the bottom.
+            assert button.minimumSizeHint().height() <= field.height(), (
+                button.text()
+            )
+
+    dialog.benchmark_window.hide()
+
+
 def test_microphone_refresh_requests_controller_reenumeration(
     dialog: SettingsDialog,
     monkeypatch,

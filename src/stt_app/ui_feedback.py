@@ -4,6 +4,11 @@ from collections.abc import Iterable
 
 from PySide6 import QtWidgets
 
+# The inlineFieldButton rule must keep a smaller vertical box than the base
+# QPushButton rule: buttons matched to an adjacent input via
+# _match_field_button_height are fixed to the input's height, and the base
+# rule's min-height/padding would otherwise exceed that fixed height and
+# render the button taller than its field or clipped at the bottom.
 BUTTON_FEEDBACK_STYLESHEET = """
 QPushButton {
     min-height: 24px;
@@ -24,6 +29,10 @@ QPushButton:disabled {
     color: #777;
     background-color: #f1f3f4;
     border-color: #d5d9df;
+}
+QPushButton[inlineFieldButton="true"] {
+    min-height: 0px;
+    padding: 1px 10px;
 }
 QPushButton[feedbackState="success"] {
     color: #1b5e20;

@@ -575,14 +575,23 @@ class SettingsDialog(
         field: QtWidgets.QWidget,
         *buttons: QtWidgets.QAbstractButton,
     ) -> None:
-        height = max(
-            1,
-            field.sizeHint().height(),
-            *(button.sizeHint().height() for button in buttons),
-        )
-        field.setFixedHeight(height)
-        for button in buttons:
-            button.setFixedHeight(height)
+        # Mark every button in the row as an inline field button first: the
+        # dialog stylesheet's base QPushButton rule has a larger vertical box
+        # (min-height + padding + border) than native inputs, and that QSS
+        # minimum would win against the fixed height set here once the button
+        # is reparented into the styled dialog — rendering it taller than its
+        # field or clipped at the bottom. The inlineFieldButton stylesheet
+        # rule shrinks the QSS box so the matched height wins.
+        widgets: tuple[QtWidgets.QWidget, ...] = (field, *buttons)
+        for widget in widgets:
+            if isinstance(widget, QtWidgets.QAbstractButton):
+                widget.setProperty("inlineFieldButton", True)
+                style = widget.style()
+                style.unpolish(widget)
+                style.polish(widget)
+        height = max(1, *(widget.sizeHint().height() for widget in widgets))
+        for widget in widgets:
+            widget.setFixedHeight(height)
 
     @staticmethod
     def _field_with_hint(
