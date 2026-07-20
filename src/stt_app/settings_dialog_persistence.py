@@ -11,6 +11,7 @@ from .config import (
     DEFAULT_AZURE_ENDPOINT,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
+    DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
@@ -57,6 +58,13 @@ class _PersistenceMixin:
                 )
             )
         )
+        self.repaste_hotkey_edit.setKeySequence(
+            QtGui.QKeySequence(
+                _app_hotkey_to_qt_hotkey_text(
+                    str(getattr(settings, "repaste_hotkey", "") or "")
+                )
+            )
+        )
         # Model Dir must be set before refreshing the model combo so it can
         # scan the correct directory for cached models.
         blocker = QtCore.QSignalBlocker(self.model_dir_edit)
@@ -85,6 +93,22 @@ class _PersistenceMixin:
         )
         self.start_beep_checkbox.setChecked(settings.start_beep_enabled)
         self._select_combo_data(self.start_beep_tone_combo, settings.start_beep_tone)
+        self.completion_beep_checkbox.setChecked(
+            bool(getattr(settings, "completion_beep_enabled", False))
+        )
+        self._select_combo_data(
+            self.completion_beep_tone_combo,
+            str(
+                getattr(
+                    settings,
+                    "completion_beep_tone",
+                    DEFAULT_COMPLETION_BEEP_TONE,
+                )
+            ),
+        )
+        self.tray_middle_click_checkbox.setChecked(
+            bool(getattr(settings, "tray_middle_click_toggle", True))
+        )
         self.save_wav_checkbox.setChecked(settings.save_last_wav)
         self.save_all_recordings_checkbox.setChecked(settings.save_all_recordings)
         self.recordings_dir_edit.setText(settings.recordings_dir or "")
@@ -399,6 +423,7 @@ class _PersistenceMixin:
         hotkey: str | None = None,
         cancel_hotkey: str | None = None,
         show_overlay_hotkey: str | None = None,
+        repaste_hotkey: str | None = None,
         history_limit: int | None = None,
         key_states: dict[str, bool] | None = None,
         model_size: str | None = None,
@@ -454,6 +479,11 @@ class _PersistenceMixin:
                     getattr(self._loaded_settings, "show_overlay_hotkey", "") or ""
                 )
             ),
+            repaste_hotkey=(
+                repaste_hotkey
+                if repaste_hotkey is not None
+                else str(getattr(self._loaded_settings, "repaste_hotkey", "") or "")
+            ),
             model_size=(
                 model_size
                 if model_size is not None
@@ -498,6 +528,12 @@ class _PersistenceMixin:
             start_beep_tone=str(
                 self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE
             ),
+            completion_beep_enabled=self.completion_beep_checkbox.isChecked(),
+            completion_beep_tone=str(
+                self.completion_beep_tone_combo.currentData()
+                or DEFAULT_COMPLETION_BEEP_TONE
+            ),
+            tray_middle_click_toggle=self.tray_middle_click_checkbox.isChecked(),
             overlay_corner=str(
                 self.overlay_corner_combo.currentData() or DEFAULT_OVERLAY_CORNER
             ),
@@ -572,9 +608,12 @@ class _PersistenceMixin:
             self.cancel_hotkey_edit.keySequence()
         )
         cancel_hotkey = cancel_hotkey or DEFAULT_CANCEL_HOTKEY
-        # Optional: an empty show-overlay hotkey stays empty (disabled).
+        # Optional hotkeys: an empty field stays empty (disabled).
         show_overlay_hotkey = _qt_hotkey_sequence_to_app_hotkey(
             self.show_overlay_hotkey_edit.keySequence()
+        )
+        repaste_hotkey = _qt_hotkey_sequence_to_app_hotkey(
+            self.repaste_hotkey_edit.keySequence()
         )
         try:
             parse_hotkey(hotkey)
@@ -604,6 +643,16 @@ class _PersistenceMixin:
                     f"The overlay hotkey is invalid: {exc}",
                 )
                 return
+        if repaste_hotkey:
+            try:
+                parse_hotkey(repaste_hotkey)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Invalid re-paste hotkey",
+                    f"The re-paste hotkey is invalid: {exc}",
+                )
+                return
         if _hotkeys_conflict(hotkey, cancel_hotkey):
             QtWidgets.QMessageBox.critical(
                 self,
@@ -621,6 +670,18 @@ class _PersistenceMixin:
                 "Hotkey conflict",
                 "Overlay hotkey must not be identical to, subset of, or "
                 "superset of the recording or cancel hotkey.",
+            )
+            return
+        if repaste_hotkey and (
+            _hotkeys_conflict(repaste_hotkey, hotkey)
+            or _hotkeys_conflict(repaste_hotkey, cancel_hotkey)
+            or _hotkeys_conflict(repaste_hotkey, show_overlay_hotkey)
+        ):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Hotkey conflict",
+                "Re-paste hotkey must not be identical to, subset of, or "
+                "superset of the recording, cancel, or overlay hotkey.",
             )
             return
 
@@ -664,6 +725,7 @@ class _PersistenceMixin:
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
             show_overlay_hotkey=show_overlay_hotkey,
+            repaste_hotkey=repaste_hotkey,
             history_limit=requested_history_limit,
             key_states=key_states,
             model_size=str(self.model_combo.currentData()),

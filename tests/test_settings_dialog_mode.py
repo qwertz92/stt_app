@@ -1399,7 +1399,7 @@ def test_settings_tab_widths_stay_stable_when_selection_changes():
     _ = app
 
 
-def test_general_tab_uses_shared_label_column_width():
+def test_general_and_audio_tabs_share_label_column_width():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -1410,9 +1410,11 @@ def test_general_tab_uses_shared_label_column_width():
     app.processEvents()
 
     general_tab = dialog.tabs.widget(0)
+    audio_tab = dialog.tabs.widget(1)
     labels_by_text = {
         label.text(): label
-        for label in general_tab.findChildren(QtWidgets.QLabel)
+        for tab in (general_tab, audio_tab)
+        for label in tab.findChildren(QtWidgets.QLabel)
     }
     labels = [
         labels_by_text["Hotkey"],
@@ -3255,20 +3257,75 @@ def test_save_persists_optional_show_overlay_hotkey():
         app_logger=_FakeLogger(),
     )
 
-    assert dialog.show_overlay_hotkey_edit.keySequence().isEmpty()
-    dialog.show_overlay_hotkey_edit.setKeySequence(
-        QtGui.QKeySequence("Ctrl+Alt+F11")
+    # The overlay hotkey ships preset for the out-of-the-box experience.
+    assert (
+        dialog.show_overlay_hotkey_edit.keySequence().toString()
+        == "Ctrl+Alt+F11"
     )
+
+    # Clearing the field disables the hotkey: it must save as empty, not
+    # fall back to any default combo.
+    dialog.show_overlay_hotkey_edit.clear()
+    dialog._save()
+    assert store.saved is not None
+    assert store.saved.show_overlay_hotkey == ""
+
+    dialog.show_overlay_hotkey_edit.setKeySequence(
+        QtGui.QKeySequence("Ctrl+Alt+F10")
+    )
+    dialog._save()
+    assert store.saved.show_overlay_hotkey == "Ctrl+Alt+F10"
+    _ = app
+
+
+def test_save_persists_repaste_hotkey_and_new_toggles():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.repaste_hotkey_edit.keySequence().isEmpty()
+    dialog.repaste_hotkey_edit.setKeySequence(QtGui.QKeySequence("Ctrl+Alt+F9"))
+    dialog.completion_beep_checkbox.setChecked(True)
+    dialog._select_combo_data(dialog.completion_beep_tone_combo, "high")
+    dialog.tray_middle_click_checkbox.setChecked(False)
     dialog._save()
 
     assert store.saved is not None
-    assert store.saved.show_overlay_hotkey == "Ctrl+Alt+F11"
+    assert store.saved.repaste_hotkey == "Ctrl+Alt+F9"
+    assert store.saved.completion_beep_enabled is True
+    assert store.saved.completion_beep_tone == "high"
+    assert store.saved.tray_middle_click_toggle is False
 
-    # Clearing the field disables the hotkey again: it must save as empty,
-    # not fall back to any default combo.
-    dialog.show_overlay_hotkey_edit.clear()
+    dialog.repaste_hotkey_edit.clear()
     dialog._save()
-    assert store.saved.show_overlay_hotkey == ""
+    assert store.saved.repaste_hotkey == ""
+    _ = app
+
+
+def test_save_rejects_repaste_hotkey_conflicts(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    errors: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "critical",
+        lambda _parent, title, _text: errors.append(title),
+    )
+
+    # Conflicts with the preset overlay hotkey (Ctrl+Alt+F11).
+    dialog.repaste_hotkey_edit.setKeySequence(QtGui.QKeySequence("Ctrl+Alt+F11"))
+    dialog._save()
+    assert errors == ["Hotkey conflict"]
+    assert store.saved is None
     _ = app
 
 

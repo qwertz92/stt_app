@@ -44,6 +44,7 @@ from .logger import AppLogger
 from .model_download_progress import ModelDownloadSpeedTracker
 from .provider_connection_test_store import ProviderConnectionTestStore
 from .secret_store import SecretStore
+from .settings_dialog_audio import _AudioTabMixin
 from .settings_dialog_benchmark import _BenchmarkMixin
 from .settings_dialog_general import _GeneralTabMixin
 from .settings_dialog_helpers import (
@@ -117,6 +118,7 @@ __all__ = [
 
 class SettingsDialog(
     _GeneralTabMixin,
+    _AudioTabMixin,
     _LocalModelsMixin,
     _BenchmarkMixin,
     _RemoteProvidersMixin,
@@ -367,6 +369,7 @@ class SettingsDialog(
             """
         )
         self._build_general_tab()
+        self._build_audio_tab()
         self._build_local_tab()
         self._build_remote_tab()
         self._build_history_tab()

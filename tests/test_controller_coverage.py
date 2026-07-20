@@ -1730,6 +1730,7 @@ def test_register_show_overlay_hotkey_success_and_idle_detail():
     controller._hotkey_registration_ok = True
     controller._cancel_hotkey_registration_ok = True
     controller._show_overlay_hotkey_registration_ok = True
+    controller._repaste_hotkey_registration_ok = True
     controller.show_idle_status()
     state, detail = overlay.states[-1]
     assert state == "Idle"
@@ -1792,6 +1793,146 @@ def test_refresh_hotkey_registration_includes_show_overlay():
 
     assert manager.calls[-1] == "Ctrl+Alt+F11"
     assert controller._show_overlay_hotkey_registration_ok is True
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# Re-paste hotkey registration and action
+# ---------------------------------------------------------------------------
+
+
+def test_register_repaste_hotkey_and_refresh():
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        repaste_hotkey="Ctrl+Alt+F9",
+    )
+    manager = _AcceptAllHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        repaste_hotkey_manager=manager,
+    )
+
+    assert controller._register_repaste_hotkey() is True
+    assert manager.calls[-1] == "Ctrl+Alt+F9"
+
+    controller.refresh_hotkey_registration()
+    assert controller._repaste_hotkey_registration_ok is True
+    controller.shutdown()
+    _ = app
+
+
+def test_register_repaste_hotkey_disabled_unregisters():
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, repaste_hotkey="")
+    manager = _AcceptAllHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        repaste_hotkey_manager=manager,
+    )
+
+    assert controller._register_repaste_hotkey() is True
+    assert manager.calls == []
+    assert manager.unregister_calls >= 1
+    controller.shutdown()
+    _ = app
+
+
+def test_repaste_last_transcript_inserts_into_current_window(monkeypatch):
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    beeps: list[bool] = []
+    monkeypatch.setattr(
+        controller, "_play_completion_beep", lambda: beeps.append(True)
+    )
+    controller._last_transcript = "hello again"
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1] == ("hello again", None, "auto")
+    state, detail = overlay.states[-1]
+    assert state == "Done"
+    assert detail == "hello again"
+    assert beeps == [True]
+    controller.shutdown()
+    _ = app
+
+
+def test_repaste_last_transcript_without_transcript_shows_error():
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls == []
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "No transcript" in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_repaste_last_transcript_blocked_while_recording():
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    controller._last_transcript = "hello again"
+    controller._audio_capture = FakeCapture()
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls == []
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "recording" in detail.lower()
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# Completion tone
+# ---------------------------------------------------------------------------
+
+
+class _ImmediateThread:
+    def __init__(self, target=None, args=(), **_kwargs):
+        self._target = target
+        self._args = args
+
+    def start(self):
+        if self._target is not None:
+            self._target(*self._args)
+
+
+def test_completion_beep_disabled_by_default_is_silent(monkeypatch):
+    controller, app = _make_controller()
+    tones: list[str] = []
+    monkeypatch.setattr(controller, "_play_tone", lambda tone: tones.append(tone))
+
+    controller._play_completion_beep()
+
+    assert tones == []
+    controller.shutdown()
+    _ = app
+
+
+def test_completion_beep_enabled_plays_selected_tone(monkeypatch):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        completion_beep_enabled=True,
+        completion_beep_tone="high",
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+    )
+    tones: list[str] = []
+    monkeypatch.setattr(controller, "_play_tone", lambda tone: tones.append(tone))
+    monkeypatch.setattr("stt_app.controller.threading.Thread", _ImmediateThread)
+
+    controller._play_completion_beep()
+
+    assert tones == ["high"]
     controller.shutdown()
     _ = app
 

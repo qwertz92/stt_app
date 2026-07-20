@@ -13,6 +13,7 @@ from .config import (
     APP_LOGGER_NAME,
     APP_USER_MODEL_ID,
     DEFAULT_CANCEL_HOTKEY_ID,
+    DEFAULT_REPASTE_HOTKEY_ID,
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
 )
 from .history_dialog import HistoryDialog
@@ -103,6 +104,7 @@ def run() -> int:
     show_overlay_hotkey_manager = HotkeyManager(
         hotkey_id=DEFAULT_SHOW_OVERLAY_HOTKEY_ID
     )
+    repaste_hotkey_manager = HotkeyManager(hotkey_id=DEFAULT_REPASTE_HOTKEY_ID)
     text_inserter = TextInserter()
 
     controller = DictationController(
@@ -116,6 +118,7 @@ def run() -> int:
         history_store=history_store,
         last_recording_store=last_recording_store,
         show_overlay_hotkey_manager=show_overlay_hotkey_manager,
+        repaste_hotkey_manager=repaste_hotkey_manager,
     )
 
     event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)
@@ -127,9 +130,14 @@ def run() -> int:
         show_overlay_hotkey_manager,
         controller.bring_overlay_to_front,
     )
+    repaste_event_filter = QtHotkeyEventFilter(
+        repaste_hotkey_manager,
+        controller.repaste_last_transcript,
+    )
     app.installNativeEventFilter(event_filter)
     app.installNativeEventFilter(cancel_event_filter)
     app.installNativeEventFilter(show_overlay_event_filter)
+    app.installNativeEventFilter(repaste_event_filter)
     power_resume_timer = QtCore.QTimer(app)
     power_resume_timer.setSingleShot(True)
     power_resume_timer.setInterval(750)
@@ -199,6 +207,7 @@ def run() -> int:
         "event_filter": event_filter,
         "cancel_event_filter": cancel_event_filter,
         "show_overlay_event_filter": show_overlay_event_filter,
+        "repaste_event_filter": repaste_event_filter,
         "power_resume_filter": power_resume_filter,
         "power_resume_timer": power_resume_timer,
         "tray_icon": tray_icon,
@@ -239,6 +248,7 @@ def _create_tray_icon(
     cancel_action = menu.addAction("Cancel current action")
 
     copy_last_action = menu.addAction("Copy last transcript")
+    repaste_action = menu.addAction("Insert last transcript again")
     copy_diag_action = menu.addAction("Copy diagnostics")
     check_updates_action = menu.addAction("Check for updates")
 
@@ -309,6 +319,7 @@ def _create_tray_icon(
     retry_action.triggered.connect(controller.retry_last_transcription)
     cancel_action.triggered.connect(controller.cancel_current_action)
     copy_last_action.triggered.connect(copy_last_transcript)
+    repaste_action.triggered.connect(controller.repaste_last_transcript)
     copy_diag_action.triggered.connect(copy_diagnostics)
 
     def check_for_updates_from_tray() -> None:
@@ -325,6 +336,11 @@ def _create_tray_icon(
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
             open_settings_dialog()
+            return
+        if reason == QtWidgets.QSystemTrayIcon.MiddleClick and bool(
+            getattr(controller.settings, "tray_middle_click_toggle", True)
+        ):
+            controller.toggle_recording()
 
     tray_icon.activated.connect(on_tray_activated)
     tray_icon.setContextMenu(menu)

@@ -4,6 +4,7 @@ from stt_app.config import (
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     DEFAULT_CANCEL_HOTKEY,
+    DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ENGINE,
     DEFAULT_DISPLAY_TIMEZONE,
@@ -39,7 +40,11 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.schema_version == CURRENT_SCHEMA_VERSION
     assert settings.hotkey == DEFAULT_HOTKEY
     assert settings.cancel_hotkey == DEFAULT_CANCEL_HOTKEY
-    assert settings.show_overlay_hotkey == ""
+    assert settings.show_overlay_hotkey == DEFAULT_SHOW_OVERLAY_HOTKEY
+    assert settings.repaste_hotkey == ""
+    assert settings.completion_beep_enabled is False
+    assert settings.completion_beep_tone == "chime"
+    assert settings.tray_middle_click_toggle is True
     assert settings.model_size == DEFAULT_MODEL_SIZE
     assert settings.language_mode == DEFAULT_LANGUAGE_MODE
     assert settings.vad_enabled is False
@@ -415,25 +420,109 @@ def test_invalid_cancel_hotkey_falls_back_to_cancel_default(tmp_path):
 def test_show_overlay_hotkey_roundtrip(tmp_path):
     settings_path = tmp_path / "settings.json"
     store = SettingsStore(settings_path)
-    store.save(AppSettings(show_overlay_hotkey="Ctrl+Alt+F11"))
+    store.save(AppSettings(show_overlay_hotkey="Ctrl+Alt+F10"))
 
     settings = SettingsStore(settings_path).load()
 
-    assert settings.show_overlay_hotkey == "Ctrl+Alt+F11"
+    assert settings.show_overlay_hotkey == "Ctrl+Alt+F10"
 
 
-def test_invalid_show_overlay_hotkey_falls_back_to_disabled(tmp_path):
+def test_invalid_show_overlay_hotkey_falls_back_to_default(tmp_path):
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
-        json.dumps({"show_overlay_hotkey": "TotallyInvalid"}),
+        json.dumps(
+            {
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "show_overlay_hotkey": "TotallyInvalid",
+            }
+        ),
         encoding="utf-8",
     )
 
     settings = SettingsStore(settings_path).load()
 
-    # The optional hotkey has no key-combo default: invalid and empty values
-    # both mean "disabled".
+    assert settings.show_overlay_hotkey == DEFAULT_SHOW_OVERLAY_HOTKEY
+
+
+def test_cleared_show_overlay_hotkey_stays_disabled(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps(
+            {
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "show_overlay_hotkey": "",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    # An empty value at the current schema is a deliberate disable and must
+    # not be re-defaulted to a key combo.
     assert settings.show_overlay_hotkey == ""
+
+
+def test_legacy_empty_show_overlay_hotkey_migrates_to_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"schema_version": 20, "show_overlay_hotkey": ""}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    # Schema 20 briefly stored "" for "never configured"; it upgrades to the
+    # new on-by-default combo.
+    assert settings.show_overlay_hotkey == DEFAULT_SHOW_OVERLAY_HOTKEY
+
+
+def test_repaste_hotkey_roundtrip_and_invalid_stays_disabled(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+    store.save(AppSettings(repaste_hotkey="Ctrl+Alt+F9"))
+    assert SettingsStore(settings_path).load().repaste_hotkey == "Ctrl+Alt+F9"
+
+    settings_path.write_text(
+        json.dumps(
+            {
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "repaste_hotkey": "TotallyInvalid",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # The re-paste hotkey has no default combo: invalid values disable it.
+    assert SettingsStore(settings_path).load().repaste_hotkey == ""
+
+
+def test_completion_beep_and_tray_middle_click_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+    store.save(
+        AppSettings(
+            completion_beep_enabled=True,
+            completion_beep_tone="high",
+            tray_middle_click_toggle=False,
+        )
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.completion_beep_enabled is True
+    assert settings.completion_beep_tone == "high"
+    assert settings.tray_middle_click_toggle is False
+
+
+def test_invalid_completion_beep_tone_falls_back_to_default(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"completion_beep_tone": "airhorn"}),
+        encoding="utf-8",
+    )
+
+    assert SettingsStore(settings_path).load().completion_beep_tone == "chime"
 
 
 def test_keep_transcript_in_clipboard_flag_roundtrip(tmp_path):

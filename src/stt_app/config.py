@@ -14,7 +14,7 @@ APP_LOGGER_NAME = "stt_app"
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
-SCHEMA_VERSION = 20
+SCHEMA_VERSION = 21
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -23,11 +23,16 @@ FALLBACK_HOTKEY = "Ctrl+Win+LShift"
 DEFAULT_HOTKEY_ID = 1
 DEFAULT_CANCEL_HOTKEY = "Ctrl+Alt+F12"
 DEFAULT_CANCEL_HOTKEY_ID = 2
-# Optional hotkey that only brings the overlay to the front (same action as
-# the tray's "Show overlay"). Empty string = disabled; no global key is
-# registered by default so a fresh install cannot shadow another app's combo.
-DEFAULT_SHOW_OVERLAY_HOTKEY = ""
+# Hotkey that only brings the overlay to the front (same action as the tray's
+# "Show overlay"). Preset for an out-of-the-box experience but optional:
+# clearing the field stores an empty string, which disables the hotkey.
+DEFAULT_SHOW_OVERLAY_HOTKEY = "Ctrl+Alt+F11"
 DEFAULT_SHOW_OVERLAY_HOTKEY_ID = 3
+# Optional hotkey that pastes the last transcript again into the currently
+# focused window. Empty string = disabled; no default combo is preset because
+# an accidental global paste shortcut is riskier than an overlay reveal.
+DEFAULT_REPASTE_HOTKEY = ""
+DEFAULT_REPASTE_HOTKEY_ID = 4
 
 DEFAULT_MODEL_SIZE = "small"
 DEFAULT_LANGUAGE_MODE = "auto"
@@ -94,6 +99,13 @@ DEFAULT_OFFLINE_MODE = False
 DEFAULT_KEEP_ONNX_MODEL_LOADED = False
 DEFAULT_START_BEEP_ENABLED = False
 DEFAULT_START_BEEP_TONE = "soft"
+# Completion tone after a successful transcript insertion (batch, queued
+# background, and re-paste inserts; streaming appends stay silent). Shares the
+# start-tone choices; a different default tone keeps start/end distinguishable.
+DEFAULT_COMPLETION_BEEP_ENABLED = False
+DEFAULT_COMPLETION_BEEP_TONE = "chime"
+# Middle-clicking the tray icon toggles dictation (same as the hotkey).
+DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE = True
 DEFAULT_OVERLAY_ALWAYS_ON_TOP = True
 VALID_START_BEEP_TONES = ("soft", "high", "chime", "system")
 # User-defined technical terms/names to bias transcription toward. Applies to

@@ -50,6 +50,15 @@ def _position_in_dialog(
     return widget.mapTo(dialog, point)
 
 
+def _switch_to_tab(dialog: SettingsDialog, title: str) -> None:
+    tabs = dialog.tabs
+    for index in range(tabs.count()):
+        if tabs.tabText(index) == title:
+            tabs.setCurrentIndex(index)
+            return
+    raise AssertionError(f"tab not found: {title}")
+
+
 def test_vocabulary_hint_explains_parsing_and_model_support(
     dialog: SettingsDialog,
 ) -> None:
@@ -101,6 +110,7 @@ def test_field_hints_are_closer_to_their_control_than_the_next_field(
     app = QtWidgets.QApplication.instance()
     assert app is not None
     dialog.show()
+    _switch_to_tab(dialog, "Audio && Recording")
     app.processEvents()
 
     control = dialog.keep_microphone_warm_checkbox
@@ -237,6 +247,43 @@ def test_owned_delayed_callback_is_cancelled_with_its_dialog() -> None:
     assert calls == []
 
 
+def test_audio_and_recording_tab_hosts_capture_settings(
+    dialog: SettingsDialog,
+) -> None:
+    """The capture setup moved off General into its own tab.
+
+    General keeps what changes during daily dictation (hotkeys, display,
+    engine/model, insertion); microphone, VAD, tones, and recordings live on
+    the Audio & Recording tab directly after General.
+    """
+    titles = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
+    assert titles[:3] == ["General", "Audio && Recording", "Local"]
+
+    general_tab = dialog.tabs.widget(0)
+    audio_tab = dialog.tabs.widget(1)
+    for widget in (
+        dialog.microphone_combo,
+        dialog.vad_checkbox,
+        dialog.silence_gate_checkbox,
+        dialog.start_beep_tone_combo,
+        dialog.completion_beep_checkbox,
+        dialog.completion_beep_tone_combo,
+        dialog.recordings_dir_edit,
+        dialog.recordings_max_spin,
+    ):
+        assert audio_tab.isAncestorOf(widget)
+        assert not general_tab.isAncestorOf(widget)
+    for widget in (
+        dialog.hotkey_edit,
+        dialog.show_overlay_hotkey_edit,
+        dialog.repaste_hotkey_edit,
+        dialog.tray_middle_click_checkbox,
+        dialog.engine_combo,
+        dialog.paste_mode_combo,
+    ):
+        assert general_tab.isAncestorOf(widget)
+
+
 def test_microphone_picker_lists_devices_and_keeps_missing_selection(
     dialog: SettingsDialog,
     monkeypatch,
@@ -275,6 +322,7 @@ def test_inline_field_buttons_match_their_field_height(
     app = QtWidgets.QApplication.instance()
     assert app is not None
     dialog.show()
+    _switch_to_tab(dialog, "Audio && Recording")
     dialog.benchmark_window.show()
     app.processEvents()
 

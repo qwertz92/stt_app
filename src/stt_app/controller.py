@@ -32,6 +32,7 @@ from .config import (
     DEFAULT_INSERT_TARGET,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     INSERT_TARGET_CURRENT_WINDOW,
+    DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
     FALLBACK_HOTKEY,
@@ -194,12 +195,14 @@ class DictationController(QtCore.QObject):
         history_store: TranscriptHistoryStore | None = None,
         last_recording_store: LastRecordingStore | None = None,
         show_overlay_hotkey_manager: HotkeyManager | None = None,
+        repaste_hotkey_manager: HotkeyManager | None = None,
     ) -> None:
         super().__init__()
         self._settings_store = settings_store
         self._hotkey_manager = hotkey_manager
         self._cancel_hotkey_manager = cancel_hotkey_manager
         self._show_overlay_hotkey_manager = show_overlay_hotkey_manager
+        self._repaste_hotkey_manager = repaste_hotkey_manager
         self._overlay = overlay
         self._text_inserter = text_inserter
         self._logger = logger
@@ -245,6 +248,8 @@ class DictationController(QtCore.QObject):
         self._cancel_hotkey_notice: str | None = None
         self._show_overlay_hotkey_registration_ok = False
         self._show_overlay_hotkey_notice: str | None = None
+        self._repaste_hotkey_registration_ok = False
+        self._repaste_hotkey_notice: str | None = None
         self._target_window_handle: int | None = None
         self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
@@ -343,6 +348,11 @@ class DictationController(QtCore.QObject):
                 self._show_overlay_hotkey_manager.unregister()
             except Exception:
                 self._logger.exception("Failed to unregister show-overlay hotkey")
+        if self._repaste_hotkey_manager is not None:
+            try:
+                self._repaste_hotkey_manager.unregister()
+            except Exception:
+                self._logger.exception("Failed to unregister re-paste hotkey")
         self._focus_poll_timer.stop()
         self._cancel_audio_callback_watchdog()
         self._audio_device_change_timer.stop()
@@ -443,6 +453,7 @@ class DictationController(QtCore.QObject):
             self._show_overlay_hotkey_registration_ok = (
                 self._register_show_overlay_hotkey()
             )
+            self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
         else:
             self._hotkey_registration_ok = True
             self._hotkey_notice = None
@@ -450,6 +461,8 @@ class DictationController(QtCore.QObject):
             self._cancel_hotkey_notice = None
             self._show_overlay_hotkey_registration_ok = True
             self._show_overlay_hotkey_notice = None
+            self._repaste_hotkey_registration_ok = True
+            self._repaste_hotkey_notice = None
 
     def on_settings_changed(self) -> None:
         """Reload settings after user applies changes in the settings dialog.
@@ -495,6 +508,13 @@ class DictationController(QtCore.QObject):
                 or "Show-overlay hotkey registration failed.",
             )
             return
+        if not self._repaste_hotkey_registration_ok:
+            self._overlay.set_state(
+                "Error",
+                self._repaste_hotkey_notice
+                or "Re-paste hotkey registration failed.",
+            )
+            return
 
         detail = f"Hotkey: {self._settings.hotkey}"
         if self._hotkey_notice:
@@ -510,6 +530,11 @@ class DictationController(QtCore.QObject):
             detail = f"{detail} | Overlay: {show_overlay_hotkey}"
             if self._show_overlay_hotkey_notice:
                 detail = f"{detail} ({self._show_overlay_hotkey_notice})"
+        repaste_hotkey = str(getattr(self._settings, "repaste_hotkey", "") or "")
+        if repaste_hotkey:
+            detail = f"{detail} | Re-paste: {repaste_hotkey}"
+            if self._repaste_hotkey_notice:
+                detail = f"{detail} ({self._repaste_hotkey_notice})"
         self._overlay.set_state("Idle", detail)
 
     @QtCore.Slot()
@@ -1257,6 +1282,43 @@ class DictationController(QtCore.QObject):
         )
         if tone not in VALID_START_BEEP_TONES:
             tone = DEFAULT_START_BEEP_TONE
+        # Deliberately synchronous: the recording-start path plays the tone
+        # before opening the capture so the microphone cannot record it.
+        self._play_tone(tone)
+
+    def _play_completion_beep(self) -> None:
+        """Play the completion tone after a successful transcript insertion.
+
+        Runs on a short-lived worker thread because winsound.Beep is
+        synchronous and there is no capture to keep the tone away from —
+        blocking the Qt thread for 50-150 ms after every insert would be pure
+        latency.
+        """
+        if not getattr(self._settings, "completion_beep_enabled", False):
+            return
+        tone = (
+            str(
+                getattr(
+                    self._settings,
+                    "completion_beep_tone",
+                    DEFAULT_COMPLETION_BEEP_TONE,
+                )
+                or DEFAULT_COMPLETION_BEEP_TONE
+            )
+            .strip()
+            .lower()
+        )
+        if tone not in VALID_START_BEEP_TONES:
+            tone = DEFAULT_COMPLETION_BEEP_TONE
+        threading.Thread(
+            target=self._play_tone,
+            args=(tone,),
+            name="stt_app_completion_beep",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _play_tone(tone: str) -> None:
         try:
             import winsound  # type: ignore
         except ImportError:
@@ -2834,6 +2896,7 @@ class DictationController(QtCore.QObject):
                 return
 
             self._overlay.set_state("Done", text)
+            self._play_completion_beep()
 
         # Bring the (possibly floating/hidden) overlay forward so the finished
         # transcript is actually visible for a quick confirmation.
@@ -2997,6 +3060,8 @@ class DictationController(QtCore.QObject):
                 job.engine,
                 job.model,
             )
+        else:
+            self._play_completion_beep()
         return inserted
 
     def _flush_deferred_background_results(
@@ -3531,6 +3596,42 @@ class DictationController(QtCore.QObject):
             return False
         QtGui.QGuiApplication.clipboard().setText(self._last_transcript)
         return True
+
+    def repaste_last_transcript(self) -> None:
+        """Insert the last transcript again into the currently focused window.
+
+        Tray action and optional global hotkey. Uses the normal insertion
+        path (paste-mode and clipboard semantics from settings, modifier
+        release wait in the inserter), but targets the current focus instead
+        of a recording snapshot. Blocked while a recording is active so the
+        paste cannot interfere with a capture or live streaming inserts.
+        """
+        text = self._last_transcript
+        if not text.strip():
+            self.show_overlay_error("No transcript available to insert yet.")
+            return
+        if (
+            self._recording_start_in_progress
+            or self._recording_stop_in_progress
+            or self._audio_capture is not None
+            or self._streaming_recording
+        ):
+            self.show_overlay_error(
+                "Finish the current recording before inserting the last "
+                "transcript again."
+            )
+            return
+        if self._insert_text_at_target(
+            text,
+            restore_focus=False,
+            target_handle=None,
+            target_signature=None,
+        ):
+            self._overlay.set_state("Done", text)
+            self._reveal_overlay_result(is_error=False)
+            self._play_completion_beep()
+        else:
+            self._reveal_overlay_result(is_error=True)
 
     def show_overlay_error(self, message: str) -> None:
         """Surface a transient error on the overlay without exposing the
@@ -4067,6 +4168,44 @@ class DictationController(QtCore.QObject):
             )
             return False
 
+    def _register_repaste_hotkey(self) -> bool:
+        manager = self._repaste_hotkey_manager
+        if manager is None:
+            self._repaste_hotkey_notice = None
+            return True
+
+        repaste_hotkey = (
+            str(getattr(self._settings, "repaste_hotkey", "") or "")
+        ).strip()
+        if not repaste_hotkey:
+            self._repaste_hotkey_notice = None
+            try:
+                manager.unregister()
+                return True
+            except HotkeyRegistrationError:
+                self._logger.exception(
+                    "Failed to unregister disabled re-paste hotkey"
+                )
+                self._repaste_hotkey_notice = (
+                    "The disabled re-paste hotkey could not be unregistered. "
+                    "Restart the app before reusing that key combination."
+                )
+                return False
+
+        try:
+            manager.register(repaste_hotkey)
+            self._repaste_hotkey_notice = None
+            return True
+        except (HotkeyRegistrationError, ValueError):
+            self._logger.exception(
+                "Failed to register re-paste hotkey: %s", repaste_hotkey
+            )
+            self._repaste_hotkey_notice = (
+                f"Re-paste hotkey registration failed ({repaste_hotkey}). "
+                "Use another key combo or clear it in Settings."
+            )
+            return False
+
     def _register_show_overlay_hotkey(self) -> bool:
         manager = self._show_overlay_hotkey_manager
         if manager is None:
@@ -4110,9 +4249,11 @@ class DictationController(QtCore.QObject):
         self._show_overlay_hotkey_registration_ok = (
             self._register_show_overlay_hotkey()
         )
+        self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
         if not (
             self._hotkey_registration_ok
             and self._cancel_hotkey_registration_ok
             and self._show_overlay_hotkey_registration_ok
+            and self._repaste_hotkey_registration_ok
         ):
             self._logger.warning("Global hotkey refresh did not fully succeed.")

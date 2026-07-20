@@ -59,12 +59,17 @@ class FakeController:
         self.resume_calls = 0
         self.bring_overlay_calls = 0
         self.audio_device_refresh_calls = 0
+        self.repaste_calls = 0
+        self.settings = AppSettings()
 
     def toggle_recording(self):
         self.toggle_calls += 1
 
     def bring_overlay_to_front(self):
         self.bring_overlay_calls += 1
+
+    def repaste_last_transcript(self):
+        self.repaste_calls += 1
 
     def reload_settings(self, re_register_hotkey=True):
         pass
@@ -384,6 +389,31 @@ def test_tray_double_click_connected():
     # The activated signal should have at least one receiver connected.
     sig = QtCore.SIGNAL("activated(QSystemTrayIcon::ActivationReason)")
     assert tray.receivers(sig) > 0
+
+
+def test_tray_middle_click_toggles_dictation_respecting_setting():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = FakeController()
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.MiddleClick)
+    assert controller.toggle_calls == 1
+
+    # The Display-tab checkbox takes effect without restart: the guard reads
+    # live controller settings on every activation.
+    controller.settings = AppSettings(tray_middle_click_toggle=False)
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.MiddleClick)
+    assert controller.toggle_calls == 1
+    _ = tray
 
 
 def test_tray_double_click_presents_settings_dialog(monkeypatch):

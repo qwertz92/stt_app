@@ -41,10 +41,14 @@ from .config import (
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_DIR,
     DEFAULT_RECORDINGS_MAX_COUNT,
+    DEFAULT_COMPLETION_BEEP_ENABLED,
+    DEFAULT_COMPLETION_BEEP_TONE,
+    DEFAULT_REPASTE_HOTKEY,
     DEFAULT_SAVE_ALL_RECORDINGS,
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_START_BEEP_ENABLED,
+    DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE,
     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
@@ -95,6 +99,7 @@ DEFAULTS = {
     "hotkey": DEFAULT_HOTKEY,
     "cancel_hotkey": DEFAULT_CANCEL_HOTKEY,
     "show_overlay_hotkey": DEFAULT_SHOW_OVERLAY_HOTKEY,
+    "repaste_hotkey": DEFAULT_REPASTE_HOTKEY,
     "model_size": DEFAULT_MODEL_SIZE,
     "language_mode": DEFAULT_LANGUAGE_MODE,
     "custom_vocabulary": DEFAULT_CUSTOM_VOCABULARY,
@@ -125,6 +130,9 @@ DEFAULTS = {
     "keep_onnx_model_loaded": DEFAULT_KEEP_ONNX_MODEL_LOADED,
     "start_beep_enabled": DEFAULT_START_BEEP_ENABLED,
     "start_beep_tone": DEFAULT_START_BEEP_TONE,
+    "completion_beep_enabled": DEFAULT_COMPLETION_BEEP_ENABLED,
+    "completion_beep_tone": DEFAULT_COMPLETION_BEEP_TONE,
+    "tray_middle_click_toggle": DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE,
     "overlay_corner": DEFAULT_OVERLAY_CORNER,
     "model_dir": DEFAULT_MODEL_DIR,
     "has_openai_key": False,
@@ -158,6 +166,7 @@ class AppSettings:
     hotkey: str = DEFAULT_HOTKEY
     cancel_hotkey: str = DEFAULT_CANCEL_HOTKEY
     show_overlay_hotkey: str = DEFAULT_SHOW_OVERLAY_HOTKEY
+    repaste_hotkey: str = DEFAULT_REPASTE_HOTKEY
     model_size: str = DEFAULT_MODEL_SIZE
     language_mode: str = DEFAULT_LANGUAGE_MODE
     custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY
@@ -188,6 +197,9 @@ class AppSettings:
     keep_onnx_model_loaded: bool = DEFAULT_KEEP_ONNX_MODEL_LOADED
     start_beep_enabled: bool = DEFAULT_START_BEEP_ENABLED
     start_beep_tone: str = DEFAULT_START_BEEP_TONE
+    completion_beep_enabled: bool = DEFAULT_COMPLETION_BEEP_ENABLED
+    completion_beep_tone: str = DEFAULT_COMPLETION_BEEP_TONE
+    tray_middle_click_toggle: bool = DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE
     overlay_corner: str = DEFAULT_OVERLAY_CORNER
     model_dir: str = DEFAULT_MODEL_DIR
     has_openai_key: bool = False
@@ -276,13 +288,20 @@ class AppSettings:
         cancel_hotkey = _normalize_hotkey(
             cancel_hotkey, default=DEFAULT_CANCEL_HOTKEY
         )
-        # Optional: the empty default means "disabled", so empty and invalid
-        # values both normalize back to disabled instead of a key combo.
-        show_overlay_hotkey = str(
-            merged.get("show_overlay_hotkey", DEFAULT_SHOW_OVERLAY_HOTKEY)
+        # Optional hotkeys: an empty stored value is a deliberate "disabled"
+        # and must stay empty; only invalid non-empty values fall back to the
+        # respective default.
+        show_overlay_hotkey = _normalize_optional_hotkey(
+            str(merged.get("show_overlay_hotkey", DEFAULT_SHOW_OVERLAY_HOTKEY)),
+            default=DEFAULT_SHOW_OVERLAY_HOTKEY,
         )
-        show_overlay_hotkey = _normalize_hotkey(
-            show_overlay_hotkey, default=DEFAULT_SHOW_OVERLAY_HOTKEY
+        if raw_schema_version < 21 and not show_overlay_hotkey:
+            # Schema 20 briefly stored "" for "never configured"; the hotkey
+            # now defaults on, so only schema >= 21 empties mean "disabled".
+            show_overlay_hotkey = DEFAULT_SHOW_OVERLAY_HOTKEY
+        repaste_hotkey = _normalize_optional_hotkey(
+            str(merged.get("repaste_hotkey", DEFAULT_REPASTE_HOTKEY)),
+            default=DEFAULT_REPASTE_HOTKEY,
         )
 
         groq_model = str(merged.get("groq_model", DEFAULT_GROQ_MODEL))
@@ -322,6 +341,11 @@ class AppSettings:
         ).strip().lower()
         if start_beep_tone not in VALID_START_BEEP_TONES:
             start_beep_tone = DEFAULT_START_BEEP_TONE
+        completion_beep_tone = str(
+            merged.get("completion_beep_tone", DEFAULT_COMPLETION_BEEP_TONE)
+        ).strip().lower()
+        if completion_beep_tone not in VALID_START_BEEP_TONES:
+            completion_beep_tone = DEFAULT_COMPLETION_BEEP_TONE
         overlay_corner = str(
             merged.get("overlay_corner", DEFAULT_OVERLAY_CORNER)
         ).strip().lower()
@@ -383,6 +407,7 @@ class AppSettings:
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
             show_overlay_hotkey=show_overlay_hotkey,
+            repaste_hotkey=repaste_hotkey,
             model_size=model_size,
             language_mode=language_mode,
             custom_vocabulary=str(
@@ -479,6 +504,18 @@ class AppSettings:
                 default=DEFAULT_START_BEEP_ENABLED,
             ),
             start_beep_tone=start_beep_tone,
+            completion_beep_enabled=parse_json_bool(
+                merged.get("completion_beep_enabled"),
+                default=DEFAULT_COMPLETION_BEEP_ENABLED,
+            ),
+            completion_beep_tone=completion_beep_tone,
+            tray_middle_click_toggle=parse_json_bool(
+                merged.get(
+                    "tray_middle_click_toggle",
+                    DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE,
+                ),
+                default=DEFAULT_TRAY_MIDDLE_CLICK_TOGGLE,
+            ),
             overlay_corner=overlay_corner,
             model_dir=str(merged.get("model_dir", DEFAULT_MODEL_DIR)).strip(),
             has_openai_key=parse_json_bool(merged.get("has_openai_key")),
@@ -565,6 +602,22 @@ def _normalize_hotkey(value: str, *, default: str) -> str:
     hotkey = (value or "").strip()
     if not hotkey:
         return default
+    try:
+        parse_hotkey(hotkey)
+    except ValueError:
+        return default
+    return hotkey
+
+
+def _normalize_optional_hotkey(value: str, *, default: str) -> str:
+    """Normalize a hotkey whose empty value means "deliberately disabled".
+
+    Unlike ``_normalize_hotkey``, an empty value stays empty; only an invalid
+    non-empty value falls back to the default combo.
+    """
+    hotkey = (value or "").strip()
+    if not hotkey:
+        return ""
     try:
         parse_hotkey(hotkey)
     except ValueError:
