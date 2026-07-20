@@ -32,6 +32,35 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **Run Benchmark window opens larger.** 820x720 -> 860x880, bounded to the
   available screen at build time, so expanding "Show Run Options" no longer
   squeezes the installed-models list until the window is resized manually.
+- **General tab split: new Audio & Recording tab.** The General tab had grown
+  to six group boxes (~25 rows). The set-and-forget capture setup ("Audio &&
+  Voice Detection" and "Recordings") moved to a dedicated tab directly after
+  General (`settings_dialog_audio.py` mixin); General keeps Hotkeys, Display,
+  Engine && Mode, and Text Insertion. Widget attribute names are unchanged so
+  persistence, controller wiring, and the test seams kept working; the shared
+  form label column now spans both tabs and is applied by `_build_audio_tab`.
+- **Overlay hotkey now ships preset (schema 21).** `show_overlay_hotkey`
+  defaults to Ctrl+Alt+F11 for an out-of-the-box experience but stays
+  clearable: the new `_normalize_optional_hotkey` keeps a stored "" as a
+  deliberate disable (only invalid non-empty values fall back to the
+  default), and a schema<21 empty value migrates to the default once because
+  schema 20 briefly used "" for "never configured".
+- **Re-paste last transcript.** `controller.repaste_last_transcript` inserts
+  the last transcript into the currently focused window via the normal
+  insertion path; reachable from the tray ("Insert last transcript again")
+  and an optional `repaste_hotkey` (default empty — a global paste combo is
+  riskier than an overlay reveal). Blocked while a recording/stream is
+  active; no new history entry.
+- **Completion tone.** `completion_beep_enabled`/`completion_beep_tone`
+  (default off/chime, shares the start-tone table) plays after successful
+  foreground-batch, queued-background, and re-paste inserts on a worker
+  thread; streaming appends and history-only delivery stay silent. The
+  recording-start beep remains synchronous on purpose (keeps the tone out of
+  the microphone).
+- **Tray middle-click toggles dictation.** `tray_middle_click_toggle`
+  (default on, Display group) makes a middle-click on the tray icon act like
+  the recording hotkey; the guard reads live controller settings so the
+  checkbox applies without restart.
 
 ## 2026-07-18
 

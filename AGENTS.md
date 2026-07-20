@@ -84,7 +84,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
-| `settings_dialog_general.py` | General tab: engine/model/language/mode selection mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
+| `settings_dialog_general.py` | General tab: hotkeys, display, engine/model/language/mode selection, and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
+| `settings_dialog_audio.py` | Audio & Recording tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the General tab) |
 | `settings_dialog_local.py` | Local tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the General tab) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
 | `settings_dialog_remote.py` | Remote tab: provider API keys and connection-test mixin |
@@ -122,7 +123,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 - **Settings dialog is a mixin facade**: `settings_dialog.py` composes
   `SettingsDialog` from per-tab mixins in `settings_dialog_*.py`
-  (`_GeneralTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,
+  (`_GeneralTabMixin`, `_AudioTabMixin`, `_LocalModelsMixin`, `_BenchmarkMixin`,
   `_RemoteProvidersMixin`, `_HistoryTabMixin`, `_ImportTabMixin`,
   `_PersistenceMixin`) plus shared code in `settings_dialog_helpers.py`. Rules to
   keep intact: Qt `Signal`s stay on the `QObject`-derived `SettingsDialog`
@@ -138,6 +139,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   local/benchmark mixins so the patch target still resolves after the split. The
   accessor imports the facade lazily (not at module scope) so a mixin can be
   imported directly without an import cycle.
+- **General tab hosts daily-use settings; capture setup lives on Audio &&
+  Recording**: the General tab kept growing until it needed its own scroll
+  marathon, so the set-and-forget capture groups ("Audio && Voice Detection"
+  and "Recordings") moved to a dedicated Audio && Recording tab directly
+  after General (`settings_dialog_audio.py`). General keeps Hotkeys, Display,
+  Engine && Mode, and Text Insertion — what actually changes during daily
+  dictation. Widget attribute names are unchanged, so persistence and the
+  controller are unaffected; `_build_audio_tab` must run after
+  `_build_general_tab` because it applies the shared label column across both
+  tabs.
 - **Model selection is unified on the General tab; Local tab is management-only**:
   "what do I use" (engine, model, language, mode) all live in the General tab's
   "Engine && Mode" group box. A single "Model" form row hosts a
@@ -231,7 +242,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `capture.start()` so a first callback delivered from inside that call reaches
   the active transcriber instead of being discarded.
 - **Microphone selection and audio device changes**: `input_device_name`
-  (General-tab picker; empty = system default) is resolved to a PortAudio index
+  (Audio && Recording-tab picker; empty = system default) is resolved to a PortAudio index
   only at stream open via `audio_devices.resolve_input_device`; a selected but
   missing microphone fails the recording with an actionable error — never
   silently record from another device. PortAudio freezes its device list at
@@ -312,8 +323,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   render it taller than its field or clipped at the bottom. Action rows keep
   explicit spacing rather than relying on platform defaults. Settings tab selection must
   not change tab font weight or measured tab width; use color/border changes for
-  the selected state. General-tab form sections share a measured label column so
-  fields align across group boxes. Pressing Save with no effective setting or
+  the selected state. General and Audio && Recording form sections share one
+  measured label column (applied by `_build_audio_tab` after both tabs exist)
+  so fields align across group boxes and when switching between the two tabs. Pressing Save with no effective setting or
   API-key changes must not emit `settings_changed`; otherwise the controller can
   reload or preload local models unnecessarily. The Benchmark tab hosts the
   *viewing* side directly (viewing results/history is frequent, running a
@@ -348,9 +360,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   shutdown calls `SettingsDialog.shutdown()` before controller shutdown so
   active model-download and benchmark child-process work is canceled and given
   a bounded cleanup window.
-- **General-tab field hints have explicit visual ownership**: a control and its
-  descriptive hint use `_field_with_hint` with a 2 px internal gap; General
-  forms use a 10 px row gap before the next setting. Changing model/language
+- **General/Audio-tab field hints have explicit visual ownership**: a control
+  and its descriptive hint use `_field_with_hint` with a 2 px internal gap;
+  these forms use a 10 px row gap before the next setting. Changing model/language
   notes reserve two fixed lines so engine switches never move later fields.
   Delayed paint/prewarm callbacks use dialog-owned `QTimer`s and must disappear
   with the dialog instead of invoking deleted Qt objects.
@@ -781,17 +793,43 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   "Show overlay" action (`controller.bring_overlay_to_front`) is the manual
   escape hatch. Reveals are best-effort (wrapped so a missing overlay method
   never breaks delivery).
-- **Show-overlay hotkey (optional, default off)**: `show_overlay_hotkey`
-  (schema 20, empty string = disabled) registers a third global hotkey
+- **Show-overlay hotkey (preset, clearable)**: `show_overlay_hotkey`
+  (default `Ctrl+Alt+F11`, schema 21) registers a third global hotkey
   (`DEFAULT_SHOW_OVERLAY_HOTKEY_ID`) whose only action is
   `controller.bring_overlay_to_front` — the same reveal as the tray "Show
   overlay" action, e.g. to check the last transcript on a floating overlay.
-  Empty must stay empty: saving never substitutes a default combo, and no
-  global key is registered by default so a fresh install cannot shadow other
-  apps. The Save flow validates the combo and rejects conflicts with the
-  recording and cancel hotkeys; registration mirrors the cancel hotkey
-  (disabled -> unregister, failure -> notice + Error idle state) and is
-  included in the resume-path `refresh_hotkey_registration`.
+  Optional hotkeys use `_normalize_optional_hotkey`: an empty stored value is
+  a deliberate disable and must stay empty (saving never substitutes the
+  default combo back); only invalid non-empty values fall back to the
+  default. Schema-20 files briefly stored "" for "never configured", so a
+  `< 21` empty value migrates to the default once. The Save flow validates
+  the combo and rejects conflicts with the recording and cancel hotkeys;
+  registration mirrors the cancel hotkey (disabled -> unregister, failure ->
+  notice + Error idle state) and is included in the resume-path
+  `refresh_hotkey_registration`.
+- **Re-paste last transcript**: `controller.repaste_last_transcript` pastes
+  `_last_transcript` into the currently focused window through the normal
+  `_insert_text_at_target` path (paste mode, clipboard semantics, modifier
+  release wait), reachable via the tray action "Insert last transcript
+  again" and the optional fourth global hotkey `repaste_hotkey` (default
+  empty — a global paste combo is riskier than an overlay reveal, so nothing
+  is preset). It is blocked while a recording/stream is active so a paste can
+  never interfere with a capture, and it never writes a new history entry.
+  Save-time validation rejects conflicts with the recording, cancel, and
+  overlay hotkeys.
+- **Completion tone (`completion_beep_enabled` + `completion_beep_tone`,
+  default off/chime)**: after a successful transcript insertion (foreground
+  batch, queued background insert, re-paste) the controller plays the
+  configured tone via the shared `_play_tone` table on a short-lived worker
+  thread (winsound is synchronous; only the recording-start beep stays
+  deliberately synchronous so the microphone cannot record it). Streaming
+  appends are many small pastes and stay silent by design. History-only
+  delivery and failed inserts never beep.
+- **Tray middle-click toggle (`tray_middle_click_toggle`, default on)**:
+  middle-clicking the tray icon calls `controller.toggle_recording`, exactly
+  like the recording hotkey; double-click keeps opening Settings. The guard
+  reads `controller.settings` at click time so the Display-tab checkbox takes
+  effect without restart.
 - **Windows taskbar identity**: `main._set_windows_app_user_model_id` sets an
   explicit `APP_USER_MODEL_ID` before the first window is created. Without it
   Windows groups our windows under the host process (python.exe) and shows its
