@@ -1693,6 +1693,110 @@ def test_register_cancel_hotkey_failure_sets_notice():
 
 
 # ---------------------------------------------------------------------------
+# Show-overlay hotkey registration
+# ---------------------------------------------------------------------------
+
+
+class _AcceptAllHotkeyManager(FakeHotkeyManager):
+    def __init__(self):
+        super().__init__()
+        self.unregister_calls = 0
+
+    def register(self, hotkey):
+        self.calls.append(hotkey)
+
+    def unregister(self):
+        self.unregister_calls += 1
+
+
+def test_register_show_overlay_hotkey_success_and_idle_detail():
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        show_overlay_hotkey="Ctrl+Alt+F11",
+    )
+    manager = _AcceptAllHotkeyManager()
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        show_overlay_hotkey_manager=manager,
+        overlay=overlay,
+    )
+
+    ok = controller._register_show_overlay_hotkey()
+
+    assert ok is True
+    assert manager.calls[-1] == "Ctrl+Alt+F11"
+
+    controller._hotkey_registration_ok = True
+    controller._cancel_hotkey_registration_ok = True
+    controller._show_overlay_hotkey_registration_ok = True
+    controller.show_idle_status()
+    state, detail = overlay.states[-1]
+    assert state == "Idle"
+    assert "Overlay: Ctrl+Alt+F11" in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_register_show_overlay_hotkey_failure_sets_notice():
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        show_overlay_hotkey="Ctrl+Shift+X",
+    )
+    manager = FakeHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        show_overlay_hotkey_manager=manager,
+    )
+
+    ok = controller._register_show_overlay_hotkey()
+
+    assert ok is False
+    assert "Show-overlay hotkey registration failed" in (
+        controller._show_overlay_hotkey_notice or ""
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_register_show_overlay_hotkey_disabled_unregisters():
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, show_overlay_hotkey="")
+    manager = _AcceptAllHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        show_overlay_hotkey_manager=manager,
+    )
+
+    ok = controller._register_show_overlay_hotkey()
+
+    assert ok is True
+    assert manager.calls == []
+    assert manager.unregister_calls >= 1
+    assert controller._show_overlay_hotkey_notice is None
+    controller.shutdown()
+    _ = app
+
+
+def test_refresh_hotkey_registration_includes_show_overlay():
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        show_overlay_hotkey="Ctrl+Alt+F11",
+    )
+    manager = _AcceptAllHotkeyManager()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        show_overlay_hotkey_manager=manager,
+    )
+
+    controller.refresh_hotkey_registration()
+
+    assert manager.calls[-1] == "Ctrl+Alt+F11"
+    assert controller._show_overlay_hotkey_registration_ok is True
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
 # _on_stream_focus_poll early-return paths
 # ---------------------------------------------------------------------------
 

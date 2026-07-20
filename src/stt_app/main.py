@@ -13,6 +13,7 @@ from .config import (
     APP_LOGGER_NAME,
     APP_USER_MODEL_ID,
     DEFAULT_CANCEL_HOTKEY_ID,
+    DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
 )
 from .history_dialog import HistoryDialog
 from .controller import DictationController
@@ -99,6 +100,9 @@ def run() -> int:
 
     hotkey_manager = HotkeyManager()
     cancel_hotkey_manager = HotkeyManager(hotkey_id=DEFAULT_CANCEL_HOTKEY_ID)
+    show_overlay_hotkey_manager = HotkeyManager(
+        hotkey_id=DEFAULT_SHOW_OVERLAY_HOTKEY_ID
+    )
     text_inserter = TextInserter()
 
     controller = DictationController(
@@ -111,6 +115,7 @@ def run() -> int:
         secret_store=secret_store,
         history_store=history_store,
         last_recording_store=last_recording_store,
+        show_overlay_hotkey_manager=show_overlay_hotkey_manager,
     )
 
     event_filter = QtHotkeyEventFilter(hotkey_manager, controller.toggle_recording)
@@ -118,8 +123,13 @@ def run() -> int:
         cancel_hotkey_manager,
         controller.cancel_current_action,
     )
+    show_overlay_event_filter = QtHotkeyEventFilter(
+        show_overlay_hotkey_manager,
+        controller.bring_overlay_to_front,
+    )
     app.installNativeEventFilter(event_filter)
     app.installNativeEventFilter(cancel_event_filter)
+    app.installNativeEventFilter(show_overlay_event_filter)
     power_resume_timer = QtCore.QTimer(app)
     power_resume_timer.setSingleShot(True)
     power_resume_timer.setInterval(750)
@@ -188,6 +198,7 @@ def run() -> int:
         "overlay": overlay,
         "event_filter": event_filter,
         "cancel_event_filter": cancel_event_filter,
+        "show_overlay_event_filter": show_overlay_event_filter,
         "power_resume_filter": power_resume_filter,
         "power_resume_timer": power_resume_timer,
         "tray_icon": tray_icon,

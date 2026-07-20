@@ -14,7 +14,7 @@ APP_LOGGER_NAME = "stt_app"
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
-SCHEMA_VERSION = 19
+SCHEMA_VERSION = 20
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -23,6 +23,11 @@ FALLBACK_HOTKEY = "Ctrl+Win+LShift"
 DEFAULT_HOTKEY_ID = 1
 DEFAULT_CANCEL_HOTKEY = "Ctrl+Alt+F12"
 DEFAULT_CANCEL_HOTKEY_ID = 2
+# Optional hotkey that only brings the overlay to the front (same action as
+# the tray's "Show overlay"). Empty string = disabled; no global key is
+# registered by default so a fresh install cannot shadow another app's combo.
+DEFAULT_SHOW_OVERLAY_HOTKEY = ""
+DEFAULT_SHOW_OVERLAY_HOTKEY_ID = 3
 
 DEFAULT_MODEL_SIZE = "small"
 DEFAULT_LANGUAGE_MODE = "auto"

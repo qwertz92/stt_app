@@ -193,11 +193,13 @@ class DictationController(QtCore.QObject):
         secret_store=None,
         history_store: TranscriptHistoryStore | None = None,
         last_recording_store: LastRecordingStore | None = None,
+        show_overlay_hotkey_manager: HotkeyManager | None = None,
     ) -> None:
         super().__init__()
         self._settings_store = settings_store
         self._hotkey_manager = hotkey_manager
         self._cancel_hotkey_manager = cancel_hotkey_manager
+        self._show_overlay_hotkey_manager = show_overlay_hotkey_manager
         self._overlay = overlay
         self._text_inserter = text_inserter
         self._logger = logger
@@ -241,6 +243,8 @@ class DictationController(QtCore.QObject):
         self._hotkey_notice: str | None = None
         self._cancel_hotkey_registration_ok = False
         self._cancel_hotkey_notice: str | None = None
+        self._show_overlay_hotkey_registration_ok = False
+        self._show_overlay_hotkey_notice: str | None = None
         self._target_window_handle: int | None = None
         self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
@@ -334,6 +338,11 @@ class DictationController(QtCore.QObject):
                 self._cancel_hotkey_manager.unregister()
             except Exception:
                 self._logger.exception("Failed to unregister cancel hotkey")
+        if self._show_overlay_hotkey_manager is not None:
+            try:
+                self._show_overlay_hotkey_manager.unregister()
+            except Exception:
+                self._logger.exception("Failed to unregister show-overlay hotkey")
         self._focus_poll_timer.stop()
         self._cancel_audio_callback_watchdog()
         self._audio_device_change_timer.stop()
@@ -431,11 +440,16 @@ class DictationController(QtCore.QObject):
         if re_register_hotkey:
             self._hotkey_registration_ok = self._register_hotkey_with_fallback()
             self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
+            self._show_overlay_hotkey_registration_ok = (
+                self._register_show_overlay_hotkey()
+            )
         else:
             self._hotkey_registration_ok = True
             self._hotkey_notice = None
             self._cancel_hotkey_registration_ok = True
             self._cancel_hotkey_notice = None
+            self._show_overlay_hotkey_registration_ok = True
+            self._show_overlay_hotkey_notice = None
 
     def on_settings_changed(self) -> None:
         """Reload settings after user applies changes in the settings dialog.
@@ -474,6 +488,13 @@ class DictationController(QtCore.QObject):
                 self._cancel_hotkey_notice or "Cancel hotkey registration failed.",
             )
             return
+        if not self._show_overlay_hotkey_registration_ok:
+            self._overlay.set_state(
+                "Error",
+                self._show_overlay_hotkey_notice
+                or "Show-overlay hotkey registration failed.",
+            )
+            return
 
         detail = f"Hotkey: {self._settings.hotkey}"
         if self._hotkey_notice:
@@ -482,6 +503,13 @@ class DictationController(QtCore.QObject):
             detail = f"{detail} | Cancel: {self._settings.cancel_hotkey}"
             if self._cancel_hotkey_notice:
                 detail = f"{detail} ({self._cancel_hotkey_notice})"
+        show_overlay_hotkey = str(
+            getattr(self._settings, "show_overlay_hotkey", "") or ""
+        )
+        if show_overlay_hotkey:
+            detail = f"{detail} | Overlay: {show_overlay_hotkey}"
+            if self._show_overlay_hotkey_notice:
+                detail = f"{detail} ({self._show_overlay_hotkey_notice})"
         self._overlay.set_state("Idle", detail)
 
     @QtCore.Slot()
@@ -4039,9 +4067,52 @@ class DictationController(QtCore.QObject):
             )
             return False
 
+    def _register_show_overlay_hotkey(self) -> bool:
+        manager = self._show_overlay_hotkey_manager
+        if manager is None:
+            self._show_overlay_hotkey_notice = None
+            return True
+
+        show_overlay_hotkey = (self._settings.show_overlay_hotkey or "").strip()
+        if not show_overlay_hotkey:
+            self._show_overlay_hotkey_notice = None
+            try:
+                manager.unregister()
+                return True
+            except HotkeyRegistrationError:
+                self._logger.exception(
+                    "Failed to unregister disabled show-overlay hotkey"
+                )
+                self._show_overlay_hotkey_notice = (
+                    "The disabled show-overlay hotkey could not be unregistered. "
+                    "Restart the app before reusing that key combination."
+                )
+                return False
+
+        try:
+            manager.register(show_overlay_hotkey)
+            self._show_overlay_hotkey_notice = None
+            return True
+        except (HotkeyRegistrationError, ValueError):
+            self._logger.exception(
+                "Failed to register show-overlay hotkey: %s", show_overlay_hotkey
+            )
+            self._show_overlay_hotkey_notice = (
+                f"Show-overlay hotkey registration failed ({show_overlay_hotkey}). "
+                "Use another key combo or clear it in Settings."
+            )
+            return False
+
     def refresh_hotkey_registration(self) -> None:
         """Re-register global hotkeys after Windows resumes or opens Explorer."""
         self._hotkey_registration_ok = self._register_hotkey_with_fallback()
         self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
-        if not self._hotkey_registration_ok or not self._cancel_hotkey_registration_ok:
+        self._show_overlay_hotkey_registration_ok = (
+            self._register_show_overlay_hotkey()
+        )
+        if not (
+            self._hotkey_registration_ok
+            and self._cancel_hotkey_registration_ok
+            and self._show_overlay_hotkey_registration_ok
+        ):
             self._logger.warning("Global hotkey refresh did not fully succeed.")

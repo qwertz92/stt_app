@@ -121,6 +121,24 @@ class _GeneralTabMixin:
             "Cancel Hotkey",
             self._field_with_hint(self.cancel_hotkey_edit, cancel_hotkey_hint),
         )
+
+        self.show_overlay_hotkey_edit = QtWidgets.QKeySequenceEdit()
+        self.show_overlay_hotkey_edit.setMaximumSequenceLength(1)
+        if hasattr(self.show_overlay_hotkey_edit, "setClearButtonEnabled"):
+            self.show_overlay_hotkey_edit.setClearButtonEnabled(True)
+        show_overlay_hotkey_hint = QtWidgets.QLabel(
+            "Optional: brings the overlay to the front to check the last "
+            "transcript, like the tray's Show overlay. Leave empty to disable."
+        )
+        show_overlay_hotkey_hint.setWordWrap(True)
+        self._style_field_hint_label(show_overlay_hotkey_hint)
+        hotkey_form.addRow(
+            "Overlay Hotkey",
+            self._field_with_hint(
+                self.show_overlay_hotkey_edit,
+                show_overlay_hotkey_hint,
+            ),
+        )
         layout.addWidget(hotkey_box)
 
         # --- Display section ---

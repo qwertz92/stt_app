@@ -39,6 +39,7 @@ def test_load_defaults_creates_file(tmp_path):
     assert settings.schema_version == CURRENT_SCHEMA_VERSION
     assert settings.hotkey == DEFAULT_HOTKEY
     assert settings.cancel_hotkey == DEFAULT_CANCEL_HOTKEY
+    assert settings.show_overlay_hotkey == ""
     assert settings.model_size == DEFAULT_MODEL_SIZE
     assert settings.language_mode == DEFAULT_LANGUAGE_MODE
     assert settings.vad_enabled is False
@@ -409,6 +410,30 @@ def test_invalid_cancel_hotkey_falls_back_to_cancel_default(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.cancel_hotkey == DEFAULT_CANCEL_HOTKEY
+
+
+def test_show_overlay_hotkey_roundtrip(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+    store.save(AppSettings(show_overlay_hotkey="Ctrl+Alt+F11"))
+
+    settings = SettingsStore(settings_path).load()
+
+    assert settings.show_overlay_hotkey == "Ctrl+Alt+F11"
+
+
+def test_invalid_show_overlay_hotkey_falls_back_to_disabled(tmp_path):
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"show_overlay_hotkey": "TotallyInvalid"}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(settings_path).load()
+
+    # The optional hotkey has no key-combo default: invalid and empty values
+    # both mean "disabled".
+    assert settings.show_overlay_hotkey == ""
 
 
 def test_keep_transcript_in_clipboard_flag_roundtrip(tmp_path):

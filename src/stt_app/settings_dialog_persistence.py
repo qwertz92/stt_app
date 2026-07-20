@@ -50,6 +50,13 @@ class _PersistenceMixin:
                 _app_hotkey_to_qt_hotkey_text(settings.cancel_hotkey)
             )
         )
+        self.show_overlay_hotkey_edit.setKeySequence(
+            QtGui.QKeySequence(
+                _app_hotkey_to_qt_hotkey_text(
+                    str(getattr(settings, "show_overlay_hotkey", "") or "")
+                )
+            )
+        )
         # Model Dir must be set before refreshing the model combo so it can
         # scan the correct directory for cached models.
         blocker = QtCore.QSignalBlocker(self.model_dir_edit)
@@ -391,6 +398,7 @@ class _PersistenceMixin:
         *,
         hotkey: str | None = None,
         cancel_hotkey: str | None = None,
+        show_overlay_hotkey: str | None = None,
         history_limit: int | None = None,
         key_states: dict[str, bool] | None = None,
         model_size: str | None = None,
@@ -438,6 +446,13 @@ class _PersistenceMixin:
                 cancel_hotkey
                 if cancel_hotkey is not None
                 else self._loaded_settings.cancel_hotkey
+            ),
+            show_overlay_hotkey=(
+                show_overlay_hotkey
+                if show_overlay_hotkey is not None
+                else str(
+                    getattr(self._loaded_settings, "show_overlay_hotkey", "") or ""
+                )
             ),
             model_size=(
                 model_size
@@ -557,6 +572,10 @@ class _PersistenceMixin:
             self.cancel_hotkey_edit.keySequence()
         )
         cancel_hotkey = cancel_hotkey or DEFAULT_CANCEL_HOTKEY
+        # Optional: an empty show-overlay hotkey stays empty (disabled).
+        show_overlay_hotkey = _qt_hotkey_sequence_to_app_hotkey(
+            self.show_overlay_hotkey_edit.keySequence()
+        )
         try:
             parse_hotkey(hotkey)
         except ValueError as exc:
@@ -575,12 +594,33 @@ class _PersistenceMixin:
                 f"The cancel hotkey is invalid: {exc}",
             )
             return
+        if show_overlay_hotkey:
+            try:
+                parse_hotkey(show_overlay_hotkey)
+            except ValueError as exc:
+                QtWidgets.QMessageBox.critical(
+                    self,
+                    "Invalid overlay hotkey",
+                    f"The overlay hotkey is invalid: {exc}",
+                )
+                return
         if _hotkeys_conflict(hotkey, cancel_hotkey):
             QtWidgets.QMessageBox.critical(
                 self,
                 "Hotkey conflict",
                 "Cancel hotkey must not be identical to, subset of, or superset "
                 "of the main recording hotkey.",
+            )
+            return
+        if show_overlay_hotkey and (
+            _hotkeys_conflict(show_overlay_hotkey, hotkey)
+            or _hotkeys_conflict(show_overlay_hotkey, cancel_hotkey)
+        ):
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Hotkey conflict",
+                "Overlay hotkey must not be identical to, subset of, or "
+                "superset of the recording or cancel hotkey.",
             )
             return
 
@@ -623,6 +663,7 @@ class _PersistenceMixin:
         settings = self._construct_settings_from_widgets(
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
+            show_overlay_hotkey=show_overlay_hotkey,
             history_limit=requested_history_limit,
             key_states=key_states,
             model_size=str(self.model_combo.currentData()),

@@ -3246,6 +3246,65 @@ def test_save_shows_status_feedback_for_real_changes():
     _ = app
 
 
+def test_save_persists_optional_show_overlay_hotkey():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert dialog.show_overlay_hotkey_edit.keySequence().isEmpty()
+    dialog.show_overlay_hotkey_edit.setKeySequence(
+        QtGui.QKeySequence("Ctrl+Alt+F11")
+    )
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.show_overlay_hotkey == "Ctrl+Alt+F11"
+
+    # Clearing the field disables the hotkey again: it must save as empty,
+    # not fall back to any default combo.
+    dialog.show_overlay_hotkey_edit.clear()
+    dialog._save()
+    assert store.saved.show_overlay_hotkey == ""
+    _ = app
+
+
+def test_save_rejects_show_overlay_hotkey_conflicts(monkeypatch):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    errors: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "critical",
+        lambda _parent, title, _text: errors.append(title),
+    )
+
+    # Conflicts with the main recording hotkey (default Ctrl+Alt+Space).
+    dialog.show_overlay_hotkey_edit.setKeySequence(
+        QtGui.QKeySequence("Ctrl+Alt+Space")
+    )
+    dialog._save()
+    assert errors == ["Hotkey conflict"]
+    assert store.saved is None
+
+    # Conflicts with the cancel hotkey (default Ctrl+Alt+F12).
+    dialog.show_overlay_hotkey_edit.setKeySequence(
+        QtGui.QKeySequence("Ctrl+Alt+F12")
+    )
+    dialog._save()
+    assert errors == ["Hotkey conflict", "Hotkey conflict"]
+    assert store.saved is None
+    _ = app
+
+
 def test_check_for_updates_button_reports_up_to_date(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     monkeypatch.setattr(settings_dialog_module.threading, "Thread", _ImmediateThread)

@@ -43,6 +43,7 @@ from .config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
     DEFAULT_SAVE_ALL_RECORDINGS,
     DEFAULT_SAVE_LAST_WAV,
+    DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_START_BEEP_ENABLED,
     DEFAULT_STREAMING_FULL_FINAL_TRANSCRIPT,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
@@ -93,6 +94,7 @@ DEFAULTS = {
     "schema_version": CURRENT_SCHEMA_VERSION,
     "hotkey": DEFAULT_HOTKEY,
     "cancel_hotkey": DEFAULT_CANCEL_HOTKEY,
+    "show_overlay_hotkey": DEFAULT_SHOW_OVERLAY_HOTKEY,
     "model_size": DEFAULT_MODEL_SIZE,
     "language_mode": DEFAULT_LANGUAGE_MODE,
     "custom_vocabulary": DEFAULT_CUSTOM_VOCABULARY,
@@ -155,6 +157,7 @@ class AppSettings:
     schema_version: int = CURRENT_SCHEMA_VERSION
     hotkey: str = DEFAULT_HOTKEY
     cancel_hotkey: str = DEFAULT_CANCEL_HOTKEY
+    show_overlay_hotkey: str = DEFAULT_SHOW_OVERLAY_HOTKEY
     model_size: str = DEFAULT_MODEL_SIZE
     language_mode: str = DEFAULT_LANGUAGE_MODE
     custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY
@@ -273,6 +276,14 @@ class AppSettings:
         cancel_hotkey = _normalize_hotkey(
             cancel_hotkey, default=DEFAULT_CANCEL_HOTKEY
         )
+        # Optional: the empty default means "disabled", so empty and invalid
+        # values both normalize back to disabled instead of a key combo.
+        show_overlay_hotkey = str(
+            merged.get("show_overlay_hotkey", DEFAULT_SHOW_OVERLAY_HOTKEY)
+        )
+        show_overlay_hotkey = _normalize_hotkey(
+            show_overlay_hotkey, default=DEFAULT_SHOW_OVERLAY_HOTKEY
+        )
 
         groq_model = str(merged.get("groq_model", DEFAULT_GROQ_MODEL))
         if groq_model not in GROQ_MODELS:
@@ -371,6 +382,7 @@ class AppSettings:
             schema_version=CURRENT_SCHEMA_VERSION,
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
+            show_overlay_hotkey=show_overlay_hotkey,
             model_size=model_size,
             language_mode=language_mode,
             custom_vocabulary=str(
