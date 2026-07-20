@@ -32,7 +32,7 @@ from .settings_dialog_helpers import (
 )
 from .ui_feedback import restore_vertical_scrollbar
 
-_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(820, 720)
+_BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(860, 880)
 _BENCHMARK_WINDOW_MINIMUM_SIZE = QtCore.QSize(680, 560)
 _BENCHMARK_COMPACT_BUTTON_WIDTH_PX = 110
 _BENCHMARK_RESULT_SURFACE_STYLESHEET = """
@@ -555,7 +555,14 @@ class _BenchmarkMixin:
         window.setWindowFlag(QtCore.Qt.WindowMinimizeButtonHint, True)
         window.setWindowFlag(QtCore.Qt.WindowMaximizeButtonHint, True)
         window.setWindowFlag(QtCore.Qt.WindowCloseButtonHint, True)
-        window.resize(_BENCHMARK_WINDOW_DEFAULT_SIZE)
+        # Tall enough that expanding "Show Run Options" leaves the installed-
+        # models list usable without manual resizing, bounded to the available
+        # screen so the default never exceeds small displays.
+        target_size = QtCore.QSize(_BENCHMARK_WINDOW_DEFAULT_SIZE)
+        available_size = self._available_dialog_size()
+        if available_size.isValid():
+            target_size = target_size.boundedTo(available_size)
+        window.resize(target_size)
         window.setMinimumSize(_BENCHMARK_WINDOW_MINIMUM_SIZE)
 
         outer_layout = QtWidgets.QVBoxLayout(window)
