@@ -622,6 +622,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   pressing the recording hotkey does not block on model loading. Its internal
   runtime VAD follows the app's VAD setting. The language UI exposes only the
   transcription-ready and broad-coverage official prompt IDs.
+- **onnxruntime-node follows the Transformers.js pin**: Transformers.js
+  hard-pins an exact `onnxruntime-node` version (1.24.3 across 4.0-4.2), and
+  the Cohere/Granite pipeline models always run on that nested pin. Do not
+  bump the top-level `onnxruntime-node` beyond it: npm then installs two
+  different native ORT runtimes into one Node process (observed API-version
+  mismatch warnings), and only the raw Granite Plus/NAR paths would use the
+  newer copy. Revisit when Transformers.js itself moves its pin; forcing a
+  newer version via `overrides` is upstream-untested and needs explicit
+  pipeline verification. A 2026-07-21 benchmark found Transformers.js
+  4.1->4.2 and CTranslate2 4.7.1->4.8.1 performance-neutral on AMD hardware
+  (CT2 4.8.0's int8 PACKED_GEMM speedup is Intel-MKL-only).
 - **Streaming availability**: `config.supports_streaming()` is the shared
   source of truth for UI and controller checks. Cohere/Granite ONNX/WebGPU
   models are batch-only; Nemotron is true streaming. A local model selection

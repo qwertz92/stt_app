@@ -5,6 +5,28 @@ Agents and developers: use this as a knowledge base for past issues and solution
 
 ## 2026-07-21
 
+- **Runtime upgrade check: mostly current; no measurable perf win available.**
+  Benchmarked on HomeBase (Ryzen 5 7600X, Arc A750, 199 s German dictation,
+  runs=2 + warmup, fixed language): Transformers.js 4.1.0 -> 4.2.0 changed
+  Cohere/Granite WebGPU inference by -0.4 %/-4 % (within noise, transcripts
+  bit-identical); CTranslate2 4.7.1 -> 4.8.1 looked ~6 % slower on
+  large-v3-turbo until an A/B/A counter-run showed the machine itself had
+  drifted ~8 % slower over the session — verdict: no measurable difference.
+  CTranslate2 4.8.0's advertised int8 speedup (PACKED_GEMM, ~+22 %) applies
+  only to Intel-MKL CPUs; AMD runs oneDNN and is unaffected. faster-whisper
+  1.2.1 and onnxruntime-genai 0.14.1 are the latest releases.
+  **Key structural finding:** Transformers.js hard-pins an exact
+  `onnxruntime-node` version (1.24.3 across 4.0/4.1/4.2 and main), so bumping
+  the top-level `onnxruntime-node` cannot speed up the Cohere/Granite
+  pipeline models — npm then nests a private 1.24.3 for Transformers.js and
+  two different native ORT runtimes coexist in one Node process (observed
+  "requested API version [27] is not available" warning). Only the raw
+  Granite Plus/NAR `InferenceSession` paths would use a newer top-level
+  runtime. DirectML for GenAI remains blocked upstream
+  (`onnxruntime-genai-directml` 0.14.1 requires `onnxruntime-directml>=1.26`;
+  PyPI still tops out at 1.24.4). Worthwhile low-risk maintenance for a
+  future release: ctranslate2 4.8.1 (model-load heap-overflow security fix)
+  and Transformers.js 4.2.0 (verified compatible); neither is urgent.
 - **Explicitly selected microphones failed with PortAudio -9997.** Work-machine
   diagnostics showed every warm and cold `sd.InputStream` open failing with
   "Invalid sample rate [PaErrorCode -9997]" as soon as a specific microphone
