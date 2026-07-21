@@ -13,6 +13,7 @@ import sounddevice as sd
 from .audio_devices import (
     SYSTEM_DEFAULT_INPUT_DEVICE,
     InputDeviceNotFoundError,
+    input_stream_extra_settings,
     portaudio_guard,
     register_live_stream,
     unregister_live_stream,
@@ -121,6 +122,7 @@ class WarmMicrophoneStream:
                     dtype="float32",
                     blocksize=self.block_size,
                     device=device_index,
+                    extra_settings=input_stream_extra_settings(device_index),
                     callback=self._dispatch,
                 )
                 try:
@@ -405,6 +407,7 @@ class AudioCapture:
                     dtype="float32",
                     blocksize=self.block_size,
                     device=device_index,
+                    extra_settings=input_stream_extra_settings(device_index),
                     callback=session_callback,
                 )
                 try:

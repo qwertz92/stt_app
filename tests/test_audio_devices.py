@@ -22,12 +22,21 @@ class _FakeSd:
         self.default = types.SimpleNamespace(hostapi=default_hostapi)
         self.terminate_calls = 0
         self.initialize_calls = 0
+        self.wasapi_settings_calls = []
 
-    def query_hostapis(self):
-        return self._hostapis
+    def query_hostapis(self, index=None):
+        if index is None:
+            return self._hostapis
+        return self._hostapis[index]
 
-    def query_devices(self):
-        return self._devices
+    def query_devices(self, index=None):
+        if index is None:
+            return self._devices
+        return self._devices[index]
+
+    def WasapiSettings(self, **kwargs):
+        self.wasapi_settings_calls.append(kwargs)
+        return ("wasapi-settings", tuple(sorted(kwargs.items())))
 
     def _terminate(self):
         self.terminate_calls += 1
@@ -123,6 +132,36 @@ def test_resolve_missing_device_raises_actionable_error(monkeypatch):
 
     assert "Unplugged Mic" in str(excinfo.value)
     assert "not connected" in str(excinfo.value)
+
+
+def test_extra_settings_none_for_default_selection(monkeypatch):
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
+
+    assert audio_devices.input_stream_extra_settings(None) is None
+
+
+def test_extra_settings_enable_wasapi_auto_convert(monkeypatch):
+    fake = _fake_sd_with_wasapi()
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    # Index 2 is the WASAPI headset microphone in the fake device table.
+    result = audio_devices.input_stream_extra_settings(2)
+
+    assert result == ("wasapi-settings", (("auto_convert", True),))
+    assert fake.wasapi_settings_calls == [{"auto_convert": True}]
+
+
+def test_extra_settings_none_for_non_wasapi_device(monkeypatch):
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
+
+    # Index 1 is the truncated MME entry.
+    assert audio_devices.input_stream_extra_settings(1) is None
+
+
+def test_extra_settings_none_when_device_query_fails(monkeypatch):
+    monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
+
+    assert audio_devices.input_stream_extra_settings(99) is None
 
 
 def test_refresh_refused_while_a_stream_is_live(monkeypatch):

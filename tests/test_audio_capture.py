@@ -408,3 +408,58 @@ def test_late_warm_callback_cannot_write_into_next_recording(monkeypatch):
     assert len(capture._chunks) == 1
     capture.stop()
     warm.close()
+
+
+def test_cold_open_passes_extra_settings_for_explicit_device(monkeypatch):
+    """Explicitly selected (WASAPI) devices need host-API stream settings.
+
+    Without them, WASAPI shared mode rejects the app's 16 kHz capture rate
+    with paInvalidSampleRate (-9997) when the endpoint mix format differs.
+    """
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    sentinel = object()
+    seen: list[int | None] = []
+
+    def fake_extra_settings(device_index):
+        seen.append(device_index)
+        return sentinel
+
+    monkeypatch.setattr(
+        "stt_app.audio_capture.input_stream_extra_settings",
+        fake_extra_settings,
+    )
+    capture = AudioCapture(
+        sample_rate=16000,
+        channels=1,
+        device_resolver=lambda: 7,
+    )
+
+    capture.start()
+
+    assert seen == [7]
+    assert FakeInputStream.instances[0].kwargs["device"] == 7
+    assert FakeInputStream.instances[0].kwargs["extra_settings"] is sentinel
+    capture.stop()
+
+
+def test_warm_open_passes_extra_settings_for_explicit_device(monkeypatch):
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    sentinel = object()
+
+    monkeypatch.setattr(
+        "stt_app.audio_capture.input_stream_extra_settings",
+        lambda device_index: sentinel if device_index == 7 else None,
+    )
+    warm = WarmMicrophoneStream(
+        sample_rate=16000,
+        channels=1,
+        device_provider=lambda: ("USB Microphone", 7),
+    )
+
+    assert warm.ensure_started()
+
+    assert FakeInputStream.instances[0].kwargs["device"] == 7
+    assert FakeInputStream.instances[0].kwargs["extra_settings"] is sentinel
+    warm.close()

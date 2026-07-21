@@ -121,6 +121,36 @@ def list_input_devices() -> list[InputDeviceInfo]:
     return result
 
 
+def input_stream_extra_settings(device_index: int | None):
+    """Host-API-specific stream settings for opening *device_index*.
+
+    Explicitly selected microphones resolve to WASAPI device indices (one
+    entry per endpoint, untruncated names), but WASAPI shared-mode streams
+    reject sample rates that differ from the endpoint's shared mix format —
+    typically 48 kHz versus the app's 16 kHz capture rate — with
+    paInvalidSampleRate (-9997). The MME sound mapper behind the
+    system-default path resamples transparently, which is why only explicit
+    selections failed. ``WasapiSettings(auto_convert=True)`` turns on
+    PortAudio's own sample-rate conversion so an explicit WASAPI selection
+    opens like the default path. Returns ``None`` for the default selection
+    and for non-WASAPI devices.
+    """
+    if device_index is None:
+        return None
+    try:
+        device = sd.query_devices(device_index)
+        host_api = sd.query_hostapis(int(device.get("hostapi", -1)))
+        host_api_name = str(host_api.get("name", ""))
+    except Exception:
+        return None
+    if _WASAPI_NAME_FRAGMENT not in host_api_name.lower():
+        return None
+    try:
+        return sd.WasapiSettings(auto_convert=True)
+    except Exception:
+        return None
+
+
 def resolve_input_device(device_name: str) -> int | None:
     """Persisted microphone name -> PortAudio device index for this open.
 
