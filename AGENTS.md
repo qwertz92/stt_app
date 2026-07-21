@@ -245,7 +245,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (Audio && Recording-tab picker; empty = system default) is resolved to a PortAudio index
   only at stream open via `audio_devices.resolve_input_device`; a selected but
   missing microphone fails the recording with an actionable error — never
-  silently record from another device. PortAudio freezes its device list at
+  silently record from another device. Explicit selections resolve to WASAPI
+  device indices, and WASAPI shared mode rejects the app's 16 kHz capture
+  rate with paInvalidSampleRate (-9997) when the endpoint mix format differs
+  (typically 48 kHz) — the MME sound mapper behind the default path resamples
+  transparently, which is why only explicit selections failed. Every
+  `sd.InputStream` open therefore passes
+  `audio_devices.input_stream_extra_settings(device_index)`, which returns
+  `WasapiSettings(auto_convert=True)` for WASAPI devices so PortAudio
+  resamples like the default path; do not open input streams without it. PortAudio freezes its device list at
   initialization, so `audio_devices.try_refresh_input_devices` re-initializes
   PortAudio; a shared open-lock plus live-stream registry makes re-enumeration
   impossible while any stream is open (it is refused and retried, never allowed

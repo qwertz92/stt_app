@@ -3,6 +3,29 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-07-21
+
+- **Explicitly selected microphones failed with PortAudio -9997.** Work-machine
+  diagnostics showed every warm and cold `sd.InputStream` open failing with
+  "Invalid sample rate [PaErrorCode -9997]" as soon as a specific microphone
+  was selected, while "System default" kept working. Root cause: explicit
+  selections resolve to WASAPI device indices (untruncated names, one entry
+  per endpoint), and PortAudio's WASAPI backend opens shared-mode streams
+  only at the endpoint's shared mix format (typically 48 kHz) — the app
+  captures at 16 kHz. The default path goes through the MME sound mapper,
+  which resamples transparently. Fix: `input_stream_extra_settings` returns
+  `WasapiSettings(auto_convert=True)` for WASAPI devices and both stream-open
+  sites pass it, enabling PortAudio's own sample-rate conversion.
+- **Release v0.7.0 never published: npm audit gate.** The tag build failed in
+  "Run release quality gates" because a fresh advisory (GHSA-xcpc-8h2w-3j85,
+  adm-zip < 0.6.0, high) reaches the production tree via onnxruntime-node ->
+  @huggingface/transformers; the Quality workflow's Linux audit went red for
+  the same reason. onnxruntime-node uses adm-zip only in its install script
+  to unzip vendor archives, and adm-zip 0.6.0 is the API-compatible fix
+  release, so a package.json `overrides` entry pins adm-zip to ^0.6.0
+  (lockfile-only change). The v0.7.0 tag exists without a GitHub release;
+  v0.7.1 ships the fixed tree.
+
 ## 2026-07-20
 
 - **Optional show-overlay hotkey.** New `show_overlay_hotkey` setting
