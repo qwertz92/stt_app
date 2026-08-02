@@ -49,6 +49,7 @@ from .config import (
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
+    OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_REVEAL_MS,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_START_BEEP_TONES,
@@ -3590,10 +3591,14 @@ class DictationController(QtCore.QObject):
                 preview = insertion_text.strip()
                 if preview:
                     detail = f"{detail}\n\n{preview}"
+                # The transcription itself succeeded, so Retry (which
+                # re-transcribes) has nothing to work with; offer inserting the
+                # transcript again instead.
                 self._overlay.set_state(
                     "Error",
                     detail,
                     copy_text=insertion_text,
+                    error_action=OVERLAY_ERROR_ACTION_INSERT,
                 )
             self._logger.exception("Text insertion failed")
             return False

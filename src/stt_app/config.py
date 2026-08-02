@@ -1072,6 +1072,10 @@ OVERLAY_QUEUE_MIN_HEIGHT = 96
 OVERLAY_RESULT_REVEAL_MS = 2500
 OVERLAY_ERROR_REVEAL_MS = 9000
 OVERLAY_INITIAL_DETAIL = "Press hotkey to start dictation"
+# Overlay error states offer one follow-up action. "insert" replaces Retry
+# (which re-transcribes) with Insert when the transcription succeeded and only
+# the insertion failed, because there is no failed transcription to retry then.
+OVERLAY_ERROR_ACTION_INSERT = "insert"
 OVERLAY_OPACITY_MIN_PERCENT = 25
 OVERLAY_OPACITY_MAX_PERCENT = 100
 DEFAULT_OVERLAY_OPACITY_PERCENT = OVERLAY_OPACITY_MAX_PERCENT

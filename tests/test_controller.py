@@ -3,7 +3,11 @@ import logging
 
 from PySide6 import QtGui, QtWidgets
 
-from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEY
+from stt_app.config import (
+    DEFAULT_HOTKEY,
+    FALLBACK_HOTKEY,
+    OVERLAY_ERROR_ACTION_INSERT,
+)
 import stt_app.controller as controller_module
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
@@ -345,6 +349,9 @@ def test_failed_insert_shows_the_transcript_and_copies_only_it(monkeypatch):
     assert "the transcribed sentence" in detail
     # Copy must yield the transcript, not the error message around it.
     assert overlay.state_kwargs[-1]["copy_text"] == "the transcribed sentence"
+    # Retry would re-transcribe; the transcription succeeded, so the overlay
+    # must offer inserting the transcript again instead.
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
 
     controller.shutdown()
     _ = app

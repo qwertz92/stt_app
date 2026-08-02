@@ -3,6 +3,55 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-02
+
+- **Overlay refused to shrink because `resize()` clamps to a stale minimum.**
+  After a long transcript the overlay stayed at its expanded height even when
+  the state switched to a short error message. Root cause: `QWidget.resize()`
+  clamps the requested size to the widget's *current* minimum size, and that
+  minimum is only recomputed when the layout is activated (normally deferred to
+  the next event-loop pass). Immediately after shrinking the detail area the
+  window still carried the previous state's larger minimum, so the resize was
+  silently swallowed — growing always worked, shrinking never did. Fix:
+  `_resize_window` activates both layouts before resizing. Activating the
+  layout also exposed a second, older inaccuracy: the container's stylesheet
+  border adds 1 px contents margin per side, which no size formula counted, so
+  every computed target was 2 px below the real layout minimum and
+  `OVERLAY_MAX_HEIGHT` was quietly exceeded. `set_state` now applies the state
+  stylesheet before measuring and all formulas add `_container_frame_margins()`.
+- **A language switch used to unload the model.** `language_mode` was part of
+  both the transcriber cache key and the preload key, so choosing another
+  language tore the loaded runtime down and reloaded it — even though no local
+  runtime depends on the language: faster-whisper passes it per
+  `transcribe()` call, Nemotron sets `lang_id` per session, the Cohere/Granite
+  Node process takes it as a JSON request field, and the remote providers put
+  it into request parameters. Consequences in daily use: a mis-clicked language
+  blocked the correction behind a full model load (the overlay's language
+  button is disabled while "Processing"), and transcribing one import in
+  another language evicted the model the next dictation needed. The language is
+  now applied to the live instance through `ITranscriber.set_language_mode`
+  when a job acquires the runtime; the cache and preload keys ignore it.
+- **Retry was the wrong offer after a failed insertion.** A successful
+  transcription clears `_last_failed_wav_bytes`, so the Retry button shown in
+  the Error state after a failed paste could only answer "No failed
+  transcription to retry". The Error state now shows the transcript itself
+  (it was invisible exactly when the user needed to read it) and offers Insert
+  instead, wired to the existing re-paste path.
+- **Qt closes the Windows 11 hidden-icons flyout when the tray menu opens.**
+  Qt's Windows tray backend calls `SetForegroundWindow` on its hidden helper
+  window before tracking a menu registered via `setContextMenu`, so Explorer's
+  overflow flyout loses the foreground and light-dismisses itself. Popping the
+  `QMenu` up ourselves from `activated(Context)` skips that call — Qt still
+  emits `Context` when no platform menu is set. Note that Electron's tray code
+  calls `SetForegroundWindow` too, so the comparison with ChatGPT/Claude
+  desktop does not prove a framework-level difference; this needs a real-world
+  check on the target machine.
+- **No fallback model exists (wording only).** The startup notice
+  "Model 'X' is ready. Next transcription uses it." read as if something else
+  had been used before. There is no fallback: preload is strict about the
+  selected model and a recording waits for it. The message is now plain
+  "Model 'X' is ready."
+
 ## 2026-07-21
 
 - **Runtime upgrade check: mostly current; no measurable perf win available.**

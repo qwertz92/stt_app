@@ -167,6 +167,7 @@ def run() -> int:
     overlay.history_requested.connect(open_history_dialog)
     overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
     overlay.retry_requested.connect(controller.retry_last_transcription)
+    overlay.insert_again_requested.connect(controller.repaste_last_transcript)
     overlay.cancel_requested.connect(controller.cancel_current_action)
     overlay.queue_cancel_requested.connect(controller.cancel_queued_transcription)
     overlay.queue_clear_requested.connect(controller.clear_transcription_queue)

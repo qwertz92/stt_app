@@ -2,6 +2,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.overlay_ui as overlay_ui_module
 from stt_app.config import (
+    OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
     OVERLAY_MARGIN_X,
@@ -531,6 +532,24 @@ def test_overlay_cancel_and_retry_share_one_slot_without_resizing():
     assert overlay._cancel_button.isHidden() is False
     assert overlay._cancel_button.isEnabled() is False
     assert overlay._controls_widget.sizeHint().width() == listening_width
+
+    # A failed insertion has no failed transcription to retry, so the slot
+    # offers inserting the transcript again instead.
+    overlay.set_state(
+        "Error",
+        "Insertion failed.",
+        error_action=OVERLAY_ERROR_ACTION_INSERT,
+    )
+    assert overlay._insert_button.isHidden() is False
+    assert overlay._insert_button.isEnabled() is True
+    assert overlay._retry_button.isHidden() is True
+    assert overlay._cancel_button.isHidden() is True
+    assert overlay._controls_widget.sizeHint().width() == listening_width
+
+    inserts: list[int] = []
+    overlay.insert_again_requested.connect(lambda: inserts.append(1))
+    overlay._insert_button.click()
+    assert inserts == [1]
 
 
 def test_overlay_copy_uses_copy_text_override(monkeypatch):

@@ -7,6 +7,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     LANGUAGE_MODE_LABELS,
+    OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_DETAIL_MIN_HEIGHT,
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
@@ -78,6 +79,7 @@ class OverlayUI(QtWidgets.QWidget):
     history_requested = QtCore.Signal()
     edit_requested = QtCore.Signal()
     retry_requested = QtCore.Signal()
+    insert_again_requested = QtCore.Signal()
     cancel_requested = QtCore.Signal()
     opacity_changed = QtCore.Signal(int)
     always_on_top_changed = QtCore.Signal(bool)
@@ -203,6 +205,15 @@ class OverlayUI(QtWidgets.QWidget):
         self._cancel_button.setFixedSize(64, 22)
         self._cancel_button.clicked.connect(self.cancel_requested.emit)
 
+        self._insert_button = QtWidgets.QPushButton("Insert")
+        self._insert_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._insert_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._insert_button.setFixedSize(64, 22)
+        self._insert_button.setToolTip(
+            "Insert this transcript into the focused window again."
+        )
+        self._insert_button.clicked.connect(self.insert_again_requested.emit)
+
         self._reset_pos_button = QtWidgets.QPushButton("Reset Pos")
         self._reset_pos_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._reset_pos_button.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -299,6 +310,7 @@ class OverlayUI(QtWidgets.QWidget):
         # width constant and shows only the action that is actually available.
         controls.addWidget(self._cancel_button)
         controls.addWidget(self._retry_button)
+        controls.addWidget(self._insert_button)
         controls.addWidget(self._edit_button)
         controls.addWidget(self._reset_pos_button)
         controls.addWidget(self._language_button)
@@ -418,6 +430,7 @@ class OverlayUI(QtWidgets.QWidget):
         *,
         compact: bool | None = None,
         copy_text: str | None = None,
+        error_action: str | None = None,
     ) -> None:
         """Render an overlay state.
 
@@ -425,6 +438,10 @@ class OverlayUI(QtWidgets.QWidget):
         It is used when the detail area shows more than the plain transcript
         (an insertion error plus the transcript preview, for example), so Copy
         still yields exactly the transcript.
+
+        ``error_action`` selects the follow-up action offered in the Error
+        state: ``OVERLAY_ERROR_ACTION_INSERT`` when the transcription itself
+        succeeded and only the insertion failed, otherwise Retry.
         """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
@@ -440,7 +457,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._edit_button.setEnabled(has_detail and state == "Done")
         self._clear_button.setEnabled(has_detail and state in {"Done", "Error"})
         self._sync_record_button(state)
-        self._sync_action_slot(state)
+        self._sync_action_slot(state, error_action)
         self._reset_pos_button.setEnabled(True)
         self._language_change_blocked = state in {"Listening", "Processing"}
         self._sync_language_button()
@@ -473,17 +490,23 @@ class OverlayUI(QtWidgets.QWidget):
             self._record_button.style().polish(self._record_button)
             self._record_button.update()
 
-    def _sync_action_slot(self, state: str) -> None:
-        """Show Retry in the error state and Cancel everywhere else.
+    def _sync_action_slot(self, state: str, error_action: str | None = None) -> None:
+        """Show the one follow-up action that applies to the current state.
 
-        Both buttons occupy the same slot with the same fixed size, so the
-        swap keeps the row width constant.
+        Cancel, Retry and Insert are mutually exclusive and share one slot of
+        identical fixed size, so swapping them keeps the row width constant.
+        Retry re-transcribes, which is meaningless when the transcription
+        succeeded and only the insertion failed — that case offers Insert.
         """
-        show_retry = state == "Error"
+        is_error = state == "Error"
+        show_insert = is_error and error_action == OVERLAY_ERROR_ACTION_INSERT
+        show_retry = is_error and not show_insert
         self._retry_button.setEnabled(show_retry)
+        self._insert_button.setEnabled(show_insert)
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})
         self._retry_button.setVisible(show_retry)
-        self._cancel_button.setVisible(not show_retry)
+        self._insert_button.setVisible(show_insert)
+        self._cancel_button.setVisible(not (show_retry or show_insert))
 
     def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])

@@ -299,10 +299,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Record/Stop button (`record_toggle_requested` → `controller.toggle_recording`)
   so dictation can be started without a keyboard; its caption swaps between two
   fixed-width captions and the recording state is a stylesheet property, so
-  neither changes the layout. Cancel and Retry never apply at the same time and
-  therefore share one slot: exactly one of them is visible (Retry only in the
-  Error state) with identical fixed sizes, which keeps the controls row width
-  constant while showing only the action that is actually available.
+  neither changes the layout. Cancel, Retry and Insert never apply at the same
+  time and therefore share one slot: exactly one of them is visible with
+  identical fixed sizes, which keeps the controls row width constant while
+  showing only the action that is actually available. Retry re-transcribes, so
+  it is wrong after a *successful* transcription whose insertion failed — that
+  state passes `error_action=OVERLAY_ERROR_ACTION_INSERT` and offers Insert
+  (`insert_again_requested` → `controller.repaste_last_transcript`) instead.
+  Before this, the Error state after a failed paste offered a Retry that could
+  only answer "No failed transcription to retry".
 - **Overlay `set_state(copy_text=...)`**: when the detail area shows more than
   the transcript — an insertion error followed by the transcript preview — the
   Copy action must still yield exactly the transcript. A failed insertion shows
