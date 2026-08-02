@@ -491,6 +491,38 @@ def test_overlay_shrinks_after_long_transcription():
     assert overlay.height() >= OVERLAY_HEIGHT
 
 
+def test_overlay_error_after_long_transcript_restores_compact_height():
+    """A short error must not inherit the expanded transcript height.
+
+    The window's minimum size is only refreshed when the layout is activated,
+    so an expanded transcript used to keep the overlay large while the state
+    switched to Error (typically an insertion failure).
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    initial_height = overlay.height()
+
+    overlay.set_state("Done", "word " * 900)
+    expanded_height = overlay.height()
+    assert expanded_height > initial_height
+
+    overlay.set_state("Error", "Insertion failed: target window rejected paste.")
+
+    assert overlay.height() == initial_height
+    assert overlay.height() < expanded_height
+
+
+def test_overlay_never_exceeds_max_height_including_container_border():
+    """The styled container's border must be part of the height budget."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_state("Done", "word " * 900)
+
+    assert overlay.height() <= OVERLAY_MAX_HEIGHT
+    assert overlay.height() >= overlay.minimumSizeHint().height()
+
+
 def test_overlay_reset_position_preserves_expanded_result_size():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

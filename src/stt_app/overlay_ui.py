@@ -256,6 +256,7 @@ class OverlayUI(QtWidgets.QWidget):
 
         container = QtWidgets.QFrame()
         container.setObjectName("overlayContainer")
+        self._container = container
 
         self._layout = QtWidgets.QVBoxLayout(container)
         self._layout.setContentsMargins(14, 10, 14, 10)
@@ -408,11 +409,17 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_change_blocked = state in {"Listening", "Processing"}
         self._sync_language_button()
         self._reset_copy_button_feedback()
+        # Style before measuring: the container's stylesheet border becomes
+        # part of its contents margins, so measuring first would size the
+        # window for an unstyled container and leave it below its own layout
+        # minimum (the window then refused to shrink to the computed target).
+        self._apply_state_stylesheet(state)
         self._update_detail_height()
         self._detail_scroll.verticalScrollBar().setValue(
             self._detail_scroll.verticalScrollBar().maximum()
         )
 
+    def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
         if bg != self._state_background:
             self.setStyleSheet(
@@ -771,16 +778,34 @@ class OverlayUI(QtWidgets.QWidget):
         elif selected == clear_action:
             self.clear_detail_text()
 
+    def _container_frame_margins(self) -> QtCore.QMargins:
+        """Contents margins the styled container adds around the inner layout.
+
+        The container's stylesheet border contributes 1 px per side. Ignoring
+        it made every computed size 2 px smaller than the layout's real
+        minimum, which both defeated ``OVERLAY_MAX_HEIGHT`` and left the window
+        unable to reach its own computed target size.
+        """
+        self._container.ensurePolished()
+        return self._container.contentsMargins()
+
     def _update_detail_height(self) -> None:
         previous_size = QtCore.QSize(self.size())
         self._apply_queue_scroll_height()
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
+        frame = self._container_frame_margins()
+        frame_height = frame.top() + frame.bottom()
         height_cap = self._window_height_cap()
         target_window_width = self._target_window_width()
         target_content_width = max(
             80,
-            target_window_width - margins.left() - margins.right() - 4,
+            target_window_width
+            - frame.left()
+            - frame.right()
+            - margins.left()
+            - margins.right()
+            - 4,
         )
 
         header_height = self._header_widget.sizeHint().height()
@@ -791,7 +816,8 @@ class OverlayUI(QtWidgets.QWidget):
             OVERLAY_DETAIL_MIN_HEIGHT,
             height_cap
             - (
-                margins.top()
+                frame_height
+                + margins.top()
                 + margins.bottom()
                 + header_height
                 + controls_height
@@ -837,7 +863,8 @@ class OverlayUI(QtWidgets.QWidget):
             desired_window_height = self._compact_target_size().height()
         else:
             desired_window_height = (
-                margins.top()
+                frame_height
+                + margins.top()
                 + margins.bottom()
                 + header_height
                 + controls_height
@@ -847,16 +874,38 @@ class OverlayUI(QtWidgets.QWidget):
                 + desired_detail_height
             )
         desired_window_height = self._bounded_window_height(desired_window_height)
-        desired_size = QtCore.QSize(target_window_width, desired_window_height)
-        if self.size() != desired_size:
-            self.resize(desired_size)
+        self._resize_window(QtCore.QSize(target_window_width, desired_window_height))
         self._reposition_within_current_screen(previous_size)
+
+    def _resize_window(self, target: QtCore.QSize) -> None:
+        """Resize the overlay window, refreshing the layout constraints first.
+
+        ``QWidget.resize`` clamps the requested size to the widget's current
+        minimum size, and that minimum is only recomputed when the layout is
+        activated (normally deferred to the next event loop pass). Right after
+        shrinking the detail/queue areas the window therefore still carries the
+        *previous* state's larger minimum, which silently swallowed the resize:
+        a long transcript followed by a short error message left the overlay at
+        its expanded height. Activating the layouts makes the new minimum take
+        effect before the resize, so growing and shrinking both work.
+        """
+        if self.size() == target:
+            return
+        self._layout.activate()
+        root_layout = self.layout()
+        if root_layout is not None:
+            root_layout.activate()
+        if self.size() != target:
+            self.resize(target)
 
     def _compact_window_height(self) -> int:
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
+        frame = self._container_frame_margins()
         return (
-            margins.top()
+            frame.top()
+            + frame.bottom()
+            + margins.top()
             + margins.bottom()
             + self._header_widget.sizeHint().height()
             + self._controls_widget.sizeHint().height()
@@ -905,8 +954,11 @@ class OverlayUI(QtWidgets.QWidget):
             return
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
+        frame = self._container_frame_margins()
         non_queue_fixed = (
-            margins.top()
+            frame.top()
+            + frame.bottom()
+            + margins.top()
             + margins.bottom()
             + self._header_widget.sizeHint().height()
             + self._controls_widget.sizeHint().height()
@@ -953,13 +1005,17 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _target_window_width(self) -> int:
         margins = self._layout.contentsMargins()
+        frame = self._container_frame_margins()
+        chrome_width = (
+            frame.left() + frame.right() + margins.left() + margins.right()
+        )
         content_width = max(
-            OVERLAY_WIDTH - margins.left() - margins.right(),
+            OVERLAY_WIDTH - chrome_width,
             self._header_widget.sizeHint().width(),
             self._controls_widget.sizeHint().width(),
             self._footer_widget.sizeHint().width(),
         )
-        return max(OVERLAY_WIDTH, content_width + margins.left() + margins.right())
+        return max(OVERLAY_WIDTH, content_width + chrome_width)
 
     def _should_preserve_size_on_reset(self) -> bool:
         return bool(self._detail_label.text().strip()) and (
@@ -969,10 +1025,8 @@ class OverlayUI(QtWidgets.QWidget):
     def ensure_compact_size(self) -> None:
         self._compact_mode = True
         self._apply_queue_scroll_height()
-        target_size = self._compact_target_size()
-        if self.size() != target_size:
-            self.resize(target_size)
         self._detail_scroll.setFixedHeight(OVERLAY_DETAIL_MIN_HEIGHT)
+        self._resize_window(self._compact_target_size())
         self._update_detail_height()
 
     # -- Transcription queue panel -------------------------------------------
