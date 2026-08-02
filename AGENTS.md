@@ -869,6 +869,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   deliberately synchronous so the microphone cannot record it). Streaming
   appends are many small pastes and stay silent by design. History-only
   delivery and failed inserts never beep.
+- **Tray menu is popped up manually on Windows (`_MANUAL_TRAY_MENU`)**: Qt's
+  Windows tray backend calls `SetForegroundWindow` on its hidden helper window
+  before tracking a menu registered through `setContextMenu`, so opening the
+  menu steals the foreground from Explorer's Windows 11 "hidden icons" flyout,
+  which then light-dismisses itself underneath the menu. On Windows the menu is
+  therefore *not* registered with Qt; `activated(Context)` (still emitted with
+  no platform menu set) pops the `QMenu` up at the cursor instead, and Qt's own
+  popup grab keeps outside-click dismissal working. The menu object stays
+  reachable as `tray_icon._context_menu`. Other platforms keep
+  `setContextMenu`. Trade-off: the menu is Qt-drawn instead of a native Win32
+  menu.
+- **Tray left-click reveals the overlay**: a single left click (`Trigger`) has
+  no other meaning and there is no main window, so it calls
+  `controller.bring_overlay_to_front`. Together with the overlay's Record
+  button this is the keyboard-free path to dictation; double-click still opens
+  Settings.
 - **Tray middle-click toggle (`tray_middle_click_toggle`, default on)**:
   middle-clicking the tray icon calls `controller.toggle_recording`, exactly
   like the recording hotkey; double-click keeps opening Settings. The guard

@@ -34,6 +34,15 @@ from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
 from .app_paths import appdata_root
 
+# Pop the tray menu up ourselves instead of handing it to Qt via
+# ``setContextMenu``. Qt's Windows tray backend calls ``SetForegroundWindow``
+# on its hidden helper window before tracking the menu, so opening the menu
+# steals the foreground from Explorer's Windows 11 "hidden icons" flyout, which
+# then light-dismisses itself underneath the menu. Showing the menu as a Qt
+# popup skips that call; Qt's own popup grab still closes the menu on an
+# outside click. Other platforms keep Qt's platform menu.
+_MANUAL_TRAY_MENU = sys.platform == "win32"
+
 
 def _set_windows_app_user_model_id() -> None:
     """Give the app its own Windows taskbar identity.
@@ -335,8 +344,19 @@ def _create_tray_icon(
     check_updates_action.triggered.connect(check_for_updates_from_tray)
 
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        if reason == QtWidgets.QSystemTrayIcon.Context:
+            if _MANUAL_TRAY_MENU:
+                menu.popup(QtGui.QCursor.pos())
+            return
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
             open_settings_dialog()
+            return
+        if reason == QtWidgets.QSystemTrayIcon.Trigger:
+            # A single left click has no other meaning here and there is no
+            # main window, so use it to surface the overlay. Together with the
+            # overlay's Record button this makes dictation reachable entirely
+            # without a keyboard.
+            controller.bring_overlay_to_front()
             return
         if reason == QtWidgets.QSystemTrayIcon.MiddleClick and bool(
             getattr(controller.settings, "tray_middle_click_toggle", True)
@@ -344,7 +364,11 @@ def _create_tray_icon(
             controller.toggle_recording()
 
     tray_icon.activated.connect(on_tray_activated)
-    tray_icon.setContextMenu(menu)
+    # Keep the menu referenced and reachable for callers/tests even when it is
+    # not handed to Qt below.
+    tray_icon._context_menu = menu
+    if not _MANUAL_TRAY_MENU:
+        tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
     tray_icon._shutdown_settings_dialog = shutdown_settings_dialog
     QtCore.QTimer.singleShot(2500, prepare_settings_dialog)

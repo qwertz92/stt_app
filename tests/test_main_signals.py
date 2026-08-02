@@ -217,7 +217,7 @@ def test_create_tray_icon_has_expected_menu_actions():
         last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
-    menu = tray.contextMenu()
+    menu = tray._context_menu
     action_labels = [a.text() for a in menu.actions() if not a.isSeparator()]
     assert "Toggle Dictation" in action_labels
     assert "Show overlay" in action_labels
@@ -245,7 +245,7 @@ def test_tray_toggle_action_calls_controller():
         last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
-    menu = tray.contextMenu()
+    menu = tray._context_menu
     toggle_action = [a for a in menu.actions() if a.text() == "Toggle Dictation"][0]
     toggle_action.trigger()
     assert controller.toggle_calls == 1
@@ -265,7 +265,7 @@ def test_tray_show_overlay_action_calls_controller():
         last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
-    menu = tray.contextMenu()
+    menu = tray._context_menu
     show_action = [a for a in menu.actions() if a.text() == "Show overlay"][0]
     show_action.trigger()
     assert controller.bring_overlay_calls == 1
@@ -389,6 +389,56 @@ def test_tray_double_click_connected():
     # The activated signal should have at least one receiver connected.
     sig = QtCore.SIGNAL("activated(QSystemTrayIcon::ActivationReason)")
     assert tray.receivers(sig) > 0
+
+
+def test_tray_left_click_reveals_overlay():
+    """A single left click must surface the overlay (keyboard-free access)."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = FakeController()
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.Trigger)
+
+    assert controller.bring_overlay_calls == 1
+    _ = tray
+
+
+def test_tray_context_click_pops_menu_without_platform_menu(monkeypatch):
+    """The menu is popped up by us so Qt cannot steal the foreground.
+
+    Qt's Windows tray backend calls SetForegroundWindow before tracking a menu
+    registered via setContextMenu, which closes the Windows 11 hidden-icons
+    flyout underneath the menu.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(main_module, "_MANUAL_TRAY_MENU", True)
+    tray = _create_tray_icon(
+        app=app,
+        controller=FakeController(),
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+    popups: list[object] = []
+    monkeypatch.setattr(tray._context_menu, "popup", popups.append)
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
+
+    assert len(popups) == 1
+    assert tray.contextMenu() is None
+    _ = tray
 
 
 def test_tray_middle_click_toggles_dictation_respecting_setting():
