@@ -384,6 +384,7 @@ class SettingsDialog(
         self.check_updates_button.clicked.connect(self._check_for_updates)
 
         save_button = QtWidgets.QPushButton("Save")
+        self._save_button = save_button
         close_button = QtWidgets.QPushButton("Close")
         save_button.clicked.connect(self._save)
         close_button.clicked.connect(self.reject)
@@ -393,9 +394,7 @@ class SettingsDialog(
         self._save_status_timer = QtCore.QTimer(self)
         self._save_status_timer.setSingleShot(True)
         self._save_status_timer.setInterval(3000)
-        self._save_status_timer.timeout.connect(
-            lambda: self._save_status_label.setText("")
-        )
+        self._save_status_timer.timeout.connect(lambda: self._set_bottom_status(""))
 
         buttons = QtWidgets.QHBoxLayout()
         self._configure_button_row(buttons)
@@ -419,6 +418,7 @@ class SettingsDialog(
             f"color: {color}; font-weight: bold;"
         )
         self._save_status_label.setText(text)
+        self._save_status_label.setToolTip(text)
 
     def _reserve_feedback_button_widths(self) -> None:
         for button, texts in (

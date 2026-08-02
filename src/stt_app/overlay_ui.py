@@ -26,6 +26,11 @@ from .config import (
 RECORD_BUTTON_START_TEXT = "● Record"
 RECORD_BUTTON_STOP_TEXT = "■ Stop"
 
+# Language button chrome around its caption: the stylesheet reserves 8 px on
+# the left and 26 px on the right for the chevron, plus a 1 px border per side
+# and 2 px of rounding headroom.
+_LANGUAGE_BUTTON_CHROME_PX = 38
+
 
 class _OverlayLanguageButton(QtWidgets.QPushButton):
     _ARROW_AREA_WIDTH = 22
@@ -224,7 +229,13 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_button.setObjectName("overlayLanguageButton")
         self._language_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._language_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._language_button.setFixedSize(130, 22)
+        # Measure instead of guessing, like the state label above: the previous
+        # fixed 130 px offered only 94 px of caption area and clipped the
+        # longest language names (Luxembourgish, Northern Sotho, ...), which
+        # faster-whisper's ~100 languages expose by default.
+        self._language_button.setFixedSize(
+            self._widest_language_caption_width(), 22
+        )
         self._language_menu = QtWidgets.QMenu(self._language_button)
         self._language_button.clicked.connect(self._show_language_menu)
         self._rebuild_language_menu()
@@ -656,10 +667,22 @@ class OverlayUI(QtWidgets.QWidget):
             )
         )
 
+    def _widest_language_caption_width(self) -> int:
+        metrics = QtGui.QFontMetrics(self._language_button.font())
+        widest = max(
+            metrics.horizontalAdvance(self._language_caption(label))
+            for label in LANGUAGE_MODE_LABELS.values()
+        )
+        return widest + _LANGUAGE_BUTTON_CHROME_PX
+
+    @staticmethod
+    def _language_caption(label: str) -> str:
+        return f"Lang: {label}"
+
     def _sync_language_button(self) -> None:
         label = LANGUAGE_MODE_LABELS.get(self._language_mode, self._language_mode)
         has_choices = len(self._language_modes) > 1
-        self._language_button.setText(f"Lang: {label}")
+        self._language_button.setText(self._language_caption(label))
         self._language_button.setEnabled(
             has_choices and not self._language_change_blocked
         )

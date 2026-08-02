@@ -166,7 +166,10 @@ class _HistoryTabMixin:
         self.history_status_label = QtWidgets.QLabel("")
         self.history_status_label.setWordWrap(True)
         self.history_status_label.setStyleSheet("color: #555;")
-        self.history_status_label.setVisible(False)
+        # Reserve the space instead of toggling visibility: the label sits
+        # below the stretching history splitter, so appearing and disappearing
+        # resized the visible transcript list after every export/import/delete.
+        self._reserve_dynamic_hint_height(self.history_status_label)
         history_layout.addWidget(self.history_status_label)
 
         layout.addWidget(history_box, 1)
@@ -178,7 +181,7 @@ class _HistoryTabMixin:
         self.history_status_label.setStyleSheet(
             "color: #b71c1c;" if error else "color: #555;"
         )
-        self.history_status_label.setVisible(bool(text))
+        self.history_status_label.setToolTip(text)
 
     def _update_history_count_label(self, total: int) -> None:
         self.history_count_label.setText(

@@ -377,3 +377,34 @@ def test_microphone_refresh_requests_controller_reenumeration(
     # The delayed repopulate is armed so the list updates again after the
     # controller's off-thread re-enumeration finished.
     assert dialog._microphone_repopulate_timer.isActive()
+
+
+def test_bottom_status_does_not_move_the_save_and_close_buttons(
+    dialog: SettingsDialog,
+) -> None:
+    """The bottom status text must never move the Save/Close buttons.
+
+    Their row also holds a status label whose text ranges from empty to a full
+    failure message; the stretch in front of it is what keeps the buttons
+    anchored, so guard that it stays there.
+    """
+    dialog.show()
+    QtWidgets.QApplication.processEvents()
+    save_button = dialog._save_button
+    idle_position = save_button.pos().x()
+
+    dialog._set_bottom_status("Settings saved")
+    QtWidgets.QApplication.processEvents()
+    assert save_button.pos().x() == idle_position
+
+    dialog._set_bottom_status(
+        "Failed to save settings: " + ("a very long failure reason " * 8),
+        "#b71c1c",
+    )
+    QtWidgets.QApplication.processEvents()
+    assert save_button.pos().x() == idle_position
+
+    dialog._set_bottom_status("")
+    QtWidgets.QApplication.processEvents()
+    assert save_button.pos().x() == idle_position
+    dialog.hide()

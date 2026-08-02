@@ -22,7 +22,12 @@ class TranscriptEditDialog(QtWidgets.QDialog):
 
         self._error_label = QtWidgets.QLabel("")
         self._error_label.setStyleSheet("color: #b71c1c;")
-        self._error_label.setVisible(False)
+        # Keep the row in the layout and only swap its text: toggling the
+        # label's visibility pushed the Save/Cancel row down by a line whenever
+        # the validation error appeared.
+        self._error_label.setFixedHeight(
+            self._error_label.sizeHint().height()
+        )
 
         self._save_button = QtWidgets.QPushButton("Save Transcript")
         self._save_button.setObjectName("primaryButton")
@@ -54,15 +59,13 @@ class TranscriptEditDialog(QtWidgets.QDialog):
     def _accept_if_valid(self) -> None:
         if not self.text:
             self._error_label.setText("Transcript text cannot be empty.")
-            self._error_label.setVisible(True)
             self._editor.setFocus(QtCore.Qt.FocusReason.OtherFocusReason)
             return
         self.accept()
 
     def _clear_error(self) -> None:
-        if not self._error_label.isHidden() and self.text:
+        if self._error_label.text() and self.text:
             self._error_label.clear()
-            self._error_label.setVisible(False)
 
     @staticmethod
     def get_text(

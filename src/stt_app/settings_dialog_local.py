@@ -199,6 +199,10 @@ class _LocalModelsMixin:
 
         self.local_models_action_label = QtWidgets.QLabel("")
         self.local_models_action_label.setWordWrap(True)
+        # Reserve the space: this label sits below the stretching model list,
+        # so a status message that wraps to a second line would otherwise
+        # shorten the list mid-scan/mid-download.
+        self._reserve_dynamic_hint_height(self.local_models_action_label)
         local_models_layout.addWidget(self.local_models_action_label)
 
         self.local_model_download_progress_bar = QtWidgets.QProgressBar()
