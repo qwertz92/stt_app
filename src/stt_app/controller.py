@@ -2091,11 +2091,15 @@ class DictationController(QtCore.QObject):
 
     @staticmethod
     def _model_preload_key(settings: AppSettings) -> tuple[object, ...]:
-        """Identity of the selected local runtime that preload prepares."""
+        """Identity of the selected local runtime that preload prepares.
+
+        Mirrors the transcriber cache key and likewise excludes
+        ``language_mode``: the loaded runtime is the same for every language,
+        so a language switch must not invalidate a finished preload.
+        """
         return (
             settings.engine,
             settings.model_size,
-            settings.language_mode,
             settings.vad_enabled,
             bool(getattr(settings, "offline_mode", False)),
             getattr(settings, "model_dir", ""),
@@ -2274,8 +2278,8 @@ class DictationController(QtCore.QObject):
         )
 
         return (
-            f"{detail} Recordings keep using the selected model and wait for it "
-            "before transcription. Use Cancel to abort download."
+            f"{detail} You can start recording now; transcription waits for "
+            "this model. Use Cancel to abort download."
         )
 
     @QtCore.Slot()
@@ -2432,7 +2436,7 @@ class DictationController(QtCore.QObject):
             if not session_active:
                 self._overlay.set_state(
                     "Done",
-                    f"Model '{ready_model}' is ready. Next transcription uses it.",
+                    f"Model '{ready_model}' is ready.",
                 )
                 QtCore.QTimer.singleShot(1800, self.show_idle_status)
             else:
@@ -2742,10 +2746,15 @@ class DictationController(QtCore.QObject):
             self._emit_stream_runtime_failure(f"Streaming chunk push failed: {exc}")
 
     def _get_or_create_transcriber(self, settings: AppSettings):
+        # ``language_mode`` is deliberately absent from the key: every provider
+        # reads the language when a request or stream starts, so a language
+        # change only has to be applied to the existing runtime (see
+        # ``set_language_mode`` below). Keying on it would throw away a loaded
+        # local model — several GB and seconds of load time — for a setting the
+        # runtime does not depend on.
         cache_key = (
             settings.engine,
             settings.model_size,
-            settings.language_mode,
             settings.vad_enabled,
             getattr(settings, "offline_mode", False),
             getattr(settings, "model_dir", ""),
@@ -2776,6 +2785,16 @@ class DictationController(QtCore.QObject):
                     settings, secret_store=self._secret_store
                 )
                 self._transcriber_cache_key = cache_key
+            # Apply the language of *this* job's settings snapshot. Acquisition
+            # is serialized by the runtime lock, so a reused runtime can never
+            # transcribe with a stale language. Every provider implements this
+            # through ITranscriber; the lookup keeps duck-typed transcribers
+            # (tests, future in-process adapters) working.
+            apply_language = getattr(
+                self._transcriber_cache, "set_language_mode", None
+            )
+            if callable(apply_language):
+                apply_language(settings.language_mode)
             return self._transcriber_cache
 
     @QtCore.Slot(int, str)
@@ -4014,13 +4033,11 @@ class DictationController(QtCore.QObject):
         except Exception:
             self._logger.exception("Failed to persist transcription language")
         self._sync_overlay_language_options()
-
-        if self._transcription_runtime_active():
-            self._pending_transcriber_cache_reset = True
-            return
-        self._reset_transcriber_cache()
-        if self._settings.engine == DEFAULT_ENGINE:
-            self._start_local_model_preload()
+        # No runtime teardown and no preload: the language is a per-request
+        # parameter for every engine and is applied when the next job acquires
+        # the runtime. Reloading here made a mistyped language selection block
+        # the correction behind a full model load, and switching language for a
+        # single recording evicted the model that the next dictation needs.
 
     def set_history_max_items(self, value: int) -> None:
         normalized = max(0, int(value))

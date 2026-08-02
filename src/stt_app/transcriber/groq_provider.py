@@ -76,16 +76,19 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings → Remote Provider API Keys."
             )
         self._api_key = api_key
-        self._language_mode = (language_mode or "auto").strip().lower()
         self._model = model or DEFAULT_GROQ_MODEL
-        if self._language_mode not in language_modes_for_selection(
-            "groq",
-            self._model,
-        ):
-            self._language_mode = "auto"
+        # Needs self._model, so this must run after it is assigned above
+        # (reordered from the model assignment's original position below it).
+        self.set_language_mode(language_mode)
         self._groq_class = groq_client_class  # None → lazy import on first use
         self._client = None
         self._prompt = ", ".join(parse_custom_vocabulary(custom_vocabulary))
+
+    def _normalize_language_mode(self, mode: str) -> str:
+        normalized = (mode or "auto").strip().lower()
+        if normalized not in language_modes_for_selection("groq", self._model):
+            normalized = "auto"
+        return normalized
 
     def _get_groq_class(self):
         if self._groq_class is None:

@@ -83,17 +83,17 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             )
         self._api_key = api_key
         self._model = model if model in FUNASR_MODELS else DEFAULT_FUNASR_MODEL
-        self._language_mode = (
-            (language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        )
-        if self._language_mode not in language_modes_for_selection(
-            "funasr",
-            self._model,
-        ):
-            self._language_mode = DEFAULT_LANGUAGE_MODE
+        # Needs self._model, so this must run after it is assigned above.
+        self.set_language_mode(language_mode)
         self._ws_url = ws_url or FUNASR_WS_URL_INTL
         self._request_timeout_s = max(5, int(request_timeout_s))
         self._ws_module = None
+
+    def _normalize_language_mode(self, mode: str) -> str:
+        normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
+        if normalized not in language_modes_for_selection("funasr", self._model):
+            normalized = DEFAULT_LANGUAGE_MODE
+        return normalized
 
     # -- websocket-client lazy import ------------------------------------------
 

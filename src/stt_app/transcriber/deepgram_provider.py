@@ -78,13 +78,10 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings → Remote Provider API Keys."
             )
         self._api_key = api_key
-        self._language_mode = (language_mode or "auto").strip().lower()
         self._model = model or DEFAULT_DEEPGRAM_MODEL
-        if self._language_mode not in language_modes_for_selection(
-            "deepgram",
-            self._model,
-        ):
-            self._language_mode = "auto"
+        # Needs self._model, so this must run after it is assigned above
+        # (reordered from the model assignment's original position below it).
+        self.set_language_mode(language_mode)
         self._vocabulary_terms = parse_custom_vocabulary(custom_vocabulary)
         self._stream_lock = threading.Lock()
         self._stream_generation = 0
@@ -105,6 +102,12 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._stream_partial_text = ""
         self._stream_error_reported = False
         self._stream_last_message_at = 0.0
+
+    def _normalize_language_mode(self, mode: str) -> str:
+        normalized = (mode or "auto").strip().lower()
+        if normalized not in language_modes_for_selection("deepgram", self._model):
+            normalized = "auto"
+        return normalized
 
     def _stream_combined_text_locked(self) -> str:
         parts = list(self._stream_finals)

@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+from stt_app.config import (
+    LOCAL_ONNX_MODEL_SIZES,
+    VALID_ENGINES,
+    language_modes_for_selection,
+)
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.factory import create_transcriber
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
@@ -122,3 +127,55 @@ def test_factory_local_passes_stream_final_full_pass():
     settings = AppSettings(engine="local")
     t = create_transcriber(settings)
     assert t.stream_final_full_pass is False
+
+
+def test_every_engine_can_change_its_language_without_being_recreated():
+    """The transcriber cache applies the language instead of rebuilding.
+
+    The controller deliberately keeps ``language_mode`` out of its cache key so
+    a language switch never reloads a local model. That only holds if every
+    engine really accepts a language change on a live instance.
+    """
+
+    class FakeSecretStore:
+        def get_api_key(self, name):
+            return "test-key"
+
+    for engine in VALID_ENGINES:
+        settings = AppSettings(
+            engine=engine,
+            language_mode="auto",
+            # Azure refuses to build without a resource endpoint.
+            azure_endpoint="https://example.cognitiveservices.azure.com",
+        )
+        transcriber = create_transcriber(settings, secret_store=FakeSecretStore())
+
+        assert callable(getattr(transcriber, "set_language_mode", None)), engine
+
+        supported = language_modes_for_selection(
+            engine,
+            settings.model_size,
+            settings.mode,
+        )
+        target = "de" if "de" in supported else supported[-1]
+        transcriber.set_language_mode(target)
+
+        assert transcriber._language_mode == target, engine
+
+
+def test_every_local_runtime_can_change_its_language_without_being_recreated():
+    """Same guard as above for the local runtimes, which are the expensive ones.
+
+    Reloading a local model for a language switch costs seconds and gigabytes,
+    which is exactly why the controller applies the language to the live
+    instance instead of rebuilding it.
+    """
+    for model_size in LOCAL_ONNX_MODEL_SIZES + ("small",):
+        settings = AppSettings(engine="local", model_size=model_size)
+        transcriber = create_transcriber(settings)
+
+        supported = language_modes_for_selection("local", model_size, settings.mode)
+        target = "de" if "de" in supported else supported[-1]
+        transcriber.set_language_mode(target)
+
+        assert transcriber._language_mode == target, model_size

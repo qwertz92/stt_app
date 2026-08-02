@@ -82,7 +82,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 "Enter your key in Settings → Remote Provider API Keys."
             )
         self._api_key = api_key
-        self._language_mode = (language_mode or "auto").strip().lower()
+        # No class-specific validation: the base ``_normalize_language_mode``
+        # (strip/lower with an "auto" fallback) already matches what this
+        # provider needs. Actual language-code validity is decided per
+        # request in ``_build_config`` (falls back to language detection).
+        self.set_language_mode(language_mode)
         self._model = (model or DEFAULT_ASSEMBLYAI_MODEL).strip().lower()
         self._aai = aai_module  # None → lazy import on first use
         self._streaming_client_factory = streaming_client_factory

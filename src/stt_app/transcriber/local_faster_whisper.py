@@ -409,7 +409,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         custom_vocabulary: str = DEFAULT_CUSTOM_VOCABULARY,
     ) -> None:
         self.model_size = model_size
-        self.language_mode = language_mode
+        # Needs self.model_size, so this must run after it is assigned above.
+        self.set_language_mode(language_mode)
         self.device = device
         self.compute_type = compute_type
         self.vad_filter = vad_filter
@@ -479,12 +480,18 @@ class LocalFasterWhisperTranscriber(ITranscriber):
     def is_model_loaded(self) -> bool:
         return self._model is not None
 
-    def _language_arg(self) -> str | None:
-        mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
+    def _normalize_language_mode(self, mode: str) -> str:
+        normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
         supported_modes = language_modes_for_selection("local", self.model_size)
-        if mode == DEFAULT_LANGUAGE_MODE or mode not in supported_modes:
+        if normalized not in supported_modes:
+            normalized = DEFAULT_LANGUAGE_MODE
+        return normalized
+
+    def _language_arg(self) -> str | None:
+        # Auto-detect is expressed to faster-whisper as no language hint.
+        if self._language_mode == DEFAULT_LANGUAGE_MODE:
             return None
-        return mode
+        return self._language_mode
 
     @staticmethod
     def _build_initial_prompt(custom_vocabulary: str) -> str | None:

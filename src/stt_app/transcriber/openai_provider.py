@@ -51,14 +51,16 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             )
         self._api_key = api_key
         self._model = model if model in OPENAI_MODELS else DEFAULT_OPENAI_MODEL
-        self._language_mode = (language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
-        if self._language_mode not in language_modes_for_selection(
-            "openai",
-            self._model,
-        ):
-            self._language_mode = DEFAULT_LANGUAGE_MODE
+        # Needs self._model, so this must run after it is assigned above.
+        self.set_language_mode(language_mode)
         self._request_timeout_s = max(5, int(request_timeout_s))
         self._prompt = self._build_prompt(custom_vocabulary)
+
+    def _normalize_language_mode(self, mode: str) -> str:
+        normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
+        if normalized not in language_modes_for_selection("openai", self._model):
+            normalized = DEFAULT_LANGUAGE_MODE
+        return normalized
 
     @staticmethod
     def _build_prompt(custom_vocabulary: str) -> str:

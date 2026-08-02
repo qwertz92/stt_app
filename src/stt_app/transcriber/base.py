@@ -5,6 +5,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
 
+from ..config import DEFAULT_LANGUAGE_MODE
+
 AudioInput = bytes | str | Path
 StreamingCallback = Callable[[str], None]
 StreamingErrorCallback = Callable[[str], None]
@@ -29,6 +31,19 @@ class ITranscriber(ABC):
     @abstractmethod
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         raise NotImplementedError
+
+    def set_language_mode(self, mode: str) -> None:
+        """Apply a language selection to an already-created transcriber.
+
+        Every provider reads the language when a request or stream starts, so
+        a language change must never force a new runtime object (for local
+        models that would mean reloading the whole model). Subclasses that
+        restrict the accepted values override ``_normalize_language_mode``.
+        """
+        self._language_mode = self._normalize_language_mode(mode)
+
+    def _normalize_language_mode(self, mode: str) -> str:
+        return str(mode or DEFAULT_LANGUAGE_MODE).strip().lower()
 
     def start_stream(
         self,

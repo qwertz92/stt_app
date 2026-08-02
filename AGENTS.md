@@ -744,6 +744,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcription delivers itself later with no duplicate. Normal (non-cancel)
   flow keeps the `_active_request_token` guard so background text is not
   inserted mid-foreground-session.
+- **A language change never reloads a runtime**: `language_mode` is
+  deliberately absent from both the transcriber cache key and the preload key.
+  Every engine takes the language as a per-request/per-session parameter
+  (faster-whisper `transcribe(language=...)`, Nemotron's `lang_id` runtime
+  option, the Cohere/Granite JSON request field, and the remote providers'
+  request parameters), so `ITranscriber.set_language_mode` applies it to the
+  live instance when a job acquires the runtime — acquisition is serialized by
+  the runtime lock, so a reused runtime can never transcribe with a stale
+  language. Providers that restrict the accepted values override
+  `_normalize_language_mode`; anything derived from the language must be
+  recomputed there or read per request. `controller.set_language_mode`
+  therefore only persists and syncs the UI: it must not reset the transcriber
+  cache or start a preload. Before this, switching language tore down the
+  loaded model, so a mistyped selection blocked the correction behind a full
+  reload and transcribing one recording in another language evicted the model
+  the next dictation needed. `tests/test_factory.py` asserts the setter exists
+  and works for every engine — keep that guard.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can

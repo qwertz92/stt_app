@@ -309,6 +309,47 @@ def test_controller_preserves_clipboard_on_contention_error(monkeypatch):
     _ = app
 
 
+def test_failed_insert_shows_the_transcript_and_copies_only_it(monkeypatch):
+    """The transcript must be readable while the insertion error is shown."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
+    overlay = FakeOverlay()
+
+    class FailingInserter:
+        def insert_text_with_options(
+            self,
+            text,
+            target_hwnd=None,
+            paste_mode="auto",
+            restore_clipboard=True,
+        ):
+            raise TextInsertionError("Target window did not accept the paste.")
+
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FailingInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: FakeClipboard())
+
+    controller._target_window_handle = 555
+    controller._on_transcription_ready("the transcribed sentence")
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Target window did not accept the paste." in detail
+    assert "the transcribed sentence" in detail
+    # Copy must yield the transcript, not the error message around it.
+    assert overlay.state_kwargs[-1]["copy_text"] == "the transcribed sentence"
+
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_records_history_when_insert_fails(monkeypatch, tmp_path):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
@@ -1691,7 +1732,7 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
     _ = app
 
 
-def test_overlay_language_change_persists_and_refreshes_local_transcriber():
+def test_overlay_language_change_keeps_the_loaded_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         engine="local",
@@ -1712,16 +1753,66 @@ def test_overlay_language_change_persists_and_refreshes_local_transcriber():
     )
     preload_calls = []
     controller._start_local_model_preload = lambda: preload_calls.append(True)
-    controller._transcriber_cache = object()
+    cached = object()
+    controller._transcriber_cache = cached
 
     controller.set_language_mode("de")
 
     assert controller.settings.language_mode == "de"
     assert store.saved is not None
     assert store.saved.language_mode == "de"
-    assert controller._transcriber_cache is None
-    assert preload_calls == [True]
+    # The language is a per-request parameter, so switching it must neither
+    # tear down the loaded runtime nor schedule a reload.
+    assert controller._transcriber_cache is cached
+    assert preload_calls == []
     assert overlay.language_options[-1][1] == "de"
+    controller.shutdown()
+    _ = app
+
+
+def test_language_change_reuses_the_cached_transcriber(monkeypatch):
+    """A language switch must apply to the cached runtime, not rebuild it."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    class FakeCachedTranscriber:
+        def __init__(self, language_mode: str):
+            self.language_mode = language_mode
+
+        def set_language_mode(self, mode: str) -> None:
+            self.language_mode = mode
+
+    created: list[FakeCachedTranscriber] = []
+
+    def fake_create(settings, secret_store=None):
+        transcriber = FakeCachedTranscriber(settings.language_mode)
+        created.append(transcriber)
+        return transcriber
+
+    monkeypatch.setattr(controller_module, "create_transcriber", fake_create)
+    settings = AppSettings(
+        engine="local",
+        model_size="small",
+        language_mode="auto",
+        hotkey=FALLBACK_HOTKEY,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._start_local_model_preload = lambda: None
+
+    first = controller._get_or_create_transcriber(controller.settings)
+    controller.set_language_mode("de")
+    second = controller._get_or_create_transcriber(controller.settings)
+
+    assert second is first
+    assert len(created) == 1
+    assert first.language_mode == "de"
     controller.shutdown()
     _ = app
 

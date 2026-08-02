@@ -594,7 +594,8 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             device = "cpu"
         ProgressReporter.__init__(self)
         self.model_size = model_size
-        self.language_mode = language_mode
+        # Needs self.model_size, so this must run after it is assigned above.
+        self.set_language_mode(language_mode)
         self.device = device
         self._auto_cpu_preferred = auto_cpu_preferred
         self.dtype = str(dtype or LOCAL_ONNX_MODEL_PRECISION.get(model_size) or "q4")
@@ -654,11 +655,16 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             "available or did not load."
         )
 
-    def _language_arg(self) -> str:
-        mode = (self.language_mode or DEFAULT_LANGUAGE_MODE).strip().lower()
+    def _normalize_language_mode(self, mode: str) -> str:
+        normalized = (mode or DEFAULT_LANGUAGE_MODE).strip().lower()
         supported_modes = language_modes_for_selection("local", self.model_size)
-        if mode in supported_modes and mode != DEFAULT_LANGUAGE_MODE:
-            return mode
+        if normalized not in supported_modes:
+            normalized = DEFAULT_LANGUAGE_MODE
+        return normalized
+
+    def _language_arg(self) -> str:
+        if self._language_mode != DEFAULT_LANGUAGE_MODE:
+            return self._language_mode
         if self.model_size != "cohere-transcribe-03-2026":
             return ""
         # Cohere requires an explicit language. German is the safer default for

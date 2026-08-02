@@ -92,7 +92,8 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
             raise ValueError(f"Unsupported Nemotron model '{model_size}'.")
         ProgressReporter.__init__(self)
         self.model_size = model_size
-        self.language_mode = str(language_mode or DEFAULT_LANGUAGE_MODE).lower()
+        # Needs self.model_size, so this must run after it is assigned above.
+        self.set_language_mode(language_mode)
         self.offline_mode = bool(offline_mode)
         self.model_dir = str(model_dir or "").strip()
         self.provider_order = tuple(provider_order) or ("cpu",)
@@ -214,10 +215,20 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
     def preload_model(self) -> None:
         self._ensure_model()
 
-    def _language_id(self) -> int:
+    def _normalize_language_mode(self, mode: str) -> str:
+        # No ``.strip()`` here: matches this provider's pre-existing behavior,
+        # where a mode with stray whitespace never matches ``supported`` below
+        # and therefore always falls back to auto-detection.
+        normalized = str(mode or DEFAULT_LANGUAGE_MODE).lower()
         supported = language_modes_for_selection("local", self.model_size)
-        mode = self.language_mode if self.language_mode in supported else "auto"
-        return NEMOTRON_LANGUAGE_IDS.get(mode, NEMOTRON_LANGUAGE_IDS["auto"])
+        if normalized not in supported:
+            normalized = DEFAULT_LANGUAGE_MODE
+        return normalized
+
+    def _language_id(self) -> int:
+        return NEMOTRON_LANGUAGE_IDS.get(
+            self._language_mode, NEMOTRON_LANGUAGE_IDS["auto"]
+        )
 
     def _create_session(self) -> _InferenceSession:
         model = self._ensure_model()
