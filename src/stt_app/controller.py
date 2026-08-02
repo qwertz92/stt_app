@@ -3565,7 +3565,17 @@ class DictationController(QtCore.QObject):
                         f"{detail} Transcript saved to history; current "
                         "clipboard left untouched."
                     )
-                self._overlay.set_state("Error", detail)
+                # Show what was transcribed: the text is otherwise invisible
+                # until it is inserted again, which is exactly when the user
+                # needs to see and be able to copy it.
+                preview = insertion_text.strip()
+                if preview:
+                    detail = f"{detail}\n\n{preview}"
+                self._overlay.set_state(
+                    "Error",
+                    detail,
+                    copy_text=insertion_text,
+                )
             self._logger.exception("Text insertion failed")
             return False
         self._logger.info(

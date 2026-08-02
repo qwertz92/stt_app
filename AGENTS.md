@@ -283,6 +283,31 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   silence). The windowed peak (`peak_windowed_rms_from_wav`) keeps short
   whispers detectable; every batch stop logs `recording_peak_level` for
   threshold tuning, and gated audio stays available as the last recording.
+- **Overlay window resizes go through `_resize_window`**: `QWidget.resize`
+  clamps to the widget's *current* minimum size, and that minimum is only
+  recomputed when the layout is activated (normally deferred to the next event
+  loop pass). Right after shrinking the detail/queue areas the window still
+  carried the previous state's larger minimum, so the resize was silently
+  swallowed and a short error after a long transcript kept the expanded height.
+  `_resize_window` activates both layouts first; never call `self.resize(...)`
+  directly for the overlay window. The styled container's stylesheet border
+  becomes part of its contents margins, so every size computation adds
+  `_container_frame_margins()` and `set_state` applies the state stylesheet
+  *before* measuring — without that the computed target was 2 px below the real
+  layout minimum and `OVERLAY_MAX_HEIGHT` did not hold.
+- **Overlay primary action and shared action slot**: the header starts with the
+  Record/Stop button (`record_toggle_requested` → `controller.toggle_recording`)
+  so dictation can be started without a keyboard; its caption swaps between two
+  fixed-width captions and the recording state is a stylesheet property, so
+  neither changes the layout. Cancel and Retry never apply at the same time and
+  therefore share one slot: exactly one of them is visible (Retry only in the
+  Error state) with identical fixed sizes, which keeps the controls row width
+  constant while showing only the action that is actually available.
+- **Overlay `set_state(copy_text=...)`**: when the detail area shows more than
+  the transcript — an insertion error followed by the transcript preview — the
+  Copy action must still yield exactly the transcript. A failed insertion shows
+  the transcript because it is otherwise invisible until it is inserted again,
+  and the Error state scrolls to the top so the reason stays in view.
 - **Overlay must never re-wrap or blink**: the transcript label wraps at a
   width derived from the target window width (never the live scroll
   viewport, which changes with deferred queue resizes and scrollbar

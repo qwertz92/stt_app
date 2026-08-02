@@ -154,6 +154,7 @@ def run() -> int:
     )
     open_history_dialog = history_dialog_presenter.open
 
+    overlay.record_toggle_requested.connect(controller.toggle_recording)
     overlay.history_requested.connect(open_history_dialog)
     overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
     overlay.retry_requested.connect(controller.retry_last_transcription)

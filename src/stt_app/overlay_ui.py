@@ -22,6 +22,10 @@ from .config import (
 )
 
 
+RECORD_BUTTON_START_TEXT = "● Record"
+RECORD_BUTTON_STOP_TEXT = "■ Stop"
+
+
 class _OverlayLanguageButton(QtWidgets.QPushButton):
     _ARROW_AREA_WIDTH = 22
     _ARROW_HALF_WIDTH = 4
@@ -70,6 +74,7 @@ class _OverlayLanguageButton(QtWidgets.QPushButton):
 
 
 class OverlayUI(QtWidgets.QWidget):
+    record_toggle_requested = QtCore.Signal()
     history_requested = QtCore.Signal()
     edit_requested = QtCore.Signal()
     retry_requested = QtCore.Signal()
@@ -116,6 +121,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._manual_positioned = False
         self._screen_change_connected = False
         self._state_background = ""
+        self._copy_text: str | None = None
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -137,11 +143,22 @@ class OverlayUI(QtWidgets.QWidget):
         )
         self._state_label.setMinimumWidth(_max_state_w)
 
+        # Primary action: start/stop dictation without touching the keyboard.
+        # Fixed width for both captions so the caption swap cannot reflow the
+        # header row.
+        self._record_button = QtWidgets.QPushButton(RECORD_BUTTON_START_TEXT)
+        self._record_button.setObjectName("overlayRecordButton")
+        self._record_button.setCursor(QtCore.Qt.PointingHandCursor)
+        self._record_button.setFocusPolicy(QtCore.Qt.NoFocus)
+        self._record_button.setFixedWidth(84)
+        self._record_button.setFixedHeight(24)
+        self._record_button.clicked.connect(self.record_toggle_requested.emit)
+
         self._history_button = QtWidgets.QPushButton("History")
         self._history_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._history_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._history_button.setFixedWidth(68)
-        self._history_button.setFixedHeight(24)
+        self._history_button.setFixedHeight(22)
         self._history_button.clicked.connect(self.history_requested.emit)
 
         self._always_on_top_button = QtWidgets.QPushButton("")
@@ -163,7 +180,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._edit_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._edit_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._edit_button.setFixedWidth(58)
-        self._edit_button.setFixedHeight(24)
+        self._edit_button.setFixedHeight(22)
         self._edit_button.setEnabled(False)
         self._edit_button.clicked.connect(self.edit_requested.emit)
 
@@ -266,7 +283,7 @@ class OverlayUI(QtWidgets.QWidget):
         header = QtWidgets.QHBoxLayout(self._header_widget)
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(6)
-        header.addWidget(self._history_button, 0, QtCore.Qt.AlignLeft)
+        header.addWidget(self._record_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
         header.addWidget(self._clear_button, 0, QtCore.Qt.AlignRight)
@@ -276,8 +293,12 @@ class OverlayUI(QtWidgets.QWidget):
         controls = QtWidgets.QHBoxLayout(self._controls_widget)
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(6)
-        controls.addWidget(self._retry_button)
+        controls.addWidget(self._history_button)
+        # Cancel and Retry never apply at the same time, so they share one slot
+        # of identical size: exactly one of them is visible, which keeps the row
+        # width constant and shows only the action that is actually available.
         controls.addWidget(self._cancel_button)
+        controls.addWidget(self._retry_button)
         controls.addWidget(self._edit_button)
         controls.addWidget(self._reset_pos_button)
         controls.addWidget(self._language_button)
@@ -390,21 +411,36 @@ class OverlayUI(QtWidgets.QWidget):
         self._temporary_foreground_uses_window_flag = False
         self._apply_window_flags()
 
-    def set_state(self, state: str, detail: str = "", *, compact: bool | None = None) -> None:
+    def set_state(
+        self,
+        state: str,
+        detail: str = "",
+        *,
+        compact: bool | None = None,
+        copy_text: str | None = None,
+    ) -> None:
+        """Render an overlay state.
+
+        ``copy_text`` overrides what the Copy action puts into the clipboard.
+        It is used when the detail area shows more than the plain transcript
+        (an insertion error plus the transcript preview, for example), so Copy
+        still yields exactly the transcript.
+        """
         if state == "Idle" and detail.strip():
             self._idle_default_detail = detail
         self._state_label.setText(state)
         self._detail_label.setText(detail)
+        self._copy_text = copy_text
         has_detail = bool(detail.strip())
         if compact is None:
             self._compact_mode = state in {"Idle", "Listening", "Processing"}
         else:
             self._compact_mode = compact
-        self._copy_button.setEnabled(has_detail)
+        self._copy_button.setEnabled(has_detail or bool(copy_text))
         self._edit_button.setEnabled(has_detail and state == "Done")
         self._clear_button.setEnabled(has_detail and state in {"Done", "Error"})
-        self._retry_button.setEnabled(state == "Error")
-        self._cancel_button.setEnabled(state in {"Listening", "Processing"})
+        self._sync_record_button(state)
+        self._sync_action_slot(state)
         self._reset_pos_button.setEnabled(True)
         self._language_change_blocked = state in {"Listening", "Processing"}
         self._sync_language_button()
@@ -415,9 +451,39 @@ class OverlayUI(QtWidgets.QWidget):
         # minimum (the window then refused to shrink to the computed target).
         self._apply_state_stylesheet(state)
         self._update_detail_height()
-        self._detail_scroll.verticalScrollBar().setValue(
-            self._detail_scroll.verticalScrollBar().maximum()
+        scrollbar = self._detail_scroll.verticalScrollBar()
+        # Errors lead with the reason and may be followed by a long transcript
+        # preview, so keep the reason in view; every other state shows the end
+        # of the transcript.
+        scrollbar.setValue(0 if state == "Error" else scrollbar.maximum())
+
+    def _sync_record_button(self, state: str) -> None:
+        recording = state == "Listening"
+        self._record_button.setText(
+            RECORD_BUTTON_STOP_TEXT if recording else RECORD_BUTTON_START_TEXT
         )
+        self._record_button.setToolTip(
+            "Stop dictation and transcribe."
+            if recording
+            else "Start dictation (same as the recording hotkey)."
+        )
+        if self._record_button.property("recording") != recording:
+            self._record_button.setProperty("recording", recording)
+            self._record_button.style().unpolish(self._record_button)
+            self._record_button.style().polish(self._record_button)
+            self._record_button.update()
+
+    def _sync_action_slot(self, state: str) -> None:
+        """Show Retry in the error state and Cancel everywhere else.
+
+        Both buttons occupy the same slot with the same fixed size, so the
+        swap keeps the row width constant.
+        """
+        show_retry = state == "Error"
+        self._retry_button.setEnabled(show_retry)
+        self._cancel_button.setEnabled(state in {"Listening", "Processing"})
+        self._retry_button.setVisible(show_retry)
+        self._cancel_button.setVisible(not show_retry)
 
     def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
@@ -487,6 +553,15 @@ class OverlayUI(QtWidgets.QWidget):
             }}
             QPushButton#overlayLanguageButton {{
                 padding: 0 26px 0 8px;
+            }}
+            QPushButton#overlayRecordButton {{
+                font-weight: bold;
+                background-color: rgba(255,255,255,0.16);
+                border-color: rgba(255,255,255,0.55);
+            }}
+            QPushButton#overlayRecordButton[recording="true"] {{
+                background-color: rgba(220,70,70,0.55);
+                border-color: rgba(255,200,200,0.8);
             }}
             QPushButton:hover {{
                 background-color: rgba(255,255,255,0.18);
@@ -1247,7 +1322,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._set_copy_button_feedback(False)
 
     def copy_detail_text(self) -> None:
-        text = self._detail_label.text()
+        text = self._copy_text or self._detail_label.text()
         if not text:
             return
         try:

@@ -491,6 +491,70 @@ def test_overlay_shrinks_after_long_transcription():
     assert overlay.height() >= OVERLAY_HEIGHT
 
 
+def test_overlay_record_button_toggles_caption_and_emits():
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    emitted: list[int] = []
+    overlay.record_toggle_requested.connect(lambda: emitted.append(1))
+
+    assert overlay._record_button.text() == overlay_ui_module.RECORD_BUTTON_START_TEXT
+
+    overlay.set_state("Listening", "Speak now.")
+    assert overlay._record_button.text() == overlay_ui_module.RECORD_BUTTON_STOP_TEXT
+    assert overlay._record_button.isEnabled() is True
+
+    overlay._record_button.click()
+    overlay.set_state("Processing", "Transcribing audio...")
+
+    assert emitted == [1]
+    assert overlay._record_button.text() == overlay_ui_module.RECORD_BUTTON_START_TEXT
+
+
+def test_overlay_cancel_and_retry_share_one_slot_without_resizing():
+    """Only the applicable action is shown, and the row width stays constant."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_state("Listening", "Speak now.")
+    listening_width = overlay._controls_widget.sizeHint().width()
+    assert overlay._cancel_button.isHidden() is False
+    assert overlay._retry_button.isHidden() is True
+    assert overlay._cancel_button.isEnabled() is True
+
+    overlay.set_state("Error", "Transcription failed.")
+    assert overlay._cancel_button.isHidden() is True
+    assert overlay._retry_button.isHidden() is False
+    assert overlay._retry_button.isEnabled() is True
+    assert overlay._controls_widget.sizeHint().width() == listening_width
+
+    overlay.set_state("Done", "transcribed text")
+    assert overlay._cancel_button.isHidden() is False
+    assert overlay._cancel_button.isEnabled() is False
+    assert overlay._controls_widget.sizeHint().width() == listening_width
+
+
+def test_overlay_copy_uses_copy_text_override(monkeypatch):
+    """An error detail may embed the transcript; Copy must yield only it."""
+    fake_clipboard = FakeClipboard()
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: fake_clipboard)
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+
+    overlay.set_state(
+        "Error",
+        "Insertion failed.\n\ntranscribed text",
+        copy_text="transcribed text",
+    )
+    overlay._copy_button.click()
+
+    assert fake_clipboard.text() == "transcribed text"
+
+    overlay.set_state("Done", "plain transcript")
+    overlay._copy_button.click()
+
+    assert fake_clipboard.text() == "plain transcript"
+
+
 def test_overlay_error_after_long_transcript_restores_compact_height():
     """A short error must not inherit the expanded transcript height.
 
