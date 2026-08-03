@@ -28,6 +28,20 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - Things Qt used to do for us that a hand-rolled icon must do itself: re-add
   the icon on `TaskbarCreated` after an Explorer restart, and delete it before
   destroying its window (otherwise a dead icon stays until hovered).
+- **Native menu width is `longest label + 70 px`, and the 70 px is not ours.**
+  Measured by opening the real menu, reading its window rect and comparing it
+  with `GetTextExtentPoint32W` in the system menu font: the chrome is exactly
+  70 px for a one-word menu and for the full one alike, so it is Windows'
+  padding, not something the app reserves. Two levers exist: `MNS_NOCHECK`
+  removes the check-mark column while nothing is checkable (233 -> 205 px wide,
+  257 -> 224 px tall — the column drives the row height too), and shorter
+  labels move the width 1:1 (dropping the redundant "last" from three entries:
+  205 -> 184 px). Anything beyond that needs owner-drawn items, i.e. drawing
+  hover, disabled and dark-mode states by hand.
+- **Removing the icon must be the first shutdown step.** `aboutToQuit` runs its
+  slots in connection order, and the controller's shutdown joins worker threads
+  and child processes, so with the tray close registered after it the icon
+  lingered for a second or two after the windows were gone.
 
 ## 2026-08-03 (silence gate field data)
 

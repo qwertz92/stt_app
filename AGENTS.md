@@ -963,6 +963,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `create_tray_icon` falls back to `QSystemTrayIcon` on other platforms and on
   any Win32 failure. The context menu stays a `QMenu` — it is the model
   (labels, order, enabled state, callbacks) and is only *rendered* natively.
+  Menu width is `longest label + 70 px`: that 70 px is Windows' own padding and
+  is constant for any content (measured across five label sets), so the labels
+  are the only lever — `MNS_NOCHECK` reclaims the check-mark column while no
+  entry is checkable (233 -> 205 px), and dropping the redundant "last" from
+  three labels took it to 184 px. Entries report their checkable state, so
+  adding a checkable action brings the column back instead of losing its check
+  mark. Anything narrower would need owner-drawn items, which means drawing
+  hover/disabled/dark-mode states by hand — not worth it.
   Invariants that Qt used to provide and that this module must keep: the window
   class is registered once per process with a dispatcher that routes by HWND (a
   per-instance window procedure dangles as soon as one instance is collected),

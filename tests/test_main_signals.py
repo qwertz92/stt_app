@@ -242,9 +242,10 @@ def test_create_tray_icon_has_expected_menu_actions():
     assert "Show overlay" in action_labels
     assert "Settings" in action_labels
     assert "History" in action_labels
-    assert "Retry last transcription" in action_labels
+    assert "Retry transcription" in action_labels
     assert "Cancel current action" in action_labels
-    assert "Copy last transcript" in action_labels
+    assert "Copy transcript" in action_labels
+    assert "Insert transcript again" in action_labels
     assert "Copy diagnostics" in action_labels
     assert "Check for updates" in action_labels
     assert "Quit" in action_labels

@@ -217,12 +217,14 @@ def run() -> int:
         ),
     )
 
-    app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
-    app.aboutToQuit.connect(controller.shutdown)
-    # A hand-registered icon must be removed explicitly, or a dead icon stays
-    # in the tray until the user hovers over it.
+    # First: a hand-registered icon must be removed explicitly, or a dead icon
+    # stays in the tray until the user hovers over it. Doing it before the
+    # shutdown work below also makes it disappear immediately instead of after
+    # however long stopping the runtimes takes.
     if hasattr(tray_icon, "close"):
         app.aboutToQuit.connect(tray_icon.close)
+    app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
+    app.aboutToQuit.connect(controller.shutdown)
     signal_timer = _install_signal_handlers(app)
 
     app._tts_refs = {
@@ -268,11 +270,11 @@ def _create_tray_icon(
 
     settings_action = menu.addAction("Settings")
     history_action = menu.addAction("History")
-    retry_action = menu.addAction("Retry last transcription")
+    retry_action = menu.addAction("Retry transcription")
     cancel_action = menu.addAction("Cancel current action")
 
-    copy_last_action = menu.addAction("Copy last transcript")
-    repaste_action = menu.addAction("Insert last transcript again")
+    copy_last_action = menu.addAction("Copy transcript")
+    repaste_action = menu.addAction("Insert transcript again")
     copy_diag_action = menu.addAction("Copy diagnostics")
     check_updates_action = menu.addAction("Check for updates")
 
