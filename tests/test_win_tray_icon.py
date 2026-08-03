@@ -140,10 +140,10 @@ def test_right_click_renders_the_qt_menu_natively():
     assert reasons == [QtWidgets.QSystemTrayIcon.Context]
     entries, x, y = api.menus[0]
     assert entries == [
-        ("First", True),
-        ("Disabled", False),
-        (None, False),
-        ("Last", True),
+        ("First", True, None),
+        ("Disabled", False, None),
+        (None, False, None),
+        ("Last", True, None),
     ]
     assert (x, y) == (120, 340)
 
@@ -259,3 +259,21 @@ def test_create_tray_icon_falls_back_when_the_native_path_fails(monkeypatch):
     tray = create_tray_icon(QtCore.QObject(), QtWidgets.QApplication.windowIcon())
 
     assert isinstance(tray, QtWidgets.QSystemTrayIcon)
+
+
+def test_checkable_entries_are_reported_with_their_state():
+    """The check column is only dropped while nothing can be checked."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    api = FakeWin32TrayApi()
+    icon = _make_icon(api)
+    menu = QtWidgets.QMenu()
+    menu.addAction("Plain")
+    checkable = menu.addAction("Checkable")
+    checkable.setCheckable(True)
+    checkable.setChecked(True)
+    icon.setContextMenu(menu)
+
+    _send(icon, win_tray_icon.WM_CONTEXTMENU)
+
+    entries, _x, _y = api.menus[0]
+    assert entries == [("Plain", True, None), ("Checkable", True, True)]
