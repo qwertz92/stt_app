@@ -17,17 +17,28 @@ Agents and developers: use this as a knowledge base for past issues and solution
   Chromium menu widget is owned, and the two windows' extended styles differ.
   `scripts/diagnose_tray_flyout.py` now logs style/exstyle/owner so one more
   run compares the two windows directly.
-- **Resolved by that second run.** The decisive line was the foreground going
+- **Not resolved after all — the fix was reverted.** With the activation in
+  place the app logged `tray_menu_activation hwnd=6291618 accepted=True
+  foreground=6291618`, i.e. Windows granted the foreground to our icon window
+  exactly as it does for Electron, and the flyout still closed. A 50 ms gap
+  before showing the menu (matching the reference app's timing) changed nothing
+  either. Both the manual popup and the activation were removed: they carried a
+  real cost (a Qt-drawn menu, and moving the foreground on every tray click)
+  for no measured benefit. Only the untestable candidate remains — how Qt
+  registers the icon (`NOTIFYICONDATA` version/flags; Qt's host window is a
+  `WS_CAPTION` overlapped window, Electron's a bare `WS_POPUP`) — which would
+  mean replacing `QSystemTrayIcon` with a hand-rolled `Shell_NotifyIcon`
+  implementation. Not worth it for a cosmetic issue with a one-click
+  workaround (pin the icon).
+- **What the second run did show:** the foreground going
   to `Electron_NotifyIconHostWindow` at 14.109 s and only 38 ms later to their
   menu widget — the app activates the window that owns the notification icon
   *before* showing the menu, exactly the documented Q135788 pattern. Our menu
   jumped straight from the flyout to the popup. Both menu windows are
   otherwise identical (`ex=0x88` vs `ex=0x200088`, i.e. toolwindow + topmost,
   no owner in either case), so this ordering is the whole difference.
-  `_activate_tray_icon_window()` now does the same. Qt's own `setContextMenu`
-  path claims to call `SetForegroundWindow` as well, which is why the original
-  native menu was not a workaround — do not assume it is equivalent without
-  measuring again.
+  That ordering was implemented and measured — and it did not help (see
+  above), so activation order is not the trigger either.
 - **Consequence handled either way:** a dictation started from the tray menu
   used to capture our own menu as the insert target, because
   `get_foreground_window` returned the raw foreground. It now remembers the
@@ -90,7 +101,11 @@ Agents and developers: use this as a knowledge base for past issues and solution
 - **`diagnostics_text()` only saw the live log file** and only its last 300
   lines, so a copied diagnostic could start minutes after the interesting
   events. It now reads the rotated backups oldest-first, keeps 3000 lines and
-  prefixes the log path. Transcripts are still never logged.
+  prefixes the log path. A fixed line budget turned out to be the wrong knob
+  (300 cut the session, 3000 made the clipboard unusable): the text now starts
+  at the last `app_session_started` marker, so it covers exactly the current
+  run, with 800 lines only as a safety net. Transcripts are still never
+  logged.
 - **Cohere/Granite defaults:** `keep_onnx_model_loaded` defaults to on. It only
   applies when such a model is selected, and the previous default made every
   dictation reload several GB while the other local engines stayed warm.

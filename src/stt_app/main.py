@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import logging
 import signal
 import sys
 import threading
@@ -8,6 +7,7 @@ from datetime import datetime
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import __version__
 from .app_icon import load_app_icon
 from .config import (
     APP_DISPLAY_NAME,
@@ -16,6 +16,7 @@ from .config import (
     DEFAULT_CANCEL_HOTKEY_ID,
     DEFAULT_REPASTE_HOTKEY_ID,
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
+    SESSION_START_LOG_MARKER,
 )
 from .history_dialog import HistoryDialog
 from .controller import DictationController
@@ -34,92 +35,6 @@ from .transcript_history import TranscriptHistoryStore
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
 from .app_paths import appdata_root
-
-# Pop the tray menu up ourselves instead of handing it to Qt via
-# ``setContextMenu``, so the notification-icon window can be activated first
-# (see ``_activate_tray_icon_window``). Qt's own popup grab still closes the
-# menu on an outside click. Other platforms keep Qt's platform menu.
-_MANUAL_TRAY_MENU = sys.platform == "win32"
-_TRAY_HOST_WINDOW_CLASS_FRAGMENT = "TrayIconMessageWindow"
-_WM_NULL = 0x0000
-# The reference implementation has ~40 ms between activating its icon window
-# and showing the menu. Doing both in the same instant may never publish the
-# intermediate foreground state to the shell, so keep a comparable gap.
-_TRAY_MENU_POPUP_DELAY_MS = 50
-_tray_icon_window_handle: int | None = None
-
-
-def _find_tray_icon_window() -> int | None:
-    """HWND of the window Qt registered the notification icon with."""
-    import ctypes
-    import ctypes.wintypes
-
-    user32 = ctypes.windll.user32
-    own_process_id = int(ctypes.windll.kernel32.GetCurrentProcessId())
-    found: list[int] = []
-
-    @ctypes.WINFUNCTYPE(
-        ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
-    )
-    def _visit(hwnd, _lparam):
-        process_id = ctypes.wintypes.DWORD()
-        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
-        if int(process_id.value) != own_process_id:
-            return True
-        class_name = ctypes.create_unicode_buffer(256)
-        user32.GetClassNameW(hwnd, class_name, 256)
-        if _TRAY_HOST_WINDOW_CLASS_FRAGMENT in class_name.value:
-            found.append(int(hwnd))
-            return False
-        return True
-
-    user32.EnumWindows(_visit, 0)
-    return found[0] if found else None
-
-
-def _activate_tray_icon_window() -> None:
-    """Take the foreground with our icon's window before showing the menu.
-
-    Measured on Windows 11: Explorer's hidden-icons flyout stays open when the
-    clicked icon's *owner* window becomes the foreground window first — an
-    Electron app does exactly that ~40 ms before its menu appears — and closes
-    about a second later when a menu takes the foreground without that step,
-    which is what our menu did. Both menus are otherwise identical
-    (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, no owner), so this is the one
-    difference. It is also the documented notification-icon contract.
-
-    Best effort: if the window cannot be found or Windows refuses the
-    foreground change, the menu still opens.
-    """
-    global _tray_icon_window_handle
-
-    if sys.platform != "win32":
-        return
-    import ctypes
-
-    if _tray_icon_window_handle is None:
-        _tray_icon_window_handle = _find_tray_icon_window()
-    logger = logging.getLogger(APP_LOGGER_NAME)
-    hwnd = _tray_icon_window_handle
-    if not hwnd:
-        logger.info("tray_menu_activation hwnd=none")
-        return
-    try:
-        user32 = ctypes.windll.user32
-        accepted = bool(user32.SetForegroundWindow(hwnd))
-        # Second half of the documented pattern: let the message queue run so
-        # the menu dismisses reliably after the foreground change.
-        user32.PostMessageW(hwnd, _WM_NULL, 0, 0)
-        # Logged so a failed activation is distinguishable from an activation
-        # that Explorer simply ignores.
-        logger.info(
-            "tray_menu_activation hwnd=%s accepted=%s foreground=%s",
-            hwnd,
-            accepted,
-            int(user32.GetForegroundWindow() or 0),
-        )
-    except Exception:
-        logger.debug("Could not activate the tray icon window", exc_info=True)
 
 
 def _set_windows_app_user_model_id() -> None:
@@ -168,6 +83,9 @@ def run() -> int:
 
     app_logger = AppLogger()
     logger = app_logger.get_logger(APP_LOGGER_NAME)
+    # Marks where a session begins. "Copy diagnostics" cuts here so the copied
+    # text covers exactly the current run instead of an arbitrary line count.
+    logger.info("%s version=%s", SESSION_START_LOG_MARKER, __version__)
 
     settings_store = SettingsStore()
     secret_store = KeyringSecretStore()
@@ -441,17 +359,6 @@ def _create_tray_icon(
     check_updates_action.triggered.connect(check_for_updates_from_tray)
 
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
-        if reason == QtWidgets.QSystemTrayIcon.Context:
-            if _MANUAL_TRAY_MENU:
-                _activate_tray_icon_window()
-                # Capture the position now: the menu opens a moment later and
-                # the pointer may have moved by then.
-                position = QtGui.QCursor.pos()
-                QtCore.QTimer.singleShot(
-                    _TRAY_MENU_POPUP_DELAY_MS,
-                    lambda: menu.popup(position),
-                )
-            return
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
             open_settings_dialog()
             return
@@ -468,11 +375,9 @@ def _create_tray_icon(
             controller.toggle_recording()
 
     tray_icon.activated.connect(on_tray_activated)
-    # Keep the menu referenced and reachable for callers/tests even when it is
-    # not handed to Qt below.
+    # Also kept reachable for callers/tests that need the menu itself.
     tray_icon._context_menu = menu
-    if not _MANUAL_TRAY_MENU:
-        tray_icon.setContextMenu(menu)
+    tray_icon.setContextMenu(menu)
     tray_icon._open_settings_dialog = open_settings_dialog
     tray_icon._shutdown_settings_dialog = shutdown_settings_dialog
     QtCore.QTimer.singleShot(2500, prepare_settings_dialog)

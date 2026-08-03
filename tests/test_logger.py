@@ -58,6 +58,33 @@ def test_diagnostics_text_returns_tail(tmp_path):
     assert lines[1:] == ["line3", "line4", "line5"]
 
 
+def test_diagnostics_text_starts_at_the_current_session(tmp_path):
+    """A copied diagnostic should cover this run, not an arbitrary tail."""
+    from stt_app.config import SESSION_START_LOG_MARKER
+
+    al = AppLogger(root_dir=tmp_path)
+    al.log_path.write_text(
+        "\n".join(
+            [
+                "old session line",
+                f"2026-01-01 10:00:00 [INFO] {SESSION_START_LOG_MARKER} version=1",
+                "first line of this run",
+                f"2026-01-01 11:00:00 [INFO] {SESSION_START_LOG_MARKER} version=1",
+                "restarted",
+                "and this",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    lines = al.diagnostics_text().strip().splitlines()
+
+    assert "current session" in lines[0]
+    assert SESSION_START_LOG_MARKER in lines[1]
+    assert lines[2:] == ["restarted", "and this"]
+
+
 def test_diagnostics_text_includes_rotated_backups(tmp_path):
     """The interesting part (start, preload, first failure) is often rotated."""
     al = AppLogger(root_dir=tmp_path)

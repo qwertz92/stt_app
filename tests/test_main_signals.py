@@ -3,7 +3,7 @@ import signal
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from PySide6 import QtCore, QtGui, QtTest, QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.app_icon import app_icon_path, load_app_icon
@@ -412,15 +412,15 @@ def test_tray_left_click_reveals_overlay():
     _ = tray
 
 
-def test_tray_context_click_pops_menu_without_platform_menu(monkeypatch):
-    """The menu is popped up by us so Qt cannot steal the foreground.
+def test_tray_menu_is_registered_with_qt():
+    """The menu is Qt's platform menu again.
 
-    Qt's Windows tray backend calls SetForegroundWindow before tracking a menu
-    registered via setContextMenu, which closes the Windows 11 hidden-icons
-    flyout underneath the menu.
+    Popping it up manually and activating the icon window first were attempts
+    at keeping Windows 11's hidden-icons flyout open; both were measured on the
+    affected machine and neither changed the flyout's behaviour, so the extra
+    machinery was removed. See docs/learning-log.md.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    monkeypatch.setattr(main_module, "_MANUAL_TRAY_MENU", True)
     tray = _create_tray_icon(
         app=app,
         controller=FakeController(),
@@ -431,54 +431,8 @@ def test_tray_context_click_pops_menu_without_platform_menu(monkeypatch):
         last_recording_store=FakeLastRecordingStore(),
         open_history_dialog=lambda: None,
     )
-    popups: list[object] = []
-    monkeypatch.setattr(tray._context_menu, "popup", popups.append)
 
-    tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
-    QtTest.QTest.qWait(main_module._TRAY_MENU_POPUP_DELAY_MS + 60)
-
-    assert len(popups) == 1
-    assert tray.contextMenu() is None
-    _ = tray
-
-
-def test_tray_context_click_activates_the_icon_window_before_the_menu(monkeypatch):
-    """The icon's own window must take the foreground before the menu opens.
-
-    Measured on Windows 11: Explorer's hidden-icons flyout stays open when an
-    app does this (an Electron app activates its notify-icon host window ~40 ms
-    before showing its menu) and closes about a second later when a menu takes
-    the foreground without that step.
-    """
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    order: list[str] = []
-    monkeypatch.setattr(main_module, "_MANUAL_TRAY_MENU", True)
-    monkeypatch.setattr(
-        main_module,
-        "_activate_tray_icon_window",
-        lambda: order.append("activate"),
-    )
-    tray = _create_tray_icon(
-        app=app,
-        controller=FakeController(),
-        overlay=FakeOverlay(),
-        settings_store=FakeSettingsStore(),
-        secret_store=FakeSecretStore(),
-        app_logger=FakeAppLogger(),
-        last_recording_store=FakeLastRecordingStore(),
-        open_history_dialog=lambda: None,
-    )
-    monkeypatch.setattr(
-        tray._context_menu, "popup", lambda _position: order.append("popup")
-    )
-
-    tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
-
-    # The menu opens a moment after the activation so the shell can observe it.
-    assert order == ["activate"]
-    QtTest.QTest.qWait(main_module._TRAY_MENU_POPUP_DELAY_MS + 60)
-
-    assert order == ["activate", "popup"]
+    assert tray.contextMenu() is tray._context_menu
     _ = tray
 
 

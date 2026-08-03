@@ -1110,9 +1110,12 @@ OVERLAY_STATE_COLORS = {
 LOG_FILE_NAME = "dictation.log"
 LOG_MAX_BYTES = 1_000_000
 LOG_BACKUP_COUNT = 3
-# Enough to cover a full session including app start and model preload; the
-# text only goes to the clipboard, and transcripts are never logged.
-DIAGNOSTICS_MAX_LINES = 3000
+# "Copy diagnostics" returns the current session: everything since the last
+# line carrying this marker. The line budget is only the safety net for a very
+# long session (or a log without a marker), because the text goes to the
+# clipboard and has to stay pasteable.
+SESSION_START_LOG_MARKER = "app_session_started"
+DIAGNOSTICS_MAX_LINES = 800
 DOC_MODELS_PATH = "docs/models.md"
 DOC_SSL_PROXY_PATH = "docs/advanced-setup.md#ssl--proxy-issues"
 

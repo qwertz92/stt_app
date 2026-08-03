@@ -11,6 +11,7 @@ from .config import (
     LOG_BACKUP_COUNT,
     LOG_FILE_NAME,
     LOG_MAX_BYTES,
+    SESSION_START_LOG_MARKER,
 )
 
 
@@ -31,12 +32,15 @@ class AppLogger:
         return logging.getLogger(name)
 
     def diagnostics_text(self, max_lines: int = DIAGNOSTICS_MAX_LINES) -> str:
-        """Return the tail of the log, including already rotated files.
+        """Return the current session's log, across already rotated files.
 
         Reading only the live file made a diagnostics copy stop at the last
         rotation, which can be minutes of runtime: the interesting part (app
         start, model preload, the first failure) had usually rolled into a
-        backup by the time the user copied anything.
+        backup by the time the user copied anything. A plain line count is a
+        poor substitute — too small and it cuts the session, too large and the
+        clipboard is unusable — so the text starts at the last session marker
+        and only falls back to the tail when there is none.
         """
         lines: list[str] = []
         # Oldest backup first so the copied text stays chronological.
@@ -49,8 +53,20 @@ class AppLogger:
         if not lines:
             return "No diagnostics available yet."
 
-        header = f"Log file: {self._log_path}"
-        return "\n".join([header, *lines[-max_lines:]])
+        session = self._current_session_lines(lines)
+        truncated = len(session) > max_lines
+        scope = "current session" if len(session) < len(lines) else "full log"
+        if truncated:
+            scope = f"{scope}, last {max_lines} lines"
+        header = f"Log file: {self._log_path} ({scope})"
+        return "\n".join([header, *session[-max_lines:]])
+
+    @staticmethod
+    def _current_session_lines(lines: list[str]) -> list[str]:
+        for index in range(len(lines) - 1, -1, -1):
+            if SESSION_START_LOG_MARKER in lines[index]:
+                return lines[index:]
+        return lines
 
     def _rotated_log_paths(self) -> list[Path]:
         """Existing ``dictation.log.N`` backups, oldest first."""

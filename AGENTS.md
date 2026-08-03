@@ -940,23 +940,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   deliberately synchronous so the microphone cannot record it). Streaming
   appends are many small pastes and stay silent by design. History-only
   delivery and failed inserts never beep.
-- **Tray menu is popped up manually on Windows (`_MANUAL_TRAY_MENU`)** so the
-  notification-icon window can be activated first. Measured on Windows 11:
-  Explorer's "hidden icons" flyout stays open when the clicked icon's *owner*
-  window becomes the foreground window before the menu appears (an Electron
-  app activates its `Electron_NotifyIconHostWindow` ~40 ms before showing its
-  menu) and light-dismisses about a second later when a menu takes the
-  foreground without that step. Both menus are otherwise identical
-  (`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, no owner), and taking the foreground per
-  se is not the trigger — the reference app's menu takes it too. Hence
-  `_activate_tray_icon_window()` (find our `TrayIconMessageWindow` by class
-  fragment, `SetForegroundWindow`, then `PostMessage(WM_NULL)`) runs before
-  `menu.popup()`. `activated(Context)` is still emitted with no platform menu
-  set, and Qt's own popup grab keeps outside-click dismissal working. The menu
-  object stays reachable as `tray_icon._context_menu`. Other platforms keep
-  `setContextMenu`. Trade-off: the menu is Qt-drawn instead of a native Win32
-  menu, and opening it moves the foreground — which is why
-  `Win32WindowFocusHelper` remembers the last foreign window.
+- **Tray menu uses Qt's platform menu (`setContextMenu`)**: opening it closes
+  Windows 11's "hidden icons" flyout, which Electron apps in the same flyout do
+  not. Three hypotheses were measured on the affected machine and all are
+  **refuted** — do not re-try them without new evidence: (1) Qt's
+  `SetForegroundWindow` before `trackPopupMenu` (bypassing it via a manual
+  `menu.popup()` changed nothing); (2) the menu stealing the foreground (the
+  Electron menu takes it too and the flyout survives); (3) missing activation
+  of our notification-icon window before the menu (implemented, logged
+  `accepted=True foreground=<our hwnd>`, flyout still closed). The menu windows
+  are otherwise identical (`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, no owner). The
+  remaining untested candidate is how Qt registers the icon itself
+  (`NOTIFYICONDATA` version/flags; Qt's host window is a `WS_CAPTION`
+  overlapped window, Electron's a bare `WS_POPUP`), which `QSystemTrayIcon`
+  does not expose. `scripts/diagnose_tray_flyout.py` reproduces the
+  measurement. Workaround for users: pin the icon to the always-visible tray.
 - **Tray left-click reveals the overlay**: a single left click (`Trigger`) has
   no other meaning and there is no main window, so it calls
   `controller.bring_overlay_to_front`. Together with the overlay's Record
