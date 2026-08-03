@@ -289,7 +289,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   while room tone at -54 dBFS is blocked). Every batch stop logs
   `recording_peak_level` for tuning, and gated audio stays available as the
   last recording. Unmeasurable audio returns `None` and must never be gated —
-  undecodable bytes are a failure to surface, not silence.
+  undecodable bytes are a failure to surface, not silence. Schema 22 turns the
+  gate on once for older settings files: every file written before the default
+  flip carries "off", so a stored "off" could not be told apart from a
+  deliberate choice; an "off" saved at schema >= 22 is kept. Field data from
+  one session backs the threshold: 26 silent/hallucinated recordings measured
+  0.0006-0.0034 and 7 real utterances 0.0075-0.0290, so 0.0040 separates them
+  with 1.9x margin below and 1.2x above.
 - **Overlay changes of one event go through `batched_update`**: most
   transitions touch the queue panel *and* the state text (a finished
   transcription clears its queue row, then publishes the transcript). Applied

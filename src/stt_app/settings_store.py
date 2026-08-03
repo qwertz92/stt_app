@@ -92,6 +92,7 @@ from .hotkey import parse_hotkey
 
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 _HISTORY_RETENTION_SCHEMA_VERSION = 16
+_SILENCE_GATE_DEFAULT_SCHEMA_VERSION = 22
 _LEGACY_DEFAULT_HISTORY_MAX_ITEMS = 20
 
 DEFAULTS = {
@@ -373,6 +374,22 @@ class AppSettings:
             and parsed_history_max_items == _LEGACY_DEFAULT_HISTORY_MAX_ITEMS
         ):
             history_max_items = DEFAULT_HISTORY_MAX_ITEMS
+        silence_gate_enabled = parse_json_bool(
+            merged.get("silence_gate_enabled", DEFAULT_SILENCE_GATE_ENABLED),
+            default=DEFAULT_SILENCE_GATE_ENABLED,
+        )
+        if (
+            raw_schema_version < _SILENCE_GATE_DEFAULT_SCHEMA_VERSION
+            and not silence_gate_enabled
+        ):
+            # Older files stored the previous default (off) for everyone, so a
+            # stored "off" cannot be told apart from a deliberate choice. The
+            # gate is the only hallucination guard that covers every engine —
+            # without it a silent recording is transcribed into invented text —
+            # so adopt the new default once. A deliberate "off" saved from now
+            # on carries the current schema and is kept.
+            silence_gate_enabled = DEFAULT_SILENCE_GATE_ENABLED
+
         display_timezone = str(
             merged.get("display_timezone", DEFAULT_DISPLAY_TIMEZONE)
         ).strip().lower()
@@ -466,13 +483,7 @@ class AppSettings:
                 ),
                 default=DEFAULT_KEEP_MICROPHONE_WARM,
             ),
-            silence_gate_enabled=parse_json_bool(
-                merged.get(
-                    "silence_gate_enabled",
-                    DEFAULT_SILENCE_GATE_ENABLED,
-                ),
-                default=DEFAULT_SILENCE_GATE_ENABLED,
-            ),
+            silence_gate_enabled=silence_gate_enabled,
             silence_gate_threshold=silence_gate_threshold,
             paste_mode=paste_mode,
             keep_transcript_in_clipboard=parse_json_bool(

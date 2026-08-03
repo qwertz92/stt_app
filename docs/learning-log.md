@@ -3,6 +3,23 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-03 (silence gate field data)
+
+- **Flipping a default is not enough — old settings files keep the old value.**
+  After the gate defaulted to on, a real session still logged
+  `silence_gate_enabled=False` because the stored `settings.json` carried the
+  previous default. Schema 22 adopts the new default once for files below it;
+  an "off" saved at schema >= 22 is a real choice and is kept.
+- **The threshold is confirmed by field data, not by synthetic tones.** One
+  session produced 26 silent recordings that were transcribed into invented
+  subtitle-style text ("Herr Präsident", "Vielen Dank", "... Musik ...") and 7
+  real utterances. Measured peak levels: hallucinations 0.0006-0.0034, real
+  speech 0.0075-0.0290. The 0.0040 gate separates them cleanly — every
+  hallucination blocked, every real utterance kept, 1.9x margin to the quietest
+  real recording. The invented phrases correlated with music playing on the
+  machine, but the levels do not: those recordings were *quieter* than the
+  silent ones without music, so it is decoder behaviour, not audio bleed.
+
 ## 2026-08-03 (tray flyout measurement)
 
 - **Measured on the affected machine, with the app's own tray menu vs. an

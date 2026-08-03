@@ -840,3 +840,41 @@ class TestInputDeviceName:
             encoding="utf-8",
         )
         assert SettingsStore(settings_path).load().input_device_name == ""
+
+
+def test_older_settings_adopt_the_silence_gate_default(tmp_path, monkeypatch):
+    """A stored "off" from before the default flip cannot be a real choice.
+
+    Every older file carries it, and without the gate a silent recording is
+    transcribed into invented text on engines that have no no-speech detection.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = tmp_path / "stt_app" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"schema_version": 21, "silence_gate_enabled": False}),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(path).load()
+
+    assert settings.silence_gate_enabled is True
+
+
+def test_deliberate_silence_gate_off_is_kept(tmp_path, monkeypatch):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    path = tmp_path / "stt_app" / "settings.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": CURRENT_SCHEMA_VERSION,
+                "silence_gate_enabled": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(path).load()
+
+    assert settings.silence_gate_enabled is False
