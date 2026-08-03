@@ -13,6 +13,7 @@ import sounddevice as sd
 from .audio_devices import (
     SYSTEM_DEFAULT_INPUT_DEVICE,
     InputDeviceNotFoundError,
+    NoInputDeviceError,
     input_stream_extra_settings,
     portaudio_guard,
     register_live_stream,
@@ -137,7 +138,7 @@ class WarmMicrophoneStream:
                     stream = None
                     raise
                 register_live_stream(stream)
-        except InputDeviceNotFoundError as exc:
+        except (InputDeviceNotFoundError, NoInputDeviceError) as exc:
             if self._logger is not None:
                 self._logger.warning("Warm microphone stream not started: %s", exc)
         except Exception:
@@ -425,7 +426,7 @@ class AudioCapture:
                     raise
                 register_live_stream(stream)
             self._stream = stream
-        except InputDeviceNotFoundError as exc:
+        except (InputDeviceNotFoundError, NoInputDeviceError) as exc:
             with self._lock:
                 if generation == self._capture_generation:
                     self._accepting_audio = False

@@ -34,6 +34,22 @@ _live_streams_lock = threading.Lock()
 _live_stream_ids: set[int] = set()
 
 
+class NoInputDeviceError(RuntimeError):
+    """Windows itself reports no usable recording device.
+
+    Distinct from a missing *selection*: no microphone can be chosen at all,
+    so pointing at the Settings picker would be a dead end.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "Windows reports no microphone at all. Open Windows Sound "
+            "settings -> Input: if no device is listed there either, the "
+            "microphone is disabled or its driver is missing, which the app "
+            "cannot work around."
+        )
+
+
 class InputDeviceNotFoundError(RuntimeError):
     """The persisted microphone selection matches no connected device."""
 
@@ -161,9 +177,14 @@ def resolve_input_device(device_name: str) -> int | None:
     happen freshly at each stream open, never be cached.
     """
     name = str(device_name or "").strip()
+    available = list_input_devices()
+    if not available:
+        # Without this the default path fails deep inside PortAudio with
+        # "Error querying device -1", which says nothing about the real cause.
+        raise NoInputDeviceError()
     if not name:
         return None
-    for info in list_input_devices():
+    for info in available:
         if info.name == name:
             return info.index
     raise InputDeviceNotFoundError(name)

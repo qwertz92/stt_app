@@ -1052,6 +1052,8 @@ def test_background_failure_keeps_live_recording_session(monkeypatch, tmp_path):
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
+    reported: list[str] = []
+    controller.background_transcription_failed.connect(reported.append)
 
     token_a = _record_and_stop(controller)
     controller.start_recording()
@@ -1063,6 +1065,39 @@ def test_background_failure_keeps_live_recording_session(monkeypatch, tmp_path):
     assert token_a not in controller._jobs
     # The failed job's audio stays available for a manual retry.
     assert controller._last_failed_wav_bytes == b"RIFF"
+    # The live session keeps the overlay, but the failure is still reported and
+    # names the recording it belongs to.
+    assert len(reported) == 1
+    assert "provider down" in reported[0]
+    assert "Recording " in reported[0]
+    assert "Retry" in reported[0]
+    controller.shutdown()
+    _ = app
+
+
+def test_background_failure_is_shown_when_no_session_owns_the_overlay(
+    monkeypatch,
+    tmp_path,
+):
+    """An idle overlay must show the failure instead of staying silent."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="history"
+    )
+    reported: list[str] = []
+    controller.background_transcription_failed.connect(reported.append)
+
+    token_a = _record_and_stop(controller)
+    _record_and_stop(controller)
+    # The newer job already delivered, so nothing owns the overlay any more
+    # when the older queued job finally fails.
+    controller._active_request_token = None
+
+    controller._on_transcription_failed("provider down", request_token=token_a)
+
+    assert len(reported) == 1
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "provider down" in detail
     controller.shutdown()
     _ = app
 

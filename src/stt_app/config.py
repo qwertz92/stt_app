@@ -96,7 +96,12 @@ DEFAULT_PASTE_MODE = "auto"
 DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD = False
 DEFAULT_ALLOW_INSECURE_KEY_STORAGE = False
 DEFAULT_OFFLINE_MODE = False
-DEFAULT_KEEP_ONNX_MODEL_LOADED = False
+# On by default: the setting only takes effect once a Cohere/Granite model is
+# selected, and a user who selects one wants to dictate with it. Without it
+# every single dictation pays the full Node + ONNX model load, while
+# faster-whisper and Nemotron stay warm. Users who need the RAM/VRAM back can
+# turn it off; existing settings files keep whatever they stored.
+DEFAULT_KEEP_ONNX_MODEL_LOADED = True
 DEFAULT_START_BEEP_ENABLED = False
 DEFAULT_START_BEEP_TONE = "soft"
 # Completion tone after a successful transcript insertion (batch, queued
@@ -1070,6 +1075,9 @@ OVERLAY_QUEUE_MIN_HEIGHT = 96
 # result so a floating overlay is actually seen: a brief glance on success, a
 # longer window on errors/insert failures so the transcript can be copied.
 OVERLAY_RESULT_REVEAL_MS = 2500
+# How long a confirmation ("copied to clipboard") stays before the overlay
+# returns to its idle hint.
+OVERLAY_NOTICE_MS = 2200
 OVERLAY_ERROR_REVEAL_MS = 9000
 OVERLAY_INITIAL_DETAIL = "Press hotkey to start dictation"
 # Overlay error states offer one follow-up action. "insert" replaces Retry
@@ -1097,7 +1105,9 @@ OVERLAY_STATE_COLORS = {
 LOG_FILE_NAME = "dictation.log"
 LOG_MAX_BYTES = 1_000_000
 LOG_BACKUP_COUNT = 3
-DIAGNOSTICS_MAX_LINES = 300
+# Enough to cover a full session including app start and model preload; the
+# text only goes to the clipboard, and transcripts are never logged.
+DIAGNOSTICS_MAX_LINES = 3000
 DOC_MODELS_PATH = "docs/models.md"
 DOC_SSL_PROXY_PATH = "docs/advanced-setup.md#ssl--proxy-issues"
 

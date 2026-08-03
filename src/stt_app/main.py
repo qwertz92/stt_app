@@ -193,6 +193,18 @@ def run() -> int:
         open_history_dialog=open_history_dialog,
     )
     tray_icon.show()
+
+    def _notify_background_failure(message: str) -> None:
+        # The overlay belongs to the live session, so a queued job's failure is
+        # reported here as well; without it the failure was invisible.
+        tray_icon.showMessage(
+            "Transcription failed",
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    controller.background_transcription_failed.connect(_notify_background_failure)
     update_checker = _TrayUpdateChecker(
         tray_icon=tray_icon, logger=logger, parent_widget=overlay
     )
@@ -319,11 +331,17 @@ def _create_tray_icon(
             shutdown()
 
     def copy_diagnostics() -> None:
-        QtGui.QGuiApplication.clipboard().setText(app_logger.diagnostics_text())
+        text = app_logger.diagnostics_text()
+        QtGui.QGuiApplication.clipboard().setText(text)
+        controller.show_overlay_notice(
+            f"Diagnostics copied to clipboard ({len(text.splitlines())} lines)."
+        )
 
     def copy_last_transcript() -> None:
         if not controller.copy_last_transcript_to_clipboard():
             controller.show_overlay_error("No transcript available to copy yet.")
+            return
+        controller.show_overlay_notice("Last transcript copied to clipboard.")
 
     settings_action.triggered.connect(open_settings_dialog)
     history_action.triggered.connect(open_history_dialog)

@@ -1147,11 +1147,13 @@ def test_controller_initialize_skips_preload_for_remote_engine():
 
 
 def test_controller_initialize_skips_preload_for_webgpu_local_model():
+    """Without keep-loaded there is nothing to keep, so nothing is preloaded."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         engine="local",
         model_size="cohere-transcribe-03-2026",
         hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=False,
     )
     overlay = FakeOverlay()
     controller = DictationController(
@@ -1288,12 +1290,43 @@ def test_controller_preload_failure_is_reported_without_fallback():
     _ = app
 
 
+def test_keep_loaded_onnx_model_is_preloaded():
+    """With keep-loaded on, the ONNX runtime is warmed like every other local
+    model instead of being loaded again for each dictation."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=True,
+    )
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = ImmediateExecutor()
+    preload_called: list[bool] = []
+    controller._preload_model_worker = lambda *_args: preload_called.append(True)
+
+    controller.initialize()
+
+    assert preload_called == [True]
+    controller.shutdown()
+    _ = app
+
+
 def test_webgpu_batch_transcriber_is_closed_after_worker(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         engine="local",
         model_size="cohere-transcribe-03-2026",
         hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=False,
     )
 
     class FakeWebGpuTranscriber:
@@ -1715,6 +1748,7 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
         engine="local",
         model_size="granite-4.0-1b-speech",
         hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=False,
     )
     store = FakeSettingsStore(settings)
     overlay = FakeOverlay()
@@ -1735,6 +1769,43 @@ def test_on_settings_changed_skips_preload_for_webgpu_local_model():
 
     assert preload_called == []
     assert any(state == "Idle" for state, _detail in overlay.states)
+    controller.shutdown()
+    _ = app
+
+
+def test_idle_status_never_overwrites_an_active_recording():
+    """A delayed preload timer must not report Idle while dictation runs.
+
+    The overlay showing "Idle" made it look as if nothing was being recorded;
+    pressing the hotkey again to "start" then stopped the running capture.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._hotkey_registration_ok = True
+    controller._cancel_hotkey_registration_ok = True
+    controller._show_overlay_hotkey_registration_ok = True
+    controller._repaste_hotkey_registration_ok = True
+
+    controller.show_idle_status()
+    assert overlay.states[-1][0] == "Idle"
+
+    # A recording started after the timer was armed.
+    controller._audio_capture = object()
+    overlay.set_state("Listening", "Speak now.")
+
+    controller.show_idle_status()
+
+    assert overlay.states[-1][0] == "Listening"
+    controller._audio_capture = None
     controller.shutdown()
     _ = app
 

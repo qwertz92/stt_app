@@ -1000,6 +1000,10 @@ class SettingsDialog(
         text = self._app_logger.diagnostics_text()
         clipboard = QtGui.QGuiApplication.clipboard()
         clipboard.setText(text)
+        # Without feedback the button looks like it did nothing.
+        line_count = len(text.splitlines())
+        self._set_bottom_status(f"Diagnostics copied ({line_count} lines)")
+        self._save_status_timer.start()
 
     def _check_for_updates(self) -> None:
         if self._active_update_check_thread is not None:

@@ -574,6 +574,44 @@ def test_overlay_copy_uses_copy_text_override(monkeypatch):
     assert fake_clipboard.text() == "plain transcript"
 
 
+def test_batched_update_resizes_once_instead_of_shrinking_and_growing():
+    """Finishing a transcription must be one visual step, not two.
+
+    The queue row is cleared before the transcript is published; applied
+    separately the overlay shrinks for the empty queue and grows again for the
+    text, which reads as a stutter and shows the old content at the new size.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+
+    sizes: list[int] = []
+    overlay.resizeEvent = (  # type: ignore[method-assign]
+        lambda event, _base=overlay.resizeEvent: (
+            sizes.append(event.size().height()),
+            _base(event),
+        )[1]
+    )
+
+    overlay.set_state("Processing", "Transcribing audio...")
+    overlay.set_transcription_queue([(1, "#1 - local - cohere")])
+    for _ in range(4):
+        app.processEvents()
+    queued_height = overlay.height()
+    sizes.clear()
+
+    with overlay.batched_update():
+        overlay.set_transcription_queue([])
+        overlay.set_state("Done", "word " * 200)
+    for _ in range(4):
+        app.processEvents()
+
+    assert overlay.height() != queued_height
+    assert sizes == [overlay.height()]
+    overlay.hide()
+
+
 def test_overlay_error_after_long_transcript_restores_compact_height():
     """A short error must not inherit the expanded transcript height.
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import sys
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -129,6 +130,8 @@ class OverlayUI(QtWidgets.QWidget):
         self._screen_change_connected = False
         self._state_background = ""
         self._copy_text: str | None = None
+        self._geometry_batch_depth = 0
+        self._geometry_batch_dirty = False
 
         self._state_label = QtWidgets.QLabel("Idle")
         self._state_label.setAlignment(QtCore.Qt.AlignCenter)
@@ -588,14 +591,18 @@ class OverlayUI(QtWidgets.QWidget):
             QPushButton#overlayLanguageButton {{
                 padding: 0 26px 0 8px;
             }}
+            /* Primary action: same fill as its neighbours (a lighter fill
+               reads as a permanent hover state) and a brighter border to mark
+               it. Recording tints it red without changing the box. */
             QPushButton#overlayRecordButton {{
-                font-weight: bold;
-                background-color: rgba(255,255,255,0.16);
-                border-color: rgba(255,255,255,0.55);
+                border-color: rgba(255,255,255,0.7);
             }}
             QPushButton#overlayRecordButton[recording="true"] {{
-                background-color: rgba(220,70,70,0.55);
-                border-color: rgba(255,200,200,0.8);
+                background-color: rgba(190,60,60,0.42);
+                border-color: rgba(255,190,190,0.85);
+            }}
+            QPushButton#overlayRecordButton[recording="true"]:hover {{
+                background-color: rgba(205,75,75,0.55);
             }}
             QPushButton:hover {{
                 background-color: rgba(255,255,255,0.18);
@@ -899,6 +906,50 @@ class OverlayUI(QtWidgets.QWidget):
         elif selected == clear_action:
             self.clear_detail_text()
 
+    @contextlib.contextmanager
+    def batched_update(self):
+        """Apply several state changes as one visual step.
+
+        Finishing a transcription first clears the queue panel and then
+        publishes the result text. Applied one after the other, the window
+        shrinks for the empty queue and grows again for the transcript: the
+        user sees the window jump twice, and the frame in between shows the
+        previous content at the already-changed size. Inside this context the
+        content is updated normally but the geometry is recomputed once, at the
+        end, and the resize plus repaint happen together.
+        """
+        self._geometry_batch_depth += 1
+        try:
+            yield
+        finally:
+            self._geometry_batch_depth -= 1
+            if self._geometry_batch_depth == 0 and self._geometry_batch_dirty:
+                self._geometry_batch_dirty = False
+                self._commit_batched_geometry()
+
+    def _defer_geometry(self) -> bool:
+        if self._geometry_batch_depth <= 0:
+            return False
+        self._geometry_batch_dirty = True
+        return True
+
+    def _commit_batched_geometry(self) -> None:
+        # Suppress painting across the resize so the window cannot be shown at
+        # its new size with the old content still in the backing store, then
+        # repaint synchronously so size and content land in the same frame.
+        repaint_needed = self.isVisible() and self.updatesEnabled()
+        if repaint_needed:
+            self.setUpdatesEnabled(False)
+        try:
+            if self._compact_mode:
+                self.ensure_compact_size()
+            else:
+                self._update_detail_height()
+        finally:
+            if repaint_needed:
+                self.setUpdatesEnabled(True)
+                self.repaint()
+
     def _container_frame_margins(self) -> QtCore.QMargins:
         """Contents margins the styled container adds around the inner layout.
 
@@ -911,6 +962,8 @@ class OverlayUI(QtWidgets.QWidget):
         return self._container.contentsMargins()
 
     def _update_detail_height(self) -> None:
+        if self._defer_geometry():
+            return
         previous_size = QtCore.QSize(self.size())
         self._apply_queue_scroll_height()
         margins = self._layout.contentsMargins()
@@ -1145,6 +1198,8 @@ class OverlayUI(QtWidgets.QWidget):
 
     def ensure_compact_size(self) -> None:
         self._compact_mode = True
+        if self._defer_geometry():
+            return
         self._apply_queue_scroll_height()
         self._detail_scroll.setFixedHeight(OVERLAY_DETAIL_MIN_HEIGHT)
         self._resize_window(self._compact_target_size())

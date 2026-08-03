@@ -283,6 +283,30 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   silence). The windowed peak (`peak_windowed_rms_from_wav`) keeps short
   whispers detectable; every batch stop logs `recording_peak_level` for
   threshold tuning, and gated audio stays available as the last recording.
+- **Overlay changes of one event go through `batched_update`**: most
+  transitions touch the queue panel *and* the state text (a finished
+  transcription clears its queue row, then publishes the transcript). Applied
+  separately the window resized twice — measurably 183 → 137 → 269 px — and the
+  frame in between showed the previous content at the already-changed size.
+  `OverlayUI.batched_update()` defers the geometry to the end of the block and
+  resizes with painting suppressed, then repaints, so size and content land
+  together. The controller wraps its Qt slots via `_overlay_batch()`
+  (`toggle_recording`, transcription ready/failed). Geometry stays synchronous
+  outside a batch, so direct `set_state` calls still resize immediately.
+- **`show_idle_status` never overwrites a live session**: the preload
+  completion arms `singleShot(..., show_idle_status)` when nothing is running,
+  but the timer fires 1.2-1.8 s later — long enough for the user to have
+  started dictating. The overlay then showed "Idle" during an active capture,
+  and pressing the hotkey again to "start" actually stopped it mid-sentence.
+  `show_idle_status` therefore re-checks `_overlay_session_active()` at fire
+  time; any new delayed overlay writer must do the same.
+- **Background transcription failures are reported, never silent**: a queued
+  job that fails while a newer session owns the overlay emits
+  `background_transcription_failed` (tray notification in `main.py`) naming the
+  recording and whether its audio was kept for Retry, and additionally shows
+  the error on the overlay when no live session owns it. Delivering a success
+  but dropping a failure made a lost recording indistinguishable from one that
+  was never transcribed.
 - **Overlay window resizes go through `_resize_window`**: `QWidget.resize`
   clamps to the widget's *current* minimum size, and that minimum is only
   recomputed when the layout is activated (normally deferred to the next event
@@ -627,8 +651,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (or an explicit CPU policy) from a real failed GPU fallback. These raw paths
   are separate from the Cohere / Granite 4.0 / Granite
   4.1 2B Transformers.js pipeline path.
-  They are not preloaded and are closed after normal batch dictation to avoid
-  idle ONNX/Node CPU load.
+  `keep_onnx_model_loaded` now defaults to **on**: the flag only takes effect
+  once such a model is selected, and without it every single dictation pays the
+  full Node + ONNX load while faster-whisper and Nemotron stay warm. With it on
+  the runtime is preloaded and kept like the other local engines; turning it
+  off restores the old behavior (no preload, closed after each batch) for
+  machines where RAM/VRAM pressure matters more. Existing settings files keep
+  whatever they stored.
   The resolved runtime device is reported through transcriber progress messages
   so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
   Keep faster-whisper as the stable local default until real target-hardware

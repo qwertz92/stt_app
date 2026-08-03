@@ -124,6 +124,21 @@ def test_resolve_matches_device_name(monkeypatch):
     assert index == 2
 
 
+def test_resolve_without_any_input_device_names_the_real_cause(monkeypatch):
+    """No device at all is a Windows problem, not a wrong selection.
+
+    The default path used to fail deep inside PortAudio with "Error querying
+    device -1", which told the user nothing.
+    """
+    monkeypatch.setattr(audio_devices, "list_input_devices", lambda: [])
+
+    with pytest.raises(audio_devices.NoInputDeviceError) as excinfo:
+        resolve_input_device("")
+
+    assert "no microphone at all" in str(excinfo.value)
+    assert "Sound" in str(excinfo.value)
+
+
 def test_resolve_missing_device_raises_actionable_error(monkeypatch):
     monkeypatch.setattr(audio_devices, "sd", _fake_sd_with_wasapi())
 

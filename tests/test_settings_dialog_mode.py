@@ -433,6 +433,7 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
             mode="streaming",
             model_size="cohere-transcribe-03-2026",
             language_mode="auto",
+            keep_onnx_model_loaded=False,
         )
     )
     dialog = SettingsDialog(

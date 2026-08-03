@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import logging
 import os
 import re
@@ -51,6 +52,7 @@ from .config import (
     OVERLAY_RESULT_REVEAL_MS,
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_REVEAL_MS,
+    OVERLAY_NOTICE_MS,
     VAD_ENERGY_THRESHOLD_MIN,
     VALID_START_BEEP_TONES,
     VAD_MAX_SILENCE_MS,
@@ -179,6 +181,8 @@ class DictationController(QtCore.QObject):
     stream_runtime_failed = QtCore.Signal(str)
     stream_abort_requested = QtCore.Signal(str, bool)
     model_preload_done = QtCore.Signal(int, bool, str)  # generation, success, message
+    # A queued transcription failed while a newer session owns the overlay.
+    background_transcription_failed = QtCore.Signal(str)
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
@@ -489,7 +493,24 @@ class DictationController(QtCore.QObject):
                     pass
             self.show_idle_status()
 
+    def _overlay_session_active(self) -> bool:
+        """True while the overlay belongs to a recording/transcription."""
+        return (
+            self._audio_capture is not None
+            or self._streaming_recording
+            or self._recording_start_in_progress
+            or self._recording_stop_in_progress
+            or self._active_request_token is not None
+        )
+
     def show_idle_status(self) -> None:
+        # Delayed callers (the preload timers) decided to return to Idle when
+        # nothing was running. By the time they fire the user may have started
+        # dictating, and overwriting "Listening" with "Idle" made it look as if
+        # nothing was being recorded — pressing the hotkey again to "start"
+        # then really stopped the running capture mid-sentence.
+        if self._overlay_session_active():
+            return
         if not self._hotkey_registration_ok:
             self._overlay.set_state(
                 "Error",
@@ -538,8 +559,29 @@ class DictationController(QtCore.QObject):
                 detail = f"{detail} ({self._repaste_hotkey_notice})"
         self._overlay.set_state("Idle", detail)
 
+    @contextlib.contextmanager
+    def _overlay_batch(self):
+        """Group overlay changes of one event into a single visual update.
+
+        Most transitions touch the queue panel *and* the state text (a finished
+        transcription clears its queue row and then publishes the transcript).
+        Applied separately, the overlay resizes twice and briefly shows the
+        previous content at the new size.
+        """
+        batch = getattr(self._overlay, "batched_update", None)
+        if not callable(batch):
+            yield
+            return
+        with batch():
+            yield
+
     @QtCore.Slot()
     def toggle_recording(self) -> None:
+        """Start or stop dictation (hotkey, tray and overlay entry point)."""
+        with self._overlay_batch():
+            self._toggle_recording()
+
+    def _toggle_recording(self) -> None:
         if self._recording_start_in_progress:
             self._pending_toggle_after_start_count += 1
             self._logger.info(
@@ -2415,13 +2457,7 @@ class DictationController(QtCore.QObject):
         self._preload_progress_timer.stop()
         self._preload_target_model = None
         self._terminate_preload_download_process()
-        session_active = (
-            self._audio_capture is not None
-            or self._streaming_recording
-            or self._recording_start_in_progress
-            or self._recording_stop_in_progress
-            or self._active_request_token is not None
-        )
+        session_active = self._overlay_session_active()
 
         ready_model = self._settings.model_size
 
@@ -2817,7 +2853,8 @@ class DictationController(QtCore.QObject):
     def _on_transcription_ready_result(self, request_token: int, text: str) -> None:
         if self._shutdown_started:
             return
-        self._on_transcription_ready(text, request_token=request_token)
+        with self._overlay_batch():
+            self._on_transcription_ready(text, request_token=request_token)
 
     def _on_transcription_ready(
         self,
@@ -3183,7 +3220,34 @@ class DictationController(QtCore.QObject):
     ) -> None:
         if self._shutdown_started:
             return
-        self._on_transcription_failed(error_text, request_token=request_token)
+        with self._overlay_batch():
+            self._on_transcription_failed(error_text, request_token=request_token)
+
+    def _job_identity(self, job: _TranscriptionJob | None) -> str:
+        """Short, user-facing identity of a queued transcription."""
+        if job is None:
+            return "A queued transcription"
+        engine = (job.engine or "").strip() or "transcriber"
+        model = (job.model or "").strip()
+        provider = f"{engine} · {model}" if model else engine
+        return f"Recording {job.created_at.strftime('%H:%M:%S')} ({provider})"
+
+    def _report_background_failure(
+        self,
+        job: _TranscriptionJob | None,
+        error_text: str,
+        retry_available: bool,
+    ) -> None:
+        message = f"{self._job_identity(job)} failed: {error_text}"
+        if retry_available:
+            message = f"{message} The audio was kept — use Retry to try again."
+        self._logger.warning("background_transcription_failed %s", message)
+        # Always notify (the tray notification survives an active session);
+        # additionally show it on the overlay when no live session owns it.
+        self.background_transcription_failed.emit(message)
+        if not self._overlay_session_active():
+            self._overlay.set_state("Error", message)
+            self._reveal_overlay_result(is_error=True)
 
     def _on_transcription_failed(
         self,
@@ -3195,10 +3259,15 @@ class DictationController(QtCore.QObject):
         if request_token is not None:
             job = self._jobs.get(request_token)
             if not self._is_foreground_transcription(request_token, job):
-                # A queued/canceled transcription failed while a newer session
-                # is active. Drop it quietly without disturbing the live session;
-                # keep its audio available for a manual retry.
-                self._promote_request_audio_for_retry(request_token)
+                # A queued transcription failed while a newer session is
+                # active. Keep the live session's overlay state untouched and
+                # keep the audio for a manual retry, but never let the failure
+                # pass silently: an unreported failure looks exactly like a
+                # recording that was simply never transcribed.
+                retry_available = self._promote_request_audio_for_retry(
+                    request_token
+                )
+                self._report_background_failure(job, error_text, retry_available)
                 self._finish_transcription_job(request_token)
                 self._flush_deferred_background_results()
                 return
@@ -3666,6 +3735,18 @@ class DictationController(QtCore.QObject):
             self._play_completion_beep()
         else:
             self._reveal_overlay_result(is_error=True)
+
+    def show_overlay_notice(self, message: str) -> None:
+        """Confirm a completed action on the overlay and return to Idle.
+
+        Tray actions have no other feedback surface, so a copy that silently
+        succeeds is indistinguishable from one that did nothing.
+        """
+        if self._overlay_session_active():
+            return
+        self._overlay.set_state("Done", str(message))
+        self._reveal_overlay_result(is_error=False)
+        QtCore.QTimer.singleShot(OVERLAY_NOTICE_MS, self.show_idle_status)
 
     def show_overlay_error(self, message: str) -> None:
         """Surface a transient error on the overlay without exposing the

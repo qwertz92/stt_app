@@ -97,11 +97,12 @@ class _LocalModelsMixin:
             "Keep Cohere/Granite ONNX model loaded after dictation"
         )
         self.keep_onnx_model_loaded_checkbox.setToolTip(
-            "Expert option for Cohere and Granite. Keeps the last ONNX runtime "
-            "process alive so short follow-up dictations skip model load time. "
-            "Disable it if RAM or GPU memory pressure matters more."
+            "Keeps the last ONNX runtime process alive so every following "
+            "dictation skips the model load. Turn it off if RAM or GPU memory "
+            "pressure matters more than the delay before each transcription."
         )
         keep_onnx_note = QtWidgets.QLabel(
+            "On by default. Without it every dictation reloads the model; "
             "Cohere and Granite can use several GB of RAM/VRAM while loaded. "
             "Nemotron stays warm like faster-whisper so streaming starts promptly. "
             "Benchmarks always close each case after measuring it."

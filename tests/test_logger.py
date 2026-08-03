@@ -53,8 +53,25 @@ def test_diagnostics_text_returns_tail(tmp_path):
     al.log_path.write_text("line1\nline2\nline3\nline4\nline5\n", encoding="utf-8")
     tail = al.diagnostics_text(max_lines=3)
     lines = tail.strip().splitlines()
-    assert len(lines) == 3
-    assert lines[0] == "line3"
+    # A header naming the log file, then at most max_lines log lines.
+    assert lines[0].startswith("Log file:")
+    assert lines[1:] == ["line3", "line4", "line5"]
+
+
+def test_diagnostics_text_includes_rotated_backups(tmp_path):
+    """The interesting part (start, preload, first failure) is often rotated."""
+    al = AppLogger(root_dir=tmp_path)
+    al.log_path.with_name(al.log_path.name + ".2").write_text(
+        "oldest\n", encoding="utf-8"
+    )
+    al.log_path.with_name(al.log_path.name + ".1").write_text(
+        "older\n", encoding="utf-8"
+    )
+    al.log_path.write_text("current\n", encoding="utf-8")
+
+    lines = al.diagnostics_text().strip().splitlines()
+
+    assert lines[1:] == ["oldest", "older", "current"]
 
 
 def test_configure_is_idempotent(tmp_path):

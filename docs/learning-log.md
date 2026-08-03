@@ -3,6 +3,41 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-03
+
+- **The overlay stuttered because one event caused two resizes.** Finishing a
+  transcription clears the queue row and then publishes the transcript;
+  measured with a `resizeEvent` trace, the window went 183 → 137 → 269 px, and
+  the frame in between showed the old content at the new size (a screenshot
+  from the user showed the queue text cut off). `OverlayUI.batched_update()`
+  now collects the geometry work of one event, resizes with painting
+  suppressed and repaints once: 183 → 269 in a single step. Note for future
+  measurements: instrumenting `resize()` is misleading, because activating a
+  layout also resizes the window through its minimum size — only `resizeEvent`
+  shows the real changes.
+- **A delayed "Idle" could stop a running dictation.** `_on_model_preload_done`
+  evaluates "is a session active" when it *arms* `singleShot(1800,
+  show_idle_status)`. If the user starts dictating inside that window the timer
+  fires anyway and the overlay claims Idle while the microphone is recording —
+  and pressing the hotkey again to "start" really stopped the capture.
+  `show_idle_status` now re-checks at fire time. The repeating preload-progress
+  poll already did this correctly; the one-shot did not.
+- **Qt's tray menu does not steal the foreground.** Measured on Windows 11:
+  `QMenu.popup()` leaves `GetForegroundWindow()` at `Shell_TrayWnd` (Qt shows
+  popups with `SW_SHOWNOACTIVATE`), so the earlier hypothesis that our menu
+  closes the hidden-icons flyout is wrong — bypassing Qt's `setContextMenu`
+  (and its `SetForegroundWindow` call) did not change the behavior for the
+  user. Remaining explanation: Explorer dismisses its own overflow flyout when
+  a hidden icon is clicked. Practical workaround: pin the icon to the
+  always-visible tray area.
+- **`diagnostics_text()` only saw the live log file** and only its last 300
+  lines, so a copied diagnostic could start minutes after the interesting
+  events. It now reads the rotated backups oldest-first, keeps 3000 lines and
+  prefixes the log path. Transcripts are still never logged.
+- **Cohere/Granite defaults:** `keep_onnx_model_loaded` defaults to on. It only
+  applies when such a model is selected, and the previous default made every
+  dictation reload several GB while the other local engines stayed warm.
+
 ## 2026-08-02
 
 - **Overlay refused to shrink because `resize()` clamps to a stale minimum.**
