@@ -852,6 +852,45 @@ def test_overlay_language_button_draws_centered_chevron_and_opens_menu(monkeypat
     ]
 
 
+def test_overlay_record_button_indicator_stays_centered_in_both_states():
+    """The state indicator is painted, not typed.
+
+    "●"/"■" sit on the font baseline: the dot rendered 1.5 px below the
+    button's middle, the square 1 px, and the indicator jumped between states
+    because the two glyphs have different heights.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    button = overlay._record_button
+
+    centers: list[float] = []
+    for state in ("Idle", "Listening"):
+        overlay.set_state(state, "detail")
+        app.processEvents()
+        image = QtGui.QImage(button.size(), QtGui.QImage.Format_ARGB32)
+        image.fill(QtCore.Qt.transparent)
+        button.render(image)
+        points = [
+            QtCore.QPoint(x, y)
+            for y in range(image.height())
+            for x in range(image.width())
+            if image.pixelColor(x, y) == button._COLOR
+        ]
+        area = button._indicator_rect()
+
+        assert points, state
+        assert all(area.contains(point) for point in points), state
+        ys = [point.y() for point in points]
+        centers.append((min(ys) + max(ys)) / 2)
+
+    assert centers[0] == (button.height() - 1) / 2
+    # Same position in both states, so switching cannot make it jump.
+    assert centers[0] == centers[1]
+    overlay.hide()
+
+
 def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()

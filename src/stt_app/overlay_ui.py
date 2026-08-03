@@ -24,8 +24,8 @@ from .config import (
 )
 
 
-RECORD_BUTTON_START_TEXT = "● Record"
-RECORD_BUTTON_STOP_TEXT = "■ Stop"
+RECORD_BUTTON_START_TEXT = "Record"
+RECORD_BUTTON_STOP_TEXT = "Stop"
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
 # the left and 26 px on the right for the chevron, plus a 1 px border per side
@@ -78,6 +78,63 @@ class _OverlayLanguageButton(QtWidgets.QPushButton):
             center.y() - self._ARROW_HALF_HEIGHT,
         )
         painter.drawPath(path)
+
+
+class _OverlayRecordButton(QtWidgets.QPushButton):
+    """Record/Stop button with a self-drawn state indicator.
+
+    The obvious approach — putting "●" and "■" into the caption — is not
+    centered: both glyphs sit on the font baseline, so the dot rendered 1.5 px
+    below the button's middle, the square 1 px, and because the two glyphs have
+    different heights the indicator visibly jumped when the state changed.
+    Painting it keeps it exactly centered, identically sized in both states and
+    independent of the font's glyph coverage.
+    """
+
+    _INDICATOR_AREA_WIDTH = 22
+    _INDICATOR_SIZE = 8
+    _COLOR = QtGui.QColor("#f0f4f8")
+    _DISABLED_COLOR = QtGui.QColor("#8894a2")
+
+    def __init__(self, text: str = "") -> None:
+        super().__init__(text)
+        self._recording = False
+
+    def set_recording(self, recording: bool) -> None:
+        normalized = bool(recording)
+        if normalized == self._recording:
+            return
+        self._recording = normalized
+        self.update()
+
+    def _indicator_rect(self) -> QtCore.QRect:
+        content_rect = self.contentsRect()
+        width = min(self._INDICATOR_AREA_WIDTH, content_rect.width())
+        return QtCore.QRect(
+            content_rect.left(),
+            content_rect.top(),
+            width,
+            content_rect.height(),
+        )
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        super().paintEvent(event)
+        area = self._indicator_rect()
+        if area.isEmpty():
+            return
+        size = min(self._INDICATOR_SIZE, area.width(), area.height())
+        center = area.center()
+        shape = QtCore.QRect(0, 0, size, size)
+        shape.moveCenter(center)
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        color = self._COLOR if self.isEnabled() else self._DISABLED_COLOR
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(color)
+        if self._recording:
+            painter.drawRect(shape)
+        else:
+            painter.drawEllipse(shape)
 
 
 class OverlayUI(QtWidgets.QWidget):
@@ -156,7 +213,7 @@ class OverlayUI(QtWidgets.QWidget):
         # Primary action: start/stop dictation without touching the keyboard.
         # Fixed width for both captions so the caption swap cannot reflow the
         # header row.
-        self._record_button = QtWidgets.QPushButton(RECORD_BUTTON_START_TEXT)
+        self._record_button = _OverlayRecordButton(RECORD_BUTTON_START_TEXT)
         self._record_button.setObjectName("overlayRecordButton")
         self._record_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._record_button.setFocusPolicy(QtCore.Qt.NoFocus)
@@ -493,6 +550,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._record_button.setText(
             RECORD_BUTTON_STOP_TEXT if recording else RECORD_BUTTON_START_TEXT
         )
+        self._record_button.set_recording(recording)
         self._record_button.setToolTip(
             "Stop dictation and transcribe."
             if recording
@@ -596,6 +654,7 @@ class OverlayUI(QtWidgets.QWidget):
                it. Recording tints it red without changing the box. */
             QPushButton#overlayRecordButton {{
                 border-color: rgba(255,255,255,0.7);
+                padding: 0 8px 0 26px;
             }}
             QPushButton#overlayRecordButton[recording="true"] {{
                 background-color: rgba(190,60,60,0.42);
