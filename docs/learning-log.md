@@ -17,6 +17,17 @@ Agents and developers: use this as a knowledge base for past issues and solution
   Chromium menu widget is owned, and the two windows' extended styles differ.
   `scripts/diagnose_tray_flyout.py` now logs style/exstyle/owner so one more
   run compares the two windows directly.
+- **Resolved by that second run.** The decisive line was the foreground going
+  to `Electron_NotifyIconHostWindow` at 14.109 s and only 38 ms later to their
+  menu widget — the app activates the window that owns the notification icon
+  *before* showing the menu, exactly the documented Q135788 pattern. Our menu
+  jumped straight from the flyout to the popup. Both menu windows are
+  otherwise identical (`ex=0x88` vs `ex=0x200088`, i.e. toolwindow + topmost,
+  no owner in either case), so this ordering is the whole difference.
+  `_activate_tray_icon_window()` now does the same. Qt's own `setContextMenu`
+  path claims to call `SetForegroundWindow` as well, which is why the original
+  native menu was not a workaround — do not assume it is equivalent without
+  measuring again.
 - **Consequence handled either way:** a dictation started from the tray menu
   used to capture our own menu as the insert target, because
   `get_foreground_window` returned the raw foreground. It now remembers the

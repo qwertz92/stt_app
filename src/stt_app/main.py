@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import signal
 import sys
 import threading
@@ -35,13 +36,78 @@ from .update_ui import show_update_available_dialog, show_update_status_dialog
 from .app_paths import appdata_root
 
 # Pop the tray menu up ourselves instead of handing it to Qt via
-# ``setContextMenu``. Qt's Windows tray backend calls ``SetForegroundWindow``
-# on its hidden helper window before tracking the menu, so opening the menu
-# steals the foreground from Explorer's Windows 11 "hidden icons" flyout, which
-# then light-dismisses itself underneath the menu. Showing the menu as a Qt
-# popup skips that call; Qt's own popup grab still closes the menu on an
-# outside click. Other platforms keep Qt's platform menu.
+# ``setContextMenu``, so the notification-icon window can be activated first
+# (see ``_activate_tray_icon_window``). Qt's own popup grab still closes the
+# menu on an outside click. Other platforms keep Qt's platform menu.
 _MANUAL_TRAY_MENU = sys.platform == "win32"
+_TRAY_HOST_WINDOW_CLASS_FRAGMENT = "TrayIconMessageWindow"
+_WM_NULL = 0x0000
+_tray_icon_window_handle: int | None = None
+
+
+def _find_tray_icon_window() -> int | None:
+    """HWND of the window Qt registered the notification icon with."""
+    import ctypes
+    import ctypes.wintypes
+
+    user32 = ctypes.windll.user32
+    own_process_id = int(ctypes.windll.kernel32.GetCurrentProcessId())
+    found: list[int] = []
+
+    @ctypes.WINFUNCTYPE(
+        ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+    def _visit(hwnd, _lparam):
+        process_id = ctypes.wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
+        if int(process_id.value) != own_process_id:
+            return True
+        class_name = ctypes.create_unicode_buffer(256)
+        user32.GetClassNameW(hwnd, class_name, 256)
+        if _TRAY_HOST_WINDOW_CLASS_FRAGMENT in class_name.value:
+            found.append(int(hwnd))
+            return False
+        return True
+
+    user32.EnumWindows(_visit, 0)
+    return found[0] if found else None
+
+
+def _activate_tray_icon_window() -> None:
+    """Take the foreground with our icon's window before showing the menu.
+
+    Measured on Windows 11: Explorer's hidden-icons flyout stays open when the
+    clicked icon's *owner* window becomes the foreground window first — an
+    Electron app does exactly that ~40 ms before its menu appears — and closes
+    about a second later when a menu takes the foreground without that step,
+    which is what our menu did. Both menus are otherwise identical
+    (WS_EX_TOOLWINDOW | WS_EX_TOPMOST, no owner), so this is the one
+    difference. It is also the documented notification-icon contract.
+
+    Best effort: if the window cannot be found or Windows refuses the
+    foreground change, the menu still opens.
+    """
+    global _tray_icon_window_handle
+
+    if sys.platform != "win32":
+        return
+    import ctypes
+
+    if _tray_icon_window_handle is None:
+        _tray_icon_window_handle = _find_tray_icon_window()
+    hwnd = _tray_icon_window_handle
+    if not hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        user32.SetForegroundWindow(hwnd)
+        # Second half of the documented pattern: let the message queue run so
+        # the menu dismisses reliably after the foreground change.
+        user32.PostMessageW(hwnd, _WM_NULL, 0, 0)
+    except Exception:
+        logging.getLogger(APP_LOGGER_NAME).debug(
+            "Could not activate the tray icon window", exc_info=True
+        )
 
 
 def _set_windows_app_user_model_id() -> None:
@@ -365,6 +431,7 @@ def _create_tray_icon(
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
         if reason == QtWidgets.QSystemTrayIcon.Context:
             if _MANUAL_TRAY_MENU:
+                _activate_tray_icon_window()
                 menu.popup(QtGui.QCursor.pos())
             return
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:

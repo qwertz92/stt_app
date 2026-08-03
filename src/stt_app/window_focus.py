@@ -43,26 +43,30 @@ class Win32WindowFocusHelper:
     def get_foreground_window(self) -> int | None:
         """Foreground window, skipping our own popups.
 
-        Starting dictation from the tray menu means our own menu holds the
-        foreground at that moment, so the transcript would be aimed at a
-        window that cannot take text. Remember the last window that belonged
-        to another application and use it instead. Only our *popups* are
-        skipped (tray menu, overlay): the Settings dialog is a normal window
-        and stays a valid dictation target.
+        Opening the tray menu activates our notification-icon window and then
+        our menu, so at that moment the foreground belongs to us and the
+        transcript would be aimed at a window that cannot take text. Remember
+        the last window that belonged to another application and use it
+        instead. Only our *popups and hidden helper windows* are skipped: the
+        Settings dialog is a normal visible window and stays a valid dictation
+        target.
         """
         hwnd = int(self._user32.GetForegroundWindow() or 0)
         if not hwnd:
             return self._remembered_foreign_window()
-        if self._is_own_popup(hwnd):
+        if self._is_own_non_target_window(hwnd):
             return self._remembered_foreign_window() or hwnd
         self._last_foreign_window = hwnd
         return hwnd
 
-    def _is_own_popup(self, hwnd: int) -> bool:
+    def _is_own_non_target_window(self, hwnd: int) -> bool:
         process_id = ctypes.wintypes.DWORD()
         self._user32.GetWindowThreadProcessId(hwnd, ctypes.byref(process_id))
         if int(process_id.value) != self._own_process_id:
             return False
+        if not self._user32.IsWindowVisible(hwnd):
+            # The tray icon's helper window, activated while the menu opens.
+            return True
         style = int(self._user32.GetWindowLongW(hwnd, _GWL_EXSTYLE) or 0)
         return bool(style & _WS_EX_TOOLWINDOW)
 

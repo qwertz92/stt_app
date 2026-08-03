@@ -14,6 +14,7 @@ class _FakeUser32:
         self.own_windows: set[int] = set()
         self.tool_windows: set[int] = set()
         self.valid_windows: set[int] = set()
+        self.hidden_windows: set[int] = set()
 
     def GetForegroundWindow(self) -> int:  # noqa: N802 - Win32 name
         return self.foreground
@@ -29,6 +30,9 @@ class _FakeUser32:
 
     def IsWindow(self, hwnd) -> int:  # noqa: N802
         return 1 if hwnd in self.valid_windows else 0
+
+    def IsWindowVisible(self, hwnd) -> int:  # noqa: N802
+        return 0 if hwnd in self.hidden_windows else 1
 
 
 def _helper() -> tuple[Win32WindowFocusHelper, _FakeUser32]:
@@ -88,3 +92,19 @@ def test_remembered_window_is_dropped_once_it_is_gone():
     fake.foreground = tray_menu
 
     assert helper.get_foreground_window() == tray_menu
+
+
+def test_hidden_tray_helper_window_is_never_the_target():
+    """Opening the tray menu activates our notification-icon window first."""
+    helper, fake = _helper()
+    editor = 1001
+    tray_host = 4004
+    fake.valid_windows = {editor, tray_host}
+    fake.own_windows = {tray_host}
+    fake.hidden_windows = {tray_host}
+
+    fake.foreground = editor
+    helper.get_foreground_window()
+    fake.foreground = tray_host
+
+    assert helper.get_foreground_window() == editor

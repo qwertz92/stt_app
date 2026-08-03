@@ -441,6 +441,42 @@ def test_tray_context_click_pops_menu_without_platform_menu(monkeypatch):
     _ = tray
 
 
+def test_tray_context_click_activates_the_icon_window_before_the_menu(monkeypatch):
+    """The icon's own window must take the foreground before the menu opens.
+
+    Measured on Windows 11: Explorer's hidden-icons flyout stays open when an
+    app does this (an Electron app activates its notify-icon host window ~40 ms
+    before showing its menu) and closes about a second later when a menu takes
+    the foreground without that step.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    order: list[str] = []
+    monkeypatch.setattr(main_module, "_MANUAL_TRAY_MENU", True)
+    monkeypatch.setattr(
+        main_module,
+        "_activate_tray_icon_window",
+        lambda: order.append("activate"),
+    )
+    tray = _create_tray_icon(
+        app=app,
+        controller=FakeController(),
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+    monkeypatch.setattr(
+        tray._context_menu, "popup", lambda _position: order.append("popup")
+    )
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
+
+    assert order == ["activate", "popup"]
+    _ = tray
+
+
 def test_tray_middle_click_toggles_dictation_respecting_setting():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = FakeController()

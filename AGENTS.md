@@ -940,17 +940,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   deliberately synchronous so the microphone cannot record it). Streaming
   appends are many small pastes and stay silent by design. History-only
   delivery and failed inserts never beep.
-- **Tray menu is popped up manually on Windows (`_MANUAL_TRAY_MENU`)**: Qt's
-  Windows tray backend calls `SetForegroundWindow` on its hidden helper window
-  before tracking a menu registered through `setContextMenu`, so opening the
-  menu steals the foreground from Explorer's Windows 11 "hidden icons" flyout,
-  which then light-dismisses itself underneath the menu. On Windows the menu is
-  therefore *not* registered with Qt; `activated(Context)` (still emitted with
-  no platform menu set) pops the `QMenu` up at the cursor instead, and Qt's own
-  popup grab keeps outside-click dismissal working. The menu object stays
-  reachable as `tray_icon._context_menu`. Other platforms keep
+- **Tray menu is popped up manually on Windows (`_MANUAL_TRAY_MENU`)** so the
+  notification-icon window can be activated first. Measured on Windows 11:
+  Explorer's "hidden icons" flyout stays open when the clicked icon's *owner*
+  window becomes the foreground window before the menu appears (an Electron
+  app activates its `Electron_NotifyIconHostWindow` ~40 ms before showing its
+  menu) and light-dismisses about a second later when a menu takes the
+  foreground without that step. Both menus are otherwise identical
+  (`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, no owner), and taking the foreground per
+  se is not the trigger — the reference app's menu takes it too. Hence
+  `_activate_tray_icon_window()` (find our `TrayIconMessageWindow` by class
+  fragment, `SetForegroundWindow`, then `PostMessage(WM_NULL)`) runs before
+  `menu.popup()`. `activated(Context)` is still emitted with no platform menu
+  set, and Qt's own popup grab keeps outside-click dismissal working. The menu
+  object stays reachable as `tray_icon._context_menu`. Other platforms keep
   `setContextMenu`. Trade-off: the menu is Qt-drawn instead of a native Win32
-  menu.
+  menu, and opening it moves the foreground — which is why
+  `Win32WindowFocusHelper` remembers the last foreign window.
 - **Tray left-click reveals the overlay**: a single left click (`Trigger`) has
   no other meaning and there is no main window, so it calls
   `controller.bring_overlay_to_front`. Together with the overlay's Record
