@@ -3,7 +3,7 @@ import signal
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
-from PySide6 import QtCore, QtGui, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.app_icon import app_icon_path, load_app_icon
@@ -435,6 +435,7 @@ def test_tray_context_click_pops_menu_without_platform_menu(monkeypatch):
     monkeypatch.setattr(tray._context_menu, "popup", popups.append)
 
     tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
+    QtTest.QTest.qWait(main_module._TRAY_MENU_POPUP_DELAY_MS + 60)
 
     assert len(popups) == 1
     assert tray.contextMenu() is None
@@ -472,6 +473,10 @@ def test_tray_context_click_activates_the_icon_window_before_the_menu(monkeypatc
     )
 
     tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
+
+    # The menu opens a moment after the activation so the shell can observe it.
+    assert order == ["activate"]
+    QtTest.QTest.qWait(main_module._TRAY_MENU_POPUP_DELAY_MS + 60)
 
     assert order == ["activate", "popup"]
     _ = tray

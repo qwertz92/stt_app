@@ -42,6 +42,10 @@ from .app_paths import appdata_root
 _MANUAL_TRAY_MENU = sys.platform == "win32"
 _TRAY_HOST_WINDOW_CLASS_FRAGMENT = "TrayIconMessageWindow"
 _WM_NULL = 0x0000
+# The reference implementation has ~40 ms between activating its icon window
+# and showing the menu. Doing both in the same instant may never publish the
+# intermediate foreground state to the shell, so keep a comparable gap.
+_TRAY_MENU_POPUP_DELAY_MS = 50
 _tray_icon_window_handle: int | None = None
 
 
@@ -95,19 +99,27 @@ def _activate_tray_icon_window() -> None:
 
     if _tray_icon_window_handle is None:
         _tray_icon_window_handle = _find_tray_icon_window()
+    logger = logging.getLogger(APP_LOGGER_NAME)
     hwnd = _tray_icon_window_handle
     if not hwnd:
+        logger.info("tray_menu_activation hwnd=none")
         return
     try:
         user32 = ctypes.windll.user32
-        user32.SetForegroundWindow(hwnd)
+        accepted = bool(user32.SetForegroundWindow(hwnd))
         # Second half of the documented pattern: let the message queue run so
         # the menu dismisses reliably after the foreground change.
         user32.PostMessageW(hwnd, _WM_NULL, 0, 0)
-    except Exception:
-        logging.getLogger(APP_LOGGER_NAME).debug(
-            "Could not activate the tray icon window", exc_info=True
+        # Logged so a failed activation is distinguishable from an activation
+        # that Explorer simply ignores.
+        logger.info(
+            "tray_menu_activation hwnd=%s accepted=%s foreground=%s",
+            hwnd,
+            accepted,
+            int(user32.GetForegroundWindow() or 0),
         )
+    except Exception:
+        logger.debug("Could not activate the tray icon window", exc_info=True)
 
 
 def _set_windows_app_user_model_id() -> None:
@@ -432,7 +444,13 @@ def _create_tray_icon(
         if reason == QtWidgets.QSystemTrayIcon.Context:
             if _MANUAL_TRAY_MENU:
                 _activate_tray_icon_window()
-                menu.popup(QtGui.QCursor.pos())
+                # Capture the position now: the menu opens a moment later and
+                # the pointer may have moved by then.
+                position = QtGui.QCursor.pos()
+                QtCore.QTimer.singleShot(
+                    _TRAY_MENU_POPUP_DELAY_MS,
+                    lambda: menu.popup(position),
+                )
             return
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
             open_settings_dialog()
