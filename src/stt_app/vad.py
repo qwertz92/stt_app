@@ -15,29 +15,33 @@ from .config import (
 )
 
 
-def peak_windowed_rms_from_wav(
+def measure_peak_windowed_rms(
     wav_bytes: bytes,
     window_ms: int = SILENCE_GATE_WINDOW_MS,
-) -> float:
-    """Loudest windowed RMS level (0..1) of a 16-bit PCM WAV recording.
+) -> float | None:
+    """Loudest windowed RMS level (0..1), or ``None`` if unmeasurable.
 
     Used by the silence gate: a recording whose loudest window stays below a
     (user-tunable) threshold contains no speech, so it can skip transcription
     instead of letting the model hallucinate words from silence. Windowing
     keeps a short whisper detectable that full-recording averaging would
-    dilute. Returns 0.0 for empty or unreadable audio.
+    dilute.
+
+    Empty or unreadable audio returns ``None`` rather than ``0.0`` so callers
+    can tell "measured silence" from "could not measure" — gating on the
+    latter would silently discard a recording that merely failed to decode.
     """
     if not wav_bytes:
-        return 0.0
+        return None
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wav_file:
             sample_rate = wav_file.getframerate()
             sample_width = wav_file.getsampwidth()
             frames = wav_file.readframes(wav_file.getnframes())
     except Exception:
-        return 0.0
+        return None
     if sample_width != 2 or not frames:
-        return 0.0
+        return None
 
     samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
     window = max(1, int(sample_rate * (max(1, window_ms) / 1000.0)))
@@ -48,6 +52,15 @@ def peak_windowed_rms_from_wav(
         if rms > peak:
             peak = rms
     return peak
+
+
+def peak_windowed_rms_from_wav(
+    wav_bytes: bytes,
+    window_ms: int = SILENCE_GATE_WINDOW_MS,
+) -> float:
+    """Loudest windowed RMS level (0..1); 0.0 for empty or unreadable audio."""
+    level = measure_peak_windowed_rms(wav_bytes, window_ms)
+    return 0.0 if level is None else level
 
 
 @dataclass(slots=True)

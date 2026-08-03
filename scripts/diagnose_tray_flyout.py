@@ -34,6 +34,12 @@ FLYOUT_CLASSES = (
     "TopLevelWindowForOverflowXamlIsland",
     "NotifyIconOverflowWindow",
 )
+# Menu windows, so the timeline shows whether the flyout closes before or
+# after the menu appears: "#32768" is the native Win32 menu, Qt popups carry
+# "QWindowPopup" in their class name. Chromium's own menu widgets share the
+# generic Chrome_WidgetWin class with ordinary browser windows and are left
+# out on purpose — matching them buries the timeline in noise.
+MENU_CLASS_FRAGMENTS = ("#32768", "QWindowPopup")
 
 user32 = ctypes.windll.user32
 
@@ -72,6 +78,24 @@ def _find_flyouts() -> list[tuple[int, str, bool]]:
     return found
 
 
+def _find_menus() -> list[tuple[int, str]]:
+    found: list[tuple[int, str]] = []
+
+    @ctypes.WINFUNCTYPE(
+        ctypes.wintypes.BOOL, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM
+    )
+    def _callback(hwnd, _lparam):
+        if not user32.IsWindowVisible(hwnd):
+            return True
+        class_name = _window_class(hwnd)
+        if any(fragment in class_name for fragment in MENU_CLASS_FRAGMENTS):
+            found.append((hwnd, class_name))
+        return True
+
+    user32.EnumWindows(_callback, 0)
+    return found
+
+
 def main() -> int:
     if sys.platform != "win32":
         print("This diagnosis only applies to Windows.")
@@ -88,6 +112,7 @@ def main() -> int:
     timeline: list[str] = []
     last_foreground = None
     last_flyouts: list[tuple[int, str, bool]] = []
+    last_menus: list[tuple[int, str]] = []
 
     while time.perf_counter() - started < duration:
         elapsed = time.perf_counter() - started
@@ -105,6 +130,15 @@ def main() -> int:
                     f"visible={visible}"
                 )
             last_flyouts = flyouts
+        menus = _find_menus()
+        if menus != last_menus:
+            if not menus:
+                timeline.append(f"{elapsed:7.3f}s menu      -> closed")
+            for hwnd, class_name in menus:
+                timeline.append(
+                    f"{elapsed:7.3f}s menu      -> {hwnd} [{class_name}] shown"
+                )
+            last_menus = menus
         time.sleep(POLL_SECONDS)
 
     report = "\n".join(timeline) or "Nothing changed — was the flyout opened?"

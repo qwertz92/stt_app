@@ -52,6 +52,9 @@ def _make_queue_controller(monkeypatch, tmp_path, *, mode):
         hotkey=FALLBACK_HOTKEY,
         keep_transcript_in_clipboard=False,
         concurrent_transcription_mode=mode,
+        # These tests drive the queue with synthetic silent audio, which the
+        # silence gate would (correctly) refuse to transcribe.
+        silence_gate_enabled=False,
     )
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
@@ -777,17 +780,30 @@ def test_silence_gate_skips_transcription_of_silent_recording(
     monkeypatch,
     tmp_path,
 ):
+    import io
+    import wave
+
+    import numpy as np
+
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
     controller._settings = replace(
         controller._settings, silence_gate_enabled=True
     )
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(16000)
+        wav_file.writeframes(np.zeros(16000, dtype=np.int16).tobytes())
+    silence = buffer.getvalue()
+    monkeypatch.setattr(FakeCapture, "stop", lambda _self: silence)
 
     controller.start_recording()
     controller.stop_recording()
 
-    # FakeCapture returns unparsable audio -> measured level 0.0 -> gated.
+    # A real, decodable but silent recording is what the gate is for.
     assert controller._active_request_token is None
     assert controller._executor.calls == []
     assert overlay.states[-1][0] == "Done"

@@ -81,3 +81,13 @@ def test_peak_windowed_rms_reports_silence_and_bad_input():
     assert peak_windowed_rms_from_wav(_wav_bytes_from_float(silence)) < 0.0005
     assert peak_windowed_rms_from_wav(b"") == 0.0
     assert peak_windowed_rms_from_wav(b"RIFF") == 0.0
+
+
+def test_unmeasurable_audio_is_not_reported_as_silence():
+    """The silence gate must not treat undecodable audio as "no speech"."""
+    from stt_app.vad import measure_peak_windowed_rms
+
+    assert measure_peak_windowed_rms(b"") is None
+    assert measure_peak_windowed_rms(b"RIFF") is None
+    silence = _wav_bytes_from_float(np.zeros(16000, dtype=np.float32))
+    assert measure_peak_windowed_rms(silence) == 0.0

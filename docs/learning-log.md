@@ -3,6 +3,33 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-03 (later)
+
+- **Hallucinated text from silent recordings had no guard at all in practice.**
+  The user dictates with Cohere Transcribe, whose Node/ONNX runtime exposes no
+  VAD, no no-speech probability and no confidence signal — its request carries
+  only `id/command/audioPath/language/maxNewTokens`, so a silent recording is
+  decoded into fluent invented text ("Hallo Herr Präsident"). faster-whisper's
+  `vad_filter` would help there but is wired to the *auto-stop* checkbox, which
+  is off by default, and `no_speech_threshold` & friends are left at library
+  defaults. The app-level silence gate was the only engine-independent guard
+  and was also off. It now defaults to on. Measured against synthetic levels:
+  digital silence, mic self-noise (-66 dBFS) and room tone (-54 dBFS) are
+  blocked, a faint whisper (-40 dBFS → 0.0071) passes the 0.0040 gate with
+  ~1.8x headroom, a normal whisper with 5x. Gated audio stays recoverable.
+- **`peak_windowed_rms_from_wav` reported unreadable audio as 0.0**, which was
+  harmless while the gate was opt-in and became a silent data-loss path the
+  moment it defaulted to on. Split into `measure_peak_windowed_rms` returning
+  `None` for undecodable audio; the gate only acts on a real measurement. An
+  existing test had been passing for the wrong reason (it fed `b"RIFF"` as
+  "silence") and now uses a real silent WAV.
+- **Record button indicator:** "●"/"■" in a caption are baseline-aligned, so
+  the dot sat 1.5 px below the button's middle, the square 1 px, and the
+  indicator jumped between states. Painting it in a reserved zone (like the
+  language button's chevron) fixes all three. Measured, not eyeballed: the
+  button's border is 1 px on every side for every button — only its brightness
+  differs (luminance 194 vs. 122), which is what reads as "thicker".
+
 ## 2026-08-03
 
 - **The overlay stuttered because one event caused two resizes.** Finishing a

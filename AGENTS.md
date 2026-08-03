@@ -278,11 +278,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   submitted automatically while an Error is shown. Snapshot warm-stream and
   callback-count diagnostics before `capture.stop()` mutates them.
 - **Silence gate (`silence_gate_enabled` + `silence_gate_threshold`, default
-  off/0.004)**: batch recordings whose loudest 100 ms window stays below the
+  on/0.004)**: batch recordings whose loudest 100 ms window stays below the
   threshold skip transcription entirely (speech models hallucinate words from
-  silence). The windowed peak (`peak_windowed_rms_from_wav`) keeps short
-  whispers detectable; every batch stop logs `recording_peak_level` for
-  threshold tuning, and gated audio stays available as the last recording.
+  silence). It defaults to on because it is the only guard that covers *every*
+  engine: the Cohere/Granite runtime exposes no VAD and no no-speech
+  probability at all, and faster-whisper's `vad_filter` is tied to the
+  auto-stop checkbox, which is off by default. The threshold is ~-48 dBFS on
+  the *loudest* window (`measure_peak_windowed_rms`), which a whisper clears
+  with room to spare (measured: -40 dBFS whisper → 0.0071 vs. 0.0040 gate,
+  while room tone at -54 dBFS is blocked). Every batch stop logs
+  `recording_peak_level` for tuning, and gated audio stays available as the
+  last recording. Unmeasurable audio returns `None` and must never be gated —
+  undecodable bytes are a failure to surface, not silence.
 - **Overlay changes of one event go through `batched_update`**: most
   transitions touch the queue panel *and* the state text (a finished
   transcription clears its queue row, then publishes the transcript). Applied
@@ -323,7 +330,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Record/Stop button (`record_toggle_requested` → `controller.toggle_recording`)
   so dictation can be started without a keyboard; its caption swaps between two
   fixed-width captions and the recording state is a stylesheet property, so
-  neither changes the layout. Cancel, Retry and Insert never apply at the same
+  neither changes the layout. Its state indicator is *painted* in a reserved
+  zone (`_OverlayRecordButton`), like the language button's chevron: the
+  obvious "●"/"■" in the caption sit on the font baseline, so the dot rendered
+  1.5 px below the button's middle, the square 1 px, and the indicator jumped
+  between states because the glyphs differ in height. The button keeps the same
+  fill as its neighbours — a lighter fill reads as a permanent hover state —
+  and is marked as primary by a brighter border only. Cancel, Retry and Insert never apply at the same
   time and therefore share one slot: exactly one of them is visible with
   identical fixed sizes, which keeps the controls row width constant while
   showing only the action that is actually available. Retry re-transcribes, so

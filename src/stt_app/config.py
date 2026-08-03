@@ -1053,7 +1053,12 @@ VAD_MAX_SILENCE_MS = 700
 # hallucinate words from silence. Opt-in and deliberately tuned well below
 # the VAD default so whispering into a good microphone still passes; the
 # measured peak level is logged on every batch stop to make tuning easy.
-DEFAULT_SILENCE_GATE_ENABLED = False
+# On by default: it is the only hallucination guard that covers every engine.
+# The Cohere/Granite runtime has no no-speech probability and no VAD at all, so
+# a silent recording is decoded into fluent invented text. The gate measures
+# the *loudest* 100 ms window against a very low threshold (~-48 dBFS), which
+# whispering clears comfortably, and a gated recording stays recoverable.
+DEFAULT_SILENCE_GATE_ENABLED = True
 DEFAULT_SILENCE_GATE_THRESHOLD = 0.004
 SILENCE_GATE_THRESHOLD_MIN = 0.0005
 SILENCE_GATE_THRESHOLD_MAX = 0.1

@@ -152,9 +152,10 @@ class _AudioTabMixin:
             "recording for a manual retry."
         )
         silence_gate_hint = QtWidgets.QLabel(
-            "Keep the threshold low so whispering still passes. The measured "
-            "peak level of every recording is written to the log "
-            "(recording_peak_level) to make tuning easy."
+            "On by default; Cohere and Granite have no built-in no-speech "
+            "detection at all. Keep the threshold low so whispering still "
+            "passes. The measured peak level of every recording is written to "
+            "the log (recording_peak_level) to make tuning easy."
         )
         silence_gate_hint.setWordWrap(True)
         self._style_field_hint_label(silence_gate_hint)

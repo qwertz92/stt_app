@@ -81,7 +81,7 @@ from .text_inserter import TextInserter, TextInsertionError
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .transcriber import create_transcriber
 from .transcriber.base import TranscriptionCanceled, TranscriptionError
-from .vad import EnergyVad, peak_windowed_rms_from_wav
+from .vad import EnergyVad, measure_peak_windowed_rms
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
 _ARCHIVED_RECORDING_NAME_RE = re.compile(
@@ -1279,9 +1279,16 @@ class DictationController(QtCore.QObject):
         """
         enabled = bool(getattr(self._settings, "silence_gate_enabled", False))
         try:
-            peak_level = peak_windowed_rms_from_wav(wav_bytes)
+            peak_level = measure_peak_windowed_rms(wav_bytes)
         except Exception:
             self._logger.exception("Failed to measure recording peak level")
+            return False
+        if peak_level is None:
+            # Unreadable audio is not silence: let it through so the failure
+            # surfaces instead of the recording quietly disappearing.
+            self._logger.warning(
+                "recording_peak_level unmeasurable bytes=%d", len(wav_bytes or b"")
+            )
             return False
         threshold = float(
             getattr(
@@ -1307,9 +1314,10 @@ class DictationController(QtCore.QObject):
         self._overlay.set_state(
             "Done",
             (
-                f"No speech detected (peak level {peak_level:.4f} below the "
-                f"silence gate threshold {threshold:.4f}). The recording is "
-                "kept as the last recording."
+                f"No speech detected (loudest 100 ms {peak_level:.4f}, gate "
+                f"{threshold:.4f}). Nothing was transcribed; the recording is "
+                "kept. If this was speech, lower the silence gate in "
+                "Settings -> Audio & Recording."
             ),
         )
         return True
