@@ -56,10 +56,28 @@ def _window_title(hwnd: int) -> str:
     return buffer.value
 
 
+GWL_STYLE = -16
+GWL_EXSTYLE = -20
+GW_OWNER = 4
+
+
 def _describe(hwnd: int) -> str:
+    """Identify a window well enough to compare two implementations.
+
+    Foreground changes alone did not explain the dismissal — the reference
+    apps' menus take the foreground too — so the window's styles and its owner
+    are logged as well.
+    """
     if not hwnd:
         return "<none>"
-    return f"{hwnd} [{_window_class(hwnd)}] {_window_title(hwnd)[:48]!r}"
+    style = user32.GetWindowLongW(hwnd, GWL_STYLE) & 0xFFFFFFFF
+    ex_style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE) & 0xFFFFFFFF
+    owner = user32.GetWindow(hwnd, GW_OWNER)
+    owner_text = f"{owner} [{_window_class(owner)}]" if owner else "<none>"
+    return (
+        f"{hwnd} [{_window_class(hwnd)}] {_window_title(hwnd)[:32]!r} "
+        f"style=0x{style:08x} ex=0x{ex_style:08x} owner={owner_text}"
+    )
 
 
 def _find_flyouts() -> list[tuple[int, str, bool]]:

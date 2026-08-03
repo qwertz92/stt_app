@@ -81,60 +81,62 @@ class _OverlayLanguageButton(QtWidgets.QPushButton):
 
 
 class _OverlayRecordButton(QtWidgets.QPushButton):
-    """Record/Stop button with a self-drawn state indicator.
+    """Record/Stop button whose state indicator is a generated icon.
 
-    The obvious approach — putting "●" and "■" into the caption — is not
-    centered: both glyphs sit on the font baseline, so the dot rendered 1.5 px
-    below the button's middle, the square 1 px, and because the two glyphs have
-    different heights the indicator visibly jumped when the state changed.
-    Painting it keeps it exactly centered, identically sized in both states and
-    independent of the font's glyph coverage.
+    Putting "●"/"■" into the caption is not centered — both glyphs sit on the
+    font baseline, so the dot rendered 1.5 px below the button's middle and the
+    square 1 px, and since the glyphs differ in height the indicator jumped
+    when the state changed. A real button icon is laid out by Qt (vertically
+    centered, fixed distance to the caption) and the two shapes are drawn at
+    the same size, so nothing moves between states.
     """
 
-    _INDICATOR_AREA_WIDTH = 22
+    # Even size: an odd icon cannot be centred exactly in an even-height
+    # button, which left it half a pixel high. The gap to the caption is part
+    # of the icon because Qt places icon and text almost flush.
     _INDICATOR_SIZE = 8
+    _INDICATOR_GAP = 5
     _COLOR = QtGui.QColor("#f0f4f8")
-    _DISABLED_COLOR = QtGui.QColor("#8894a2")
 
     def __init__(self, text: str = "") -> None:
         super().__init__(text)
         self._recording = False
+        self._indicator_icons = {
+            False: self._build_indicator_icon(circle=True),
+            True: self._build_indicator_icon(circle=False),
+        }
+        self.setIconSize(
+            QtCore.QSize(
+                self._INDICATOR_SIZE + self._INDICATOR_GAP,
+                self._INDICATOR_SIZE,
+            )
+        )
+        self.setIcon(self._indicator_icons[False])
+
+    @classmethod
+    def _build_indicator_icon(cls, *, circle: bool) -> QtGui.QIcon:
+        scale = 4  # drawn oversized, so the shape stays smooth when scaled
+        size = cls._INDICATOR_SIZE * scale
+        pixmap = QtGui.QPixmap(size + cls._INDICATOR_GAP * scale, size)
+        pixmap.fill(QtCore.Qt.transparent)
+        painter = QtGui.QPainter(pixmap)
+        painter.setRenderHint(QtGui.QPainter.Antialiasing)
+        painter.setPen(QtCore.Qt.NoPen)
+        painter.setBrush(cls._COLOR)
+        shape = QtCore.QRect(0, 0, size, size)
+        if circle:
+            painter.drawEllipse(shape)
+        else:
+            painter.drawRect(shape.adjusted(scale, scale, -scale, -scale))
+        painter.end()
+        return QtGui.QIcon(pixmap)
 
     def set_recording(self, recording: bool) -> None:
         normalized = bool(recording)
         if normalized == self._recording:
             return
         self._recording = normalized
-        self.update()
-
-    def _indicator_rect(self) -> QtCore.QRect:
-        content_rect = self.contentsRect()
-        width = min(self._INDICATOR_AREA_WIDTH, content_rect.width())
-        return QtCore.QRect(
-            content_rect.left(),
-            content_rect.top(),
-            width,
-            content_rect.height(),
-        )
-
-    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
-        super().paintEvent(event)
-        area = self._indicator_rect()
-        if area.isEmpty():
-            return
-        size = min(self._INDICATOR_SIZE, area.width(), area.height())
-        center = area.center()
-        shape = QtCore.QRect(0, 0, size, size)
-        shape.moveCenter(center)
-        painter = QtGui.QPainter(self)
-        painter.setRenderHint(QtGui.QPainter.Antialiasing)
-        color = self._COLOR if self.isEnabled() else self._DISABLED_COLOR
-        painter.setPen(QtCore.Qt.NoPen)
-        painter.setBrush(color)
-        if self._recording:
-            painter.drawRect(shape)
-        else:
-            painter.drawEllipse(shape)
+        self.setIcon(self._indicator_icons[normalized])
 
 
 class OverlayUI(QtWidgets.QWidget):
@@ -217,7 +219,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._record_button.setObjectName("overlayRecordButton")
         self._record_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._record_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._record_button.setFixedWidth(84)
+        self._record_button.setFixedWidth(78)
         self._record_button.setFixedHeight(24)
         self._record_button.clicked.connect(self.record_toggle_requested.emit)
 
@@ -654,7 +656,6 @@ class OverlayUI(QtWidgets.QWidget):
                it. Recording tints it red without changing the box. */
             QPushButton#overlayRecordButton {{
                 border-color: rgba(255,255,255,0.7);
-                padding: 0 8px 0 26px;
             }}
             QPushButton#overlayRecordButton[recording="true"] {{
                 background-color: rgba(190,60,60,0.42);

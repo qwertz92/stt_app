@@ -330,13 +330,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Record/Stop button (`record_toggle_requested` → `controller.toggle_recording`)
   so dictation can be started without a keyboard; its caption swaps between two
   fixed-width captions and the recording state is a stylesheet property, so
-  neither changes the layout. Its state indicator is *painted* in a reserved
-  zone (`_OverlayRecordButton`), like the language button's chevron: the
-  obvious "●"/"■" in the caption sit on the font baseline, so the dot rendered
-  1.5 px below the button's middle, the square 1 px, and the indicator jumped
-  between states because the glyphs differ in height. The button keeps the same
-  fill as its neighbours — a lighter fill reads as a permanent hover state —
-  and is marked as primary by a brighter border only. Cancel, Retry and Insert never apply at the same
+  neither changes the layout. Its state indicator is a *generated icon*
+  (`_OverlayRecordButton`), not a caption glyph: "●"/"■" sit on the font
+  baseline, so the dot rendered 1.5 px below the button's middle, the square
+  1 px, and the indicator jumped because the glyphs differ in height. Qt lays
+  an icon out vertically centred; the icon carries its own trailing gap
+  because Qt otherwise places icon and caption almost flush. The button keeps
+  the same fill as its neighbours — a lighter fill reads as a permanent hover
+  state — and is marked as primary by a brighter border only.
+- **Our own popups are never a dictation target**: `Win32WindowFocusHelper`
+  remembers the last foreground window of another application and returns it
+  while one of our *popups* (tray menu, overlay) holds the foreground, so
+  dictation started from the tray menu still inserts into the window the user
+  was working in. Only `WS_EX_TOOLWINDOW` windows of our own process are
+  skipped — the Settings dialog is a normal window and stays a valid target. Cancel, Retry and Insert never apply at the same
   time and therefore share one slot: exactly one of them is visible with
   identical fixed sizes, which keeps the controls row width constant while
   showing only the action that is actually available. Retry re-transcribes, so

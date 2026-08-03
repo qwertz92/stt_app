@@ -3,6 +3,25 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-03 (tray flyout measurement)
+
+- **Measured on the affected machine, with the app's own tray menu vs. an
+  Electron app's:** both menus become the foreground window, and only ours
+  makes the Windows 11 overflow flyout close — about 1.0-1.3 s later, not
+  immediately. Timeline excerpt: our popup takes the foreground at 10.196 s,
+  flyout hides at 11.462 s; the Electron menu takes the foreground at 15.206 s
+  and the flyout stays visible until the user dismisses it at 17.886 s. This
+  **refutes** the foreground-steal explanation (and with it the earlier
+  `SetForegroundWindow` hypotheses, in both directions). Remaining candidate
+  differences, still unverified: our popup has no owner window while a
+  Chromium menu widget is owned, and the two windows' extended styles differ.
+  `scripts/diagnose_tray_flyout.py` now logs style/exstyle/owner so one more
+  run compares the two windows directly.
+- **Consequence handled either way:** a dictation started from the tray menu
+  used to capture our own menu as the insert target, because
+  `get_foreground_window` returned the raw foreground. It now remembers the
+  last foreign window and skips our own tool windows.
+
 ## 2026-08-03 (later)
 
 - **Hallucinated text from silent recordings had no guard at all in practice.**

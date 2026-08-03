@@ -865,7 +865,7 @@ def test_overlay_record_button_indicator_stays_centered_in_both_states():
     app.processEvents()
     button = overlay._record_button
 
-    centers: list[float] = []
+    boxes: list[tuple[float, int, int]] = []
     for state in ("Idle", "Listening"):
         overlay.set_state(state, "detail")
         app.processEvents()
@@ -878,16 +878,20 @@ def test_overlay_record_button_indicator_stays_centered_in_both_states():
             for x in range(image.width())
             if image.pixelColor(x, y) == button._COLOR
         ]
-        area = button._indicator_rect()
 
         assert points, state
-        assert all(area.contains(point) for point in points), state
         ys = [point.y() for point in points]
-        centers.append((min(ys) + max(ys)) / 2)
+        xs = [point.x() for point in points]
+        boxes.append(
+            ((min(ys) + max(ys)) / 2, max(ys) - min(ys), max(xs) - min(xs))
+        )
 
-    assert centers[0] == (button.height() - 1) / 2
-    # Same position in both states, so switching cannot make it jump.
-    assert centers[0] == centers[1]
+    # Vertically centred in both states...
+    assert boxes[0][0] == (button.height() - 1) / 2
+    assert boxes[1][0] == (button.height() - 1) / 2
+    # ...and the same size, so the state swap cannot resize the indicator.
+    assert boxes[0][1] == boxes[1][1]
+    assert boxes[0][2] == boxes[1][2]
     overlay.hide()
 
 
