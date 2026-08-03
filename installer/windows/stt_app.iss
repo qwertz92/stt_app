@@ -4,7 +4,7 @@
 #define MyAppExeName "stt_app.exe"
 
 #ifndef MyAppVersion
-  #define MyAppVersion "0.7.1"
+  #define MyAppVersion "0.8.0"
 #endif
 
 #ifndef MyReleaseDir
