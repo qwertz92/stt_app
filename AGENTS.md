@@ -110,6 +110,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
 | `window_focus.py` | Win32 foreground/focus/caret window tracking for text insertion |
+| `win_tray_icon.py` | Hand-registered Windows notification icon (`Shell_NotifyIcon` + native menu) with a `QSystemTrayIcon` fallback |
 | `hotkey.py` | Global hotkey registration via Win32 RegisterHotKey |
 | `benchmark_environment.py` | Best-effort benchmark system metadata |
 | `local_benchmark.py` | Pure benchmark runner (`run_benchmark_cases`) + result models; used by the CLI and the out-of-process worker |
@@ -946,21 +947,30 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   deliberately synchronous so the microphone cannot record it). Streaming
   appends are many small pastes and stay silent by design. History-only
   delivery and failed inserts never beep.
-- **Tray menu uses Qt's platform menu (`setContextMenu`)**: opening it closes
-  Windows 11's "hidden icons" flyout, which Electron apps in the same flyout do
-  not. Three hypotheses were measured on the affected machine and all are
-  **refuted** — do not re-try them without new evidence: (1) Qt's
-  `SetForegroundWindow` before `trackPopupMenu` (bypassing it via a manual
-  `menu.popup()` changed nothing); (2) the menu stealing the foreground (the
-  Electron menu takes it too and the flyout survives); (3) missing activation
-  of our notification-icon window before the menu (implemented, logged
-  `accepted=True foreground=<our hwnd>`, flyout still closed). The menu windows
-  are otherwise identical (`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`, no owner). The
-  remaining untested candidate is how Qt registers the icon itself
-  (`NOTIFYICONDATA` version/flags; Qt's host window is a `WS_CAPTION`
-  overlapped window, Electron's a bare `WS_POPUP`), which `QSystemTrayIcon`
-  does not expose. `scripts/diagnose_tray_flyout.py` reproduces the
-  measurement. Workaround for users: pin the icon to the always-visible tray.
+- **The tray icon is registered by hand on Windows (`win_tray_icon.py`)**:
+  `QSystemTrayIcon`'s menu closed Windows 11's "hidden icons" flyout while
+  other apps in the same flyout kept it open. Everything observable at menu
+  time was measured and refuted — Qt's `SetForegroundWindow`, the menu taking
+  the foreground (the reference app's does too), window styles and owners
+  (identical), and activating our icon window first (`accepted=True`, flyout
+  still closed). Two experiments then isolated it: a hand-registered icon keeps
+  the flyout open, and of two such icons differing only in their menu, only the
+  one with a native `TrackPopupMenu` does. **Both the registration and the menu
+  must be native**; do not "simplify" either half back to Qt.
+  `WindowsTrayIcon` mirrors the `QSystemTrayIcon` API this app uses
+  (`activated` with the same `ActivationReason` values, `showMessage`, `show`,
+  `setContextMenu`, `setToolTip`), so callers do not branch, and
+  `create_tray_icon` falls back to `QSystemTrayIcon` on other platforms and on
+  any Win32 failure. The context menu stays a `QMenu` — it is the model
+  (labels, order, enabled state, callbacks) and is only *rendered* natively.
+  Invariants that Qt used to provide and that this module must keep: the window
+  class is registered once per process with a dispatcher that routes by HWND (a
+  per-instance window procedure dangles as soon as one instance is collected),
+  every `ctypes` call declares `argtypes`/`restype` (defaults truncate handles
+  and overflow on a large `LPARAM`), the icon is re-added on `TaskbarCreated`
+  after an Explorer restart, and it is deleted before its window is destroyed
+  or a dead icon lingers in the tray. `scripts/diagnose_tray_flyout.py` and
+  `scripts/experiment_native_tray_icon.py` reproduce the measurements.
 - **Tray left-click reveals the overlay**: a single left click (`Trigger`) has
   no other meaning and there is no main window, so it calls
   `controller.bring_overlay_to_front`. Together with the overlay's Record

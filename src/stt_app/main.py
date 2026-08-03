@@ -34,6 +34,7 @@ from .text_inserter import TextInserter
 from .transcript_history import TranscriptHistoryStore
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
+from .win_tray_icon import create_tray_icon
 from .app_paths import appdata_root
 
 
@@ -218,6 +219,10 @@ def run() -> int:
 
     app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
     app.aboutToQuit.connect(controller.shutdown)
+    # A hand-registered icon must be removed explicitly, or a dead icon stays
+    # in the tray until the user hovers over it.
+    if hasattr(tray_icon, "close"):
+        app.aboutToQuit.connect(tray_icon.close)
     signal_timer = _install_signal_handlers(app)
 
     app._tts_refs = {
@@ -248,10 +253,10 @@ def _create_tray_icon(
     last_recording_store: LastRecordingStore,
     open_history_dialog,
     local_model_inventory_store: LocalModelInventoryStore | None = None,
-) -> QtWidgets.QSystemTrayIcon:
-    tray_icon = QtWidgets.QSystemTrayIcon(load_app_icon(), app)
-    if sys.platform != "win32":
-        tray_icon.setToolTip(APP_DISPLAY_NAME)
+):
+    # Windows gets a hand-registered notification icon; see win_tray_icon for
+    # why QSystemTrayIcon closes the hidden-icons flyout.
+    tray_icon = create_tray_icon(app, load_app_icon(), APP_DISPLAY_NAME)
 
     menu = QtWidgets.QMenu()
 

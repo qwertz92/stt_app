@@ -3,6 +3,8 @@ import signal
 from datetime import datetime, timezone
 from types import SimpleNamespace
 
+import pytest
+
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import stt_app.main as main_module
@@ -22,6 +24,23 @@ from stt_app.main import (
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from stt_app.update_checker import UpdateCheckResult
+
+
+@pytest.fixture(autouse=True)
+def _no_real_tray_icon(monkeypatch):
+    """Keep the tests off the real notification area.
+
+    ``create_tray_icon`` registers a genuine Windows tray icon; these tests are
+    about the wiring around it (menu actions, activation handling), so they use
+    the QSystemTrayIcon fallback instead of littering the tray.
+    """
+    monkeypatch.setattr(
+        main_module,
+        "create_tray_icon",
+        lambda parent, icon, tooltip=None, logger=None: (
+            QtWidgets.QSystemTrayIcon(icon, parent)
+        ),
+    )
 
 
 def test_install_signal_handlers_registers_int_and_term(monkeypatch):

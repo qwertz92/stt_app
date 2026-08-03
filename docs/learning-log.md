@@ -3,6 +3,32 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-03 (tray flyout solved)
+
+- **Solved by replacing the icon registration, not by anything at menu time.**
+  Two standalone experiments settled it: an icon registered by hand
+  (Electron-style bare `WS_POPUP` host window, `NOTIFYICON_VERSION_4`, native
+  `TrackPopupMenu`) keeps the Windows 11 hidden-icons flyout open, and of two
+  such icons differing *only* in the menu, only the native menu keeps it open —
+  a Qt `QMenu` closes the flyout even on a correctly registered icon. So both
+  halves are required. `win_tray_icon.py` implements it with a
+  `QSystemTrayIcon`-compatible surface and a fallback, and the context menu
+  stays a `QMenu` that is merely rendered natively, so all menu wiring and its
+  tests are untouched.
+- **Two bugs the unit tests could not have caught, both found by running the
+  real thing:**
+  - Registering the window class per instance crashed the process: a window
+    class is process-wide and keeps the procedure it was registered with, so
+    later windows ran the first instance's trampoline and dangled once it was
+    collected. One class, one dispatcher, per-HWND handler lookup.
+  - `ctypes` without `argtypes`/`restype` assumes `c_int`: the first large
+    `LPARAM` raised "int too long to convert" inside the window procedure, and
+    window handles would have been truncated on 64-bit. Every call is declared
+    now.
+- Things Qt used to do for us that a hand-rolled icon must do itself: re-add
+  the icon on `TaskbarCreated` after an Explorer restart, and delete it before
+  destroying its window (otherwise a dead icon stays until hovered).
+
 ## 2026-08-03 (silence gate field data)
 
 - **Flipping a default is not enough — old settings files keep the old value.**
