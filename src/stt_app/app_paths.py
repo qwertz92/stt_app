@@ -68,6 +68,14 @@ def recordings_dir() -> Path:
     return path
 
 
+def resolve_recordings_dir(configured: str = "") -> Path:
+    """Where recordings are archived: the configured directory, else default."""
+    value = str(configured or "").strip()
+    if value:
+        return Path(value)
+    return recordings_dir()
+
+
 def transcript_history_path() -> Path:
     return appdata_root() / "transcript_history.json"
 

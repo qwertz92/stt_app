@@ -201,7 +201,20 @@ def run() -> int:
             10000,
         )
 
+    def _notify_background_insertion_failure(message: str) -> None:
+        # A queued transcript that was produced but not pasted is just as lost
+        # to the user as a failed transcription; both must be reported.
+        tray_icon.showMessage(
+            "Transcript not inserted",
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
     controller.background_transcription_failed.connect(_notify_background_failure)
+    controller.background_insertion_failed.connect(
+        _notify_background_insertion_failure
+    )
     update_checker = _TrayUpdateChecker(
         tray_icon=tray_icon, logger=logger, parent_widget=overlay
     )

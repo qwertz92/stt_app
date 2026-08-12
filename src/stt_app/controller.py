@@ -15,7 +15,7 @@ from typing import Callable
 
 from PySide6 import QtCore, QtGui
 
-from .app_paths import recordings_dir
+from .app_paths import resolve_recordings_dir
 from . import audio_devices
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import AudioDeviceChangeListener
@@ -183,6 +183,9 @@ class DictationController(QtCore.QObject):
     model_preload_done = QtCore.Signal(int, bool, str)  # generation, success, message
     # A queued transcription failed while a newer session owns the overlay.
     background_transcription_failed = QtCore.Signal(str)
+    # A queued transcription succeeded but its text could not be pasted. Without
+    # this the loss was visible only in the log file.
+    background_insertion_failed = QtCore.Signal(str)
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
@@ -308,6 +311,10 @@ class DictationController(QtCore.QObject):
         # cooperative cancellation. A token is "live" while its job is present.
         self._jobs: dict[int, _TranscriptionJob] = {}
         self._deferred_background_results: list[tuple[_TranscriptionJob, str]] = []
+        # True while a foreground result is between clearing its session state
+        # and writing its own overlay state; a background report must not paint
+        # into that gap (see _report_background_insertion_failure).
+        self._foreground_delivery_pending = False
 
         self.vad_auto_stop_requested.connect(self.stop_recording)
         self.transcription_ready.connect(self._on_transcription_ready_result)
@@ -1401,10 +1408,7 @@ class DictationController(QtCore.QObject):
                 pass
 
     def _resolve_recordings_dir(self) -> str:
-        configured = str(self._settings.recordings_dir or "").strip()
-        if configured:
-            return configured
-        return str(recordings_dir())
+        return str(resolve_recordings_dir(self._settings.recordings_dir))
 
     def _selectable_last_recording_path(self) -> Path | None:
         archived_dir = (
@@ -2890,7 +2894,15 @@ class DictationController(QtCore.QObject):
             self._last_failed_wav_bytes = b""
 
         self._finish_transcription_job(request_token)
-        self._flush_deferred_background_results()
+        # A foreground result is about to claim the overlay. A deferred insert
+        # that fails inside this flush must therefore not paint an Error state
+        # that is overwritten a few statements later — it would flash and be
+        # gone. Its notification still fires, so the failure is never silent.
+        self._foreground_delivery_pending = True
+        try:
+            self._flush_deferred_background_results()
+        finally:
+            self._foreground_delivery_pending = False
 
         target_handle = (
             job.target_handle if job is not None else self._target_window_handle
@@ -3104,6 +3116,8 @@ class DictationController(QtCore.QObject):
         self,
         job: _TranscriptionJob,
         text: str,
+        *,
+        job_count: int = 1,
     ) -> bool:
         target_handle, target_signature = self._resolve_insert_target(
             job.target_handle, job.target_signature
@@ -3117,17 +3131,67 @@ class DictationController(QtCore.QObject):
             show_overlay_error=False,
         )
         if not inserted:
-            self._logger.warning(
-                "Background transcription insertion failed; saved to history "
-                "only. token=%s mode=%s engine=%s model=%s",
-                job.token,
-                job.mode,
-                job.engine,
-                job.model,
+            self._report_background_insertion_failure(
+                job,
+                text,
+                job_count=job_count,
             )
         else:
             self._play_completion_beep()
         return inserted
+
+    def _report_background_insertion_failure(
+        self,
+        job: _TranscriptionJob,
+        text: str,
+        *,
+        job_count: int = 1,
+    ) -> None:
+        """Surface a queued transcript that was produced but not pasted.
+
+        The transcription itself succeeded, so nothing is retryable and the
+        text is safe in history — but silence here is indistinguishable from a
+        successful insert, which is exactly how a transcript goes missing
+        unnoticed. Report it the same way a failed background transcription is
+        reported: always a tray notification, plus the overlay when no live
+        session owns it.
+        """
+        self._logger.warning(
+            "background_insertion_failed; saved to history only. token=%s "
+            "mode=%s engine=%s model=%s jobs=%d",
+            job.token,
+            job.mode,
+            job.engine,
+            job.model,
+            job_count,
+        )
+        identity = (
+            f"{job_count} queued transcriptions were"
+            if job_count > 1
+            else f"{self._job_identity(job)} was"
+        )
+        message = (
+            f"{identity} transcribed but could not be inserted. "
+            "The text is saved in history."
+        )
+        self.background_insertion_failed.emit(message)
+        if self._overlay_session_active() or self._foreground_delivery_pending:
+            # A newer session owns the overlay (or is one statement away from
+            # claiming it); its own transcript must stay the one that
+            # Copy/Insert act on. The notification above is the report then.
+            return
+        # Nothing newer is on screen, so this transcript becomes what the
+        # overlay shows — and therefore what Copy and Insert act on.
+        transcript = text.strip()
+        self._last_transcript = transcript
+        detail = f"{message}\n\n{transcript}" if transcript else message
+        self._overlay.set_state(
+            "Error",
+            detail,
+            copy_text=text,
+            error_action=OVERLAY_ERROR_ACTION_INSERT,
+        )
+        self._reveal_overlay_result(is_error=True)
 
     def _flush_deferred_background_results(
         self,
@@ -3174,12 +3238,21 @@ class DictationController(QtCore.QObject):
                     [job.token for job in jobs],
                 )
             try:
-                self._insert_background_transcription(jobs[0], text)
+                self._insert_background_transcription(
+                    jobs[0],
+                    text,
+                    job_count=len(jobs),
+                )
             except Exception:
                 self._logger.exception(
                     "Failed to insert deferred background transcription; "
                     "saved to history only. tokens=%s",
                     [job.token for job in jobs],
+                )
+                self._report_background_insertion_failure(
+                    jobs[0],
+                    text,
+                    job_count=len(jobs),
                 )
             for job in jobs:
                 self._finish_transcription_job(job.token)
