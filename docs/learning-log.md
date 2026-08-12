@@ -2363,3 +2363,20 @@ Agents and developers: use this as a knowledge base for past issues and solution
   `test_settings_dialog_general_ux.py::test_bottom_status_does_not_move_the_save_and_close_buttons`
   fail with 1-4 px deltas. Both pass under the normal Windows platform. A report
   of "pre-existing pixel failures" from an offscreen run is an artifact.
+
+- **Desktop side effects in tests are now structurally impossible:**
+  - Reported symptom was leftover Explorer windows, some showing an empty
+    folder named `recordings` — which reads like a product bug but is a pytest
+    `tmp_path` directory of that name.
+  - Two autouse fixtures now block `QProcess.startDetached`,
+    `QDesktopServices.openUrl`, the `QMessageBox` statics, and the
+    `QFileDialog` getters, raising a named error instead of no-opping.
+  - The full suite passes with both active, so no current test was leaking:
+    they are preventive. The modal-dialog half is the valuable one — an
+    unstubbed `QMessageBox.information` does not fail a run, it hangs it
+    indefinitely with no output naming the cause, which is expensive to bisect.
+  - This also disproves the theory that a modal dialog caused the earlier
+    ~94% hang. That hang remains unexplained.
+  - The real recordings directory resolved correctly throughout (200 WAV files
+    under the configured path); the app's own "Show audio file" and "Recordings
+    folder" actions open a window per click by design and must not close it.

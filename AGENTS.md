@@ -1063,6 +1063,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - Preferred on Windows: `.venv\Scripts\pytest.exe -q`
 - Alternate when the environment supports it: `uv run python -m pytest` or `python -m pytest`
 - Note: the project uses a uv-managed Windows `.venv`; `pytest.exe` may be available even when `python -m pytest` or `python -m pip` is not.
+- Always bound a run with a hard wall-clock limit (`timeout <secs> ...`), and
+  never start a second suite while one is running: Qt suites open real windows
+  on one desktop. Use `-o faulthandler_timeout=<secs>` to get thread tracebacks
+  if a single test hangs.
+- Do **not** substitute `QT_QPA_PLATFORM=offscreen` for the commands above. It
+  shifts widget metrics by 1-4 px and makes the two pixel-exact layout tests
+  (`test_overlay_record_button_indicator_stays_centered_in_both_states`,
+  `test_bottom_status_does_not_move_the_save_and_close_buttons`) fail. Failures
+  from an offscreen run are artifacts, not repository problems.
+- Two autouse fixtures in `tests/conftest.py` make desktop side effects
+  impossible: `_forbid_handing_paths_to_the_desktop_shell` blocks
+  `QProcess.startDetached` and `QDesktopServices.openUrl`, and
+  `_forbid_blocking_modal_dialogs` blocks the `QMessageBox` statics and the
+  `QFileDialog` getters. Both raise a named `AssertionError` rather than
+  no-opping: an unstubbed modal dialog does not fail a run, it hangs it forever
+  with no output naming the cause. A test that legitimately drives one of these
+  paths patches it and asserts on the call, which every current one does — so
+  these fixtures are preventive and currently catch nothing.
 
 ## Known limitations
 

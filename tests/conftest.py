@@ -10,7 +10,7 @@ import logging
 from pathlib import Path
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from stt_app.config import DEFAULT_CANCEL_HOTKEY, FALLBACK_HOTKEY
 from stt_app.controller import DictationController
@@ -21,6 +21,93 @@ from stt_app.text_inserter import TextInsertionError
 @pytest.fixture(autouse=True)
 def _isolate_appdata(monkeypatch, tmp_path):
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+
+
+@pytest.fixture(autouse=True)
+def _forbid_handing_paths_to_the_desktop_shell(monkeypatch):
+    """No test may open a real file-manager window or launch a process.
+
+    Several dialogs reveal a file or directory in the system file manager. A
+    test that reaches one of those paths without stubbing it opened a real
+    Explorer window on the developer's desktop and left it there — usually
+    pointing at an empty pytest ``tmp_path``, which then looks like a product
+    bug ("my recordings folder is empty").
+
+    Failing loudly is deliberate: a test that legitimately exercises such a
+    path must stub it and assert on the call, which every current one does.
+    A silently inert stub would let the next such test go unnoticed.
+    """
+
+    def _blocked_start_detached(*args, **kwargs):
+        raise AssertionError(
+            "QProcess.startDetached was called in a test. Patch it (and assert "
+            "on the call) instead of launching a real process. Args: "
+            f"{args!r}"
+        )
+
+    def _blocked_open_url(url, *args, **kwargs):
+        raise AssertionError(
+            "QDesktopServices.openUrl was called in a test. Patch it (and "
+            "assert on the call) instead of handing the path to the shell. "
+            f"URL: {url!r}"
+        )
+
+    monkeypatch.setattr(
+        QtCore.QProcess,
+        "startDetached",
+        staticmethod(_blocked_start_detached),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        QtGui.QDesktopServices,
+        "openUrl",
+        staticmethod(_blocked_open_url),
+        raising=False,
+    )
+
+
+@pytest.fixture(autouse=True)
+def _forbid_blocking_modal_dialogs(monkeypatch):
+    """No test may open a modal dialog that waits for a human click.
+
+    ``QMessageBox.information`` and the ``QFileDialog`` getters run their own
+    event loop until someone clicks. A test that reaches one unstubbed does not
+    fail — it hangs the whole run forever, with no output naming the cause.
+    Turning that into an immediate, named failure is the difference between a
+    five-second fix and bisecting a twenty-minute suite.
+
+    Every test that legitimately drives one of these already patches it, so
+    this only catches the ones that would otherwise hang.
+    """
+
+    def _blocker(kind: str):
+        def _blocked(*args, **kwargs):
+            raise AssertionError(
+                f"{kind} was called in a test and would block until a human "
+                "clicks it. Patch it (and assert on the call) instead."
+            )
+
+        return _blocked
+
+    for name in ("information", "warning", "critical", "question", "about"):
+        monkeypatch.setattr(
+            QtWidgets.QMessageBox,
+            name,
+            staticmethod(_blocker(f"QMessageBox.{name}")),
+            raising=False,
+        )
+    for name in (
+        "getExistingDirectory",
+        "getOpenFileName",
+        "getOpenFileNames",
+        "getSaveFileName",
+    ):
+        monkeypatch.setattr(
+            QtWidgets.QFileDialog,
+            name,
+            staticmethod(_blocker(f"QFileDialog.{name}")),
+            raising=False,
+        )
 
 
 class FakeSettingsStore:
