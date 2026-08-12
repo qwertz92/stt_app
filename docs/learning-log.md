@@ -2327,3 +2327,39 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - The overlay retranscribe dialog exposes only the language on purpose;
     changing engine or model stays with Settings > History, which prefills the
     Import Audio tab. Both paths write a new history entry.
+
+## 2026-08-12
+
+- **Dependency refresh to current latest, verified against the new code:**
+  - ctranslate2 4.7.1 -> 4.8.1 (model-load heap overflow), onnxruntime-genai
+    0.14.1 -> 0.15.2 (heap overflow, OOB write, use-after-free, arbitrary DLL
+    load via JSON injection), plus PySide6 6.11.1, numpy 2.5.2, groq 1.6.0,
+    assemblyai 0.64.33, pywin32 312, pyinstaller 6.22.0, pytest 9.1.1,
+    Transformers.js 4.2.0.
+  - `npm audit` surfaced a separate high-severity advisory that already applied
+    to `main`: `sharp < 0.35` inherits four libvips CVEs, and npm could not
+    resolve past `@huggingface/transformers`' `^0.34.5`. A `sharp: ^0.35.0`
+    entry in `package.json`'s existing `overrides` block fixes it; the audit
+    now reports zero vulnerabilities.
+  - Ruff 0.16.x was deliberately not adopted: its default rule set grows from
+    59 to 413 rules and produced 439 findings against a codebase that is clean
+    on 0.15.8. That is a separate triage task, not a dependency bump.
+  - Verified on the real Windows platform (not `offscreen`) with the upgraded
+    packages: Ruff clean, 1225 tests green, `npm ci` clean, and the ONNX Node
+    runtime loads reporting cpu/dml/webgpu.
+- **Two test-harness lessons, both self-inflicted:**
+  - Two full pytest suites were left running concurrently; both froze. Qt suites
+    build real windows on one desktop and must not overlap. Every test run now
+    carries a hard `timeout`.
+  - The full suite froze twice at ~94% (`test_win_tray_icon.py`, after four
+    tests) while other load ran, and passed twice when run exclusively. The file
+    alone, and large subsets around it, are green in seconds. Treat this as an
+    unexplained intermittent hang under load, not a diagnosed defect; run with
+    `-o faulthandler_timeout=...` to capture thread tracebacks if it recurs.
+- **`QT_QPA_PLATFORM=offscreen` is not a valid substitute for the documented
+  test command**: it makes
+  `test_overlay_ui.py::test_overlay_record_button_indicator_stays_centered_in_both_states`
+  and
+  `test_settings_dialog_general_ux.py::test_bottom_status_does_not_move_the_save_and_close_buttons`
+  fail with 1-4 px deltas. Both pass under the normal Windows platform. A report
+  of "pre-existing pixel failures" from an offscreen run is an artifact.

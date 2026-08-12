@@ -748,7 +748,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   newer version via `overrides` is upstream-untested and needs explicit
   pipeline verification. A 2026-07-21 benchmark found Transformers.js
   4.1->4.2 and CTranslate2 4.7.1->4.8.1 performance-neutral on AMD hardware
-  (CT2 4.8.0's int8 PACKED_GEMM speedup is Intel-MKL-only).
+  (CT2 4.8.0's int8 PACKED_GEMM speedup is Intel-MKL-only). Re-checked on
+  2026-08-11 against Transformers.js 4.2.0: the nested pin is still exactly
+  1.24.3, so the top-level version stays there. `onnxruntime-node`'s
+  `postinstall` being blocked by npm 12's install-script policy is harmless —
+  the package ships its native binaries bundled and reports cpu/dml/webgpu.
+- **`sharp` is pinned forward through `overrides`**: `@huggingface/transformers`
+  declares `sharp: ^0.34.5`, which npm cannot resolve past on its own, so the
+  tree inherited GHSA-f88m-g3jw-g9cj (libvips CVE-2026-33327/33328/35590/35591,
+  high). `package.json`'s `overrides` therefore forces `sharp: ^0.35.0`. Keep
+  that entry until Transformers.js widens its own range; sharp 0.35 requires
+  Node >= 20.9, which this project already exceeds.
 - **Streaming availability**: `config.supports_streaming()` is the shared
   source of truth for UI and controller checks. Cohere/Granite ONNX/WebGPU
   models are batch-only; Nemotron is true streaming. A local model selection
