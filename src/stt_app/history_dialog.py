@@ -6,7 +6,13 @@ from typing import Callable
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
+from .app_paths import resolve_recordings_dir
 from .config import DEFAULT_HISTORY_MAX_ITEMS, HISTORY_MAX_ITEMS_MAX
+from .history_audio import (
+    open_directory,
+    resolve_history_audio_path,
+    reveal_path_in_file_manager,
+)
 from .history_ui_actions import (
     format_history_count_label,
     history_import_dialog_dir,
@@ -15,6 +21,7 @@ from .history_ui_actions import (
     run_history_export,
     run_history_import,
 )
+from .retranscribe_dialog import RetranscribeDialog
 from .settings_store import SettingsStore
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import (
@@ -45,11 +52,17 @@ class HistoryDialog(QtWidgets.QDialog):
         on_history_limit_changed: Callable[[int], None] | None = None,
         parent: QtWidgets.QWidget | None = None,
         autoload: bool = True,
+        last_recording_store: object | None = None,
+        controller: object | None = None,
     ) -> None:
         super().__init__(parent)
         self._history_store = history_store
         self._settings_store = settings_store
         self._on_history_limit_changed = on_history_limit_changed
+        # Optional: without them the audio-linked actions stay disabled, which
+        # keeps this dialog constructible from tests and non-app callers.
+        self._last_recording_store = last_recording_store
+        self._controller = controller
         self._entries: list[TranscriptHistoryEntry] = []
         self._history_reload_signature: tuple[
             HistoryStorageSignature, int
@@ -93,10 +106,17 @@ class HistoryDialog(QtWidgets.QDialog):
         self._history_count_label = QtWidgets.QLabel("")
         self._history_count_label.setStyleSheet("color: #555;")
 
+        self._open_recordings_button = QtWidgets.QPushButton("Recordings folder")
+        self._open_recordings_button.setToolTip(
+            "Open the folder that holds the retained audio recordings."
+        )
+        self._open_recordings_button.clicked.connect(self._open_recordings_folder)
+
         controls = QtWidgets.QHBoxLayout()
         controls.setSpacing(6)
         controls.addWidget(QtWidgets.QLabel("Stored history limit"))
         controls.addWidget(self._max_items_spin)
+        controls.addWidget(self._open_recordings_button)
         controls.addStretch(1)
         controls.addWidget(self._history_count_label)
 
@@ -127,6 +147,8 @@ class HistoryDialog(QtWidgets.QDialog):
         )
         self._table.itemSelectionChanged.connect(self._on_selection_changed)
         self._table.itemDoubleClicked.connect(self._on_item_double_clicked)
+        self._table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_row_context_menu)
 
         self._detail = QtWidgets.QPlainTextEdit()
         self._detail.setReadOnly(True)
@@ -165,6 +187,21 @@ class HistoryDialog(QtWidgets.QDialog):
         self._edit_button.setEnabled(False)
         self._edit_button.clicked.connect(self._edit_selected)
 
+        self._retranscribe_button = QtWidgets.QPushButton("Retranscribe...")
+        self._retranscribe_button.setToolTip(
+            "Transcribe this entry's retained audio again, e.g. after "
+            "dictating with the wrong language selected."
+        )
+        self._retranscribe_button.setEnabled(False)
+        self._retranscribe_button.clicked.connect(self._retranscribe_selected)
+
+        self._show_audio_button = QtWidgets.QPushButton("Show audio file")
+        self._show_audio_button.setToolTip(
+            "Open the file manager with this entry's retained audio selected."
+        )
+        self._show_audio_button.setEnabled(False)
+        self._show_audio_button.clicked.connect(self._show_selected_audio_file)
+
         self._delete_button = QtWidgets.QPushButton("Delete selected")
         self._delete_button.setEnabled(False)
         self._delete_button.clicked.connect(self._delete_selected)
@@ -181,6 +218,8 @@ class HistoryDialog(QtWidgets.QDialog):
         buttons.addStretch(1)
         buttons.addWidget(self._copy_button)
         buttons.addWidget(self._edit_button)
+        buttons.addWidget(self._retranscribe_button)
+        buttons.addWidget(self._show_audio_button)
         buttons.addWidget(self._delete_button)
         buttons.addWidget(self._close_button)
 
@@ -384,6 +423,7 @@ class HistoryDialog(QtWidgets.QDialog):
             self._detail.clear()
             self._copy_button.setEnabled(False)
             self._edit_button.setEnabled(False)
+            self._set_audio_actions_enabled(False)
             self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
 
@@ -393,6 +433,7 @@ class HistoryDialog(QtWidgets.QDialog):
             self._detail.clear()
             self._copy_button.setEnabled(False)
             self._edit_button.setEnabled(False)
+            self._set_audio_actions_enabled(False)
             self._delete_button.setEnabled(False)
             self._reset_copy_feedback()
             return
@@ -400,14 +441,125 @@ class HistoryDialog(QtWidgets.QDialog):
             self._detail.setPlainText(entries[0].text)
             self._copy_button.setEnabled(bool(entries[0].text))
             self._edit_button.setEnabled(bool(entries[0].text))
+            self._set_audio_actions_enabled(
+                self._entry_audio_path(entries[0]) is not None
+            )
         else:
             self._detail.setPlainText(f"{len(entries)} entries selected.")
             self._copy_button.setEnabled(
                 any(bool(entry.text) for entry in entries)
             )
             self._edit_button.setEnabled(False)
+            # Both actions act on exactly one recording.
+            self._set_audio_actions_enabled(False)
         self._delete_button.setEnabled(True)
         self._reset_copy_feedback()
+
+    def _set_audio_actions_enabled(self, enabled: bool) -> None:
+        self._show_audio_button.setEnabled(bool(enabled))
+        # Retranscribing additionally needs the controller's worker lane.
+        self._retranscribe_button.setEnabled(
+            bool(enabled) and self._controller is not None
+        )
+
+    def _entry_audio_path(self, entry: TranscriptHistoryEntry):
+        """The entry's retained audio file, when it still exists."""
+        return resolve_history_audio_path(entry, self._last_recording_store)
+
+    def _open_recordings_folder(self) -> None:
+        # Re-read the setting: it can change while this dialog stays open.
+        settings = self._settings_store.load()
+        directory = resolve_recordings_dir(
+            str(getattr(settings, "recordings_dir", "") or "")
+        )
+        if not directory.is_dir():
+            QtWidgets.QMessageBox.information(
+                self,
+                "No recordings folder",
+                f"The recordings folder does not exist yet:\n{directory}",
+            )
+            return
+        open_directory(directory)
+
+    def _show_selected_audio_file(self) -> None:
+        entries = self._selected_entries()
+        if len(entries) != 1:
+            return
+        audio_path = self._entry_audio_path(entries[0])
+        if audio_path is None:
+            self._report_missing_audio()
+            return
+        reveal_path_in_file_manager(audio_path)
+
+    def _retranscribe_selected(self) -> None:
+        entries = self._selected_entries()
+        if len(entries) != 1 or self._controller is None:
+            return
+        entry = entries[0]
+        audio_path = self._entry_audio_path(entry)
+        if audio_path is None:
+            self._report_missing_audio()
+            return
+        dialog = RetranscribeDialog(
+            entry=entry,
+            audio_path=audio_path,
+            base_settings=self._controller.settings,
+            transcribe=self._transcribe_audio_file,
+            parent=self,
+        )
+        dialog.exec()
+        if dialog.produced_transcript:
+            self.reload(force=True)
+
+    def _transcribe_audio_file(self, path, settings, progress_callback):
+        return self._controller.transcribe_audio_file(
+            path,
+            settings_override=settings,
+            progress_callback=progress_callback,
+        )
+
+    def _report_missing_audio(self) -> None:
+        QtWidgets.QMessageBox.information(
+            self,
+            "Audio not available",
+            "The audio for this history entry is no longer available.",
+        )
+        self._on_selection_changed()
+
+    def _show_row_context_menu(self, position: QtCore.QPoint) -> None:
+        index = self._table.indexAt(position)
+        if index.isValid() and index.row() not in self._selected_rows():
+            self._table.selectRow(index.row())
+        entries = self._selected_entries()
+        if not entries:
+            return
+        menu = QtWidgets.QMenu(self)
+        copy_action = menu.addAction("Copy")
+        copy_action.setEnabled(self._copy_button.isEnabled())
+        edit_action = menu.addAction("Edit...")
+        edit_action.setEnabled(self._edit_button.isEnabled())
+        menu.addSeparator()
+        retranscribe_action = menu.addAction("Retranscribe...")
+        retranscribe_action.setEnabled(self._retranscribe_button.isEnabled())
+        show_audio_action = menu.addAction("Show audio file")
+        show_audio_action.setEnabled(self._show_audio_button.isEnabled())
+        menu.addSeparator()
+        delete_action = menu.addAction("Delete")
+        delete_action.setEnabled(self._delete_button.isEnabled())
+
+        chosen = menu.exec(self._table.viewport().mapToGlobal(position))
+        if chosen is None:
+            return
+        if chosen is copy_action:
+            self._copy_selected()
+        elif chosen is edit_action:
+            self._edit_selected()
+        elif chosen is retranscribe_action:
+            self._retranscribe_selected()
+        elif chosen is show_audio_action:
+            self._show_selected_audio_file()
+        elif chosen is delete_action:
+            self._delete_selected()
 
     def _selected_rows(self) -> list[int]:
         selected = self._table.selectionModel().selectedRows()

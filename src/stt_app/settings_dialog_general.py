@@ -1,7 +1,6 @@
 """Settings dialog: general mixin (split from settings_dialog.py)."""
 from __future__ import annotations
 
-from dataclasses import replace
 from typing import ClassVar
 
 from PySide6 import QtCore, QtWidgets
@@ -44,7 +43,7 @@ from .settings_dialog_helpers import (
     _REMOTE_MODEL_DEFAULTS,
     _WheelPassthroughComboBox,
 )
-from .settings_store import AppSettings
+from .settings_store import AppSettings, apply_engine_model_selection
 
 
 class _GeneralTabMixin:
@@ -618,27 +617,7 @@ class _GeneralTabMixin:
         engine: str,
         model_value: str,
     ) -> AppSettings:
-        normalized_engine = str(engine or "").strip().lower()
-        selected_model = str(model_value or "").strip()
-        if normalized_engine == DEFAULT_ENGINE:
-            if selected_model and selected_model in VALID_MODEL_SIZES:
-                return replace(settings, model_size=selected_model)
-            return settings
-        if normalized_engine == "groq" and selected_model:
-            return replace(settings, groq_model=selected_model)
-        if normalized_engine == "openai" and selected_model:
-            return replace(settings, openai_model=selected_model)
-        if normalized_engine == "deepgram" and selected_model:
-            return replace(settings, deepgram_model=selected_model)
-        if normalized_engine == "assemblyai" and selected_model:
-            return replace(settings, assemblyai_model=selected_model)
-        if normalized_engine == "elevenlabs" and selected_model:
-            return replace(settings, elevenlabs_model=selected_model)
-        if normalized_engine == "azure" and selected_model:
-            return replace(settings, azure_speech_model=selected_model)
-        if normalized_engine == "funasr" and selected_model:
-            return replace(settings, funasr_model=selected_model)
-        return settings
+        return apply_engine_model_selection(settings, engine, model_value)
 
     def _update_model_selector_page(self) -> None:
         """Switch the unified Model row to the local or remote page."""

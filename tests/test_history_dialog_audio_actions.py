@@ -1,0 +1,289 @@
+from __future__ import annotations
+
+import pytest
+from PySide6 import QtWidgets
+
+from stt_app import history_dialog as history_dialog_module
+from stt_app.history_dialog import HistoryDialog
+from stt_app.retranscribe_dialog import RetranscribeDialog
+from stt_app.settings_store import AppSettings, SettingsStore
+from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+
+
+class _FakeController:
+    def __init__(self, settings: AppSettings) -> None:
+        self.settings = settings
+        self.calls: list[tuple[str, AppSettings]] = []
+
+    def transcribe_audio_file(
+        self,
+        path,
+        settings_override=None,
+        progress_callback=None,
+    ):
+        self.calls.append((str(path), settings_override))
+        return True, "retranscribed text"
+
+
+@pytest.fixture(autouse=True)
+def _close_top_level_windows_after_test():
+    yield
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    for widget in list(app.topLevelWidgets()):
+        widget.close()
+        widget.deleteLater()
+    app.processEvents()
+
+
+def _entry(**kwargs) -> TranscriptHistoryEntry:
+    return TranscriptHistoryEntry.new(
+        text=kwargs.pop("text", "hallo welt"),
+        engine=kwargs.pop("engine", "local"),
+        model=kwargs.pop("model", "small"),
+        mode=kwargs.pop("mode", "batch"),
+        **kwargs,
+    )
+
+
+def _make_dialog(tmp_path, entries, *, controller=None, recordings_dir=""):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save(list(entries))
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(
+        AppSettings(history_max_items=20, recordings_dir=str(recordings_dir))
+    )
+    return HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+        controller=controller,
+    )
+
+
+def test_audio_actions_are_enabled_for_an_entry_with_retained_audio(tmp_path):
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    controller = _FakeController(AppSettings())
+
+    dialog = _make_dialog(
+        tmp_path,
+        [_entry(source_audio_path=str(audio))],
+        controller=controller,
+    )
+
+    assert dialog._show_audio_button.isEnabled()
+    assert dialog._retranscribe_button.isEnabled()
+
+
+def test_audio_actions_are_disabled_when_the_recording_is_gone(tmp_path):
+    controller = _FakeController(AppSettings())
+
+    dialog = _make_dialog(
+        tmp_path,
+        [_entry(source_audio_path=str(tmp_path / "deleted.wav"))],
+        controller=controller,
+    )
+
+    assert not dialog._show_audio_button.isEnabled()
+    assert not dialog._retranscribe_button.isEnabled()
+
+
+def test_retranscribe_stays_disabled_without_a_controller(tmp_path):
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+
+    dialog = _make_dialog(tmp_path, [_entry(source_audio_path=str(audio))])
+
+    # Revealing the file needs no transcription lane, retranscribing does.
+    assert dialog._show_audio_button.isEnabled()
+    assert not dialog._retranscribe_button.isEnabled()
+
+
+def test_selecting_multiple_entries_disables_the_single_audio_actions(tmp_path):
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    controller = _FakeController(AppSettings())
+    dialog = _make_dialog(
+        tmp_path,
+        [
+            _entry(text="one", source_audio_path=str(audio)),
+            _entry(text="two", source_audio_path=str(audio)),
+        ],
+        controller=controller,
+    )
+
+    dialog._select_rows([0, 1])
+    dialog._on_selection_changed()
+
+    assert not dialog._show_audio_button.isEnabled()
+    assert not dialog._retranscribe_button.isEnabled()
+
+
+def test_show_audio_file_reveals_the_recording(monkeypatch, tmp_path):
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    revealed: list[str] = []
+    monkeypatch.setattr(
+        history_dialog_module,
+        "reveal_path_in_file_manager",
+        lambda path: revealed.append(str(path)) or True,
+    )
+    dialog = _make_dialog(
+        tmp_path,
+        [_entry(source_audio_path=str(audio))],
+        controller=_FakeController(AppSettings()),
+    )
+
+    dialog._show_selected_audio_file()
+
+    assert revealed == [str(audio)]
+
+
+def test_recordings_folder_button_opens_the_configured_directory(
+    monkeypatch,
+    tmp_path,
+):
+    recordings = tmp_path / "recordings"
+    recordings.mkdir()
+    opened: list[str] = []
+    monkeypatch.setattr(
+        history_dialog_module,
+        "open_directory",
+        lambda path: opened.append(str(path)) or True,
+    )
+    dialog = _make_dialog(tmp_path, [_entry()], recordings_dir=recordings)
+
+    dialog._open_recordings_folder()
+
+    assert opened == [str(recordings)]
+
+
+def test_recordings_folder_button_reports_a_missing_directory(
+    monkeypatch,
+    tmp_path,
+):
+    opened: list[str] = []
+    monkeypatch.setattr(
+        history_dialog_module,
+        "open_directory",
+        lambda path: opened.append(str(path)) or True,
+    )
+    warned: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        staticmethod(lambda *args, **kwargs: warned.append(str(args[2]))),
+    )
+    dialog = _make_dialog(
+        tmp_path,
+        [_entry()],
+        recordings_dir=tmp_path / "never-created",
+    )
+
+    dialog._open_recordings_folder()
+
+    assert opened == []
+    assert warned and "never-created" in warned[0]
+
+
+def test_retranscribe_dialog_uses_the_chosen_language_and_entry_model(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    entry = _entry(engine="local", model="large-v3-turbo")
+
+    dialog = RetranscribeDialog(
+        entry=entry,
+        audio_path=audio,
+        base_settings=AppSettings(
+            engine="groq",
+            model_size="small",
+            language_mode="de",
+        ),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    index = dialog._language_combo.findData("en")
+    assert index >= 0
+    dialog._language_combo.setCurrentIndex(index)
+
+    settings = dialog.build_settings()
+
+    # The entry's own transcriber is reused; only the language changes.
+    assert settings.engine == "local"
+    assert settings.model_size == "large-v3-turbo"
+    assert settings.language_mode == "en"
+
+
+def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(),
+        audio_path=tmp_path / "gone.wav",
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (True, "unreachable"),
+    )
+
+    dialog._start_run()
+
+    assert "no longer available" in dialog._status_label.text()
+    assert not dialog._run_button.isEnabled()
+
+
+def test_retranscribe_dialog_shows_the_result_and_enables_copy(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(),
+        audio_path=tmp_path / "gone.wav",
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (True, "new text"),
+    )
+
+    dialog._on_finished(True, "new text")
+
+    assert dialog._result_text.toPlainText() == "new text"
+    assert dialog._copy_button.isEnabled()
+    assert dialog.produced_transcript is True
+
+
+def test_retranscribe_dialog_never_resizes_around_its_content(tmp_path):
+    """Progress, a long error, and a long result must not move the dialog."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(),
+        audio_path=tmp_path / "recording.wav",
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    dialog.show()
+    app.processEvents()
+    baseline = dialog.size()
+
+    dialog._set_status("Transcribing... (137s)")
+    app.processEvents()
+    assert dialog.size() == baseline
+
+    dialog._on_finished(False, "Failed: " + "a long provider error " * 8)
+    app.processEvents()
+    assert dialog.size() == baseline
+
+    dialog._on_finished(True, "ein neues transkript " * 40)
+    app.processEvents()
+    assert dialog.size() == baseline
+
+
+def test_retranscribe_dialog_keeps_a_failure_visible(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(),
+        audio_path=tmp_path / "gone.wav",
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (False, "boom"),
+    )
+
+    dialog._on_finished(False, "boom")
+
+    assert "boom" in dialog._status_label.text()
+    assert dialog.produced_transcript is False
+    assert not dialog._copy_button.isEnabled()

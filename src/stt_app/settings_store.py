@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -550,6 +550,43 @@ class AppSettings:
         data = asdict(self)
         data["schema_version"] = CURRENT_SCHEMA_VERSION
         return data
+
+
+def apply_engine_model_selection(
+    settings: AppSettings,
+    engine: str,
+    model_value: str,
+) -> AppSettings:
+    """Write ``model_value`` into the model field that ``engine`` reads.
+
+    Every engine keeps its model in its own field, so a caller that knows only
+    an engine/model pair (the Settings General tab, an audio import, a history
+    retranscription) needs this one mapping. An empty or unknown model leaves
+    the settings untouched.
+    """
+    normalized_engine = str(engine or "").strip().lower()
+    selected_model = str(model_value or "").strip()
+    if normalized_engine == DEFAULT_ENGINE:
+        if selected_model and selected_model in VALID_MODEL_SIZES:
+            return replace(settings, model_size=selected_model)
+        return settings
+    if not selected_model:
+        return settings
+    field = _REMOTE_MODEL_FIELDS.get(normalized_engine)
+    if field is None:
+        return settings
+    return replace(settings, **{field: selected_model})
+
+
+_REMOTE_MODEL_FIELDS: dict[str, str] = {
+    "groq": "groq_model",
+    "openai": "openai_model",
+    "deepgram": "deepgram_model",
+    "assemblyai": "assemblyai_model",
+    "elevenlabs": "elevenlabs_model",
+    "azure": "azure_speech_model",
+    "funasr": "funasr_model",
+}
 
 
 class SettingsStore:

@@ -157,6 +157,8 @@ def run() -> int:
         history_store=history_store,
         settings_store=settings_store,
         on_history_limit_changed=controller.set_history_max_items,
+        last_recording_store=last_recording_store,
+        controller=controller,
     )
     open_history_dialog = history_dialog_presenter.open
 
@@ -525,10 +527,14 @@ class _HistoryDialogPresenter:
         history_store: TranscriptHistoryStore,
         settings_store: SettingsStore,
         on_history_limit_changed,
+        last_recording_store=None,
+        controller=None,
     ) -> None:
         self._history_store = history_store
         self._settings_store = settings_store
         self._on_history_limit_changed = on_history_limit_changed
+        self._last_recording_store = last_recording_store
+        self._controller = controller
         self._active_dialog: HistoryDialog | None = None
 
     def open(self) -> HistoryDialog:
@@ -544,6 +550,8 @@ class _HistoryDialogPresenter:
             settings_store=self._settings_store,
             on_history_limit_changed=self._on_history_limit_changed,
             autoload=False,
+            last_recording_store=self._last_recording_store,
+            controller=self._controller,
         )
         dialog.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         dialog.finished.connect(lambda: self._clear_dialog(dialog))

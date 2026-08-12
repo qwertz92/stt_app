@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_HISTORY_MAX_ITEMS,
     HISTORY_MAX_ITEMS_MAX,
 )
+from .history_audio import resolve_history_audio_path, reveal_path_in_file_manager
 from .history_ui_actions import (
     format_history_count_label,
     history_import_dialog_dir,
@@ -513,23 +514,7 @@ class _HistoryTabMixin:
         self._reset_history_copy_feedback()
 
     def _history_audio_path(self, entry: TranscriptHistoryEntry) -> Path | None:
-        stored_path = str(getattr(entry, "source_audio_path", "") or "").strip()
-        if stored_path:
-            path = Path(stored_path)
-            if path.is_file():
-                return path
-
-        source_id = str(getattr(entry, "source_recording_id", "") or "").strip()
-        if not source_id:
-            return None
-        try:
-            state = self._last_recording_store.load()
-        except Exception:
-            return None
-        if state is None or str(getattr(state, "recording_id", "")) != source_id:
-            return None
-        path = Path(str(getattr(state, "audio_path", "") or ""))
-        return path if path.is_file() else None
+        return resolve_history_audio_path(entry, self._last_recording_store)
 
     def _prepare_selected_history_retranscription(self) -> None:
         entries = self._selected_history_entries()
@@ -573,17 +558,7 @@ class _HistoryTabMixin:
             )
             self._on_history_item_selected()
             return
-        native_path = QtCore.QDir.toNativeSeparators(str(audio_path.resolve()))
-        started = QtCore.QProcess.startDetached(
-            "explorer.exe",
-            [f"/select,{native_path}"],
-        )
-        if isinstance(started, tuple):
-            started = started[0]
-        if not started:
-            QtGui.QDesktopServices.openUrl(
-                QtCore.QUrl.fromLocalFile(str(audio_path.parent))
-            )
+        reveal_path_in_file_manager(audio_path)
 
     def _copy_selected_history(self) -> None:
         text = join_recent_entries_for_clipboard(self._selected_history_entries())
