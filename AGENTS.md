@@ -104,8 +104,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `update_checker.py` | GitHub Releases update check and version comparison helpers |
 | `update_ui.py` | Shared Qt dialogs/actions for presenting update-check results |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
-| `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control |
+| `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control, per-entry audio reveal and retranscription, recordings-folder shortcut |
 | `history_ui_actions.py` | Shared export/import/clear flows and stored-count label formatting for the History dialog and Settings History tab |
+| `history_audio.py` | Shared history-entry-to-audio resolution plus file-manager reveal/open helpers for both history views |
+| `retranscribe_dialog.py` | Compact language-only retranscription of one history entry's retained audio |
 | `app_paths.py` | Centralized app data/config path helpers |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
@@ -556,6 +558,34 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   switch-to-unlimited decision immediately (via `_settings_store` plus
   `dataclasses.replace` on `_loaded_settings`), the same way the dialog does,
   so a later Save does not see it as a phantom change.
+- **History audio linkage is shared, and the two retranscribe paths differ on
+  purpose**: `history_audio.py` owns resolving an entry's retained audio
+  (stored `source_audio_path` first, then the managed last recording only
+  while it still describes that exact entry) plus the file-manager
+  reveal/open calls; both history views use it, and
+  `app_paths.resolve_recordings_dir` is the single "configured dir else
+  default" rule. The overlay's "Recent Transcriptions" dialog offers
+  Retranscribe/Show audio file per entry (buttons plus a right-click menu)
+  and a Recordings-folder shortcut. Its `retranscribe_dialog.py` deliberately
+  exposes **only the language**: the wrong dictation language is the case it
+  exists for, and a second engine/model picker would duplicate the Import
+  Audio tab's provider/credential machinery. Changing engine or model stays
+  with Settings > History > Retranscribe..., which prefills the Import Audio
+  tab. Both write a new history entry and never modify the original.
+  `settings_store.apply_engine_model_selection` is the one place that maps an
+  engine/model pair onto the engine's own model field.
+- **A produced-but-not-pasted queued transcript is reported, never silent**:
+  a background/deferred insert that fails logs *and* emits
+  `background_insertion_failed` (tray notification in `main.py`), because a
+  silent failure there is indistinguishable from a successful insert — which
+  is exactly how a transcript goes missing unnoticed. When nothing newer owns
+  the overlay it additionally shows the Error state with the transcript and
+  `OVERLAY_ERROR_ACTION_INSERT`, and takes over `_last_transcript` so Copy and
+  Insert act on exactly what is displayed. `_foreground_delivery_pending`
+  guards the gap inside `_on_transcription_ready` between clearing the session
+  state and writing the foreground result's own overlay state: the flush runs
+  there, so without the guard the Error would flash and be overwritten one
+  statement later. The notification always fires regardless.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy

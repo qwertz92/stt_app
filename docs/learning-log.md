@@ -2288,3 +2288,42 @@ Agents and developers: use this as a knowledge base for past issues and solution
     plus exact-match/difference status against run 1 for each model/device case.
   - Older benchmark entries remain compatible and clearly show that their
     transcript text was not stored.
+
+## 2026-08-11
+
+- **Reported cancel behavior was not a bug:**
+  - The report was "cancelling with the shortcut cancels everything in the
+    pipeline". `cancel_current_action` targets only the active recording or,
+    when none runs, only `_active_request_token`; `clear_transcription_queue`
+    ("Clear queue") is the sole path that cancels every job.
+  - What the user actually saw was the documented history-only delivery: a
+    transcription that finishes despite a cancel is kept, and the session log
+    additionally contained a `Paste canceled because a Ctrl, Alt, Shift, or
+    Windows key remained held` insertion failure. Both leave the transcript in
+    history but not in the target window, which reads as "canceled".
+- **A queued transcript that is produced but never pasted is now reported:**
+  - `_insert_background_transcription` inserted with `show_overlay_error=False`
+    and logged a failure to the log file only. A failed *transcription* already
+    raised a tray notification, so the silent case was the one where the text
+    existed and was simply lost — indistinguishable from success.
+  - Failures now emit `background_insertion_failed` (tray notification) and,
+    when nothing newer owns the overlay, show the Error state with the
+    transcript and an Insert action, taking over `_last_transcript` so Copy and
+    Insert act on exactly what is displayed.
+  - Writing the test surfaced a second defect: the deferred flush runs inside
+    `_on_transcription_ready` before the foreground result writes its own
+    overlay state, so the Error flashed and was overwritten. The new
+    `_foreground_delivery_pending` guard suppresses only the overlay part in
+    that gap; the notification always fires.
+- **History audio actions moved to the overlay's Recent Transcriptions dialog:**
+  - Per-entry Retranscribe... and Show audio file (buttons plus a right-click
+    menu) and a Recordings-folder shortcut, so a wrong-language dictation can be
+    fixed without opening Settings.
+  - `history_audio.py` now owns audio resolution and file-manager reveal for
+    both history views, `app_paths.resolve_recordings_dir` owns the
+    configured-else-default rule, and `settings_store.apply_engine_model_selection`
+    owns the engine-to-model-field mapping that the Settings General tab, audio
+    imports, and retranscription all need.
+  - The overlay retranscribe dialog exposes only the language on purpose;
+    changing engine or model stays with Settings > History, which prefills the
+    Import Audio tab. Both paths write a new history entry.
