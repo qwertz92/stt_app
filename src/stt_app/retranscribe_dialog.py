@@ -1,9 +1,9 @@
-"""Retranscribe a history entry's retained audio with a different language.
+"""Retranscribe a history entry's retained audio from the overlay history.
 
-Reached from the overlay's "Recent Transcriptions" dialog. Picking the wrong
-dictation language is the common case this exists for, so the language is the
-only control: engine and model stay the ones the entry was produced with.
-Settings > History > Retranscribe... remains the path for changing those.
+Reached from the overlay's "Recent Transcriptions" dialog. The entry's own
+transcriber and language are preselected, because repeating the run with a
+corrected language is the common case; engine and model stay changeable so a
+quick "try the bigger model on this one" needs no detour through Settings.
 """
 
 from __future__ import annotations
@@ -17,9 +17,16 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
 from .config import (
+    DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
     LANGUAGE_MODE_LABELS,
+    VALID_ENGINES,
     language_modes_for_selection,
+)
+from .settings_dialog_helpers import (
+    _ENGINE_LABELS,
+    _REMOTE_MODEL_DEFAULTS,
+    model_choices_for_engine,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
 from .ui_feedback import (
@@ -33,12 +40,14 @@ TranscribeCallable = Callable[
     "tuple[bool, str]",
 ]
 
-_PREVIEW_HEIGHT_LINES = 4
-_RESULT_HEIGHT_LINES = 6
+_PREVIEW_MIN_LINES = 4
+_RESULT_MIN_LINES = 6
+_DEFAULT_SIZE = QtCore.QSize(640, 620)
+_MINIMUM_SIZE = QtCore.QSize(560, 460)
 
 
 class RetranscribeDialog(QtWidgets.QDialog):
-    """Transcribe one history entry's audio again with a chosen language."""
+    """Transcribe one history entry's audio again with a chosen setup."""
 
     _progress_reported = QtCore.Signal(str)
     _run_finished = QtCore.Signal(bool, str)
@@ -62,13 +71,14 @@ class RetranscribeDialog(QtWidgets.QDialog):
         #: True once a run produced a transcript, so the caller can reload.
         self.produced_transcript = False
 
-        self._engine = str(getattr(entry, "engine", "") or "").strip()
-        self._model = str(getattr(entry, "model", "") or "").strip()
+        self._entry_engine = str(getattr(entry, "engine", "") or "").strip().lower()
+        self._entry_model = str(getattr(entry, "model", "") or "").strip()
 
         self.setWindowTitle("Retranscribe")
         self.setWindowIcon(load_app_icon())
         self.setWindowModality(QtCore.Qt.WindowModal)
         self.setStyleSheet(BUTTON_FEEDBACK_STYLESHEET)
+        self.setSizeGripEnabled(True)
 
         self._elapsed_timer = QtCore.QTimer(self)
         self._elapsed_timer.setInterval(1000)
@@ -81,32 +91,41 @@ class RetranscribeDialog(QtWidgets.QDialog):
         form.setLabelAlignment(QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter)
         form.setFieldGrowthPolicy(QtWidgets.QFormLayout.AllNonFixedFieldsGrow)
 
-        provider = f"{self._engine} · {self._model}" if self._model else self._engine
-        self._provider_label = QtWidgets.QLabel(provider or "unknown transcriber")
-        self._provider_label.setToolTip(
-            "The entry is transcribed again with the same engine and model. "
-            "Use Settings > History > Retranscribe... to change those."
-        )
-        form.addRow("Transcriber", self._provider_label)
-
         self._audio_label = QtWidgets.QLabel(self._audio_path.name)
         self._audio_label.setToolTip(str(self._audio_path))
-        self._audio_label.setTextInteractionFlags(
-            QtCore.Qt.TextSelectableByMouse
-        )
+        self._audio_label.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
         form.addRow("Audio", self._audio_label)
 
+        self._engine_combo = QtWidgets.QComboBox()
+        for value in VALID_ENGINES:
+            self._engine_combo.addItem(_ENGINE_LABELS.get(value, value), value)
+        self._select_data(
+            self._engine_combo,
+            self._entry_engine or str(base_settings.engine or DEFAULT_ENGINE),
+        )
+        self._engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        form.addRow("Engine", self._engine_combo)
+
+        self._model_combo = QtWidgets.QComboBox()
+        self._model_combo.currentIndexChanged.connect(self._on_model_changed)
+        form.addRow("Model", self._model_combo)
+
         self._language_combo = QtWidgets.QComboBox()
-        self._populate_languages()
         form.addRow("Language", self._language_combo)
+
+        # Populate the dependent pickers once the three exist.
+        self._populate_models(preferred=self._entry_model)
+        self._populate_languages(
+            preferred=str(
+                getattr(base_settings, "language_mode", DEFAULT_LANGUAGE_MODE)
+            )
+        )
 
         self._previous_text = QtWidgets.QPlainTextEdit(
             str(getattr(entry, "text", "") or "")
         )
         self._previous_text.setReadOnly(True)
-        self._previous_text.setFixedHeight(
-            self._text_height(_PREVIEW_HEIGHT_LINES)
-        )
+        self._previous_text.setMinimumHeight(self._text_height(_PREVIEW_MIN_LINES))
 
         self._result_text = QtWidgets.QPlainTextEdit()
         self._result_text.setReadOnly(True)
@@ -114,7 +133,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
             "The new transcript appears here. It is saved to history as a "
             "separate entry; the original stays unchanged."
         )
-        self._result_text.setFixedHeight(self._text_height(_RESULT_HEIGHT_LINES))
+        self._result_text.setMinimumHeight(self._text_height(_RESULT_MIN_LINES))
 
         # Reserve the status line instead of showing/hiding it: the widgets
         # below must not move when a run starts, reports, or finishes. The
@@ -132,10 +151,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._copy_button = QtWidgets.QPushButton("Copy result")
         self._copy_button.setEnabled(False)
         self._copy_button.clicked.connect(self._copy_result)
-        reserve_button_width_for_texts(
-            self._copy_button,
-            ("Copy result", "Copied"),
-        )
+        reserve_button_width_for_texts(self._copy_button, ("Copy result", "Copied"))
         self._copy_feedback_timer = QtCore.QTimer(self)
         self._copy_feedback_timer.setSingleShot(True)
         self._copy_feedback_timer.setInterval(1000)
@@ -155,76 +171,121 @@ class RetranscribeDialog(QtWidgets.QDialog):
         buttons.addWidget(self._run_button)
         buttons.addWidget(self._close_button)
 
+        # The two transcript views share the extra height a resize provides, so
+        # a long transcript benefits from making the dialog bigger.
+        splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(_labelled(self._previous_text, "Current transcript"))
+        splitter.addWidget(_labelled(self._result_text, "New transcript"))
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 1)
+
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
         root.addLayout(form)
-        root.addWidget(_section_label("Current transcript"))
-        root.addWidget(self._previous_text)
-        root.addWidget(_section_label("New transcript"))
-        root.addWidget(self._result_text)
+        root.addWidget(splitter, 1)
         root.addWidget(self._status_label)
         root.addLayout(buttons)
 
-        self.setMinimumWidth(560)
-        self.adjustSize()
-        # A fixed height keeps the dialog from resizing around its own content
-        # while a run reports progress.
-        self.setFixedHeight(self.sizeHint().height())
+        self.setMinimumSize(_MINIMUM_SIZE)
+        self.resize(_DEFAULT_SIZE)
 
-    # -- setup ---------------------------------------------------------------
+    # -- pickers -------------------------------------------------------------
 
-    def _populate_languages(self) -> None:
-        modes = language_modes_for_selection(self._engine, self._model, "batch")
+    def selected_engine(self) -> str:
+        return str(self._engine_combo.currentData() or DEFAULT_ENGINE)
+
+    def selected_model(self) -> str:
+        return str(self._model_combo.currentData() or "")
+
+    def selected_language_mode(self) -> str:
+        return str(self._language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
+
+    def _populate_models(self, *, preferred: str = "") -> None:
+        engine = self.selected_engine()
+        blocker = QtCore.QSignalBlocker(self._model_combo)
+        self._model_combo.clear()
+        for value, label in model_choices_for_engine(engine):
+            self._model_combo.addItem(label, value)
+        del blocker
+        fallback = (
+            str(self._base_settings.model_size or "")
+            if engine == DEFAULT_ENGINE
+            else _REMOTE_MODEL_DEFAULTS.get(engine, "")
+        )
+        if not self._select_data(self._model_combo, preferred):
+            self._select_data(self._model_combo, fallback)
+        self._model_combo.setEnabled(self._model_combo.count() > 1)
+
+    def _populate_languages(self, *, preferred: str = "") -> None:
+        modes = language_modes_for_selection(
+            self.selected_engine(),
+            self.selected_model(),
+            "batch",
+        )
+        blocker = QtCore.QSignalBlocker(self._language_combo)
+        self._language_combo.clear()
         for value in modes:
             self._language_combo.addItem(
                 LANGUAGE_MODE_LABELS.get(value, value),
                 value,
             )
-        current = str(
-            getattr(self._base_settings, "language_mode", DEFAULT_LANGUAGE_MODE)
-        )
-        index = self._language_combo.findData(current)
-        if index < 0:
-            index = self._language_combo.findData(DEFAULT_LANGUAGE_MODE)
-        if index >= 0:
-            self._language_combo.setCurrentIndex(index)
+        del blocker
+        for candidate in (
+            preferred,
+            str(getattr(self._base_settings, "language_mode", "")),
+            DEFAULT_LANGUAGE_MODE,
+        ):
+            if self._select_data(self._language_combo, candidate):
+                break
         self._language_combo.setEnabled(self._language_combo.count() > 1)
+
+    def _on_engine_changed(self) -> None:
+        # Keep the entry's model when the user returns to its engine.
+        preferred = (
+            self._entry_model
+            if self.selected_engine() == self._entry_engine
+            else ""
+        )
+        self._populate_models(preferred=preferred)
+        self._populate_languages(preferred=self.selected_language_mode())
+
+    def _on_model_changed(self) -> None:
+        self._populate_languages(preferred=self.selected_language_mode())
+
+    @staticmethod
+    def _select_data(combo: QtWidgets.QComboBox, value: str) -> bool:
+        index = combo.findData(str(value or ""))
+        if index < 0:
+            return False
+        combo.setCurrentIndex(index)
+        return True
 
     def _text_height(self, lines: int) -> int:
         return self.fontMetrics().height() * lines + 12
 
     # -- run -----------------------------------------------------------------
 
-    def selected_language_mode(self) -> str:
-        return str(self._language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
-
     def build_settings(self) -> AppSettings:
+        engine = self.selected_engine()
         settings = replace(
             self._base_settings,
-            engine=self._engine or self._base_settings.engine,
+            engine=engine,
             language_mode=self.selected_language_mode(),
         )
-        return apply_engine_model_selection(
-            settings,
-            self._engine or self._base_settings.engine,
-            self._model,
-        )
+        return apply_engine_model_selection(settings, engine, self.selected_model())
 
     def _start_run(self) -> None:
         if self._running:
             return
         if not self._audio_path.is_file():
-            self._set_status(
-                "The audio file is no longer available.",
-                error=True,
-            )
+            self._set_status("The audio file is no longer available.", error=True)
             self._run_button.setEnabled(False)
             return
         self._running = True
         self._elapsed_seconds = 0
-        self._run_button.setEnabled(False)
-        self._language_combo.setEnabled(False)
+        self._set_controls_enabled(False)
         self._copy_button.setEnabled(False)
         self._reset_copy_feedback()
         self._result_text.clear()
@@ -252,6 +313,14 @@ class RetranscribeDialog(QtWidgets.QDialog):
             daemon=True,
         ).start()
 
+    def _set_controls_enabled(self, enabled: bool) -> None:
+        self._run_button.setEnabled(enabled)
+        self._engine_combo.setEnabled(enabled)
+        self._model_combo.setEnabled(enabled and self._model_combo.count() > 1)
+        self._language_combo.setEnabled(
+            enabled and self._language_combo.count() > 1
+        )
+
     def _tick_elapsed(self) -> None:
         self._elapsed_seconds += 1
         self._set_status(f"Transcribing... ({self._elapsed_seconds}s)")
@@ -265,8 +334,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
     def _on_finished(self, ok: bool, text: str) -> None:
         self._running = False
         self._elapsed_timer.stop()
-        self._run_button.setEnabled(True)
-        self._language_combo.setEnabled(self._language_combo.count() > 1)
+        self._set_controls_enabled(True)
         result = str(text or "")
         if not ok:
             self._set_status(f"Failed: {result}", error=True)
@@ -310,10 +378,17 @@ class RetranscribeDialog(QtWidgets.QDialog):
         set_button_feedback_state(self._copy_button, None)
 
 
-def _section_label(text: str) -> QtWidgets.QLabel:
-    label = QtWidgets.QLabel(text)
-    label.setStyleSheet("color: #555;")
-    return label
+def _labelled(content: QtWidgets.QWidget, title: str) -> QtWidgets.QWidget:
+    """Pair a section caption with its widget so both scale in a splitter."""
+    holder = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(2)
+    caption = QtWidgets.QLabel(title)
+    caption.setStyleSheet("color: #555;")
+    layout.addWidget(caption)
+    layout.addWidget(content, 1)
+    return holder
 
 
 def _emit(owner: QtCore.QObject, signal_name: str, *args: object) -> bool:

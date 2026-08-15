@@ -11,6 +11,9 @@ from .config import (
     ASSEMBLYAI_MODELS,
     AZURE_SPEECH_MODELS,
     DEEPGRAM_MODELS,
+    DEFAULT_ENGINE,
+    LOCAL_ONNX_MODEL_PRECISION,
+    VALID_MODEL_SIZES,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_DEEPGRAM_MODEL,
@@ -166,7 +169,63 @@ _START_BEEP_TONE_LABELS: dict[str, str] = {
 }
 
 
-_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(780, 960)
+# Single source of truth for how a local model is named in any picker: the
+# Settings General/Import tabs and the overlay's retranscribe dialog.
+LOCAL_MODEL_LABELS: dict[str, str] = {
+    "tiny": "tiny (~75 MB)",
+    "base": "base (~141 MB)",
+    "small": "small (~484 MB)",
+    "medium": "medium (~1.4 GB)",
+    "large-v3": "large-v3 (~3 GB, multilingual)",
+    "large-v3-turbo": "large-v3-turbo (~809 MB, multilingual, fast)",
+    "distil-large-v3.5": "distil-large-v3.5 (~756 MB, English only, improved)",
+    "cohere-transcribe-03-2026": (
+        "Cohere Transcribe 03-2026 (~2.13 GB, ONNX/WebGPU)"
+    ),
+    "granite-4.0-1b-speech": (
+        "IBM Granite 4.0 1B Speech (~1.84 GB, ONNX/WebGPU)"
+    ),
+    "granite-speech-4.1-2b": (
+        "IBM Granite Speech 4.1 2B (~1.84 GB, ONNX/WebGPU)"
+    ),
+    "granite-speech-4.1-2b-plus": (
+        "IBM Granite Speech 4.1 2B Plus (~4.1 GB, ONNX)"
+    ),
+    "granite-speech-4.1-2b-nar": (
+        "IBM Granite Speech 4.1 2B NAR (~2.5 GB, ONNX)"
+    ),
+    "nemotron-3.5-asr-streaming-0.6b-int4": (
+        "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB, true 560 ms streaming)"
+    ),
+}
+
+
+def local_model_precision_label(model_name: str) -> str:
+    precision = LOCAL_ONNX_MODEL_PRECISION.get(model_name, "")
+    if not precision:
+        return ""
+    return precision.upper()
+
+
+def local_model_label(model_name: str) -> str:
+    label = LOCAL_MODEL_LABELS.get(model_name, model_name)
+    precision = local_model_precision_label(model_name)
+    if not precision:
+        return label
+    return f"{label} [{precision}]"
+
+
+def model_choices_for_engine(engine: str) -> tuple[tuple[str, str], ...]:
+    """``(value, label)`` pairs of the models ``engine`` can transcribe with."""
+    normalized = str(engine or "").strip().lower()
+    if normalized == DEFAULT_ENGINE:
+        return tuple(
+            (value, local_model_label(value)) for value in VALID_MODEL_SIZES
+        )
+    return _REMOTE_MODEL_CHOICES.get(normalized, ())
+
+
+_DEFAULT_SETTINGS_DIALOG_SIZE = QtCore.QSize(860, 960)
 
 
 _DIALOG_SCREEN_MARGIN = 48

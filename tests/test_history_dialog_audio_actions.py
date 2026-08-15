@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import pytest
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtGui, QtWidgets
 
 from stt_app import history_dialog as history_dialog_module
 from stt_app.history_dialog import HistoryDialog
 from stt_app.retranscribe_dialog import RetranscribeDialog
+from stt_app.settings_dialog_helpers import model_choices_for_engine
 from stt_app.settings_store import AppSettings, SettingsStore
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
+
+_GROQ_CHOICES = model_choices_for_engine("groq")
 
 
 class _FakeController:
@@ -119,6 +122,42 @@ def test_selecting_multiple_entries_disables_the_single_audio_actions(tmp_path):
 
     assert not dialog._show_audio_button.isEnabled()
     assert not dialog._retranscribe_button.isEnabled()
+
+
+def test_ctrl_c_copies_every_selected_transcript(monkeypatch, tmp_path):
+    """Ctrl+C must match "Copy selected", not yield only the current cell."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    copied: list[str] = []
+    monkeypatch.setattr(
+        QtGui.QGuiApplication,
+        "clipboard",
+        lambda: type(
+            "C",
+            (),
+            {
+                "setText": staticmethod(copied.append),
+                "text": staticmethod(lambda: ""),
+            },
+        )(),
+    )
+    dialog = _make_dialog(
+        tmp_path,
+        [_entry(text="one"), _entry(text="two"), _entry(text="three")],
+    )
+    dialog.show()
+    app.processEvents()
+    dialog._select_rows([0, 1, 2])
+    dialog._on_selection_changed()
+
+    dialog._table.setFocus()
+    QtGui.QShortcut  # the dialog installs one on the table
+    dialog._copy_shortcut.activated.emit()
+    app.processEvents()
+
+    assert copied, "Ctrl+C produced no clipboard write"
+    assert copied[-1].count("one") == 1
+    assert copied[-1].count("two") == 1
+    assert copied[-1].count("three") == 1
 
 
 def test_show_audio_file_reveals_the_recording(monkeypatch, tmp_path):
@@ -271,6 +310,81 @@ def test_retranscribe_dialog_never_resizes_around_its_content(tmp_path):
     dialog._on_finished(True, "ein neues transkript " * 40)
     app.processEvents()
     assert dialog.size() == baseline
+
+
+def test_retranscribe_dialog_is_resizable(tmp_path):
+    """A long transcript needs a bigger window, so nothing may fix the size."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(),
+        audio_path=tmp_path / "recording.wav",
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    dialog.show()
+    app.processEvents()
+
+    assert dialog.minimumSize() != dialog.maximumSize()
+    dialog.resize(900, 800)
+    app.processEvents()
+
+    assert dialog.size() == QtCore.QSize(900, 800)
+
+
+def test_retranscribe_dialog_preselects_the_entry_engine_and_model(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="cohere-transcribe-03-2026"),
+        audio_path=tmp_path / "recording.wav",
+        # Deliberately different from the entry: the entry wins.
+        base_settings=AppSettings(engine="groq", model_size="small"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    assert dialog.selected_engine() == "local"
+    assert dialog.selected_model() == "cohere-transcribe-03-2026"
+
+
+def test_retranscribe_dialog_switches_model_with_the_engine(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="cohere-transcribe-03-2026"),
+        audio_path=tmp_path / "recording.wav",
+        base_settings=AppSettings(engine="local", language_mode="de"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    dialog._engine_combo.setCurrentIndex(dialog._engine_combo.findData("groq"))
+
+    # The model list follows the engine, and the built settings write the
+    # value into that engine's own field.
+    assert dialog.selected_model() in {value for value, _ in _GROQ_CHOICES}
+    settings = dialog.build_settings()
+    assert settings.engine == "groq"
+    assert settings.groq_model == dialog.selected_model()
+
+    # Returning to the entry's engine restores the entry's own model.
+    dialog._engine_combo.setCurrentIndex(dialog._engine_combo.findData("local"))
+    assert dialog.selected_model() == "cohere-transcribe-03-2026"
+
+
+def test_retranscribe_dialog_offers_only_languages_the_model_supports(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="distil-large-v3.5"),
+        audio_path=tmp_path / "recording.wav",
+        base_settings=AppSettings(engine="local", language_mode="de"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    offered = {
+        dialog._language_combo.itemData(index)
+        for index in range(dialog._language_combo.count())
+    }
+
+    # distil-large-v3.5 is English-only; German must not be selectable.
+    assert offered == {"auto", "en"}
+    assert dialog.selected_language_mode() in offered
 
 
 def test_retranscribe_dialog_keeps_a_failure_visible(tmp_path):
