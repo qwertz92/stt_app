@@ -943,6 +943,11 @@ class OverlayUI(QtWidgets.QWidget):
             super().mouseMoveEvent(event)
             return
         target = event.globalPosition().toPoint() - self._drag_offset
+        # Claim the manual position on the first movement, not on release. A
+        # drag during startup competes with the preload's overlay updates, and
+        # each of those repositions a not-yet-manual overlay back to its
+        # configured corner — so the window jumped out from under the cursor.
+        self._manual_positioned = True
         self.move(target)
         event.accept()
 
@@ -1439,6 +1444,10 @@ class OverlayUI(QtWidgets.QWidget):
         self,
         previous_size: QtCore.QSize | None = None,
     ) -> None:
+        if self._drag_active:
+            # The user is positioning the window right now; nothing may move it
+            # until the drag ends (mouseReleaseEvent runs the final clamp).
+            return
         screen = self._current_screen()
         if screen is None:
             return

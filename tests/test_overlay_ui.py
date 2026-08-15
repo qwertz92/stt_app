@@ -913,3 +913,51 @@ def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():
     assert emitted == []
     assert overlay._language_button.text() == "Lang: Auto"
     assert overlay._language_button.isEnabled() is False
+
+
+def test_dragging_claims_the_manual_position_on_the_first_movement(monkeypatch):
+    """A drag must own the position immediately, not only on mouse release.
+
+    Startup keeps updating the overlay (preload progress, "Model loaded",
+    the idle status), and each of those repositions a not-yet-manual overlay
+    back to its configured corner. With the claim deferred to the release,
+    the window jumped out from under the cursor mid-drag.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1920, 1080))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.move_to_corner("top-right", screen=screen)
+    assert overlay._manual_positioned is False
+
+    overlay._drag_active = True
+    overlay._drag_offset = QtCore.QPoint(0, 0)
+    overlay.mouseMoveEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.MouseMove,
+            QtCore.QPointF(400.0, 300.0),
+            QtCore.QPointF(400.0, 300.0),
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoModifier,
+        )
+    )
+
+    assert overlay._manual_positioned is True
+    assert overlay.pos() == QtCore.QPoint(400, 300)
+
+
+def test_startup_updates_do_not_move_an_overlay_being_dragged(monkeypatch):
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1920, 1080))
+    monkeypatch.setattr(overlay, "_current_screen", lambda: screen)
+    overlay.move_to_corner("top-right", screen=screen)
+    dragged = QtCore.QPoint(300, 400)
+    overlay.move(dragged)
+    overlay._drag_active = True
+
+    # A startup overlay update runs this while the button is still held.
+    overlay._reposition_within_current_screen()
+
+    assert overlay.pos() == dragged
