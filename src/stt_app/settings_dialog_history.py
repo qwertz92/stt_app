@@ -88,6 +88,14 @@ class _HistoryTabMixin:
             QtWidgets.QAbstractItemView.ExtendedSelection
         )
         self._configure_compact_list_widget(self.history_list, expand=True)
+        # Ctrl+C must copy every selected transcript, matching "Copy selected"
+        # and the standalone History dialog.
+        self.history_copy_shortcut = QtGui.QShortcut(
+            QtGui.QKeySequence.Copy,
+            self.history_list,
+            activated=self._copy_selected_history,
+        )
+        self.history_copy_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
         self.history_list.itemSelectionChanged.connect(self._on_history_item_selected)
         self.history_list.itemDoubleClicked.connect(
             self._on_history_item_double_clicked

@@ -149,6 +149,16 @@ class HistoryDialog(QtWidgets.QDialog):
         self._table.itemDoubleClicked.connect(self._on_item_double_clicked)
         self._table.setContextMenuPolicy(QtCore.Qt.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._show_row_context_menu)
+        # Ctrl+C on the table must copy every selected transcript, the same as
+        # "Copy selected". Without an explicit shortcut the view's own handling
+        # yields just the current cell, so a three-row selection silently
+        # produced one entry in the clipboard.
+        self._copy_shortcut = QtGui.QShortcut(
+            QtGui.QKeySequence.Copy,
+            self._table,
+            activated=self._copy_selected,
+        )
+        self._copy_shortcut.setContext(QtCore.Qt.WidgetWithChildrenShortcut)
 
         self._detail = QtWidgets.QPlainTextEdit()
         self._detail.setReadOnly(True)
