@@ -35,11 +35,116 @@ from .ui_feedback import restore_vertical_scrollbar
 _BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(860, 880)
 _BENCHMARK_WINDOW_MINIMUM_SIZE = QtCore.QSize(680, 560)
 _BENCHMARK_COMPACT_BUTTON_WIDTH_PX = 110
-_BENCHMARK_RESULT_SURFACE_STYLESHEET = """
-    border: 1px solid #b8c2d2;
-    border-radius: 4px;
-    background-color: #ffffff;
+_BENCHMARK_SURFACE_BORDER = "#b8c2d2"
+_BENCHMARK_SURFACE_GRID = "#e3e8ef"
+_BENCHMARK_SURFACE_HEADER_BG = "#f2f5f9"
+_BENCHMARK_SURFACE_HEADER_FG = "#33415c"
+
+# Every rule is scoped to a widget type on purpose. An unscoped property block
+# is inherited by *all* children, so a bare `border: 1px; border-radius: 4px`
+# gave every single header section and the corner button its own rounded box.
+_BENCHMARK_RESULT_SURFACE_STYLESHEET = f"""
+    QTableWidget {{
+        border: 1px solid {_BENCHMARK_SURFACE_BORDER};
+        border-radius: 4px;
+        background-color: #ffffff;
+        gridline-color: {_BENCHMARK_SURFACE_GRID};
+    }}
+    QHeaderView {{
+        border: none;
+        background: transparent;
+    }}
+    QHeaderView::section {{
+        background-color: {_BENCHMARK_SURFACE_HEADER_BG};
+        color: {_BENCHMARK_SURFACE_HEADER_FG};
+        border: none;
+        border-bottom: 1px solid {_BENCHMARK_SURFACE_BORDER};
+        border-right: 1px solid {_BENCHMARK_SURFACE_GRID};
+        padding: 4px 6px;
+    }}
+    QHeaderView::section:last, QHeaderView::section:only-one {{
+        border-right: none;
+    }}
+    QTableCornerButton::section {{
+        background-color: {_BENCHMARK_SURFACE_HEADER_BG};
+        border: none;
+        border-bottom: 1px solid {_BENCHMARK_SURFACE_BORDER};
+    }}
 """
+
+# Inside the details tabs the pane already draws the frame, so the widgets in
+# it must not draw a second one right next to it.
+_BENCHMARK_DETAILS_STYLESHEET = f"""
+    QTabWidget::pane {{
+        border: 1px solid {_BENCHMARK_SURFACE_BORDER};
+        border-radius: 4px;
+        background: #ffffff;
+        top: -1px;
+    }}
+    QTabBar::tab {{
+        padding: 4px 14px;
+        margin-right: 2px;
+        border: 1px solid #bbb;
+        border-bottom: 2px solid #bbb;
+        border-top-left-radius: 4px;
+        border-top-right-radius: 4px;
+        background: #e8e8e8;
+    }}
+    QTabBar::tab:selected {{
+        background: #ffffff;
+        border-bottom-color: #1a73e8;
+        color: #0d47a1;
+    }}
+    QTabBar::tab:hover:!selected {{
+        background: #d6e4f0;
+    }}
+    QTabBar::tab:selected:hover {{
+        background: #ffffff;
+    }}
+    QTableWidget, QPlainTextEdit {{
+        border: none;
+        border-radius: 0;
+        background-color: #ffffff;
+        gridline-color: {_BENCHMARK_SURFACE_GRID};
+    }}
+    QHeaderView {{
+        border: none;
+        background: transparent;
+    }}
+    QHeaderView::section {{
+        background-color: {_BENCHMARK_SURFACE_HEADER_BG};
+        color: {_BENCHMARK_SURFACE_HEADER_FG};
+        border: none;
+        border-bottom: 1px solid {_BENCHMARK_SURFACE_BORDER};
+        border-right: 1px solid {_BENCHMARK_SURFACE_GRID};
+        padding: 4px 6px;
+    }}
+    QHeaderView::section:last, QHeaderView::section:only-one {{
+        border-right: none;
+    }}
+    QTableCornerButton::section {{
+        background-color: {_BENCHMARK_SURFACE_HEADER_BG};
+        border: none;
+        border-bottom: 1px solid {_BENCHMARK_SURFACE_BORDER};
+    }}
+"""
+
+_BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
+
+
+def _details_page(content: QtWidgets.QWidget) -> QtWidgets.QWidget:
+    """Wrap tab content so it does not sit flush against the pane border."""
+    page = QtWidgets.QWidget()
+    layout = QtWidgets.QVBoxLayout(page)
+    layout.setContentsMargins(
+        _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+        _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+        _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+        _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+    )
+    layout.setSpacing(0)
+    layout.addWidget(content)
+    return page
 
 
 def _benchmark_created_label(value: str) -> str:
@@ -86,6 +191,8 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
     def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
         self._plain_text = ""
+        self.setStyleSheet(_BENCHMARK_DETAILS_STYLESHEET)
+        self.setDocumentMode(False)
 
         self.overview_table = QtWidgets.QTableWidget(0, 2)
         self.overview_table.setHorizontalHeaderLabels(["Field", "Value"])
@@ -96,11 +203,16 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
         self.overview_table.horizontalHeader().setSectionResizeMode(
             1, QtWidgets.QHeaderView.Stretch
         )
-        self.addTab(self.overview_table, "Details")
+        self.addTab(_details_page(self.overview_table), "Details")
 
         transcript_page = QtWidgets.QWidget()
         transcript_layout = QtWidgets.QVBoxLayout(transcript_page)
-        transcript_layout.setContentsMargins(0, 0, 0, 0)
+        transcript_layout.setContentsMargins(
+            _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+            _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+            _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+            _BENCHMARK_DETAILS_PAGE_MARGIN_PX,
+        )
         transcript_layout.setSpacing(6)
         transcript_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         transcript_splitter.setChildrenCollapsible(False)
@@ -145,7 +257,9 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
         table.setWordWrap(False)
         table.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
         table.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
-        table.setStyleSheet(_BENCHMARK_RESULT_SURFACE_STYLESHEET)
+        table.setFrameShape(QtWidgets.QFrame.NoFrame)
+        # The surrounding tab pane draws the frame for these tables; the view's
+        # own stylesheet is inherited from the details view.
 
     def toPlainText(self) -> str:
         """Compatibility accessor for tests and older dialog integrations."""
@@ -388,6 +502,10 @@ class _BenchmarkMixin:
             QtWidgets.QAbstractItemView.SingleSelection
         )
         self.benchmark_history_list.setAlternatingRowColors(True)
+        # Same surface as the Results table so the tab reads as one design.
+        self.benchmark_history_list.setStyleSheet(
+            _BENCHMARK_RESULT_SURFACE_STYLESHEET
+        )
         self.benchmark_history_list.verticalHeader().setVisible(False)
         self.benchmark_history_list.setHorizontalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
