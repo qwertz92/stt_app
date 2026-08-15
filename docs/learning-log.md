@@ -2380,3 +2380,39 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - The real recordings directory resolved correctly throughout (200 WAV files
     under the configured path); the app's own "Show audio file" and "Recordings
     folder" actions open a window per click by design and must not close it.
+
+## 2026-08-15
+
+- **Retranscribe dialog gained a quick engine/model picker and a resizable window:**
+  - The entry's own engine, model, and language stay preselected; all three are
+    now changeable, and the pickers are dependent (engine -> models ->
+    languages), restoring the entry's model when the user returns to its
+    engine.
+  - `settings_dialog_helpers.model_choices_for_engine` / `local_model_label`
+    now hold the model table that the Settings General/Import tabs used to own
+    privately, so every picker labels a model identically.
+  - The window is resizable with the two transcript views in a splitter. The
+    no-layout-shift guarantee still holds: the status line keeps a fixed
+    height and an ignored width policy, verified by rendering progress, a long
+    provider error, and a long result at a fixed window size.
+- **Ctrl+C in the history views copied only one entry:**
+  - Selecting three rows and pressing Ctrl+C produced a single transcript,
+    while "Copy selected" produced all three. Both views now install an
+    explicit `QKeySequence.Copy` shortcut bound to the same handler.
+- **Benchmark tab visuals:**
+  - `_BENCHMARK_RESULT_SURFACE_STYLESHEET` was an unscoped property block.
+    Qt inherits those into every child, so each header section and the table
+    corner button drew its own rounded, bordered box — the reported "ugly
+    corners and edges". All rules are now scoped to widget types.
+  - The details view drew a second frame inside the tab pane. Its views are
+    now `NoFrame` with their content wrapped in a small margin, and the tab bar
+    matches the main dialog. Benchmark History and Results share one surface.
+  - Verified by rendering the tab to a PNG before and after, not by assertion
+    alone.
+  - Default settings-dialog width 780 -> 860 px.
+- **Overlay jumped back to its corner while dragged during startup:**
+  - `_manual_positioned` was set on mouse *release*, so every startup overlay
+    update (preload progress, "Model loaded", idle status) repositioned the
+    still-"automatic" overlay to its configured corner mid-drag. The drag now
+    claims the position on first movement, and repositioning is skipped
+    entirely while a drag is active.
