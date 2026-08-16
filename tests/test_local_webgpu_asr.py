@@ -265,6 +265,41 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_nar_int8_patterns(
     assert "onnx/*_q4.onnx" not in kwargs["allow_patterns"]
 
 
+@pytest.mark.parametrize("model_name", LOCAL_ONNX_MODEL_SIZES)
+def test_download_destination_matches_the_local_dir_actually_downloaded_into(
+    monkeypatch,
+    tmp_path,
+    model_name,
+):
+    """Download progress is derived from growth of the destination directory, so
+    the advertised destination and the directory `snapshot_download` writes into
+    must never drift apart."""
+    calls = []
+
+    def fake_snapshot_download(repo_id, **kwargs):
+        calls.append((repo_id, kwargs))
+        return str(tmp_path / "snapshot")
+
+    monkeypatch.setitem(
+        sys.modules,
+        "huggingface_hub",
+        SimpleNamespace(snapshot_download=fake_snapshot_download),
+    )
+
+    download_webgpu_model_snapshot(model_name, str(tmp_path))
+
+    _, kwargs = calls[0]
+    destination = local_webgpu_asr.webgpu_download_destination(
+        model_name, str(tmp_path)
+    )
+    assert destination is not None
+    assert kwargs["local_dir"] == str(destination)
+
+
+def test_download_destination_is_unknown_for_an_unmapped_model():
+    assert local_webgpu_asr.webgpu_download_destination("not-a-model") is None
+
+
 def test_required_file_validation_accepts_granite_4_1_2b_q4_snapshot(tmp_path):
     snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
 

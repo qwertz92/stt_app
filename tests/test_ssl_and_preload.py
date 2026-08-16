@@ -10,6 +10,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from stt_app.config import MODEL_REPO_MAP
 from stt_app.ssl_utils import (
     create_ssl_context,
     inject_system_trust_store,
@@ -401,29 +402,80 @@ class TestEstimateCachedModelBytes:
             size = estimate_cached_model_bytes("small")
         assert size >= 10
 
-    def test_uses_larger_of_duplicate_locations(self, tmp_path):
+    def test_measures_the_configured_model_dir_not_the_default_cache(self, tmp_path):
+        """A configured model dir is where the download lands, so progress must
+        come from there even when a bigger copy sits in the default cache."""
         hf_dir = tmp_path / "hf_cache"
         hf_dir.mkdir()
         custom_dir = tmp_path / "custom"
         custom_dir.mkdir()
         self._make_hf_cache(hf_dir, "Systran/faster-whisper-small")
         self._make_hf_cache(custom_dir, "Systran/faster-whisper-small")
-        # Make custom location larger.
+        # Make the *default* cache much larger than the download destination.
         big_blob = (
-            custom_dir
-            / "models--Systran--faster-whisper-small"
-            / "blobs"
-            / "big.bin"
+            hf_dir / "models--Systran--faster-whisper-small" / "blobs" / "big.bin"
         )
         big_blob.parent.mkdir(parents=True, exist_ok=True)
-        big_blob.write_bytes(b"\x00" * 100)
+        big_blob.write_bytes(b"\x00" * 10_000)
 
         with patch(
             "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
             return_value=str(hf_dir),
         ):
             size = estimate_cached_model_bytes("small", str(custom_dir))
-        assert size >= 100
+        assert size < 10_000
+
+    def test_ignores_foreign_hf_cache_copy_of_a_local_onnx_model(self, tmp_path):
+        """A local ONNX download writes into the flat `local_dir`, never the
+        sibling `models--<repo>` folder. An unrelated full-repo copy left there
+        (e.g. fp32 weights pulled by a conversion experiment) must not be
+        reported as this download's progress."""
+        model_name = "granite-speech-4.1-2b-nar"
+        repo_id = MODEL_REPO_MAP[model_name]
+        repo_basename = repo_id.rsplit("/", 1)[-1]
+
+        foreign = (
+            tmp_path
+            / f"models--{repo_id.replace('/', '--')}"
+            / "snapshots"
+            / "abc123"
+            / "fp32"
+        )
+        foreign.mkdir(parents=True)
+        (foreign / "editor.onnx_data").write_bytes(b"\x00" * 5_000)
+
+        destination = tmp_path / repo_basename / "int8"
+        destination.mkdir(parents=True)
+        (destination / "encoder.onnx_data").write_bytes(b"\x00" * 700)
+
+        with patch(
+            "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            size = estimate_cached_model_bytes(model_name)
+        assert size == 700
+
+    def test_does_not_double_count_snapshot_symlinks(self, tmp_path):
+        repo_id = MODEL_REPO_MAP["small"]
+        root = tmp_path / f"models--{repo_id.replace('/', '--')}"
+        blobs = root / "blobs"
+        blobs.mkdir(parents=True)
+        blob = blobs / "deadbeef"
+        blob.write_bytes(b"\x00" * 1_000)
+
+        snapshot = root / "snapshots" / "abc123"
+        snapshot.mkdir(parents=True)
+        try:
+            (snapshot / "model.bin").symlink_to(blob)
+        except (OSError, NotImplementedError):
+            pytest.skip("creating symlinks requires privileges on this platform")
+
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path),
+        ):
+            size = estimate_cached_model_bytes("small")
+        assert size == 1_000
 
 
 class TestDeleteCachedModel:

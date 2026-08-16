@@ -266,6 +266,27 @@ def _repo_id_for_model(model_name: str) -> str | None:
     return MODEL_REPO_MAP.get(model_name)
 
 
+def webgpu_download_destination(model_name: str, model_dir: str = "") -> Path | None:
+    """Return the exact directory a download for this model writes into.
+
+    Single source of truth for `download_webgpu_model_snapshot` and for download
+    progress measurement. These models use a flat `local_dir` layout rather than
+    the HuggingFace blob/snapshot cache, so the sibling `models--<repo>` folder
+    is *not* the download target even when it exists: an unrelated full-repo copy
+    left there (e.g. fp32 weights pulled by a conversion experiment) must never be
+    mistaken for this download's progress.
+    """
+    repo_id = _repo_id_for_model(model_name)
+    if repo_id is None or model_name not in _MODEL_LAYOUTS:
+        return None
+    base_dir = (
+        Path(model_dir.strip())
+        if model_dir and model_dir.strip()
+        else Path(_default_hf_cache_dir())
+    )
+    return base_dir / repo_id.rsplit("/", 1)[-1]
+
+
 def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     repo_id = _repo_id_for_model(model_name)
     if repo_id is None:
@@ -352,16 +373,9 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
 
     repo_id = _repo_id_for_model(model_name)
     layout = _MODEL_LAYOUTS.get(model_name)
-    if repo_id is None or layout is None:
+    local_dir = webgpu_download_destination(model_name, model_dir)
+    if repo_id is None or layout is None or local_dir is None:
         raise ValueError(f"Unknown local ONNX model '{model_name}'.")
-
-    base_dir = (
-        Path(model_dir.strip())
-        if model_dir and model_dir.strip()
-        else Path(_default_hf_cache_dir())
-    )
-    repo_basename = repo_id.rsplit("/", 1)[-1]
-    local_dir = base_dir / repo_basename
 
     kwargs: dict[str, object] = {
         "allow_patterns": layout.allow_patterns,

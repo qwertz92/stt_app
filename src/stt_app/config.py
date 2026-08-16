@@ -265,8 +265,8 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "cohere-transcribe-03-2026": 2_128,
     "granite-4.0-1b-speech": 1_843,
     "granite-speech-4.1-2b": 1_843,
-    "granite-speech-4.1-2b-plus": 4_100,
-    "granite-speech-4.1-2b-nar": 2_500,
+    "granite-speech-4.1-2b-plus": 4_065,
+    "granite-speech-4.1-2b-nar": 2_522,
     NEMOTRON_MODEL_SIZE: 793,
 }
 

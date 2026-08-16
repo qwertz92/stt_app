@@ -515,6 +515,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   later resume. Progress and its rolling transfer rate are approximate because
   they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
+- **Download progress measures the download *destination*, never a candidate
+  copy**: because progress is cache growth, `estimate_cached_model_bytes` must
+  watch exactly the directory the downloader writes into.
+  `local_faster_whisper.download_destination_dir` is that single source of
+  truth: local ONNX models resolve through
+  `local_webgpu_asr.webgpu_download_destination` (the flat `local_dir` that
+  `download_webgpu_model_snapshot` passes to `snapshot_download`),
+  faster-whisper models to `models--<repo>` under the configured `cache_dir`.
+  Do not reintroduce a search across *candidate* layouts or cache roots with a
+  `max()` over them — `_model_cache_dirs` exists for detection/delete/cleanup
+  and legitimately includes both the flat and `models--<repo>` layouts plus the
+  default cache. Measuring those made a foreign directory masquerade as the
+  download: `scripts/convert_granite_nar_q4.py` pulls the NAR repo's fp32
+  weights with `cache_dir=` (9.4 GB in `models--smcleod--…-nar-onnx`), so the
+  NAR download reported a fixed `10078/2500 MB, approx. 100%, measuring speed`
+  while the real flat destination was still filling. A parametrized test pins
+  `webgpu_download_destination` to the `local_dir` actually downloaded into so
+  the two cannot drift. Snapshot entries that are symlinks are skipped when
+  summing, because `stat()` follows them into an already-counted blob and would
+  report 100% at half a download.
 - **ModelScope mirror downloads are transactional and path-contained**:
   Treat every path in the remote file listing as untrusted. Only normalized
   POSIX-relative repository paths contained by the requested destination are

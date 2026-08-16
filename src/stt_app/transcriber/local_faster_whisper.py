@@ -128,30 +128,54 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     return dirs
 
 
-def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
-    """Estimate the current on-disk bytes for a model cache directory.
+def download_destination_dir(model_name: str, model_dir: str = "") -> Path | None:
+    """Return the one directory a download for this model writes into.
 
-    When multiple cache roots are present, returns the largest observed size
-    to avoid double-counting duplicate copies of the same model.
+    Download progress is derived from cache growth, so it must watch exactly the
+    directory the downloader targets — never merely a *candidate* location for an
+    existing copy. Local ONNX models download into a flat `local_dir`;
+    faster-whisper models download into the HuggingFace blob/snapshot cache under
+    the configured `cache_dir`. Measuring any other layout or cache root reports a
+    foreign directory's size as this download's progress, which is how a stale
+    full-repo copy could show 100% while the real download had barely started.
     """
-    max_bytes = 0
-    for root in _model_cache_dirs(model_name, model_dir):
-        if not root.is_dir():
-            continue
-        total = 0
-        try:
-            for path in root.rglob("*"):
-                if not path.is_file():
-                    continue
-                try:
-                    total += path.stat().st_size
-                except OSError:
-                    continue
-        except OSError:
-            continue
-        if total > max_bytes:
-            max_bytes = total
-    return max_bytes
+    if model_name in LOCAL_ONNX_MODEL_SIZES:
+        from .local_webgpu_asr import webgpu_download_destination
+
+        return webgpu_download_destination(model_name, model_dir)
+
+    repo_id = _MODEL_REPO_MAP.get(model_name)
+    if repo_id is None:
+        return None
+
+    base_dir = (
+        model_dir.strip()
+        if model_dir and model_dir.strip()
+        else _default_hf_cache_dir()
+    )
+    return Path(base_dir) / f"models--{repo_id.replace('/', '--')}"
+
+
+def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
+    """Estimate the current on-disk bytes of a model's download destination."""
+    root = download_destination_dir(model_name, model_dir)
+    if root is None or not root.is_dir():
+        return 0
+    total = 0
+    try:
+        for path in root.rglob("*"):
+            # A HuggingFace snapshot entry can be a symlink to a blob that is
+            # already counted; stat() follows it, so counting both doubles the
+            # measured size and reports 100% at half a download.
+            if path.is_symlink() or not path.is_file():
+                continue
+            try:
+                total += path.stat().st_size
+            except OSError:
+                continue
+    except OSError:
+        return total
+    return total
 
 
 def cached_model_paths(model_name: str, model_dir: str = "") -> list[Path]:

@@ -2416,3 +2416,36 @@ Agents and developers: use this as a knowledge base for past issues and solution
     still-"automatic" overlay to its configured corner mid-drag. The drag now
     claims the position on first movement, and repositioning is skipped
     entirely while a drag is active.
+
+## 2026-08-17
+
+- **Model download progress measured a foreign directory (reported as
+  "10078/2500 MB, approx. 100%" while the model was still downloading):**
+  - `estimate_cached_model_bytes` searched every *candidate* cache layout for a
+    model (`models--<repo>` and the flat `local_dir`, in the configured model
+    dir and the default cache) and returned the largest. Local ONNX models only
+    ever download into the flat `local_dir`, so the largest candidate was not
+    the download.
+  - On this machine `scripts/convert_granite_nar_q4.py` had pulled the NAR
+    repo's fp32 weights with `cache_dir=` — 9.4 GB (a 6.5 GB `fp32/editor
+    .onnx_data` and a 2.5 GB `fp32/encoder.onnx_data`) in
+    `models--smcleod--ibm-granite-speech-4.1-2b-nar-onnx`. Measured: 10 077 625 970
+    bytes, exactly the "10078 MB" on screen. That directory never grows during a
+    download, so the percentage was pinned at 100% and the speed tracker never
+    saw a delta and stayed on "measuring speed" forever.
+  - Fixed by introducing `download_destination_dir` as the single source of
+    truth for where a download lands, resolving local ONNX models through the
+    new `webgpu_download_destination` that `download_webgpu_model_snapshot`
+    itself now uses for its `local_dir`. A parametrized test asserts the two
+    agree for every local ONNX model so they cannot drift.
+  - The same defect was latent for faster-whisper: with a configured model dir,
+    a larger copy in the *default* cache would have been reported as progress.
+    The destination is now a single directory rather than a `max()` over roots.
+  - Symlinked snapshot entries are now skipped when summing. `stat()` follows a
+    symlink into the blob that was already counted, which would report 100% at
+    half a download on any platform where the hub links instead of copies.
+  - Measured sizes corrected the estimates: Plus 4100 -> 4065 MB, NAR
+    2500 -> 2522 MB (base 2B's 1843 MB was already exact).
+  - Not a bug: a model that is already complete on disk jumps straight to
+    ~100%. `granite-speech-4.1-2b` and Plus were fully cached from earlier
+    sessions, which is why re-queueing them finished instantly.
