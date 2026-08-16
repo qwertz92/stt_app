@@ -382,6 +382,51 @@ def test_granite_4_1_transcriber_defaults_to_int8_dtype():
     assert "fallback was not available" not in transcriber.runtime_status_text()
 
 
+def test_granite_4_1_plus_prefers_cpu_like_nar():
+    """Plus shares NAR's conformer encoder, whose block-local attention no GPU
+    execution provider here can run. Its WebGPU session still creates fine and
+    only fails at inference, so without this preference every dictation paid a
+    doomed WebGPU load plus a failed attempt before falling back."""
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b-plus",
+        language_mode="en",
+    )
+
+    assert transcriber.device == "cpu"
+    assert "CPU preferred for this model" in transcriber.runtime_status_text()
+
+
+def test_granite_4_1_plus_explicit_gpu_target_bypasses_cpu_preference():
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b-plus",
+        language_mode="en",
+        device="webgpu",
+    )
+
+    assert transcriber.device == "webgpu"
+
+
+def test_granite_4_1_plus_required_files_match_the_published_repo():
+    """The Plus export ships `processor_config.json`; only the NAR export ships a
+    flat `preprocessor_config.json`. Requiring the NAR name made a fully
+    downloaded Plus invisible and unusable."""
+    plus_required = set(local_webgpu_asr._REQUIRED_FILES["granite-speech-4.1-2b-plus"])
+    nar_required = set(local_webgpu_asr._REQUIRED_FILES["granite-speech-4.1-2b-nar"])
+
+    assert "processor_config.json" in plus_required
+    assert "preprocessor_config.json" not in plus_required
+    assert "preprocessor_config.json" in nar_required
+
+    # Every required file must also be covered by the download allow-patterns,
+    # or the download can never satisfy the check it is gated on.
+    allowed = set(local_webgpu_asr._MODEL_LAYOUTS["granite-speech-4.1-2b-plus"]
+                  .allow_patterns)
+    for relative in plus_required:
+        assert relative in allowed or f"{relative.split('/')[0]}/*.onnx" in allowed, (
+            f"{relative} is required but never downloaded"
+        )
+
+
 def test_granite_4_1_nar_explicit_gpu_target_bypasses_cpu_preference():
     transcriber = LocalOnnxWebGpuTranscriber(
         model_size="granite-speech-4.1-2b-nar",

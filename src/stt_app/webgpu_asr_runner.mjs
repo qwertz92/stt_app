@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import { pathToFileURL } from "node:url";
@@ -358,6 +358,19 @@ function splitAudioAtQuietBoundaries(audio, sampleRate, maxChunkSeconds) {
 
 function readJson(relativeRoot, relativePath) {
   return JSON.parse(readFileSync(join(relativeRoot, relativePath), "utf8"));
+}
+
+// The Granite 4.1 raw-graph repos disagree on where the mel parameters live:
+// the NAR export ships a flat `preprocessor_config.json`, the Plus export ships
+// `processor_config.json` with the same values nested under `audio_processor`.
+// Granite41AudioFrontend already accepts either shape, so only the file lookup
+// has to tolerate both. Requiring one name made Plus unloadable.
+function readGranite41AudioConfig(modelPath) {
+  if (existsSync(join(modelPath, "preprocessor_config.json"))) {
+    return readJson(modelPath, "preprocessor_config.json");
+  }
+  const processorConfig = readJson(modelPath, "processor_config.json");
+  return processorConfig?.audio_processor || processorConfig;
 }
 
 function int64Tensor(data, dims) {
@@ -841,7 +854,7 @@ async function loadGranite41ArRuntime(options, device, webgpuAvailable) {
   const graphRoot = precision === "int8" ? "int8" : precision;
   const accelerated = device === "webgpu" || device === "dml";
   const frontend = new Granite41AudioFrontend(
-    readJson(modelPath, "preprocessor_config.json"),
+    readGranite41AudioConfig(modelPath),
   );
   const tokenizer = loadTokenizer(modelPath);
   const encoder = await createOrtSession(modelPath, `${graphRoot}/encoder.onnx`, device);
@@ -1009,7 +1022,7 @@ async function loadGranite41NarRuntime(options, device, webgpuAvailable) {
   const graphRoot = precision === "int8" ? "int8" : precision;
   const accelerated = device === "webgpu" || device === "dml";
   const frontend = new Granite41AudioFrontend(
-    readJson(modelPath, "preprocessor_config.json"),
+    readGranite41AudioConfig(modelPath),
   );
   const tokenizer = loadTokenizer(modelPath);
   const encoder = await createOrtSession(modelPath, `${graphRoot}/encoder.onnx`, device);

@@ -137,7 +137,11 @@ _GRANITE_4_0_Q4_REQUIRED_FILES = (
 _GRANITE_4_1_AR_INT8_REQUIRED_FILES = (
     "chat_template.jinja",
     "granite_export_metadata.json",
-    "preprocessor_config.json",
+    # The Plus export ships `processor_config.json` (mel parameters nested under
+    # `audio_processor`); only the NAR export ships a flat
+    # `preprocessor_config.json`. Requiring the NAR name here made a fully
+    # downloaded Plus invisible to `resolve_cached_webgpu_model_path`.
+    "processor_config.json",
     "tokenizer.json",
     "tokenizer_config.json",
     "int8/encoder.onnx",

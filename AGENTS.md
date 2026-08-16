@@ -745,12 +745,32 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   failure; DirectML cannot execute its 5-D attention MatMuls), so NAR normalizes
   the normal `auto` policy to CPU and avoids retrying known-broken GPU paths on
   every dictation. Explicit WebGPU/DirectML benchmark targets still bypass this
-  preference so a future runtime or graph fix can be detected. Plus retains the generic
-  WebGPU -> DirectML -> CPU auto path. The active device is reported in runtime
-  status, and diagnostics must distinguish this intentional NAR CPU preference
+  preference so a future runtime or graph fix can be detected. **Plus shares that
+  encoder and therefore shares the preference** (`LOCAL_ONNX_AUTO_CPU_MODELS`):
+  its WebGPU session *creates* successfully and only fails at inference on the
+  same `/encoder/layers.0/attn/Einsum` node, so the load-time probe cannot detect
+  it and `_should_restart_after_cpu_fallback` tore the process down after every
+  CPU fallback — measured at 75-110 s per dictation versus 13.6 s on CPU.
+  The active device is reported in runtime
+  status, and diagnostics must distinguish this intentional CPU preference
   (or an explicit CPU policy) from a real failed GPU fallback. These raw paths
   are separate from the Cohere / Granite 4.0 / Granite
   4.1 2B Transformers.js pipeline path.
+  **The two raw-graph repos disagree on the audio-config filename**: the NAR
+  export ships a flat `preprocessor_config.json`, the Plus export ships
+  `processor_config.json` with the same mel parameters nested under
+  `audio_processor`. The Plus required-file list was copied from NAR's and
+  demanded the NAR name, so `resolve_cached_webgpu_model_path` returned `None`
+  for a fully downloaded Plus: it never appeared as cached, offline runs raised
+  "not cached locally", and an online run would re-download and fail the same
+  check forever because the allow-pattern for a nonexistent file matches
+  nothing. `Granite41AudioFrontend` already accepts both shapes
+  (`config?.melspec_kwargs || config`), so the runner resolves the filename via
+  `readGranite41AudioConfig`. When adding a raw-graph model, verify every
+  required file against the actual repo listing rather than copying a sibling's
+  list — a required file that the repo does not ship is unrecoverable at
+  runtime, and a test asserts each required file is covered by the download
+  allow-patterns.
   `keep_onnx_model_loaded` now defaults to **on**: the flag only takes effect
   once such a model is selected, and without it every single dictation pays the
   full Node + ONNX load while faster-whisper and Nemotron stay warm. With it on

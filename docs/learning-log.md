@@ -2449,3 +2449,49 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Not a bug: a model that is already complete on disk jumps straight to
     ~100%. `granite-speech-4.1-2b` and Plus were fully cached from earlier
     sessions, which is why re-queueing them finished instantly.
+
+- **Granite Speech 4.1 2B Plus had never run end-to-end and was unusable:**
+  - `_GRANITE_4_1_AR_INT8_REQUIRED_FILES` was copied from the NAR list and
+    demanded `preprocessor_config.json`. The Plus repo does not ship that file;
+    it ships `processor_config.json` with the same mel parameters nested under
+    `audio_processor`. With 4.0 GB correctly downloaded,
+    `resolve_cached_webgpu_model_path` returned `None`, Plus never appeared in
+    `find_cached_webgpu_models()`, and selecting it raised "is not cached
+    locally. Disable Offline mode or download it first."
+  - The failure was self-perpetuating online: the re-download's allow-pattern
+    for a file that does not exist matches nothing, so the same check fails
+    again and raises "no complete int8 ONNX snapshot was found".
+  - `webgpu_asr_runner.mjs` carried the same assumption independently in
+    `loadGranite41ArRuntime`, so fixing only the Python gate would have moved
+    the failure to an ENOENT in the runner. `Granite41AudioFrontend` already
+    accepted both config shapes, so only the filename lookup needed to tolerate
+    both (`readGranite41AudioConfig`).
+  - After the fix, verified through the real `LocalOnnxWebGpuTranscriber`:
+    loads in 15.6 s and returns the reference transcript verbatim.
+  - Same lesson as the NAR CTC bug: "the model is shipped" is not "the path is
+    verified". Neither variant had a benchmark entry.
+- **Plus paid a doomed WebGPU attempt on every dictation:**
+  - Plus shares NAR's conformer encoder and fails on the identical
+    `/encoder/layers.0/attn/Einsum` node, but only at *inference* — the WebGPU
+    session creates successfully, so the load-time probe cannot reject it.
+    `_should_restart_after_cpu_fallback` then tore the runtime down after each
+    CPU fallback, so the next dictation repeated the whole cycle: measured 75 s
+    (EN) and 110 s (DE) wall clock versus 13.6 s for the same clip under an
+    explicit CPU policy. Plus joins NAR in `LOCAL_ONNX_AUTO_CPU_MODELS`.
+- **Measured model comparison (Ryzen 5 7600X + Arc A750, 16.9 s EN / 13.4 s DE):**
+
+  | model | device | RTF | English | German |
+  | --- | --- | --- | --- | --- |
+  | `granite-speech-4.1-2b` (q4) | WebGPU | 0.28 | verbatim | best |
+  | `granite-speech-4.1-2b-nar` (INT8) | CPU | 0.49 | verbatim | degraded |
+  | `granite-speech-4.1-2b-plus` (INT8) | CPU | 0.81 | verbatim | mid |
+
+  The base 2B q4 is both the fastest and the most accurate because it is the
+  only one of the three that reaches the GPU; precision is not the lever here.
+  NAR corrupts ordinary German words (`geschrenen`, `auchmllaute`, `korkt`)
+  that the other two get right.
+- **`samples/benchmark_sample.wav` cannot validate transcripts:** it is 2.09 s
+  of synthetic sine tones from `scripts/generate_sample_audio.py`, and the
+  working base 2B "transcribes" it as *"the city is the capital of the province
+  of the same name."* Benchmark timings from it are meaningful; its stored
+  transcripts are pure hallucination and must never be read as accuracy.

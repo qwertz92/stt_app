@@ -211,7 +211,17 @@ LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
 
 # Models whose known-fastest compatible path is CPU. Explicit non-auto benchmark
 # targets still bypass this policy so future runtime fixes can be re-evaluated.
-LOCAL_ONNX_AUTO_CPU_MODELS = ("granite-speech-4.1-2b-nar",)
+# Both raw-graph Granite 4.1 models share the conformer encoder whose block-local
+# attention no GPU execution provider here can run (WebGPU fails the `Einsum`
+# shader, DirectML cannot execute the 5-D attention MatMuls). Their WebGPU
+# sessions still *create* successfully and only fail at inference, so the
+# load-time probe cannot detect it: without this policy every dictation paid a
+# full WebGPU load plus a doomed attempt before falling back, measured at 75-110 s
+# versus 13.6 s on CPU for the same clip.
+LOCAL_ONNX_AUTO_CPU_MODELS = (
+    "granite-speech-4.1-2b-nar",
+    "granite-speech-4.1-2b-plus",
+)
 
 LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
     "auto": ("auto",),
