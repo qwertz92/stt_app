@@ -1064,6 +1064,28 @@ def test_stream_runtime_failure_flushes_deferred_background_insert(
     _ = app
 
 
+def test_stream_runtime_failure_keeps_the_partial_transcript(monkeypatch, tmp_path):
+    """An explicit abort deliberately keeps what was already transcribed. A
+    dying stream runtime must too: otherwise the text exists only as the part
+    already pasted into the target window, with nothing in history and nothing
+    for the overlay Copy action."""
+    controller, app, overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    controller._stream_text_state.live_text = "half a sentence already spoken"
+
+    controller._on_stream_runtime_failed("stream died")
+
+    assert [e.text for e in history.load()] == ["half a sentence already spoken"]
+    assert controller._last_transcript == "half a sentence already spoken"
+    assert overlay.states[-1][0] == "Error"
+    controller.shutdown()
+    _ = app
+
+
 def test_background_failure_keeps_live_recording_session(monkeypatch, tmp_path):
     controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"

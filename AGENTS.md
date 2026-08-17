@@ -461,7 +461,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   saves the best-known live transcript to history, keeps it as the last
   transcript for the overlay Copy action, shows it in the abort message, and
   reveals the overlay. An aborted stream must never lose already-transcribed
-  text from UI/history.
+  text from UI/history. **A dying stream runtime is the same case**:
+  `_on_transcription_failed` reads `_current_streaming_partial_text()` (the
+  single shared reader, so the two paths cannot drift on which field wins)
+  *before* `_reset_streaming_state()` wipes it, saves it to history with the
+  retained audio path, takes it as `_last_transcript`, and offers it as the
+  Error state's `copy_text`. Before this, a dropped WebSocket left minutes of
+  dictation only in the target window.
+- **Shutdown aborts a live stream, never stops it**: `shutdown()` is wired to
+  `app.aboutToQuit` and therefore runs on the Qt main thread, while
+  `stop_stream()` joins the stream worker with *no* timeout through a final
+  transcription (the whole recording under `streaming_full_final_transcript`).
+  Its result is discarded there anyway, so quitting mid-dictation only bought a
+  frozen UI. Every teardown path now prefers `abort_stream()`.
+- **A delivered result uses its own job's mode**: `_on_transcription_ready`
+  reads `job.mode`, not `_active_session_mode`. A stream runtime failure
+  delivered while a finalize is in flight resets the session mode to `batch`
+  without retiring that job, and a batch-mode delivery pastes the entire
+  transcript on top of the text streaming already inserted word by word.
 - **Custom vocabulary** (`custom_vocabulary`, General tab): user terms parsed
   by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
   case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
@@ -833,6 +850,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   select/delete previously inserted text.
   Local rolling-window partials may be merged by safe word overlap, but only to
   append new text.
+  **A rolling window must never replace the accumulated transcript.**
+  `append_only_stream_partial_candidate` falls back to returning the newer text
+  when it cannot align an overlap, which is correct for a provider's full-text
+  revision and catastrophic for a trailing-audio window, so the local
+  faster-whisper paths use `merge_rolling_window_transcript` instead. Two
+  concrete losses it closes: an empty window (trailing silence, or one that
+  simply decodes to nothing) wiped everything and produced an *empty final
+  transcript* for a whole dictation at `_stream_worker`'s fast finalization;
+  and because every candidate alignment is anchored at the window's first word,
+  a mistranscription of the word the window boundary cut in half defeated the
+  overlap search and discarded the entire accumulated text.
+  **`StreamingTextState` never lets a candidate drop `committed_text`.**
+  Committed text is already pasted into the user's document and cannot be
+  unpasted, so a contradicting candidate describes text that *follows* it and
+  is joined onto it. This is not cosmetic: once the committed prefix is gone,
+  `compute_stream_locked_prefix` can never advance again, so live insertion
+  stays frozen for the rest of the session while the overlay still reports
+  `Done`.
 - **Streaming finalization**: the full re-transcription of the recording when
   local faster-whisper streaming stops is opt-in via
   `streaming_full_final_transcript` (default off). When off, finalization

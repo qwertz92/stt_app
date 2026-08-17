@@ -4,6 +4,7 @@ from stt_app.streaming_text import (
     append_only_stream_extension_tail,
     append_only_stream_finalize_tail,
     append_only_stream_partial_candidate,
+    merge_rolling_window_transcript,
     normalize_stream_text,
     stream_insertion_text,
 )
@@ -46,6 +47,65 @@ def test_append_only_partial_candidate_keeps_revisions_revisable():
     assert append_only_stream_partial_candidate("hello world", "world again") == (
         "world again"
     )
+
+
+def test_rolling_window_merge_keeps_text_when_a_window_decodes_to_nothing():
+    """An empty trailing window is silence, not a correction. Replacing the
+    accumulated text with it produced an empty final transcript for a whole
+    dictation whenever the last window decoded to nothing."""
+    assert (
+        merge_rolling_window_transcript("hello world this is a long dictation", "")
+        == "hello world this is a long dictation"
+    )
+    assert merge_rolling_window_transcript("", "starting up") == "starting up"
+
+
+def test_rolling_window_merge_appends_when_the_boundary_word_is_wrong():
+    """Every candidate alignment is anchored at the window's first word, so a
+    mistranscribed boundary fragment defeats the overlap search. Appending may
+    duplicate a word; replacing discarded everything spoken so far."""
+    merged = merge_rolling_window_transcript(
+        "this is a long dictation",
+        "wrong dictation about streaming text",
+    )
+
+    assert merged.startswith("this is a long dictation")
+    assert "about streaming text" in merged
+
+
+def test_rolling_window_merge_still_stitches_a_normal_overlap():
+    assert (
+        merge_rolling_window_transcript("hello world this is", "world this is working")
+        == "hello world this is working"
+    )
+
+
+def test_streaming_state_never_drops_already_inserted_text():
+    """Once the candidate loses the committed prefix, compute_stream_locked_prefix
+    can never advance again, so live insertion freezes for the rest of the
+    session and the saved transcript loses its beginning."""
+    state = StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+    state.apply_partial_append_only("hello world this is")
+    state.apply_partial_append_only("world this is working now")
+    state.apply_partial_append_only("this is working now today")
+    committed_before = state.committed_text
+    assert committed_before == "hello world this is"
+
+    # A window whose boundary word came back wrong: no usable overlap at all.
+    state.apply_partial_append_only("garbled entirely different words here")
+
+    assert state.live_text.startswith(committed_before)
+    assert state.committed_text == committed_before
+
+    # Insertion must still be able to advance afterwards.
+    resumed = state.apply_partial_append_only(
+        f"{state.live_text} and it continues from here"
+    )
+    assert resumed.insertion.strip()
+    assert state.committed_text.startswith(committed_before)
 
 
 def test_append_only_finalize_uses_only_safe_extensions():

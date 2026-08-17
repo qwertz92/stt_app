@@ -32,7 +32,7 @@ from ..config import (
     parse_custom_vocabulary,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ..streaming_text import append_only_stream_partial_candidate
+from ..streaming_text import merge_rolling_window_transcript
 from .base import (
     AudioInput,
     ITranscriber,
@@ -756,7 +756,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                     max_window_seconds=self.stream_partial_window_s,
                     session=session,
                 )
-                final_text = append_only_stream_partial_candidate(
+                final_text = merge_rolling_window_transcript(
                     session.result.merged_text,
                     tail_text,
                 )
@@ -805,7 +805,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         if session.abort_requested.is_set():
             return
-        session.result.merged_text = append_only_stream_partial_candidate(
+        session.result.merged_text = merge_rolling_window_transcript(
             session.result.merged_text,
             text,
         )

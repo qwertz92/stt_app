@@ -2495,3 +2495,46 @@ Agents and developers: use this as a knowledge base for past issues and solution
   working base 2B "transcribes" it as *"the city is the capital of the province
   of the same name."* Benchmark timings from it are meaningful; its stored
   transcripts are pure hallucination and must never be read as accuracy.
+- **Streaming review: four text-loss and lifecycle defects.**
+  - *An empty rolling window wiped the whole transcript.*
+    `append_only_stream_partial_candidate("...", "")` returns `""`. At
+    `_stream_worker`'s fast finalization the trailing window is merged into the
+    accumulated text, so a last window that decoded to nothing (trailing
+    silence) produced an **empty final transcript for the entire dictation**.
+    The same call during partials wiped `merged_text` mid-session.
+  - *A mistranscribed window-boundary word discarded everything before it.*
+    `_suffix_prefix_overlap_len` anchors every candidate alignment at the
+    window's first word, and the 8 s window boundary routinely cuts a word in
+    half. When that fragment came back wrong no alignment matched, the fallback
+    returned the window alone, and the accumulated text was gone.
+  - Both are fixed by `merge_rolling_window_transcript`, used only by the
+    rolling-window paths: an unalignable window is appended, never substituted,
+    and an empty one keeps the accumulated text. The revision semantics of
+    `append_only_stream_partial_candidate` are unchanged for providers that
+    genuinely send full-text revisions, and its existing tests still pin them.
+  - *Losing the committed prefix froze insertion permanently.* Once the
+    candidate no longer contained `committed_text`,
+    `compute_stream_locked_prefix` returned the committed text unchanged for
+    every subsequent partial, so nothing more was ever inserted while the
+    overlay still finished with `Done`. `StreamingTextState` now joins a
+    contradicting candidate onto the committed text instead.
+  - *A dying stream runtime discarded the partial transcript*, though
+    `_abort_streaming_session` deliberately keeps it. Both paths now read
+    `_current_streaming_partial_text()`.
+  - *Shutdown froze the UI mid-dictation*: `shutdown()` runs on the Qt thread
+    and called `stop_stream()`, which joins the worker with no timeout through
+    a final transcription whose result it then throws away. It aborts now.
+  - *A result was delivered under the wrong mode.* `_on_transcription_ready`
+    read `_active_session_mode`, which a stream runtime failure resets to
+    `batch` without retiring the in-flight finalize job; the batch delivery
+    then pasted the whole transcript again on top of the streamed text. It
+    reads `job.mode`.
+  - Reviewed and found clean (recorded so it is not re-reviewed): the
+    PortAudio-callback non-blocking invariant for all four providers,
+    generation scoping, Nemotron abort/close lifecycle, the Deepgram stop
+    sequence, AssemblyAI `turn_order` keying, and the append-only guarantee.
+  - Known and deliberately not changed: live partials run the full blocking
+    clipboard paste on the Qt thread, so a modifier key held longer than 1.5 s
+    aborts the session instead of skipping one delta; remote stream start
+    blocks the Qt thread on the network handshake; and a stream finalize queues
+    behind unrelated batch jobs on the single-worker executor.

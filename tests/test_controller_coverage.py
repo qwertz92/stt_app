@@ -43,13 +43,18 @@ def test_shutdown_stops_active_audio_capture():
     _ = app
 
 
-def test_shutdown_stops_active_stream_transcriber():
+def test_shutdown_aborts_active_stream_transcriber_without_waiting_for_finalize():
+    """Shutdown runs on the Qt main thread, and stop_stream() joins the worker
+    with no timeout while it runs the final transcription. Quitting mid
+    dictation froze the UI for the length of that pass, and the result is
+    discarded here anyway."""
     controller, app = _make_controller()
     transcriber = FakeStreamingTranscriber()
     controller._active_stream_transcriber = transcriber
     controller._active_stream_settings = AppSettings()
     controller.shutdown()
-    assert transcriber.stopped is True
+    assert transcriber.aborted is True
+    assert transcriber.stopped is False
     assert controller._active_stream_transcriber is None
     _ = app
 

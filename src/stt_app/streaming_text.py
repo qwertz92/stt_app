@@ -36,6 +36,14 @@ class StreamingTextState:
         )
         previous_partial = self.last_partial_text
         previous_committed = self.committed_text
+        if not stream_text_extends(previous_committed, candidate_text):
+            # Committed text is already pasted into the user's document and
+            # cannot be unpasted, so a candidate that contradicts it describes
+            # text that *follows* it. Letting the candidate drop the committed
+            # prefix is unrecoverable: compute_stream_locked_prefix can then
+            # never advance again, so live insertion stays frozen for the rest
+            # of the session and the saved transcript loses its beginning.
+            candidate_text = stream_join_text(previous_committed, candidate_text)
         next_committed = compute_stream_locked_prefix(
             previous_committed,
             previous_partial,
@@ -125,6 +133,50 @@ def append_only_stream_partial_candidate(
         merged = previous_words + current_words[overlap:]
         return " ".join(merged).strip()
     return current
+
+
+def stream_text_extends(base: str, candidate: str) -> bool:
+    """Report whether `candidate` still contains `base` as a word prefix."""
+    base_words = split_stream_words(base)
+    if not base_words:
+        return True
+    candidate_words = split_stream_words(candidate)
+    return common_prefix_len(base_words, candidate_words) == len(base_words)
+
+
+def merge_rolling_window_transcript(
+    previous_text: str,
+    current_text: str,
+    *,
+    min_overlap_words: int = 2,
+) -> str:
+    """Merge a trailing-audio-window transcript into the accumulated text.
+
+    `current_text` describes only the last few seconds of audio, never the whole
+    utterance, so it must never be allowed to *replace* the accumulated text the
+    way a provider's full-text revision may:
+
+    - An empty window (trailing silence, or a window that simply decodes to
+      nothing) would otherwise wipe everything spoken so far — at finalization
+      that produced an empty final transcript for an entire dictation.
+    - The window boundary regularly cuts a word in half, and a mistranscription
+      of that fragment defeats the overlap search, because every candidate
+      alignment is anchored at the window's first word. Appending can duplicate
+      a word; replacing discards the whole transcript.
+    """
+    previous = normalize_stream_text(previous_text)
+    current = normalize_stream_text(current_text)
+    if not previous or not current:
+        return current or previous
+
+    merged = append_only_stream_partial_candidate(
+        previous,
+        current,
+        min_overlap_words=min_overlap_words,
+    )
+    if stream_text_extends(previous, merged):
+        return merged
+    return stream_join_text(previous, current)
 
 
 def compute_stream_locked_prefix(

@@ -397,7 +397,18 @@ class DictationController(QtCore.QObject):
         self._active_stream_runtime_lease = None
         try:
             if active_stream is not None:
-                active_stream.stop_stream()
+                # Abort, never stop: shutdown runs on the Qt main thread (wired
+                # to app.aboutToQuit), and stop_stream() joins the worker with no
+                # timeout while it runs the final transcription — the whole
+                # recording when stream_final_full_pass is on. Quitting mid
+                # dictation froze the UI for as long as that pass took. The
+                # result is discarded here either way, so there is nothing to
+                # gain by waiting for it. Every other teardown path already
+                # prefers abort_stream().
+                if hasattr(active_stream, "abort_stream"):
+                    active_stream.abort_stream()
+                else:
+                    active_stream.stop_stream()
         except Exception:
             pass
         finally:
@@ -991,7 +1002,7 @@ class DictationController(QtCore.QObject):
         # would then submit those late bytes for transcription and show an Error
         # at the same time. Preserve any late bytes for Retry, but never submit
         # them automatically from the timeout path.
-        wav_bytes = self._stop_active_capture(persist_audio=False)
+        wav_bytes, _ = self._stop_active_capture(persist_audio=False)
         self._last_failed_wav_bytes = bytes(wav_bytes)
         if wav_bytes and self._persist_last_recording_audio(wav_bytes):
             try:
@@ -2730,12 +2741,24 @@ class DictationController(QtCore.QObject):
         message = str(error_text or "Streaming failed.").strip()
         self.stream_runtime_failed.emit(message or "Streaming failed.")
 
-    def _stop_active_capture(self, *, persist_audio: bool) -> bytes:
+    def _current_streaming_partial_text(self) -> str:
+        """Best-known transcript of the live streaming session.
+
+        Shared by the abort and runtime-failure paths so the two cannot drift on
+        which field wins; both must keep what was already transcribed.
+        """
+        return normalize_stream_text(
+            self._stream_text_state.live_text
+            or self._stream_text_state.last_partial_text
+        )
+
+    def _stop_active_capture(self, *, persist_audio: bool) -> tuple[bytes, str]:
+        """Stop the active capture and return its audio plus the retained path."""
         capture = self._audio_capture
         self._audio_capture = None
         self._cancel_audio_callback_watchdog(capture)
         if capture is None:
-            return b""
+            return b"", ""
 
         wav_bytes = b""
         try:
@@ -2743,13 +2766,17 @@ class DictationController(QtCore.QObject):
         except Exception:
             self._logger.exception("Failed to stop active audio capture")
 
-        self._save_recording_artifacts(capture, wav_bytes)
+        source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
         if persist_audio and wav_bytes:
             self._persist_last_recording_audio(wav_bytes)
-        return wav_bytes
+        return wav_bytes, source_audio_path
 
-    def _teardown_active_stream_runtime(self, *, preserve_audio: bool) -> bytes:
-        wav_bytes = self._stop_active_capture(persist_audio=preserve_audio)
+    def _teardown_active_stream_runtime(
+        self, *, preserve_audio: bool
+    ) -> tuple[bytes, str]:
+        wav_bytes, source_audio_path = self._stop_active_capture(
+            persist_audio=preserve_audio
+        )
 
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
@@ -2767,7 +2794,7 @@ class DictationController(QtCore.QObject):
             if runtime_lease is not None:
                 runtime_lease.release()
 
-        return wav_bytes
+        return wav_bytes, source_audio_path
 
     def _on_stream_audio_chunk(self, chunk: bytes) -> None:
         """Called from the PortAudio callback thread — must be lightweight.
@@ -2914,7 +2941,11 @@ class DictationController(QtCore.QObject):
             target_handle, target_signature
         )
 
-        session_mode = self._active_session_mode
+        # Prefer the job's own mode. A stream runtime failure delivered while a
+        # finalize was already in flight resets _active_session_mode to "batch"
+        # without retiring that job, and a batch-mode delivery pastes the whole
+        # transcript on top of the text streaming already inserted word by word.
+        session_mode = job.mode if job is not None else self._active_session_mode
         self._focus_poll_timer.stop()
         self._streaming_recording = False
         stream_settings = self._active_stream_settings
@@ -3364,8 +3395,19 @@ class DictationController(QtCore.QObject):
             or self._active_stream_transcriber is not None
             or self._streaming_recording
         )
+        # A dying stream runtime must keep what was already transcribed, exactly
+        # like an explicit abort does: without this the text existed only as the
+        # part already pasted into the target window, with nothing in history and
+        # nothing for the overlay Copy action. Read before the reset below wipes
+        # the streaming text state.
+        partial_transcript = ""
+        partial_source_audio_path = ""
+        partial_settings = self._active_stream_settings or replace(self._settings)
         if runtime_stream_failed:
-            wav_bytes = self._teardown_active_stream_runtime(preserve_audio=True)
+            partial_transcript = self._current_streaming_partial_text()
+            wav_bytes, partial_source_audio_path = (
+                self._teardown_active_stream_runtime(preserve_audio=True)
+            )
             if wav_bytes:
                 self._last_failed_wav_bytes = bytes(wav_bytes)
                 preserved_audio = True
@@ -3374,6 +3416,16 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._last_transcribe_settings = None
         self._reset_streaming_state()
+        kept_detail = ""
+        if partial_transcript.strip():
+            self._append_transcript_history(
+                partial_transcript,
+                partial_settings,
+                "streaming",
+                source_audio_path=partial_source_audio_path,
+            )
+            self._last_transcript = partial_transcript
+            kept_detail = " The text transcribed so far was saved to history."
         # The failed session no longer blocks queued inserts; flush after the
         # stream/capture teardown above so a deferred result is not left
         # pending behind a capture that was just removed.
@@ -3384,7 +3436,9 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to persist last recording failure state")
         self._overlay.set_state(
             "Error",
-            f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}",
+            f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}"
+            f"{kept_detail}",
+            copy_text=partial_transcript or None,
         )
         self._reveal_overlay_result(is_error=True)
 
@@ -3497,10 +3551,7 @@ class DictationController(QtCore.QObject):
         # from the UI and history (only the text pasted so far survived in
         # the target window). A finished transcription is never discarded —
         # the same applies to an aborted one's partial text.
-        partial_transcript = normalize_stream_text(
-            self._stream_text_state.live_text
-            or self._stream_text_state.last_partial_text
-        )
+        partial_transcript = self._current_streaming_partial_text()
         partial_settings = self._active_stream_settings or replace(self._settings)
 
         self._focus_poll_timer.stop()
