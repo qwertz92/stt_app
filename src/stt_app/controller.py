@@ -2741,6 +2741,10 @@ class DictationController(QtCore.QObject):
         message = str(error_text or "Streaming failed.").strip()
         self.stream_runtime_failed.emit(message or "Streaming failed.")
 
+    def _has_pending_streaming_job(self) -> bool:
+        """Whether a streaming finalize is still in flight and will deliver text."""
+        return any(job.mode == "streaming" for job in self._jobs.values())
+
     def _current_streaming_partial_text(self) -> str:
         """Best-known transcript of the live streaming session.
 
@@ -2941,11 +2945,7 @@ class DictationController(QtCore.QObject):
             target_handle, target_signature
         )
 
-        # Prefer the job's own mode. A stream runtime failure delivered while a
-        # finalize was already in flight resets _active_session_mode to "batch"
-        # without retiring that job, and a batch-mode delivery pastes the whole
-        # transcript on top of the text streaming already inserted word by word.
-        session_mode = job.mode if job is not None else self._active_session_mode
+        session_mode = self._active_session_mode
         self._focus_poll_timer.stop()
         self._streaming_recording = False
         stream_settings = self._active_stream_settings
@@ -3403,7 +3403,12 @@ class DictationController(QtCore.QObject):
         partial_transcript = ""
         partial_source_audio_path = ""
         partial_settings = self._active_stream_settings or replace(self._settings)
-        if runtime_stream_failed:
+        if runtime_stream_failed and not self._has_pending_streaming_job():
+            # A finalize already in flight will deliver this session's text
+            # itself; saving the partial too would write two history entries
+            # for one dictation. Providers do reach that state: AssemblyAI and
+            # Deepgram both record a socket error and still return the
+            # accumulated text from stop_stream().
             partial_transcript = self._current_streaming_partial_text()
             wav_bytes, partial_source_audio_path = (
                 self._teardown_active_stream_runtime(preserve_audio=True)

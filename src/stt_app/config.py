@@ -267,7 +267,7 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "small": 484,
     "medium": 1_400,
     "large-v3": 3_000,
-    "large-v3-turbo": 809,
+    "large-v3-turbo": 1_622,
     "distil-large-v3.5": 756,
     # Selectable local ONNX downloads. Cohere, Granite 4.0, and Granite 4.1 2B
     # are q4 Transformers.js packages; Granite 4.1 Plus/NAR use the smallest
@@ -276,7 +276,7 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "granite-4.0-1b-speech": 1_843,
     "granite-speech-4.1-2b": 1_843,
     "granite-speech-4.1-2b-plus": 4_065,
-    "granite-speech-4.1-2b-nar": 2_522,
+    "granite-speech-4.1-2b-nar": 2_490,
     NEMOTRON_MODEL_SIZE: 793,
 }
 

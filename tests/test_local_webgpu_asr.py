@@ -9,6 +9,7 @@ import sys
 import time
 import wave
 from collections import deque
+from fnmatch import fnmatch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -417,14 +418,19 @@ def test_granite_4_1_plus_required_files_match_the_published_repo():
     assert "preprocessor_config.json" not in plus_required
     assert "preprocessor_config.json" in nar_required
 
-    # Every required file must also be covered by the download allow-patterns,
-    # or the download can never satisfy the check it is gated on.
-    allowed = set(local_webgpu_asr._MODEL_LAYOUTS["granite-speech-4.1-2b-plus"]
-                  .allow_patterns)
-    for relative in plus_required:
-        assert relative in allowed or f"{relative.split('/')[0]}/*.onnx" in allowed, (
-            f"{relative} is required but never downloaded"
-        )
+
+@pytest.mark.parametrize("model_name", LOCAL_ONNX_MODEL_SIZES)
+def test_every_required_file_is_covered_by_the_download_allow_patterns(model_name):
+    """A required file the download never fetches is unrecoverable at runtime:
+    the snapshot check fails, an online retry re-downloads, the allow-pattern
+    for a nonexistent file matches nothing, and the same check fails again.
+    This is what made Granite 4.1 Plus permanently unusable."""
+    layout = local_webgpu_asr._MODEL_LAYOUTS[model_name]
+
+    for relative in layout.required_files:
+        assert any(
+            fnmatch(relative, pattern) for pattern in layout.allow_patterns
+        ), f"{model_name}: '{relative}' is required but no allow-pattern fetches it"
 
 
 def test_granite_4_1_nar_explicit_gpu_target_bypasses_cpu_preference():

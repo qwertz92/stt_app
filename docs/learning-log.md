@@ -2538,3 +2538,51 @@ Agents and developers: use this as a knowledge base for past issues and solution
     aborts the session instead of skipping one delta; remote stream start
     blocks the Qt thread on the network handshake; and a stream finalize queues
     behind unrelated batch jobs on the single-worker executor.
+- **Adversarial review of the same day's fixes — three of them were wrong.**
+  Two Opus reviewers were pointed at the three commits with instructions to
+  break them. Both produced executable proof; the streaming commit did not
+  survive and was corrected before pushing.
+  - *The rolling-window append fallback was a worse bug than the one it fixed.*
+    A silent microphone makes faster-whisper emit a fresh hallucination on
+    every 0.35 s partial, and none of them can ever align, so appending grew
+    the transcript without bound — measured 79 words after 10 s of silence,
+    896 after 120 s, for 8 words of real speech — and finalization *pasted*
+    330 of them into the user's document. The old code lost the transcript;
+    this typed junk into whatever had focus. Reverted to replacing.
+  - What survives, and is strictly better than the baseline: an empty window no
+    longer wipes anything, and the overlap search now re-anchors up to three
+    words into the window. The reviewer's own 20-word rolling simulation with a
+    garbled boundary went from 31 words (15 duplicated) to the exact 20-word
+    ground truth.
+  - *The committed-prefix join re-pasted whole dictations.* It does unfreeze
+    insertion, but an AssemblyAI turn revision inside the already-pasted region
+    made it re-emit everything: 86 pasted words for a 48-word truth, scaling
+    with session length. Reverted; the freeze is documented as the lesser evil
+    and the real fix (gate windows on audio energy) is recorded in AGENTS.md.
+  - *Reading `job.mode` instead of `_active_session_mode` was inert.* Every
+    writer of `_active_session_mode = "batch"` also resets the streaming text
+    state, so `committed_text` is already empty and the delivery is identical;
+    it only relabelled history and suppressed the completion beep. Reverted,
+    along with the AGENTS.md bullet that asserted it prevented a double paste.
+  - *Partial preservation could write two history entries.* AssemblyAI and
+    Deepgram record a socket error and still return text from `stop_stream()`,
+    so the failure path and the finalize both stored the dictation. Guarded
+    with `_has_pending_streaming_job()`.
+  - *Measuring only the download destination regressed the user's own model.*
+    Cohere is cached in the legacy `models--<repo>` layout, which is still
+    resolved and loaded, so its preload bar dropped from 100% to 0%.
+    `estimate_cached_model_bytes` now falls back to the largest existing layout
+    while the destination does not exist yet.
+  - Estimates corrected again from Hub-authoritative listings rather than the
+    local directory: NAR 2522 -> 2490 MB (the measured dir held a 31.5 MB
+    orphan `.incomplete`), and the pre-existing `large-v3-turbo` 809 -> 1622 MB,
+    whose bar had been reading 100% at half a download.
+  - The new allow-pattern guard was vacuous — `int8/encoder.onnx_data` was
+    being checked against `int8/*.onnx`, so it passed even with
+    `int8/*.onnx_data` removed. It now uses `fnmatch` over every layout, which
+    is the check that would have caught the original Plus bug.
+  - The Settings note still said "NAR uses CPU by default" for Plus; the
+    transcriber's own status text was already model-agnostic.
+  - Lesson: a fix in a merge/reconciliation path needs a simulation over long
+    realistic input, not just unit assertions on two-line examples. Every
+    defect above passed the full test suite.

@@ -785,7 +785,7 @@ class _GeneralTabMixin:
         if engine == "local" and model_name in LOCAL_ONNX_AUTO_CPU_MODELS:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)
             self.local_model_runtime_warning_label.setText(
-                "Batch mode only. NAR uses CPU by default because its encoder "
+                "Batch mode only. This model uses CPU by default because its encoder "
                 "is not currently compatible with WebGPU or DirectML."
             )
             return

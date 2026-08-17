@@ -474,11 +474,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcription (the whole recording under `streaming_full_final_transcript`).
   Its result is discarded there anyway, so quitting mid-dictation only bought a
   frozen UI. Every teardown path now prefers `abort_stream()`.
-- **A delivered result uses its own job's mode**: `_on_transcription_ready`
-  reads `job.mode`, not `_active_session_mode`. A stream runtime failure
-  delivered while a finalize is in flight resets the session mode to `batch`
-  without retiring that job, and a batch-mode delivery pastes the entire
-  transcript on top of the text streaming already inserted word by word.
+  The preservation is skipped while `_has_pending_streaming_job()`: a finalize
+  already in flight delivers that session's text itself, and both AssemblyAI
+  and Deepgram record a socket error *and* still return accumulated text from
+  `stop_stream()`, so saving the partial too wrote two history entries for one
+  dictation. Reading `job.mode` instead of `_active_session_mode` in
+  `_on_transcription_ready` was tried and reverted: every writer of
+  `_active_session_mode = "batch"` also resets the streaming text state, so
+  `committed_text` is already empty by then and the delivery is identical
+  either way — it only relabelled history and suppressed the completion beep.
 - **Custom vocabulary** (`custom_vocabulary`, General tab): user terms parsed
   by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
   case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
@@ -850,24 +854,34 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   select/delete previously inserted text.
   Local rolling-window partials may be merged by safe word overlap, but only to
   append new text.
-  **A rolling window must never replace the accumulated transcript.**
-  `append_only_stream_partial_candidate` falls back to returning the newer text
-  when it cannot align an overlap, which is correct for a provider's full-text
-  revision and catastrophic for a trailing-audio window, so the local
-  faster-whisper paths use `merge_rolling_window_transcript` instead. Two
-  concrete losses it closes: an empty window (trailing silence, or one that
-  simply decodes to nothing) wiped everything and produced an *empty final
-  transcript* for a whole dictation at `_stream_worker`'s fast finalization;
-  and because every candidate alignment is anchored at the window's first word,
-  a mistranscription of the word the window boundary cut in half defeated the
-  overlap search and discarded the entire accumulated text.
-  **`StreamingTextState` never lets a candidate drop `committed_text`.**
-  Committed text is already pasted into the user's document and cannot be
-  unpasted, so a contradicting candidate describes text that *follows* it and
-  is joined onto it. This is not cosmetic: once the committed prefix is gone,
-  `compute_stream_locked_prefix` can never advance again, so live insertion
-  stays frozen for the rest of the session while the overlay still reports
-  `Done`.
+  The local faster-whisper paths merge windows with
+  `merge_rolling_window_transcript`, not `append_only_stream_partial_candidate`,
+  because a trailing-audio window is not a full-text revision. It closes two
+  losses: an empty window (trailing silence, or one that simply decodes to
+  nothing) wiped everything and produced an *empty final transcript* for a
+  whole dictation at `_stream_worker`'s fast finalization; and because
+  `_suffix_prefix_overlap_len` anchors every candidate alignment at the
+  window's *first* word — the word the 8 s boundary cut in half — one
+  mistranscribed fragment defeated the search, so the merge now re-anchors up
+  to `_WINDOW_BOUNDARY_SKIP_WORDS` words in.
+  **A window that still cannot be aligned replaces the accumulated text, and
+  must not append.** Appending was tried and reverted: a silent microphone
+  makes the model emit a fresh hallucination on every 0.35 s partial, none of
+  which can ever align, so the accumulated text grew without bound (measured:
+  896 words for 8 words of speech after two minutes of silence) and
+  finalization *pasted* it — turning a lost transcript into hundreds of junk
+  words typed into the user's document. Any future fix here has to gate the
+  window on audio energy (`vad.measure_peak_windowed_rms` plus
+  `silence_gate_threshold`, which exists precisely because "speech models
+  hallucinate words from silence") rather than make the merge more permissive.
+  **`StreamingTextState` deliberately does not join a candidate that has lost
+  the `committed_text` prefix onto it.** That would unfreeze insertion — once
+  the prefix is gone `compute_stream_locked_prefix` can never advance again, so
+  live insertion stays frozen for the rest of the session while the overlay
+  still reports `Done` — but a provider revising a word inside the
+  already-pasted region then re-emits the whole dictation (measured: 86 pasted
+  words for a 48-word truth on an AssemblyAI turn revision, scaling with
+  session length). Pasting the transcript twice is worse than stopping early.
 - **Streaming finalization**: the full re-transcription of the recording when
   local faster-whisper streaming stops is opt-in via
   `streaming_full_final_transcript` (default off). When off, finalization

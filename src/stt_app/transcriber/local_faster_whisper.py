@@ -157,9 +157,25 @@ def download_destination_dir(model_name: str, model_dir: str = "") -> Path | Non
 
 
 def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
-    """Estimate the current on-disk bytes of a model's download destination."""
+    """Estimate the current on-disk bytes of a model's download destination.
+
+    Until that destination exists, fall back to the largest *existing* cache
+    layout for the model. A local ONNX model cached in the legacy
+    `models--<repo>` layout is still resolved and loaded from there, so
+    measuring only the flat destination reported 0 bytes and showed a 0%
+    "Downloading" bar for a model that is fully present. Once the destination
+    exists it is the only thing measured, so a download in progress is never
+    confused with a copy sitting somewhere else.
+    """
     root = download_destination_dir(model_name, model_dir)
-    if root is None or not root.is_dir():
+    if root is not None and root.is_dir():
+        return _directory_size_bytes(root)
+    candidates = _model_cache_dirs(model_name, model_dir)
+    return max((_directory_size_bytes(path) for path in candidates), default=0)
+
+
+def _directory_size_bytes(root: Path) -> int:
+    if not root.is_dir():
         return 0
     total = 0
     try:

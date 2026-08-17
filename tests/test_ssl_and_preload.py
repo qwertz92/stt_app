@@ -455,6 +455,37 @@ class TestEstimateCachedModelBytes:
             size = estimate_cached_model_bytes(model_name)
         assert size == 700
 
+    def test_falls_back_to_a_legacy_layout_when_the_destination_is_absent(
+        self, tmp_path
+    ):
+        """A local ONNX model cached in the old `models--<repo>` layout is still
+        resolved and loaded from there. Measuring only the flat destination
+        reported 0 bytes and showed a 0% "Downloading" bar for a model that is
+        fully present."""
+        model_name = "cohere-transcribe-03-2026"
+        repo_id = MODEL_REPO_MAP[model_name]
+        legacy = (
+            tmp_path
+            / f"models--{repo_id.replace('/', '--')}"
+            / "snapshots"
+            / "abc123"
+        )
+        legacy.mkdir(parents=True)
+        (legacy / "encoder_model_q4.onnx_data").write_bytes(b"\x00" * 4_096)
+        assert not (tmp_path / repo_id.rsplit("/", 1)[-1]).exists()
+
+        with (
+            patch(
+                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
+        ):
+            assert estimate_cached_model_bytes(model_name) == 4_096
+
     def test_does_not_double_count_snapshot_symlinks(self, tmp_path):
         repo_id = MODEL_REPO_MAP["small"]
         root = tmp_path / f"models--{repo_id.replace('/', '--')}"

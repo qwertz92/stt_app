@@ -4,6 +4,12 @@ from dataclasses import dataclass
 
 _NO_SPACE_BEFORE = {".", ",", ";", ":", "!", "?", ")", "]", "}"}
 
+# How far into a rolling audio window the overlap search may re-anchor. The
+# window boundary cuts a word in half, so its first token or two are the ones
+# the model is most likely to get wrong; beyond that a "match" is more likely
+# to be a coincidental repeat than the real seam.
+_WINDOW_BOUNDARY_SKIP_WORDS = 3
+
 
 @dataclass(frozen=True, slots=True)
 class StreamingTextAppend:
@@ -36,14 +42,13 @@ class StreamingTextState:
         )
         previous_partial = self.last_partial_text
         previous_committed = self.committed_text
-        if not stream_text_extends(previous_committed, candidate_text):
-            # Committed text is already pasted into the user's document and
-            # cannot be unpasted, so a candidate that contradicts it describes
-            # text that *follows* it. Letting the candidate drop the committed
-            # prefix is unrecoverable: compute_stream_locked_prefix can then
-            # never advance again, so live insertion stays frozen for the rest
-            # of the session and the saved transcript loses its beginning.
-            candidate_text = stream_join_text(previous_committed, candidate_text)
+        # Deliberately NOT joining a candidate that has lost the committed
+        # prefix onto it. That does unfreeze insertion (once the prefix is
+        # gone, compute_stream_locked_prefix can never advance again), but a
+        # provider that revises a word inside the already-pasted region then
+        # re-emits the whole dictation: measured at 86 pasted words for a
+        # 48-word truth on an AssemblyAI turn revision, scaling with session
+        # length. Pasting the transcript twice is worse than stopping early.
         next_committed = compute_stream_locked_prefix(
             previous_committed,
             previous_partial,
@@ -153,16 +158,24 @@ def merge_rolling_window_transcript(
     """Merge a trailing-audio-window transcript into the accumulated text.
 
     `current_text` describes only the last few seconds of audio, never the whole
-    utterance, so it must never be allowed to *replace* the accumulated text the
-    way a provider's full-text revision may:
+    utterance, which changes two things versus a provider's full-text revision:
 
-    - An empty window (trailing silence, or a window that simply decodes to
-      nothing) would otherwise wipe everything spoken so far — at finalization
-      that produced an empty final transcript for an entire dictation.
-    - The window boundary regularly cuts a word in half, and a mistranscription
-      of that fragment defeats the overlap search, because every candidate
-      alignment is anchored at the window's first word. Appending can duplicate
-      a word; replacing discards the whole transcript.
+    - An empty window (trailing silence, or one that simply decodes to nothing)
+      is not a correction and must not wipe the accumulated text. Letting it
+      through produced an *empty final transcript* for a whole dictation at the
+      fast finalization path.
+    - The window boundary routinely cuts a word in half, and
+      `_suffix_prefix_overlap_len` anchors every candidate alignment at the
+      window's *first* word, so a mistranscription of that one fragment
+      defeated the whole search. Retrying the alignment a few words into the
+      window recovers it.
+
+    A window that still cannot be aligned falls back to replacing the
+    accumulated text. That loses text, but the alternative — appending — is
+    worse: a silent microphone makes the model emit a fresh hallucination every
+    partial, none of which can ever align, so an append fallback grows without
+    bound and types hundreds of junk words into the user's document at
+    finalization (measured: 896 words after two minutes of silence).
     """
     previous = normalize_stream_text(previous_text)
     current = normalize_stream_text(current_text)
@@ -176,7 +189,17 @@ def merge_rolling_window_transcript(
     )
     if stream_text_extends(previous, merged):
         return merged
-    return stream_join_text(previous, current)
+
+    previous_words = split_stream_words(previous)
+    current_words = split_stream_words(current)
+    required_overlap = max(1, int(min_overlap_words))
+    for skip in range(1, _WINDOW_BOUNDARY_SKIP_WORDS + 1):
+        if skip >= len(current_words):
+            break
+        overlap = _suffix_prefix_overlap_len(previous_words, current_words[skip:])
+        if overlap >= required_overlap:
+            return " ".join(previous_words + current_words[skip + overlap:]).strip()
+    return current
 
 
 def compute_stream_locked_prefix(
