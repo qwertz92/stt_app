@@ -2742,8 +2742,16 @@ class DictationController(QtCore.QObject):
         self.stream_runtime_failed.emit(message or "Streaming failed.")
 
     def _has_pending_streaming_job(self) -> bool:
-        """Whether a streaming finalize is still in flight and will deliver text."""
-        return any(job.mode == "streaming" for job in self._jobs.values())
+        """Whether a streaming finalize is still in flight and will deliver text.
+
+        An aborting job does not count: it is being canceled and will not
+        deliver, so treating it as pending would drop the partial transcript
+        this guard exists to avoid duplicating.
+        """
+        return any(
+            job.mode == "streaming" and not job.aborting
+            for job in self._jobs.values()
+        )
 
     def _current_streaming_partial_text(self) -> str:
         """Best-known transcript of the live streaming session.
