@@ -2586,3 +2586,45 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Lesson: a fix in a merge/reconciliation path needs a simulation over long
     realistic input, not just unit assertions on two-line examples. Every
     defect above passed the full test suite.
+- **Re-verification round: the corrections themselves had two regressions.**
+  A third adversarial pass over `b9ba9ce..HEAD` confirmed the streaming-merge
+  work (re-anchoring, bounded silence, the reverted join) holds under a
+  600-trial fuzz and a 1005-partial silence run, but found two defects the
+  correction commit introduced:
+  - *The partial-preservation guard also gated the teardown.* Wrapping
+    `_teardown_active_stream_runtime` in `not _has_pending_streaming_job()`
+    abandoned a live capture, its transcriber and its runtime lease, so the
+    microphone kept recording after the overlay said Error and the leaked lease
+    defeated `_pending_transcriber_cache_reset`. Only the history write is
+    conditional now.
+  - *The 0%-preload fallback reintroduced the original download bug.* Falling
+    back to `max(_model_cache_dirs)` when the destination is absent let the
+    9.4 GB fp32 conversion copy pose as NAR's progress again — the same
+    `10078/2490 MB, 100%` string, and it violated the rule this same series had
+    just written into `AGENTS.md`. The fallback now requires a *complete,
+    loadable* snapshot (`_complete_cached_model_root`), which the fp32 copy can
+    never satisfy because it carries no `int8/*` files, and which an in-flight
+    download cannot satisfy either, so it correctly starts at 0%.
+  - Lesson, again: the fix for a bug in a fallback path needs a fixture with
+    *both* conditions true. The two tests written for the fallback each covered
+    one branch (destination absent, or foreign copy present) and neither
+    covered the combination that actually reproduces the bug.
+  - Fuzz evidence worth keeping: over 600 randomized rolling-window trials with
+    1-4-word garbles, the re-anchoring merge lost 4158 truth words against the
+    baseline's 23581, and where it did worse than baseline (80/600 trials) the
+    maximum delta was 3 words, all of them retained garble tokens rather than
+    truncated speech. Through the real stream worker, 1005 hallucinated silence
+    partials produced at most 8 words.
+  - Known and accepted, unchanged from baseline: a finalize that raises or
+    returns empty after a runtime failure still loses the partial, and one
+    unalignable window still freezes live insertion for the session. Both wait
+    on gating streaming windows by audio energy.
+- **The ONNX execution device is now selectable for daily dictation:** the
+  Benchmark tab has offered Auto/GPU/CPU/DirectML/WebGPU targets all along, but
+  `factory.py` never passed a device to `LocalOnnxWebGpuTranscriber`, so real
+  dictation always ran on `auto` and a benchmark result could not be acted on.
+  `local_onnx_device` (schema 23) closes that, using the same wording as the
+  benchmark choices. It belongs in both the transcriber cache key and the
+  preload key — unlike the language, the device is baked into the loaded
+  runtime — and the row stays permanently visible so switching to
+  faster-whisper or a remote engine cannot shift the fields under it.

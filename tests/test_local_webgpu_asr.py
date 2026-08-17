@@ -9,7 +9,7 @@ import sys
 import time
 import wave
 from collections import deque
-from fnmatch import fnmatch
+from fnmatch import fnmatchcase
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -429,7 +429,7 @@ def test_every_required_file_is_covered_by_the_download_allow_patterns(model_nam
 
     for relative in layout.required_files:
         assert any(
-            fnmatch(relative, pattern) for pattern in layout.allow_patterns
+            fnmatchcase(relative, pattern) for pattern in layout.allow_patterns
         ), f"{model_name}: '{relative}' is required but no allow-pattern fetches it"
 
 

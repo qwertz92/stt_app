@@ -2171,6 +2171,9 @@ class DictationController(QtCore.QObject):
             getattr(settings, "model_dir", ""),
             bool(getattr(settings, "keep_onnx_model_loaded", False)),
             bool(getattr(settings, "streaming_full_final_transcript", False)),
+            # Unlike language_mode, the execution device is baked into the
+            # loaded runtime: switching it must reload, not reuse.
+            getattr(settings, "local_onnx_device", ""),
         )
 
     def _matching_model_preload_running(self, settings: AppSettings) -> bool:
@@ -2856,6 +2859,7 @@ class DictationController(QtCore.QObject):
             getattr(settings, "funasr_model", ""),
             bool(getattr(settings, "keep_onnx_model_loaded", False)),
             bool(getattr(settings, "streaming_full_final_transcript", False)),
+            getattr(settings, "local_onnx_device", ""),
         )
         if (
             settings.engine == DEFAULT_ENGINE
@@ -3411,13 +3415,18 @@ class DictationController(QtCore.QObject):
         partial_transcript = ""
         partial_source_audio_path = ""
         partial_settings = self._active_stream_settings or replace(self._settings)
-        if runtime_stream_failed and not self._has_pending_streaming_job():
-            # A finalize already in flight will deliver this session's text
-            # itself; saving the partial too would write two history entries
-            # for one dictation. Providers do reach that state: AssemblyAI and
-            # Deepgram both record a socket error and still return the
-            # accumulated text from stop_stream().
-            partial_transcript = self._current_streaming_partial_text()
+        if runtime_stream_failed:
+            # Only the *history write* is conditional. The teardown must always
+            # run: gating it too abandoned a live capture, its transcriber and
+            # its runtime lease, so the microphone kept recording after the
+            # overlay already said Error.
+            if not self._has_pending_streaming_job():
+                # A finalize already in flight will deliver this session's text
+                # itself; saving the partial too would write two history
+                # entries for one dictation. Providers do reach that state:
+                # AssemblyAI and Deepgram both record a socket error and still
+                # return the accumulated text from stop_stream().
+                partial_transcript = self._current_streaming_partial_text()
             wav_bytes, partial_source_audio_path = (
                 self._teardown_active_stream_runtime(preserve_audio=True)
             )

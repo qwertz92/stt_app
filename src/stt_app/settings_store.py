@@ -30,6 +30,8 @@ from .config import (
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD,
     DEFAULT_KEEP_ONNX_MODEL_LOADED,
+    DEFAULT_LOCAL_ONNX_DEVICE,
+    LOCAL_WEBGPU_DEVICE_POLICIES,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
     DEFAULT_MODEL_DIR,
@@ -129,6 +131,7 @@ DEFAULTS = {
     "allow_insecure_key_storage": DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
     "offline_mode": DEFAULT_OFFLINE_MODE,
     "keep_onnx_model_loaded": DEFAULT_KEEP_ONNX_MODEL_LOADED,
+    "local_onnx_device": DEFAULT_LOCAL_ONNX_DEVICE,
     "start_beep_enabled": DEFAULT_START_BEEP_ENABLED,
     "start_beep_tone": DEFAULT_START_BEEP_TONE,
     "completion_beep_enabled": DEFAULT_COMPLETION_BEEP_ENABLED,
@@ -196,6 +199,7 @@ class AppSettings:
     allow_insecure_key_storage: bool = DEFAULT_ALLOW_INSECURE_KEY_STORAGE
     offline_mode: bool = DEFAULT_OFFLINE_MODE
     keep_onnx_model_loaded: bool = DEFAULT_KEEP_ONNX_MODEL_LOADED
+    local_onnx_device: str = DEFAULT_LOCAL_ONNX_DEVICE
     start_beep_enabled: bool = DEFAULT_START_BEEP_ENABLED
     start_beep_tone: str = DEFAULT_START_BEEP_TONE
     completion_beep_enabled: bool = DEFAULT_COMPLETION_BEEP_ENABLED
@@ -510,6 +514,9 @@ class AppSettings:
                 ),
                 default=DEFAULT_KEEP_ONNX_MODEL_LOADED,
             ),
+            local_onnx_device=normalize_local_onnx_device(
+                merged.get("local_onnx_device")
+            ),
             start_beep_enabled=parse_json_bool(
                 merged.get("start_beep_enabled"),
                 default=DEFAULT_START_BEEP_ENABLED,
@@ -644,6 +651,19 @@ class SettingsStore:
                 ensure_ascii=True,
                 keep_backup=True,
             )
+
+
+def normalize_local_onnx_device(value: Any) -> str:
+    """Normalize the stored local ONNX execution-device policy.
+
+    An unknown or missing value falls back to ``auto`` rather than failing the
+    load, so a settings file written by a newer build (or hand-edited) still
+    opens with working defaults.
+    """
+    device = str(value or "").strip().lower()
+    if device in LOCAL_WEBGPU_DEVICE_POLICIES:
+        return device
+    return DEFAULT_LOCAL_ONNX_DEVICE
 
 
 def _normalize_hotkey(value: str, *, default: str) -> str:

@@ -14,7 +14,7 @@ APP_LOGGER_NAME = "stt_app"
 # makes the taskbar button use the app/window icon instead.
 APP_USER_MODEL_ID = "Farfeleder.VoiceDictationApp"
 
-SCHEMA_VERSION = 22
+SCHEMA_VERSION = 23
 
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
@@ -102,6 +102,11 @@ DEFAULT_OFFLINE_MODE = False
 # faster-whisper and Nemotron stay warm. Users who need the RAM/VRAM back can
 # turn it off; existing settings files keep whatever they stored.
 DEFAULT_KEEP_ONNX_MODEL_LOADED = True
+# Execution-device policy for the local ONNX engines. "auto" keeps the existing
+# behaviour (GPU first, CPU fallback, with the per-model CPU preference in
+# LOCAL_ONNX_AUTO_CPU_MODELS applied); the rest let the user pin a device when a
+# benchmark shows one is better on their hardware.
+DEFAULT_LOCAL_ONNX_DEVICE = "auto"
 DEFAULT_START_BEEP_ENABLED = False
 DEFAULT_START_BEEP_TONE = "soft"
 # Completion tone after a successful transcript insertion (batch, queued

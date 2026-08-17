@@ -6,6 +6,7 @@ from ..config import (
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_ENGINE,
     DEFAULT_FUNASR_MODEL,
+    DEFAULT_LOCAL_ONNX_DEVICE,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
 )
@@ -47,6 +48,9 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             language_mode=settings.language_mode,
             offline_mode=settings.offline_mode,
             model_dir=settings.model_dir,
+            device=getattr(
+                settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE
+            ),
         )
     return LocalFasterWhisperTranscriber(
         model_size=settings.model_size,

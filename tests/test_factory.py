@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 from stt_app.config import (
     LOCAL_ONNX_MODEL_SIZES,
     VALID_ENGINES,
@@ -179,3 +181,24 @@ def test_every_local_runtime_can_change_its_language_without_being_recreated():
         transcriber.set_language_mode(target)
 
         assert transcriber._language_mode == target, model_size
+
+
+def test_local_onnx_device_setting_reaches_the_transcriber():
+    """The device is baked into the loaded runtime, so the setting has to reach
+    the transcriber; the Benchmark tab could already pin a device but daily
+    dictation always ran on `auto`."""
+    base = AppSettings(engine="local", model_size="granite-speech-4.1-2b")
+
+    for device in ("auto", "cpu", "webgpu", "dml", "gpu"):
+        transcriber = create_transcriber(replace(base, local_onnx_device=device))
+        assert transcriber.device == device
+
+
+def test_local_onnx_device_auto_keeps_the_per_model_cpu_preference():
+    nar = AppSettings(
+        engine="local", model_size="granite-speech-4.1-2b-nar", local_onnx_device="auto"
+    )
+    explicit = replace(nar, local_onnx_device="webgpu")
+
+    assert create_transcriber(nar).device == "cpu"
+    assert create_transcriber(explicit).device == "webgpu"

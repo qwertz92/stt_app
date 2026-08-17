@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_COMPLETION_BEEP_TONE,
+    DEFAULT_LOCAL_ONNX_DEVICE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
@@ -36,7 +37,7 @@ from .settings_dialog_helpers import (
     _hotkeys_conflict,
     _qt_hotkey_sequence_to_app_hotkey,
 )
-from .settings_store import AppSettings
+from .settings_store import AppSettings, normalize_local_onnx_device
 
 
 class _PersistenceMixin:
@@ -129,6 +130,13 @@ class _PersistenceMixin:
         self.keep_onnx_model_loaded_checkbox.setChecked(
             bool(getattr(settings, "keep_onnx_model_loaded", False))
         )
+        device_index = self.local_onnx_device_combo.findData(
+            normalize_local_onnx_device(
+                getattr(settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE)
+            )
+        )
+        if device_index >= 0:
+            self.local_onnx_device_combo.setCurrentIndex(device_index)
         self._select_combo_data(self.engine_combo, settings.engine)
         self._select_combo_data(self.mode_combo, settings.mode)
         self.streaming_full_final_check.setChecked(
@@ -152,6 +160,7 @@ class _PersistenceMixin:
             str(getattr(settings, "custom_vocabulary", DEFAULT_CUSTOM_VOCABULARY))
         )
         self._update_local_model_runtime_warning()
+        self._update_local_onnx_device_row()
         self._select_combo_data(self.paste_mode_combo, settings.paste_mode)
         self._select_combo_data(
             self.insert_target_combo,
@@ -524,6 +533,9 @@ class _PersistenceMixin:
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),
             keep_onnx_model_loaded=self.keep_onnx_model_loaded_checkbox.isChecked(),
+            local_onnx_device=normalize_local_onnx_device(
+                self.local_onnx_device_combo.currentData()
+            ),
             start_beep_enabled=self.start_beep_checkbox.isChecked(),
             start_beep_tone=str(
                 self.start_beep_tone_combo.currentData() or DEFAULT_START_BEEP_TONE

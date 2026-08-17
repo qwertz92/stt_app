@@ -18,6 +18,7 @@ from .config import (
     LOCAL_ONNX_AUTO_CPU_MODELS,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_ONNX_MODEL_SIZES,
+    LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     VALID_DISPLAY_TIMEZONES,
     VALID_ENGINES,
@@ -47,6 +48,17 @@ from .settings_dialog_helpers import (
     _WheelPassthroughComboBox,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
+
+
+# Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
+# benchmark can be selected for daily dictation with the same wording.
+_LOCAL_ONNX_DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
+    ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
+    ("GPU only (WebGPU -> DirectML)", "gpu"),
+    ("WebGPU only", "webgpu"),
+    ("DirectML only", "dml"),
+    ("CPU only", "cpu"),
+)
 
 
 class _GeneralTabMixin:
@@ -265,6 +277,27 @@ class _GeneralTabMixin:
         self.model_selector_stack.addWidget(remote_model_widget)
 
         engine_form.addRow("Model", self.model_selector_stack)
+
+        self.local_onnx_device_combo = _WheelPassthroughComboBox()
+        for label, value in _LOCAL_ONNX_DEVICE_CHOICES:
+            if value in LOCAL_WEBGPU_DEVICE_POLICIES:
+                self.local_onnx_device_combo.addItem(label, value)
+        self.local_onnx_device_combo.currentIndexChanged.connect(
+            self._on_local_onnx_device_changed
+        )
+        self.local_onnx_device_note_label = QtWidgets.QLabel("")
+        self.local_onnx_device_note_label.setWordWrap(True)
+        self._style_field_hint_label(self.local_onnx_device_note_label)
+        self._reserve_dynamic_hint_height(self.local_onnx_device_note_label)
+        # The row stays present and only changes enabled state, so selecting a
+        # model that ignores it never shifts the fields below.
+        engine_form.addRow(
+            "ONNX Device",
+            self._field_with_hint(
+                self.local_onnx_device_combo,
+                self.local_onnx_device_note_label,
+            ),
+        )
 
         self.language_combo = _WheelPassthroughComboBox()
         for value in VALID_LANGUAGE_MODES:
@@ -769,6 +802,57 @@ class _GeneralTabMixin:
             note or default_note
         )
 
+    def _on_local_onnx_device_changed(self, _index: int) -> None:
+        self._update_local_onnx_device_row()
+
+    def _update_local_onnx_device_row(self) -> None:
+        """Enable the device picker only where it has an effect.
+
+        The row stays present and only changes enabled state and note text, so
+        switching models never shifts the fields below it.
+        """
+        if not hasattr(self, "local_onnx_device_combo"):
+            return
+        engine = str(self.engine_combo.currentData() or DEFAULT_ENGINE)
+        model_name = (
+            str(self.model_combo.currentData() or "")
+            if hasattr(self, "model_combo")
+            else ""
+        )
+        applies = engine == "local" and model_name in LOCAL_ONNX_MODEL_SIZES
+        self.local_onnx_device_combo.setEnabled(applies)
+
+        if not applies:
+            self.local_onnx_device_note_label.setText(
+                "Only applies to the local ONNX models (Cohere, Granite, "
+                "Nemotron). faster-whisper uses its own device setting."
+            )
+            return
+
+        device = str(self.local_onnx_device_combo.currentData() or "auto")
+        if device == "auto" and model_name in LOCAL_ONNX_AUTO_CPU_MODELS:
+            self.local_onnx_device_note_label.setText(
+                "Auto resolves to CPU for this model because its encoder cannot "
+                "run on WebGPU or DirectML. Benchmark before overriding."
+            )
+            return
+        if device == "auto":
+            self.local_onnx_device_note_label.setText(
+                "Tries WebGPU, then DirectML, then CPU. Pin a device only when "
+                "a benchmark shows it is faster on your hardware."
+            )
+            return
+        if device == "cpu":
+            self.local_onnx_device_note_label.setText(
+                "Forces CPU and never tries the GPU. Faster for models whose "
+                "encoder the GPU cannot run; slower for the rest."
+            )
+            return
+        self.local_onnx_device_note_label.setText(
+            "Forces this device and fails instead of falling back to CPU, so a "
+            "model the GPU cannot run will error rather than transcribe slowly."
+        )
+
     def _update_local_model_runtime_warning(self) -> None:
         if not hasattr(self, "local_model_runtime_warning_label"):
             return
@@ -886,6 +970,7 @@ class _GeneralTabMixin:
         self._update_mode_availability()
         self._update_language_availability()
         self._update_local_model_runtime_warning()
+        self._update_local_onnx_device_row()
         self._update_remote_model_selector()
         self._update_import_engine_note()
 
@@ -898,6 +983,7 @@ class _GeneralTabMixin:
         self._update_mode_availability()
         self._update_language_availability()
         self._update_local_model_runtime_warning()
+        self._update_local_onnx_device_row()
 
     def _on_model_dir_changed(self, _text: str = "") -> None:
         """React to model directory changes — update cached model info."""

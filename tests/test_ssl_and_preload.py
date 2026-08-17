@@ -462,6 +462,8 @@ class TestEstimateCachedModelBytes:
         resolved and loaded from there. Measuring only the flat destination
         reported 0 bytes and showed a 0% "Downloading" bar for a model that is
         fully present."""
+        from stt_app.transcriber import local_webgpu_asr
+
         model_name = "cohere-transcribe-03-2026"
         repo_id = MODEL_REPO_MAP[model_name]
         legacy = (
@@ -470,8 +472,12 @@ class TestEstimateCachedModelBytes:
             / "snapshots"
             / "abc123"
         )
-        legacy.mkdir(parents=True)
-        (legacy / "encoder_model_q4.onnx_data").write_bytes(b"\x00" * 4_096)
+        # A *complete* snapshot: an incomplete one must not count, because the
+        # model would not load from it either.
+        for relative in local_webgpu_asr._REQUIRED_FILES[model_name]:
+            path = legacy / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"\x00" * 512)
         assert not (tmp_path / repo_id.rsplit("/", 1)[-1]).exists()
 
         with (
@@ -484,7 +490,41 @@ class TestEstimateCachedModelBytes:
                 return_value=str(tmp_path),
             ),
         ):
-            assert estimate_cached_model_bytes(model_name) == 4_096
+            measured = estimate_cached_model_bytes(model_name)
+        assert measured == 512 * len(local_webgpu_asr._REQUIRED_FILES[model_name])
+
+    def test_foreign_copy_is_ignored_even_before_the_destination_exists(
+        self, tmp_path
+    ):
+        """The combination that matters: destination absent *and* a foreign copy
+        of the same repo present. Falling back to the largest candidate here
+        reported the NAR repo's fp32 conversion weights as this download's
+        progress, which is the original 10078/2490 MB bug."""
+        model_name = "granite-speech-4.1-2b-nar"
+        repo_id = MODEL_REPO_MAP[model_name]
+
+        foreign = (
+            tmp_path
+            / f"models--{repo_id.replace('/', '--')}"
+            / "snapshots"
+            / "abc123"
+            / "fp32"
+        )
+        foreign.mkdir(parents=True)
+        (foreign / "editor.onnx_data").write_bytes(b"\x00" * 9_000)
+        assert not (tmp_path / repo_id.rsplit("/", 1)[-1]).exists()
+
+        with (
+            patch(
+                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
+        ):
+            assert estimate_cached_model_bytes(model_name) == 0
 
     def test_does_not_double_count_snapshot_symlinks(self, tmp_path):
         repo_id = MODEL_REPO_MAP["small"]

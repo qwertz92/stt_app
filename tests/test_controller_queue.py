@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from PySide6 import QtCore, QtGui
 
+from stt_app.controller import _TranscriptionJob
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -1081,6 +1082,39 @@ def test_stream_runtime_failure_keeps_the_partial_transcript(monkeypatch, tmp_pa
 
     assert [e.text for e in history.load()] == ["half a sentence already spoken"]
     assert controller._last_transcript == "half a sentence already spoken"
+    assert overlay.states[-1][0] == "Error"
+    controller.shutdown()
+    _ = app
+
+
+def test_stream_runtime_failure_always_tears_down_the_capture(monkeypatch, tmp_path):
+    """The history write is conditional on a pending finalize; the teardown is
+    not. Gating both abandoned a live capture, its transcriber and its runtime
+    lease, so the microphone kept recording after the overlay said Error."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    capture = controller._audio_capture
+    assert capture is not None
+    # Pretend a finalize is already in flight for this session.
+    controller._jobs[999] = _TranscriptionJob(
+        token=999,
+        engine="local",
+        model=controller._settings.model_size,
+        mode="streaming",
+        settings=controller._settings,
+        target_handle=None,
+        target_signature=None,
+    )
+
+    controller._on_stream_runtime_failed("stream died")
+
+    assert controller._audio_capture is None
+    assert capture.stopped is True
+    assert controller._active_stream_transcriber is None
     assert overlay.states[-1][0] == "Error"
     controller.shutdown()
     _ = app

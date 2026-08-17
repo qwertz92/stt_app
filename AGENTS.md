@@ -474,11 +474,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcription (the whole recording under `streaming_full_final_transcript`).
   Its result is discarded there anyway, so quitting mid-dictation only bought a
   frozen UI. Every teardown path now prefers `abort_stream()`.
-  The preservation is skipped while `_has_pending_streaming_job()`: a finalize
-  already in flight delivers that session's text itself, and both AssemblyAI
-  and Deepgram record a socket error *and* still return accumulated text from
-  `stop_stream()`, so saving the partial too wrote two history entries for one
-  dictation. Reading `job.mode` instead of `_active_session_mode` in
+  Only that *history write* is skipped while `_has_pending_streaming_job()`
+  (which excludes an `aborting` job, since a canceled finalize delivers
+  nothing): a finalize in flight delivers that session's text itself, and both
+  AssemblyAI and Deepgram record a socket error *and* still return accumulated
+  text from `stop_stream()`, so saving the partial too wrote two history
+  entries for one dictation. **The teardown itself is never conditional** —
+  gating `_teardown_active_stream_runtime` on the same check abandoned a live
+  capture, its transcriber and its runtime lease, leaving the microphone
+  recording after the overlay already showed Error. Known gap: if that pending
+  finalize then raises or returns empty, the partial is lost (the pre-existing
+  behaviour); preserving it needs the streaming job's terminal handler to write
+  a stashed partial when it produced no text. Reading `job.mode` instead of `_active_session_mode` in
   `_on_transcription_ready` was tried and reverted: every writer of
   `_active_session_mode = "batch"` also resets the streaming text state, so
   `committed_text` is already empty by then and the delivery is identical
@@ -544,18 +551,31 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `local_webgpu_asr.webgpu_download_destination` (the flat `local_dir` that
   `download_webgpu_model_snapshot` passes to `snapshot_download`),
   faster-whisper models to `models--<repo>` under the configured `cache_dir`.
-  Do not reintroduce a search across *candidate* layouts or cache roots with a
-  `max()` over them — `_model_cache_dirs` exists for detection/delete/cleanup
-  and legitimately includes both the flat and `models--<repo>` layouts plus the
-  default cache. Measuring those made a foreign directory masquerade as the
+  Do not reintroduce a `max()` over the *candidate* layouts and cache roots in
+  `_model_cache_dirs` — that exists for detection/delete/cleanup and
+  legitimately includes both the flat and `models--<repo>` layouts plus the
+  default cache. Sizing those made a foreign directory masquerade as the
   download: `scripts/convert_granite_nar_q4.py` pulls the NAR repo's fp32
   weights with `cache_dir=` (9.4 GB in `models--smcleod--…-nar-onnx`), so the
-  NAR download reported a fixed `10078/2500 MB, approx. 100%, measuring speed`
+  NAR download reported a fixed `10078/2490 MB, approx. 100%, measuring speed`
   while the real flat destination was still filling. A parametrized test pins
   `webgpu_download_destination` to the `local_dir` actually downloaded into so
   the two cannot drift. Snapshot entries that are symlinks are skipped when
   summing, because `stat()` follows them into an already-counted blob and would
   report 100% at half a download.
+  **The one permitted fallback**: while the destination directory does not
+  exist, `_complete_cached_model_root` may size a cache root that holds a
+  *complete, loadable* snapshot — validated by
+  `resolve_cached_webgpu_model_root` for local ONNX models and by
+  `_has_valid_model_snapshot` for faster-whisper. Without it a model cached in
+  the legacy `models--<repo>` layout — which the loader still resolves and
+  uses, as Cohere does here — showed a 0% "Downloading" bar during every
+  preload. Requiring a *valid* snapshot is what separates this from the bug
+  above: the fp32 conversion copy carries none of the required `int8/*` files
+  and can never qualify, and an in-flight download has no valid snapshot
+  anywhere, so it correctly starts at 0%. A complete copy in another root is
+  reported at 100% on purpose — the app would load that copy rather than
+  download anything.
 - **ModelScope mirror downloads are transactional and path-contained**:
   Treat every path in the remote file listing as untrusted. Only normalized
   POSIX-relative repository paths contained by the requested destination are
@@ -843,6 +863,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   high). `package.json`'s `overrides` therefore forces `sharp: ^0.35.0`. Keep
   that entry until Transformers.js widens its own range; sharp 0.35 requires
   Node >= 20.9, which this project already exceeds.
+- **Local ONNX execution device (`local_onnx_device`, default `auto`, schema
+  23)**: the Benchmark tab could always pin a device, but daily dictation
+  always ran on `auto` because `factory.py` never passed one. The General tab's
+  "ONNX Device" row now feeds the same policy (`LOCAL_WEBGPU_DEVICE_POLICIES`)
+  into `LocalOnnxWebGpuTranscriber`, with the same wording as the benchmark
+  choices so a device proven faster there can be selected for real use.
+  `auto` keeps every existing behaviour, including the per-model CPU
+  preference in `LOCAL_ONNX_AUTO_CPU_MODELS`; an explicit target still bypasses
+  that preference. Unlike `language_mode`, the device **is** part of the
+  transcriber cache key *and* the preload key: it is baked into the loaded
+  runtime, so changing it must reload rather than reuse. An unknown stored
+  value falls back to `auto` via `normalize_local_onnx_device` instead of
+  failing the load. The row is always present and only toggles enabled state
+  and note text — hiding it for faster-whisper or a remote engine would shift
+  every field below it, which a test pins by asserting the Language row's
+  y-position is identical across all four cases.
 - **Streaming availability**: `config.supports_streaming()` is the shared
   source of truth for UI and controller checks. Cohere/Granite ONNX/WebGPU
   models are batch-only; Nemotron is true streaming. A local model selection

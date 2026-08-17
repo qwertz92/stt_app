@@ -349,6 +349,23 @@ def _valid_snapshot_path(model_name: str, cache_dir: Path) -> Path | None:
     return None
 
 
+def resolve_cached_webgpu_model_root(
+    model_name: str, model_dir: str = ""
+) -> Path | None:
+    """Cache root holding a *complete* snapshot of this model, for sizing.
+
+    Returns the root rather than the snapshot directory because a HuggingFace
+    snapshot entry may be a symlink into `blobs/`, which a size sum has to skip.
+    Requiring a valid snapshot is what keeps an unrelated copy of the same repo
+    out of the measurement: the NAR repo's fp32 conversion weights live under
+    `models--<repo>` and carry none of the required `int8/*` files.
+    """
+    for root in _model_cache_dirs(model_name, model_dir):
+        if _valid_snapshot_path(model_name, root) is not None:
+            return root
+    return None
+
+
 def resolve_cached_webgpu_model_path(
     model_name: str, model_dir: str = ""
 ) -> Path | None:

@@ -408,3 +408,39 @@ def test_bottom_status_does_not_move_the_save_and_close_buttons(
     QtWidgets.QApplication.processEvents()
     assert save_button.pos().x() == idle_position
     dialog.hide()
+
+
+def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
+    """The picker only applies to the local ONNX models, but hiding the row for
+    the others would shift every field beneath it. It stays present and only
+    changes enabled state and note text."""
+    dialog.show()
+
+    def probe(engine: str, model: str | None) -> tuple[bool, int]:
+        index = dialog.engine_combo.findData(engine)
+        assert index >= 0
+        dialog.engine_combo.setCurrentIndex(index)
+        if model is not None:
+            model_index = dialog.model_combo.findData(model)
+            assert model_index >= 0, model
+            dialog.model_combo.setCurrentIndex(model_index)
+        QtWidgets.QApplication.processEvents()
+        language_y = _position_in_dialog(
+            dialog.language_combo,
+            dialog.language_combo.rect().topLeft(),
+            dialog,
+        ).y()
+        return dialog.local_onnx_device_combo.isEnabled(), language_y
+
+    faster_whisper_enabled, y_faster_whisper = probe("local", "small")
+    granite_enabled, y_granite = probe("local", "granite-speech-4.1-2b")
+    nemotron_enabled, y_nemotron = probe(
+        "local", "nemotron-3.5-asr-streaming-0.6b-int4"
+    )
+    remote_enabled, y_remote = probe("openai", None)
+
+    assert granite_enabled is True
+    assert nemotron_enabled is True
+    assert faster_whisper_enabled is False
+    assert remote_enabled is False
+    assert {y_faster_whisper, y_granite, y_nemotron, y_remote} == {y_granite}

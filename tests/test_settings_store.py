@@ -878,3 +878,20 @@ def test_deliberate_silence_gate_off_is_kept(tmp_path, monkeypatch):
     settings = SettingsStore(path).load()
 
     assert settings.silence_gate_enabled is False
+
+
+def test_local_onnx_device_round_trips_and_rejects_unknown_values(tmp_path):
+    """An unknown or hand-edited value must fall back to auto rather than fail
+    the load, and a valid one must survive save/load."""
+    from dataclasses import replace
+
+    from stt_app.settings_store import normalize_local_onnx_device
+
+    assert normalize_local_onnx_device("cpu") == "cpu"
+    assert normalize_local_onnx_device("  DML ") == "dml"
+    assert normalize_local_onnx_device("nonsense") == "auto"
+    assert normalize_local_onnx_device(None) == "auto"
+
+    store = SettingsStore(tmp_path / "settings.json")
+    store.save(replace(store.load(), local_onnx_device="webgpu"))
+    assert store.load().local_onnx_device == "webgpu"

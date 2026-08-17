@@ -159,19 +159,36 @@ def download_destination_dir(model_name: str, model_dir: str = "") -> Path | Non
 def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
     """Estimate the current on-disk bytes of a model's download destination.
 
-    Until that destination exists, fall back to the largest *existing* cache
-    layout for the model. A local ONNX model cached in the legacy
+    Until that destination exists, fall back to a cache root holding a
+    *complete, loadable* snapshot. A local ONNX model cached in the legacy
     `models--<repo>` layout is still resolved and loaded from there, so
-    measuring only the flat destination reported 0 bytes and showed a 0%
-    "Downloading" bar for a model that is fully present. Once the destination
-    exists it is the only thing measured, so a download in progress is never
-    confused with a copy sitting somewhere else.
+    measuring only the flat destination reported 0 bytes and a 0% "Downloading"
+    bar for a model that is fully present.
+
+    The fallback deliberately requires a valid snapshot rather than taking the
+    largest candidate directory. Sizing any candidate is what let the NAR
+    repo's 9.4 GB fp32 conversion copy pose as this model's download progress;
+    it carries none of the required `int8/*` files, so it can never qualify.
+    An in-flight download has no valid snapshot anywhere either, so it starts
+    at 0% and is measured only at its destination.
     """
     root = download_destination_dir(model_name, model_dir)
     if root is not None and root.is_dir():
         return _directory_size_bytes(root)
-    candidates = _model_cache_dirs(model_name, model_dir)
-    return max((_directory_size_bytes(path) for path in candidates), default=0)
+    cached_root = _complete_cached_model_root(model_name, model_dir)
+    return 0 if cached_root is None else _directory_size_bytes(cached_root)
+
+
+def _complete_cached_model_root(model_name: str, model_dir: str = "") -> Path | None:
+    if model_name in LOCAL_ONNX_MODEL_SIZES:
+        from .local_webgpu_asr import resolve_cached_webgpu_model_root
+
+        return resolve_cached_webgpu_model_root(model_name, model_dir)
+
+    for root in _model_cache_dirs(model_name, model_dir):
+        if _has_valid_model_snapshot(root, {"config.json", "model.bin"}):
+            return root
+    return None
 
 
 def _directory_size_bytes(root: Path) -> int:
