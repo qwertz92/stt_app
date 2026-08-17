@@ -6,6 +6,7 @@ from typing import ClassVar
 from PySide6 import QtCore, QtWidgets
 
 from .config import (
+    CANARY_MODEL_SIZE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODE,
@@ -15,6 +16,7 @@ from .config import (
     LOCAL_ENGLISH_ONLY_MODELS,
     LOCAL_EXPLICIT_LANGUAGE_MODELS,
     LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_AUTO_CPU_MODELS,
     LOCAL_ONNX_MODEL_RUNTIME_LABELS,
     LOCAL_ONNX_MODEL_SIZES,
@@ -52,6 +54,12 @@ from .settings_store import AppSettings, apply_engine_model_selection
 
 # Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
 # benchmark can be selected for daily dictation with the same wording.
+# The onnx-asr models (Parakeet/Canary) are CPU-only and ignore the policy, so
+# the picker must not claim to control them.
+_DEVICE_AWARE_LOCAL_MODELS = tuple(
+    name for name in LOCAL_ONNX_MODEL_SIZES if name not in LOCAL_ONNX_ASR_MODEL_SIZES
+)
+
 _LOCAL_ONNX_DEVICE_CHOICES: tuple[tuple[str, str], ...] = (
     ("Auto (WebGPU -> DirectML -> CPU)", "auto"),
     ("GPU only (WebGPU -> DirectML)", "gpu"),
@@ -819,10 +827,16 @@ class _GeneralTabMixin:
             if hasattr(self, "model_combo")
             else ""
         )
-        applies = engine == "local" and model_name in LOCAL_ONNX_MODEL_SIZES
+        applies = engine == "local" and model_name in _DEVICE_AWARE_LOCAL_MODELS
         self.local_onnx_device_combo.setEnabled(applies)
 
         if not applies:
+            if model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
+                self.local_onnx_device_note_label.setText(
+                    "This model runs on CPU through onnx-asr and ignores this "
+                    "setting. It is already the fastest local option here."
+                )
+                return
             self.local_onnx_device_note_label.setText(
                 "Only applies to the local ONNX models (Cohere, Granite, "
                 "Nemotron). faster-whisper uses its own device setting."
@@ -879,6 +893,19 @@ class _GeneralTabMixin:
                 "Batch mode only. Auto tries WebGPU, then DirectML, then "
                 "falls back to CPU (active device shown in the overlay)."
             )
+            return
+        if engine == "local" and model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
+            self.local_model_runtime_warning_label.setStyleSheet(note_style)
+            if model_name == CANARY_MODEL_SIZE:
+                self.local_model_runtime_warning_label.setText(
+                    "Batch mode only, CPU. Pick a language: this model has no "
+                    "auto-detect and would otherwise translate into English."
+                )
+            else:
+                self.local_model_runtime_warning_label.setText(
+                    "Batch mode only, CPU. Multilingual with no language "
+                    "selection needed, and the fastest local model here."
+                )
             return
         if engine == "local" and model_name in LOCAL_NEMOTRON_MODEL_SIZES:
             self.local_model_runtime_warning_label.setStyleSheet(warning_style)

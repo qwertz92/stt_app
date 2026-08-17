@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from ..config import (
+    CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
     LOCAL_ONNX_AUTO_CPU_MODELS,
@@ -24,6 +25,7 @@ from ..config import (
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
+    PARAKEET_MODEL_SIZE,
     language_modes_for_selection,
 )
 from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
@@ -217,6 +219,42 @@ _GRANITE_4_1_NAR_INT8_LAYOUT = _OnnxModelLayout(
     required_files=_GRANITE_4_1_NAR_INT8_REQUIRED_FILES,
 )
 
+# NeMo exports served by the pure-Python onnx-asr runtime. Both repos also ship
+# fp32 graphs (2.4 GB / 3.3 GB of `.onnx.data`); the allow-patterns deliberately
+# fetch only the int8 tier, which is what the app runs.
+_ONNX_ASR_INT8_BASE_ALLOW_PATTERNS = (
+    ".gitattributes",
+    "README.md",
+    "config.json",
+    "vocab.txt",
+    "*.int8.onnx",
+)
+
+_PARAKEET_INT8_LAYOUT = _OnnxModelLayout(
+    name="parakeet_tdt_int8",
+    precision="int8",
+    allow_patterns=(*_ONNX_ASR_INT8_BASE_ALLOW_PATTERNS, "nemo128.onnx"),
+    required_files=(
+        "config.json",
+        "vocab.txt",
+        "encoder-model.int8.onnx",
+        "decoder_joint-model.int8.onnx",
+    ),
+)
+
+_CANARY_INT8_LAYOUT = _OnnxModelLayout(
+    name="canary_aed_int8",
+    precision="int8",
+    allow_patterns=_ONNX_ASR_INT8_BASE_ALLOW_PATTERNS,
+    required_files=(
+        "config.json",
+        "vocab.txt",
+        "encoder-model.int8.onnx",
+        # AED, so a plain decoder — Parakeet's TDT ships a fused decoder_joint.
+        "decoder-model.int8.onnx",
+    ),
+)
+
 _NEMOTRON_INT4_LAYOUT = _OnnxModelLayout(
     name="nemotron_int4",
     precision="int4",
@@ -231,6 +269,8 @@ _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "granite-speech-4.1-2b-plus": _GRANITE_4_1_AR_INT8_LAYOUT,
     "granite-speech-4.1-2b-nar": _GRANITE_4_1_NAR_INT8_LAYOUT,
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
+    PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
+    CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
 }
 _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     model_name: layout.required_files for model_name, layout in _MODEL_LAYOUTS.items()

@@ -197,6 +197,12 @@ LOCAL_MODEL_LABELS: dict[str, str] = {
     "nemotron-3.5-asr-streaming-0.6b-int4": (
         "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB, true 560 ms streaming)"
     ),
+    "parakeet-tdt-0.6b-v3": (
+        "NVIDIA Parakeet TDT 0.6B v3 (~670 MB, CPU, fastest)"
+    ),
+    "canary-1b-v2": (
+        "NVIDIA Canary 1B v2 (~1.03 GB, CPU, pick a language)"
+    ),
 }
 
 

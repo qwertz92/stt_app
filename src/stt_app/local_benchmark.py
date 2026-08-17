@@ -13,6 +13,7 @@ from .csv_safety import spreadsheet_safe_mapping
 from .config import (
     LOCAL_MODEL_RUNTIME,
     LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
 )
@@ -284,6 +285,7 @@ def _run_onnx_case(
     cancel_check: Callable[[], bool] | None = None,
 ) -> BenchmarkCase:
     from .transcriber.local_nemotron import LocalNemotronTranscriber
+    from .transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
     from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
     total_steps = runs + (1 if warmup else 0)
@@ -306,6 +308,14 @@ def _run_onnx_case(
             language_mode=language_mode,
             provider_order=provider_order,
             use_runtime_vad=vad_filter,
+            model_dir=model_dir,
+        )
+    elif model_name in LOCAL_ONNX_ASR_MODEL_SIZES:
+        # CPU-only runtime: the device policy does not apply, and Parakeet
+        # normalizes any language to its single supported mode itself.
+        transcriber = LocalOnnxAsrTranscriber(
+            model_size=model_name,
+            language_mode=language_mode,
             model_dir=model_dir,
         )
     else:

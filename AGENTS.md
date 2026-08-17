@@ -50,6 +50,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - sounddevice for mic capture
 - faster-whisper (CTranslate2) for local transcription
 - ONNX Runtime GenAI for Nemotron 3.5 cache-aware local streaming
+- onnx-asr (pure Python) for NVIDIA Parakeet TDT and Canary, CPU only
 - Remote providers: AssemblyAI (SDK batch + Universal-3.5 Pro realtime),
   OpenAI (REST API), Groq (SDK), Deepgram (REST + WebSocket),
   ElevenLabs (REST API), Azure LLM Speech / MAI-Transcribe (REST, batch-only),
@@ -71,6 +72,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
+| `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models) |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
@@ -863,6 +865,44 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   high). `package.json`'s `overrides` therefore forces `sharp: ^0.35.0`. Keep
   that entry until Transformers.js widens its own range; sharp 0.35 requires
   Node >= 20.9, which this project already exceeds.
+- **onnx-asr engine (Parakeet TDT 0.6B v3, Canary 1B v2)**: a third local ONNX
+  path in `transcriber/local_onnx_asr.py`, separate from the Cohere/Granite Node
+  runtime and from Nemotron's ORT GenAI path. It is **pure Python and needs no
+  Node.js**, and it adds no ONNX Runtime: `onnx-asr[cpu,hub]` resolves the exact
+  `onnxruntime` distribution `onnxruntime-genai` already requires. Only
+  inference lives in that module — download, cache detection, size estimation
+  and deletion reuse the shared `_OnnxModelLayout` entries in
+  `local_webgpu_asr`, whose allow-patterns fetch only the int8 tier (both repos
+  also ship fp32 graphs worth 2.4 GB and 3.3 GB).
+  Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **RTF 0.046 EN /
+  0.043 DE**, Canary 1029 MB at RTF 0.134 / 0.135 — Parakeet is roughly ten
+  times faster than Granite NAR and six times faster than Granite 2B *on the
+  GPU*, so a GPU path is not needed to make it the quickest local option.
+  **Never add `onnxruntime-directml`.** It installs happily beside
+  `onnxruntime` — `pip check` reports nothing wrong — but both distributions
+  own the same `onnxruntime/` package directory (620 of 625 files), so the
+  DirectML wheel silently overwrites the CPU build and downgrades the reported
+  version. `onnxruntime-genai` then dies with "The requested API version [26]
+  is not available" and a DLL init failure, i.e. it would trade a 1.9x Parakeet
+  speedup for the whole Nemotron engine. `onnxruntime-webgpu==1.27.0` is the one
+  GPU distribution that coexists, but it measured *slower* than CPU here. If a
+  GPU path is ever wanted it must be an isolated subprocess environment, like
+  the Node runner already is.
+  **Canary must never expose `auto`.** onnx-asr hardcodes the `<|en|>` source
+  and target token, so with no explicit language it *translates* German into
+  English instead of transcribing it (observed: "The automatic speaker
+  recognition wandels spoken language..."). It is therefore in
+  `LOCAL_EXPLICIT_LANGUAGE_MODELS` alongside Cohere, and
+  `_normalize_language_mode` maps any unsupported code onto a trained one
+  because an untrained ISO code raises `KeyError` deep inside the runtime.
+  Parakeet is the mirror image: it accepts `language=` and *ignores* it (a
+  bogus code yields byte-identical output), so it exposes only `auto` and sends
+  no language at all rather than faking control. Both are batch-only, and both
+  are excluded from the ONNX Device picker because they are CPU-only and would
+  otherwise let the UI claim a setting that does nothing. PyInstaller needs
+  `collect_all('onnx_asr')`, not just a hidden import: the mel/resampler graphs
+  are package *data* loaded via `importlib.resources`, and without them every
+  model fails while constructing its preprocessor.
 - **Local ONNX execution device (`local_onnx_device`, default `auto`, schema
   23)**: the Benchmark tab could always pin a device, but daily dictation
   always ran on `auto` because `factory.py` never passed one. The General tab's

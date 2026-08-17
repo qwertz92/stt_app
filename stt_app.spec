@@ -18,6 +18,11 @@ hiddenimports = [
     'stt_app.benchmark_worker',
     'onnxruntime_genai',
     'comtypes',
+    # onnx-asr's loader imports every model class statically, so one entry
+    # covers Parakeet and Canary. huggingface_hub is imported lazily inside
+    # its resolver and would otherwise be missed.
+    'onnx_asr',
+    'huggingface_hub',
 ]
 ort_genai_datas, ort_genai_binaries, ort_genai_hiddenimports = collect_all(
     'onnxruntime_genai'
@@ -25,6 +30,14 @@ ort_genai_datas, ort_genai_binaries, ort_genai_hiddenimports = collect_all(
 datas.extend(ort_genai_datas)
 binaries.extend(ort_genai_binaries)
 hiddenimports.extend(ort_genai_hiddenimports)
+# onnx-asr keeps its mel/resampler graphs as package *data*
+# (onnx_asr/preprocessors/data/*.onnx plus fbanks.npz), loaded through
+# importlib.resources. hiddenimports alone does not bundle those, and without
+# them every model fails while constructing its preprocessor.
+onnx_asr_datas, onnx_asr_binaries, onnx_asr_hiddenimports = collect_all('onnx_asr')
+datas.extend(onnx_asr_datas)
+binaries.extend(onnx_asr_binaries)
+hiddenimports.extend(onnx_asr_hiddenimports)
 for source, target in (
     ('package.json', '.'),
     ('package-lock.json', '.'),

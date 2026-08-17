@@ -180,7 +180,17 @@ LOCAL_WEBGPU_MODEL_SIZES = (
 
 NEMOTRON_MODEL_SIZE = "nemotron-3.5-asr-streaming-0.6b-int4"
 LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
-LOCAL_ONNX_MODEL_SIZES = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES
+
+# NVIDIA NeMo models served by the pure-Python `onnx-asr` runtime. They need no
+# Node.js and no new ONNX Runtime: onnx-asr resolves the same `onnxruntime`
+# distribution the app already carries for Nemotron.
+PARAKEET_MODEL_SIZE = "parakeet-tdt-0.6b-v3"
+CANARY_MODEL_SIZE = "canary-1b-v2"
+LOCAL_ONNX_ASR_MODEL_SIZES = (PARAKEET_MODEL_SIZE, CANARY_MODEL_SIZE)
+
+LOCAL_ONNX_MODEL_SIZES = (
+    LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
+)
 
 GRANITE_4_1_MODEL_SIZES = (
     "granite-speech-4.1-2b",
@@ -195,6 +205,8 @@ LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "granite-speech-4.1-2b-plus": "int8",
     "granite-speech-4.1-2b-nar": "int8",
     NEMOTRON_MODEL_SIZE: "int4",
+    PARAKEET_MODEL_SIZE: "int8",
+    CANARY_MODEL_SIZE: "int8",
 }
 
 LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
@@ -204,6 +216,8 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b-plus": "ONNX INT8 AR",
     "granite-speech-4.1-2b-nar": "ONNX INT8 NAR",
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
+    PARAKEET_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
+    CANARY_MODEL_SIZE: "onnx-asr INT8 AED, CPU",
 }
 
 GRANITE_4_1_REPO_MAP: dict[str, str] = {
@@ -255,6 +269,8 @@ MODEL_REPO_MAP: dict[str, str] = {
     NEMOTRON_MODEL_SIZE: (
         "onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"
     ),
+    PARAKEET_MODEL_SIZE: "istupakov/parakeet-tdt-0.6b-v3-onnx",
+    CANARY_MODEL_SIZE: "istupakov/canary-1b-v2-onnx",
     **GRANITE_4_1_REPO_MAP,
 }
 
@@ -262,6 +278,7 @@ LOCAL_MODEL_RUNTIME: dict[str, str] = {
     **{name: "faster-whisper" for name in FASTER_WHISPER_MODEL_SIZES},
     **{name: "onnx-webgpu" for name in LOCAL_WEBGPU_MODEL_SIZES},
     **{name: "onnxruntime-genai" for name in LOCAL_NEMOTRON_MODEL_SIZES},
+    **{name: "onnx-asr" for name in LOCAL_ONNX_ASR_MODEL_SIZES},
 }
 
 # Approximate model sizes for UI progress estimation.
@@ -283,6 +300,9 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "granite-speech-4.1-2b-plus": 4_065,
     "granite-speech-4.1-2b-nar": 2_490,
     NEMOTRON_MODEL_SIZE: 793,
+    # Measured from the int8 downloads: 670.48 MB and 1029.33 MB.
+    PARAKEET_MODEL_SIZE: 670,
+    CANARY_MODEL_SIZE: 1_029,
 }
 
 LANGUAGE_MODE_LABELS: dict[str, str] = {
@@ -611,6 +631,18 @@ COHERE_LANGUAGE_MODES = (
     "ja",
     "ko",
 )
+# Parakeet TDT v3 is implicitly multilingual: onnx-asr accepts a `language`
+# argument but the model ignores it (verified: "de" and a bogus code produce
+# byte-identical output), so Auto is the only honest choice.
+PARAKEET_LANGUAGE_MODES = ("auto",)
+# Canary must NEVER offer Auto. onnx-asr hardcodes the <|en|> source/target
+# token, so without an explicit language it silently *translates* German into
+# English rather than transcribing it. The 25 trained locales only; the vocab
+# carries ~180 ISO codes and an untrained one raises KeyError.
+CANARY_LANGUAGE_MODES = (
+    "de", "en", "bg", "cs", "da", "el", "es", "et", "fi", "fr", "hr", "hu",
+    "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
+)
 GRANITE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt", "ja")
 GRANITE_NO_JAPANESE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt")
 # Bare app language codes for Nemotron's transcription-ready and broad-coverage
@@ -898,8 +930,10 @@ ENGINE_LANGUAGE_MODES: dict[str, tuple[str, ...]] = {
     "funasr": FUNASR_LANGUAGE_MODES,
 }
 LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
-LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES
-LOCAL_EXPLICIT_LANGUAGE_MODELS = LOCAL_WEBGPU_MODEL_SIZES
+LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
+# Models that must never expose Auto. Cohere needs an explicit language; Canary
+# would otherwise translate to English instead of transcribing.
+LOCAL_EXPLICIT_LANGUAGE_MODELS = LOCAL_WEBGPU_MODEL_SIZES + (CANARY_MODEL_SIZE,)
 MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "cohere-transcribe-03-2026"): COHERE_LANGUAGE_MODES,
     ("local", "granite-4.0-1b-speech"): GRANITE_LANGUAGE_MODES,
@@ -907,6 +941,8 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "granite-speech-4.1-2b-plus"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
     ("local", "granite-speech-4.1-2b-nar"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
     ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
+    ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
+    ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,
     (
         "assemblyai",
         "universal-3-5-pro",

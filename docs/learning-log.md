@@ -2628,3 +2628,37 @@ Agents and developers: use this as a knowledge base for past issues and solution
   preload key — unlike the language, the device is baked into the loaded
   runtime — and the row stays permanently visible so switching to
   faster-whisper or a remote engine cannot shift the fields under it.
+- **Added NVIDIA Parakeet TDT 0.6B v3 and Canary 1B v2 through `onnx-asr`.**
+  - Measured through the app's own transcriber on a Ryzen 5 7600X, CPU only:
+    Parakeet **670.6 MB, RTF 0.046 EN / 0.043 DE**; Canary **1029.3 MB, RTF
+    0.134 / 0.135**. Parakeet is about ten times faster than Granite NAR (0.49)
+    and six times faster than Granite 2B *on the GPU* (0.28) — a 17 s dictation
+    comes back in 0.78 s with no GPU involved at all.
+  - The graft is unusually light: `onnx-asr[cpu,hub]` resolves the same
+    `onnxruntime` 1.28.0 that `onnxruntime-genai` already required, so no new
+    native runtime enters the app. Download, cache detection, progress and
+    deletion all reuse the existing `_OnnxModelLayout` machinery; only
+    inference is new code.
+  - **DirectML was measured and rejected.** It is genuinely the fastest
+    (Parakeet EN RTF 0.022 vs 0.043) but `onnxruntime-directml` installs beside
+    `onnxruntime` without pip noticing — `pip check` reports no broken
+    requirements — while overwriting 620 of 625 shared files. `import
+    onnxruntime` then reports 1.24.4 and `onnxruntime-genai` dies with "The
+    requested API version [26] is not available" plus a DLL init failure. So it
+    would silently trade a 1.9x speedup for the entire Nemotron engine.
+    `onnxruntime-webgpu==1.27.0` coexists but is slower than CPU here.
+  - **Canary's default silently translates.** With no explicit language,
+    onnx-asr's hardcoded `<|en|>` made it return *"The automatic speaker
+    recognition wandels spoken language reliably into written text"* for German
+    audio. It is now in `LOCAL_EXPLICIT_LANGUAGE_MODELS` and can never select
+    Auto. Parakeet is the opposite — it ignores the language argument entirely,
+    so it exposes only Auto and sends none.
+  - The German gate clip turned out to be a weak discriminator: Parakeet,
+    Canary and faster-whisper large-v3 all mangle its three isolated umlaut
+    showcase words identically, so that failure is the TTS clip, not the
+    models. Everything diagnostic — noun capitalisation, `ä`/`ö`/`ü` inside
+    real words, `ß` in "Straße", sentence punctuation — is correct in both.
+    A real dictated German sample is still needed to rank German accuracy.
+  - Canary is kept despite being 3x slower because published FLEURS-de favours
+    it (3.43 vs Parakeet's 4.16) and our clip cannot separate them; it is the
+    accuracy option, Parakeet the speed option.

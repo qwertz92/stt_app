@@ -8,6 +8,7 @@ from ..config import (
     DEFAULT_FUNASR_MODEL,
     DEFAULT_LOCAL_ONNX_DEVICE,
     LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
 )
 from ..settings_store import AppSettings
@@ -31,6 +32,15 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
     selection, shared by the explicit ``local`` engine path and the
     unknown-engine fallback so the two cannot drift.
     """
+    if settings.model_size in LOCAL_ONNX_ASR_MODEL_SIZES:
+        from .local_onnx_asr import LocalOnnxAsrTranscriber
+
+        return LocalOnnxAsrTranscriber(
+            model_size=settings.model_size,
+            language_mode=settings.language_mode,
+            offline_mode=settings.offline_mode,
+            model_dir=settings.model_dir,
+        )
     if settings.model_size in LOCAL_NEMOTRON_MODEL_SIZES:
         # Nemotron's cache-aware ONNX Runtime GenAI streaming has no prompt/
         # biasing input, so custom_vocabulary does not apply here.

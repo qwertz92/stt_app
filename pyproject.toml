@@ -10,6 +10,10 @@ dependencies = [
     "numpy==2.5.2",
     "faster-whisper==1.2.1",
     "onnxruntime-genai==0.15.2; platform_system == 'Windows'",
+    # Pure-Python NeMo runtime (Parakeet/Canary). Resolves the same
+    # onnxruntime distribution onnxruntime-genai already requires; do NOT
+    # add onnxruntime-directml, which overwrites it and breaks genai.
+    "onnx-asr[cpu,hub]==0.12.0",
     "keyring==25.7.0",
     "pywin32==312; platform_system == 'Windows'",
     "comtypes==1.4.16; platform_system == 'Windows'",

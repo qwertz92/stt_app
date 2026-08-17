@@ -3,6 +3,7 @@ sounddevice==0.5.5
 numpy==2.5.2
 faster-whisper==1.2.1
 onnxruntime-genai==0.15.2
+onnx-asr[cpu,hub]==0.12.0
 keyring==25.7.0
 pywin32==312
 comtypes==1.4.16

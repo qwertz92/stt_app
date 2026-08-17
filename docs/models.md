@@ -44,6 +44,8 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 Plus, speaker tags/timestamps (raw INT8, CPU-bound), batch mode only |
 | `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 NAR, non-autoregressive (raw INT8, CPU-bound), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
+| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest local model** — RTF ~0.045 on CPU, no GPU or Node.js needed, batch mode only |
+| `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet, ~3x slower, batch mode only |
 
 ### Which model should I use?
 
@@ -58,6 +60,7 @@ hardware.
 | Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` (GPU) |
 | High accuracy, fastest on GPU | `cohere-transcribe-03-2026` (GPU) |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` |
+| Fastest local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (CPU) |
 | No GPU / zero setup, German + English | `small` (default, CPU) |
 | Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, maximum speed | `distil-large-v3.5` |
@@ -525,3 +528,27 @@ This is why you cannot just drop files into a folder — the download script and
 Setting **Model Dir** (e.g. `D:\whisper-models`) causes all model downloads and cache lookups to use that directory instead of the default HuggingFace cache. The same internal structure is created there.
 
 Useful for: USB transfer, network share, keeping models separate from user profile.
+
+### onnx-asr models (Parakeet, Canary)
+
+`parakeet-tdt-0.6b-v3` and `canary-1b-v2` run through
+[`onnx-asr`](https://github.com/istupakov/onnx-asr), a pure-Python runtime. Unlike
+the Cohere/Granite models they need **no Node.js**, and unlike Nemotron they need
+no extra ONNX Runtime — they reuse the one the app already ships.
+
+Both are **CPU only and batch only**. That is not a limitation in practice:
+measured on a Ryzen 5 7600X, Parakeet transcribes a 17-second clip in 0.78 s
+(RTF 0.046), which is faster than any GPU model in this app.
+
+The ONNX Device setting does not apply to them and is disabled while one is
+selected. A DirectML build of ONNX Runtime would be roughly twice as fast again,
+but installing it overwrites the ONNX Runtime that Nemotron depends on and breaks
+that engine, so the app deliberately does not ship it.
+
+**Language selection differs between the two, and it matters:**
+
+- **Parakeet** is implicitly multilingual and ignores any language you give it,
+  so it offers only `Auto`.
+- **Canary** has no automatic detection. Left to itself it would *translate* into
+  English instead of transcribing, so the app requires you to pick one of its 25
+  trained languages and never offers `Auto`.
