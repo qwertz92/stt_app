@@ -270,6 +270,22 @@ def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):
     assert not dialog._run_button.isEnabled()
 
 
+def test_retranscribe_dialog_empty_result_is_not_saved_to_history(tmp_path):
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(),
+        audio_path=tmp_path / "clip.wav",
+        base_settings=AppSettings(),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    dialog._on_finished(True, "")
+
+    assert dialog.produced_transcript is False
+    assert "Failed" in dialog._status_label.text()
+    assert not dialog._copy_button.isEnabled()
+
+
 def test_retranscribe_dialog_shows_the_result_and_enables_copy(tmp_path):
     QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(

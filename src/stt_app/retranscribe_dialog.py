@@ -336,12 +336,13 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._elapsed_timer.stop()
         self._set_controls_enabled(True)
         result = str(text or "")
-        if not ok:
+        if not ok or not result.strip():
+            self.produced_transcript = False
             self._set_status(f"Failed: {result}", error=True)
             return
         self._result_text.setPlainText(result)
-        self._copy_button.setEnabled(bool(result.strip()))
-        self.produced_transcript = bool(result.strip())
+        self._copy_button.setEnabled(True)
+        self.produced_transcript = True
         self._set_status("Done. Saved to history as a new entry.", success=True)
 
     # -- feedback ------------------------------------------------------------

@@ -89,6 +89,14 @@ _ARCHIVED_RECORDING_NAME_RE = re.compile(
     re.IGNORECASE,
 )
 
+# A finished batch/import run that produced no text is a model miss, not
+# silence. The silence gate already skipped true quiet recordings. Treat the
+# empty result as a failure so Retry keeps the audio and the overlay does not
+# look like the recording never happened.
+_EMPTY_MODEL_TRANSCRIPT_MESSAGE = (
+    "The model returned no text for this recording."
+)
+
 
 def _join_transcripts(texts: list[str]) -> str:
     """Join transcripts for one paste, separating them by a single space
@@ -2581,9 +2589,16 @@ class DictationController(QtCore.QObject):
                 self._set_transcriber_cancel_check(transcriber, lambda: job.aborting)
             transcribe_started_at = time.perf_counter()
             text = transcriber.transcribe_batch(wav_bytes)
-            outcome = "success"
-            terminal_kind = "ready"
-            terminal_payload = text
+            if not str(text or "").strip() and (
+                job is None or job.mode != "streaming"
+            ):
+                outcome = "empty_transcript"
+                terminal_kind = "failed"
+                terminal_payload = _EMPTY_MODEL_TRANSCRIPT_MESSAGE
+            else:
+                outcome = "success"
+                terminal_kind = "ready"
+                terminal_payload = text
         except TranscriptionCanceled:
             outcome = "canceled"
             terminal_kind = "canceled"
@@ -2633,16 +2648,21 @@ class DictationController(QtCore.QObject):
             runtime_details = str(
                 getattr(transcriber, "runtime_details_text", "") or ""
             )
+            result_chars = (
+                len(terminal_payload) if terminal_kind == "ready" else 0
+            )
             self._logger.info(
                 "transcription_timing engine=%s model=%s init_ms=%d "
-                "transcribe_ms=%d total_ms=%d audio_bytes=%d outcome=%s "
-                "runtime_device=%s gpu_available=%s runtime_details=%s",
+                "transcribe_ms=%d total_ms=%d audio_bytes=%d chars=%d "
+                "outcome=%s runtime_device=%s gpu_available=%s "
+                "runtime_details=%s",
                 settings.engine,
                 self._selected_model_name(settings),
                 init_elapsed_ms,
                 transcribe_elapsed_ms,
                 total_elapsed_ms,
                 len(wav_bytes),
+                result_chars,
                 outcome,
                 runtime_device or "n/a",
                 gpu_available if gpu_available != "" else "n/a",
@@ -2922,6 +2942,14 @@ class DictationController(QtCore.QObject):
         job: _TranscriptionJob | None = None
         if request_token is not None:
             job = self._jobs.get(request_token)
+        session_mode = job.mode if job is not None else self._active_session_mode
+        if not text.strip() and session_mode != "streaming":
+            self._on_transcription_failed(
+                _EMPTY_MODEL_TRANSCRIPT_MESSAGE,
+                request_token=request_token,
+            )
+            return
+        if request_token is not None:
             if not self._is_foreground_transcription(request_token, job):
                 # A newer recording owns the live session, or this job was asked
                 # to stop. Keep the live session untouched and deliver this
@@ -4053,20 +4081,26 @@ class DictationController(QtCore.QObject):
                 progress_callback,
             )
             text = future.result().strip()
-            if text:
-                self._append_transcript_history(
-                    text,
-                    settings,
-                    "import",
-                    source_recording_id=recording_id,
-                    source_audio_path=(
-                        "" if managed_last_recording else os.path.abspath(path)
-                    ),
-                    track_for_edit=False,
-                )
+            if not text:
+                if managed_last_recording:
+                    self._last_recording_store.mark_failed(
+                        _EMPTY_MODEL_TRANSCRIPT_MESSAGE,
+                        **conditional_transition,
+                    )
+                return False, _EMPTY_MODEL_TRANSCRIPT_MESSAGE
+            self._append_transcript_history(
+                text,
+                settings,
+                "import",
+                source_recording_id=recording_id,
+                source_audio_path=(
+                    "" if managed_last_recording else os.path.abspath(path)
+                ),
+                track_for_edit=False,
+            )
             if managed_last_recording:
                 self._last_recording_store.mark_completed(**conditional_transition)
-            return True, text or "No speech detected."
+            return True, text
         except Exception as exc:
             self._logger.exception("Failed to transcribe imported file")
             if managed_last_recording:

@@ -1229,3 +1229,49 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     assert controller._transcriber_cache is None
     controller.shutdown()
     _ = app
+
+
+def test_empty_batch_transcript_is_a_retryable_error(monkeypatch, tmp_path):
+    """A model that returns no text is not 'no speech' and must not vanish."""
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._last_transcript = "previous transcript"
+
+    token = _record_and_stop(controller)
+    controller._on_transcription_ready("   ", request_token=token)
+
+    assert overlay.states[-1][0] == "Error"
+    assert "no text" in overlay.states[-1][1].lower()
+    assert "Retry" in overlay.states[-1][1]
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    assert controller._last_transcript == "previous transcript"
+    assert inserter.calls == []
+    assert history.load() == []
+    assert token not in controller._jobs
+    controller.shutdown()
+    _ = app
+
+
+def test_empty_background_transcript_is_reported(monkeypatch, tmp_path):
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    reported: list[str] = []
+    controller.background_transcription_failed.connect(reported.append)
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("", request_token=token_a)
+
+    assert overlay.states[-1][0] == "Listening"
+    assert controller._audio_capture is not None
+    assert token_a not in controller._jobs
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    assert inserter.calls == []
+    assert history.load() == []
+    assert len(reported) == 1
+    assert "no text" in reported[0].lower()
+    assert "Retry" in reported[0]
+    controller.shutdown()
+    _ = app

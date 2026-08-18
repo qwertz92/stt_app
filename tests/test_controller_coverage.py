@@ -882,6 +882,34 @@ def test_transcribe_worker_emits_unexpected_error():
     _ = app
 
 
+def test_transcribe_worker_empty_batch_text_is_a_failure():
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._executor = ImmediateExecutor()
+    controller._last_transcript = "kept"
+
+    class EmptyTranscriber:
+        def transcribe_batch(self, wav):
+            return "  "
+
+    controller._get_or_create_transcriber = (  # type: ignore[method-assign]
+        lambda _settings: EmptyTranscriber()
+    )
+
+    settings_snapshot = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
+    job = controller._register_transcription_job(3, settings_snapshot, "batch")
+    controller._active_request_token = 3
+    controller._store_request_audio(3, b"spoken-audio", settings_snapshot)
+    controller._transcribe_worker(3, b"spoken-audio", settings_snapshot, job)
+
+    assert overlay.states[-1][0] == "Error"
+    assert "no text" in overlay.states[-1][1].lower()
+    assert controller._last_failed_wav_bytes == b"spoken-audio"
+    assert controller._last_transcript == "kept"
+    controller.shutdown()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # _finalize_stream_worker error branches
 # ---------------------------------------------------------------------------
@@ -1360,6 +1388,35 @@ def test_transcribe_audio_file_marks_managed_last_recording_completed(
     assert text == "import text"
     assert last_recording_store.transcribing == [("deepgram", "nova-2", "import")]
     assert last_recording_store.completed == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_transcribe_audio_file_empty_model_text_is_a_failure(
+    monkeypatch,
+    tmp_path,
+):
+    last_path = tmp_path / "last_recording.wav"
+    last_path.write_bytes(b"RIFF")
+    last_recording_store = FakeLastRecordingStore(str(last_path))
+    last_recording_store._available = True
+    controller, app = _make_controller(last_recording_store=last_recording_store)
+
+    class _FakeTranscriber:
+        def transcribe_batch(self, _path):
+            return "  "
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FakeTranscriber(),
+    )
+
+    ok, text = controller.transcribe_audio_file(str(last_path))
+
+    assert ok is False
+    assert "no text" in text.lower()
+    assert last_recording_store.failed == [text]
+    assert last_recording_store.completed == 0
     controller.shutdown()
     _ = app
 

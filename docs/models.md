@@ -564,3 +564,9 @@ that engine, so the app deliberately does not ship it.
 - **Canary** has no automatic detection. Left to itself it would *translate* into
   English instead of transcribing, so the app requires you to pick one of its 25
   trained languages and never offers `Auto`.
+
+Parakeet's TDT decoder can return no text for a short but real utterance
+(about one to two seconds). That is a model miss, not the silence gate: the
+overlay shows an Error with Retry, and History → Use last recording can send
+the same clip to another model. Do not pad the audio as a workaround — extra
+silence can drop words or invent new ones.

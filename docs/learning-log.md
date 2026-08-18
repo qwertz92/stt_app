@@ -3,6 +3,24 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-18 (empty Parakeet result looked like a skipped queue item)
+
+- **The queued WAV was transcribed.** `recording_20260818_211317_907096.wav`
+  (token 11, 1.8 s, peak 0.1178) was submitted and finished with
+  `outcome=success` in 1188 ms. Nothing was inserted and nothing was written
+  to history because Parakeet returned `""`. The next clip 28 s later was the
+  same sentence spoken longer (`Gib mir hierzu bitte noch eine Auskunft.`) and
+  worked. Whisper recovers the short clip; Parakeet does not.
+- **"No speech detected" as Done hid the miss.** The silence gate had already
+  passed. The empty-result path then showed a brief Done state, saved no
+  history, cleared retry audio, and overwrote `_last_transcript`. In a queue
+  that looks exactly like "this recording was skipped".
+- **Do not pad short Parakeet audio.** 0.5 s lead + 1.0 s tail recovered a
+  truncated sentence; 6 s of pad invented words. Treat empty batch text as
+  `empty_transcript` / Error + Retry instead. Import/retranscribe of the same
+  empty result must return failure, not success plus a fake
+  "No speech detected." history save.
+
 ## 2026-08-03 (tray flyout solved)
 
 - **Solved by replacing the icon registration, not by anything at menu time.**

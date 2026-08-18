@@ -301,6 +301,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   one session backs the threshold: 26 silent/hallucinated recordings measured
   0.0006-0.0034 and 7 real utterances 0.0075-0.0290, so 0.0040 separates them
   with 1.9x margin below and 1.2x above.
+- **Empty model text is a failure, not "no speech"**: once a recording has
+  passed the silence gate, a blank `transcribe_batch` result means the model
+  missed the utterance. Parakeet TDT does this on some 1-2 s clips that
+  still contain clear speech (replayed: peak 0.12, Whisper recovered the
+  text, padding either dropped words or invented new ones). Do not treat
+  that as the silence-gate Done path: show Error, keep the WAV for Retry,
+  leave `_last_transcript` alone, and log `chars=0
+  outcome=empty_transcript`. Streaming finalization may still legitimately
+  be empty.
 - **Overlay changes of one event go through `batched_update`**: most
   transitions touch the queue panel *and* the state text (a finished
   transcription clears its queue row, then publishes the transcript). Applied
