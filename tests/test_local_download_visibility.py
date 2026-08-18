@@ -11,26 +11,36 @@ competed with the first for the same link.
 from __future__ import annotations
 
 import threading
+from types import SimpleNamespace
 
 from stt_app.settings_dialog_local import _LocalModelsMixin
 
 
 class _Controller:
-    def __init__(self, downloading: str | None = None, explode: bool = False):
+    def __init__(
+        self,
+        downloading: str | None = None,
+        explode: bool = False,
+        model_dir: str = "",
+    ):
         self._downloading = downloading
         self._explode = explode
+        self._model_dir = model_dir
 
-    def preload_downloading_model(self) -> str | None:
+    def preload_downloading_model(self):
         if self._explode:
             raise RuntimeError("controller is shutting down")
-        return self._downloading
+        if not self._downloading:
+            return None
+        return self._downloading, self._model_dir
 
 
 class _Dialog(_LocalModelsMixin):
     """Just enough state for the download-state helpers."""
 
-    def __init__(self, controller=None, active=None, queued=None):
+    def __init__(self, controller=None, active=None, queued=None, model_dir=""):
         self._controller = controller
+        self.model_dir_edit = SimpleNamespace(text=lambda: model_dir)
         self._local_model_download_lock = threading.Lock()
         self._local_model_download_active = active
         self._local_model_download_queue = list(queued or [])
@@ -123,3 +133,35 @@ def test_watch_sync_before_the_timer_exists_is_harmless():
     dialog = _Dialog(controller=_Controller(None))
     dialog._local_tab_index = 3
     dialog._sync_preload_download_watch(3)  # must not raise
+
+
+def test_a_download_into_another_model_dir_does_not_suppress_this_one():
+    """The dialog can point at a Model Dir the controller is not filling."""
+    dialog = _Dialog(
+        controller=_Controller("cohere-transcribe-03-2026", model_dir=r"D:\other"),
+        model_dir=r"C:\mine",
+    )
+    assert dialog._preload_downloading_model() is None
+    assert dialog._local_model_download_state("cohere-transcribe-03-2026") == ""
+    assert (
+        "cohere-transcribe-03-2026"
+        not in dialog._local_model_download_pending_names()
+    )
+
+
+def test_matching_model_dir_is_still_recognised():
+    dialog = _Dialog(
+        controller=_Controller("cohere-transcribe-03-2026", model_dir=r"C:\mine"),
+        model_dir=r"C:\mine",
+    )
+    assert dialog._local_model_download_state("cohere-transcribe-03-2026") == "active"
+
+
+def test_old_string_only_answer_is_rejected():
+    """A controller that has not been updated must not be half-understood."""
+    class _Legacy:
+        def preload_downloading_model(self):
+            return "cohere-transcribe-03-2026"
+
+    dialog = _Dialog(controller=_Legacy())
+    assert dialog._preload_downloading_model() is None

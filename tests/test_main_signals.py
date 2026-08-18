@@ -759,6 +759,7 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
     store.mark_failed("network")
 
     prompts = []
+    captured = {}
 
     class _FakeBox:
         def __init__(self, text):
@@ -768,11 +769,11 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
             prompts.append(self._text)
             return QtWidgets.QMessageBox.Yes
 
-    monkeypatch.setattr(
-        main_module,
-        "styled_message_box",
-        lambda *, text, **_kwargs: _FakeBox(text),
-    )
+    def _fake_box(**kwargs):
+        captured.update(kwargs)
+        return _FakeBox(kwargs["text"])
+
+    monkeypatch.setattr(main_module, "styled_message_box", _fake_box)
 
     opened = []
 
@@ -784,6 +785,40 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
 
     assert opened == [True]
     assert "Settings -> Import Audio" in prompts[0]
+    # A recovery prompt has to be a question offering both answers, with the
+    # safe one preselected; a plain information box would lose the choice.
+    assert captured["icon"] == QtWidgets.QMessageBox.Question
+    assert captured["default_button"] == QtWidgets.QMessageBox.Yes
+    assert captured["buttons"] & QtWidgets.QMessageBox.Yes
+    assert captured["buttons"] & QtWidgets.QMessageBox.No
+    _ = app
+
+
+def test_prompt_recoverable_last_recording_respects_no(monkeypatch, tmp_path):
+    """Answering No must not open the settings dialog behind the user's back."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    store.save_recording(b"RIFF", keep_after_success=False)
+    store.mark_failed("network")
+
+    class _FakeBox:
+        def exec(self):
+            return QtWidgets.QMessageBox.No
+
+    monkeypatch.setattr(main_module, "styled_message_box", lambda **_k: _FakeBox())
+
+    opened = []
+
+    class _FakeDialog:
+        def prepare_last_recording_import(self):
+            opened.append(True)
+
+    _prompt_recoverable_last_recording(store, lambda: _FakeDialog())
+
+    assert opened == []
     _ = app
 
 

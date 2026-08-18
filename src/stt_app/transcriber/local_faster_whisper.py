@@ -283,16 +283,25 @@ def cleanup_incomplete_model_download(
 
 
 def format_model_download_error(model_name: str, exc: Exception) -> str:
+    ssl_hint = (
+        " The failure looked like a certificate error, which a corporate proxy "
+        "also produces; if the network does allow Hugging Face, point "
+        f"REQUESTS_CA_BUNDLE at your CA bundle and retry. See {DOC_SSL_PROXY_PATH}."
+        if _is_ssl_error(exc)
+        else ""
+    )
     if model_name in MODELS_WITHOUT_MODELSCOPE_MIRROR:
         # The generic wording ends in "check your internet connection", which
         # sends people chasing the one thing that is fine. This model simply
-        # has no second source.
+        # has no second source. A TLS-intercepting proxy reports the block as a
+        # certificate failure, so both causes are named rather than guessed at.
         return (
             f"'{model_name}' could not be downloaded: Hugging Face is not "
             "reachable from this machine and this model has no ModelScope "
             "mirror, so there is no second source to fall back to. Download it "
             "on an unrestricted machine and point 'Model Dir' at it, pick a "
-            f"mirrored model, or ask IT to allow huggingface.co. See {DOC_MODELS_PATH}."
+            "mirrored model, or ask IT to allow huggingface.co. See "
+            f"{DOC_MODELS_PATH}.{ssl_hint}"
         )
     if _is_ssl_error(exc):
         return (

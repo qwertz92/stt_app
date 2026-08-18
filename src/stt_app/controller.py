@@ -303,6 +303,7 @@ class DictationController(QtCore.QObject):
         self._preload_cancel_requested = False
         self._preload_download_process: subprocess.Popen | None = None
         self._preload_downloading_model: str | None = None
+        self._preload_downloading_dir: str = ""
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
         self._active_request_token: int | None = None
@@ -4300,30 +4301,40 @@ class DictationController(QtCore.QObject):
     def _set_preload_download_process(
         self,
         process: subprocess.Popen | None,
+        model_dir: str = "",
     ) -> None:
         with self._preload_download_lock:
             self._preload_download_process = process
-            self._preload_downloading_model = (
-                self._preload_target_model if process is not None else None
-            )
+            if process is None:
+                self._preload_downloading_model = None
+                self._preload_downloading_dir = ""
+            else:
+                self._preload_downloading_model = self._preload_target_model
+                self._preload_downloading_dir = str(model_dir or "")
 
-    def preload_downloading_model(self) -> str | None:
-        """Model the background preload is currently downloading, if any.
+    def preload_downloading_model(self) -> tuple[str, str] | None:
+        """Model and target directory the preload is downloading, if any.
 
         The settings dialog runs its own download queue and knows nothing about
         this one. Selecting a missing model and saving starts a download here,
         which then ran invisibly: the Local tab still listed the model as "Not
         downloaded" while bytes were arriving, and a second download started
-        from that tab competed with it for the same link.
+        from that tab competed with it for the same link. The directory is part
+        of the answer because the dialog can be pointed at a different Model Dir
+        than the one this download is filling.
         """
         with self._preload_download_lock:
-            return self._preload_downloading_model
+            name = self._preload_downloading_model
+            if not name:
+                return None
+            return name, self._preload_downloading_dir
 
     def _terminate_preload_download_process(self) -> None:
         with self._preload_download_lock:
             process = self._preload_download_process
             self._preload_download_process = None
             self._preload_downloading_model = None
+            self._preload_downloading_dir = ""
 
         if process is None:
             return
@@ -4356,7 +4367,7 @@ class DictationController(QtCore.QObject):
         except Exception as exc:
             raise RuntimeError(f"Failed to start model download: {exc}") from exc
 
-        self._set_preload_download_process(process)
+        self._set_preload_download_process(process, model_dir)
         try:
             while True:
                 if self._preload_generation_was_canceled(generation) or (

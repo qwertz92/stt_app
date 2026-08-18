@@ -20,13 +20,39 @@ def test_unmirrored_models_are_named_not_guessed():
         assert name in MODEL_REPO_MAP, f"{name} is not a known model"
 
 
+def test_the_unmirrored_set_is_exactly_what_was_verified():
+    """Pin the set, so shrinking it cannot pass silently.
+
+    Deriving the parametrization below from the set itself would keep every
+    test green if an entry were dropped -- the models would quietly go back to
+    "check your internet connection". These five were each probed against the
+    ModelScope API on 2026-08-18 and answered 404.
+    """
+    assert MODELS_WITHOUT_MODELSCOPE_MIRROR == frozenset(
+        {
+            "distil-large-v3.5",
+            "parakeet-tdt-0.6b-v3",
+            "canary-1b-v2",
+            "granite-speech-4.1-2b-plus",
+            "granite-speech-4.1-2b-nar",
+        }
+    )
+
+
 @pytest.mark.parametrize(
     "model_name",
-    sorted(MODELS_WITHOUT_MODELSCOPE_MIRROR),
+    [
+        "distil-large-v3.5",
+        "parakeet-tdt-0.6b-v3",
+        "canary-1b-v2",
+        "granite-speech-4.1-2b-plus",
+        "granite-speech-4.1-2b-nar",
+    ],
 )
 def test_unmirrored_download_error_does_not_blame_the_connection(model_name):
     """The old wording sent people to debug the one thing that was fine."""
     message = format_model_download_error(model_name, RuntimeError("hub is gone"))
+    assert model_name in message
     assert "no ModelScope mirror" in message
     assert "internet connection" not in message
     # It must say what to do instead of only what broke.
@@ -138,3 +164,65 @@ def test_missing_file_list_is_summarised_not_dumped(tmp_path):
             layout,
         )
     assert "more" in str(excinfo.value)
+
+
+@pytest.mark.parametrize("model_name", [PARAKEET_MODEL_SIZE, CANARY_MODEL_SIZE])
+def test_public_download_path_reports_the_missing_mirror(
+    monkeypatch, tmp_path, model_name
+):
+    """Go through the real entry point, not the helper.
+
+    Testing _download_onnx_via_modelscope directly still passes if the caller
+    stops handing it the model name, which is exactly the wiring that turns a
+    useful message back into "check your internet connection".
+    """
+    import huggingface_hub
+
+    from stt_app.transcriber import modelscope_mirror as ms
+
+    def blocked(*_args, **_kwargs):
+        raise OSError("huggingface blocked by proxy")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", blocked)
+    # ModelScope answers, but does not host this repo.
+    monkeypatch.setattr(ms, "modelscope_fallback_enabled", lambda: True)
+    monkeypatch.setattr(ms, "repo_available", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "webgpu_download_destination",
+        lambda *_a, **_k: tmp_path / "dest",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        local_webgpu_asr.download_webgpu_model_snapshot(model_name)
+
+    message = str(excinfo.value)
+    assert "no ModelScope mirror" in message
+    assert model_name in message
+    assert "internet connection" not in message
+
+
+def test_public_download_path_keeps_the_repo_error_for_mirrored_models(
+    monkeypatch, tmp_path
+):
+    """A mirrored model that fails for another reason must not be mislabelled."""
+    import huggingface_hub
+
+    from stt_app.transcriber import modelscope_mirror as ms
+
+    def blocked(*_args, **_kwargs):
+        raise OSError("huggingface blocked by proxy")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", blocked)
+    monkeypatch.setattr(ms, "modelscope_fallback_enabled", lambda: True)
+    monkeypatch.setattr(ms, "repo_available", lambda *_a, **_k: False)
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "webgpu_download_destination",
+        lambda *_a, **_k: tmp_path / "dest",
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        local_webgpu_asr.download_webgpu_model_snapshot("granite-4.0-1b-speech")
+
+    assert "no ModelScope mirror" not in str(excinfo.value)

@@ -753,17 +753,32 @@ class _LocalModelsMixin:
         return running
 
     def _preload_downloading_model(self) -> str | None:
-        """Model the controller's background preload is downloading, if any."""
+        """Model the controller's preload is downloading into *this* Model Dir.
+
+        A download filling a different directory does not satisfy the one this
+        tab is configured for, so it must not suppress it either.
+        """
         getter = getattr(self._controller, "preload_downloading_model", None)
         if not callable(getter):
             return None
         try:
-            name = getter()
+            answer = getter()
         except Exception:
             return None
+        if not isinstance(answer, tuple) or len(answer) != 2:
+            return None
+        name, model_dir = answer
         # Test doubles hand back stand-ins rather than a name; only a real
         # string can match a model in the list.
-        return name if isinstance(name, str) and name else None
+        if not isinstance(name, str) or not name:
+            return None
+        if not isinstance(model_dir, str):
+            return None
+        if self._local_model_cache_key(model_dir) != self._local_model_cache_key(
+            self.model_dir_edit.text() if hasattr(self, "model_dir_edit") else ""
+        ):
+            return None
+        return name
 
     def _local_model_download_state(self, model_name: str) -> str:
         active, queued, _running = self._local_model_download_snapshot()
