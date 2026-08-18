@@ -1,8 +1,9 @@
-﻿"""Tests for the ModelScope mirror fallback used when Hugging Face is blocked."""
+"""Tests for the ModelScope mirror fallback used when Hugging Face is blocked."""
 
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import huggingface_hub
 import pytest
@@ -300,30 +301,80 @@ def test_faster_whisper_falls_back_to_modelscope(monkeypatch):
     assert called["repo_id"] == "Systran/faster-whisper-small"
 
 
-def test_onnx_falls_back_to_modelscope(monkeypatch):
+def test_onnx_falls_back_to_modelscope(monkeypatch, tmp_path):
     def boom(*args, **kwargs):
         raise OSError("huggingface blocked by proxy")
 
     monkeypatch.setattr(huggingface_hub, "snapshot_download", boom)
     monkeypatch.setattr(ms, "repo_available", lambda *a, **k: True)
 
+    model_name = "nemotron-3.5-asr-streaming-0.6b-int4"
+    destination = tmp_path / "onnx-community" / (
+        "nemotron-3.5-asr-streaming-0.6b-onnx-int4"
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "webgpu_download_destination",
+        lambda *_a, **_k: destination,
+    )
+
     called = {}
 
     def fake_download(repo_id, dest_dir, allow_patterns=None, **kwargs):
         called["repo_id"] = repo_id
         called["allow_patterns"] = allow_patterns
+        # A mirror that answers but delivers nothing is a different case, and
+        # test_onnx_fallback_rejects_a_weightless_mirror covers it. Here the
+        # transfer genuinely succeeds, so produce what the layout requires.
+        layout = local_webgpu_asr._MODEL_LAYOUTS[model_name]
+        for relative in layout.required_files:
+            target = Path(dest_dir) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("x", encoding="utf-8")
         return str(dest_dir)
 
     monkeypatch.setattr(ms, "download_repo_to_dir", fake_download)
 
-    result = local_webgpu_asr.download_webgpu_model_snapshot(
-        "nemotron-3.5-asr-streaming-0.6b-int4"
-    )
+    result = local_webgpu_asr.download_webgpu_model_snapshot(model_name)
     assert result.endswith("nemotron-3.5-asr-streaming-0.6b-onnx-int4")
     assert (
         called["repo_id"] == "onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4"
     )
     assert called["allow_patterns"]  # non-empty tuple was forwarded
+
+
+def test_onnx_fallback_rejects_a_weightless_mirror(monkeypatch, tmp_path):
+    """A mirror carrying only metadata must not count as a finished download.
+
+    ModelScope hosts onnx-community/cohere-transcribe-03-2026-ONNX but its copy
+    has no ``onnx/`` directory, so the fallback "succeeded" and left an
+    unloadable model behind.
+    """
+    def boom(*args, **kwargs):
+        raise OSError("huggingface blocked by proxy")
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", boom)
+    monkeypatch.setattr(ms, "repo_available", lambda *a, **k: True)
+
+    destination = tmp_path / "cohere"
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "webgpu_download_destination",
+        lambda *_a, **_k: destination,
+    )
+
+    def metadata_only(repo_id, dest_dir, allow_patterns=None, **kwargs):
+        for relative in ("config.json", "preprocessor_config.json",
+                         "processor_config.json", "tokenizer.json"):
+            target = Path(dest_dir) / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text("{}", encoding="utf-8")
+        return str(dest_dir)
+
+    monkeypatch.setattr(ms, "download_repo_to_dir", metadata_only)
+
+    with pytest.raises(RuntimeError, match="downloaded incompletely"):
+        local_webgpu_asr.download_webgpu_model_snapshot("cohere-transcribe-03-2026")
 
 
 def test_no_fallback_when_disabled(monkeypatch):

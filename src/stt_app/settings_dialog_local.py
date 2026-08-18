@@ -218,6 +218,41 @@ class _LocalModelsMixin:
         layout.addWidget(self.local_models_box, 1)
         self._local_tab_index = self.tabs.addTab(tab, "Local")
 
+        # The controller downloads models on its own (preload after a save, or
+        # lazily on first use) without going through this tab's queue, so the
+        # list has to be told to look. Polling is tied to the tab actually being
+        # in front: a timer that runs for the dialog's whole lifetime keeps
+        # firing on every dialog anything ever creates, which is both wasted
+        # work and a way to have background refreshes outlive their usefulness.
+        self._preload_download_seen: str | None = self._preload_downloading_model()
+        self._preload_download_watch_timer = QtCore.QTimer(self)
+        self._preload_download_watch_timer.setInterval(1000)
+        self._preload_download_watch_timer.timeout.connect(
+            self._poll_preload_download_state
+        )
+        self.tabs.currentChanged.connect(self._sync_preload_download_watch)
+        self._sync_preload_download_watch(self.tabs.currentIndex())
+
+    def _sync_preload_download_watch(self, index: int) -> None:
+        timer = getattr(self, "_preload_download_watch_timer", None)
+        if timer is None:
+            return
+        if index == self._local_tab_index:
+            self._preload_download_seen = self._preload_downloading_model()
+            timer.start()
+        else:
+            timer.stop()
+
+    def _poll_preload_download_state(self) -> None:
+        current = self._preload_downloading_model()
+        if current == self._preload_download_seen:
+            return
+        self._preload_download_seen = current
+        if not hasattr(self, "local_models_list"):
+            return
+        self._refresh_local_models_list()
+        self._update_local_model_actions()
+
     def _local_model_cache_key(self, model_dir: str | None = None) -> str:
         return str(model_dir or "").strip()
 
@@ -717,12 +752,30 @@ class _LocalModelsMixin:
         _active, _queued, running = self._local_model_download_snapshot()
         return running
 
+    def _preload_downloading_model(self) -> str | None:
+        """Model the controller's background preload is downloading, if any."""
+        getter = getattr(self._controller, "preload_downloading_model", None)
+        if not callable(getter):
+            return None
+        try:
+            name = getter()
+        except Exception:
+            return None
+        # Test doubles hand back stand-ins rather than a name; only a real
+        # string can match a model in the list.
+        return name if isinstance(name, str) and name else None
+
     def _local_model_download_state(self, model_name: str) -> str:
         active, queued, _running = self._local_model_download_snapshot()
         if active is not None and active[0] == model_name:
             return "active"
         if any(name == model_name for name, _model_dir in queued):
             return "queued"
+        # A download the controller started for the selected model is just as
+        # real as one from this tab; listing it as "Not downloaded" while bytes
+        # arrive is what made two downloads race for the same link.
+        if self._preload_downloading_model() == model_name:
+            return "active"
         return ""
 
     def _local_model_download_pending_names(self) -> set[str]:
@@ -730,6 +783,11 @@ class _LocalModelsMixin:
         pending = {name for name, _model_dir in queued}
         if active is not None:
             pending.add(active[0])
+        # Treat a controller-side preload download as pending too, so this tab
+        # neither offers to start a second copy of it nor reports it missing.
+        preloading = self._preload_downloading_model()
+        if preloading:
+            pending.add(preloading)
         return pending
 
     def _update_local_model_actions(self) -> None:
@@ -1074,6 +1132,31 @@ class _LocalModelsMixin:
             )
         self.local_model_download_progress_bar.setVisible(True)
 
+    def _set_local_models_action_text(
+        self,
+        text: str,
+        color: str,
+        *,
+        allow_growth: bool = False,
+    ) -> None:
+        """Show a status line, without silently swallowing long messages.
+
+        The label is deliberately fixed at two lines so a status update during a
+        scan cannot resize the model list underneath the pointer. A download
+        error is longer than that and used to be clipped mid-sentence, which is
+        the one case where the text matters most, so terminal messages are
+        allowed to grow and the full string is always available as a tooltip.
+        """
+        label = self.local_models_action_label
+        if allow_growth:
+            label.setMinimumHeight(self._dynamic_hint_height(label))
+            label.setMaximumHeight(16777215)
+        else:
+            label.setFixedHeight(self._dynamic_hint_height(label))
+        label.setStyleSheet(f"color: {color};")
+        label.setText(text)
+        label.setToolTip(text)
+
     def _on_local_model_download_finished(
         self,
         worker_token: int,
@@ -1090,14 +1173,16 @@ class _LocalModelsMixin:
         self._local_model_download_speed_tracker.reset()
         self.local_model_download_progress_bar.setVisible(False)
         if success:
-            self.local_models_action_label.setStyleSheet("color: #1b5e20;")
+            color = "#1b5e20"
         elif text.startswith("Completed with errors"):
-            self.local_models_action_label.setStyleSheet("color: #b26a00;")
+            color = "#b26a00"
         elif text.startswith("Download canceled"):
-            self.local_models_action_label.setStyleSheet("color: #b26a00;")
+            color = "#b26a00"
         else:
-            self.local_models_action_label.setStyleSheet("color: #b71c1c;")
-        self.local_models_action_label.setText(text)
+            color = "#b71c1c"
+        # A finished download is a terminal message: nothing is about to move
+        # underneath the pointer, so let a long failure explain itself.
+        self._set_local_models_action_text(text, color, allow_growth=not success)
         self._refresh_local_model_views(force=True)
 
     def _on_cached_model_selection_changed(self) -> None:

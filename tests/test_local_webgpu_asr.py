@@ -33,6 +33,29 @@ from stt_app.transcriber.local_webgpu_asr import (
 )
 
 
+def _materialise_required_files(repo_id: str, local_dir: str) -> None:
+    """Give a faked download the files a real one would leave behind.
+
+    ``download_webgpu_model_snapshot`` refuses to report success when the
+    weights are absent, because a mirror can serve a repo's metadata without
+    its large files and used to leave an unloadable model behind. A stub that
+    writes nothing is that same case, so these tests would otherwise be
+    asserting against a failure.
+    """
+    model_name = next(
+        (name for name, repo in MODEL_REPO_MAP.items() if repo == repo_id),
+        "",
+    )
+    required = local_webgpu_asr._REQUIRED_FILES.get(model_name)
+    if not required:
+        return
+    root = Path(local_dir)
+    for relative in required:
+        path = root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("x", encoding="utf-8")
+
+
 def _write_required_snapshot(base: Path, model_name: str, snapshot_id: str = "abc123"):
     repo_id = local_webgpu_asr._repo_id_for_model(model_name)
     assert repo_id is not None
@@ -127,6 +150,7 @@ def test_download_nemotron_snapshot_uses_root_int4_graph_patterns(
 
     def fake_snapshot_download(repo_id, **kwargs):
         calls.append((repo_id, kwargs))
+        _materialise_required_files(repo_id, kwargs["local_dir"])
         return str(tmp_path / "snapshot")
 
     monkeypatch.setitem(
@@ -151,6 +175,7 @@ def test_download_webgpu_model_snapshot_uses_q4_allow_patterns(monkeypatch, tmp_
 
     def fake_snapshot_download(repo_id, **kwargs):
         calls.append((repo_id, kwargs))
+        _materialise_required_files(repo_id, kwargs["local_dir"])
         return str(tmp_path / "snapshot")
 
     monkeypatch.setitem(
@@ -181,6 +206,7 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_2b_q4_patterns(
 
     def fake_snapshot_download(repo_id, **kwargs):
         calls.append((repo_id, kwargs))
+        _materialise_required_files(repo_id, kwargs["local_dir"])
         return str(tmp_path / "snapshot")
 
     monkeypatch.setitem(
@@ -213,6 +239,7 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_plus_int8_patterns(
 
     def fake_snapshot_download(repo_id, **kwargs):
         calls.append((repo_id, kwargs))
+        _materialise_required_files(repo_id, kwargs["local_dir"])
         return str(tmp_path / "snapshot")
 
     monkeypatch.setitem(
@@ -245,6 +272,7 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_nar_int8_patterns(
 
     def fake_snapshot_download(repo_id, **kwargs):
         calls.append((repo_id, kwargs))
+        _materialise_required_files(repo_id, kwargs["local_dir"])
         return str(tmp_path / "snapshot")
 
     monkeypatch.setitem(
@@ -279,6 +307,7 @@ def test_download_destination_matches_the_local_dir_actually_downloaded_into(
 
     def fake_snapshot_download(repo_id, **kwargs):
         calls.append((repo_id, kwargs))
+        _materialise_required_files(repo_id, kwargs["local_dir"])
         return str(tmp_path / "snapshot")
 
     monkeypatch.setitem(

@@ -302,6 +302,7 @@ class DictationController(QtCore.QObject):
         self._preload_speed_tracker = ModelDownloadSpeedTracker()
         self._preload_cancel_requested = False
         self._preload_download_process: subprocess.Popen | None = None
+        self._preload_downloading_model: str | None = None
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
         self._active_request_token: int | None = None
@@ -4302,11 +4303,27 @@ class DictationController(QtCore.QObject):
     ) -> None:
         with self._preload_download_lock:
             self._preload_download_process = process
+            self._preload_downloading_model = (
+                self._preload_target_model if process is not None else None
+            )
+
+    def preload_downloading_model(self) -> str | None:
+        """Model the background preload is currently downloading, if any.
+
+        The settings dialog runs its own download queue and knows nothing about
+        this one. Selecting a missing model and saving starts a download here,
+        which then ran invisibly: the Local tab still listed the model as "Not
+        downloaded" while bytes were arriving, and a second download started
+        from that tab competed with it for the same link.
+        """
+        with self._preload_download_lock:
+            return self._preload_downloading_model
 
     def _terminate_preload_download_process(self) -> None:
         with self._preload_download_lock:
             process = self._preload_download_process
             self._preload_download_process = None
+            self._preload_downloading_model = None
 
         if process is None:
             return

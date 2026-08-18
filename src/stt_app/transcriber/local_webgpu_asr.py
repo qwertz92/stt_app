@@ -25,6 +25,7 @@ from ..config import (
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
+    MODELS_WITHOUT_MODELSCOPE_MIRROR,
     PARAKEET_MODEL_SIZE,
     language_modes_for_selection,
 )
@@ -449,16 +450,50 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
     }
 
     try:
-        return str(snapshot_download(repo_id, **kwargs))
+        path = str(snapshot_download(repo_id, **kwargs))
     except Exception as hf_error:
         # Hugging Face may be unreachable (e.g. a corporate proxy blocking the
         # whole "Generative AI and ML Applications" category). Fall back to the
         # ModelScope mirror, which hosts the same repo IDs and serves the LFS
         # weights from its own CDN. The flat local_dir layout is identical to
         # what snapshot_download produces, so the app finds it unchanged.
-        return _download_onnx_via_modelscope(
-            repo_id, local_dir, layout.allow_patterns, hf_error
+        path = _download_onnx_via_modelscope(
+            repo_id, local_dir, layout.allow_patterns, hf_error, model_name
         )
+    _verify_downloaded_layout(model_name or repo_id, repo_id, local_dir, layout)
+    return path
+
+
+def _verify_downloaded_layout(
+    label: str,
+    repo_id: str,
+    local_dir: Path,
+    layout: "_OnnxModelLayout",
+) -> None:
+    """Refuse to call a download finished while the weights are absent.
+
+    A mirror can carry a repo's metadata without its large files: ModelScope's
+    copy of onnx-community/cohere-transcribe-03-2026-ONNX holds the JSON and
+    the tokenizer but no ``onnx/`` directory at all. The transfer then reports
+    success, the model is left unloadable, and the failure surfaces much later
+    as a runtime error that says nothing about the download.
+    """
+    missing = [
+        relative
+        for relative in layout.required_files
+        if not (local_dir / relative).is_file()
+    ]
+    if not missing:
+        return
+    shown = ", ".join(missing[:4])
+    if len(missing) > 4:
+        shown = f"{shown}, and {len(missing) - 4} more"
+    raise RuntimeError(
+        f"'{label}' downloaded incompletely: {len(missing)} required file(s) "
+        f"are missing ({shown}). The source that answered does not carry the "
+        f"weights for '{repo_id}'. Download the model on an unrestricted "
+        f"machine and point 'Model Dir' at it. See {DOC_MODELS_PATH}."
+    )
 
 
 def _download_onnx_via_modelscope(
@@ -466,10 +501,17 @@ def _download_onnx_via_modelscope(
     local_dir: Path,
     allow_patterns: tuple[str, ...],
     hf_error: Exception,
+    model_name: str = "",
 ) -> str:
     from . import modelscope_mirror as ms
 
     if not ms.modelscope_fallback_enabled() or not ms.repo_available(repo_id):
+        if model_name in MODELS_WITHOUT_MODELSCOPE_MIRROR:
+            from .local_faster_whisper import format_model_download_error
+
+            raise RuntimeError(
+                format_model_download_error(model_name, hf_error)
+            ) from hf_error
         raise RuntimeError(
             f"Model download for '{repo_id}' failed: {hf_error}. See {DOC_MODELS_PATH}."
         ) from hf_error

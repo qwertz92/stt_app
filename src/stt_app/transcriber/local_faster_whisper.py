@@ -23,6 +23,7 @@ from ..config import (
     FASTER_WHISPER_MODEL_SIZES,
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
+    MODELS_WITHOUT_MODELSCOPE_MIRROR,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
@@ -282,6 +283,17 @@ def cleanup_incomplete_model_download(
 
 
 def format_model_download_error(model_name: str, exc: Exception) -> str:
+    if model_name in MODELS_WITHOUT_MODELSCOPE_MIRROR:
+        # The generic wording ends in "check your internet connection", which
+        # sends people chasing the one thing that is fine. This model simply
+        # has no second source.
+        return (
+            f"'{model_name}' could not be downloaded: Hugging Face is not "
+            "reachable from this machine and this model has no ModelScope "
+            "mirror, so there is no second source to fall back to. Download it "
+            "on an unrestricted machine and point 'Model Dir' at it, pick a "
+            f"mirrored model, or ask IT to allow huggingface.co. See {DOC_MODELS_PATH}."
+        )
     if _is_ssl_error(exc):
         return (
             "SSL certificate verification failed while downloading the model. "

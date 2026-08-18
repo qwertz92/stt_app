@@ -192,6 +192,22 @@ LOCAL_ONNX_MODEL_SIZES = (
     LOCAL_WEBGPU_MODEL_SIZES + LOCAL_NEMOTRON_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
 )
 
+# Models whose upstream repo has no ModelScope counterpart (verified against the
+# ModelScope API on 2026-08-18). On a network that blocks Hugging Face wholesale
+# -- a proxy denying the whole "Generative AI and ML Applications" category is
+# the common case -- these cannot be fetched at all. Naming them up front beats
+# a download that ends in "check your internet connection", which is exactly the
+# one thing that is not wrong.
+MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
+    {
+        "distil-large-v3.5",
+        PARAKEET_MODEL_SIZE,
+        CANARY_MODEL_SIZE,
+        "granite-speech-4.1-2b-plus",
+        "granite-speech-4.1-2b-nar",
+    }
+)
+
 GRANITE_4_1_MODEL_SIZES = (
     "granite-speech-4.1-2b",
     "granite-speech-4.1-2b-plus",
