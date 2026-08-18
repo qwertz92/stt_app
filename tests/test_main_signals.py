@@ -759,12 +759,19 @@ def test_prompt_recoverable_last_recording_opens_settings(monkeypatch, tmp_path)
     store.mark_failed("network")
 
     prompts = []
+
+    class _FakeBox:
+        def __init__(self, text):
+            self._text = text
+
+        def exec(self):
+            prompts.append(self._text)
+            return QtWidgets.QMessageBox.Yes
+
     monkeypatch.setattr(
-        QtWidgets.QMessageBox,
-        "question",
-        lambda _parent, _title, text, *_args, **_kwargs: (
-            prompts.append(text) or QtWidgets.QMessageBox.Yes
-        ),
+        main_module,
+        "styled_message_box",
+        lambda *, text, **_kwargs: _FakeBox(text),
     )
 
     opened = []

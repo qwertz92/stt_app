@@ -20,6 +20,7 @@ from .config import (
 )
 from .history_dialog import HistoryDialog
 from .controller import DictationController
+from .dialog_style import styled_message_box
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
@@ -75,11 +76,13 @@ def run() -> int:
     instance_lock = QtCore.QLockFile(str(appdata_root() / "stt_app.lock"))
     instance_lock.setStaleLockTime(0)
     if not instance_lock.tryLock(0):
-        QtWidgets.QMessageBox.information(
-            None,
-            APP_DISPLAY_NAME,
-            f"{APP_DISPLAY_NAME} is already running.",
-        )
+        styled_message_box(
+            icon=QtWidgets.QMessageBox.Information,
+            title=APP_DISPLAY_NAME,
+            text=f"{APP_DISPLAY_NAME} is already running.",
+            buttons=QtWidgets.QMessageBox.Ok,
+            default_button=QtWidgets.QMessageBox.Ok,
+        ).exec()
         return 0
 
     app_logger = AppLogger()
@@ -671,16 +674,17 @@ def _prompt_recoverable_last_recording(
     if state is not None and state.status == "failed" and state.error:
         description = f"{description}\n\nLast error: {state.error}"
 
-    answer = QtWidgets.QMessageBox.question(
-        parent,
-        "Recover last recording",
-        (
+    answer = styled_message_box(
+        icon=QtWidgets.QMessageBox.Question,
+        title="Recover last recording",
+        text=(
             f"{description}\n\n"
             "Open Settings -> Import Audio and load it for transcription now?"
         ),
-        QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
-        QtWidgets.QMessageBox.Yes,
-    )
+        buttons=QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+        default_button=QtWidgets.QMessageBox.Yes,
+        parent=parent,
+    ).exec()
     if answer != QtWidgets.QMessageBox.Yes:
         return
 

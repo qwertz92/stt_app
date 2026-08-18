@@ -246,7 +246,11 @@ def cleanup_incomplete_model_download(
         if not root.is_dir():
             continue
         try:
-            incomplete_paths = list(root.rglob("*.incomplete"))
+            incomplete_paths = [
+                path
+                for pattern in ("*.incomplete", "*.ms-part")
+                for path in root.rglob(pattern)
+            ]
         except OSError:
             continue
         for path in incomplete_paths:

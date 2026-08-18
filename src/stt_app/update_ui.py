@@ -7,6 +7,7 @@ from typing import Callable
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import appdata_root
+from .dialog_style import DIALOG_STYLESHEET, apply_dialog_style
 from .update_checker import UpdateCheckResult
 from .update_installer import (
     UpdateDownloadCancelled,
@@ -14,69 +15,13 @@ from .update_installer import (
     verify_windows_publisher_signature,
 )
 
-UPDATE_DIALOG_STYLESHEET = """
-QMessageBox, QDialog {
-    background-color: #f7f9fc;
-    color: #1f2933;
-}
-QMessageBox QLabel, QDialog QLabel {
-    color: #1f2933;
-}
-QPushButton {
-    min-height: 26px;
-    padding: 5px 12px;
-    color: #1f2933;
-    background-color: #f7f9fc;
-    border: 1px solid #9aa8b7;
-    border-radius: 4px;
-}
-QPushButton:hover:enabled {
-    color: #0b315c;
-    background-color: #dbeafe;
-    border-color: #4f83c2;
-}
-QPushButton:pressed:enabled {
-    color: #082544;
-    background-color: #bfdbfe;
-    border-color: #2563a6;
-}
-QPushButton:disabled {
-    color: #6b7280;
-    background-color: #e5e7eb;
-    border-color: #c7cdd4;
-}
-QPushButton[primary="true"] {
-    color: #ffffff;
-    background-color: #1769aa;
-    border-color: #12558a;
-}
-QPushButton[primary="true"]:hover:enabled {
-    color: #ffffff;
-    background-color: #125a96;
-    border-color: #0d4779;
-}
-QPushButton[primary="true"]:pressed:enabled {
-    color: #ffffff;
-    background-color: #0d4779;
-    border-color: #08375f;
-}
-QProgressBar {
-    min-height: 18px;
-    color: #1f2933;
-    background-color: #e5e7eb;
-    border: 1px solid #aeb8c5;
-    border-radius: 4px;
-    text-align: center;
-}
-QProgressBar::chunk {
-    background-color: #2f80c9;
-    border-radius: 3px;
-}
-"""
+# Kept under its original name so existing callers and tests keep working; the
+# colours now live in ``dialog_style`` because every dialog needs them.
+UPDATE_DIALOG_STYLESHEET = DIALOG_STYLESHEET
 
 
 def _style_dialog(dialog: QtWidgets.QWidget) -> None:
-    dialog.setStyleSheet(UPDATE_DIALOG_STYLESHEET)
+    apply_dialog_style(dialog)
 
 
 def show_update_status_dialog(

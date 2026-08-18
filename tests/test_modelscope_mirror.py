@@ -1,4 +1,4 @@
-"""Tests for the ModelScope mirror fallback used when Hugging Face is blocked."""
+﻿"""Tests for the ModelScope mirror fallback used when Hugging Face is blocked."""
 
 from __future__ import annotations
 
@@ -101,7 +101,7 @@ def test_download_rejects_unsafe_server_paths(monkeypatch, tmp_path, unsafe_path
 def test_download_completes_via_incomplete_then_atomic_replace(monkeypatch, tmp_path):
     destination = tmp_path / "models"
     target = destination / "weights.bin"
-    incomplete = destination / "weights.bin.incomplete"
+    incomplete = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
     monkeypatch.setattr(
         ms,
         "list_repo_files",
@@ -137,7 +137,7 @@ def test_interrupted_download_retains_only_resumable_incomplete_file(
 ):
     destination = tmp_path / "models"
     target = destination / "weights.bin"
-    incomplete = destination / "weights.bin.incomplete"
+    incomplete = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
     monkeypatch.setattr(
         ms,
         "list_repo_files",
@@ -175,7 +175,7 @@ def test_interrupted_download_retains_only_resumable_incomplete_file(
 def test_resume_restarts_when_server_ignores_range(monkeypatch, tmp_path):
     destination = tmp_path / "models"
     destination.mkdir()
-    incomplete = destination / "weights.bin.incomplete"
+    incomplete = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
     incomplete.write_bytes(b"abc")
     monkeypatch.setattr(
         ms,
@@ -200,7 +200,7 @@ def test_resume_restarts_when_server_ignores_range(monkeypatch, tmp_path):
 def test_resume_rejects_mismatched_content_range(monkeypatch, tmp_path):
     destination = tmp_path / "models"
     destination.mkdir()
-    incomplete = destination / "weights.bin.incomplete"
+    incomplete = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
     incomplete.write_bytes(b"abc")
     monkeypatch.setattr(
         ms,
@@ -230,7 +230,7 @@ def test_resume_rolls_back_body_that_disagrees_with_content_range(
 ):
     destination = tmp_path / "models"
     destination.mkdir()
-    incomplete = destination / "weights.bin.incomplete"
+    incomplete = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
     incomplete.write_bytes(b"abc")
     monkeypatch.setattr(
         ms,
@@ -277,7 +277,7 @@ def test_legacy_partial_final_name_is_migrated_before_resume(monkeypatch, tmp_pa
     ms.download_repo_to_dir("org/model", destination)
 
     assert target.read_bytes() == b"abcdef"
-    assert not (destination / "weights.bin.incomplete").exists()
+    assert not (destination / f"weights.bin{ms._PARTIAL_SUFFIX}").exists()
 
 
 def test_faster_whisper_falls_back_to_modelscope(monkeypatch):
@@ -362,3 +362,232 @@ def test_npm_beside_node(tmp_path):
     assert local_webgpu_asr._npm_beside_node(str(node)) is None
     (tmp_path / "npm.cmd").write_text("")
     assert local_webgpu_asr._npm_beside_node(str(node)) == str(tmp_path / "npm.cmd")
+
+
+def test_foreign_incomplete_is_discarded_not_resumed(monkeypatch, tmp_path):
+    """A Hugging Face leftover must never be treated as a resumable transfer.
+
+    Regression test: huggingface_hub parks aborted downloads as
+    ``<name>.incomplete`` in the very same directory. Resuming one of those
+    appended mirror bytes onto a foreign prefix and produced a file of exactly
+    the right length whose contents were two downloads glued together.
+    """
+    destination = tmp_path / "models"
+    destination.mkdir()
+    target = destination / "weights.bin"
+    foreign = destination / "weights.bin.incomplete"
+    foreign.write_bytes(b"XXX")
+
+    requests: list[dict] = []
+
+    def _capture(url, headers=None, timeout=60):
+        requests.append(dict(headers or {}))
+        return _FakeResponse([b"abc", b"def"])
+
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6)],
+    )
+    monkeypatch.setattr(ms, "_open", _capture)
+
+    ms.download_repo_to_dir("org/model", destination)
+
+    # Whole object requested: no Range header derived from the foreign prefix.
+    assert requests and "Range" not in requests[0]
+    assert target.read_bytes() == b"abcdef"
+    assert not foreign.exists()
+
+
+def test_checksum_mismatch_rejects_and_removes_partial(monkeypatch, tmp_path):
+    """Size matching is not proof of a clean transfer; the digest decides."""
+    destination = tmp_path / "models"
+    target = destination / "weights.bin"
+    partial = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
+
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6, "0" * 64)],
+    )
+    monkeypatch.setattr(
+        ms,
+        "_open",
+        lambda *_args, **_kwargs: _FakeResponse([b"abc", b"def"]),
+    )
+
+    with pytest.raises(ms.ModelScopeError, match="checksum mismatch"):
+        ms.download_repo_to_dir("org/model", destination)
+
+    # A file that failed verification must not survive as a resume candidate.
+    assert not target.exists()
+    assert not partial.exists()
+
+
+def test_checksum_match_publishes_file(monkeypatch, tmp_path):
+    import hashlib
+
+    destination = tmp_path / "models"
+    target = destination / "weights.bin"
+    digest = hashlib.sha256(b"abcdef").hexdigest()
+
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6, digest)],
+    )
+    monkeypatch.setattr(
+        ms,
+        "_open",
+        lambda *_args, **_kwargs: _FakeResponse([b"abc", b"def"]),
+    )
+
+    ms.download_repo_to_dir("org/model", destination)
+
+    assert target.read_bytes() == b"abcdef"
+
+
+def test_list_repo_files_exposes_checksum(monkeypatch):
+    payload = {
+        "Success": True,
+        "Data": {
+            "Files": [
+                {
+                    "Type": "blob",
+                    "Path": "model.bin",
+                    "Size": 6,
+                    "Sha256": "A" * 64,
+                },
+                {
+                    "Type": "blob",
+                    "Path": "config.json",
+                    "Size": 2,
+                    "Sha256": "not-a-digest",
+                },
+            ]
+        },
+    }
+    monkeypatch.setattr(
+        ms,
+        "_open",
+        lambda *_args, **_kwargs: _FakeJsonResponse(payload),
+    )
+    files = dict((entry[0], entry[2]) for entry in ms.list_repo_files("org/model"))
+    assert files["model.bin"] == "a" * 64
+    # A malformed digest is dropped rather than trusted.
+    assert files["config.json"] is None
+
+
+class _FakeJsonResponse:
+    def __init__(self, payload):
+        import json
+
+        self._data = json.dumps(payload).encode("utf-8")
+
+    def read(self, _size=-1):
+        data, self._data = self._data, b""
+        return data
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+
+def test_partial_suffix_is_distinct_from_huggingface(tmp_path):
+    """The whole fix rests on not sharing a name with huggingface_hub."""
+    assert ms._PARTIAL_SUFFIX != ".incomplete"
+    assert ".incomplete" in ms._FOREIGN_PARTIAL_SUFFIXES
+    # And the literal name, so renaming the constant cannot silently
+    # reintroduce the collision.
+    assert ms._PARTIAL_SUFFIX == ".ms-part"
+
+
+def test_existing_destination_with_wrong_checksum_is_replaced(monkeypatch, tmp_path):
+    """A published file of the right length but wrong content must not stand.
+
+    This is the exact production state the append bug left behind: correct
+    size, wrong bytes. Trusting size alone kept it forever.
+    """
+    import hashlib
+
+    destination = tmp_path / "models"
+    destination.mkdir()
+    target = destination / "weights.bin"
+    target.write_bytes(b"XXXXXX")  # right length, wrong content
+    digest = hashlib.sha256(b"abcdef").hexdigest()
+
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6, digest)],
+    )
+    monkeypatch.setattr(
+        ms,
+        "_open",
+        lambda *_args, **_kwargs: _FakeResponse([b"abc", b"def"]),
+    )
+
+    ms.download_repo_to_dir("org/model", destination)
+
+    assert target.read_bytes() == b"abcdef"
+
+
+def test_existing_destination_with_matching_checksum_is_not_refetched(
+    monkeypatch, tmp_path
+):
+    import hashlib
+
+    destination = tmp_path / "models"
+    destination.mkdir()
+    target = destination / "weights.bin"
+    target.write_bytes(b"abcdef")
+    digest = hashlib.sha256(b"abcdef").hexdigest()
+
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6, digest)],
+    )
+    monkeypatch.setattr(
+        ms,
+        "_open",
+        lambda *_args, **_kwargs: pytest.fail("a verified file must not refetch"),
+    )
+
+    ms.download_repo_to_dir("org/model", destination)
+
+    assert target.read_bytes() == b"abcdef"
+
+
+def test_resume_still_works_without_a_published_digest(monkeypatch, tmp_path):
+    """Resume must survive for repos ModelScope publishes no checksum for.
+
+    Dropping resume there would restart multi-GB transfers on the flaky proxied
+    links that need it most.
+    """
+    destination = tmp_path / "models"
+    destination.mkdir()
+    target = destination / "weights.bin"
+    partial = destination / f"weights.bin{ms._PARTIAL_SUFFIX}"
+    partial.write_bytes(b"abc")
+
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6)],
+    )
+    monkeypatch.setattr(
+        ms,
+        "_open",
+        lambda *_args, **_kwargs: _FakeResponse(
+            [b"def"],
+            status=206,
+            headers={"Content-Range": "bytes 3-5/6"},
+        ),
+    )
+
+    ms.download_repo_to_dir("org/model", destination)
+
+    assert target.read_bytes() == b"abcdef"

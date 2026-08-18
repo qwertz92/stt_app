@@ -15,7 +15,7 @@ This module implements a minimal, dependency-free downloader (stdlib only) that:
 
 * lists a repo's files through the ModelScope API,
 * filters them with the same ``allow_patterns`` the Hugging Face paths use,
-* downloads them (resumable, size-verified) into either
+* downloads them (resumable, size- and checksum-verified) into either
   - a flat repo folder (ONNX / Nemotron models, which the app loads from a
     plain directory), or
   - the Hugging Face hub cache ``models--<repo>/snapshots/<rev>`` layout
@@ -29,6 +29,7 @@ The public entry points are :func:`download_repo_to_dir`,
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import os
 import re
@@ -48,6 +49,12 @@ MODELSCOPE_ENDPOINT = os.environ.get(
 DEFAULT_REVISION = "master"
 
 _CHUNK_BYTES = 1 << 20
+
+# Partial transfers get a suffix of our own. ``huggingface_hub`` uses
+# ``.incomplete`` for the very same destinations, and resuming one of those as
+# if it were ours corrupts the result -- see ``_discard_foreign_partials``.
+_PARTIAL_SUFFIX = ".ms-part"
+_FOREIGN_PARTIAL_SUFFIXES = (".incomplete",)
 
 ProgressCallback = Callable[[str], None]
 
@@ -194,8 +201,12 @@ def repo_available(
 
 def list_repo_files(
     repo_id: str, revision: str = DEFAULT_REVISION, timeout: float = 30
-) -> list[tuple[str, int]]:
-    """Return ``[(relative_path, size_bytes), …]`` for every blob in the repo."""
+) -> list[tuple[str, int, str | None]]:
+    """Return ``[(relative_path, size_bytes, sha256_or_None), …]`` for the repo.
+
+    The checksum is what lets a download prove it transferred the bytes it
+    meant to; ModelScope omits it for some entries, hence the ``None``.
+    """
     try:
         with _open(_api_files_url(repo_id, revision), timeout=timeout) as response:
             data = json.load(response)
@@ -213,7 +224,7 @@ def list_repo_files(
         raise ModelScopeError(
             f"ModelScope repo '{repo_id}' returned an invalid file listing."
         )
-    files: list[tuple[str, int]] = []
+    files: list[tuple[str, int, str | None]] = []
     for entry in entries:
         if not isinstance(entry, dict) or entry.get("Type") != "blob":
             continue
@@ -231,7 +242,7 @@ def list_repo_files(
             ) from exc
         if size < 0:
             raise ModelScopeError(f"ModelScope returned a negative size for '{path}'.")
-        files.append((path, size))
+        files.append((path, size, _normalized_sha256(entry.get("Sha256"))))
     if not files:
         raise ModelScopeError(f"ModelScope repo '{repo_id}' returned no files.")
     return files
@@ -243,6 +254,45 @@ def _matches(path: str, allow_patterns: tuple[str, ...] | list[str] | None) -> b
     return any(fnmatch.fnmatch(path, pattern) for pattern in allow_patterns)
 
 
+def _normalized_sha256(raw: object) -> str | None:
+    """Return a lowercase hex SHA-256, or ``None`` when ModelScope omits it."""
+    if not isinstance(raw, str):
+        return None
+    value = raw.strip().lower()
+    if len(value) != 64 or any(char not in "0123456789abcdef" for char in value):
+        return None
+    return value
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for block in iter(lambda: handle.read(_CHUNK_BYTES), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _discard_foreign_partials(dest: Path) -> None:
+    """Remove partial files this module did not create.
+
+    ``huggingface_hub`` parks its own aborted downloads next to the destination
+    as ``<name>.incomplete``. That is the same place -- and, historically, the
+    same name -- this module used, so a Hugging Face download that a corporate
+    proxy cut short used to be picked up here as a resumable ModelScope
+    transfer. The mirror then issued a ranged request and *appended* its bytes
+    to somebody else's prefix, producing a file of exactly the right length
+    whose contents were two different downloads glued together. Size alone
+    cannot detect that, which is why the checksum below exists and why these
+    files are deleted rather than resumed.
+    """
+    for suffix in _FOREIGN_PARTIAL_SUFFIXES:
+        candidate = dest.with_name(f"{dest.name}{suffix}")
+        try:
+            candidate.unlink(missing_ok=True)
+        except OSError:
+            continue
+
+
 def _download_file(
     repo_id: str,
     revision: str,
@@ -250,10 +300,12 @@ def _download_file(
     dest: Path,
     size: int,
     progress: ProgressCallback | None = None,
+    sha256: str | None = None,
 ) -> None:
     _validated_repo_path(path)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    incomplete = dest.with_name(f"{dest.name}.incomplete")
+    _discard_foreign_partials(dest)
+    incomplete = dest.with_name(f"{dest.name}{_PARTIAL_SUFFIX}")
     expected_size = int(size)
     if expected_size < 0:
         raise ModelScopeError(f"ModelScope returned a negative size for '{path}'.")
@@ -262,16 +314,30 @@ def _download_file(
         if dest.exists():
             final_size = dest.stat().st_size
             if final_size == expected_size:
-                incomplete.unlink(missing_ok=True)
-                return
-            if final_size < expected_size and not incomplete.exists():
+                # A published file of the right length is not proof of a clean
+                # one: the append bug this module now guards against produced
+                # exactly that. Re-verify when a digest is available so an
+                # already-corrupt file heals instead of being trusted forever.
+                if sha256 and _file_sha256(dest) != sha256:
+                    dest.unlink()
+                else:
+                    incomplete.unlink(missing_ok=True)
+                    return
+            elif final_size < expected_size and not incomplete.exists():
                 os.replace(dest, incomplete)
             else:
                 dest.unlink()
 
         have = incomplete.stat().st_size if incomplete.exists() else 0
+        # A partial carrying our own suffix was written by this module, so
+        # resuming it is sound even when ModelScope publishes no digest for the
+        # file. Refusing to resume without one would throw away multi-GB
+        # transfers on exactly the flaky, proxied links that need resume most;
+        # the corruption this module guards against came from resuming a
+        # *foreign* prefix, which the suffix and _discard_foreign_partials now
+        # rule out.
         if have == expected_size:
-            _publish_download(incomplete, dest, expected_size)
+            _publish_download(incomplete, dest, expected_size, sha256)
             return
         if have > expected_size:
             incomplete.unlink()
@@ -345,7 +411,7 @@ def _download_file(
             f"ModelScope size mismatch for '{path}': "
             f"got {final_size}, want {expected_size}."
         )
-    _publish_download(incomplete, dest, expected_size)
+    _publish_download(incomplete, dest, expected_size, sha256)
 
 
 def _response_status(response) -> int:
@@ -384,11 +450,28 @@ def _validate_content_range(response, *, start: int, total: int) -> int:
     return actual_end - actual_start + 1
 
 
-def _publish_download(incomplete: Path, dest: Path, expected_size: int) -> None:
+def _publish_download(
+    incomplete: Path,
+    dest: Path,
+    expected_size: int,
+    sha256: str | None = None,
+) -> None:
     if incomplete.stat().st_size != expected_size:
         raise ModelScopeError(
             f"Refusing to publish an incomplete ModelScope download for '{dest.name}'."
         )
+    # Size alone cannot tell a clean transfer from a resumed one that glued two
+    # different sources together, so verify the checksum whenever ModelScope
+    # published one. A corrupt file is deleted rather than kept, otherwise the
+    # next run would "resume" it and reproduce the same broken result.
+    if sha256:
+        actual = _file_sha256(incomplete)
+        if actual != sha256:
+            incomplete.unlink(missing_ok=True)
+            raise ModelScopeError(
+                f"ModelScope checksum mismatch for '{dest.name}': "
+                f"got {actual}, want {sha256}."
+            )
     # Windows requires a writable descriptor for ``FlushFileBuffers``.
     with incomplete.open("r+b") as handle:
         os.fsync(handle.fileno())
@@ -419,12 +502,16 @@ def _select_files(
     repo_id: str,
     revision: str,
     allow_patterns: tuple[str, ...] | list[str] | None,
-) -> list[tuple[str, int]]:
-    files: list[tuple[str, int]] = []
-    for path, size in list_repo_files(repo_id, revision):
+) -> list[tuple[str, int, str | None]]:
+    files: list[tuple[str, int, str | None]] = []
+    for entry in list_repo_files(repo_id, revision):
+        # Older callers (and the tests) hand back ``(path, size)`` pairs; the
+        # live API also carries a checksum. Accept both shapes.
+        path, size = entry[0], entry[1]
+        digest = _normalized_sha256(entry[2]) if len(entry) > 2 else None
         safe_path = _validated_repo_path(path).as_posix()
         if _matches(safe_path, allow_patterns):
-            files.append((safe_path, size))
+            files.append((safe_path, int(size), digest))
     if not files:
         raise ModelScopeError(
             f"No files in '{repo_id}' matched the requested patterns."
@@ -447,11 +534,11 @@ def download_repo_to_dir(
     path (e.g. ``onnx/audio_encoder_q4.onnx_data``). Returns ``dest_dir``.
     """
     dest = Path(dest_dir)
-    for path, size in _select_files(repo_id, revision, allow_patterns):
+    for path, size, digest in _select_files(repo_id, revision, allow_patterns):
         if progress is not None:
             progress(f"ModelScope {repo_id}: {path}")
         target = _contained_destination(dest, path)
-        _download_file(repo_id, revision, path, target, size, progress)
+        _download_file(repo_id, revision, path, target, size, progress, digest)
     return str(dest)
 
 
@@ -473,11 +560,11 @@ def download_faster_whisper_to_cache(
     root = Path(cache_dir) / folder
     safe_revision = _validated_revision(revision)
     snapshot = root / "snapshots" / safe_revision
-    for path, size in _select_files(repo_id, revision, allow_patterns):
+    for path, size, digest in _select_files(repo_id, revision, allow_patterns):
         if progress is not None:
             progress(f"ModelScope {repo_id}: {path}")
         target = _contained_destination(snapshot, path)
-        _download_file(repo_id, revision, path, target, size, progress)
+        _download_file(repo_id, revision, path, target, size, progress, digest)
     refs = root / "refs"
     refs.mkdir(parents=True, exist_ok=True)
     ref_path = refs / "main"

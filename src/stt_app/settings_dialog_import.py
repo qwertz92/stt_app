@@ -14,6 +14,7 @@ from .config import (
     DEFAULT_LANGUAGE_MODE,
     VALID_ENGINES,
 )
+from .dialog_style import styled_message_box
 from .settings_dialog_helpers import (
     _emit_background_signal,
     _ENGINE_LABELS,
@@ -107,8 +108,21 @@ class _ImportTabMixin:
         self.import_start_button.clicked.connect(
             self._transcribe_selected_import_file
         )
+        # "Use last recording" can resolve to the archive folder, so offer a way
+        # to look inside it without hunting through AppData by hand.
+        self.import_open_recordings_button = QtWidgets.QPushButton(
+            "Open recordings folder"
+        )
+        self.import_open_recordings_button.setToolTip(
+            "Open the folder that stores archived recordings.\n"
+            "It only fills up while 'Save all recordings' is enabled."
+        )
+        self.import_open_recordings_button.clicked.connect(
+            self._open_recordings_dir
+        )
         import_buttons.addWidget(self.import_file_button)
         import_buttons.addWidget(self.import_last_recording_button)
+        import_buttons.addWidget(self.import_open_recordings_button)
         import_buttons.addWidget(self.import_start_button)
         import_buttons.addStretch(1)
         import_controls_layout.addLayout(import_buttons)
@@ -175,7 +189,24 @@ class _ImportTabMixin:
 
     def _open_recordings_dir(self) -> None:
         target = self._effective_recordings_dir()
-        Path(target).mkdir(parents=True, exist_ok=True)
+        # The path is user-editable and may point at a disconnected share or a
+        # location this account cannot create. Failing here used to raise out
+        # of the Qt slot with nothing shown to the user.
+        try:
+            Path(target).mkdir(parents=True, exist_ok=True)
+        except (OSError, ValueError) as exc:
+            styled_message_box(
+                icon=QtWidgets.QMessageBox.Warning,
+                title="Recordings folder",
+                text=(
+                    f"This folder cannot be opened:\n{target}\n\n{exc}\n\n"
+                    "Pick a different recordings directory in the Audio tab."
+                ),
+                buttons=QtWidgets.QMessageBox.Ok,
+                default_button=QtWidgets.QMessageBox.Ok,
+                parent=self,
+            ).exec()
+            return
         QtGui.QDesktopServices.openUrl(QtCore.QUrl.fromLocalFile(target))
         refresher = getattr(self._controller, "refresh_hotkey_registration", None)
         if callable(refresher):
