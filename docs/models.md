@@ -6,13 +6,13 @@ Everything about model choices, downloading, and configuring models for offline 
 
 The app has three local runtime families:
 
-- **GPU-accelerated ONNX models** â€” Cohere Transcribe and IBM Granite Speech, run
+- **GPU-accelerated ONNX models** — Cohere Transcribe and IBM Granite Speech, run
   on the GPU through WebGPU via a Node.js helper. These are the highest-accuracy
   local models and, on a machine with a working GPU, usually faster than the
   Whisper models too. Batch mode only.
-- **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) â€” the local true cache-aware
+- **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
-- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) â€”
+- **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
 
@@ -33,18 +33,18 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 |-------|---------|------|-----------|----------|
 | `tiny` | CTranslate2 | ~75 MB | Multilingual | Quick testing, fallback |
 | `base` | CTranslate2 | ~141 MB | Multilingual | Light usage |
-| `small` | CTranslate2 | ~484 MB | Multilingual | **Default â€” good balance for German + English** |
+| `small` | CTranslate2 | ~484 MB | Multilingual | **Default — good balance for German + English** |
 | `medium` | CTranslate2 | ~1.4 GB | Multilingual | Better quality, slower |
 | `large-v3` | CTranslate2 | ~3.1 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
-| `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality â€” pruned version of large-v3 |
+| `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
 | `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
-| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** â€” Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
+| `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** — Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
 | `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 Plus, speaker tags/timestamps (raw INT8, CPU-bound), batch mode only |
 | `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 NAR, non-autoregressive (raw INT8, CPU-bound), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
-| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest local model** â€” RTF ~0.045 on CPU, no GPU or Node.js needed, batch mode only |
+| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest local model** — RTF ~0.045 on CPU, no GPU or Node.js needed, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet, ~3x slower, batch mode only |
 
 ### Which model should I use?
@@ -67,17 +67,17 @@ hardware.
 | Smaller GPU model / Granite 4.0 fallback | `granite-4.0-1b-speech` |
 | Testing / very limited resources | `tiny` |
 
-> **Real-time factor (RTF)** measures speed: processing time Ã· audio length.
-> RTF 0.1 means a 10-second clip transcribes in ~1 second â€” lower is faster, and
+> **Real-time factor (RTF)** measures speed: processing time ÷ audio length.
+> RTF 0.1 means a 10-second clip transcribes in ~1 second — lower is faster, and
 > anything below 1.0 is faster than real time. On the tested Ryzen 7600X + Arc
 > A750, `granite-4.0-1b-speech` runs at RTF 0.059 on WebGPU vs 0.381 on CPU, and
-> `cohere-transcribe-03-2026` at 0.071 on WebGPU â€” both faster than `small`
+> `cohere-transcribe-03-2026` at 0.071 on WebGPU — both faster than `small`
 > (0.151) or `large-v3-turbo` (0.355). See
 > [Local Benchmark Results](benchmarks/README.md).
 
 ### Accuracy reference (Word Error Rate)
 
-Lower is better. These are published benchmark values â€” your results depend on microphone, accent, and environment.
+Lower is better. These are published benchmark values — your results depend on microphone, accent, and environment.
 
 **German (FLEURS benchmark):**
 
@@ -128,8 +128,8 @@ Granite 4.1 2B uses the q4 package
 which has the exact same component layout as Granite 4.0
 (`audio_encoder` / `embed_tokens` / `decoder_model_merged`). On 2026-06-17 it was
 verified on an Intel Arc A750 to load on **WebGPU** (no `Einsum` shader failure)
-and transcribe German, English, and French correctly at roughly 0.13â€“0.19
-real-time factor â€” materially faster than the raw CPU path.
+and transcribe German, English, and French correctly at roughly 0.13–0.19
+real-time factor — materially faster than the raw CPU path.
 
 The Granite 4.1 Plus (autoregressive) raw export uses encoder, token embedding,
 prompt-encode, and decode-step graphs plus a host-side audio-token splice and
@@ -305,7 +305,7 @@ If the machine-wide Node.js installer is blocked by corporate policy, use the
 no-admin portable install: run `python scripts/setup_node_windows.py` (Windows
 Python), which downloads the portable Node.js ZIP and sets `STT_APP_NODE_PATH`
 for you. See
-[Advanced Setup â†’ Node.js for the GPU/ONNX models](advanced-setup.md#nodejs-for-the-gpuonnx-models-no-admin-install).
+[Advanced Setup → Node.js for the GPU/ONNX models](advanced-setup.md#nodejs-for-the-gpuonnx-models-no-admin-install).
 
 ---
 
@@ -314,11 +314,11 @@ for you. See
 If a Hugging Face download fails for any reason, the app and the download script
 **automatically retry against the [ModelScope](https://modelscope.cn) mirror**
 (Alibaba's model hub). ModelScope mirrors the same repository IDs
-(`onnx-community/â€¦`, `Systran/â€¦`, etc.) and serves the large LFS weights from its
+(`onnx-community/…`, `Systran/…`, etc.) and serves the large LFS weights from its
 own CDN instead of redirecting back to Hugging Face, so it usually works even
 when a corporate proxy blocks Hugging Face wholesale under a "Generative AI and
 ML Applications" category rule (see
-[SSL / proxy issues â†’ Category block](advanced-setup.md#category-block-hugging-face-fully-blocked-not-an-ssl-error)).
+[SSL / proxy issues → Category block](advanced-setup.md#category-block-hugging-face-fully-blocked-not-an-ssl-error)).
 
 - No setup is required; the fallback is transparent and lands the files in the
   same cache location a Hugging Face download would use.
@@ -391,7 +391,7 @@ If git traffic is allowed through your proxy:
 > Without it, `git clone` downloads only tiny LFS pointer files (~130 bytes) instead of the actual
 > model weights. The app will fail with `Unsupported model binary version` errors.
 >
-> **`git lfs install` is NOT a built-in Git command** â€” you must install the
+> **`git lfs install` is NOT a built-in Git command** — you must install the
 > `git-lfs` package first via your system package manager:
 >
 > **Ubuntu / Debian:**
@@ -493,8 +493,8 @@ python.exe .\scripts\import_model.py C:\Downloads\faster-whisper-small
 
 After transferring model files to the target machine:
 
-1. Open **Settings** (right-click tray icon â†’ Settings).
-2. Check **Offline mode** â€” prevents any network access.
+1. Open **Settings** (right-click tray icon → Settings).
+2. Check **Offline mode** — prevents any network access.
 3. Set **Model Dir** (only if you used a custom directory, not the default cache).
 
 Alternatively, set an environment variable before launching:
@@ -510,11 +510,11 @@ python main.py
 
 When you select e.g. `small` in Settings, faster-whisper resolves the model in this order:
 
-1. **Is the model name a directory path?** â†’ If `model_size_or_path` points to an existing folder on disk (e.g. `C:\models\faster-whisper-small\`), it uses that folder directly.
+1. **Is the model name a directory path?** → If `model_size_or_path` points to an existing folder on disk (e.g. `C:\models\faster-whisper-small\`), it uses that folder directly.
 
-2. **Is the model in the cache?** â†’ The short name (`small`) is mapped to a HuggingFace repo ID (`Systran/faster-whisper-small`). faster-whisper checks the HuggingFace cache (or the configured Model Dir) for a downloaded snapshot. If found â†’ loads from cache, no internet needed.
+2. **Is the model in the cache?** → The short name (`small`) is mapped to a HuggingFace repo ID (`Systran/faster-whisper-small`). faster-whisper checks the HuggingFace cache (or the configured Model Dir) for a downloaded snapshot. If found → loads from cache, no internet needed.
 
-3. **Download from HuggingFace Hub** â†’ If no cache hit, the model is downloaded and cached. This only happens once per model.
+3. **Download from HuggingFace Hub** → If no cache hit, the model is downloaded and cached. This only happens once per model.
 
 **Fallback behavior:** If the selected model cannot be loaded (download fails, file missing), the app falls back to any locally cached model (preferring `tiny` as last resort) and shows a warning.
 
@@ -525,15 +525,15 @@ The cache uses HuggingFace's internal directory format, not flat files:
 ```
 %USERPROFILE%\.cache\huggingface\hub\
   models--Systran--faster-whisper-small\
-    refs\main                              â† commit hash reference
-    snapshots\abc123...\                   â† actual model files
+    refs\main                              ← commit hash reference
+    snapshots\abc123...\                   ← actual model files
       config.json
       model.bin
       tokenizer.json
       vocabulary.txt
 ```
 
-This is why you cannot just drop files into a folder â€” the download script and import script handle this structure automatically.
+This is why you cannot just drop files into a folder — the download script and import script handle this structure automatically.
 
 ### Custom Model Dir
 
@@ -546,7 +546,7 @@ Useful for: USB transfer, network share, keeping models separate from user profi
 `parakeet-tdt-0.6b-v3` and `canary-1b-v2` run through
 [`onnx-asr`](https://github.com/istupakov/onnx-asr), a pure-Python runtime. Unlike
 the Cohere/Granite models they need **no Node.js**, and unlike Nemotron they need
-no extra ONNX Runtime â€” they reuse the one the app already ships.
+no extra ONNX Runtime — they reuse the one the app already ships.
 
 Both are **CPU only and batch only**. That is not a limitation in practice:
 measured on a Ryzen 5 7600X, Parakeet transcribes a 17-second clip in 0.78 s
