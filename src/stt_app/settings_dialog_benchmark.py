@@ -31,6 +31,7 @@ from .settings_dialog_helpers import (
     _WheelPassthroughSpinBox,
 )
 from .ui_feedback import restore_vertical_scrollbar
+from .dialog_style import make_label_selectable
 
 _BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(860, 880)
 _BENCHMARK_WINDOW_MINIMUM_SIZE = QtCore.QSize(680, 560)
@@ -446,6 +447,7 @@ class _BenchmarkMixin:
         )
         header_row.addWidget(self.open_benchmark_window_button)
         self.benchmark_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.benchmark_status_label)
         self.benchmark_status_label.setWordWrap(False)
         self.benchmark_status_label.setSizePolicy(
             QtWidgets.QSizePolicy.Expanding,
@@ -746,6 +748,7 @@ class _BenchmarkMixin:
         audio_layout.addLayout(audio_row)
 
         self.benchmark_audio_status_label = QtWidgets.QLabel("No audio sample selected.")
+        make_label_selectable(self.benchmark_audio_status_label)
         self.benchmark_audio_status_label.setWordWrap(True)
         self._style_note_label(self.benchmark_audio_status_label)
         audio_layout.addWidget(self.benchmark_audio_status_label)
@@ -993,6 +996,7 @@ class _BenchmarkMixin:
         outer_layout.addWidget(scroll, 1)
 
         self.benchmark_window_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.benchmark_window_status_label)
         self.benchmark_window_status_label.setWordWrap(True)
         outer_layout.addWidget(self.benchmark_window_status_label)
 

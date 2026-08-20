@@ -20,7 +20,7 @@ from .config import (
 )
 from .history_dialog import HistoryDialog
 from .controller import DictationController
-from .dialog_style import styled_message_box
+from .dialog_style import install_selectable_message_text, styled_message_box
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
@@ -72,6 +72,10 @@ def run() -> int:
     app.setApplicationName(APP_DISPLAY_NAME)
     app.setWindowIcon(load_app_icon())
     app.setQuitOnLastWindowClosed(False)
+    # Qt message boxes are not selectable by default, so an error could only be
+    # retyped or screenshotted. One filter covers every box the app raises,
+    # including the ones built by the QMessageBox convenience statics.
+    install_selectable_message_text(app)
 
     instance_lock = QtCore.QLockFile(str(appdata_root() / "stt_app.lock"))
     instance_lock.setStaleLockTime(0)

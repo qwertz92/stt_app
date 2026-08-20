@@ -32,6 +32,7 @@ from .transcript_history import (
     recent_entries_change_plan,
 )
 from .ui_feedback import restore_vertical_scrollbar, set_button_feedback_state
+from .dialog_style import make_label_selectable
 
 
 class _HistoryTabMixin:
@@ -173,6 +174,7 @@ class _HistoryTabMixin:
         history_layout.addLayout(history_entry_buttons)
 
         self.history_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.history_status_label)
         self.history_status_label.setWordWrap(True)
         self.history_status_label.setStyleSheet("color: #555;")
         # Reserve the space instead of toggling visibility: the label sits

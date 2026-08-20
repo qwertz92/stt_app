@@ -555,6 +555,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   later resume. Progress and its rolling transfer rate are approximate because
   they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
+- **Error text must be selectable**: Qt hands a `QMessageBox` only
+  `LinksAccessibleByMouse`, so its text could be captured only by retyping it
+  or screenshotting it. `dialog_style.install_selectable_message_text` installs
+  one application-wide event filter that marks every message box selectable as
+  it is shown. That is the only place that reaches the `QMessageBox.critical`
+  and friends convenience statics, which build *and* show the box in a single
+  call and give the caller no chance to configure it — do not "simplify" this
+  into per-call-site changes unless every static is migrated first. Inline
+  status/error labels use `dialog_style.make_label_selectable`; the overlay
+  detail label already carried the flags.
 - **There is exactly one download slot in the process**: every download goes
   through `model_download_coordinator`. Before it, the controller's preload
   path and the Local tab's queue each spawned a worker process against the same

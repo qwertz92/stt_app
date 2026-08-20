@@ -12,7 +12,7 @@ raises itself carries these explicit colours.
 
 from __future__ import annotations
 
-from PySide6 import QtWidgets
+from PySide6 import QtCore, QtWidgets
 
 DIALOG_STYLESHEET = """
 QMessageBox, QDialog {
@@ -75,9 +75,72 @@ QProgressBar::chunk {
 """
 
 
+# Qt gives a message box `LinksAccessibleByMouse` and nothing else, so its text
+# cannot be selected — an error message could only be transcribed by hand or
+# screenshotted. Every box the app shows gets these instead.
+SELECTABLE_TEXT_FLAGS = (
+    QtCore.Qt.TextSelectableByMouse | QtCore.Qt.TextSelectableByKeyboard
+)
+
+
 def apply_dialog_style(widget: QtWidgets.QWidget) -> None:
     """Give ``widget`` the app's readable dialog colours."""
     widget.setStyleSheet(DIALOG_STYLESHEET)
+
+
+def make_label_selectable(label: QtWidgets.QLabel) -> None:
+    """Let the user select and copy an inline status/error label.
+
+    These carry provider and runtime errors verbatim, which is exactly the text
+    worth pasting into a bug report.
+    """
+    label.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
+
+
+def make_message_text_selectable(box: QtWidgets.QMessageBox) -> None:
+    """Let the user select and copy a message box's text.
+
+    Also covers the detail area, which carries the long provider/runtime errors
+    that are the ones actually worth copying.
+    """
+    try:
+        box.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
+    except Exception:
+        return
+    for label in box.findChildren(QtWidgets.QLabel):
+        label.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
+    for view in box.findChildren(QtWidgets.QTextEdit):
+        view.setReadOnly(True)
+        view.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
+
+
+class _SelectableMessageTextFilter(QtCore.QObject):
+    """Makes every message box selectable, whoever created it.
+
+    The app raises most of its boxes through `QMessageBox.critical` and friends,
+    which build and show the box in one call and give no chance to configure it.
+    Filtering on show is the only place that reaches all of them, and it also
+    covers boxes Qt raises on its own.
+    """
+
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.Show and isinstance(
+            obj, QtWidgets.QMessageBox
+        ):
+            make_message_text_selectable(obj)
+        return False
+
+
+_SELECTABLE_FILTER: _SelectableMessageTextFilter | None = None
+
+
+def install_selectable_message_text(app: QtWidgets.QApplication) -> None:
+    """Install the app-wide filter once."""
+    global _SELECTABLE_FILTER
+    if _SELECTABLE_FILTER is not None:
+        return
+    _SELECTABLE_FILTER = _SelectableMessageTextFilter(app)
+    app.installEventFilter(_SELECTABLE_FILTER)
 
 
 def styled_message_box(
@@ -102,4 +165,5 @@ def styled_message_box(
     box.setStandardButtons(buttons)
     box.setDefaultButton(default_button)
     apply_dialog_style(box)
+    make_message_text_selectable(box)
     return box

@@ -30,6 +30,7 @@ from .settings_dialog_helpers import (
     model_choices_for_engine,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
+from .dialog_style import make_label_selectable
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -156,6 +157,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # ignored width policy keeps a long provider error from widening the
         # dialog; the full text stays available as the tooltip.
         self._status_label = QtWidgets.QLabel("")
+        make_label_selectable(self._status_label)
         self._status_label.setWordWrap(False)
         self._status_label.setFixedHeight(self.fontMetrics().height())
         self._status_label.setSizePolicy(

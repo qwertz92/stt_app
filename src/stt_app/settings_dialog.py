@@ -89,6 +89,7 @@ from .transcript_history import (
 from .ui_feedback import BUTTON_FEEDBACK_STYLESHEET, reserve_button_width_for_texts
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
+from .dialog_style import make_label_selectable
 
 if TYPE_CHECKING:
     from .controller import DictationController
@@ -390,6 +391,7 @@ class SettingsDialog(
         close_button.clicked.connect(self.reject)
 
         self._save_status_label = QtWidgets.QLabel()
+        make_label_selectable(self._save_status_label)
         self._save_status_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
         self._save_status_timer = QtCore.QTimer(self)
         self._save_status_timer.setSingleShot(True)

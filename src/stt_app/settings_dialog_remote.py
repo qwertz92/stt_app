@@ -9,6 +9,7 @@ from typing import Callable
 from PySide6 import QtCore, QtWidgets
 
 from .config import DEFAULT_ENGINE, DEFAULT_LANGUAGE_MODE
+from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _emit_background_signal,
     _remote_provider_label,
@@ -281,6 +282,7 @@ class _RemoteProvidersMixin:
         grid_row += 1
 
         self.key_storage_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.key_storage_status_label)
         self.key_storage_status_label.setWordWrap(True)
         self._style_note_label(self.key_storage_status_label)
         self.save_api_keys_button = QtWidgets.QPushButton("Save API Keys")

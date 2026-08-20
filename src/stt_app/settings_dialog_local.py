@@ -31,6 +31,7 @@ from .settings_dialog_helpers import (
     _emit_background_signal,
 )
 from .ui_feedback import restore_vertical_scrollbar
+from .dialog_style import make_label_selectable
 
 
 def _facade():
@@ -137,6 +138,7 @@ class _LocalModelsMixin:
         local_models_layout.addWidget(self.local_models_label)
 
         self.local_models_scan_status_label = QtWidgets.QLabel("")
+        make_label_selectable(self.local_models_scan_status_label)
         self.local_models_scan_status_label.setWordWrap(True)
         self._style_note_label(self.local_models_scan_status_label)
         local_models_layout.addWidget(self.local_models_scan_status_label)
@@ -204,6 +206,7 @@ class _LocalModelsMixin:
         local_models_layout.addLayout(manage_buttons)
 
         self.local_models_action_label = QtWidgets.QLabel("")
+        make_label_selectable(self.local_models_action_label)
         self.local_models_action_label.setWordWrap(True)
         # Reserve the space: this label sits below the stretching model list,
         # so a status message that wraps to a second line would otherwise

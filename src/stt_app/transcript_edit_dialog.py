@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
+from .dialog_style import make_label_selectable
 
 
 class TranscriptEditDialog(QtWidgets.QDialog):
@@ -21,6 +22,7 @@ class TranscriptEditDialog(QtWidgets.QDialog):
         self._editor.textChanged.connect(self._clear_error)
 
         self._error_label = QtWidgets.QLabel("")
+        make_label_selectable(self._error_label)
         self._error_label.setStyleSheet("color: #b71c1c;")
         # Keep the row in the layout and only swap its text: toggling the
         # label's visibility pushed the Save/Cancel row down by a line whenever

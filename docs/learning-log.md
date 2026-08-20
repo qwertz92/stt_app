@@ -2725,3 +2725,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
   deleting the partial files they are about to resume from. The remote work had
   already made a controller download visible in the model list; the progress
   bar now follows it too, so the two paths are indistinguishable to the user.
+- **Error messages could not be selected or copied.** Qt gives a `QMessageBox`
+  only `LinksAccessibleByMouse`, so every error dialog in the app could be
+  captured only by retyping it or taking a screenshot. Most of the app's boxes
+  come from the `QMessageBox.critical`/`warning`/`information`/`question`
+  convenience statics, which construct and show the box in one call, so no
+  call-site change can configure them; one application-wide event filter that
+  marks each box selectable as it is shown covers all of them, plus any box Qt
+  raises itself, with no call-site or test churn. Inline status labels in the
+  Settings, benchmark, history, remote, retranscribe and transcript-edit
+  surfaces are marked selectable too. Verified that a 216-character provider
+  error is wrapped and kept whole rather than elided. The overlay's detail
+  label already had the flags, and a probe confirmed a drag over it selects
+  text rather than moving the window.
