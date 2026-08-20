@@ -124,3 +124,55 @@ def test_release_by_a_non_owner_leaves_the_real_claim_intact():
 
 def test_the_app_shares_one_coordinator():
     assert model_download_coordinator() is model_download_coordinator()
+
+
+def test_concurrent_callers_never_overlap_and_never_leak():
+    """The whole point is that two downloads can never touch the same cache
+    directory at once. Exercised with mixed explicit/implicit callers, random
+    failures and random cancels, since those are the paths that skip the normal
+    release."""
+    import random
+
+    coordinator = ModelDownloadCoordinator()
+    rng = random.Random(20260818)
+    in_flight: list[str] = []
+    peak = 0
+    guard = threading.Lock()
+
+    def worker(index: int) -> None:
+        nonlocal peak
+        model = ("a", "b", "c")[index % 3]
+        explicit = index % 2 == 0
+        cancels = index % 9 == 0
+        try:
+            outcome = coordinator.acquire(
+                model, "", explicit=explicit, cancel_check=lambda: cancels
+            )
+        except ModelDownloadCanceled:
+            return
+        if outcome == ACQUIRE_JOINED:
+            return
+        succeeded = rng.random() < 0.7
+        try:
+            with guard:
+                in_flight.append(model)
+                peak = max(peak, len(in_flight))
+            time.sleep(0.002)
+        finally:
+            with guard:
+                in_flight.remove(model)
+            coordinator.release(model, "", succeeded=succeeded)
+
+    threads = [
+        threading.Thread(target=worker, args=(index,), daemon=True)
+        for index in range(60)
+    ]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+
+    assert not [t for t in threads if t.is_alive()], "a caller deadlocked"
+    assert peak == 1, f"{peak} downloads ran at once"
+    assert coordinator.active() is None
+    assert not [m for m in ("a", "b", "c") if coordinator.has_explicit_interest(m, "")]

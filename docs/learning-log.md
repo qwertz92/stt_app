@@ -2738,3 +2738,16 @@ Agents and developers: use this as a knowledge base for past issues and solution
   error is wrapped and kept whole rather than elided. The overlay's detail
   label already had the flags, and a probe confirmed a drag over it selects
   text rather than moving the window.
+- **A registration audit now guards the model tables.** Two defects in this
+  session came from a model being added to some tables but not all: Granite
+  Plus demanded a file its repo does not ship (invisible and unusable), and the
+  onnx-asr models introduced a `LOCAL_MODEL_RUNTIME` value the benchmark
+  dispatcher did not know (benchmarking them always failed).
+  `tests/test_model_registration.py` parametrizes over `VALID_MODEL_SIZES` and
+  fails if a model is missing from the repo map, the runtime map, the label
+  table, the size estimates or the language modes, and over
+  `LOCAL_ONNX_MODEL_SIZES` for a layout and a download destination.
+- The download coordinator is exercised by a 60-thread concurrency test with
+  mixed explicit/implicit callers, random failures and random cancels; it
+  asserts peak concurrency of exactly 1, no deadlock, no dangling slot and no
+  leaked explicit interest. An ad-hoc 200-thread run behaved identically.
