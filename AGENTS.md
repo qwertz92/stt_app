@@ -97,22 +97,32 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `settings_store.py` | JSON settings persistence (`%APPDATA%\stt_app\settings.json`) |
 | `persistence.py` | Atomic file writes, strict JSON booleans, recovery helpers, and shared path-scoped locks |
 | `csv_safety.py` | Spreadsheet-formula neutralization for user-controlled CSV cells |
+| `benchmark_history.py` | Persistent benchmark run history (JSON) with export |
 | `ui_feedback.py` | Shared Qt button feedback styles, stable feedback widths, scroll restoration helpers |
+| `dialog_style.py` | Shared message-box/dialog colours plus the app-wide filter that makes error text selectable |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
 | `model_download_coordinator.py` | The single process-wide download slot; serializes the preload and Local-tab download paths |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
+| `local_model_download_worker.py` | Subprocess entry point that downloads one model |
+| `local_model_scan.py` | Local model inventory scan shared by the app and its worker |
+| `local_model_scan_worker.py` | Subprocess entry point for the inventory scan |
 | `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
 | `provider_connection_test_store.py` | Persistent last-known remote-provider connection test status keyed by provider |
 | `update_checker.py` | GitHub Releases update check and version comparison helpers |
 | `update_ui.py` | Shared Qt dialogs/actions for presenting update-check results |
+| `update_installer.py` | Verified download and launch of a release installer |
 | `transcript_history.py` | Persistent transcript history store (JSON) with import/export |
 | `history_dialog.py` | History dialog with table view, copy, export/import, clear, limit control, per-entry audio reveal and retranscription, recordings-folder shortcut |
+| `transcript_edit_dialog.py` | Edit one history entry's transcript |
 | `history_ui_actions.py` | Shared export/import/clear flows and stored-count label formatting for the History dialog and Settings History tab |
 | `history_audio.py` | Shared history-entry-to-audio resolution plus file-manager reveal/open helpers for both history views |
 | `retranscribe_dialog.py` | Compact language-only retranscription of one history entry's retained audio |
 | `app_paths.py` | Centralized app data/config path helpers |
+| `last_recording_store.py` | Managed last-recording state (path, status, recovery) for Retry and Import |
 | `app_icon.py` | Shared app icon path/loader for the app, tray, and dialog window icons |
+| `logger.py` | Application logging setup and diagnostics text |
+| `ssl_utils.py` | System trust store injection and CA bundle resolution |
 | `vad.py` | Energy-based voice activity detection with configurable threshold |
 | `window_focus.py` | Win32 foreground/focus/caret window tracking for text insertion |
 | `win_tray_icon.py` | Hand-registered Windows notification icon (`Shell_NotifyIcon` + native menu) with a `QSystemTrayIcon` fallback |
