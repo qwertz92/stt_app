@@ -182,7 +182,12 @@ def test_faster_whisper_downloads_through_the_slot(recording, monkeypatch):
     entirely."""
     from stt_app.transcriber import local_faster_whisper
 
-    monkeypatch.setattr(local_faster_whisper, "find_cached_models", lambda *_a: [])
+    # The gate is the *download destination*, not find_cached_models: the
+    # latter also accepts the default cache and a flat layout, so with a custom
+    # Model Dir it said "cached" for a model WhisperModel would still fetch.
+    monkeypatch.setattr(
+        local_faster_whisper, "_has_valid_model_snapshot", lambda *_a, **_k: False
+    )
     downloaded: list[str] = []
     monkeypatch.setattr(
         local_faster_whisper,
@@ -210,7 +215,9 @@ def test_faster_whisper_downloads_through_the_slot(recording, monkeypatch):
 def test_an_offline_transcriber_does_not_take_the_slot(recording, monkeypatch):
     from stt_app.transcriber import local_faster_whisper
 
-    monkeypatch.setattr(local_faster_whisper, "find_cached_models", lambda *_a: [])
+    monkeypatch.setattr(
+        local_faster_whisper, "_has_valid_model_snapshot", lambda *_a, **_k: False
+    )
     transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
         model_size="small", offline_mode=True, model_factory=lambda *a, **k: object()
     )
@@ -313,3 +320,68 @@ def test_several_waiters_for_one_model_all_skip_their_download():
         thread.join(timeout=5)
 
     assert outcomes == [ACQUIRE_JOINED] * 3
+
+
+def test_cancelling_while_queued_does_not_strand_the_entry(monkeypatch, tmp_path):
+    """Cancelling while an entry waits for the slot used to leave it claimed:
+    the tab then showed it as downloading forever and silently refused to queue
+    it again for the rest of the session."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    coordinator = model_download_coordinator()
+    coordinator.acquire("someone-else", "", explicit=False)
+
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    dialog._local_model_download_lock = threading.RLock()
+    dialog._local_model_download_active = None
+    dialog._local_model_download_claimed = ("small", "")
+    dialog._local_model_download_cancel_event = threading.Event()
+    dialog._local_model_download_cancel_event.set()
+    coordinator.register_explicit_interest("small", "")
+
+    try:
+        status, _detail, _f, _b = _LocalModelsMixin._download_local_model_in_subprocess(
+            dialog, "small", ""
+        )
+        assert status == "canceled"
+        assert dialog._local_model_download_claimed is None, "entry stayed claimed"
+        assert coordinator.has_explicit_interest("small", "") is False
+    finally:
+        coordinator.release("someone-else", "", succeeded=False)
+
+
+def test_a_crashing_download_queue_does_not_wedge_the_tab(monkeypatch):
+    """Without a finally the worker thread died holding the queue: interest
+    stayed registered, `_worker_running` stayed True forever, and every later
+    Download click appended to a queue nothing would ever run."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    coordinator = model_download_coordinator()
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    dialog._local_model_download_lock = threading.RLock()
+    dialog._local_model_download_queue = [("medium", "")]
+    dialog._local_model_download_active = None
+    dialog._local_model_download_claimed = None
+    dialog._local_model_download_worker_running = True
+    coordinator.register_explicit_interest("medium", "")
+
+    monkeypatch.setattr(
+        _LocalModelsMixin,
+        "_drive_local_model_download_queue",
+        lambda self, token: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    emitted: list[tuple] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local._emit_background_signal",
+        lambda *args: emitted.append(args),
+    )
+
+    with pytest.raises(RuntimeError):
+        _LocalModelsMixin._run_local_model_download_queue(dialog, 1)
+
+    assert dialog._local_model_download_worker_running is False
+    assert dialog._local_model_download_queue == []
+    assert coordinator.has_explicit_interest("medium", "") is False
+    assert emitted, "the user must be told the queue stopped"

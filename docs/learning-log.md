@@ -2813,3 +2813,36 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Recorded as a known limitation: the lock is process-wide, so the
     out-of-process benchmark worker and `scripts/download_model.py` can still
     write the same cache directory. Both are deliberate developer actions.
+- **Round 3: four more defects, three of them introduced by round 2's fixes.**
+  - *Cancelling a queued download stranded its entry for the session.* The
+    cancel branch returned before the `finally` that clears
+    `_local_model_download_claimed`, so the tab showed the model as downloading
+    forever and silently refused to queue it again. One `try/finally` now covers
+    every exit, and releases the enqueue-time interest when the slot was never
+    held. The precondition became far more common in the same commit, because
+    the new faster-whisper pre-fetch takes the slot too.
+  - *The progress bar measured a model that was only queued.* The snapshot folds
+    a claimed entry in for the list and the duplicate check, and the bar was
+    reading that same field — inventing a percentage from another model's
+    directory growth, and the 500 ms timer overwrote the accurate "Waiting for
+    the current download" line with it. The bar now reads
+    `_local_model_download_active` only.
+  - *faster-whisper still bypassed the slot with a custom Model Dir.* The gate
+    used `find_cached_models`, which also accepts the default cache and a flat
+    layout, so it answered "cached" for a model `WhisperModel` would still
+    download into the custom dir. It now gates on
+    `download_destination_dir` + `_has_valid_model_snapshot`, i.e. exactly the
+    directory the constructor resolves.
+  - *An exception in the download queue wedged the tab permanently.* The worker
+    body had no `try/finally`: interest stayed registered (blocking partial
+    cleanup for the process lifetime), `_worker_running` stayed True, and the
+    Refresh/Delete/Model-Dir controls stayed disabled with no way back.
+  - Also: `_hide_local_model_download_progress` asked the widget whether it was
+    visible, and Qt answers False for a child of a hidden dialog — this dialog
+    persists hidden for the app lifetime, so a download ending while Settings
+    was closed never cleared its bar. It tracks the state itself now.
+  - Known and accepted: the coordinator is process-wide, so the out-of-process
+    benchmark worker and `scripts/download_model.py` can still write the same
+    cache directory; `ModelDownloadCanceled` surfaces as a transcription error
+    rather than a clean cancel; and the transcriber's own pre-fetch is not
+    reported by `preload_downloading_model()`.

@@ -563,7 +563,14 @@ class LocalFasterWhisperTranscriber(ITranscriber):
     def _coordinated_download_if_missing(self) -> None:
         if self._offline_mode:
             return
-        if self.model_size in find_cached_models(self._model_dir):
+        # Gate on the directory WhisperModel will actually resolve, not on
+        # find_cached_models: that also accepts the default cache and a flat
+        # layout, so with a custom Model Dir it reported "cached" for a model
+        # the constructor would still download — uncoordinated.
+        destination = download_destination_dir(self.model_size, self._model_dir)
+        if destination is not None and _has_valid_model_snapshot(
+            destination, {"config.json", "model.bin"}
+        ):
             return
         from ..model_download_coordinator import run_coordinated_download
 
