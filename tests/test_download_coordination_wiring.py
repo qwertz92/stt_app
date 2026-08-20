@@ -385,3 +385,161 @@ def test_a_crashing_download_queue_does_not_wedge_the_tab(monkeypatch):
     assert dialog._local_model_download_queue == []
     assert coordinator.has_explicit_interest("medium", "") is False
     assert emitted, "the user must be told the queue stopped"
+
+
+def test_a_custom_model_dir_does_not_skip_the_slot(recording, monkeypatch, tmp_path):
+    """`find_cached_models` also accepts the default cache and a flat layout, so
+    gating on it answered "cached" for a model WhisperModel would still fetch
+    into the configured Model Dir — uncoordinated. The gate must ask about the
+    destination the constructor actually resolves."""
+    from stt_app.transcriber import local_faster_whisper
+
+    # The model exists somewhere find_cached_models looks...
+    monkeypatch.setattr(
+        local_faster_whisper, "find_cached_models", lambda *_a, **_k: ["small"]
+    )
+    # ...but not in the configured Model Dir, which is where it would land.
+    downloaded: list[str] = []
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "download_model_snapshot",
+        lambda model, model_dir="": downloaded.append(model),
+    )
+
+    transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
+        model_size="small",
+        model_dir=str(tmp_path),
+        model_factory=lambda *a, **k: object(),
+    )
+    transcriber.preload_model()
+
+    assert downloaded == ["small"], "the empty custom Model Dir must still download"
+    assert recording.acquired == [("small", str(tmp_path), False)]
+
+
+def test_a_model_present_in_the_custom_dir_is_not_refetched(
+    recording, monkeypatch, tmp_path
+):
+    """The mirror case: over-narrowing would re-download a model the user has."""
+    from stt_app.config import MODEL_REPO_MAP
+    from stt_app.transcriber import local_faster_whisper
+
+    repo = MODEL_REPO_MAP["small"].replace("/", "--")
+    snapshot = tmp_path / f"models--{repo}" / "snapshots" / "abc123"
+    snapshot.mkdir(parents=True)
+    (snapshot / "config.json").write_text("{}", encoding="utf-8")
+    (snapshot / "model.bin").write_bytes(b"x")
+
+    downloaded: list[str] = []
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "download_model_snapshot",
+        lambda model, model_dir="": downloaded.append(model),
+    )
+    transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
+        model_size="small",
+        model_dir=str(tmp_path),
+        model_factory=lambda *a, **k: object(),
+    )
+    transcriber.preload_model()
+
+    assert downloaded == [], "a model already in the Model Dir must not be refetched"
+    assert recording.acquired == []
+
+
+class _BarStub:
+    """Minimal stand-in for the Local tab's progress widgets."""
+
+    def __init__(self):
+        self.visible = False
+        self.text = ""
+        self.range = None
+        self.value = None
+        self.fmt = ""
+
+    # progress bar
+    def setVisible(self, value):
+        self.visible = bool(value)
+
+    def setRange(self, low, high):
+        self.range = (low, high)
+
+    def setValue(self, value):
+        self.value = value
+
+    def setFormat(self, fmt):
+        self.fmt = fmt
+
+    # label
+    def setText(self, text):
+        self.text = text
+
+    def setStyleSheet(self, _sheet):
+        pass
+
+
+def _progress_dialog(measured):
+    from stt_app.model_download_progress import ModelDownloadSpeedTracker
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    dialog._local_model_download_lock = threading.RLock()
+    dialog._local_model_download_queue = []
+    dialog._local_model_download_worker_running = True
+    dialog._local_model_download_speed_tracker = ModelDownloadSpeedTracker()
+    dialog.local_model_download_progress_bar = _BarStub()
+    dialog.local_models_action_label = _BarStub()
+    dialog.model_dir_edit = _BarStub()
+    dialog.model_dir_edit.text = lambda: ""
+    dialog._preload_downloading_model = lambda: None
+    dialog._local_model_download_bar_shown = False
+    return dialog
+
+
+def test_the_progress_bar_never_measures_a_merely_queued_model(monkeypatch):
+    """A claimed entry is folded into the snapshot for the list and the
+    duplicate check. Measuring it reports another model's directory growth as
+    its progress and invents a percentage for a download that has not started."""
+    measured: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local._facade",
+        lambda: type(
+            "F",
+            (),
+            {
+                "estimate_cached_model_bytes": staticmethod(
+                    lambda name, model_dir: measured.append(name) or 0
+                )
+            },
+        ),
+    )
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = _progress_dialog(measured)
+    dialog._local_model_download_active = None
+    dialog._local_model_download_claimed = ("queued-model", "")
+
+    _LocalModelsMixin._refresh_local_model_download_progress(dialog)
+
+    assert measured == [], "measured a model that is only waiting for the slot"
+    assert dialog.local_model_download_progress_bar.visible is False
+
+
+def test_the_progress_bar_hides_even_while_settings_is_closed():
+    """Qt reports a child of a hidden dialog as not visible, and this dialog
+    persists hidden for the app lifetime, so asking the widget meant a download
+    ending while Settings was closed never cleared its bar."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = _progress_dialog([])
+    dialog._local_model_download_active = None
+    dialog._local_model_download_claimed = None
+    dialog._local_model_download_bar_shown = True
+    # The widget reports itself invisible, exactly as Qt would here.
+    dialog.local_model_download_progress_bar.visible = False
+    dialog.local_models_action_label.text = "Downloading 'x': approx. 27%"
+
+    _LocalModelsMixin._hide_local_model_download_progress(dialog)
+
+    assert dialog._local_model_download_bar_shown is False
+    assert dialog.local_models_action_label.text == "", "stale status line kept"

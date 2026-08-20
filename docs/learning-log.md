@@ -2846,3 +2846,27 @@ Agents and developers: use this as a knowledge base for past issues and solution
     cache directory; `ModelDownloadCanceled` surfaces as a transcription error
     rather than a clean cancel; and the transcriber's own pre-fetch is not
     reported by `preload_downloading_model()`.
+- **Round 4 verification (run by hand after the reviewer hit its usage limit).**
+  The reviewer died before delivering findings, so its checklist was executed
+  directly. All five round-3 fixes verified by reproduction, plus:
+  - The narrowed faster-whisper gate agrees with `find_cached_models` on all
+    seven models against the real cache, so it does not re-download anything
+    already present; with a custom Model Dir it correctly refuses to skip the
+    slot, and it correctly recognises an imported `models--<repo>` snapshot
+    inside that dir.
+  - Explicit-interest refcounting survives over-drops: the counter clamps at
+    zero and a later register still takes effect, so the new `finally` cannot
+    push another caller's claim negative.
+  - Interest returns to zero on every exit of
+    `_download_local_model_in_subprocess` — success, worker failure, worker
+    exception, cancel-while-queued and joined — with the claim and the slot
+    cleared each time.
+  - **One of the new guards was vacuous**: the faster-whisper wiring test
+    patched `_has_valid_model_snapshot`, so reverting the gate to
+    `find_cached_models` left it green. Replaced with two tests that assert the
+    behaviour instead — an empty custom Model Dir still takes the slot, and a
+    model already in that dir is not refetched — and both were confirmed to
+    fail against the reverted gate.
+  - The two remaining uncovered fixes (the bar never measuring a merely claimed
+    model; the bar hiding while Settings is closed) now have tests, each
+    verified against a revert.
