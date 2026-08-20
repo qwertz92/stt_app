@@ -469,3 +469,36 @@ def test_language_note_names_the_selected_model_family(dialog):
     assert "Granite" not in granite_note
 
     assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3")
+
+
+def test_the_language_hint_never_contradicts_the_language_picker(dialog):
+    """The hint sits directly under the combo. A note claiming a model has no
+    automatic detection while the combo offers Auto (or the reverse) is a
+    user-facing falsehood, and asserting only on the model family's name cannot
+    detect it."""
+    from stt_app.config import VALID_MODEL_SIZES, language_modes_for_selection
+
+    dialog.show()
+    index = dialog.engine_combo.findData("local")
+    dialog.engine_combo.setCurrentIndex(index)
+
+    for model in VALID_MODEL_SIZES:
+        model_index = dialog.model_combo.findData(model)
+        if model_index < 0:
+            continue
+        dialog.model_combo.setCurrentIndex(model_index)
+        QtWidgets.QApplication.processEvents()
+        note = dialog.language_note_label.text()
+        offers_auto = "auto" in language_modes_for_selection("local", model)
+        claims_no_auto = (
+            "no automatic" in note.lower()
+            or "not provide automatic" in note.lower()
+            or "cannot detect the language" in note.lower()
+        )
+        assert not (offers_auto and claims_no_auto), (
+            f"{model}: picker offers Auto but the hint denies it -> {note!r}"
+        )
+        if not offers_auto and note:
+            assert "supports auto" not in note.lower(), (
+                f"{model}: picker has no Auto but the hint promises it -> {note!r}"
+            )

@@ -635,7 +635,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     controller teardown, because the dialog shutdown releases the slot and a
     waiter would otherwise start a fresh multi-gigabyte download on a
     non-daemon executor thread that the interpreter joins at exit.
-  - The download queue worker is wrapped in `try/finally`: an exception used to
+  - The download queue worker is wrapped in `try/except BaseException`: an
+    exception used to
     kill the thread holding the queue, leaving interest registered, the running
     flag set and the tab's controls disabled with no way back.
   - The lock is process-wide, not machine-wide. The out-of-process benchmark

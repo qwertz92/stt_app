@@ -203,6 +203,7 @@ class _RemoteProvidersMixin:
 
             last_test_label = QtWidgets.QLabel("Last test: never.")
             last_test_label.setWordWrap(True)
+            make_label_selectable(last_test_label)
             self._style_provider_last_test_label(last_test_label)
             provider_grid.addWidget(
                 title_label,
@@ -335,6 +336,7 @@ class _RemoteProvidersMixin:
         self.test_conn_button.clicked.connect(self._test_connection)
         self.test_conn_result = QtWidgets.QLabel("")
         self.test_conn_result.setWordWrap(True)
+        make_label_selectable(self.test_conn_result)
         provider_grid.addWidget(
             self.test_conn_button,
             grid_row,

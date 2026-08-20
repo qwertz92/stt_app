@@ -1375,6 +1375,10 @@ class _LocalModelsMixin:
         self._local_model_download_progress_timer.stop()
         self._local_model_download_speed_tracker.reset()
         self.local_model_download_progress_bar.setVisible(False)
+        # Clear the shown-flag with it. Leaving it set let the Local tab's 1 Hz
+        # watchdog run the full hide body a second later, which blanks the
+        # "Downloaded X" / "Download failed: <reason>" line the user needs.
+        self._local_model_download_bar_shown = False
         if success:
             color = "#1b5e20"
         elif text.startswith("Completed with errors"):
@@ -1431,6 +1435,13 @@ class _LocalModelsMixin:
                     self.model_dir_edit.text().strip(),
                 )
                 total_removed += removed
+                # Forget the "downloaded this session" marker with it. It is
+                # name-keyed and otherwise only ever shrunk against the scan, so
+                # a delete left the row reading "Downloaded" and made every
+                # re-download attempt answer "already downloaded or queued"
+                # until the app restarted.
+                with self._local_model_download_lock:
+                    self._local_model_download_completed_names.discard(model_name)
             except Exception as exc:
                 errors.append(f"'{model_name}': {exc}")
 

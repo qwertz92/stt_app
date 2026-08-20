@@ -149,7 +149,9 @@ def _wait_for_local_models(
     dialog: SettingsDialog,
     *model_names: str,
     cached: bool | None = None,
-    timeout_ms: int = 3000,
+    # The inventory scan runs out of process; 3 s was enough on an idle machine
+    # but made the suite intermittently red under load.
+    timeout_ms: int = 15000,
 ) -> None:
     """Wait until the deferred inventory render lists the given models.
 

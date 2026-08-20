@@ -121,10 +121,16 @@ class ModelDownloadCoordinator:
                 self._explicit_interest[key] = self._explicit_interest.get(key, 0) + 1
         try:
             return self._acquire_slot(
-                key, model_name, model_dir, explicit, cancel_check, completed_before
+                key,
+                model_name,
+                model_dir,
+                explicit,
+                cancel_check,
+                completed_before,
+                interest_already_registered,
             )
         except BaseException:
-            if explicit:
+            if explicit and not interest_already_registered:
                 self._drop_explicit_interest(key)
             raise
 
@@ -136,6 +142,7 @@ class ModelDownloadCoordinator:
         explicit: bool,
         cancel_check: Callable[[], bool] | None,
         completed_before: int,
+        interest_already_registered: bool = False,
     ) -> str:
         with self._condition:
             while self._active is not None:
@@ -152,7 +159,7 @@ class ModelDownloadCoordinator:
                     waiting_for_same_model
                     and self._completed.get(key, 0) > completed_before
                 ):
-                    if explicit:
+                    if explicit and not interest_already_registered:
                         self._drop_explicit_interest(key)
                     return ACQUIRE_JOINED
             self._active = ActiveModelDownload(model_name, model_dir, bool(explicit))

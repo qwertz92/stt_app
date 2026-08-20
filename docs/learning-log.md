@@ -2870,3 +2870,35 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - The two remaining uncovered fixes (the bar never measuring a merely claimed
     model; the bar hiding while Settings is closed) now have tests, each
     verified against a revert.
+- **Round 5 (release-readiness): verdict releasable, with four small fixes.**
+  - *The "Downloaded X" / "Download failed: reason" line was wiped a second
+    after it appeared.* `_on_local_model_download_finished` hid the bar without
+    clearing the shown-flag, so the Local tab's 1 Hz watchdog then ran the full
+    hide body — including blanking the label — exactly when the user was
+    watching. One line.
+  - *The General tab told the user the four Granite models have no automatic
+    language detection while the combo beside it offered Auto.* The round-2
+    rewrite moved that falsehood rather than removing it: Cohere and Canary have
+    their own branches, so only Granite reaches the fall-through. Worse, the
+    guard added with it asserted only that the word "Granite" was absent, which
+    cannot detect a wrong claim. Replaced with a test that compares every
+    model's hint against its actual picker contents, verified against a revert.
+  - The Remote tab's connection-test and per-provider "Last test" labels — where
+    a 401, SSL or proxy error actually lands — had been missed by the selectable
+    sweep, so the AGENTS.md claim about inline error labels was false for them.
+  - `acquire()` returned explicit interest it had never registered: the
+    increment was guarded by `interest_already_registered`, both decrements only
+    by `explicit`, so the production call path went net −2 on the joined and
+    cancelled branches. Latent (the counter clamps at zero) but it disarmed the
+    partial-file protection early.
+  - Two pre-existing bugs the round surfaced were fixed too: Parakeet and Canary
+    were never preloaded although the overlay announced "Model loaded" (the
+    isinstance tuple omitted their class; it now asks for `preload_model`), and
+    deleting a model kept its name in the session's "completed" set, so the row
+    still read "Downloaded" and re-downloading was refused until restart.
+  - The intermittently red `test_delete_selected_cached_model_updates_feedback`
+    was waiting 3 s for an out-of-process inventory scan; raised to 15 s.
+  - Reviewer measurements worth keeping: the selectable-text filter costs
+    ~0.74 us per dispatched event (~0.07 % CPU at 1000 events/s), and
+    `estimate_cached_model_bytes` takes 1.0-8.3 ms across all 14 cached models,
+    so the 1 Hz progress timer is not a concern.

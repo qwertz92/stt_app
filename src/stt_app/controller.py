@@ -2394,10 +2394,6 @@ class DictationController(QtCore.QObject):
         key: tuple[object, ...],
     ) -> None:
         """Background worker: eagerly load the configured local model."""
-        from .transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
-        from .transcriber.local_nemotron import LocalNemotronTranscriber
-        from .transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
-
         try:
             self._download_model_for_preload(settings, generation)
         except RuntimeError as exc:
@@ -2428,15 +2424,13 @@ class DictationController(QtCore.QObject):
                 )
                 return
             transcriber = runtime_lease.transcriber
-            if isinstance(
-                transcriber,
-                (
-                    LocalFasterWhisperTranscriber,
-                    LocalNemotronTranscriber,
-                    LocalOnnxWebGpuTranscriber,
-                ),
-            ):
-                transcriber.preload_model()
+            # Any local runtime that can preload should: skipping one makes the
+            # first dictation pay the full cold load while the overlay has
+            # already announced "Model loaded", and a broken install goes
+            # undetected until the user speaks.
+            preload = getattr(transcriber, "preload_model", None)
+            if callable(preload):
+                preload()
         except Exception as exc:
             if self._preload_generation_was_canceled(generation):
                 self._record_model_preload_result(key, generation, None)

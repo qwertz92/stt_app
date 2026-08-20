@@ -748,9 +748,10 @@ class _GeneralTabMixin:
             )
 
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
+            # Only the Granite models reach here: Cohere and Canary have their
+            # own branches above, and both of those really do lack Auto.
             return (
-                "This model supports the languages documented for it and does "
-                "not provide automatic language detection."
+                "This model supports Auto plus the languages documented for it."
             )
 
         if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
