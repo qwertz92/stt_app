@@ -18,6 +18,11 @@ from .local_model_download import (
     model_download_process_error,
     terminate_model_download_process,
 )
+from .model_download_coordinator import (
+    ACQUIRE_JOINED,
+    ModelDownloadCanceled,
+    model_download_coordinator,
+)
 from .model_download_progress import format_model_download_progress
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
@@ -979,6 +984,38 @@ class _LocalModelsMixin:
         model_name: str,
         model_dir: str,
     ) -> tuple[str, str, int, int]:
+        # Claim the one process-wide download slot first. The preload path may
+        # already be fetching this model because the user selected it and
+        # pressed Save; starting a second worker against the same cache
+        # directory is what made this queue sit at 0% forever.
+        coordinator = model_download_coordinator()
+        try:
+            outcome = coordinator.acquire(
+                model_name,
+                model_dir,
+                explicit=True,
+                cancel_check=self._local_model_download_cancel_event.is_set,
+            )
+        except ModelDownloadCanceled:
+            return "canceled", "", 0, 0
+        if outcome == ACQUIRE_JOINED:
+            # The preload path finished this exact model while we waited.
+            return "success", "", 0, 0
+
+        result: tuple[str, str, int, int] = ("failed", "", 0, 0)
+        try:
+            result = self._run_download_worker(model_name, model_dir)
+            return result
+        finally:
+            coordinator.release(
+                model_name, model_dir, succeeded=result[0] == "success"
+            )
+
+    def _run_download_worker(
+        self,
+        model_name: str,
+        model_dir: str,
+    ) -> tuple[str, str, int, int]:
         try:
             process = _facade().start_model_download_process(model_name, model_dir)
         except Exception as exc:
@@ -1124,9 +1161,17 @@ class _LocalModelsMixin:
             return
         active, queued, running = self._local_model_download_snapshot()
         if not running or active is None:
-            return
-
-        model_name, model_dir = active
+            # A download the *controller* started (the user selected an
+            # uncached model and pressed Save) is the same single download as
+            # far as the user is concerned, so show its progress here too
+            # instead of leaving this tab looking idle.
+            preload_active = self._preload_downloading_model()
+            if not preload_active:
+                return
+            model_name, model_dir = preload_active, self.model_dir_edit.text().strip()
+            queued = []
+        else:
+            model_name, model_dir = active
         downloaded_bytes = _facade().estimate_cached_model_bytes(model_name, model_dir)
         progress = self._local_model_download_speed_tracker.measure(
             model_name,

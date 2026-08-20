@@ -100,6 +100,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `ui_feedback.py` | Shared Qt button feedback styles, stable feedback widths, scroll restoration helpers |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
+| `model_download_coordinator.py` | The single process-wide download slot; serializes the preload and Local-tab download paths |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `secret_store.py` | keyring wrapper for API keys with optional insecure plain-text fallback for restricted environments |
 | `provider_connection_test_store.py` | Persistent last-known remote-provider connection test status keyed by provider |
@@ -554,6 +555,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   later resume. Progress and its rolling transfer rate are approximate because
   they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
+- **There is exactly one download slot in the process**: every download goes
+  through `model_download_coordinator`. Before it, the controller's preload
+  path and the Local tab's queue each spawned a worker process against the same
+  cache directory, which produced three failures the user hit in one sitting:
+  selecting an uncached model and pressing Save downloaded it while the Local
+  tab showed nothing; starting that same model from the Local tab then sat at
+  0% forever, because progress is directory growth and the other process owned
+  the directory; and switching model terminated the preload download *and*
+  deleted its partial files, so a multi-gigabyte model restarted from a few
+  hundred megabytes. `acquire()` blocks until the slot is free and returns
+  `ACQUIRE_JOINED` when the very same model finished while the caller waited,
+  so the second caller never re-downloads. Explicit (Local-tab) requests
+  register interest *while queued*, and the preload path checks
+  `has_explicit_interest` before deleting partials so a waiting user request
+  can resume from them. The Local tab renders a controller-started download in
+  both the model list and the progress bar; the two paths must stay
+  indistinguishable to the user.
 - **Download progress measures the download *destination*, never a candidate
   copy**: because progress is cache growth, `estimate_cached_model_bytes` must
   watch exactly the directory the downloader writes into.

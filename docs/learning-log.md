@@ -2706,3 +2706,22 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Lesson: adding a value to a lookup table is only half the change — every
     dispatcher keyed on that table has to learn it, and a UI that offers a
     setting has to be traced to the code that consumes it.
+
+## 2026-08-18
+
+- **Two independent model downloaders were merged into one slot.** The
+  controller's preload path and the Local tab's queue each spawned their own
+  worker process against the same Hugging Face cache. Reported symptoms, all
+  from one sitting: an uncached model selected and saved downloaded invisibly
+  (the Local tab showed no download); starting the same model from the Local
+  tab then sat at 0% because progress is directory growth and the other process
+  owned the directory; and switching model killed the preload download *and*
+  ran `cleanup_incomplete_model_download`, so a multi-gigabyte download
+  restarted from ~100 MB.
+  `model_download_coordinator` is now the single slot. A second caller waits
+  rather than racing, a caller waiting for the *same* model gets
+  `ACQUIRE_JOINED` and skips its own download entirely, and explicit user
+  requests register interest while still queued so the implicit path stops
+  deleting the partial files they are about to resume from. The remote work had
+  already made a controller download visible in the model list; the progress
+  bar now follows it too, so the two paths are indistinguishable to the user.

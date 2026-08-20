@@ -62,6 +62,11 @@ from .config import (
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError
 from .last_recording_store import LastRecordingStore
+from .model_download_coordinator import (
+    ACQUIRE_JOINED,
+    ModelDownloadCanceled,
+    model_download_coordinator,
+)
 from .local_model_download import (
     model_download_process_error,
     start_model_download_process,
@@ -4396,37 +4401,71 @@ class DictationController(QtCore.QObject):
         if model_name in cached:
             return
 
-        try:
-            process = start_model_download_process(model_name, model_dir)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to start model download: {exc}") from exc
+        # Every download in the process goes through one coordinator. Without
+        # it this path and the Local tab each spawned a worker against the same
+        # cache directory: the second one then measured a directory the first
+        # owned and sat at 0% forever.
+        def _canceled() -> bool:
+            return self._preload_generation_was_canceled(generation) or (
+                use_legacy_cancel_flag and self._preload_cancel_requested
+            )
 
-        self._set_preload_download_process(process, model_dir)
+        coordinator = model_download_coordinator()
         try:
-            while True:
-                if self._preload_generation_was_canceled(generation) or (
-                    use_legacy_cancel_flag and self._preload_cancel_requested
-                ):
-                    self._terminate_preload_download_process()
-                    from .transcriber.local_faster_whisper import (
-                        cleanup_incomplete_model_download,
-                    )
+            outcome = coordinator.acquire(
+                model_name,
+                model_dir,
+                explicit=False,
+                cancel_check=_canceled,
+            )
+        except ModelDownloadCanceled as exc:
+            raise RuntimeError("Model download canceled.") from exc
+        if outcome == ACQUIRE_JOINED:
+            # The Local tab (or an earlier preload) just finished this exact
+            # model while we waited; nothing left to fetch.
+            return
 
-                    cleanup_incomplete_model_download(model_name, model_dir)
-                    raise RuntimeError("Model download canceled.")
-                returncode = process.poll()
-                if returncode is not None:
-                    if returncode != 0:
-                        detail = model_download_process_error(process)
-                        suffix = f": {detail}" if detail else "."
-                        raise RuntimeError(
-                            f"Model download failed for '{model_name}'{suffix}"
-                        )
-                    model_download_process_error(process)
-                    return
-                time.sleep(0.2)
+        succeeded = False
+        try:
+            try:
+                process = start_model_download_process(model_name, model_dir)
+            except Exception as exc:
+                raise RuntimeError(f"Failed to start model download: {exc}") from exc
+
+            self._set_preload_download_process(process, model_dir)
+            try:
+                while True:
+                    if _canceled():
+                        self._terminate_preload_download_process()
+                        # Keep the partial bytes when the user explicitly asked
+                        # for this model in the Local tab: that request is
+                        # waiting to resume from them, and wiping them made a
+                        # multi-gigabyte download restart from zero.
+                        if not coordinator.has_explicit_interest(
+                            model_name, model_dir
+                        ):
+                            from .transcriber.local_faster_whisper import (
+                                cleanup_incomplete_model_download,
+                            )
+
+                            cleanup_incomplete_model_download(model_name, model_dir)
+                        raise RuntimeError("Model download canceled.")
+                    returncode = process.poll()
+                    if returncode is not None:
+                        if returncode != 0:
+                            detail = model_download_process_error(process)
+                            suffix = f": {detail}" if detail else "."
+                            raise RuntimeError(
+                                f"Model download failed for '{model_name}'{suffix}"
+                            )
+                        model_download_process_error(process)
+                        succeeded = True
+                        return
+                    time.sleep(0.2)
+            finally:
+                self._set_preload_download_process(None)
         finally:
-            self._set_preload_download_process(None)
+            coordinator.release(model_name, model_dir, succeeded=succeeded)
 
     def _register_hotkey_with_fallback(self) -> bool:
         preferred = self._settings.hotkey
