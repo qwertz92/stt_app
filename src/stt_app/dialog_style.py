@@ -123,10 +123,13 @@ class _SelectableMessageTextFilter(QtCore.QObject):
     covers boxes Qt raises on its own.
     """
 
+    # Bound as class attributes: this runs for *every* event in the process, so
+    # the rejection path must not pay for attribute lookups on QtCore/QtWidgets.
+    _SHOW = QtCore.QEvent.Type.Show
+    _BOX = QtWidgets.QMessageBox
+
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        if event.type() == QtCore.QEvent.Show and isinstance(
-            obj, QtWidgets.QMessageBox
-        ):
+        if event.type() is self._SHOW and isinstance(obj, self._BOX):
             make_message_text_selectable(obj)
         return False
 
