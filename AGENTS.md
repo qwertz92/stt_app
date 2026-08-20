@@ -580,47 +580,68 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   dead. The whole body of `make_message_text_selectable` is guarded, because it
   runs from an event filter and an exception there escapes the caller's
   `show()`.
-- **There is exactly one download slot in the process**: every download goes
-  through `model_download_coordinator`, including the ones a transcriber starts
-  from its own load path (`_ensure_snapshot` / `_resolve_model_path`) via
-  `run_coordinated_download`. Those are not an edge case: with
-  `keep_onnx_model_loaded` off, the Cohere/Granite family never preloads, so the
-  transcriber's own download is the *only* one it has. **faster-whisper counts
-  too, and is the easiest to miss**: `WhisperModel(...)` downloads inside its own
-  constructor through `huggingface_hub`, which no grep of this repo reveals, so
-  `_ensure_model` fetches through the slot first. The lock is process-wide, not
-  machine-wide: the out-of-process benchmark worker and
-  `scripts/download_model.py` each get their own, which is accepted because both
-  are deliberate developer actions.
-  **Nothing may wait for the slot on the Qt thread.** Nemotron's `start_stream`
-  used to load the model there, and once loads could queue behind an unrelated
-  download that froze the whole UI with no progress and no way out; it loads in
-  its worker instead. `main` connects `request_download_shutdown` to
-  `aboutToQuit` *before* the dialog and controller teardown, because the dialog
-  shutdown releases the slot and a waiter would otherwise start a fresh
-  multi-gigabyte download on a non-daemon executor thread that the interpreter
-  joins at exit. Before it, the controller's preload
-  path and the Local tab's queue each spawned a worker process against the same
-  cache directory, which produced three failures the user hit in one sitting:
+- **There is exactly one download slot in the process**
+  (`model_download_coordinator`). It exists because the controller's preload
+  path and the Local tab's queue each used to spawn a worker against the same
+  cache directory, which the user hit as three failures in one sitting:
   selecting an uncached model and pressing Save downloaded it while the Local
   tab showed nothing; starting that same model from the Local tab then sat at
   0% forever, because progress is directory growth and the other process owned
   the directory; and switching model terminated the preload download *and*
   deleted its partial files, so a multi-gigabyte model restarted from a few
-  hundred megabytes. `acquire()` blocks until the slot is free and returns
-  `ACQUIRE_JOINED` when the very same model finished while the caller waited,
-  so the second caller never re-downloads. Explicit (Local-tab) requests
-  register interest *while queued*, and the preload path checks
-  `has_explicit_interest` before deleting partials so a waiting user request
-  can resume from them — registered at *enqueue* time, not when the entry
-  reaches the slot, or a model still queued behind another download loses its
-  partials. The Local tab renders a controller-started download in both the
-  model list and the progress bar, which means `_poll_preload_download_state`
-  must drive `_refresh_local_model_download_progress` too; without that the
-  progress branch is unreachable. A queue entry publishes itself as the active
-  download only *after* `acquire()` returns, otherwise the bar measures a
-  directory nothing is writing to and reads 0% forever — the very bug this
-  coordinator exists to remove.
+  hundred megabytes.
+  - **Every** download goes through it, including the ones a transcriber starts
+    from its own load path (`_ensure_snapshot` / `_resolve_model_path`) via
+    `run_coordinated_download`. Not an edge case: with `keep_onnx_model_loaded`
+    off the Cohere/Granite family never preloads, so the transcriber's own
+    download is the only one it has. **faster-whisper is the easiest to miss** —
+    `WhisperModel(...)` downloads inside its own constructor through
+    `huggingface_hub`, which no grep of this repo reveals, so `_ensure_model`
+    fetches through the slot first. That pre-fetch gates on
+    `download_destination_dir` + `_has_valid_model_snapshot`, i.e. the directory
+    the constructor actually resolves; `find_cached_models` is too broad (it
+    also accepts the default cache and a flat layout) and let a custom Model Dir
+    bypass the slot.
+  - `acquire()` blocks until the slot is free and returns `ACQUIRE_JOINED` when
+    the very same model finished while the caller waited, so the second caller
+    never re-downloads. It is idempotent: several waiters on one finished model
+    all join.
+  - **Explicit (Local-tab) requests register interest at *enqueue***, not when
+    the entry reaches the slot, and the preload path checks
+    `has_explicit_interest` before deleting partials — otherwise a model still
+    queued behind another download loses the bytes it is about to resume from.
+    Every path that abandons the queue must give that claim back
+    (`_discard_queued_downloads_locked`), and every exit from
+    `_download_local_model_in_subprocess` must clear
+    `_local_model_download_claimed`; leaving either behind blocks partial
+    cleanup for the process lifetime and strands the entry so the model can
+    never be queued again that session.
+  - **`claimed` and `active` are different things.** A popped entry waiting for
+    the slot is `claimed`: the model list, the pending set and the duplicate
+    check must see it, but the progress bar must not — it measures directory
+    growth, so pointing it at a model nothing is writing to invents a
+    percentage. The bar reads `_local_model_download_active` only.
+  - The Local tab renders a controller-started download in both the list and
+    the progress bar, so `_poll_preload_download_state` drives
+    `_refresh_local_model_download_progress` too; without that the progress
+    branch is unreachable. The bar tracks its own shown-state rather than asking
+    the widget, because Qt reports a child of a hidden dialog as invisible and
+    this dialog persists hidden for the app lifetime.
+  - **Nothing may wait for the slot on the Qt thread.** Nemotron's `start_stream`
+    used to load the model there; once loads could queue behind an unrelated
+    download that froze the whole UI with no progress and no way out, so it
+    loads in its stream worker instead. `main` connects
+    `request_download_shutdown` to `aboutToQuit` *before* the dialog and
+    controller teardown, because the dialog shutdown releases the slot and a
+    waiter would otherwise start a fresh multi-gigabyte download on a
+    non-daemon executor thread that the interpreter joins at exit.
+  - The download queue worker is wrapped in `try/finally`: an exception used to
+    kill the thread holding the queue, leaving interest registered, the running
+    flag set and the tab's controls disabled with no way back.
+  - The lock is process-wide, not machine-wide. The out-of-process benchmark
+    worker and `scripts/download_model.py` each get their own; accepted because
+    both are deliberate developer actions rather than something the app does on
+    its own.
 - **Download progress measures the download *destination*, never a candidate
   copy**: because progress is cache growth, `estimate_cached_model_bytes` must
   watch exactly the directory the downloader writes into.
