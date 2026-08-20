@@ -94,7 +94,9 @@ def make_label_selectable(label: QtWidgets.QLabel) -> None:
     These carry provider and runtime errors verbatim, which is exactly the text
     worth pasting into a bug report.
     """
-    label.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
+    label.setTextInteractionFlags(
+        label.textInteractionFlags() | SELECTABLE_TEXT_FLAGS
+    )
 
 
 def make_message_text_selectable(box: QtWidgets.QMessageBox) -> None:
@@ -103,15 +105,24 @@ def make_message_text_selectable(box: QtWidgets.QMessageBox) -> None:
     Also covers the detail area, which carries the long provider/runtime errors
     that are the ones actually worth copying.
     """
+    # The whole body is guarded: this runs from an event filter, and an
+    # exception escaping there propagates out of the caller's `show()` and can
+    # take the event loop down with it.
     try:
-        box.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
+        # OR, never replace: Qt's own default is LinksAccessibleByMouse, and
+        # dropping it would make the links in the update dialogs unclickable.
+        box.setTextInteractionFlags(box.textInteractionFlags() | SELECTABLE_TEXT_FLAGS)
+        for label in box.findChildren(QtWidgets.QLabel):
+            label.setTextInteractionFlags(
+                label.textInteractionFlags() | SELECTABLE_TEXT_FLAGS
+            )
+        for view in box.findChildren(QtWidgets.QTextEdit):
+            view.setReadOnly(True)
+            view.setTextInteractionFlags(
+                view.textInteractionFlags() | SELECTABLE_TEXT_FLAGS
+            )
     except Exception:
         return
-    for label in box.findChildren(QtWidgets.QLabel):
-        label.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
-    for view in box.findChildren(QtWidgets.QTextEdit):
-        view.setReadOnly(True)
-        view.setTextInteractionFlags(SELECTABLE_TEXT_FLAGS)
 
 
 class _SelectableMessageTextFilter(QtCore.QObject):

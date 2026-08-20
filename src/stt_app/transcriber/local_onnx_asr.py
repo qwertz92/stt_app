@@ -164,9 +164,15 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 f"Local model '{self.model_size}' is not cached locally. "
                 f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
             )
+        from ..model_download_coordinator import run_coordinated_download
         from .local_faster_whisper import download_model_snapshot
 
-        download_model_snapshot(self.model_size, self.model_dir)
+        # Through the single slot, like every other download in the process.
+        run_coordinated_download(
+            self.model_size,
+            self.model_dir,
+            lambda: download_model_snapshot(self.model_size, self.model_dir),
+        )
         cached = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
         if cached is None:
             raise TranscriptionError(

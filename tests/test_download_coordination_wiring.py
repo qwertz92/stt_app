@@ -1,0 +1,176 @@
+"""The download paths must actually go through the coordinator.
+
+Isolated tests of the coordinator cannot catch the defect these commits exist
+to fix: a caller that never acquires the slot. Reverting the wiring must fail
+here, so each test drives the real call site with a recording coordinator.
+"""
+
+from __future__ import annotations
+
+import threading
+from dataclasses import dataclass, field
+
+import pytest
+
+from stt_app import model_download_coordinator as coordinator_module
+from stt_app.model_download_coordinator import ACQUIRE_DOWNLOAD
+
+
+@dataclass
+class _RecordingCoordinator:
+    acquired: list[tuple[str, str, bool]] = field(default_factory=list)
+    released: list[tuple[str, str, bool]] = field(default_factory=list)
+    outcome: str = ACQUIRE_DOWNLOAD
+
+    def acquire(self, model_name, model_dir, *, explicit, cancel_check=None):
+        self.acquired.append((model_name, model_dir, explicit))
+        return self.outcome
+
+    def release(self, model_name, model_dir, *, succeeded):
+        self.released.append((model_name, model_dir, succeeded))
+
+    def has_explicit_interest(self, model_name, model_dir=""):
+        return False
+
+    def active(self):
+        return None
+
+
+@pytest.fixture
+def recording(monkeypatch):
+    recorder = _RecordingCoordinator()
+    monkeypatch.setattr(
+        coordinator_module, "model_download_coordinator", lambda: recorder
+    )
+    return recorder
+
+
+def test_a_transcriber_cache_miss_takes_the_slot(recording, monkeypatch):
+    """A transcriber downloading from its own load path is a real download.
+    For the Cohere/Granite family with keep-loaded off this is the *only*
+    download path, so leaving it uncoordinated left the original bug intact."""
+    from stt_app.transcriber import local_webgpu_asr
+
+    monkeypatch.setattr(
+        local_webgpu_asr, "resolve_cached_webgpu_model_path", lambda *a, **k: None
+    )
+    downloads: list[str] = []
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "download_webgpu_model_snapshot",
+        lambda model, model_dir="": downloads.append(model),
+    )
+
+    transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026"
+    )
+    with pytest.raises(Exception):
+        # The snapshot is still missing afterwards; we only care that the
+        # download was coordinated.
+        transcriber._ensure_snapshot()
+
+    assert downloads == ["cohere-transcribe-03-2026"]
+    assert recording.acquired == [("cohere-transcribe-03-2026", "", False)]
+    assert recording.released == [("cohere-transcribe-03-2026", "", True)]
+
+
+def test_the_onnx_asr_load_path_takes_the_slot(recording, monkeypatch):
+    from stt_app.transcriber import local_faster_whisper, local_webgpu_asr
+    from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
+
+    monkeypatch.setattr(
+        local_webgpu_asr, "resolve_cached_webgpu_model_path", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        local_faster_whisper, "download_model_snapshot", lambda *a, **k: None
+    )
+
+    transcriber = LocalOnnxAsrTranscriber("parakeet-tdt-0.6b-v3")
+    with pytest.raises(Exception):
+        transcriber._resolve_model_path()
+
+    assert recording.acquired == [("parakeet-tdt-0.6b-v3", "", False)]
+    assert recording.released == [("parakeet-tdt-0.6b-v3", "", True)]
+
+
+def test_a_joined_download_is_not_repeated(recording, monkeypatch):
+    """When another caller finished the same model while we waited, the caller
+    must skip its own download instead of fetching it a second time."""
+    from stt_app.transcriber import local_webgpu_asr
+
+    recording.outcome = "joined"
+    monkeypatch.setattr(
+        local_webgpu_asr, "resolve_cached_webgpu_model_path", lambda *a, **k: None
+    )
+    downloads: list[str] = []
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "download_webgpu_model_snapshot",
+        lambda model, model_dir="": downloads.append(model),
+    )
+
+    transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
+        model_size="granite-speech-4.1-2b"
+    )
+    with pytest.raises(Exception):
+        transcriber._ensure_snapshot()
+
+    assert downloads == []
+    assert recording.released == []
+
+
+def test_no_two_downloads_overlap_across_the_real_call_sites(monkeypatch):
+    """End to end against the real coordinator: hold the slot, then prove a
+    transcriber load blocks instead of starting a rival download."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+    from stt_app.transcriber import local_webgpu_asr
+
+    real = model_download_coordinator()
+    real.acquire("holder", "", explicit=False)
+    started: list[str] = []
+    monkeypatch.setattr(
+        local_webgpu_asr, "resolve_cached_webgpu_model_path", lambda *a, **k: None
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "download_webgpu_model_snapshot",
+        lambda model, model_dir="": started.append(model),
+    )
+
+    transcriber = local_webgpu_asr.LocalOnnxWebGpuTranscriber(
+        model_size="granite-4.0-1b-speech"
+    )
+    thread = threading.Thread(target=lambda: _swallow(transcriber), daemon=True)
+    thread.start()
+    thread.join(timeout=1.0)
+    try:
+        assert started == [], "a transcriber downloaded while the slot was held"
+        assert thread.is_alive(), "the transcriber should be waiting for the slot"
+    finally:
+        real.release("holder", "", succeeded=False)
+        thread.join(timeout=10)
+    assert started == ["granite-4.0-1b-speech"]
+
+
+def _swallow(transcriber) -> None:
+    try:
+        transcriber._ensure_snapshot()
+    except Exception:
+        pass
+
+
+def test_main_installs_the_selectable_message_filter(monkeypatch):
+    """Without the install call every message box is unselectable again, and
+    the dialog_style unit tests would not notice."""
+    from stt_app import main as main_module
+
+    installed: list[object] = []
+    monkeypatch.setattr(
+        main_module,
+        "install_selectable_message_text",
+        lambda app: installed.append(app),
+    )
+    source = main_module.run.__code__.co_names
+    assert "install_selectable_message_text" in source, (
+        "main.run must install the app-wide selectable-text filter"
+    )

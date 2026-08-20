@@ -116,10 +116,16 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._language_note = QtWidgets.QLabel("")
         self._language_note.setWordWrap(True)
         self._language_note.setStyleSheet("color: #b71c1c; font-size: 11px;")
-        # Reserved height: the note appears only for some models, and showing or
-        # hiding the row would move everything below it.
-        self._language_note.setFixedHeight(
+        # Reserved height so showing or hiding the note never moves the widgets
+        # below it, but a *minimum* rather than a fixed one: the dialog is
+        # deliberately resizable, and at its narrowest the two-line reservation
+        # clipped the Canary warning.
+        self._language_note.setMinimumHeight(
             self.fontMetrics().lineSpacing() * 2 + 6
+        )
+        self._language_note.setSizePolicy(
+            QtWidgets.QSizePolicy.Preferred,
+            QtWidgets.QSizePolicy.Minimum,
         )
         self._language_note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         language_box = QtWidgets.QWidget()

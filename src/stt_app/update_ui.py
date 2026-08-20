@@ -7,7 +7,7 @@ from typing import Callable
 from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_paths import appdata_root
-from .dialog_style import DIALOG_STYLESHEET, apply_dialog_style
+from .dialog_style import DIALOG_STYLESHEET, apply_dialog_style, make_label_selectable
 from .update_checker import UpdateCheckResult
 from .update_installer import (
     UpdateDownloadCancelled,
@@ -75,6 +75,7 @@ class UpdateDownloadDialog(QtWidgets.QDialog):
             "Downloading the installer from the verified GitHub release..."
         )
         self._status_label.setWordWrap(True)
+        make_label_selectable(self._status_label)
         self._progress_bar = QtWidgets.QProgressBar()
         self._progress_bar.setRange(0, 100)
         self._progress_bar.setValue(0)
@@ -83,6 +84,9 @@ class UpdateDownloadDialog(QtWidgets.QDialog):
             "verified before installation."
         )
         self._details_label.setWordWrap(True)
+        # This is where a failed update puts the provider error verbatim, which
+        # is exactly the text worth pasting into a bug report.
+        make_label_selectable(self._details_label)
 
         self._primary_button = QtWidgets.QPushButton("Downloading...")
         self._primary_button.setProperty("primary", True)

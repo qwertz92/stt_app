@@ -29,6 +29,7 @@ from ..config import (
     PARAKEET_MODEL_SIZE,
     language_modes_for_selection,
 )
+from ..model_download_coordinator import run_coordinated_download
 from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
 
 logger = logging.getLogger(__name__)
@@ -798,7 +799,15 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 f"Disable Offline mode or download it first. See {DOC_MODELS_PATH}."
             )
         try:
-            download_webgpu_model_snapshot(self.model_size, self.model_dir)
+            # Through the single slot: a cache miss here is a real download and
+            # must not race the preload path or the Local tab's queue.
+            run_coordinated_download(
+                self.model_size,
+                self.model_dir,
+                lambda: download_webgpu_model_snapshot(
+                    self.model_size, self.model_dir
+                ),
+            )
         except Exception as exc:
             raise TranscriptionError(
                 f"Failed to download ONNX/WebGPU model '{self.model_size}': {exc}"

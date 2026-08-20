@@ -253,13 +253,25 @@ class _LocalModelsMixin:
 
     def _poll_preload_download_state(self) -> None:
         current = self._preload_downloading_model()
-        if current == self._preload_download_seen:
-            return
+        changed = current != self._preload_download_seen
         self._preload_download_seen = current
         if not hasattr(self, "local_models_list"):
             return
-        self._refresh_local_models_list()
-        self._update_local_model_actions()
+        if changed:
+            self._refresh_local_models_list()
+            self._update_local_model_actions()
+        # The bar has to be driven from here as well, not only from this tab's
+        # own queue: a download the controller started is the same download to
+        # the user, and without this its progress branch is unreachable.
+        if current and not self._local_model_download_is_running():
+            self._refresh_local_model_download_progress()
+        elif changed and not current and not self._local_model_download_is_running():
+            self._hide_local_model_download_progress()
+
+    def _hide_local_model_download_progress(self) -> None:
+        if hasattr(self, "local_model_download_progress_bar"):
+            self.local_model_download_progress_bar.setVisible(False)
+        self._local_model_download_speed_tracker.reset()
 
     def _local_model_cache_key(self, model_dir: str | None = None) -> str:
         return str(model_dir or "").strip()
@@ -922,6 +934,12 @@ class _LocalModelsMixin:
                 if model_name in pending:
                     continue
                 self._local_model_download_queue.append((model_name, model_dir))
+                # Claim interest now, not when this entry reaches the slot: the
+                # preload path deletes partial files on cancel, and a queued
+                # user request is going to resume from them.
+                model_download_coordinator().register_explicit_interest(
+                    model_name, model_dir
+                )
                 pending.add(model_name)
                 added.append(model_name)
             if added and not self._local_model_download_worker_running:
@@ -966,6 +984,10 @@ class _LocalModelsMixin:
                 return
             self._local_model_download_cancel_event.set()
             queued_count = len(self._local_model_download_queue)
+            for queued_name, queued_dir in self._local_model_download_queue:
+                model_download_coordinator().drop_explicit_interest(
+                    queued_name, queued_dir
+                )
             self._local_model_download_queue.clear()
             process = self._local_model_download_process
 
@@ -992,6 +1014,10 @@ class _LocalModelsMixin:
         # pressed Save; starting a second worker against the same cache
         # directory is what made this queue sit at 0% forever.
         coordinator = model_download_coordinator()
+        # The enqueue already registered this entry's interest; hand that claim
+        # over to the acquire below so it is held continuously rather than
+        # dropped and re-taken.
+        coordinator.drop_explicit_interest(model_name, model_dir)
         try:
             outcome = coordinator.acquire(
                 model_name,
@@ -1006,10 +1032,15 @@ class _LocalModelsMixin:
             return "success", "", 0, 0
 
         result: tuple[str, str, int, int] = ("failed", "", 0, 0)
+        with self._local_model_download_lock:
+            self._local_model_download_active = (model_name, model_dir)
         try:
             result = self._run_download_worker(model_name, model_dir)
             return result
         finally:
+            with self._local_model_download_lock:
+                if self._local_model_download_active == (model_name, model_dir):
+                    self._local_model_download_active = None
             coordinator.release(
                 model_name, model_dir, succeeded=result[0] == "success"
             )
@@ -1069,15 +1100,27 @@ class _LocalModelsMixin:
                     self._local_model_download_worker_running = False
                     break
                 model_name, model_dir = self._local_model_download_queue.pop(0)
-                self._local_model_download_active = (model_name, model_dir)
                 queued_count = len(self._local_model_download_queue)
 
-            _emit_background_signal(
-                self,
-                "local_model_download_progress",
-                worker_token,
-                f"Starting '{model_name}'. {queued_count} queued.",
-            )
+            # Only claim to be downloading this model once the slot is ours.
+            # Publishing it while still queued behind another download made the
+            # progress bar measure a directory nothing was writing to, which
+            # looked exactly like the 0%-forever bug this queue was fixed for.
+            if model_download_coordinator().active() is not None:
+                _emit_background_signal(
+                    self,
+                    "local_model_download_progress",
+                    worker_token,
+                    f"Waiting for the current download to finish, then "
+                    f"'{model_name}'. {queued_count} queued.",
+                )
+            else:
+                _emit_background_signal(
+                    self,
+                    "local_model_download_progress",
+                    worker_token,
+                    f"Starting '{model_name}'. {queued_count} queued.",
+                )
             status, detail, removed_files, removed_bytes = (
                 self._download_local_model_in_subprocess(model_name, model_dir)
             )
@@ -1090,6 +1133,13 @@ class _LocalModelsMixin:
             elif status == "canceled":
                 canceled = True
                 with self._local_model_download_lock:
+                    # Entries dropped here never reach acquire(), so their
+                    # enqueue-time interest has to be released explicitly or it
+                    # keeps the preload path from cleaning up forever.
+                    for queued_name, queued_dir in self._local_model_download_queue:
+                        model_download_coordinator().drop_explicit_interest(
+                            queued_name, queued_dir
+                        )
                     self._local_model_download_queue.clear()
                     self._local_model_download_active = None
                     self._local_model_download_worker_running = False

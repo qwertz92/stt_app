@@ -2751,3 +2751,35 @@ Agents and developers: use this as a knowledge base for past issues and solution
   mixed explicit/implicit callers, random failures and random cancels; it
   asserts peak concurrency of exactly 1, no deadlock, no dangling slot and no
   leaked explicit interest. An ad-hoc 200-thread run behaved identically.
+- **Adversarial review of the download/selectable work found 14 issues; the
+  premise of the coordinator did not hold.**
+  - *Three transcriber load paths downloaded outside the slot.*
+    `_ensure_snapshot` (Cohere/Granite), Nemotron's loader and the onnx-asr
+    loader all fetched in-process on a cache miss. Worse, with
+    `keep_onnx_model_loaded` off the Cohere/Granite family never preloads, so
+    that uncoordinated path was the *only* one — the original triple failure
+    was fully reachable for exactly the family it was reported on. All three now
+    go through `run_coordinated_download`.
+  - *The progress bar never followed a controller download.* The branch added
+    for it was unreachable: `_poll_preload_download_state` refreshed only the
+    list, and the progress timer starts solely on this tab's own queue paths.
+  - *A queue entry published itself as active before `acquire()` returned*, so
+    while queued behind another download the bar measured a directory nothing
+    was writing to and read 0% forever — the exact symptom being fixed. It now
+    publishes after acquiring and says "Waiting for the current download".
+  - *The Canary benchmark-language fix was a no-op*: "the model's first declared
+    mode" is `de` for Canary. Defaulting cannot be right when the sample's
+    language is unknown, so the benchmark now refuses without an explicit one.
+  - *Two of the three new guard suites were vacuous.* The runtime-dispatch guard
+    compared the table against a hardcoded copy of itself, and nothing tested
+    the coordinator wiring or the filter installation — reverting either fix
+    left the suites green. Both are now driven through the real call sites, and
+    each was checked by reverting the fix in a scratch tree and confirming a
+    failure.
+  - Also fixed: explicit interest is registered at enqueue so a queued model
+    keeps its partials; `ACQUIRE_JOINED` is idempotent so several waiters on the
+    same finished model all skip their download; selectable flags are ORed so
+    update-dialog links keep working; the whole filter body is guarded since an
+    exception in an event filter escapes `show()`; the unused listener plumbing
+    is gone; a mismatched release now logs instead of silently wedging the slot;
+    and the Canary warning no longer clips when the dialog is narrowed.

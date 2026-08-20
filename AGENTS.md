@@ -573,10 +573,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and friends convenience statics, which build *and* show the box in a single
   call and give the caller no chance to configure it — do not "simplify" this
   into per-call-site changes unless every static is migrated first. Inline
-  status/error labels use `dialog_style.make_label_selectable`; the overlay
-  detail label already carried the flags.
+  status/error labels use `dialog_style.make_label_selectable`, including the
+  update dialog's status and details labels; the overlay detail label already
+  carried the flags. Always OR the flags onto the existing ones: replacing them
+  strips `LinksAccessibleByMouse` and makes the links in the update dialogs
+  dead. The whole body of `make_message_text_selectable` is guarded, because it
+  runs from an event filter and an exception there escapes the caller's
+  `show()`.
 - **There is exactly one download slot in the process**: every download goes
-  through `model_download_coordinator`. Before it, the controller's preload
+  through `model_download_coordinator`, including the ones a transcriber starts
+  from its own load path (`_ensure_snapshot` / `_resolve_model_path`) via
+  `run_coordinated_download`. Those are not an edge case: with
+  `keep_onnx_model_loaded` off, the Cohere/Granite family never preloads, so the
+  transcriber's own download is the *only* one it has. Before it, the controller's preload
   path and the Local tab's queue each spawned a worker process against the same
   cache directory, which produced three failures the user hit in one sitting:
   selecting an uncached model and pressing Save downloaded it while the Local
@@ -589,9 +598,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   so the second caller never re-downloads. Explicit (Local-tab) requests
   register interest *while queued*, and the preload path checks
   `has_explicit_interest` before deleting partials so a waiting user request
-  can resume from them. The Local tab renders a controller-started download in
-  both the model list and the progress bar; the two paths must stay
-  indistinguishable to the user.
+  can resume from them — registered at *enqueue* time, not when the entry
+  reaches the slot, or a model still queued behind another download loses its
+  partials. The Local tab renders a controller-started download in both the
+  model list and the progress bar, which means `_poll_preload_download_state`
+  must drive `_refresh_local_model_download_progress` too; without that the
+  progress branch is unreachable. A queue entry publishes itself as the active
+  download only *after* `acquire()` returns, otherwise the bar measures a
+  directory nothing is writing to and reads 0% forever — the very bug this
+  coordinator exists to remove.
 - **Download progress measures the download *destination*, never a candidate
   copy**: because progress is cache growth, `estimate_cached_model_bytes` must
   watch exactly the directory the downloader writes into.

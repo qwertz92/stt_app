@@ -495,13 +495,71 @@ class TestBenchmarkDownloadSeconds:
         assert "4.2" in text
 
 
-def test_every_local_runtime_is_dispatchable_by_the_benchmark():
-    """`LOCAL_MODEL_RUNTIME` gained a new value when the onnx-asr engine landed
-    and the benchmark dispatcher did not learn it, so both new models always
-    failed with "Benchmark runtime ... is unknown"."""
-    from stt_app.config import LOCAL_MODEL_RUNTIME, VALID_MODEL_SIZES
+def test_every_local_model_is_dispatchable_by_the_benchmark(monkeypatch, tmp_path):
+    """Drive the real dispatcher, not a second copy of the runtime table.
 
-    known = {"faster-whisper", "onnx-webgpu", "onnxruntime-genai", "onnx-asr"}
+    `LOCAL_MODEL_RUNTIME` gained a new value when the onnx-asr engine landed and
+    `run_benchmark_cases` did not learn it, so benchmarking either new model
+    always failed with "Benchmark runtime ... is unknown". Asserting the table
+    against a hardcoded set in the test could never catch that: it was the same
+    table written twice.
+    """
+    from stt_app import local_benchmark
+    from stt_app.config import CANARY_MODEL_SIZE, VALID_MODEL_SIZES
+
+    def fake_case(**kwargs) -> local_benchmark.BenchmarkCase:
+        return local_benchmark.BenchmarkCase(
+            model=kwargs.get("model_name", "?"),
+            device=kwargs.get("device", "cpu"),
+            compute_type="stub",
+            download_seconds=0.0,
+            load_seconds=0.0,
+            runs=[],
+            error=None,
+            runtime_details="",
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_case", lambda **kw: fake_case(**kw))
+    monkeypatch.setattr(local_benchmark, "_run_onnx_case", lambda **kw: fake_case(**kw))
+    monkeypatch.setattr(
+        local_benchmark, "_run_webgpu_case", lambda **kw: fake_case(**kw)
+    )
+
+    audio = tmp_path / "clip.wav"
+    audio.write_bytes(b"RIFF")
+
     for model_name in VALID_MODEL_SIZES:
-        runtime = LOCAL_MODEL_RUNTIME.get(model_name)
-        assert runtime in known, f"{model_name} has undispatchable runtime {runtime!r}"
+        # Canary deliberately refuses to guess a language; give it one.
+        language = "en" if model_name == CANARY_MODEL_SIZE else None
+        cases = local_benchmark.run_benchmark_cases(
+            audio_path=audio,
+            model_names=[model_name],
+            runs=1,
+            warmup=False,
+            device="cpu",
+            language=language,
+        )
+        assert cases, model_name
+        for case in cases:
+            assert "is unknown" not in str(case.error or ""), (
+                f"{model_name}: {case.error}"
+            )
+
+
+def test_canary_refuses_to_benchmark_without_a_language(tmp_path):
+    """Defaulting a language cannot be right: the sample's language is not
+    knowable, and a wrong one makes Canary translate, so the benchmark would
+    store the translation as the transcript."""
+    import pytest as _pytest
+
+    from stt_app.config import CANARY_MODEL_SIZE
+    from stt_app.local_benchmark import _run_onnx_case
+
+    with _pytest.raises(ValueError, match="cannot detect the language"):
+        _run_onnx_case(
+            audio_path=tmp_path / "clip.wav",
+            model_name=CANARY_MODEL_SIZE,
+            runs=1,
+            language=None,
+            warmup=False,
+        )

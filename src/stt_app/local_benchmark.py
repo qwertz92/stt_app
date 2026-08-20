@@ -11,12 +11,12 @@ from typing import Any, Callable
 from .benchmark_environment import BenchmarkEnvironment
 from .csv_safety import spreadsheet_safe_mapping
 from .config import (
+    CANARY_MODEL_SIZE,
     LOCAL_MODEL_RUNTIME,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
-    language_modes_for_selection,
     nemotron_provider_order,
 )
 
@@ -292,14 +292,23 @@ def _run_onnx_case(
 
     total_steps = runs + (1 if warmup else 0)
     step = 0
-    # Parakeet ignores the language and only offers "auto"; Canary has no
-    # auto-detect and would translate rather than transcribe under a wrong one,
-    # so both take the first mode their own model declares instead of "de".
+    # Canary has no auto-detect: onnx-asr hardcodes the source/target token, so
+    # a wrong language makes it *translate* and the benchmark would record the
+    # translation as the transcript. Defaulting cannot be right here — the
+    # sample's language is not knowable — so refuse instead of guessing.
+    # (Picking "the model's first declared mode" looked like a fix but is a
+    # no-op for Canary, whose first mode is "de".)
+    if model_name == CANARY_MODEL_SIZE and not language:
+        raise ValueError(
+            "Canary cannot detect the language. Choose the language spoken in "
+            "the sample before benchmarking it; with the wrong one this model "
+            "translates instead of transcribing."
+        )
+    # Parakeet ignores the language and only offers "auto".
     default_language = (
         "auto"
         if model_name in LOCAL_NEMOTRON_MODEL_SIZES
-        else language_modes_for_selection("local", model_name)[0]
-        if model_name in LOCAL_ONNX_ASR_MODEL_SIZES
+        or model_name in LOCAL_ONNX_ASR_MODEL_SIZES
         else "de"
     )
     language_mode = language or default_language
