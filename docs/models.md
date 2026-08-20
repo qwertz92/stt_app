@@ -266,6 +266,26 @@ WebGPU or DirectML is available, so Intel, AMD, and NVIDIA GPUs are all valid
 targets. If neither GPU runtime can be selected by the JavaScript runtime, the
 model uses CPU and will likely be slower than `large-v3-turbo`.
 
+**Choosing the device yourself.** Settings → General → **ONNX Device** applies to
+the local ONNX models (Cohere, Granite, Nemotron). It offers the same choices as
+the benchmark, so a device that proves faster there can be selected for everyday
+dictation:
+
+| Choice | Meaning |
+|--------|---------|
+| `Auto` | WebGPU, then DirectML, then CPU (the default) |
+| `GPU only` | WebGPU then DirectML; fails rather than falling back to CPU |
+| `WebGPU only` / `DirectML only` | Pin one backend |
+| `CPU only` | Never try the GPU |
+
+Two models ignore `Auto` and always use CPU, because their encoder cannot run on
+WebGPU or DirectML: **Granite 4.1 2B Plus** and **Granite 4.1 2B NAR**. Choosing
+an explicit GPU target for them still forces the attempt, so a future runtime fix
+can be re-tested. Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU
+only, so every GPU choice means DirectML for it. Parakeet and Canary run through
+`onnx-asr` on CPU and ignore the setting entirely; the row is disabled while one
+of them is selected.
+
 Nemotron currently ships with the reproducibly installable CPU ORT GenAI
 runtime. Its DirectML path is already attempted by the app, but cannot be part
 of the normal dependency lock until Microsoft publishes the matching DirectML
