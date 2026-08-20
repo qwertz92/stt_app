@@ -102,7 +102,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `dialog_style.py` | Shared message-box/dialog colours plus the app-wide filter that makes error text selectable |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
-| `model_download_coordinator.py` | The single process-wide download slot; serializes the preload and Local-tab download paths |
+| `model_download_coordinator.py` | The single process-wide download slot; serializes every download path, including the ones transcribers start themselves |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `local_model_download_worker.py` | Subprocess entry point that downloads one model |
 | `local_model_scan.py` | Local model inventory scan shared by the app and its worker |
@@ -585,7 +585,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   from its own load path (`_ensure_snapshot` / `_resolve_model_path`) via
   `run_coordinated_download`. Those are not an edge case: with
   `keep_onnx_model_loaded` off, the Cohere/Granite family never preloads, so the
-  transcriber's own download is the *only* one it has. Before it, the controller's preload
+  transcriber's own download is the *only* one it has. **faster-whisper counts
+  too, and is the easiest to miss**: `WhisperModel(...)` downloads inside its own
+  constructor through `huggingface_hub`, which no grep of this repo reveals, so
+  `_ensure_model` fetches through the slot first. The lock is process-wide, not
+  machine-wide: the out-of-process benchmark worker and
+  `scripts/download_model.py` each get their own, which is accepted because both
+  are deliberate developer actions.
+  **Nothing may wait for the slot on the Qt thread.** Nemotron's `start_stream`
+  used to load the model there, and once loads could queue behind an unrelated
+  download that froze the whole UI with no progress and no way out; it loads in
+  its worker instead. `main` connects `request_download_shutdown` to
+  `aboutToQuit` *before* the dialog and controller teardown, because the dialog
+  shutdown releases the slot and a waiter would otherwise start a fresh
+  multi-gigabyte download on a non-daemon executor thread that the interpreter
+  joins at exit. Before it, the controller's preload
   path and the Local tab's queue each spawned a worker process against the same
   cache directory, which produced three failures the user hit in one sitting:
   selecting an uncached model and pressing Save downloaded it while the Local

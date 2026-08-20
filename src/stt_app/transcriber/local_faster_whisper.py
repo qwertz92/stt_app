@@ -551,8 +551,28 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 # download_root controls where HF caches model snapshots.
                 if self._model_dir:
                     kwargs["download_root"] = self._model_dir
+                # WhisperModel downloads inside its own constructor via
+                # huggingface_hub, which no grep of this repo reveals. Fetch
+                # first, through the one download slot, so the default engine
+                # cannot race the Local tab or another transcriber into the
+                # same cache directory.
+                self._coordinated_download_if_missing()
                 self._model = self._model_factory(self.model_size, **kwargs)
             return self._model
+
+    def _coordinated_download_if_missing(self) -> None:
+        if self._offline_mode:
+            return
+        if self.model_size in find_cached_models(self._model_dir):
+            return
+        from ..model_download_coordinator import run_coordinated_download
+
+        run_coordinated_download(
+            self.model_size,
+            self._model_dir,
+            lambda: download_model_snapshot(self.model_size, self._model_dir),
+            cancel_check=self._cancel_check,
+        )
 
     def preload_model(self) -> None:
         """Eagerly load/download the model.  Raises on failure."""

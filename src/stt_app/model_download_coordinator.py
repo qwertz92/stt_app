@@ -18,6 +18,13 @@ Every download now passes through one coordinator. At most one runs at a time,
 a second request for the *same* model waits for the running one instead of
 starting a rival process, and an explicit (user-requested) download is never
 cancelled by the implicit preload path.
+
+Scope: this is a *process*-wide lock, not a machine-wide one. The out-of-process
+benchmark worker and the standalone `scripts/download_model.py` each get their
+own coordinator, so running one of those alongside the app can still put two
+writers in one cache directory. Making that safe needs a lock file rather than a
+`threading.Condition`; it has not been needed, because both are deliberate
+developer actions rather than something the app does on its own.
 """
 
 from __future__ import annotations
@@ -27,10 +34,10 @@ from collections.abc import Callable
 import logging
 from dataclasses import dataclass
 
-# Poll interval while waiting for the active download to finish. Short enough
-# that a cancel is honoured promptly, long enough not to spin.
 logger = logging.getLogger(__name__)
 
+# Poll interval while waiting for the active download to finish. Short enough
+# that a cancel is honoured promptly, long enough not to spin.
 _WAIT_POLL_SECONDS = 0.1
 
 ACQUIRE_DOWNLOAD = "download"
@@ -39,6 +46,27 @@ ACQUIRE_JOINED = "joined"
 
 class ModelDownloadCanceled(RuntimeError):
     """Raised when a caller's own cancel check fires while it waits its turn."""
+
+
+# Set once the app is quitting. Without it a caller blocked in `acquire()` keeps
+# waiting, and worse: the shutdown sequence releases the slot before the
+# controller stops, so the waiter would *start* a fresh multi-gigabyte download
+# on a non-daemon executor thread that the interpreter then joins at exit —
+# a tray-less process still downloading for minutes.
+_SHUTDOWN = threading.Event()
+
+
+def request_download_shutdown() -> None:
+    """Refuse any further waiting for the download slot."""
+    _SHUTDOWN.set()
+
+
+def download_shutdown_requested() -> bool:
+    return _SHUTDOWN.is_set()
+
+
+def reset_download_shutdown_for_tests() -> None:
+    _SHUTDOWN.clear()
 
 
 @dataclass(frozen=True, slots=True)
@@ -75,6 +103,7 @@ class ModelDownloadCoordinator:
         *,
         explicit: bool,
         cancel_check: Callable[[], bool] | None = None,
+        interest_already_registered: bool = False,
     ) -> str:
         """Claim the right to download, waiting for any download in flight.
 
@@ -84,9 +113,11 @@ class ModelDownloadCoordinator:
         re-check the cache.
         """
         key = (model_name, model_dir)
+        if _SHUTDOWN.is_set():
+            raise ModelDownloadCanceled("The application is shutting down.")
         with self._condition:
             completed_before = self._completed.get(key, 0)
-            if explicit:
+            if explicit and not interest_already_registered:
                 self._explicit_interest[key] = self._explicit_interest.get(key, 0) + 1
         try:
             return self._acquire_slot(
@@ -108,6 +139,8 @@ class ModelDownloadCoordinator:
     ) -> str:
         with self._condition:
             while self._active is not None:
+                if _SHUTDOWN.is_set():
+                    raise ModelDownloadCanceled("The application is shutting down.")
                 if cancel_check is not None and cancel_check():
                     raise ModelDownloadCanceled("Model download canceled.")
                 waiting_for_same_model = (

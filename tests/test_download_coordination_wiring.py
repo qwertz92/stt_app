@@ -174,3 +174,142 @@ def test_main_installs_the_selectable_message_filter(monkeypatch):
     assert "install_selectable_message_text" in source, (
         "main.run must install the app-wide selectable-text filter"
     )
+
+
+def test_faster_whisper_downloads_through_the_slot(recording, monkeypatch):
+    """WhisperModel downloads inside its own constructor via huggingface_hub,
+    which no grep of this repo reveals — so the default engine bypassed the slot
+    entirely."""
+    from stt_app.transcriber import local_faster_whisper
+
+    monkeypatch.setattr(local_faster_whisper, "find_cached_models", lambda *_a: [])
+    downloaded: list[str] = []
+    monkeypatch.setattr(
+        local_faster_whisper,
+        "download_model_snapshot",
+        lambda model, model_dir="": downloaded.append(model),
+    )
+    constructed: list[str] = []
+
+    def fake_factory(model_size, **_kwargs):
+        # The download must already have happened by the time WhisperModel runs.
+        assert downloaded == [model_size], "constructed before the coordinated fetch"
+        constructed.append(model_size)
+        return object()
+
+    transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
+        model_size="large-v3", model_factory=fake_factory
+    )
+    transcriber.preload_model()
+
+    assert constructed == ["large-v3"]
+    assert recording.acquired == [("large-v3", "", False)]
+    assert recording.released == [("large-v3", "", True)]
+
+
+def test_an_offline_transcriber_does_not_take_the_slot(recording, monkeypatch):
+    from stt_app.transcriber import local_faster_whisper
+
+    monkeypatch.setattr(local_faster_whisper, "find_cached_models", lambda *_a: [])
+    transcriber = local_faster_whisper.LocalFasterWhisperTranscriber(
+        model_size="small", offline_mode=True, model_factory=lambda *a, **k: object()
+    )
+    transcriber.preload_model()
+    assert recording.acquired == []
+
+
+def test_nemotron_does_not_load_on_the_calling_thread():
+    """start_stream runs on the Qt main thread; loading there could block on the
+    download slot with no progress and no way out, freezing the whole UI."""
+    import inspect
+
+    from stt_app.transcriber import local_nemotron
+
+    source = inspect.getsource(local_nemotron.LocalNemotronTranscriber.start_stream)
+    assert "_ensure_model" not in source, (
+        "start_stream must not load the model on the caller's thread"
+    )
+    worker = inspect.getsource(local_nemotron.LocalNemotronTranscriber._stream_worker)
+    assert "_ensure_model" in worker
+
+
+def test_shutdown_stops_anyone_waiting_for_the_slot():
+    """At quit the dialog shutdown releases the slot before the controller
+    stops, so without this a waiter would start a fresh multi-gigabyte download
+    on a non-daemon thread the interpreter then joins at exit."""
+    import time
+
+    from stt_app.model_download_coordinator import (
+        ModelDownloadCanceled,
+        ModelDownloadCoordinator,
+        request_download_shutdown,
+        reset_download_shutdown_for_tests,
+    )
+
+    reset_download_shutdown_for_tests()
+    coordinator = ModelDownloadCoordinator()
+    coordinator.acquire("holder", "", explicit=True)
+    outcome: list[str] = []
+
+    def waiter() -> None:
+        try:
+            outcome.append(coordinator.acquire("other", "", explicit=False))
+        except ModelDownloadCanceled:
+            outcome.append("canceled")
+
+    thread = threading.Thread(target=waiter, daemon=True)
+    thread.start()
+    time.sleep(0.3)
+    assert outcome == []
+    try:
+        request_download_shutdown()
+        thread.join(timeout=5)
+        assert outcome == ["canceled"]
+    finally:
+        reset_download_shutdown_for_tests()
+
+
+def test_message_flags_are_added_not_replaced():
+    """Replacing them stripped LinksAccessibleByMouse, which would have killed
+    the links in the update dialogs."""
+    from PySide6 import QtCore, QtWidgets
+
+    from stt_app.dialog_style import make_message_text_selectable
+
+    _ = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    box = QtWidgets.QMessageBox()
+    box.setTextInteractionFlags(QtCore.Qt.LinksAccessibleByMouse)
+    make_message_text_selectable(box)
+    flags = box.textInteractionFlags()
+    assert flags & QtCore.Qt.LinksAccessibleByMouse
+    assert flags & QtCore.Qt.TextSelectableByMouse
+
+
+def test_several_waiters_for_one_model_all_skip_their_download():
+    """Only the first waiter used to consume the completion marker, so a second
+    one re-downloaded a model that had just finished."""
+    import time
+
+    from stt_app.model_download_coordinator import (
+        ACQUIRE_JOINED,
+        ModelDownloadCoordinator,
+    )
+
+    coordinator = ModelDownloadCoordinator()
+    coordinator.acquire("m", "", explicit=False)
+    outcomes: list[str] = []
+    threads = [
+        threading.Thread(
+            target=lambda: outcomes.append(coordinator.acquire("m", "", explicit=True)),
+            daemon=True,
+        )
+        for _ in range(3)
+    ]
+    for thread in threads:
+        thread.start()
+    time.sleep(0.3)
+    coordinator.release("m", "", succeeded=True)
+    for thread in threads:
+        thread.join(timeout=5)
+
+    assert outcomes == [ACQUIRE_JOINED] * 3

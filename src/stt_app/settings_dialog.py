@@ -201,6 +201,10 @@ class SettingsDialog(
         self._local_model_download_lock = threading.Lock()
         self._local_model_download_queue: list[tuple[str, str]] = []
         self._local_model_download_active: tuple[str, str] | None = None
+        # Popped from the queue and waiting for the download slot. Kept apart
+        # from _active so the progress bar only measures a model that is really
+        # downloading, while the list and the duplicate check still see it.
+        self._local_model_download_claimed: tuple[str, str] | None = None
         self._local_model_download_completed_names: set[str] = set()
         self._local_model_download_worker_running = False
         self._local_model_download_worker_token = 0

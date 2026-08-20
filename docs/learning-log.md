@@ -2783,3 +2783,33 @@ Agents and developers: use this as a knowledge base for past issues and solution
     exception in an event filter escapes `show()`; the unused listener plumbing
     is gone; a mismatched release now logs instead of silently wedging the slot;
     and the Canary warning no longer clips when the dialog is narrowed.
+- **Re-verification round: three release blockers, and four regressions from the
+  previous round's own fixes.**
+  - *The default engine still bypassed the slot.* `WhisperModel(...)` downloads
+    inside its own constructor through `huggingface_hub`, so no grep of this
+    repo reveals it and the headline "every download goes through the
+    coordinator" was false for the engine most users run. `_ensure_model` now
+    fetches through the slot first.
+  - *A hotkey press could freeze the UI forever.* Nemotron's `start_stream`
+    loaded the model on the Qt thread; once that load could queue behind an
+    unrelated download, the freeze became unbounded with no progress and no
+    cancel. The worker loads instead, and buffered audio means nothing is lost.
+  - *The app could outlive its own exit downloading gigabytes.* No transcriber
+    path passed a cancel check, and the shutdown sequence releases the slot
+    (dialog first) before the controller stops — so a waiter woke up and started
+    a fresh download on a non-daemon executor thread that the interpreter joins
+    at exit. `request_download_shutdown` is now connected to `aboutToQuit`
+    ahead of both teardowns, and `acquire()` refuses to wait once it is set.
+  - Regressions from the previous fixes, all mine: publishing the active entry
+    only after `acquire()` made a queued model invisible so Download queued it
+    twice; the progress bar could never hide again because the hide branch was
+    gated on a value tab re-entry resets; the loop-top break leaked enqueue-time
+    interest, which then blocked partial cleanup for the process lifetime *and*
+    stranded the entry so the model could never be downloaded again that
+    session; and the new "Waiting for the current download" line was overwritten
+    two lines later by the progress refresh.
+  - Four of seven fixes had shipped with no coverage at all. Each new guard was
+    checked by reverting its fix in a scratch tree and confirming a failure.
+  - Recorded as a known limitation: the lock is process-wide, so the
+    out-of-process benchmark worker and `scripts/download_model.py` can still
+    write the same cache directory. Both are deliberate developer actions.

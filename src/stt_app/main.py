@@ -21,6 +21,7 @@ from .config import (
 from .history_dialog import HistoryDialog
 from .controller import DictationController
 from .dialog_style import install_selectable_message_text, styled_message_box
+from .model_download_coordinator import request_download_shutdown
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
@@ -245,6 +246,12 @@ def run() -> int:
     # however long stopping the runtimes takes.
     if hasattr(tray_icon, "close"):
         app.aboutToQuit.connect(tray_icon.close)
+    # First of all: stop anyone from waiting for the download slot. The dialog
+    # shutdown below cancels the Local tab's download and releases the slot, so
+    # without this a transcriber blocked in acquire() would start a fresh
+    # multi-gigabyte download on a non-daemon thread that the interpreter then
+    # joins at exit — a process with no tray icon still downloading for minutes.
+    app.aboutToQuit.connect(request_download_shutdown)
     app.aboutToQuit.connect(tray_icon._shutdown_settings_dialog)
     app.aboutToQuit.connect(controller.shutdown)
     signal_timer = _install_signal_handlers(app)

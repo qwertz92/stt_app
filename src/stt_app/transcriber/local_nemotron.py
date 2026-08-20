@@ -314,7 +314,11 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         on_partial: StreamingCallback | None = None,
         on_error: StreamingErrorCallback | None = None,
     ) -> None:
-        self._ensure_model()
+        # Deliberately NOT loading the model here. This runs on the Qt main
+        # thread (hotkey, tray, overlay), and the load can wait for the single
+        # download slot another download owns, which froze the whole UI with no
+        # progress and no way out. The worker loads instead and reports a
+        # failure through on_error like any other streaming runtime failure.
         with self._stream_lock:
             if self._stream_active:
                 raise TranscriptionError("Streaming session already active.")
@@ -399,6 +403,9 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
     def _stream_worker(self, run: _StreamRun) -> None:
         pcm_buffer = bytearray()
         try:
+            # Load here rather than in start_stream: audio pushed meanwhile is
+            # buffered in run.audio_queue, so nothing is lost.
+            self._ensure_model()
             with self._inference_lock:
                 session = self._create_session()
                 chunk_bytes = self._chunk_samples * 2
