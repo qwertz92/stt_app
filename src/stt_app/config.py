@@ -244,6 +244,25 @@ GRANITE_4_1_REPO_MAP: dict[str, str] = {
 
 LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
 
+# Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU but no WebGPU
+# provider, so every GPU-flavoured policy maps onto DirectML for it. Shared by
+# the factory and the benchmark so the two cannot disagree about what a policy
+# means for this engine.
+NEMOTRON_DEVICE_PROVIDER_ORDER: dict[str, tuple[str, ...]] = {
+    "auto": ("dml", "cpu"),
+    "gpu": ("dml",),
+    "dml": ("dml",),
+    "webgpu": ("dml",),
+    "cpu": ("cpu",),
+}
+
+
+def nemotron_provider_order(device_policy: str) -> tuple[str, ...]:
+    """Provider order for a device policy, defaulting to the auto behaviour."""
+    return NEMOTRON_DEVICE_PROVIDER_ORDER.get(
+        str(device_policy or "").strip().lower(), ("dml", "cpu")
+    )
+
 # Models whose known-fastest compatible path is CPU. Explicit non-auto benchmark
 # targets still bypass this policy so future runtime fixes can be re-evaluated.
 # Both raw-graph Granite 4.1 models share the conformer encoder whose block-local

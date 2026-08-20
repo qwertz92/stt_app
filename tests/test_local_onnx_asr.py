@@ -166,3 +166,45 @@ def test_offline_mode_reports_a_missing_model_instead_of_downloading(monkeypatch
     )
     with pytest.raises(TranscriptionError, match="not cached locally"):
         transcriber._resolve_model_path()
+
+
+def test_bytes_and_path_wav_decoding_validate_identically(tmp_path):
+    """The bytes branch was a copy of the path reader that had dropped the
+    sample-width guard, so 24-bit audio was silently reinterpreted as 16-bit."""
+    import struct
+
+    def wav_with_width(width: int) -> bytes:
+        frames = b"\x00" * (width * 100)
+        header = b"RIFF" + struct.pack("<I", 36 + len(frames)) + b"WAVE"
+        header += b"fmt " + struct.pack("<IHHIIHH", 16, 1, 1, 16000,
+                                        16000 * width, width, width * 8)
+        header += b"data" + struct.pack("<I", len(frames))
+        return header + frames
+
+    transcriber, _fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
+    for width in (1, 3, 4):
+        payload = wav_with_width(width)
+        with pytest.raises(TranscriptionError, match="16-bit"):
+            transcriber.transcribe_batch(payload)
+        path = tmp_path / f"w{width}.wav"
+        path.write_bytes(payload)
+        with pytest.raises(TranscriptionError, match="16-bit"):
+            transcriber.transcribe_batch(str(path))
+
+
+def test_malformed_wav_surfaces_a_transcription_error(tmp_path):
+    transcriber, _fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
+    with pytest.raises(TranscriptionError):
+        transcriber.transcribe_batch(b"RIFF" + b"\x00" * 20)
+
+
+def test_dropping_an_unsupported_language_is_logged(caplog):
+    """A wrong language makes Canary translate, so the substitution must be
+    diagnosable rather than silent."""
+    import logging
+
+    with caplog.at_level(logging.WARNING):
+        transcriber = LocalOnnxAsrTranscriber(CANARY_MODEL_SIZE, language_mode="auto")
+
+    assert transcriber._language_mode != "auto"
+    assert any("translate" in record.message for record in caplog.records)

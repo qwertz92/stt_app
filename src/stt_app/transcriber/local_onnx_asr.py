@@ -48,15 +48,28 @@ def _pcm_bytes_to_float32(data: bytes) -> np.ndarray:
     return samples / 32768.0
 
 
-def _read_wav_float32(path: Path) -> tuple[np.ndarray, int]:
-    with wave.open(str(path), "rb") as handle:
-        if handle.getsampwidth() != 2:
-            raise TranscriptionError(
-                "Only 16-bit PCM WAV audio is supported by this local model."
-            )
-        channels = handle.getnchannels()
-        sample_rate = handle.getframerate()
-        frames = handle.readframes(handle.getnframes())
+def _read_wav_float32(source: str | Path | io.BytesIO) -> tuple[np.ndarray, int]:
+    """Decode a 16-bit PCM WAV from a path or an in-memory buffer.
+
+    Both the path and the bytes branch go through here so they cannot drift on
+    validation; an earlier copy of this logic omitted the sample-width check and
+    silently reinterpreted 24-bit audio as 16-bit.
+    """
+    handle_source = source if isinstance(source, io.BytesIO) else str(source)
+    try:
+        with wave.open(handle_source, "rb") as handle:
+            sample_width = handle.getsampwidth()
+            channels = handle.getnchannels()
+            sample_rate = handle.getframerate()
+            frames = handle.readframes(handle.getnframes())
+    except TranscriptionError:
+        raise
+    except Exception as exc:
+        raise TranscriptionError(f"Could not read WAV audio: {exc}") from exc
+    if sample_width != 2:
+        raise TranscriptionError(
+            "Only 16-bit PCM WAV audio is supported by this local model."
+        )
     waveform = _pcm_bytes_to_float32(frames)
     if channels > 1:
         # Average to mono; the models are single-channel.
@@ -115,7 +128,21 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         supported = language_modes_for_selection("local", self.model_size)
         if requested in supported:
             return requested
-        return supported[0]
+        fallback = supported[0]
+        # Never silently: for Canary a *wrong* language is as destructive as
+        # none, because it translates into the requested language instead of
+        # transcribing. The UI keeps `auto` out of its picker, but a stored
+        # `auto` can still arrive here from an older history entry or another
+        # engine's settings snapshot.
+        logger.warning(
+            "Language '%s' is not supported by '%s'; using '%s' instead. "
+            "A wrong language makes this model translate rather than "
+            "transcribe.",
+            requested,
+            self.model_size,
+            fallback,
+        )
+        return fallback
 
     def _recognize_kwargs(self) -> dict[str, str]:
         # Parakeet TDT v3 is implicitly multilingual and ignores the argument,
@@ -159,7 +186,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
 
         model_path = self._resolve_model_path()
         self._emit_progress(
-            f"Loading {self.model_size} (onnx-asr, CPU)..."
+            f"Loading {self.model_size}: {self.runtime_status_text()}..."
         )
         try:
             return onnx_asr.load_model(
@@ -189,14 +216,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         elif isinstance(audio_source, (bytes, bytearray)):
             payload = bytes(audio_source)
             if payload[:4] == b"RIFF":
-                with io.BytesIO(payload) as buffer, wave.open(buffer, "rb") as handle:
-                    channels = handle.getnchannels()
-                    sample_rate = handle.getframerate()
-                    frames = handle.readframes(handle.getnframes())
-                waveform = _pcm_bytes_to_float32(frames)
-                if channels > 1:
-                    usable = (waveform.size // channels) * channels
-                    waveform = waveform[:usable].reshape(-1, channels).mean(axis=1)
+                waveform, sample_rate = _read_wav_float32(io.BytesIO(payload))
             else:
                 waveform = _pcm_bytes_to_float32(payload)
                 sample_rate = AUDIO_SAMPLE_RATE
@@ -211,7 +231,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 self._model = self._load_model()
             model = self._model
 
-        self._emit_progress(f"Transcribing with {self.model_size} (onnx-asr, CPU)...")
+        self._emit_progress(f"Transcribing with {self.runtime_status_text()}...")
         try:
             text = model.recognize(  # type: ignore[attr-defined]
                 waveform,

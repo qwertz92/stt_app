@@ -10,6 +10,7 @@ from ..config import (
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
+    nemotron_provider_order,
 )
 from ..settings_store import AppSettings
 from .assemblyai_provider import AssemblyAITranscriber
@@ -50,6 +51,11 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
             offline_mode=settings.offline_mode,
             model_dir=settings.model_dir,
             use_runtime_vad=settings.vad_enabled,
+            # The ONNX Device setting has to reach this engine too; the picker
+            # offers it for Nemotron, and without this the choice was inert.
+            provider_order=nemotron_provider_order(
+                getattr(settings, "local_onnx_device", DEFAULT_LOCAL_ONNX_DEVICE)
+            ),
         )
     if settings.model_size in LOCAL_WEBGPU_MODEL_SIZES:
         # Cohere/Granite ONNX/WebGPU models have no biasing input either.

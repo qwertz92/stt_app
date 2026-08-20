@@ -2680,3 +2680,29 @@ Agents and developers: use this as a knowledge base for past issues and solution
   - Canary is kept despite being 3x slower because published FLEURS-de favours
     it (3.43 vs Parakeet's 4.16) and our clip cannot separate them; it is the
     accuracy option, Parakeet the speed option.
+- **Adversarial review of the onnx-asr work found four defects, all mine.**
+  - *Benchmarking either new model was impossible.* `LOCAL_MODEL_RUNTIME` gained
+    the value `"onnx-asr"`, but `run_benchmark_cases` dispatches on that dict
+    and only knew three runtimes, so both models hit the `else: raise` with
+    "Benchmark runtime ... is unknown. Restart the app..." — advice that could
+    never help — and the branch added inside `_run_onnx_case` was unreachable
+    dead code. A test now asserts every `LOCAL_MODEL_RUNTIME` value is
+    dispatchable.
+  - *The benchmark's `"de"` language default would have made Canary translate*
+    an English sample and store the German result as the benchmark transcript.
+    It now takes the first mode the model itself declares.
+  - *The new ONNX Device picker was enabled for Nemotron but the factory never
+    passed it a device* — the exact bug the picker was written to fix, one
+    branch above the one it fixed, and a violation of the rule the same commit
+    added to AGENTS.md. `config.nemotron_provider_order` is now the shared
+    mapping for the factory and the benchmark.
+  - *Canary's `auto -> de` substitution was silent.* Closing the "no language"
+    hole only moved it: a wrong language is equally destructive because the
+    model translates into it. Retranscribing an English history entry (recorded
+    with the default `auto`) as Canary produced German prose saved as a new
+    entry, and the Language hint underneath still read "Granite supports Auto".
+    The substitution is now logged, the retranscribe dialog warns and names the
+    dropped language, and the constraint note is per-model.
+  - Lesson: adding a value to a lookup table is only half the change — every
+    dispatcher keyed on that table has to learn it, and a UI that offers a
+    setting has to be traced to the code that consumes it.

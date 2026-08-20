@@ -16,6 +16,8 @@ from .config import (
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
+    language_modes_for_selection,
+    nemotron_provider_order,
 )
 
 
@@ -290,19 +292,24 @@ def _run_onnx_case(
 
     total_steps = runs + (1 if warmup else 0)
     step = 0
-    language_mode = language or (
-        "auto" if model_name in LOCAL_NEMOTRON_MODEL_SIZES else "de"
+    # Parakeet ignores the language and only offers "auto"; Canary has no
+    # auto-detect and would translate rather than transcribe under a wrong one,
+    # so both take the first mode their own model declares instead of "de".
+    default_language = (
+        "auto"
+        if model_name in LOCAL_NEMOTRON_MODEL_SIZES
+        else language_modes_for_selection("local", model_name)[0]
+        if model_name in LOCAL_ONNX_ASR_MODEL_SIZES
+        else "de"
     )
+    language_mode = language or default_language
 
     _raise_if_canceled(cancel_check)
     if progress_callback is not None:
         progress_callback("Loading local ONNX model...")
     model_start = time.perf_counter()
     if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
-        provider_order = {
-            "cpu": ("cpu",),
-            "dml": ("dml",),
-        }.get(device, ("dml", "cpu"))
+        provider_order = nemotron_provider_order(device)
         transcriber = LocalNemotronTranscriber(
             model_size=model_name,
             language_mode=language_mode,
@@ -447,7 +454,7 @@ def run_benchmark_cases(
             case_index += 1
             display_compute_type = (
                 f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
-                if runtime in {"onnx-webgpu", "onnxruntime-genai"}
+                if runtime in {"onnx-webgpu", "onnxruntime-genai", "onnx-asr"}
                 else compute_type
             )
             if progress_callback is not None:
@@ -485,7 +492,7 @@ def run_benchmark_cases(
                         progress_callback=progress_callback,
                         cancel_check=cancel_check,
                     )
-                elif runtime == "onnxruntime-genai":
+                elif runtime in {"onnxruntime-genai", "onnx-asr"}:
                     case = _run_onnx_case(
                         audio_path=path,
                         model_name=model_name,

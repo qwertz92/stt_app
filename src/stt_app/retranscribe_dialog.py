@@ -17,6 +17,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from .app_icon import load_app_icon
 from .config import (
+    CANARY_MODEL_SIZE,
     DEFAULT_ENGINE,
     DEFAULT_LANGUAGE_MODE,
     LANGUAGE_MODE_LABELS,
@@ -111,7 +112,22 @@ class RetranscribeDialog(QtWidgets.QDialog):
         form.addRow("Model", self._model_combo)
 
         self._language_combo = QtWidgets.QComboBox()
-        form.addRow("Language", self._language_combo)
+        self._language_note = QtWidgets.QLabel("")
+        self._language_note.setWordWrap(True)
+        self._language_note.setStyleSheet("color: #b71c1c; font-size: 11px;")
+        # Reserved height: the note appears only for some models, and showing or
+        # hiding the row would move everything below it.
+        self._language_note.setFixedHeight(
+            self.fontMetrics().lineSpacing() * 2 + 6
+        )
+        self._language_note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        language_box = QtWidgets.QWidget()
+        language_layout = QtWidgets.QVBoxLayout(language_box)
+        language_layout.setContentsMargins(0, 0, 0, 0)
+        language_layout.setSpacing(2)
+        language_layout.addWidget(self._language_combo)
+        language_layout.addWidget(self._language_note)
+        form.addRow("Language", language_box)
 
         # Populate the dependent pickers once the three exist.
         self._populate_models(preferred=self._entry_model)
@@ -240,6 +256,32 @@ class RetranscribeDialog(QtWidgets.QDialog):
             if self._select_data(self._language_combo, candidate):
                 break
         self._language_combo.setEnabled(self._language_combo.count() > 1)
+        self._update_language_note(preferred)
+
+    def _update_language_note(self, requested: str = "") -> None:
+        """Warn when a model translates under the wrong language.
+
+        Canary has no auto-detect, so a history entry recorded with `auto` (the
+        app default) silently lands on the first offered language. Running an
+        English recording that way stores a German *translation* as a new
+        history entry, which is why this must be visible rather than logged.
+        """
+        if not hasattr(self, "_language_note"):
+            return
+        if self.selected_model() != CANARY_MODEL_SIZE:
+            self._language_note.setText("")
+            return
+        selected = self.selected_language_mode()
+        note = (
+            "Canary cannot detect the language. Pick the one actually spoken - "
+            "with the wrong one it translates instead of transcribing."
+        )
+        if requested and requested != selected:
+            note = (
+                f"This entry's language ({requested}) is unavailable here, so "
+                f"{selected} was chosen. " + note
+            )
+        self._language_note.setText(note)
 
     def _on_engine_changed(self) -> None:
         # Keep the entry's model when the user returns to its engine.

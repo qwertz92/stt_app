@@ -444,3 +444,28 @@ def test_onnx_device_row_never_moves_the_fields_below_it(dialog):
     assert faster_whisper_enabled is False
     assert remote_enabled is False
     assert {y_faster_whisper, y_granite, y_nemotron, y_remote} == {y_granite}
+
+
+def test_language_note_names_the_selected_model_family(dialog):
+    """Canary joined LOCAL_EXPLICIT_LANGUAGE_MODELS and inherited Granite's
+    hint, which told the user Auto was available — the exact behaviour the
+    model must never have."""
+    dialog.show()
+    index = dialog.engine_combo.findData("local")
+    dialog.engine_combo.setCurrentIndex(index)
+
+    def note_for(model: str) -> str:
+        model_index = dialog.model_combo.findData(model)
+        assert model_index >= 0, model
+        dialog.model_combo.setCurrentIndex(model_index)
+        QtWidgets.QApplication.processEvents()
+        return dialog.language_note_label.text()
+
+    canary_note = note_for("canary-1b-v2")
+    assert "Granite" not in canary_note
+    assert "translat" in canary_note.lower()
+
+    granite_note = note_for("granite-speech-4.1-2b-plus")
+    assert "Granite" not in granite_note
+
+    assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3")

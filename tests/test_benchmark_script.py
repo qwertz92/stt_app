@@ -493,3 +493,15 @@ class TestBenchmarkDownloadSeconds:
         text = out_path.read_text(encoding="utf-8")
         assert "download_seconds" in text
         assert "4.2" in text
+
+
+def test_every_local_runtime_is_dispatchable_by_the_benchmark():
+    """`LOCAL_MODEL_RUNTIME` gained a new value when the onnx-asr engine landed
+    and the benchmark dispatcher did not learn it, so both new models always
+    failed with "Benchmark runtime ... is unknown"."""
+    from stt_app.config import LOCAL_MODEL_RUNTIME, VALID_MODEL_SIZES
+
+    known = {"faster-whisper", "onnx-webgpu", "onnxruntime-genai", "onnx-asr"}
+    for model_name in VALID_MODEL_SIZES:
+        runtime = LOCAL_MODEL_RUNTIME.get(model_name)
+        assert runtime in known, f"{model_name} has undispatchable runtime {runtime!r}"

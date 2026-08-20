@@ -22,6 +22,7 @@ from .config import (
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
+    PARAKEET_MODEL_SIZE,
     VALID_DISPLAY_TIMEZONES,
     VALID_ENGINES,
     VALID_LANGUAGE_MODES,
@@ -733,10 +734,23 @@ class _GeneralTabMixin:
                 "automatic language detection."
             )
 
+        if engine == "local" and model == CANARY_MODEL_SIZE:
+            return (
+                "Canary has no automatic detection: pick the language actually "
+                "spoken. With the wrong one it translates instead of "
+                "transcribing."
+            )
+
+        if engine == "local" and model == PARAKEET_MODEL_SIZE:
+            return (
+                "Parakeet is multilingual and detects the language itself; "
+                "there is nothing to choose."
+            )
+
         if engine == "local" and model in LOCAL_EXPLICIT_LANGUAGE_MODELS:
             return (
-                "Granite supports Auto plus the languages documented for the "
-                "selected model."
+                "This model supports the languages documented for it and does "
+                "not provide automatic language detection."
             )
 
         if engine == "local" and model in LOCAL_NEMOTRON_MODEL_SIZES:
@@ -852,6 +866,12 @@ class _GeneralTabMixin:
             self.local_onnx_device_note_label.setText(
                 "Auto resolves to CPU for this model because its encoder cannot "
                 "run on WebGPU or DirectML. Benchmark before overriding."
+            )
+            return
+        if model_name in LOCAL_NEMOTRON_MODEL_SIZES:
+            self.local_onnx_device_note_label.setText(
+                "This model runs on ONNX Runtime GenAI, which has DirectML and "
+                "CPU only: every GPU choice here means DirectML."
             )
             return
         if device == "auto":

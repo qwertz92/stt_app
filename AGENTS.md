@@ -924,7 +924,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcriber cache key *and* the preload key: it is baked into the loaded
   runtime, so changing it must reload rather than reuse. An unknown stored
   value falls back to `auto` via `normalize_local_onnx_device` instead of
-  failing the load. The row is always present and only toggles enabled state
+  failing the load. Nemotron is in the picker and therefore *must* receive the
+  policy: `config.nemotron_provider_order` is the shared mapping used by both
+  the factory and the benchmark, and because ORT GenAI has no WebGPU provider
+  every GPU-flavoured policy resolves to DirectML for it, which its note says. The row is always present and only toggles enabled state
   and note text — hiding it for faster-whisper or a remote engine would shift
   every field below it, which a test pins by asserting the Language row's
   y-position is identical across all four cases.
