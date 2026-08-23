@@ -29,6 +29,7 @@ from ..config import (
     STREAMING_ABORT_JOIN_TIMEOUT_S,
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
+    STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
     STREAMING_PARTIAL_WINDOW_S,
     VALID_MODEL_SIZES,
     language_modes_for_selection,
@@ -36,7 +37,7 @@ from ..config import (
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ..streaming_text import merge_rolling_window_transcript
-from ..vad import measure_peak_windowed_rms_pcm
+from ..vad import measure_peak_windowed_rms_pcm, measure_speech_seconds_pcm
 from .base import (
     AudioInput,
     ITranscriber,
@@ -855,7 +856,21 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 # last hallucinated window here, and because a hallucination
                 # cannot be aligned the merge replaced the entire transcript
                 # with it -- the whole dictation lost at the last step.
-                if self._stream_tail_window_is_silent(session):
+                # Two ways the trailing window must not be decoded: it is
+                # silent, or the pause before it was longer than the window and
+                # what little sound it holds is not enough to be speech. The
+                # second case is a transient -- a click, a chair creak -- and
+                # decoding it produces an invented sentence that, being
+                # unalignable, replaces the entire dictation at the last step.
+                tail_after_long_pause = (
+                    self.stream_partial_window_s > 0
+                    and session.result.silent_seconds >= self.stream_partial_window_s
+                )
+                if self._stream_tail_window_is_silent(session) or (
+                    tail_after_long_pause
+                    and self.silence_gate_enabled
+                    and not self._stream_window_has_speech(session)
+                ):
                     final_text = session.result.merged_text
                 else:
                     tail_text = self._transcribe_current_stream_buffer(
@@ -865,9 +880,13 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                     final_text = merge_rolling_window_transcript(
                         session.result.merged_text,
                         tail_text,
+                        # Same rule as the partial path: append only when the
+                        # decoded window really holds speech. Reading
+                        # `silent_seconds` alone let a transient at the end of a
+                        # long pause append an invented sentence.
                         new_segment=(
-                            session.result.silent_seconds
-                            >= self.stream_partial_window_s
+                            tail_after_long_pause
+                            and self._stream_window_has_speech(session)
                         ),
                     )
         except Exception as exc:
@@ -904,17 +923,46 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # why the batch silence gate exists — and here every invented window is
         # unalignable, so it used to replace the whole accumulated transcript.
         new_audio = bytes(session.pcm_buffer[session.result.last_partial_size:])
-        if self._stream_audio_is_silent(new_audio):
+        quiet_slice = self._stream_slice_is_quiet(new_audio)
+        if quiet_slice:
+            # Tracked even when the gate is switched off: `silent_seconds` also
+            # drives the pause detection below, and wiring two behaviours to one
+            # checkbox meant disabling the gate silently disabled that too.
             session.result.silent_seconds += len(new_audio) / (
                 self.stream_sample_rate * 2
             )
-            session.result.last_partial_at = time.monotonic()
-            session.result.last_partial_size = len(session.pcm_buffer)
-            return
+            if self.silence_gate_enabled:
+                session.result.last_partial_at = time.monotonic()
+                session.result.last_partial_size = len(session.pcm_buffer)
+                return
 
-        # A pause longer than the window means the coming window shares no audio
-        # with what is already transcribed, so it is genuinely new text.
-        new_segment = session.result.silent_seconds >= self.stream_partial_window_s
+        # A pause longer than the window means the coming window shares no
+        # audio with what is already transcribed, so it cannot be aligned. That
+        # is the most dangerous input there is: the window is mostly silence,
+        # which is exactly what makes the model invent words. So measure the
+        # window that will ACTUALLY be decoded -- not the slice that just
+        # arrived -- and require real speech in it, which a keyboard click or a
+        # chair creak cannot fake.
+        pause_exceeded_window = (
+            self.stream_partial_window_s > 0
+            and session.result.silent_seconds >= self.stream_partial_window_s
+        )
+        new_segment = False
+        if pause_exceeded_window:
+            new_segment = self._stream_window_has_speech(session)
+            if not new_segment and self.silence_gate_enabled:
+                # Too little speech to append on trust -- and too little to
+                # trust a replace either. A transient ending a long pause would
+                # otherwise decode to an invented sentence that, being
+                # unalignable, wipes the real transcript. Skip it and keep
+                # counting the pause.
+                logger.debug(
+                    "stream_window_after_pause_skipped: too little speech to "
+                    "decode a window that cannot be aligned."
+                )
+                session.result.last_partial_at = time.monotonic()
+                session.result.last_partial_size = len(session.pcm_buffer)
+                return
         session.result.silent_seconds = 0.0
 
         try:
@@ -952,17 +1000,45 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         session.result.last_partial_at = time.monotonic()
         session.result.last_partial_size = len(session.pcm_buffer)
 
-    def _stream_audio_is_silent(self, pcm_bytes: bytes) -> bool:
-        """Report whether a stretch of stream audio is below the speech gate.
+    def _stream_window_has_speech(self, session: _StreamingSession) -> bool:
+        """Does the trailing window hold enough speech to append it on trust?
 
-        Unmeasurable audio (too short to fill a window) returns ``None`` from
-        the meter and is deliberately *not* treated as silence: refusing to
-        decode something we could not measure would drop real speech.
+        Measured on the window that is actually decoded. Unmeasurable audio
+        returns ``None`` and is refused: appending is the risky direction, so
+        "cannot tell" must fall back to the safe aligning path.
         """
-        if not self.silence_gate_enabled:
+        snapshot = bytes(session.pcm_buffer)
+        if not snapshot:
             return False
+        max_bytes = int(self.stream_partial_window_s * self.stream_sample_rate * 2)
+        if max_bytes > 0 and len(snapshot) > max_bytes:
+            snapshot = snapshot[-max_bytes:]
+        speech_seconds = measure_speech_seconds_pcm(
+            snapshot, self.stream_sample_rate, self.silence_gate_threshold
+        )
+        if speech_seconds is None:
+            return False
+        return speech_seconds >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+
+    def _stream_slice_is_quiet(self, pcm_bytes: bytes) -> bool:
+        """Is this stretch of stream audio below the speech threshold?
+
+        Deliberately independent of ``silence_gate_enabled``: the caller uses
+        the answer both to skip decoding (which the setting controls) and to
+        measure how long the pause has been (which it must not).
+
+        Unmeasurable audio returns ``None`` from the meter and is never treated
+        as quiet -- refusing to decode something that could not be measured
+        would drop real speech.
+        """
         level = measure_peak_windowed_rms_pcm(pcm_bytes, self.stream_sample_rate)
         return level is not None and level < self.silence_gate_threshold
+
+    def _stream_audio_is_silent(self, pcm_bytes: bytes) -> bool:
+        """Whether the gate should skip decoding this audio."""
+        if not self.silence_gate_enabled:
+            return False
+        return self._stream_slice_is_quiet(pcm_bytes)
 
     def _stream_tail_window_is_silent(self, session: _StreamingSession) -> bool:
         """Measure exactly the trailing window the finalizer would decode."""

@@ -35,6 +35,7 @@ environment variable STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import sys
 
@@ -118,24 +119,38 @@ def download_model(name: str, output_dir: str | None = None) -> str:
 
     print(f"Downloading {name} ({repo_id})...")
     results: list[str] = []
+    # Tracks whether *this* process ever started writing. Ctrl+C while only
+    # waiting for the slot must not delete partial files: they belong to
+    # whoever holds it, and removing them makes a multi-gigabyte download
+    # the app has queued restart from zero. Same rule the app applies to
+    # its own preload cancel path through `has_explicit_interest`.
+    started_downloading = False
+
+    def _download() -> None:
+        nonlocal started_downloading
+        started_downloading = True
+        results.append(download_model_snapshot(name, output_dir or ""))
 
     try:
-        # Take the same slot the app uses. The lock is machine-wide, so running
-        # this script while the app is downloading no longer puts two writers in
-        # one cache directory -- it waits for the app instead. Without a
-        # `cancel_check` the wait ends only when the other side finishes, which
-        # is what a CLI download should do; Ctrl+C is handled below.
-        joined = not run_coordinated_download(
-            name,
-            output_dir or "",
-            lambda: results.append(download_model_snapshot(name, output_dir or "")),
-        )
-        if joined:
-            print("  Another process finished this model while we waited.")
-            path = download_model_snapshot(name, output_dir or "")
-        else:
-            path = results[0]
+        # Take the same slot the app uses. The lock is machine-wide, so a
+        # run of this script while the app is downloading now waits for the
+        # app instead of putting two writers in one cache directory.
+        if not run_coordinated_download(name, output_dir or "", _download):
+            # Another caller in THIS process finished the same model first.
+            # A single-threaded script cannot reach that, but re-fetching
+            # outside the slot would be the one unlocked write path here,
+            # so go through the slot again rather than around it.
+            run_coordinated_download(name, output_dir or "", _download)
+        path = results[-1]
     except KeyboardInterrupt:
+        if not started_downloading:
+            print(
+                "\nCanceled while waiting for another process to finish "
+                "with this cache directory. Nothing was downloaded, and no "
+                "partial files were deleted.",
+                file=sys.stderr,
+            )
+            raise SystemExit(130) from None
         removed_files, removed_bytes = cleanup_incomplete_model_download(
             name,
             output_dir or "",
@@ -146,7 +161,7 @@ def download_model(name: str, output_dir: str | None = None) -> str:
             f"{'s' if removed_files != 1 else ''} ({removed_mb:.1f} MB).",
             file=sys.stderr,
         )
-        raise SystemExit(130)
+        raise SystemExit(130) from None
     except Exception as exc:
         if "SSL certificate verification failed" in str(exc):
             _print_ssl_help(name)
@@ -189,6 +204,12 @@ def main() -> None:
         help="List available models and exit.",
     )
     args = parser.parse_args()
+
+    # Without this the "waiting for another process" message from
+    # file_lock is dropped by the root logger, and the script looks hung
+    # for as long as the app download takes -- which is what provokes the
+    # Ctrl+C the cancel path above has to protect against.
+    logging.basicConfig(level=logging.INFO, format="  %(message)s")
 
     if args.list:
         print("Available models:")

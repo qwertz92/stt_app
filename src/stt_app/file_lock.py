@@ -24,6 +24,7 @@ import errno
 import hashlib
 import logging
 import os
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -36,6 +37,11 @@ else:  # pragma: no cover - platform split
     import fcntl
 
 _POLL_SECONDS = 0.1
+
+# Resources this process holds, so a reentrant attempt can be reported instead
+# of spinning on an EACCES that looks exactly like another process's lock.
+_HELD_LOCK = threading.Lock()
+_HELD_RESOURCES: set[str] = set()
 
 
 class FileLockUnavailable(RuntimeError):
@@ -53,22 +59,31 @@ def lock_path_for(resource: str, *, lock_dir: Path) -> Path:
     return Path(lock_dir) / f"{digest.hexdigest()[:32]}.lock"
 
 
+class LockHeldInThisProcess(RuntimeError):
+    """Raised when this process already holds the lock it is asking for."""
+
+
 class CrossProcessLock:
     """An exclusive, OS-enforced lock on one resource.
 
-    Not reentrant: acquiring twice from the same process deadlocks on POSIX and
-    raises on Windows. Callers must already be serialized within the process,
-    which the download coordinator's single slot guarantees.
+    Not reentrant, and the failure is loud rather than silent. Measured on
+    Windows, a second lock attempt on a resource this process already holds --
+    through a new handle *or* the same one -- fails with ``EACCES``, which is
+    indistinguishable from "another process holds it", so `acquire()` would spin
+    forever at 10 Hz while logging that it is waiting for another process. That
+    is a lie that would misdirect any later diagnosis, and there is no timeout
+    to end it. `_HELD_RESOURCES` therefore tracks what this process holds and
+    turns the second attempt into an immediate `LockHeldInThisProcess`.
+
+    Callers are expected to be serialized within the process already -- the
+    download coordinator's single slot does that -- so this is a backstop.
     """
 
     def __init__(self, resource: str, *, lock_dir: Path) -> None:
         self._resource = resource
         self._path = lock_path_for(resource, lock_dir=lock_dir)
         self._handle = None
-
-    @property
-    def path(self) -> Path:
-        return self._path
+        self._held_key: str | None = None
 
     def _open(self) -> None:
         try:
@@ -92,9 +107,11 @@ class CrossProcessLock:
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return True
         except OSError as exc:
-            # Windows reports a held lock as EDEADLOCK/EACCES, POSIX as
-            # EAGAIN/EACCES. Anything else is a real failure worth reporting.
-            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK, 36):
+            # Measured: Windows `LK_NBLCK` reports a held lock as EACCES (13),
+            # POSIX `flock` as EAGAIN (and EACCES on some systems). EDEADLK is
+            # listed because POSIX may report a self-deadlock that way; on
+            # Windows it is the same value as EACCES.
+            if exc.errno in (errno.EACCES, errno.EAGAIN, errno.EDEADLK):
                 return False
             raise FileLockUnavailable(
                 f"Locking {self._path} failed: {exc}"
@@ -111,6 +128,14 @@ class CrossProcessLock:
         Returns ``False`` when ``cancel_check`` asked to stop waiting; the lock
         is not held in that case.
         """
+        key = os.path.normcase(str(self._path))
+        with _HELD_LOCK:
+            if key in _HELD_RESOURCES:
+                raise LockHeldInThisProcess(
+                    f"This process already holds the lock for {self._resource!r}. "
+                    "Waiting would spin forever: the OS reports a self-held lock "
+                    "the same way it reports another process's."
+                )
         if self._handle is None:
             self._open()
         waited_for_another_process = False
@@ -119,6 +144,9 @@ class CrossProcessLock:
                 self._close_handle()
                 return False
             if self._try_lock():
+                with _HELD_LOCK:
+                    _HELD_RESOURCES.add(key)
+                self._held_key = key
                 if waited_for_another_process:
                     logger.info(
                         "model_download_lock acquired after waiting for another "
@@ -156,6 +184,10 @@ class CrossProcessLock:
             self._close_handle()
 
     def _close_handle(self) -> None:
+        key, self._held_key = self._held_key, None
+        if key is not None:
+            with _HELD_LOCK:
+                _HELD_RESOURCES.discard(key)
         handle, self._handle = self._handle, None
         if handle is None:
             return
@@ -163,10 +195,3 @@ class CrossProcessLock:
             handle.close()
         except OSError:
             pass
-
-    def __enter__(self) -> CrossProcessLock:
-        self.acquire()
-        return self
-
-    def __exit__(self, *_exc_info) -> None:
-        self.release()

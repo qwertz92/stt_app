@@ -1137,7 +1137,29 @@ STREAMING_PARTIAL_WINDOW_S = 8.0
 # injected Ctrl+V would arrive as Ctrl+Alt+V — and ending the whole dictation
 # for that is far worse than skipping one update and retrying on the next
 # partial. A genuinely dead target still ends the session, just not instantly.
-STREAMING_LIVE_INSERT_RETRY_LIMIT = 12
+#
+# Kept small on purpose: each attempt runs on the Qt thread and a held modifier
+# costs the full PASTE_MODIFIER_RELEASE_TIMEOUT_S (1.5 s) before it fails, so a
+# large limit turns a stuck target into seconds of unresponsive UI — the very
+# thing the off-thread handshake work was fixing. Three attempts absorb the
+# transient case at a bounded ~4.5 s worst case.
+# How long the finalizer waits for an in-flight provider handshake before
+# stopping the stream anyway. Deepgram's own connect wait is 8 s, so this has to
+# exceed it or the common case would time out; the bound exists only so a
+# provider that never returns cannot hang the finalize forever.
+STREAMING_CONNECT_JOIN_TIMEOUT_S = 15.0
+
+STREAMING_LIVE_INSERT_RETRY_LIMIT = 3
+
+# How much measured speech a rolling window must contain before it may be
+# APPENDED after a pause instead of aligned. A pause longer than the window
+# means the overlap search has nothing to anchor on, so such a window is taken
+# on trust -- and the model reliably invents words when the audio is mostly
+# quiet. A peak measurement is not enough here: one keyboard click or chair
+# creak clears it, and each one would append a fresh hallucination to the
+# transcript and paste it into the document. Requiring a third of a second of
+# actual above-threshold audio rejects transients while passing any real word.
+STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.35
 
 # How much audio may pile up while a remote streaming provider is still
 # completing its network handshake. Deepgram waits up to 8 s for its socket and

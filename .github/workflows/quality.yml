@@ -19,8 +19,10 @@ jobs:
   python-quality:
     runs-on: windows-latest
     timeout-minutes: 30
-    env:
-      QT_QPA_PLATFORM: offscreen
+    # No QT_QPA_PLATFORM here on purpose. Under `offscreen` Qt reports widget
+    # metrics 1-4 px off, which fails the pixel-exact layout tests for reasons
+    # that have nothing to do with the code (see AGENTS.md, "Tests"). The
+    # windows-latest runner has a real platform plugin; use it.
 
     steps:
       - name: Check out repository

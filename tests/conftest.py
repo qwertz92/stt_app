@@ -7,6 +7,7 @@ classes to avoid duplicating ~150 lines of boilerplate.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 
 import pytest
@@ -405,3 +406,30 @@ def _keep_download_locks_out_of_the_real_appdata(tmp_path_factory, monkeypatch):
     monkeypatch.setattr(
         model_download_coordinator, "_download_lock_dir", lambda: lock_dir
     )
+
+
+def pytest_configure(config):
+    config.addinivalue_line(
+        "markers",
+        "pixel_exact: asserts exact widget geometry; skipped on the offscreen "
+        "Qt platform, where metrics are 1-4 px off and failures are artifacts",
+    )
+
+
+@pytest.fixture(autouse=True)
+def _skip_pixel_exact_tests_on_the_offscreen_platform(request):
+    """Turn the known offscreen metric drift into a skip, not a false failure.
+
+    AGENTS.md already says an offscreen run's layout failures are artifacts, but
+    saying so did not stop it: both CI workflows set `QT_QPA_PLATFORM=offscreen`
+    and the release gate ran the whole suite before the build step, so v0.8.0
+    was tagged and never published. The workflows no longer set it; this makes
+    the failure mode impossible to reintroduce by accident.
+    """
+    if request.node.get_closest_marker("pixel_exact") is None:
+        return
+    if os.environ.get("QT_QPA_PLATFORM", "").strip().lower() == "offscreen":
+        pytest.skip(
+            "Pixel-exact layout assertions are meaningless on the offscreen Qt "
+            "platform (metrics shift 1-4 px); run on a real platform plugin."
+        )

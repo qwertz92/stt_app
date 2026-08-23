@@ -36,6 +36,7 @@ meaningless for both.
 
 from __future__ import annotations
 
+import os
 import threading
 from collections.abc import Callable
 import logging
@@ -59,11 +60,22 @@ def _download_lock_dir():
 def _cache_lock_resource(model_dir: str) -> str:
     """Normalize a configured model dir into one lock identity.
 
-    An empty Model Dir means the default Hugging Face cache, which every such
-    caller shares, so they must all map onto the same lock.
+    Two spellings of one directory must produce one lock, or both writers think
+    they own it and the lock protects nothing. `os.path.normcase` alone is not
+    enough -- it folds case and slashes but keeps `D:\models` and `D:\models\`
+    apart, and leaves `..` segments and relative paths untouched.
+
+    The empty case is resolved to the *actual* default Hugging Face cache path
+    rather than a sentinel, because a user who types that path into Model Dir by
+    hand is pointing at the very same directory the empty setting uses; a
+    sentinel would give those two callers different locks.
     """
     normalized = str(model_dir or "").strip()
-    return normalized or "<default-huggingface-cache>"
+    if not normalized:
+        from .transcriber.local_faster_whisper import _default_hf_cache_dir
+
+        normalized = _default_hf_cache_dir()
+    return os.path.normcase(os.path.abspath(os.path.normpath(normalized)))
 
 # Poll interval while waiting for the active download to finish. Short enough
 # that a cancel is honoured promptly, long enough not to spin.
@@ -241,7 +253,8 @@ class ModelDownloadCoordinator:
             if _SHUTDOWN.is_set():
                 raise ModelDownloadCanceled("The application is shutting down.")
             raise ModelDownloadCanceled("Model download canceled.")
-        self._cache_lock = lock
+        with self._condition:
+            self._cache_lock = lock
 
     def _release_cache_lock(self) -> None:
         lock, self._cache_lock = self._cache_lock, None
@@ -271,7 +284,9 @@ class ModelDownloadCoordinator:
                 # every later download blocks, so say so loudly.
                 logger.warning(
                     "Ignoring a download release for %r that does not own the "
-                    "slot (held by %r).",
+                    "slot (held by %r). The cross-process lock stays with the "
+                    "real owner; releasing it here would free a lock this "
+                    "caller never took.",
                     (model_name, model_dir),
                     None if active is None else (active.model_name, active.model_dir),
                 )

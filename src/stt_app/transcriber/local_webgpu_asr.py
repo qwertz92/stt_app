@@ -807,6 +807,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 lambda: download_webgpu_model_snapshot(
                     self.model_size, self.model_dir
                 ),
+                cancel_check=self._cancel_check,
             )
         except Exception as exc:
             raise TranscriptionError(

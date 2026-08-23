@@ -2104,6 +2104,10 @@ def test_a_slow_streaming_handshake_does_not_block_the_qt_thread(monkeypatch):
         return transcriber
 
     monkeypatch.setattr("stt_app.controller.create_transcriber", slow_transcriber)
+    # Without this the test opens the real microphone: CI runners have no
+    # capture device, and locally it switches the developer's mic on
+    # mid-suite.
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -2151,6 +2155,10 @@ def test_audio_recorded_while_connecting_is_delivered_in_order(monkeypatch):
         return transcriber
 
     monkeypatch.setattr("stt_app.controller.create_transcriber", slow_transcriber)
+    # Without this the test opens the real microphone: CI runners have no
+    # capture device, and locally it switches the developer's mic on
+    # mid-suite.
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
@@ -2209,4 +2217,62 @@ def test_shutdown_stops_the_stream_finalize_worker():
     controller, app = _make_controller()
     controller.shutdown()
     assert controller._stream_finalize_executor._shutdown is True
+    _ = app
+
+
+def test_a_failed_reclaim_keeps_the_working_fallback_hotkey():
+    """A reclaim attempt must never cost the user the hotkey they already have.
+
+    `HotkeyManager.register` unregisters the current binding before trying the
+    new one and does not restore it on failure, so a reclaim tick that fails
+    used to leave no hotkey registered at all -- while the idle line kept
+    advertising the fallback that no longer existed.
+    """
+    from stt_app.config import FALLBACK_HOTKEYS
+    from stt_app.hotkey import HotkeyRegistrationError
+
+    registered: list[str] = []
+
+    class _PreferredStaysBusy:
+        hotkey_id = 1
+
+        def __init__(self):
+            self.is_registered = False
+
+        def register(self, hotkey):
+            # Mirror the real manager: drop the current binding first.
+            self.is_registered = False
+            if registered:
+                registered.pop()
+            if hotkey == "Ctrl+Alt+Space":
+                raise HotkeyRegistrationError("in use by another program")
+            registered.append(hotkey)
+            self.is_registered = True
+
+        def unregister(self):
+            self.is_registered = False
+            if registered:
+                registered.pop()
+
+    manager = _PreferredStaysBusy()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey="Ctrl+Alt+Space")),
+        hotkey_manager=manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+    )
+    try:
+        assert controller._register_hotkey_with_fallback() is True
+        assert registered == [FALLBACK_HOTKEYS[0]], registered
+        assert controller._active_hotkey == FALLBACK_HOTKEYS[0]
+
+        controller._reclaim_preferred_hotkey()
+
+        assert registered == [FALLBACK_HOTKEYS[0]], (
+            "the failed reclaim left the user with no registered hotkey"
+        )
+        assert manager.is_registered is True
+        assert controller._active_hotkey == FALLBACK_HOTKEYS[0]
+    finally:
+        controller.shutdown()
     _ = app

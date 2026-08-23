@@ -40,6 +40,7 @@ from .config import (
     HOTKEY_RECLAIM_INTERVAL_MS,
     LOCAL_WEBGPU_MODEL_SIZES,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
+    STREAMING_CONNECT_JOIN_TIMEOUT_S,
     STREAMING_LIVE_INSERT_RETRY_LIMIT,
     STREAMING_PRECONNECT_BUFFER_MAX_BYTES,
     STREAMING_ABORT_BEEP_DURATION_MS,
@@ -85,7 +86,11 @@ from .streaming_text import (
     StreamingTextState,
     normalize_stream_text,
 )
-from .text_inserter import TextInserter, TextInsertionError
+from .text_inserter import (
+    TextInserter,
+    TextInsertionError,
+    TextMayHaveBeenPastedError,
+)
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .transcriber import create_transcriber
 from .transcriber.base import TranscriptionCanceled, TranscriptionError
@@ -139,6 +144,9 @@ class _TranscriptionJob:
     source_recording_id: str = ""
     source_audio_path: str = ""
     future: object | None = None
+    # The provider handshake thread, when this job finalizes a stream that may
+    # still be connecting. The worker joins it before calling `stop_stream()`.
+    connect_thread: object | None = None
     # How a non-foreground (queued/background) result is delivered:
     # "insert" -> save to history and insert into target_handle;
     # "history" -> save to history only.
@@ -305,10 +313,14 @@ class DictationController(QtCore.QObject):
         # Audio captured while a remote provider is still connecting. The
         # microphone is opened first so no speech is lost; these bytes are
         # handed over in order the moment the stream is ready.
+        # Set by `_insert_text_at_target` when a failure happened after the
+        # paste keystroke, so the streaming retry cannot duplicate text.
+        self._last_insert_may_have_pasted = False
         self._stream_preconnect_lock = threading.Lock()
         self._stream_preconnect_chunks: list[bytes] | None = None
         self._stream_preconnect_dropped = False
         self._stream_connect_generation = 0
+        self._stream_connect_thread: threading.Thread | None = None
         self._active_stream_transcriber = None
         self._active_stream_runtime_lease: _TranscriberRuntimeLease | None = None
         self._active_stream_settings: AppSettings | None = None
@@ -897,11 +909,19 @@ class DictationController(QtCore.QObject):
                 generation, failure is None, failure or ""
             )
 
-        threading.Thread(
+        thread = threading.Thread(
             target=_connect,
             name="stt-stream-connect",
             daemon=True,
-        ).start()
+        )
+        # Kept so the finalizer can wait for the handshake. Calling
+        # `stop_stream()` while `start_stream()` is still running leaves the
+        # provider's session half-published: the stop raises "not active", the
+        # connect thread then publishes an ownerless socket and marks it
+        # active, and every later dictation fails with "session already
+        # active" for the rest of the app's life.
+        self._stream_connect_thread = thread
+        thread.start()
 
     @staticmethod
     def _stream_connect_error_text(exc: BaseException) -> str:
@@ -916,7 +936,11 @@ class DictationController(QtCore.QObject):
         while True:
             with self._stream_preconnect_lock:
                 if generation != self._stream_connect_generation:
-                    self._stream_preconnect_chunks = None
+                    # A newer session owns the buffer now. Refusing to push is
+                    # not enough -- clearing it here destroyed the *live*
+                    # session's buffer, after which its audio bypassed
+                    # buffering and was pushed into a transcriber that was
+                    # still connecting, killing the brand-new dictation.
                     return None
                 pending = self._stream_preconnect_chunks
                 if pending is None:
@@ -1018,13 +1042,13 @@ class DictationController(QtCore.QObject):
             self._active_stream_transcriber = None
             self._active_stream_runtime_lease = None
             self._active_stream_settings = None
-            try:
-                if hasattr(transcriber, "abort_stream"):
-                    transcriber.abort_stream()
-                else:
-                    transcriber.stop_stream()
-            except Exception:
-                pass
+            # The handshake was started microseconds ago and is almost certainly
+            # still running. Aborting now is not a no-op: the abort finds no
+            # session, `start_stream` then publishes one anyway, and it is
+            # orphaned -- every later dictation fails with "Streaming session
+            # already active" until the app is restarted. So one microphone
+            # failure used to disable streaming for good.
+            self._teardown_pending_stream_connect(transcriber)
             if runtime_lease is not None:
                 runtime_lease.release()
             self._reset_streaming_state()
@@ -1052,6 +1076,37 @@ class DictationController(QtCore.QObject):
                 if still_connecting
                 else "Streaming active. Speak now, press hotkey to finalize."
             )
+
+    def _teardown_pending_stream_connect(self, transcriber) -> None:
+        """Abort a stream whose handshake may still be in flight.
+
+        Waits for `start_stream` to finish first, off the Qt thread, so the
+        abort acts on a session that actually exists. The wait is bounded, and
+        the abort runs either way.
+        """
+        thread = self._stream_connect_thread
+        self._stream_connect_thread = None
+        self._stream_connect_generation += 1
+        with self._stream_preconnect_lock:
+            self._stream_preconnect_chunks = None
+
+        def _abort() -> None:
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=STREAMING_CONNECT_JOIN_TIMEOUT_S)
+            try:
+                if hasattr(transcriber, "abort_stream"):
+                    transcriber.abort_stream()
+                else:
+                    transcriber.stop_stream()
+            except Exception:
+                self._logger.exception("Failed to abort a pending stream connect")
+
+        if thread is None or not thread.is_alive():
+            _abort()
+            return
+        threading.Thread(
+            target=_abort, name="stt-stream-connect-abort", daemon=True
+        ).start()
 
     @staticmethod
     def _audio_capture_runtime_context(capture: AudioCapture) -> tuple[bool, int]:
@@ -2272,6 +2327,14 @@ class DictationController(QtCore.QObject):
         )
         job.runtime_transcriber = transcriber
         job.runtime_lease = runtime_lease
+        # Hand the in-flight handshake to the worker so it can wait for it
+        # before stopping the stream. Retire it here too: nothing that arrives
+        # after this point belongs to a session that is being finalized.
+        job.connect_thread = self._stream_connect_thread
+        self._stream_connect_thread = None
+        self._stream_connect_generation += 1
+        with self._stream_preconnect_lock:
+            self._stream_preconnect_chunks = None
         self._logger.info(
             "transcription_submitted token=%s mode=streaming engine=%s model=%s "
             "recording_id=%s",
@@ -2865,6 +2928,28 @@ class DictationController(QtCore.QObject):
         else:
             self.transcription_failed.emit(request_token, terminal_payload)
 
+    def _await_stream_connect(self, job: _TranscriptionJob | None) -> None:
+        """Wait for an in-flight handshake before stopping the stream.
+
+        Runs on the finalize worker, never the Qt thread. Stopping a provider
+        whose `start_stream` has not returned yet is not a no-op: the stop is
+        rejected because the session is not active *yet*, and the handshake then
+        completes and publishes a socket nobody owns, which blocks every later
+        dictation with "Streaming session already active". The wait is bounded
+        so a provider that hangs cannot hang the finalize with it.
+        """
+        thread = getattr(job, "connect_thread", None) if job is not None else None
+        if thread is None or not thread.is_alive():
+            return
+        self._logger.info("Waiting for the streaming handshake before stopping it.")
+        thread.join(timeout=STREAMING_CONNECT_JOIN_TIMEOUT_S)
+        if thread.is_alive():
+            self._logger.warning(
+                "The streaming handshake did not finish within %.1fs; stopping "
+                "anyway.",
+                STREAMING_CONNECT_JOIN_TIMEOUT_S,
+            )
+
     def _finalize_stream_worker(
         self,
         request_token: int,
@@ -2903,6 +2988,7 @@ class DictationController(QtCore.QObject):
             else:
                 if transcriber is None:
                     raise TranscriptionError("Streaming session was not initialized.")
+                self._await_stream_connect(job)
                 text = transcriber.stop_stream()
                 terminal_kind = "ready"
                 terminal_payload = text
@@ -3710,6 +3796,16 @@ class DictationController(QtCore.QObject):
                     show_overlay_error=False,
                 ):
                     self._stream_insert_failures = 0
+                elif self._last_insert_may_have_pasted:
+                    # The keystroke already went out and only the cleanup
+                    # failed, so the words are probably in the document. Keep
+                    # the commit: offering them again would paste them twice,
+                    # which is worse than a missing clipboard restore.
+                    self._stream_insert_failures = 0
+                    self._logger.warning(
+                        "Live insert reported a post-paste failure; keeping the "
+                        "commit so the text is not inserted twice."
+                    )
                 else:
                     # Do not end the dictation over one failed paste. The usual
                     # cause is a modifier key still held down, which turns the
@@ -3992,6 +4088,7 @@ class DictationController(QtCore.QObject):
         )
         insert_hwnd = self._target_insert_window(signature, handle)
         insertion_text = str(text)
+        self._last_insert_may_have_pasted = False
         try:
             if restore_focus and handle:
                 try:
@@ -4032,6 +4129,12 @@ class DictationController(QtCore.QObject):
                 ),
             )
         except TextInsertionError as exc:
+            # Two failure paths happen *after* the paste keystroke went out, so
+            # the target may already hold the text. The streaming retry has to
+            # know, or it offers the same words again and they land twice.
+            self._last_insert_may_have_pasted = isinstance(
+                exc, TextMayHaveBeenPastedError
+            )
             allow_clipboard_fallback = bool(
                 getattr(exc, "allow_clipboard_fallback", True)
             )
@@ -4741,15 +4844,56 @@ class DictationController(QtCore.QObject):
         # Never swap the binding out from under a running dictation.
         if self._transcription_runtime_active():
             return
+        # `HotkeyManager.register` unregisters the current binding *before*
+        # trying the new one and does not put it back on failure. Attempting a
+        # reclaim that fails therefore destroys the working fallback and leaves
+        # the user with no hotkey at all — worse than the problem this timer
+        # exists to solve, and invisible, because the idle line would still
+        # advertise the fallback.
+        previously_active = self._active_hotkey
         try:
             self._hotkey_manager.register(preferred)
         except (HotkeyRegistrationError, ValueError):
+            self._restore_hotkey_after_failed_reclaim(previously_active)
             return
         self._active_hotkey = preferred
         self._hotkey_notice = None
+        # A total registration failure earlier left this False, and
+        # `show_idle_status` short-circuits to the Error state while it is —
+        # so a successful reclaim would fix the hotkey but pin the overlay to
+        # "Hotkey registration failed" until the user saved Settings.
+        self._hotkey_registration_ok = True
         self._stop_hotkey_reclaim()
         self._logger.info("Reclaimed the preferred hotkey %s", preferred)
         self.show_idle_status()
+
+    def _restore_hotkey_after_failed_reclaim(self, previously_active: str) -> None:
+        """Put the fallback back after a failed attempt to reclaim the preferred key."""
+        if not previously_active:
+            return
+        try:
+            self._hotkey_manager.register(previously_active)
+        except (HotkeyRegistrationError, ValueError):
+            self._logger.error(
+                "Reclaiming %r failed and the fallback %r could not be restored; "
+                "no recording hotkey is registered.",
+                self._settings.hotkey,
+                previously_active,
+            )
+            self._active_hotkey = ""
+            self._hotkey_registration_ok = False
+            self._hotkey_notice = (
+                f"'{previously_active}' was lost while trying to take "
+                f"'{self._settings.hotkey}' back, and neither could be "
+                "registered. Pick a different hotkey in Settings."
+            )
+            self.show_idle_status()
+            return
+        self._logger.debug(
+            "Preferred hotkey %r still in use; kept the fallback %r.",
+            self._settings.hotkey,
+            previously_active,
+        )
 
     def _register_cancel_hotkey(self) -> bool:
         manager = self._cancel_hotkey_manager

@@ -37,9 +37,34 @@ class TextInsertionError(RuntimeError):
         self.allow_clipboard_fallback = allow_clipboard_fallback
 
 
+class TextMayHaveBeenPastedError(TextInsertionError):
+    """The paste keystroke was already delivered; only cleanup then failed.
+
+    The caller must not retry on this. Streaming live insertion takes a failed
+    insert as "those words are not in the document" and offers them again on
+    the next partial -- correct when the paste never happened (a held modifier
+    turns the injected Ctrl+V into Ctrl+Alt+V), but a duplicate paste when the
+    text did land. Pasting the transcript twice is worse than stopping early.
+    """
+
+
 class ClipboardContentionError(TextInsertionError):
     def __init__(self, message: str) -> None:
         super().__init__(message, allow_clipboard_fallback=False)
+
+
+class _ClipboardContentionAfterPaste(
+    ClipboardContentionError, TextMayHaveBeenPastedError
+):
+    """Clipboard contention detected *after* the paste keystroke went out.
+
+    Keeps the existing contention handling (no clipboard fallback, leave the
+    user's clipboard alone) while telling the caller the text may already be in
+    the document, so a retry would duplicate it.
+    """
+
+    def __init__(self, message: str) -> None:
+        ClipboardContentionError.__init__(self, message)
 
 
 @dataclass(slots=True)
@@ -324,7 +349,9 @@ class TextInserter:
 
                 if self._clipboard_changed_after_set(clipboard_marker, text):
                     restore_previous_state = False
-                    raise ClipboardContentionError(
+                    # Past the paste keystroke, so the target may already have
+                    # read the transcript. Not retryable.
+                    raise _ClipboardContentionAfterPaste(
                         "Clipboard changed during paste; left the current "
                         "clipboard untouched."
                     )
@@ -361,7 +388,7 @@ class TextInserter:
                     f"Failed to insert transcribed text: {paste_error}"
                 ) from paste_error
             if restore_error is not None:
-                raise TextInsertionError(
+                raise TextMayHaveBeenPastedError(
                     f"Text pasted but clipboard restore failed: {restore_error}"
                 ) from restore_error
 

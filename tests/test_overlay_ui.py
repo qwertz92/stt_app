@@ -1,3 +1,4 @@
+import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.overlay_ui as overlay_ui_module
@@ -170,6 +171,7 @@ def test_overlay_queue_scrolls_and_stays_bounded_with_many_rows(monkeypatch):
     overlay.hide()
 
 
+@pytest.mark.pixel_exact
 def test_overlay_resets_size_after_queue_finishes_with_short_result(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -612,6 +614,7 @@ def test_batched_update_resizes_once_instead_of_shrinking_and_growing():
     overlay.hide()
 
 
+@pytest.mark.pixel_exact
 def test_overlay_error_after_long_transcript_restores_compact_height():
     """A short error must not inherit the expanded transcript height.
 
@@ -852,6 +855,7 @@ def test_overlay_language_button_draws_centered_chevron_and_opens_menu(monkeypat
     ]
 
 
+@pytest.mark.pixel_exact
 def test_overlay_record_button_indicator_stays_centered_in_both_states():
     """The state indicator is painted, not typed.
 
@@ -963,6 +967,7 @@ def test_startup_updates_do_not_move_an_overlay_being_dragged(monkeypatch):
     assert overlay.pos() == dragged
 
 
+@pytest.mark.pixel_exact
 def test_compact_states_never_clip_their_detail_text():
     """Idle/Listening/Processing used to pin the detail area to the minimum
     height, which silently clipped anything longer than two lines. The startup
@@ -991,6 +996,7 @@ def test_compact_states_never_clip_their_detail_text():
         overlay.close()
 
 
+@pytest.mark.pixel_exact
 def test_a_short_compact_status_keeps_the_compact_size():
     """Growing to fit must not make the ordinary idle overlay bigger."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])

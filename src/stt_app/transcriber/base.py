@@ -28,9 +28,27 @@ class TranscriptionCanceled(Exception):
 
 
 class ITranscriber(ABC):
+    #: Polled while the transcriber waits for something interruptible. Every
+    #: engine now needs one, not just the ones that can stop mid-decode: since
+    #: the download slot became machine-wide, a model fetch can wait on another
+    #: *process* -- a benchmark worker pulling several GB, say -- and without a
+    #: cancel check that wait is unbreakable. It runs on the single
+    #: transcription worker, so it would block every later dictation too, with
+    #: the overlay stuck in Processing and Cancel unable to do anything.
+    _cancel_check: Callable[[], bool] | None = None
+
     @abstractmethod
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         raise NotImplementedError
+
+    def set_cancel_check(self, cancel_check: Callable[[], bool] | None) -> None:
+        """Install the callable polled during cancellable waits.
+
+        Subclasses that can additionally stop *mid-decode* (faster-whisper,
+        between segments) override this only to document that; the stored
+        attribute is the same one.
+        """
+        self._cancel_check = cancel_check
 
     def set_language_mode(self, mode: str) -> None:
         """Apply a language selection to an already-created transcriber.

@@ -379,6 +379,7 @@ def test_microphone_refresh_requests_controller_reenumeration(
     assert dialog._microphone_repopulate_timer.isActive()
 
 
+@pytest.mark.pixel_exact
 def test_bottom_status_does_not_move_the_save_and_close_buttons(
     dialog: SettingsDialog,
 ) -> None:

@@ -689,3 +689,62 @@ def test_streaming_partial_callback_receives_the_merged_transcript():
     assert seen[-1] == "first window text plus more"
     assert all(text.startswith("first window text") for text in seen)
     assert "window text plus more" not in seen, "raw window leaked to the callback"
+
+
+def _tone(sample_count, amplitude):
+    return b"".join(
+        struct.pack("<h", int(amplitude * math.sin(index / 8.0)))
+        for index in range(sample_count)
+    )
+
+
+def test_a_transient_after_a_long_pause_cannot_replace_or_extend_the_transcript():
+    """A click ending a long pause must not become an invented sentence.
+
+    A window following a pause longer than the window itself cannot be aligned,
+    so it is either appended on trust or it replaces everything. Both are
+    catastrophic when the window holds nothing but a keyboard click and the
+    model's invention: appending grew the transcript without bound and pasted
+    the junk live, replacing wiped the real dictation. A peak measurement does
+    not separate the cases -- a 5 ms transient clears it -- so the decision uses
+    how much *speech* the decoded window holds.
+    """
+    decoded = []
+
+    class _HallucinatingModel:
+        def transcribe(self, *args, **kwargs):
+            text = "hello world" if not decoded else "Thank you for watching."
+            decoded.append(text)
+            segment = types.SimpleNamespace(text=text)
+            info = types.SimpleNamespace(language="en", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _HallucinatingModel(),
+    )
+    speech = _tone(1600, 6000)
+    quiet = _tone(1600, 20)
+    click = _tone(80, 9000) + _tone(1520, 20)
+
+    transcriber.start_stream(on_partial=lambda text: None)
+    transcriber.push_audio_chunk(speech)
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and not decoded:
+        time.sleep(0.01)
+    assert decoded == ["hello world"]
+
+    quiet_chunks = int(transcriber.stream_partial_window_s * 10) + 20
+    for _ in range(3):
+        for _ in range(quiet_chunks):
+            transcriber.push_audio_chunk(quiet)
+        transcriber.push_audio_chunk(click)
+        time.sleep(0.05)
+        transcriber._maybe_emit_partial()
+        assert transcriber._stream_session.result.merged_text == "hello world"
+
+    assert transcriber.stop_stream().strip() == "hello world"
+    assert decoded == ["hello world"], "a transient must not be decoded"

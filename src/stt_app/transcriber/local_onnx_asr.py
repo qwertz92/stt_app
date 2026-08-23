@@ -172,6 +172,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             self.model_size,
             self.model_dir,
             lambda: download_model_snapshot(self.model_size, self.model_dir),
+            cancel_check=self._cancel_check,
         )
         cached = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
         if cached is None:

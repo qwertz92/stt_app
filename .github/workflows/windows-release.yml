@@ -47,8 +47,10 @@ jobs:
 
       - name: Run release quality gates
         shell: pwsh
-        env:
-          QT_QPA_PLATFORM: offscreen
+        # Deliberately no QT_QPA_PLATFORM: offscreen shifts widget metrics and
+        # fails the pixel-exact layout tests, which is what stopped v0.8.0 from
+        # ever being published -- the tag exists, the release does not, because
+        # this gate ran before the build step and failed on an artifact.
         run: |
           uv run --no-sync ruff check .
           uv run --no-sync pytest -q
