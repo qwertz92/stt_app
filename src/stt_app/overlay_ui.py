@@ -9,6 +9,7 @@ from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     LANGUAGE_MODE_LABELS,
     OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_ERROR_ACTION_NONE,
     OVERLAY_COMPACT_DETAIL_MAX_HEIGHT,
     OVERLAY_DETAIL_MIN_HEIGHT,
     OVERLAY_HEIGHT,
@@ -595,7 +596,15 @@ class OverlayUI(QtWidgets.QWidget):
         """
         is_error = state == "Error"
         show_insert = is_error and error_action == OVERLAY_ERROR_ACTION_INSERT
-        show_retry = is_error and not show_insert
+        # OVERLAY_ERROR_ACTION_NONE means exactly that. Without it "anything
+        # that is not Insert" fell through to Retry, which re-transcribes the
+        # last failed recording -- wrong for an error whose transcript already
+        # exists, and actively harmful when that recording is a different one.
+        show_retry = (
+            is_error
+            and not show_insert
+            and error_action != OVERLAY_ERROR_ACTION_NONE
+        )
         self._retry_button.setEnabled(show_retry)
         self._insert_button.setEnabled(show_insert)
         self._cancel_button.setEnabled(state in {"Listening", "Processing"})

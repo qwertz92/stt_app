@@ -1149,7 +1149,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   far more disruptive than the problem — people switch windows mid-thought
   and everything said afterwards was gone. `_on_stream_focus_poll` now sets
   `_stream_insertion_suspended`; the session keeps recording and the whole
-  tail past `committed_text` is inserted into the original window at stop.
+  tail past `committed_text` is inserted when the target comes back to the
+  front, or at stop. Two caveats: with `insert_target=current_window`
+  the stop-time insert goes to whatever is focused then, so the
+  transcript can still end up split across two windows; and if the
+  provider's final text no longer extends `committed_text`, the tail
+  exists only in history.
   Three things this depends on, each of which was wrong once:
   - **The poll timer must be armed unconditionally.** Starting it only when
     `STREAMING_ABORT_ON_FOCUS_CHANGE` was set made the suspension dead code
@@ -1170,8 +1175,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   than most words. At 20 ms the gap between keystrokes gets its own bucket.
   Measured: a 150 ms word 0.16 s and a 300 ms word 0.30 s, against 0.02 s
   for typing at 80–120 wpm and 0.04 s for a mouse double-click. Summing all
-  loud buckets instead of taking the longest run does not work either — two
-  clicks 300 ms apart total exactly as much as one 150 ms word.
+  loud buckets instead of taking the longest run does not work either: at
+  100 ms buckets two clicks 300 ms apart totalled exactly as much as one
+  150 ms word. (At 20 ms the sums differ, but the longest run separates
+  them by far more — 0.02 s against 0.16 s.)
 - **Inline locale markers are stripped by subtag *shape***
   (`transcriber/base.py:strip_language_tags`). Nemotron emits "<de-DE>" or
   "<|en|>" inline in automatic-language mode and it was pasted into the
@@ -1200,12 +1207,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   click ending a pause then appended a fresh hallucination that the
   merged-text callback pasted straight into the document (measured: the
   transcript grew by one invented sentence per click). **The value is a two-sided
-  cut and both sides are transcript loss.** The meter buckets at
-  `SILENCE_GATE_WINDOW_MS`, so measurements are quantised to tenths: a
-  5-50 ms click reports 0.10 s and a 150 ms word 0.20 s. Raising it to
-  0.35 s was tried and reverted — it silently DELETED short answers
-  ("Ja.", "Stop.") spoken after a pause, with no error and no log above
-  debug. It is an energy gate, not a VAD, so a ~400 ms chair scrape still
+  cut and both sides are transcript loss**, so it is set from measurement.
+  Against the repository sample (33 overlapping 300 ms excerpts of real
+  speech) at `STREAMING_SPEECH_RUN_WINDOW_MS`: real speech has a 5th
+  percentile of 0.100 s and a median of 0.200 s, the loudest transient
+  tested measures 0.060 s and typing 0.020 s. A cut at 0.15 s rejected
+  **9 of 33 real excerpts**; 0.08 rejects one and still rejects every
+  transient. Two earlier values were reverted for deleting speech: 0.35 s
+  dropped short answers outright, and 0.15 s survived the bucket change
+  from 100 ms to 20 ms without being rederived, which then deleted words
+  with an internal stop closure ("Stopp." 0.12 s, "Bitte." 0.10 s — a
+  voiceless closure is genuinely silent for 40-100 ms and breaks the
+  run). It is an energy gate, not a VAD, so a ~400 ms chair scrape still
   qualifies; that damage is bounded to one window. A window that fails
   this test is not decoded at all, because too little speech to append on
   trust is also too little to trust a *replace* — decoding it is how an
@@ -1597,7 +1610,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   detection is best-effort polling, so a very brief switch can be missed.
 - The post-pause append gate is an energy measurement, not a real VAD. A
   sustained non-speech sound after a long pause (a ~400 ms cough or chair
-  scrape) can still authorise appending one hallucinated window.
+  scrape) can still authorise appending one hallucinated window, and a
+  very quiet or heavily clipped short word after a pause can still fall
+  under the threshold and be dropped. Both cuts are measured against real
+  audio rather than guessed, but an energy gate cannot separate the two
+  cases perfectly.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - NVIDIA Parakeet remains intentionally unimplemented through NeMo; Nemotron

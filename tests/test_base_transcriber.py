@@ -45,6 +45,10 @@ def test_default_abort_stream_raises():
         ("<|en|>Hello there", "Hello there"),
         ("<|de-DE|>Hallo", "Hallo"),
         ("<zh-Hans-CN> Ni hao", " Ni hao"),
+        # Lower case too -- a model may emit either.
+        ("<de-de> Hallo", " Hallo"),
+        ("<en-us> Hi", " Hi"),
+        ("<es-419> Hola", " Hola"),
         ("Text <en-US> mitten drin", "Text mitten drin"),
     ],
 )
@@ -69,6 +73,15 @@ def test_inline_locale_markers_are_removed_from_a_transcript(text, expected):
         "Polymer <dom-if> Template",
         "Angular <ng-container> bleibt",
         "Datei <log-2026> oeffnen",
+        # Locale SHAPE but not a language the app knows. Matching by
+        # shape alone deleted every one of these from real dictation.
+        "Erstelle einen <to-DO> Eintrag",
+        "Wirf einen <err-404> Fehler",
+        "Lies die <job-ID> aus",
+        "Klicke <btn-OK> an",
+        "Oeffne <log-100> bitte",
+        "Das <|pad|> Token bleibt",
+        "<|bos|> und <|eos|> bleiben",
         # Plain markup and maths.
         "Verwende <div> und </div>",
         "<tr> ist eine Tabellenzeile, nicht Tuerkisch",

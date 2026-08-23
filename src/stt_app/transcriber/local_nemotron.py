@@ -39,7 +39,6 @@ from .local_webgpu_asr import (
 _STREAM_SENTINEL = object()
 _DEFAULT_CHUNK_SAMPLES = 8_960
 
-
 @dataclass
 class _InferenceSession:
     processor: Any
@@ -280,15 +279,18 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         # where decoded pieces become transcript, so batch, live partials
         # and the final text are all covered by a single rule.
         text = strip_language_tags(text)
-        # Strip the accumulated text as well. A chunk boundary can fall
-        # inside a marker ("<de-" then "DE>"), which neither half matches on
-        # its own; the concatenation does. The per-chunk pass above is still
-        # needed so live partials are clean as they are emitted.
-        combined = strip_language_tags(session.text + text)
-        if combined != session.text + text:
-            session.text = combined
-        else:
-            session.text += text
+        # Deliberately per chunk only. A marker split across a decode
+        # boundary ("<de-" then "DE>") slips through, and that is the
+        # better outcome: removing it means rewriting text that was already
+        # emitted to the partial callback and probably already pasted at the
+        # caret, which destroys the locked prefix -- after that
+        # `compute_stream_locked_prefix` can never advance again and live
+        # insertion freezes for the rest of the session while the overlay
+        # keeps reporting progress. A stray marker in the text is cosmetic;
+        # losing the rest of the dictation is not. Rewriting the whole
+        # accumulated text additionally collapsed unrelated whitespace far
+        # earlier in the transcript.
+        session.text += text
         return text
 
     def _process_samples(self, session: _InferenceSession, samples: np.ndarray) -> str:

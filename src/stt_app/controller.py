@@ -55,6 +55,7 @@ from .config import (
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
     OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_ERROR_ACTION_NONE,
     OVERLAY_ERROR_REVEAL_MS,
     OVERLAY_NOTICE_MS,
     VAD_ENERGY_THRESHOLD_MIN,
@@ -3149,7 +3150,7 @@ class DictationController(QtCore.QObject):
     def _on_stream_audio_chunk(self, chunk: bytes) -> None:
         """Called from the PortAudio callback thread — must be lightweight.
 
-        Focus-change abort is handled by ``_focus_poll_timer`` on the Qt
+        Focus changes are handled by ``_focus_poll_timer`` on the Qt
         main thread; we intentionally avoid Win32 API calls here because
         the PortAudio real-time thread must not block on system calls.
         """
@@ -3472,7 +3473,7 @@ class DictationController(QtCore.QObject):
 
         Requires ``immediate_background_insert``. A streaming recording never
         allows it: live partial inserts already write at the caret and a
-        focus change aborts the stream. A batch recording allows it — the
+        focus change suspends them. A batch recording allows it — the
         microphone does not care about a paste, the new recording's own
         target was already snapshotted at its start, and focus is restored to
         the finished job's window like in any other delivery. The historical
@@ -3579,8 +3580,9 @@ class DictationController(QtCore.QObject):
         # paste this class of bug keeps producing.
         may_have_pasted = bool(self._last_insert_may_have_pasted)
         if may_have_pasted:
+            # `identity` already ends in its own verb ("... was" / "... were").
             message = (
-                f"{identity} was inserted, but the clipboard could not be "
+                f"{identity} inserted, but the clipboard could not be "
                 "restored afterwards. Check the target window before "
                 "inserting it again. The text is saved in history."
             )
@@ -3605,7 +3607,9 @@ class DictationController(QtCore.QObject):
             detail,
             copy_text=text,
             error_action=(
-                None if may_have_pasted else OVERLAY_ERROR_ACTION_INSERT
+                OVERLAY_ERROR_ACTION_NONE
+                if may_have_pasted
+                else OVERLAY_ERROR_ACTION_INSERT
             ),
         )
         self._reveal_overlay_result(is_error=True)

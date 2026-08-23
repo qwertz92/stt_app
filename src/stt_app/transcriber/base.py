@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
 
-from ..config import DEFAULT_LANGUAGE_MODE
+from ..config import DEFAULT_LANGUAGE_MODE, VALID_LANGUAGE_MODES
 
 AudioInput = bytes | str | Path
 StreamingCallback = Callable[[str], None]
@@ -34,30 +34,34 @@ class TranscriptionCanceled(Exception):
 # into the user's document. They are model metadata that leaked through the
 # decoder, never something that was said.
 #
-# The subtags are matched by SHAPE, not by "any alphanumerics". A pattern of
-# "<xx-anything>" reads far too much ordinary dictation as a locale and
-# deletes it without trace -- measured, it ate "<my-widget>", "<el-button>",
-# "<ion-button>", "<dom-if>" and "<log-2026>". A BCP-47 region is two
-# UPPERCASE letters or three digits and a script is four letters in title
-# case, none of which a web component or a filename looks like.
-#
-# A bare "<xx>" is deliberately not matched either: it cannot be told apart
-# from markup, and "<tr>", "<br>", "<td>" would go -- "tr" is even a real
-# language code.
-_LANGUAGE_SUBTAG = r"[A-Za-z]{2,3}"
-_REGION_SUBTAG = r"(?:[A-Z]{2}|[0-9]{3})"
-_SCRIPT_SUBTAG = r"[A-Z][a-z]{3}"
+# The language subtag is matched against the codes this app actually
+# supports, not against "any two or three letters". Shape alone is not
+# enough: "<to-DO>", "<err-404>", "<job-ID>", "<btn-OK>" and "<|pad|>" all
+# have a perfectly valid locale shape and are ordinary dictation, and they
+# were being deleted without trace. A model can only announce a language the
+# app knows about, so the real list is both the tightest and the correct
+# filter -- of every false positive found, only "tr" (Turkish) is a real
+# code, and a bare "<tr>" is excluded anyway.
+_KNOWN_LANGUAGE_CODES = sorted(
+    (code for code in VALID_LANGUAGE_MODES if code and code != "auto"),
+    key=len,
+    reverse=True,
+)
+_LANGUAGE_ALTERNATION = "|".join(re.escape(code) for code in _KNOWN_LANGUAGE_CODES)
+# Optional BCP-47 script ("Hans") and region ("DE", "419"), case-insensitive
+# because a model may emit "<de-de>". The bare form requires at least one of
+# them: "<de>" on its own is indistinguishable from markup.
+_SUBTAGS = r"(?:-[A-Za-z]{4})?(?:-(?:[A-Za-z]{2}|[0-9]{3}))"
 _LANGUAGE_TAG_PATTERN = re.compile(
     "|".join(
         (
             # <|en|>, <|de-DE|> -- the pipe wrapper is unambiguous on its own
-            rf"<\|{_LANGUAGE_SUBTAG}(?:-[A-Za-z0-9]{{2,8}})*\|>",
-            # <de-DE>, <zh-Hans-CN>
-            rf"<{_LANGUAGE_SUBTAG}"
-            rf"(?:-{_SCRIPT_SUBTAG})?"
-            rf"-{_REGION_SUBTAG}>",
+            rf"<\|(?:{_LANGUAGE_ALTERNATION})(?:-[A-Za-z0-9]{{2,8}})*\|>",
+            # <de-DE>, <zh-Hans-CN>, <es-419>
+            rf"<(?:{_LANGUAGE_ALTERNATION}){_SUBTAGS}>",
         )
-    )
+    ),
+    re.IGNORECASE,
 )
 
 

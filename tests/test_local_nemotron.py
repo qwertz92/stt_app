@@ -332,20 +332,23 @@ def test_nemotron_decode_strips_the_locale_marker_it_emits():
     assert decoded.strip() == "Hallo Welt"
 
 
-def test_a_locale_marker_split_across_decode_chunks_is_still_removed():
-    """A chunk boundary can fall inside the marker.
+def test_decoding_never_rewrites_text_it_already_emitted():
+    """A marker split across two chunks is left alone, on purpose.
 
-    The model decodes in 560 ms chunks, so "<de-" can arrive in one and "DE>"
-    in the next. Neither half matches on its own; only the accumulated text
-    does. Without that second pass the marker reaches the document intact.
+    Removing it means rewriting text that was already handed to the partial
+    callback and probably already pasted at the caret. The controller's
+    locked prefix compares against exactly that text, so the rewrite makes
+    `compute_stream_locked_prefix` unable to advance and live insertion
+    freezes for the rest of the session while the overlay reports progress.
+    A stray marker is cosmetic; losing the rest of the dictation is not.
     """
     from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
 
     class _Session:
-        def __init__(self):
-            self.text = ""
+        text = ""
 
     session = _Session()
+    seen = []
     for chunk in (["Guten", " Tag <de-"], ["DE> heute", " ist"]):
         pieces = iter(chunk)
         remaining = {"n": len(chunk)}
@@ -366,9 +369,13 @@ def test_a_locale_marker_split_across_decode_chunks_is_still_removed():
 
         session.generator = _Generator()
         session.tokenizer_stream = _Tokenizer()
+        before = session.text
         LocalNemotronTranscriber._decode_available(session)
+        seen.append(before)
+        assert session.text.startswith(before), (
+            f"already-emitted text was rewritten: {before!r} -> "
+            f"{session.text!r}; the locked prefix can never advance again"
+        )
 
-    assert "<de-DE>" not in session.text, f"marker survived: {session.text!r}"
-    assert session.text == "Guten Tag heute ist", (
-        f"word boundaries were corrupted: {session.text!r}"
-    )
+    # The split marker survives -- accepted, and cheaper than the freeze.
+    assert session.text == "Guten Tag <de-DE> heute ist"

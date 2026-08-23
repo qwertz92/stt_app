@@ -815,3 +815,39 @@ def test_only_real_speech_after_a_pause_extends_the_transcript(
         assert merged == "hello world", (
             f"{label} after a pause changed the transcript: {merged!r}"
         )
+
+
+def test_the_post_pause_gate_uses_the_fine_bucket_end_to_end():
+    """Wiring guard: the bucket size must reach the real decision.
+
+    tests/test_vad.py passes window_ms explicitly, so it never exercises the
+    call in _stream_window_has_speech. Removing that argument leaves the meter
+    on the batch gate's 100 ms buckets, where typing at 120 wpm measures a 1.5 s
+    "speech" run and authorises appending a hallucinated window.
+    """
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: None,
+    )
+
+    class _Session:
+        def __init__(self, pcm):
+            self.pcm_buffer = bytearray(pcm)
+
+    def typing(count, gap_ms):
+        audio = _ms(200, 20)
+        for _ in range(count):
+            audio += _ms(5, 9000) + _ms(gap_ms, 20)
+        return audio
+
+    assert transcriber._stream_window_has_speech(_Session(typing(15, 100))) is False, (
+        "typing at 120 wpm was accepted as speech; the fine bucket is not wired"
+    )
+    assert transcriber._stream_window_has_speech(_Session(typing(12, 150))) is False
+    spoken = _ms(200, 20) + _ms(200, 6000) + _ms(200, 20)
+    assert transcriber._stream_window_has_speech(_Session(spoken)) is True, (
+        "a real 200 ms word was rejected"
+    )

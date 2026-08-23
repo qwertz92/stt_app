@@ -1187,37 +1187,46 @@ STREAMING_CONNECT_JOIN_TIMEOUT_S = 15.0
 
 STREAMING_LIVE_INSERT_RETRY_LIMIT = 3
 
-# How much measured speech a rolling window must contain before it may be
-# APPENDED after a pause instead of aligned. A pause longer than the window
-# means the overlap search has nothing to anchor on, so such a window is taken
-# on trust -- and the model reliably invents words when the audio is mostly
-# quiet. A peak measurement is not enough: one keyboard click clears it, and
-# each one would append a fresh hallucination and paste it into the document.
-#
-# The value has to sit between a transient and the shortest real word, and
-# the meter buckets at SILENCE_GATE_WINDOW_MS (100 ms), so measurements are
-# quantised to tenths. Measured on this machine: a 5-50 ms click reports
-# 0.10 s (one bucket), a 150 ms word 0.20 s, a 250 ms word 0.30 s. 0.15 s is
-# therefore the only sensible cut -- it rejects every transient and passes
-# the shortest utterance. A higher value silently DELETES short answers
-# ("Ja.", "Stop.") spoken after a pause, which is transcript loss, not
-# protection.
-#
-# Known limit: this is an energy gate, not a VAD, so a ~400 ms chair scrape
-# or cough after a long pause still qualifies and its invented sentence is
-# appended. The damage is bounded to that one window -- the unbounded growth
-# needs every window to qualify, which continuous silence no longer does.
 # Bucket size for that measurement, deliberately much finer than the batch
 # gate's SILENCE_GATE_WINDOW_MS. At 100 ms two keystrokes 100-150 ms apart
 # land in ADJACENT buckets, so the run never breaks and typing is
 # indistinguishable from a spoken word -- measured, typing at 120 wpm
 # reported a 1.5 s "speech" run. At 20 ms the silence between keystrokes
-# falls in its own bucket and breaks the run. Measured at 20 ms: a 150 ms
-# word reports 0.16 s, a 300 ms word 0.30 s, while two clicks 100 ms apart
-# report 0.02 s, a double-click 0.04 s, and typing at 80-120 wpm 0.02 s.
+# falls in its own bucket and breaks the run: typing at 80-120 wpm measures
+# 0.02 s, a mouse double-click 0.04 s, a single 50 ms click 0.06 s.
+#
+# The finer bucket also splits real words at their internal stop closures,
+# which is why STREAMING_NEW_SEGMENT_MIN_SPEECH_S below had to be rederived
+# rather than carried over.
 STREAMING_SPEECH_RUN_WINDOW_MS = 20
-
-STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.15
+# How much measured speech a rolling window must contain before it may be
+# APPENDED after a pause instead of aligned. A pause longer than the window
+# means the overlap search has nothing to anchor on, so such a window is
+# taken on trust -- and the model reliably invents words when the audio is
+# mostly quiet.
+#
+# Both sides of this cut are transcript loss, so it is set from measurement,
+# not intuition. Against the repository sample (samples/benchmark_sample.wav,
+# 33 overlapping 300 ms excerpts of real speech) and synthetic keyboard
+# input, using the longest unbroken run at STREAMING_SPEECH_RUN_WINDOW_MS:
+#
+#   real speech   5th percentile 0.100 s, median 0.200 s
+#   loudest transient tested  0.060 s (a single 50 ms click)
+#   typing 80-120 wpm         0.020 s
+#
+#   cut 0.15 s -> 9 of 33 real excerpts rejected   (far too strict)
+#   cut 0.12 s -> 4 of 33 rejected
+#   cut 0.08 s -> 1 of 33 rejected, every transient still rejected
+#
+# 0.15 was carried over from the old 100 ms bucketing and never rechecked
+# against the finer measurement; at 20 ms it DELETED words with an internal
+# stop closure -- "Stopp." measures 0.12 s and "Bitte." 0.10 s, because a
+# voiceless closure is genuinely silent for 40-100 ms and breaks the run.
+#
+# Known limit: this is an energy gate, not a VAD, so a sustained non-speech
+# sound after a long pause (a ~400 ms cough or chair scrape measures 0.40 s)
+# still qualifies. The damage is bounded to that one window.
+STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.08
 
 # How much audio may pile up while a remote streaming provider is still
 # completing its network handshake. Deepgram waits up to 8 s for its socket and
@@ -1300,6 +1309,12 @@ OVERLAY_INITIAL_DETAIL = "Press hotkey to start dictation"
 # (which re-transcribes) with Insert when the transcription succeeded and only
 # the insertion failed, because there is no failed transcription to retry then.
 OVERLAY_ERROR_ACTION_INSERT = "insert"
+# An Error state that must offer NO action at all. `None` cannot express
+# this: the action slot treats "not Insert" as Retry, so passing None gave
+# the user a Retry button on a transcript that had already been inserted --
+# and Retry re-transcribes the last *failed* recording, which may be an
+# entirely different one, pasting it on top.
+OVERLAY_ERROR_ACTION_NONE = "none"
 OVERLAY_OPACITY_MIN_PERCENT = 25
 OVERLAY_OPACITY_MAX_PERCENT = 100
 DEFAULT_OVERLAY_OPACITY_PERCENT = OVERLAY_OPACITY_MAX_PERCENT

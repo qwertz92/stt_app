@@ -358,7 +358,7 @@ class _GeneralTabMixin:
             self.mode_combo.addItem(_MODE_LABELS.get(value, value), value)
         self.mode_combo.setToolTip(
             "Streaming inserts only stable append-only text while speaking and "
-            "auto-aborts on focus change. Batch remains the recommended default."
+            "suspends live insertion on focus change. Batch remains the recommended default."
         )
         self.mode_combo.currentIndexChanged.connect(self._on_mode_changed)
         mode_hint = QtWidgets.QLabel(

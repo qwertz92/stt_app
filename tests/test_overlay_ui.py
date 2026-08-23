@@ -4,6 +4,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 import stt_app.overlay_ui as overlay_ui_module
 from stt_app.config import (
     OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_ERROR_ACTION_NONE,
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
     OVERLAY_MARGIN_X,
@@ -1075,3 +1076,37 @@ def test_the_compact_baseline_never_absorbs_the_grow_to_fit_overflow(monkeypatch
                     overlay.close()
     finally:
         app.setFont(original_font)
+
+
+def test_the_no_action_error_state_shows_neither_retry_nor_insert():
+    """"No action" needs its own value; None is not it.
+
+    The slot treats anything that is not Insert as Retry, so passing None gave
+    the user a Retry button on a transcript that had already been inserted --
+    and Retry re-transcribes the last *failed* recording, which may be an
+    entirely different one, pasting it on top of what is already there.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    try:
+        overlay.set_state(
+            "Error",
+            "Inserted, but the clipboard could not be restored.",
+            error_action=OVERLAY_ERROR_ACTION_NONE,
+        )
+        app.processEvents()
+        assert overlay._retry_button.isHidden(), "Retry would re-transcribe"
+        assert overlay._insert_button.isHidden(), "Insert would paste it twice"
+
+        # The other two error shapes still offer their action.
+        overlay.set_state("Error", "boom", error_action=OVERLAY_ERROR_ACTION_INSERT)
+        app.processEvents()
+        assert not overlay._insert_button.isHidden()
+
+        overlay.set_state("Error", "boom")
+        app.processEvents()
+        assert not overlay._retry_button.isHidden()
+    finally:
+        overlay.close()

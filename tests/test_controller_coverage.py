@@ -2608,3 +2608,129 @@ def test_the_fallback_guard_recognises_every_spelling_of_the_same_hotkey(spellin
     finally:
         controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize("archive_enabled", [True, False])
+def test_a_cancelled_recording_follows_the_archive_setting(
+    monkeypatch, tmp_path, archive_enabled
+):
+    """Cancelling with the hotkey must not be a special case for the audio.
+
+    Answers a direct user question: a separate "keep audio even when
+    cancelled" option is not needed, because "Archive every recording to
+    folder" already covers the cancel path, and the last-recording slot keeps
+    it for Retry either way. Neither can help if the app crashes mid-recording
+    -- the WAV only exists in memory until capture.stop() returns.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        save_all_recordings=archive_enabled,
+        recordings_dir=str(tmp_path / "recordings"),
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    FakeCapture.instances = []
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=FakeOverlay(),
+    )
+    try:
+        controller.start_recording()
+        assert controller._audio_capture is not None
+        controller.cancel_current_action()
+
+        capture = FakeCapture.instances[-1]
+        archived_path = getattr(capture, "last_saved_path", None)
+        if archive_enabled:
+            assert archived_path is not None, (
+                "the cancelled recording was not archived"
+            )
+            assert str(tmp_path / "recordings") in str(archived_path)
+        else:
+            assert archived_path is None, (
+                f"archiving is off, yet {archived_path} was written"
+            )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_the_focus_poll_timer_is_actually_armed_when_a_stream_starts(monkeypatch):
+    """Wiring guard for the whole focus feature.
+
+    Both suspension tests call `_on_stream_focus_poll()` directly, so neither
+    notices whether anything ever calls it. Guarding the timer's start on
+    STREAMING_ABORT_ON_FOCUS_CHANGE once made the suspension dead code *and*
+    removed the abort it replaced, so live partials pasted into whatever window
+    was in front -- and the suite stayed green.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _s, **kw: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings), overlay=FakeOverlay()
+    )
+    try:
+        assert controller._focus_poll_timer.isActive() is False
+        controller.start_recording()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not controller._streaming_recording:
+            app.processEvents()
+            time.sleep(0.01)
+
+        assert controller._focus_poll_timer.isActive() is True, (
+            "nothing polls the focus, so a window switch is never noticed"
+        )
+        controller.stop_recording()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and controller._focus_poll_timer.isActive():
+            app.processEvents()
+            time.sleep(0.01)
+        assert controller._focus_poll_timer.isActive() is False, (
+            "the focus poll kept running after the recording stopped"
+        )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_post_paste_background_failure_offers_no_action_at_all(monkeypatch):
+    """Wiring guard: Retry here re-transcribes a *different* recording.
+
+    `error_action=None` does not mean "no action" -- the overlay treats
+    anything that is not Insert as Retry. Retry re-runs the last FAILED
+    recording, which is cleared only on the foreground path, so it can paste an
+    older recording on top of text that is already in the document.
+    """
+    from stt_app.config import OVERLAY_ERROR_ACTION_INSERT, OVERLAY_ERROR_ACTION_NONE
+
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    try:
+        job = controller._register_transcription_job(
+            controller._next_request_token(),
+            AppSettings(hotkey=FALLBACK_HOTKEY),
+            "batch",
+        )
+
+        controller._last_insert_may_have_pasted = True
+        controller._report_background_insertion_failure(job, "der transkript")
+        state, detail = overlay.states[-1][0], overlay.states[-1][1]
+        action = overlay.state_kwargs[-1].get("error_action")
+        assert state == "Error"
+        assert action == OVERLAY_ERROR_ACTION_NONE, (
+            f"offered {action!r}; Retry would re-transcribe another recording"
+        )
+        assert "was was" not in detail, f"duplicated verb in: {detail!r}"
+        assert "inserted, but the clipboard" in detail
+
+        controller._last_insert_may_have_pasted = False
+        controller._report_background_insertion_failure(job, "der transkript")
+        assert overlay.state_kwargs[-1].get("error_action") == (
+            OVERLAY_ERROR_ACTION_INSERT
+        )
+    finally:
+        controller.shutdown()
+    _ = app
