@@ -993,10 +993,18 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         if session.abort_requested.is_set():
             return
-        if new_segment:
+        if new_segment and session.result.merged_text.strip():
             # Everything up to here is final: the pause proved no later
             # window shares audio with it.
-            session.result.segment_floor = session.result.merged_text
+            #
+            # Only ever grows, and only from text that is already accumulated.
+            # Assigning unconditionally let an empty first segment reset it,
+            # and with the silence gate switched off `new_segment` can fire on
+            # consecutive partials -- each one then pinned another window,
+            # so the floor grew by a hallucination per pause and none of it
+            # could ever be replaced again.
+            if len(session.result.merged_text) > len(session.result.segment_floor):
+                session.result.segment_floor = session.result.merged_text
         session.result.merged_text = merge_rolling_window_transcript(
             session.result.merged_text,
             text,

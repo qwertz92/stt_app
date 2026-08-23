@@ -2778,3 +2778,53 @@ def test_a_foreground_post_paste_failure_also_offers_no_action(monkeypatch):
     finally:
         controller.shutdown()
     _ = app
+
+
+def test_a_slow_handshake_is_still_aborted_when_the_microphone_fails(monkeypatch):
+    """The abort must survive the case it exists for.
+
+    With an instant fake transcriber the abort runs synchronously and every
+    test passes. Only a handshake that is still in flight takes the detached
+    path -- and there a generation check could never match, because the caller
+    bumps the same counter one statement later. The abort was therefore skipped
+    every time it actually mattered, the provider socket stayed published, and
+    every later dictation failed with "Streaming session already active" until
+    the app was restarted.
+    """
+    released = threading.Event()
+
+    class _SlowToConnect(FakeStreamingTranscriber):
+        def start_stream(self, on_partial=None, on_error=None):
+            released.wait(timeout=5.0)
+            return super().start_stream(on_partial=on_partial, on_error=on_error)
+
+    transcriber = _SlowToConnect()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCaptureFails)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+        ),
+        overlay=FakeOverlay(),
+    )
+    try:
+        controller.start_recording()
+        # The capture failed while the handshake was still running.
+        released.set()
+
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline and not transcriber.aborted:
+            app.processEvents()
+            time.sleep(0.01)
+
+        assert transcriber.started is True, "the handshake never ran"
+        assert transcriber.aborted is True, (
+            "the provider session was left published; every later dictation "
+            "would fail with 'Streaming session already active'"
+        )
+    finally:
+        released.set()
+        controller.shutdown()
+    _ = app

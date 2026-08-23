@@ -1113,14 +1113,23 @@ class DictationController(QtCore.QObject):
         # The lease is released right after this returns, which puts the
         # transcriber back in the shared cache -- so by the time a detached
         # aborter wakes, the object it holds may be the one a NEW session is
-        # using. Aborting then kills the new dictation. Bind the generation
-        # and re-check it after the join.
-        generation = self._stream_connect_generation
+        # using, and aborting then kills the new dictation.
+        #
+        # The guard is object identity, NOT the connect generation. The
+        # caller runs `_reset_streaming_state()` one statement after this
+        # returns, and that bumps the generation too, so a generation check
+        # could never match: the abort was skipped every single time the
+        # detached path was taken -- which is exactly the case it exists for,
+        # a real remote handshake still in flight. The provider socket then
+        # stayed published and every later dictation failed with "Streaming
+        # session already active" until the app was restarted. Only a fake
+        # transcriber that connects instantly took the synchronous path, so
+        # the tests never saw it.
 
         def _abort() -> None:
             if thread is not None and thread.is_alive():
                 thread.join(timeout=STREAMING_CONNECT_JOIN_TIMEOUT_S)
-            if generation != self._stream_connect_generation:
+            if self._active_stream_transcriber is transcriber:
                 self._logger.info(
                     "Skipping a stale stream abort: a newer session owns "
                     "this transcriber now."

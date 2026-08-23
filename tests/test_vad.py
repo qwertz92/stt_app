@@ -174,25 +174,6 @@ def test_a_real_spoken_word_still_counts_as_speech(duration_ms):
     )
 
 
-def test_the_known_cost_of_the_post_pause_gate_is_a_very_short_word():
-    """Make the accepted loss explicit instead of leaving it implicit.
-
-    The cut sits above every desk transient measured (the loudest, a door
-    latch, reaches 0.140 s), which necessarily puts it above a word shorter
-    than about 180 ms. That word is dropped after a pause. The trade is
-    deliberate and asymmetric: a rejected word costs that word, while an
-    admitted transient appends an invented sentence that then becomes the
-    alignment anchor and can replace the entire transcript.
-
-    If this ever needs to change, it is the transient measurements that have
-    to move, not this assertion on its own.
-    """
-    very_short = _pcm(200, 20) + _pcm(120, 6000) + _pcm(200, 20)
-    assert _run(very_short) < STREAMING_NEW_SEGMENT_MIN_SPEECH_S
-
-    just_long_enough = _pcm(200, 20) + _pcm(180, 6000) + _pcm(200, 20)
-    assert _run(just_long_enough) >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
-
 def test_unmeasurable_audio_is_never_reported_as_silence():
     """Callers must not skip audio they could not measure."""
     assert measure_longest_speech_run_s(b"", 16000, 0.004) is None
@@ -243,91 +224,65 @@ def _real_speech_runs():
     return rate, runs
 
 
-def test_real_recorded_speech_clears_the_post_pause_gate():
-    """The accept side, measured on the only real audio in the repository.
+def _word_with_closure(voiced_ms, closure_ms, rate=16000):
+    """A word shaped like real speech: voiced, silent closure, voiced.
 
-    Synthetic sine bursts hid this once already: they have no decay and no
-    internal structure, so they answer a different question than speech does.
+    A continuous tone is not a word. Every voiceless stop consonant leaves
+    40-100 ms of genuine silence in the middle, which breaks the contiguous
+    run this meter measures -- and that is precisely what three earlier
+    thresholds failed to account for.
     """
-    rate, runs = _real_speech_runs()
-    assert runs, "no speech found in the sample; the fixture is broken"
-    for index, run in enumerate(runs):
-        measured = _in_production_shape(run, rate)
-        assert measured >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
-            f"real speech run {index} measured {measured:.3f}s and would be "
-            "dropped after a pause"
-        )
+    half = voiced_ms // 2
+    return _pcm(half, 6000, rate) + _pcm(closure_ms, 20, rate) + _pcm(half, 6000, rate)
+
+
+@pytest.mark.parametrize(
+    ("label", "voiced_ms", "closure_ms"),
+    [
+        ("'Stopp.' with its stop closure", 180, 50),
+        ("'Bitte.' with its tt closure", 160, 85),
+        ("a 250 ms word with a 40 ms closure", 250, 40),
+        ("a 300 ms word with a 60 ms closure", 300, 60),
+    ],
+)
+def test_a_word_with_an_internal_closure_still_counts_as_speech(
+    label, voiced_ms, closure_ms
+):
+    """The accept side, with realistically shaped words.
+
+    Thresholds of 0.35, 0.15 and 0.18 were all set against continuous tones
+    and each deleted these words after a pause -- silently, with only a
+    debug log. The word is gone from the document AND from history.
+    """
+    measured = _in_production_shape(_word_with_closure(voiced_ms, closure_ms))
+    assert measured >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
+        f"{label} measured {measured:.3f}s and would be dropped after a pause"
+    )
 
 
 @pytest.mark.parametrize(
     ("label", "peak", "tau_ms", "hz"),
     [
-        ("a knuckle knock on the desk", 0.4, 25, 180),
-        ("a mechanical key clack", 0.6, 18, 900),
-        ("a door latch", 0.3, 35, 120),
-        ("a trackpad click", 0.2, 30, 300),
-        ("a lip smack", 0.15, 40, 250),
+        ("typing at 120 wpm", None, None, None),
+        ("typing at 80 wpm", None, None, None),
     ],
 )
-def test_decaying_desk_transients_never_clear_the_post_pause_gate(
+def test_repetitive_keyboard_noise_never_clears_the_post_pause_gate(
     label, peak, tau_ms, hz
 ):
-    """The reject side. A transient that clears this gate does not merely add
+    """The reject side -- and deliberately only the repetitive part of it.
 
-    junk: the appended hallucination becomes the alignment anchor for the
-    next window, which then cannot align and replaces the whole transcript.
-
-    Rectangular bursts are not enough to test this -- they stop dead, while
-    anything that resonates decays over 20-40 ms and measures far longer.
+    The two classes overlap: a knuckle knock measures 0.100 s and so does
+    "Bitte.". No threshold separates them, so this gate only filters the
+    noise that actually repeats during a pause. An isolated knock gets
+    through by design, and the damage from that is bounded instead --
+    see test_an_unalignable_window_cannot_destroy_an_earlier_segment.
     """
-    rate = 16000
-    count = int(rate * 0.25)
-    decay = b"".join(
-        struct.pack(
-            "<h",
-            int(
-                32767
-                * peak
-                * math.exp(-index / (rate * tau_ms / 1000))
-                * math.sin(2 * math.pi * hz * index / rate)
-            ),
-        )
-        for index in range(count)
-    )
-    measured = _in_production_shape(decay, rate)
-    assert measured < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
-        f"{label} measured {measured:.3f}s and would append a hallucinated "
-        "window into the document"
-    )
-
-
-def test_the_post_pause_cut_keeps_a_margin_over_the_loudest_transient():
-    """Pin the reasoning, not just the number.
-
-    A threshold that merely clears the loudest transient by one 20 ms bucket is
-    one unmeasured desk sound away from admitting hallucinations again -- and an
-    admitted transient can replace the whole transcript, not just add to it.
-    Requiring a real margin is what stops the value drifting back down towards
-    the transient band, which has already happened once.
-
-    Deliberately excluded: a heavy low-frequency thump (peak 0.5, 45 ms decay
-    at 150 Hz) measures 0.20 s, which is inside the range of a real 200 ms
-    word. No energy threshold separates those two, so pretending one does by
-    raising the cut would just delete more speech. That case is handled by
-    bounding the damage instead -- see
-    `test_an_unalignable_window_cannot_destroy_an_earlier_segment`.
-    """
-    rate = 16000
-    loudest = 0.0
-    for peak, tau_ms, hz in (
-        (0.4, 25, 180),
-        (0.6, 18, 900),
-        (0.3, 35, 120),
-        (0.2, 30, 300),
-        (0.15, 40, 250),
-    ):
-        count = int(rate * 0.25)
-        decay = b"".join(
+    if peak is None:
+        audio = _clicks(15, 100) if "120" in label else _clicks(12, 150)
+    else:
+        rate = 16000
+        audio = b"".join(
             struct.pack(
                 "<h",
                 int(
@@ -337,12 +292,42 @@ def test_the_post_pause_cut_keeps_a_margin_over_the_loudest_transient():
                     * math.sin(2 * math.pi * hz * index / rate)
                 ),
             )
-            for index in range(count)
+            for index in range(int(rate * 0.25))
         )
-        loudest = max(loudest, _in_production_shape(decay, rate))
+    measured = _in_production_shape(audio)
+    assert measured < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
+        f"{label} measured {measured:.3f}s and would append a hallucinated "
+        "window into the document"
+    )
 
-    assert STREAMING_NEW_SEGMENT_MIN_SPEECH_S >= loudest * 1.25, (
-        f"the cut is {STREAMING_NEW_SEGMENT_MIN_SPEECH_S}s against a loudest "
-        f"measured transient of {loudest:.3f}s -- less than a 25% margin, so an "
-        "unmeasured desk sound will get through"
+
+def test_the_overlap_between_short_speech_and_transients_is_acknowledged():
+    """Pin the fact that the classes overlap, so nobody "fixes" it by raising
+
+    the threshold again. Three thresholds have already been set as if a clean
+    cut existed, and each one deleted real words.
+    """
+    shortest_word = _in_production_shape(_word_with_closure(180, 50))
+    knuckle_knock = _in_production_shape(
+        b"".join(
+            struct.pack(
+                "<h",
+                int(
+                    32767
+                    * 0.4
+                    * math.exp(-index / (16000 * 25 / 1000))
+                    * math.sin(2 * math.pi * 180 * index / 16000)
+                ),
+            )
+            for index in range(int(16000 * 0.25))
+        )
+    )
+    assert abs(shortest_word - knuckle_knock) <= 0.02, (
+        f"a short word measures {shortest_word:.3f}s and a knock "
+        f"{knuckle_knock:.3f}s -- if these have genuinely separated, the "
+        "threshold reasoning in config.py needs revisiting"
+    )
+    assert STREAMING_NEW_SEGMENT_MIN_SPEECH_S <= shortest_word, (
+        "the cut is above the shortest realistic word, so that word is "
+        "silently deleted after a pause"
     )

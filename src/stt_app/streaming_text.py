@@ -238,9 +238,19 @@ def merge_rolling_window_transcript(
     # pause disappears. Bounding the replace turns a total loss into the loss
     # of one segment, which is what the design always claimed.
     protected = normalize_stream_text(protected_prefix)
-    if protected and previous.startswith(protected):
-        return stream_join_text(protected, current)
-    return current
+    if not protected:
+        return current
+    # Word-based and case-insensitive, like every other comparison here. A raw
+    # `startswith` failed open whenever a provider re-cased a word (the merge
+    # legitimately takes the window text verbatim), and it also matched inside
+    # a word -- floor "hallo welt" against "hallo welten" truncated "welten".
+    if not stream_text_extends(protected, previous):
+        return current
+    # The window may already contain the protected text (a provider that
+    # re-emits from the start). Joining then duplicates it.
+    if stream_text_extends(protected, current):
+        return current
+    return stream_join_text(protected, current)
 
 
 def compute_stream_locked_prefix(

@@ -271,3 +271,57 @@ def test_the_protected_prefix_is_ignored_when_it_no_longer_matches():
         protected_prefix="etwas das nicht passt",
     )
     assert merged == "das neue fenster"
+
+
+def test_the_protected_prefix_never_duplicates_text():
+    """A window that already contains the floor must not have it prepended.
+
+    Some providers re-emit from the start of the turn, so the window and the
+    floor overlap. Joining them then pastes the same words twice, which the
+    project treats as worse than losing them.
+    """
+    # `previous` has to be longer than the floor, or the merge resolves on
+    # the ordinary alignment path and never reaches the protected branch --
+    # a shorter fixture made an earlier version of this test prove nothing.
+    floor = "alpha beta"
+    previous = "alpha beta gamma delta"
+
+    assert (
+        merge_rolling_window_transcript(previous, floor, protected_prefix=floor)
+        == floor
+    ), "the floor was prepended to a window that already contained it"
+    assert (
+        merge_rolling_window_transcript(
+            previous, f"{floor} zeta", protected_prefix=floor
+        )
+        == f"{floor} zeta"
+    )
+    # And a window that does NOT contain the floor still gets it back.
+    assert (
+        merge_rolling_window_transcript(
+            previous, "zeta eta", protected_prefix=floor
+        )
+        == f"{floor} zeta eta"
+    )
+
+
+def test_the_protected_prefix_compares_words_not_characters():
+    """Every other comparison in this module is word-based and case-folding.
+
+    A raw `startswith` failed open whenever a provider re-cased a word -- the
+    merge legitimately takes the window text verbatim -- and it also matched
+    inside a word, so a floor of "hallo welt" truncated "hallo welten".
+    """
+    recased = merge_rolling_window_transcript(
+        "hallo welt und weiter", "voellig anderes", protected_prefix="Hallo Welt"
+    )
+    assert recased == "Hallo Welt voellig anderes", (
+        "a re-cased transcript silently disabled the floor"
+    )
+
+    partial_word = merge_rolling_window_transcript(
+        "hallo welten und mehr", "anderes", protected_prefix="hallo welt"
+    )
+    assert partial_word == "anderes", (
+        f"'welten' was truncated to 'welt': {partial_word!r}"
+    )

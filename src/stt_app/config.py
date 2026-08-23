@@ -1205,35 +1205,42 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 # taken on trust -- and the model reliably invents words when the audio is
 # mostly quiet.
 #
-# Measured the way production measures it: the longest unbroken run in the
-# whole trailing window, with the candidate audio embedded in 7 s of room
-# tone. (An earlier derivation sliced the sample into 300 ms excerpts, which
-# truncates every run at the excerpt edge and invented short values that the
-# code never computes. That mistake is what produced the 0.08 below.)
+# THE TWO CLASSES OVERLAP AND NO THRESHOLD SEPARATES THEM. Measured the way
+# production measures it (longest unbroken run at
+# STREAMING_SPEECH_RUN_WINDOW_MS, candidate embedded in 7 s of room tone):
 #
-#   real speech, contiguous runs in samples/benchmark_sample.wav
-#                             0.240, 0.260, 0.320, 0.360 s
-#   real speech cut to word length from the same file
-#                             a 150 ms word measures 0.150 s
-#   decaying desk transients  door latch 0.140, lip smack 0.140,
-#                             knuckle knock 0.100, trackpad 0.100,
-#                             mechanical key 0.080 s
-#   typing 80-120 wpm         0.020 s
+#   "Bitte." -- 2x80 ms voiced around an 85 ms tt-closure    0.085 s
+#   "Stopp." -- 90 ms, 50 ms closure, 90 ms, burst           0.102 s
+#   250 ms word with a 40 ms internal closure                0.120 s
+#   "Ja." 180 ms continuous                                  0.180 s
 #
-# The gap between the loudest transient (0.140) and the quietest real run
-# (0.240) is where the cut belongs. 0.18 sits two buckets above every
-# transient measured and still accepts any word of 180 ms or more.
+#   mechanical key clack                                     0.080 s
+#   knuckle knock / trackpad click                           0.100 s
+#   door latch / lip smack                                   0.140 s
+#   heavy low-frequency thump                                0.200 s
+#   typing at 80-120 wpm                                     0.020 s
 #
-# Both directions are transcript loss, but they are not symmetric, which is
-# why the cut leans high. A rejected short word costs that word. An admitted
-# transient appends an invented sentence AND becomes the alignment anchor
-# for the next window -- which then cannot align and REPLACES the whole
-# accumulated transcript. During a pause longer than the window the user is
-# far more likely to be typing or moving than to say a sub-180 ms word.
+# A voiceless closure is genuinely silent for 40-100 ms and breaks the run,
+# so what this meter reports for a short word is the longest *voiced piece*
+# of it -- 80-90 ms -- which is exactly what an isolated knock reports. Three
+# earlier values (0.35, 0.15, 0.18) were set as if a clean cut existed and
+# each DELETED real words; a fourth (0.08 derived from 300 ms excerpts) was
+# right by accident, for the wrong reason.
 #
-# Two earlier values were reverted for deleting text: 0.35 dropped short
-# answers outright, and 0.08 admitted every desk transient listed above.
-STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.18
+# So this gate does NOT try to recognise speech. It filters the two things it
+# can actually distinguish -- continuous silence and repetitive keyboard
+# noise, which is what an open microphone during a pause really produces, and
+# what once grew the transcript to 896 junk words. An isolated resonant
+# transient passes, deliberately:
+#
+#   deleting a word   -- silent, invisible, unrecoverable
+#   admitting a knock -- visible junk, bounded to the current segment by
+#                        `protected_prefix`, and the user can see and fix it
+#
+# Separating a knock from "Bitte." needs spectral features (a real VAD), not
+# an energy threshold. Until then, bounding the damage is the protection --
+# do not "fix" this by raising the number again.
+STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.08
 
 # How much audio may pile up while a remote streaming provider is still
 # completing its network handshake. Deepgram waits up to 8 s for its socket and
