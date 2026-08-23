@@ -19,7 +19,23 @@ SCHEMA_VERSION = 23
 # Hotkeys: RegisterHotKey requires at least one non-modifier key.
 # Original default that worked reliably in this project.
 DEFAULT_HOTKEY = "Ctrl+Alt+Space"
-FALLBACK_HOTKEY = "Ctrl+Win+LShift"
+# Tried in order when the preferred hotkey is already owned by another process.
+# Every entry must end in a NON-modifier key: RegisterHotKey matches the
+# modifier state exactly, so a combination whose key is itself a modifier (the
+# old "Ctrl+Win+LShift") registers successfully and can then never fire.
+# Ctrl+Win+Space is deliberately absent — Windows owns it for input-language
+# switching.
+FALLBACK_HOTKEYS = (
+    "Ctrl+Alt+F9",
+    "Ctrl+Shift+Space",
+    "Ctrl+Win+F9",
+    "Ctrl+Alt+D",
+)
+FALLBACK_HOTKEY = FALLBACK_HOTKEYS[0]
+# How often to try to reclaim the preferred hotkey while running on a fallback.
+# The usual cause is another app that grabbed it first (a terminal, an IDE);
+# when that app closes the preferred combination should come back on its own.
+HOTKEY_RECLAIM_INTERVAL_MS = 30_000
 DEFAULT_HOTKEY_ID = 1
 DEFAULT_CANCEL_HOTKEY = "Ctrl+Alt+F12"
 DEFAULT_CANCEL_HOTKEY_ID = 2
@@ -1160,6 +1176,12 @@ OVERLAY_QUEUE_MAX_HEIGHT = OVERLAY_HEIGHT * 6
 OVERLAY_MARGIN_X = 24
 OVERLAY_MARGIN_Y = 24
 OVERLAY_DETAIL_MIN_HEIGHT = 42
+# Compact states (Idle/Listening/Processing) used to pin the detail area to the
+# minimum, which silently clipped anything longer than two lines — most visibly
+# the startup hotkey notice, which explains a fallback binding and is exactly
+# the text a user must be able to read. Compact now grows to fit, up to this
+# cap, and only scrolls beyond it.
+OVERLAY_COMPACT_DETAIL_MAX_HEIGHT = 108
 # Minimum visible height of the scrollable queue panel before it scrolls.
 OVERLAY_QUEUE_MIN_HEIGHT = 96
 # How long the overlay is brought to the foreground (temporary topmost) after a

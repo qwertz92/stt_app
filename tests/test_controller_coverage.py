@@ -1132,7 +1132,9 @@ def test_register_hotkey_fails_when_preferred_equals_fallback():
     )
     result = controller._register_hotkey_with_fallback()
     assert result is False
-    assert "Choose a different hotkey" in (controller._hotkey_notice or "")
+    assert "Pick a different hotkey" in (controller._hotkey_notice or "")
+    # Nothing is registered, so the reclaim timer must keep trying.
+    assert controller._hotkey_reclaim_timer.isActive()
     controller.shutdown()
     _ = app
 
@@ -2019,5 +2021,49 @@ def test_focus_poll_exits_early_when_already_aborted():
     controller._stream_abort_requested = True
     # Should not trigger another abort
     controller._on_stream_focus_poll()
+    controller.shutdown()
+    _ = app
+
+
+def test_the_preferred_hotkey_is_reclaimed_once_it_is_free():
+    """Another program holding the hotkey is temporary. The app keeps the
+    user's choice, runs on a fallback, and takes the real one back on its own
+    instead of leaving them on a substitute forever."""
+    from stt_app.config import DEFAULT_HOTKEY, FALLBACK_HOTKEYS
+
+    class BusyThenFree:
+        def __init__(self):
+            self.calls = []
+            self.preferred_free = False
+
+        def register(self, hotkey):
+            self.calls.append(hotkey)
+            if hotkey == DEFAULT_HOTKEY and not self.preferred_free:
+                raise ValueError("already registered by another program")
+
+        def unregister(self):
+            pass
+
+    manager = BusyThenFree()
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=DEFAULT_HOTKEY)),
+        hotkey_manager=manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+    )
+
+    assert controller._register_hotkey_with_fallback() is True
+    assert controller._active_hotkey == FALLBACK_HOTKEYS[0]
+    assert controller.settings.hotkey == DEFAULT_HOTKEY, "the choice must survive"
+    assert controller._hotkey_reclaim_timer.isActive()
+
+    # The other program exits; the next tick should take the hotkey back.
+    manager.preferred_free = True
+    controller._reclaim_preferred_hotkey()
+
+    assert controller._active_hotkey == DEFAULT_HOTKEY
+    assert controller._hotkey_notice is None
+    assert not controller._hotkey_reclaim_timer.isActive()
     controller.shutdown()
     _ = app

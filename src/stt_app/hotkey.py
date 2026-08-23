@@ -72,6 +72,24 @@ class Win32HotkeyApi:
         return bool(self._user32.GetAsyncKeyState(virtual_key) & KEY_STATE_DOWN_MASK)
 
 
+# Virtual keys that are themselves modifiers; see parse_hotkey.
+_MODIFIER_VIRTUAL_KEYS = frozenset(
+    {
+        0x10,  # VK_SHIFT
+        0x11,  # VK_CONTROL
+        0x12,  # VK_MENU (Alt)
+        0x5B,  # VK_LWIN
+        0x5C,  # VK_RWIN
+        0xA0,  # VK_LSHIFT
+        0xA1,  # VK_RSHIFT
+        0xA2,  # VK_LCONTROL
+        0xA3,  # VK_RCONTROL
+        0xA4,  # VK_LMENU
+        0xA5,  # VK_RMENU
+    }
+)
+
+
 def parse_hotkey(value: str, include_norepeat: bool = True) -> tuple[int, int]:
     if not value:
         raise ValueError("Hotkey is empty.")
@@ -108,6 +126,18 @@ def parse_hotkey(value: str, include_norepeat: bool = True) -> tuple[int, int]:
 
     if vk is None:
         raise ValueError(f"Unknown hotkey key: {parts[-1]}")
+
+    if vk in _MODIFIER_VIRTUAL_KEYS:
+        # RegisterHotKey matches the modifier state *exactly*, and pressing a
+        # modifier necessarily raises its own modifier bit. "Ctrl+Win+LShift"
+        # therefore registers Ctrl+Win + key LSHIFT, while the actual keystroke
+        # reports Ctrl+Win+Shift — a different hotkey, so it can never match.
+        # Registration still succeeds, which is why this failed silently: the
+        # app reported a working hotkey that could not fire.
+        raise ValueError(
+            f"'{parts[-1]}' is a modifier and cannot be the hotkey's key. "
+            "Add a normal key such as a letter or a function key."
+        )
 
     return modifiers, vk
 

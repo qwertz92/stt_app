@@ -9,6 +9,7 @@ from .config import (
     DEFAULT_OVERLAY_OPACITY_PERCENT,
     LANGUAGE_MODE_LABELS,
     OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_COMPACT_DETAIL_MAX_HEIGHT,
     OVERLAY_DETAIL_MIN_HEIGHT,
     OVERLAY_HEIGHT,
     OVERLAY_INITIAL_DETAIL,
@@ -1074,8 +1075,12 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_label.setFixedWidth(wrap_width)
         self._detail_label.adjustSize()
         content_height = self._detail_label.sizeHint().height()
+        compact_detail_cap = max(
+            OVERLAY_DETAIL_MIN_HEIGHT,
+            min(max_detail_height, OVERLAY_COMPACT_DETAIL_MAX_HEIGHT),
+        )
         shown_detail_height = (
-            OVERLAY_DETAIL_MIN_HEIGHT if self._compact_mode else max_detail_height
+            compact_detail_cap if self._compact_mode else max_detail_height
         )
         if content_height + 6 > shown_detail_height:
             # The vertical scrollbar will appear; re-wrap once at the final
@@ -1090,7 +1095,13 @@ class OverlayUI(QtWidgets.QWidget):
                 content_height = self._detail_label.sizeHint().height()
 
         if self._compact_mode:
-            desired_detail_height = OVERLAY_DETAIL_MIN_HEIGHT
+            # Grow to fit rather than pinning to the minimum: pinning clipped
+            # the hotkey notice, and the user could only reach it by scrolling
+            # a two-line box.
+            desired_detail_height = max(
+                OVERLAY_DETAIL_MIN_HEIGHT,
+                min(compact_detail_cap, content_height + 6),
+            )
         else:
             desired_detail_height = max(
                 OVERLAY_DETAIL_MIN_HEIGHT,
@@ -1099,7 +1110,11 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_scroll.setFixedHeight(desired_detail_height)
 
         if self._compact_mode:
-            desired_window_height = self._compact_target_size().height()
+            # Only the overflow is added, so short status text still produces
+            # exactly the captured compact size that ensure_compact_size() uses.
+            desired_window_height = self._compact_target_size().height() + (
+                desired_detail_height - OVERLAY_DETAIL_MIN_HEIGHT
+            )
         else:
             desired_window_height = (
                 frame_height

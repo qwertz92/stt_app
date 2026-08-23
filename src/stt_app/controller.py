@@ -36,7 +36,8 @@ from .config import (
     DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
-    FALLBACK_HOTKEY,
+    FALLBACK_HOTKEYS,
+    HOTKEY_RECLAIM_INTERVAL_MS,
     LOCAL_WEBGPU_MODEL_SIZES,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
     STREAMING_ABORT_BEEP_DURATION_MS,
@@ -265,6 +266,12 @@ class DictationController(QtCore.QObject):
         self._shutdown_started = False
         self._hotkey_registration_ok = False
         self._hotkey_notice: str | None = None
+        # Which hotkey is actually registered right now. May differ from
+        # settings.hotkey while another program holds the preferred one.
+        self._active_hotkey: str = ""
+        self._hotkey_reclaim_timer = QtCore.QTimer(self)
+        self._hotkey_reclaim_timer.setInterval(HOTKEY_RECLAIM_INTERVAL_MS)
+        self._hotkey_reclaim_timer.timeout.connect(self._reclaim_preferred_hotkey)
         self._cancel_hotkey_registration_ok = False
         self._cancel_hotkey_notice: str | None = None
         self._show_overlay_hotkey_registration_ok = False
@@ -571,9 +578,12 @@ class DictationController(QtCore.QObject):
             )
             return
 
-        detail = f"Hotkey: {self._settings.hotkey}"
+        # Show what is actually registered. The stored preference is kept even
+        # while a fallback is active, so printing settings.hotkey here would
+        # name a key that does nothing.
+        detail = f"Hotkey: {self._active_hotkey or self._settings.hotkey}"
         if self._hotkey_notice:
-            detail = f"{detail} ({self._hotkey_notice})"
+            detail = f"{detail} — {self._hotkey_notice}"
         if self._settings.cancel_hotkey:
             detail = f"{detail} | Cancel: {self._settings.cancel_hotkey}"
             if self._cancel_hotkey_notice:
@@ -4462,39 +4472,85 @@ class DictationController(QtCore.QObject):
             coordinator.release(model_name, model_dir, succeeded=succeeded)
 
     def _register_hotkey_with_fallback(self) -> bool:
+        """Register the recording hotkey, falling back if it is already taken.
+
+        The user's chosen hotkey is never overwritten in settings. Another
+        process holding it (a terminal, an IDE) is a temporary condition, and
+        persisting the fallback used to make it permanent: once the other app
+        closed, the app had already forgotten what the user actually wanted.
+        The preference stays, the fallback is a runtime-only substitution, and
+        `_reclaim_preferred_hotkey` keeps trying to take the real one back.
+        """
         preferred = self._settings.hotkey
         try:
             self._hotkey_manager.register(preferred)
             self._hotkey_notice = None
+            self._active_hotkey = preferred
+            self._stop_hotkey_reclaim()
             return True
-        except (HotkeyRegistrationError, ValueError):
-            self._logger.exception("Failed to register preferred hotkey: %s", preferred)
+        except (HotkeyRegistrationError, ValueError) as exc:
+            self._logger.warning(
+                "Preferred hotkey %s unavailable: %s", preferred, exc
+            )
 
-        if preferred == FALLBACK_HOTKEY:
-            self._hotkey_notice = f"Hotkey registration failed ({preferred}). Choose a different hotkey in Settings."
-            return False
-
-        try:
-            self._hotkey_manager.register(FALLBACK_HOTKEY)
-            self._settings = replace(self._settings, hotkey=FALLBACK_HOTKEY)
+        for fallback in FALLBACK_HOTKEYS:
+            if fallback == preferred:
+                continue
             try:
-                self._settings_store.save(self._settings)
-            except Exception:
-                self._logger.exception("Failed to persist fallback hotkey")
+                self._hotkey_manager.register(fallback)
+            except (HotkeyRegistrationError, ValueError) as exc:
+                self._logger.warning(
+                    "Fallback hotkey %s unavailable: %s", fallback, exc
+                )
+                continue
+            self._active_hotkey = fallback
             self._hotkey_notice = (
-                f"Preferred hotkey '{preferred}' unavailable. "
-                f"Using fallback '{FALLBACK_HOTKEY}'."
+                f"'{preferred}' is used by another program; taken back "
+                "automatically once it is free."
             )
+            self._start_hotkey_reclaim()
             return True
+
+        self._active_hotkey = ""
+        self._hotkey_notice = (
+            f"'{preferred}' and every fallback are in use by other programs. "
+            "Pick a different hotkey in Settings."
+        )
+        self._start_hotkey_reclaim()
+        return False
+
+    def _start_hotkey_reclaim(self) -> None:
+        timer = getattr(self, "_hotkey_reclaim_timer", None)
+        if timer is not None and not timer.isActive():
+            timer.start()
+
+    def _stop_hotkey_reclaim(self) -> None:
+        timer = getattr(self, "_hotkey_reclaim_timer", None)
+        if timer is not None and timer.isActive():
+            timer.stop()
+
+    @QtCore.Slot()
+    def _reclaim_preferred_hotkey(self) -> None:
+        """Take the preferred hotkey back once the other program releases it."""
+        if self._shutdown_started:
+            self._stop_hotkey_reclaim()
+            return
+        preferred = self._settings.hotkey
+        if self._active_hotkey == preferred:
+            self._stop_hotkey_reclaim()
+            return
+        # Never swap the binding out from under a running dictation.
+        if self._transcription_runtime_active():
+            return
+        try:
+            self._hotkey_manager.register(preferred)
         except (HotkeyRegistrationError, ValueError):
-            self._logger.exception(
-                "Fallback hotkey registration failed: %s", FALLBACK_HOTKEY
-            )
-            self._hotkey_notice = (
-                "Hotkey registration failed for preferred and fallback hotkeys. "
-                "Update hotkey in Settings."
-            )
-            return False
+            return
+        self._active_hotkey = preferred
+        self._hotkey_notice = None
+        self._stop_hotkey_reclaim()
+        self._logger.info("Reclaimed the preferred hotkey %s", preferred)
+        self.show_idle_status()
 
     def _register_cancel_hotkey(self) -> bool:
         manager = self._cancel_hotkey_manager

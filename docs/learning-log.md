@@ -2902,3 +2902,36 @@ Agents and developers: use this as a knowledge base for past issues and solution
     ~0.74 us per dispatched event (~0.07 % CPU at 1000 events/s), and
     `estimate_cached_model_bytes` takes 1.0-8.3 ms across all 14 cached models,
     so the 1 Hz progress timer is not a concern.
+
+## 2026-08-19
+
+- **The fallback hotkey could never fire, and it overwrote the user's choice.**
+  Reported as "Claude Code stole my hotkey and afterwards recording did not
+  start". Both halves reproduced:
+  - `RegisterHotKey(Ctrl+Alt+Space)` really does fail on this machine with
+    error 1409 (`ERROR_HOTKEY_ALREADY_REGISTERED`) while a terminal holds it.
+  - The app then fell back to `FALLBACK_HOTKEY = "Ctrl+Win+LShift"`, whose key
+    is itself a modifier. `RegisterHotKey` matches the modifier state exactly,
+    and pressing LShift necessarily raises the SHIFT bit, so the registered
+    `Ctrl+Win`+`VK_LSHIFT` can never match the actual `Ctrl+Win+Shift`
+    keystroke. Proven by registering `Ctrl+Win`+`VK_LSHIFT` and
+    `Ctrl+Win+Shift`+`VK_LSHIFT` simultaneously — Windows accepts them as two
+    different hotkeys. Registration *succeeded*, so nothing was reported and
+    the app claimed a working hotkey that silently did nothing. `config.py`'s
+    own comment three lines above already said the key must not be a modifier.
+  - Worse, the fallback was **persisted** into settings, so the temporary
+    condition became permanent: after the other program closed, the app had
+    already forgotten the user's preference.
+  - Fixed at the root: `parse_hotkey` rejects a modifier as the key (which also
+    prevents configuring one in Settings), `FALLBACK_HOTKEYS` is a chain of
+    real-key combinations tried in order, the preference is never overwritten,
+    and a reclaim timer takes the preferred hotkey back once it is free.
+    Verified against the live Win32 API which combinations are actually
+    available here: `Ctrl+Alt+Space` and `Ctrl+Win+Space` are taken (the latter
+    by Windows itself for language switching), `Ctrl+Alt+F9`,
+    `Ctrl+Shift+Space` and `Ctrl+Alt+D` are free.
+- **The overlay clipped its own hotkey notice.** Compact states pinned the
+  detail area to 42 px while that notice needs 48 px, so the text the user most
+  needed to read was the text they could not see. Compact now grows to fit up
+  to a bounded cap and adds only the overflow to the window, leaving the
+  ordinary short idle overlay at exactly its previous size.

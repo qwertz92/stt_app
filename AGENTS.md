@@ -388,6 +388,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Copy action must still yield exactly the transcript. A failed insertion shows
   the transcript because it is otherwise invisible until it is inserted again,
   and the Error state scrolls to the top so the reason stays in view.
+- **Compact overlay states grow to fit their text**: Idle/Listening/Processing
+  used to pin the detail area to `OVERLAY_DETAIL_MIN_HEIGHT`, which silently
+  clipped anything longer than two lines — most visibly the startup hotkey
+  notice, the one message a user must be able to read. Compact now sizes to its
+  content up to `OVERLAY_COMPACT_DETAIL_MAX_HEIGHT` and adds only the overflow
+  to the compact window height, so short status text still produces exactly the
+  captured compact size `ensure_compact_size()` relies on.
 - **Overlay must never re-wrap or blink**: the transcript label wraps at a
   width derived from the target window width (never the live scroll
   viewport, which changes with deferred queue resizes and scrollbar
@@ -807,6 +814,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Deepgram streaming language**: the live WebSocket API rejects
   `detect_language`; auto maps to `language=multi` (nova-2/nova-3
   multilingual code-switching). Batch keeps `detect_language=true`.
+- **A hotkey's key must never be a modifier**: `RegisterHotKey` matches the
+  modifier state *exactly*, and pressing a modifier raises its own modifier
+  bit, so `Ctrl+Win+LShift` registers `Ctrl+Win` + key `LSHIFT` while the real
+  keystroke reports `Ctrl+Win+Shift` — a different hotkey. Registration
+  *succeeds*, so this failed silently: the app reported a working hotkey that
+  could never fire, which is exactly what the old `FALLBACK_HOTKEY` did. Proven
+  by registering both variants at once: Windows accepts them as two separate
+  hotkeys. `parse_hotkey` now rejects a modifier as the key, which also stops a
+  user configuring one in Settings, and every entry in `FALLBACK_HOTKEYS` ends
+  in a real key. `Ctrl+Win+Space` is deliberately not among them: Windows owns
+  it for input-language switching.
+- **A busy hotkey never overwrites the user's choice**: another program holding
+  the preferred combination (a terminal, an IDE) is temporary, but persisting
+  the fallback into settings made it permanent — once that program closed, the
+  app had already forgotten what the user wanted. `_register_hotkey_with_fallback`
+  keeps `settings.hotkey` and records the substitution in `_active_hotkey`
+  only; `_hotkey_reclaim_timer` retries the preferred one every
+  `HOTKEY_RECLAIM_INTERVAL_MS` and stops once it succeeds. The idle line shows
+  `_active_hotkey`, because printing the stored preference would name a key
+  that does nothing. The reclaim never swaps the binding while a dictation is
+  running.
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.

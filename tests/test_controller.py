@@ -64,9 +64,18 @@ def test_controller_falls_back_to_safe_hotkey():
 
     assert hotkey_manager.calls[0] == DEFAULT_HOTKEY
     assert hotkey_manager.calls[1] == FALLBACK_HOTKEY
-    assert store.saved is not None
-    assert store.saved.hotkey == FALLBACK_HOTKEY
-    assert any("Using fallback" in detail for _state, detail in overlay.states)
+
+    # The user's choice must survive. Another program holding the hotkey is
+    # temporary; persisting the fallback made it permanent, so once that
+    # program closed the app had already forgotten what the user wanted.
+    assert controller.settings.hotkey == DEFAULT_HOTKEY
+    assert store.saved is None or store.saved.hotkey == DEFAULT_HOTKEY
+    assert controller._active_hotkey == FALLBACK_HOTKEY
+    assert any("used by another program" in detail for _s, detail in overlay.states)
+    # The idle line must name the key that actually works, not the stored one.
+    assert any(
+        f"Hotkey: {FALLBACK_HOTKEY}" in detail for _s, detail in overlay.states
+    )
 
     controller.shutdown()
     _ = app
@@ -95,7 +104,7 @@ def test_controller_shows_error_when_all_hotkey_registration_fails():
     assert overlay.states
     state, detail = overlay.states[-1]
     assert state == "Error"
-    assert "Hotkey registration failed" in detail
+    assert "in use by other programs" in detail
 
     controller.shutdown()
     _ = app

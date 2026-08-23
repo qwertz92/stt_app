@@ -961,3 +961,49 @@ def test_startup_updates_do_not_move_an_overlay_being_dragged(monkeypatch):
     overlay._reposition_within_current_screen()
 
     assert overlay.pos() == dragged
+
+
+def test_compact_states_never_clip_their_detail_text():
+    """Idle/Listening/Processing used to pin the detail area to the minimum
+    height, which silently clipped anything longer than two lines. The startup
+    hotkey notice — the text that explains a fallback binding — was exactly
+    such a case, and could only be read by scrolling a two-line box."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+
+    long_notice = (
+        "Hotkey: Ctrl+Alt+F9 - 'Ctrl+Alt+Space' is used by another program; "
+        "taken back automatically once it is free. | Cancel: Ctrl+Alt+F12 | "
+        "Overlay: Ctrl+Alt+F11 | Re-paste: Ctrl+Alt+F10"
+    )
+    try:
+        for state in ("Idle", "Listening", "Processing"):
+            overlay.set_state(state, long_notice)
+            app.processEvents()
+            needed = overlay._detail_label.sizeHint().height()
+            shown = overlay._detail_scroll.height()
+            assert needed <= shown, (
+                f"{state}: detail clipped, needs {needed}px but shows {shown}px"
+            )
+    finally:
+        overlay.close()
+
+
+def test_a_short_compact_status_keeps_the_compact_size():
+    """Growing to fit must not make the ordinary idle overlay bigger."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    try:
+        overlay.set_state("Idle", "Idle")
+        app.processEvents()
+        short_height = overlay.height()
+
+        overlay.set_state("Idle", "Hotkey: Ctrl+Alt+Space")
+        app.processEvents()
+        assert overlay.height() == short_height
+    finally:
+        overlay.close()

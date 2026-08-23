@@ -6,7 +6,6 @@ from stt_app.hotkey import (
     MOD_ALT,
     MOD_CONTROL,
     MOD_NOREPEAT,
-    MOD_WIN,
     PBT_APMRESUMEAUTOMATIC,
     VK_RMENU,
     WM_HOTKEY,
@@ -51,13 +50,28 @@ def test_parse_hotkey_ctrl_alt_space():
     assert vk == 0x20
 
 
-def test_parse_hotkey_ctrl_win_lshift():
-    modifiers, vk = parse_hotkey("Ctrl+Win+LShift")
+def test_parse_hotkey_rejects_a_modifier_as_the_key():
+    """RegisterHotKey matches the modifier state exactly, and pressing a
+    modifier raises its own modifier bit. "Ctrl+Win+LShift" registers
+    Ctrl+Win + key LSHIFT while the real keystroke reports Ctrl+Win+Shift, so
+    it can never fire — and registration *succeeds*, so the app reported a
+    working hotkey that silently did nothing."""
+    for combination in ("Ctrl+Win+LShift", "Ctrl+Alt+RShift", "Ctrl+Shift+LCtrl"):
+        with pytest.raises(ValueError, match="modifier"):
+            parse_hotkey(combination)
+    # Names the key map does not know are rejected too, just with the
+    # unknown-key message.
+    with pytest.raises(ValueError):
+        parse_hotkey("Alt+Shift+LWin")
 
-    assert modifiers & MOD_CONTROL
-    assert modifiers & MOD_WIN
-    assert modifiers & MOD_NOREPEAT
-    assert vk == 0xA0
+
+def test_parse_hotkey_accepts_every_shipped_fallback():
+    from stt_app.config import FALLBACK_HOTKEYS
+
+    for combination in FALLBACK_HOTKEYS:
+        modifiers, vk = parse_hotkey(combination)
+        assert modifiers & MOD_NOREPEAT
+        assert vk not in {0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3}
 
 
 def test_parse_hotkey_without_modifier_raises():
