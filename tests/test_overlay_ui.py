@@ -1013,3 +1013,57 @@ def test_a_short_compact_status_keeps_the_compact_size():
         assert overlay.height() == short_height
     finally:
         overlay.close()
+
+@pytest.mark.pixel_exact
+def test_a_larger_system_font_does_not_inflate_the_compact_baseline(monkeypatch):
+    """Grow-to-fit must not be counted twice into the baseline.
+
+    The compact baseline used to be captured right after the initial detail
+    line was applied. Once compact states grew to fit, a first line needing
+    more than the minimum height baked that overflow into the baseline, and
+    every later compact state inherited it. At the default 9 pt the line
+    fits and nothing shows; at the larger sizes Windows offers under
+    Accessibility > Text size, it does not.
+
+    The falsifiable form: the baseline must not depend on how long the
+    initial detail happens to be. Build one overlay with a short initial
+    detail and one with a long one and compare -- with the old capture order
+    the second is taller for the same content.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = QtGui.QFont(app.font())
+
+    def _baseline_with(initial_detail, point_size):
+        font = QtGui.QFont(original_font)
+        font.setPointSize(point_size)
+        app.setFont(font)
+        monkeypatch.setattr(
+            overlay_ui_module, "OVERLAY_INITIAL_DETAIL", initial_detail
+        )
+        overlay = OverlayUI()
+        overlay.show()
+        app.processEvents()
+        try:
+            overlay.set_state("Idle", "Ready.")
+            app.processEvents()
+            return overlay.height()
+        finally:
+            overlay.close()
+
+    long_detail = (
+        "Hotkey: Ctrl+Alt+F9 - Ctrl+Alt+Space is used by another program; "
+        "taken back automatically once it is free. | Cancel: Ctrl+Alt+F12 | "
+        "Overlay: Ctrl+Alt+F11 | Re-paste: Ctrl+Alt+F10"
+    )
+    try:
+        for point_size in (9, 12, 16):
+            short_start = _baseline_with("Ready.", point_size)
+            long_start = _baseline_with(long_detail, point_size)
+            assert short_start == long_start, (
+                f"{point_size}pt: the same one-line state renders "
+                f"{long_start}px after a long initial detail but "
+                f"{short_start}px after a short one -- the baseline "
+                "absorbed the first line's overflow"
+            )
+    finally:
+        app.setFont(original_font)

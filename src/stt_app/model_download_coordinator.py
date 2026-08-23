@@ -22,7 +22,8 @@ cancelled by the implicit preload path.
 Scope: the slot is enforced at two levels. Inside one process a
 `threading.Condition` serializes callers and lets a second request for the same
 model join the running one. Across processes -- the out-of-process benchmark
-worker, `scripts/download_model.py`, a second copy of the app -- an OS-level
+worker, `scripts/download_model.py`, a second Windows user sharing one
+Model Dir -- an OS-level
 lock on the cache directory (`file_lock.CrossProcessLock`) makes sure only one
 of them writes it at a time. Both levels are needed: the in-process half
 provides the join/interest behaviour the UI depends on, and only the OS half can
@@ -58,7 +59,7 @@ def _download_lock_dir():
 
 
 def _cache_lock_resource(model_dir: str) -> str:
-    """Normalize a configured model dir into one lock identity.
+    r"""Normalize a configured model dir into one lock identity.
 
     Two spellings of one directory must produce one lock, or both writers think
     they own it and the lock protects nothing. `os.path.normcase` alone is not
@@ -131,6 +132,14 @@ class ModelDownloadCoordinator:
         # The OS lock held by whoever owns the slot. Only the slot owner ever
         # touches it, so it needs no lock of its own beyond the condition.
         self._cache_lock: CrossProcessLock | None = None
+        # True while a caller owns the in-process slot but is still waiting
+        # for another process to release the cache directory. The UI needs
+        # this: progress is directory growth, so while another process owns
+        # the directory the bar reads a frozen 0% and the overlay claims to
+        # be downloading. That misleading state is precisely what the slot
+        # was built to remove -- reintroducing it across processes would be
+        # the same bug one level up.
+        self._waiting_for_other_process = False
 
     # -- observation ------------------------------------------------------
 
@@ -219,6 +228,7 @@ class ModelDownloadCoordinator:
             # and no download can ever start again.
             with self._condition:
                 self._active = None
+                self._waiting_for_other_process = False
                 self._condition.notify_all()
             raise
         return ACQUIRE_DOWNLOAD
@@ -237,6 +247,8 @@ class ModelDownloadCoordinator:
                 return True
             return cancel_check is not None and cancel_check()
 
+        with self._condition:
+            self._waiting_for_other_process = True
         try:
             acquired = lock.acquire(cancel_check=_should_stop)
         except FileLockUnavailable as exc:
@@ -248,6 +260,8 @@ class ModelDownloadCoordinator:
                 "process-local serialization only: %s",
                 exc,
             )
+            with self._condition:
+                self._waiting_for_other_process = False
             return
         if not acquired:
             if _SHUTDOWN.is_set():
@@ -255,6 +269,7 @@ class ModelDownloadCoordinator:
             raise ModelDownloadCanceled("Model download canceled.")
         with self._condition:
             self._cache_lock = lock
+            self._waiting_for_other_process = False
 
     def _release_cache_lock(self) -> None:
         lock, self._cache_lock = self._cache_lock, None
@@ -296,9 +311,15 @@ class ModelDownloadCoordinator:
                 key = (model_name, model_dir)
                 self._completed[key] = self._completed.get(key, 0) + 1
             self._release_cache_lock()
+            self._waiting_for_other_process = False
             self._condition.notify_all()
         if explicit_release:
             self._drop_explicit_interest((model_name, model_dir))
+
+    def waiting_for_other_process(self) -> bool:
+        """Is a download blocked on another process holding the cache dir?"""
+        with self._condition:
+            return self._waiting_for_other_process
 
     def register_explicit_interest(self, model_name: str, model_dir: str) -> None:
         """Mark a user-requested model as wanted before it reaches the slot.

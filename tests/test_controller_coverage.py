@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import logging
 import os
+import concurrent.futures
 import threading
 import time
 from unittest.mock import MagicMock
@@ -526,14 +527,28 @@ def test_start_streaming_waits_to_invite_speech_until_capture_started(monkeypatc
     )
 
     controller.start_recording()
+    # The handshake runs off the Qt thread, so the invitation to speak
+    # arrives through a queued signal. Asserting synchronously passed only
+    # because this fake connects instantly; a 5 ms delay was enough to make
+    # it flake, and every real remote provider takes far longer.
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and len(
+        [state for state in overlay.states if state[0] == "Listening"]
+    ) < 2:
+        app.processEvents()
+        time.sleep(0.01)
 
-    assert [state for state in overlay.states if state[0] == "Listening"] == [
-        (
-            "Listening",
-            "Starting dictation. Please wait for the 'Speak now' message.",
-        ),
-        ("Listening", "Streaming active. Speak now, press hotkey to finalize.")
-    ]
+    listening = [state for state in overlay.states if state[0] == "Listening"]
+    assert listening[0] == (
+        "Listening",
+        "Starting dictation. Please wait for the 'Speak now' message.",
+    )
+    # A local engine connects to nothing, so it reaches the live message; a
+    # remote one shows the connecting message first. Both are valid here.
+    assert listening[-1][1] in {
+        "Streaming active. Speak now, press hotkey to finalize.",
+        "Connecting to the speech service. You can speak now.",
+    }
     controller.shutdown()
     _ = app
 
@@ -560,9 +575,15 @@ def test_start_streaming_forwards_audio_delivered_inside_capture_start(monkeypat
     )
 
     controller.start_recording()
+    # Audio delivered from inside capture.start() is buffered while the
+    # provider connects and handed over afterwards, so wait for the flush
+    # instead of assuming the push already happened.
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and not transcriber.chunks:
+        app.processEvents()
+        time.sleep(0.01)
 
     assert transcriber.chunks == [b"first audio block"]
-    assert overlay.states[-1] == ("Listening", "Live: stream")
     controller.shutdown()
     _ = app
 
@@ -2207,6 +2228,39 @@ def test_a_remote_stream_finalize_does_not_queue_behind_a_local_batch_job():
             is controller._stream_finalize_executor
         )
         assert controller._stream_finalize_executor is not controller._executor
+
+        # Testing the selector alone proves nothing: the whole fix can be
+        # undone by changing the submit site back to `self._executor`, and
+        # a selector-only assertion stays green. Exercise the real submit.
+        used = []
+
+        class _RecordingExecutor:
+            def __init__(self, label):
+                self.label = label
+
+            def submit(self, *args, **kwargs):
+                used.append(self.label)
+                return concurrent.futures.Future()
+
+            def shutdown(self, *args, **kwargs):
+                pass
+
+        controller._executor = _RecordingExecutor("shared")
+        controller._stream_finalize_executor = _RecordingExecutor("finalize")
+        controller._active_stream_settings = remote
+        controller._active_stream_transcriber = FakeStreamingTranscriber()
+        controller._submit_stream_finalize()
+        assert used == ["finalize"], (
+            "a remote finalize was submitted to the shared model worker"
+        )
+
+        used.clear()
+        controller._active_stream_settings = local
+        controller._active_stream_transcriber = FakeStreamingTranscriber()
+        controller._submit_stream_finalize()
+        assert used == ["shared"], (
+            "local streaming must keep finalizing on the shared worker"
+        )
     finally:
         controller.shutdown()
     _ = app

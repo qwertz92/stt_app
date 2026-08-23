@@ -6,6 +6,7 @@ classes to avoid duplicating ~150 lines of boilerplate.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import os
 from pathlib import Path
@@ -390,8 +391,25 @@ def make_controller(**kwargs):
     return DictationController(**defaults), app
 
 
+@pytest.fixture(scope="session")
+def _download_lock_root(tmp_path_factory):
+    """One lock root for the whole run; tests get a child of it.
+
+    The root is session-scoped because `mktemp(numbered=True)` scans the
+    parent directory to choose an index, which is O(n^2) across ~1000
+    tests. Each test still gets its own child path so a lock one test
+    leaves held cannot block the next -- acquiring waits with no timeout by
+    design, so that would hang the run rather than fail it. The child
+    directory is never created here; `CrossProcessLock` makes it only if a
+    test actually takes a lock, so the tmp root stays clean.
+    """
+    return tmp_path_factory.mktemp("download-locks")
+
+
 @pytest.fixture(autouse=True)
-def _keep_download_locks_out_of_the_real_appdata(tmp_path_factory, monkeypatch):
+def _keep_download_locks_out_of_the_real_appdata(
+    _download_lock_root, request, monkeypatch
+):
     r"""Give every test its own directory for cross-process download locks.
 
     The coordinator takes a real OS lock before downloading, and its default
@@ -402,9 +420,13 @@ def _keep_download_locks_out_of_the_real_appdata(tmp_path_factory, monkeypatch):
     """
     from stt_app import model_download_coordinator
 
-    lock_dir = tmp_path_factory.mktemp("download-locks")
+    lock_dir = _download_lock_root / hashlib.sha1(
+        request.node.nodeid.encode("utf-8")
+    ).hexdigest()[:16]
     monkeypatch.setattr(
-        model_download_coordinator, "_download_lock_dir", lambda: lock_dir
+        model_download_coordinator,
+        "_download_lock_dir",
+        lambda: lock_dir,
     )
 
 

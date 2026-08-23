@@ -290,8 +290,6 @@ class DictationController(QtCore.QObject):
         self._hotkey_notice: str | None = None
         # Which hotkey is actually registered right now. May differ from
         # settings.hotkey while another program holds the preferred one.
-        # Consecutive failed live inserts in the current streaming session.
-        self._stream_insert_failures = 0
         self._active_hotkey: str = ""
         self._hotkey_reclaim_timer = QtCore.QTimer(self)
         self._hotkey_reclaim_timer.setInterval(HOTKEY_RECLAIM_INTERVAL_MS)
@@ -326,6 +324,7 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings: AppSettings | None = None
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
+        # Consecutive failed live inserts in the current streaming session.
         self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
             stable_word_guard=STREAMING_STABLE_WORD_GUARD,
@@ -866,7 +865,7 @@ class DictationController(QtCore.QObject):
             )
         )
 
-    def _begin_stream_connect(self, transcriber, settings_snapshot) -> None:
+    def _begin_stream_connect(self, transcriber) -> None:
         """Start the provider's stream without blocking the Qt thread.
 
         A remote provider's `start_stream` performs a network handshake:
@@ -896,6 +895,13 @@ class DictationController(QtCore.QObject):
                     on_error=self._emit_stream_runtime_failure,
                 )
             except BaseException as exc:  # noqa: BLE001 - reported to the user
+                # Stop the audio callback before dropping the buffer.
+                # Otherwise it falls through to push_audio_chunk on a
+                # transcriber whose start_stream just raised, and *that*
+                # error reaches the user first -- "Streaming chunk push
+                # failed: session is not active" instead of the real cause,
+                # such as an invalid API key.
+                self._stream_chunk_error_reported = True
                 self._discard_preconnect_buffer(generation)
                 self.stream_connect_finished.emit(
                     generation, False, self._stream_connect_error_text(exc)
@@ -994,7 +1000,7 @@ class DictationController(QtCore.QObject):
         try:
             runtime_lease = self._acquire_transcriber_runtime(settings_snapshot)
             transcriber = runtime_lease.transcriber
-            self._begin_stream_connect(transcriber, settings_snapshot)
+            self._begin_stream_connect(transcriber)
         except NotImplementedError as exc:
             if runtime_lease is not None:
                 runtime_lease.release()
@@ -2581,6 +2587,16 @@ class DictationController(QtCore.QObject):
         from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
         model_name = self._preload_target_model or self._settings.model_size
+        if model_download_coordinator().waiting_for_other_process():
+            # Progress is directory growth, and another process owns the
+            # directory -- so the bar would sit at a frozen 0% and claim to
+            # be downloading. Say what is actually happening instead.
+            return (
+                f"Waiting for another program to finish using the model "
+                f"cache before downloading '{model_name}'. You can start "
+                "recording now; transcription waits for this model. Use "
+                "Cancel to abort."
+            )
         downloaded_bytes = estimate_cached_model_bytes(
             model_name,
             getattr(self._settings, "model_dir", ""),

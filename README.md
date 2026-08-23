@@ -139,7 +139,7 @@ Right-click the **system tray icon** → **Quit**.
 |---------|----------|
 | Model download fails on corporate network | See [Offline setup](docs/models.md#offline-download) |
 | SSL: CERTIFICATE_VERIFY_FAILED | Corporate proxy (Zscaler) issue — see [SSL troubleshooting](docs/advanced-setup.md#ssl--proxy-issues) |
-| Hotkey does not work | App auto-falls back to `Ctrl+Win+LShift`. Try another combo in Settings. |
+| Hotkey does not work | Another program is holding it. The app falls back to `Ctrl+Alt+F9` (then `Ctrl+Shift+Space`, `Ctrl+Win+F9`, `Ctrl+Alt+D`), says so in the overlay, and takes your own combination back automatically once it is free. Your setting is never overwritten. |
 | Text not inserted | Check paste mode in Settings. If it fails, transcript is copied to clipboard automatically. |
 | No module named 'requests' | Run `uv sync --group dev` and restart. |
 

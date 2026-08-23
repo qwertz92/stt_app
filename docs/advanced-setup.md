@@ -610,7 +610,13 @@ A short delay after SendInput prevents race conditions where the target app read
 ### Hotkey
 
 - Uses Win32 `RegisterHotKey` with the configured key combination.
-- Default: `Ctrl+Alt+Space`. If registration fails, falls back to `Ctrl+Win+LShift`.
+- Default: `Ctrl+Alt+Space`. If another program already holds it, the app
+  falls back through `Ctrl+Alt+F9`, `Ctrl+Shift+Space`, `Ctrl+Win+F9` and
+  `Ctrl+Alt+D`, shows which one it is using, and reclaims your own choice
+  as soon as it becomes free. The fallback is never written to settings.
+- A modifier alone (`Ctrl+Win+LShift` and similar) is rejected: Windows
+  matches the exact modifier state, so such a combination registers
+  successfully and can then never fire.
 - Win-key combinations can fail due to OS reservations.
 - Settings UI uses key capture (no manual typing needed).
 

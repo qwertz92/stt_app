@@ -652,7 +652,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     explicit-interest behaviour the Local tab depends on. Across processes an
     OS-level lock (`file_lock.CrossProcessLock`, `msvcrt.locking` on Windows /
     `fcntl.flock` elsewhere) covers the out-of-process benchmark worker,
-    `scripts/download_model.py`, and a second copy of the app — none of which
+    `scripts/download_model.py`, and a second Windows user sharing one Model
+    Dir (a second copy of the app is separately refused by the
+    single-instance guard in `main.py`) — none of which
     the in-process half can even see. It is a real kernel lock rather than a
     PID file on purpose: the OS drops it when the owner exits for any reason,
     so there is no stale-lock detection, no heartbeat, and no timeout that
@@ -1096,15 +1098,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   mistranscribed fragment defeated the search, so the merge now re-anchors up
   to `_WINDOW_BOUNDARY_SKIP_WORDS` words in.
   **A window that still cannot be aligned replaces the accumulated text, and
-  must not append.** Appending was tried and reverted: a silent microphone
+  must not append**, unless the pause before it was measured *and* the
+  decoded window is shown to hold real speech (see the
+  measured-silence entry below). Appending unconditionally was tried and
+  reverted: a silent microphone
   makes the model emit a fresh hallucination on every 0.35 s partial, none of
   which can ever align, so the accumulated text grew without bound (measured:
   896 words for 8 words of speech after two minutes of silence) and
   finalization *pasted* it — turning a lost transcript into hundreds of junk
-  words typed into the user's document. Any future fix here has to gate the
-  window on audio energy (`vad.measure_peak_windowed_rms` plus
-  `silence_gate_threshold`, which exists precisely because "speech models
-  hallucinate words from silence") rather than make the merge more permissive.
+  words typed into the user's document. That advice — gate the window on
+  audio energy rather than making the merge more permissive — is now
+  implemented: the caller measures the decoded window with
+  `vad.measure_speech_seconds_pcm` against `silence_gate_threshold` and only
+  then passes `new_segment=True`. The merge itself is still not allowed to
+  get more permissive on its own.
   **`StreamingTextState` deliberately does not join a candidate that has lost
   the `committed_text` prefix onto it.** That would unfreeze insertion — once
   the prefix is gone `compute_stream_locked_prefix` can never advance again, so
@@ -1121,38 +1128,61 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   entry matches the streamed text. Inserted text stays append-only either way.
 - **Streaming decodes nothing during silence, at either end**: faster-whisper
   invents words from silence (the same reason the batch silence gate exists),
-  and in the streaming path an invented window can never be aligned against the
-  accumulated text, so the merge fell back to *replacing* it. Both the rolling
-  partial (`_maybe_emit_partial`) and the fast finalizer therefore measure the
-  audio they are about to decode with `measure_peak_windowed_rms_pcm` and skip
-  it below `silence_gate_threshold`. The finalizer measures exactly its own
-  trailing window (`_stream_tail_window_is_silent`); without that a dictation
-  that simply ended with a few quiet seconds lost its entire transcript at the
-  last step. Unmeasurable audio returns `None` from the meter and is never
-  treated as silence — refusing to decode something that could not be measured
-  would drop real speech.
-- **Silence that is skipped is counted, and the next window is appended**:
-  `_StreamResult.silent_seconds` accumulates the skipped audio, and a window
-  arriving after more than `stream_partial_window_s` of it is passed to
-  `merge_rolling_window_transcript(new_segment=True)`. Such a window shares no
-  audio with what is already transcribed, so the overlap search cannot find a
-  seam and the unalignable-window fallback would have replaced everything said
-  before the pause. The append must stay driven by *measured* silence: an
-  unconditional append is what grew to 896 junk words during two minutes of an
-  open microphone.
+  and in the streaming path an invented window can never be aligned against
+  the accumulated text, so the merge fell back to *replacing* it. The rolling
+  partial measures the audio that arrived since the last partial and skips it
+  below `silence_gate_threshold`; the fast finalizer measures exactly its own
+  trailing window (`_stream_tail_window_is_silent`). Without the finalizer
+  half, a dictation that simply ended with a quiet stretch lost its entire
+  transcript at the last step. Unmeasurable audio returns `None` from the
+  meter and is never treated as silence — refusing to decode something that
+  could not be measured would drop real speech. Note the asymmetry: the
+  partial gate looks at the *increment*, not the 8 s window it decodes, which
+  is why the post-pause case below needs its own, stronger measurement.
+- **A quiet microphone can still gate a whole streaming dictation to nothing**,
+  exactly as it can for a batch recording; the threshold is the same and is
+  backed by the field data in the batch entry. The result surfaces as the
+  ordinary "No speech detected" path.
+- **A window after a pause is appended only when it is shown to hold speech**:
+  `_StreamResult.silent_seconds` accumulates the skipped audio (tracked even
+  when the gate is switched off — wiring two behaviours to one checkbox meant
+  disabling the gate silently disabled the pause handling too). A window
+  arriving after more than `stream_partial_window_s` of silence shares no
+  audio with what is already transcribed, so the overlap search has nothing
+  to anchor on and the window is taken on trust. That is the most dangerous
+  input there is, so the decision measures the window that will *actually be
+  decoded* with `vad.measure_speech_seconds_pcm` and requires
+  `STREAMING_NEW_SEGMENT_MIN_SPEECH_S` of above-threshold audio in it.
+  A peak measurement is not enough: a 5 ms keyboard click clears it, and each
+  click ending a pause then appended a fresh hallucination that the
+  merged-text callback pasted straight into the document (measured: the
+  transcript grew by one invented sentence per click). A window that fails
+  this test is not decoded at all, because too little speech to append on
+  trust is also too little to trust a *replace* — decoding it is how an
+  invented sentence wiped a real dictation. The finalizer applies the same
+  rule to its trailing window. Never relax this back to `silent_seconds`
+  alone, and never make the append unconditional: that is what grew to 896
+  junk words during two minutes of an open microphone.
 - **The stream partial callback carries the merged transcript, not the window**:
   the controller's locked-prefix insertion compares against what it has already
   pasted, and a raw rolling window does not contain that text — so live
   insertion froze for the rest of the session as soon as the window rolled past
   it, while the overlay still reported progress. The transcriber merges and
   emits `session.result.merged_text`; the controller must not re-merge.
-- **A live insert that fails gives its words back**: `apply_partial_append_only`
-  marks text committed the moment it is handed to the inserter, so a failed
-  paste would otherwise lose it for good — the locked prefix can never offer it
-  again. The controller calls `StreamingTextState.rollback_commit(previous)` and
-  retries; after `STREAMING_LIVE_INSERT_RETRY_LIMIT` consecutive failures it
-  aborts the session rather than dictating into a window that is not accepting
-  text.
+- **A live insert that fails gives its words back — unless it may have landed**:
+  `apply_partial_append_only` marks text committed the moment it is handed to
+  the inserter, so a failed paste would otherwise lose it for good: the locked
+  prefix can never offer it again. The controller calls
+  `StreamingTextState.rollback_commit(previous)` and retries on the next
+  partial. **Two failure paths run *after* the paste keystroke** — the
+  post-paste clipboard-contention check and "text pasted but clipboard restore
+  failed" — and rolling those back pastes the same words twice, up to the
+  retry limit. They therefore raise `TextMayHaveBeenPastedError`, which the
+  retry refuses to act on; keep any new post-paste failure on that class.
+  `STREAMING_LIVE_INSERT_RETRY_LIMIT` is deliberately small (3): each attempt
+  runs on the Qt thread and a held modifier costs the full 1.5 s modifier-
+  release timeout, so a large limit turns a stuck target into seconds of
+  unresponsive UI.
 - **A remote stream handshake never runs on the Qt thread**: Deepgram waits up
   to 8 s for its socket (`connected.wait(timeout=8.0)`) and the AssemblyAI SDK
   connects synchronously. Called inline from `_start_streaming_recording` that
@@ -1160,13 +1190,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   moment the user pressed the hotkey to start talking. `_begin_stream_connect`
   opens the microphone first and runs the handshake on a worker thread; audio
   recorded meanwhile is buffered (`_stream_preconnect_chunks`, bounded by
-  `STREAMING_PRECONNECT_BUFFER_MAX_BYTES`) and flushed **in order** on that same
-  worker before the completion signal, so nothing is lost. The buffer is cleared
-  and `_stream_connect_generation` bumped by `_reset_streaming_state`, which is
-  what stops a late flush from pushing one session's audio into the next. The
-  overlay says "Connecting… You can speak now" until the stream is live, because
-  the microphone genuinely is open. Consequence for tests: a stream-start
-  failure now arrives through a queued signal, not on the caller's stack.
+  `STREAMING_PRECONNECT_BUFFER_MAX_BYTES` — past that the newest chunks are
+  dropped with a warning) and flushed **in order** on that same worker before
+  the completion signal. The overlay says "Connecting to the speech service.
+  You can speak now." until the stream is live, because the microphone
+  genuinely is open. Consequence for tests: a stream-start failure now arrives
+  through a queued signal, not on the caller's stack.
+- **Stopping or aborting must retire an in-flight handshake, never race it**:
+  `stop_stream()` called while `start_stream()` is still running is not a
+  no-op. The provider rejects the stop because the session is not active
+  *yet*, the handshake then publishes a socket nobody owns and marks it
+  active, and every later dictation fails with "Streaming session already
+  active" until the app restarts — from one hotkey press inside the 8 s
+  window, or from a single microphone failure. `_submit_stream_finalize`
+  therefore hands the connect thread to the job and
+  `_finalize_stream_worker` joins it (bounded by
+  `STREAMING_CONNECT_JOIN_TIMEOUT_S`, off the Qt thread) before stopping;
+  the capture-start failure path uses `_teardown_pending_stream_connect` for
+  the same reason. Both also bump `_stream_connect_generation` and clear the
+  buffer, which is what keeps a late flush out of the next session. A stale
+  flush must **refuse to push without clearing the buffer** — clearing it
+  destroyed the live session's buffer and killed the new dictation.
 - **Remote stream finalizes have their own worker**: `_executor` stays
   `max_workers=1` so two local models never load at once, but a remote finalize
   loads nothing — `stop_stream()` drains a socket. Sharing that queue meant
@@ -1181,8 +1225,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   inserts its result into the window that was focused when it was recorded
   (plus history); `history` keeps it but only saves to history; `cancel`
   requests a real stop and, if it still finishes, keeps it in history. Local and
-  remote share the single `max_workers=1` transcription executor, so jobs
-  serialize — this only changes delivery, never runs two at once. Each recording
+  remote *batch* work shares the single `max_workers=1` transcription
+  executor, so those jobs serialize — this only changes delivery. The one
+  exception is a remote stream finalize, which has its own single worker
+  (`_stream_finalize_executor_for`) because it drains a socket instead of
+  loading a model: it can overlap one local batch job, so a remote
+  finalize can complete ahead of an earlier token. Each recording
   snapshots its target window into a `_TranscriptionJob`; the job also carries
   `background_delivery` (`insert`/`history`) and `aborting`. A result is
   "foreground" only when its token is active, no newer recording is active, and
@@ -1340,7 +1388,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   shared runtime, preventing a stream-finalizer/executor deadlock.
 - **Normal transcription stays threaded, not isolated**: batch/stream
   transcription runs in the shared `max_workers=1` executor with models
-  preloaded; faster-whisper (CTranslate2) and ONNX Runtime release the GIL
+  preloaded (remote stream finalizes excepted — see the concurrent-mode
+  entry above); faster-whisper (CTranslate2) and ONNX Runtime release the GIL
   during inference and the Cohere/Granite Node path is already its own
   subprocess, so dictation does not freeze the UI. Do not move it to a
   subprocess — that would break the preload latency guarantee and streaming.

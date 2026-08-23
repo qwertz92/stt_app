@@ -1297,6 +1297,21 @@ class _LocalModelsMixin:
         if not hasattr(self, "local_model_download_progress_bar"):
             return
         _snapshot_active, queued, running = self._local_model_download_snapshot()
+        if model_download_coordinator().waiting_for_other_process():
+            # Blocked on a *different process* holding the cache directory.
+            # `coordinator.active()` is None in that case, so without this
+            # the tab printed "Starting 'X'" and then hung silently -- the
+            # same "0% forever" symptom the slot was built to remove. The
+            # progress bar deliberately stays hidden: nothing is being
+            # written here, so any percentage would be invented.
+            self.local_models_action_label.setStyleSheet("color: #0d47a1;")
+            self.local_models_action_label.setText(
+                "Waiting for another program to finish using the model "
+                "cache. The download starts as soon as it is free."
+            )
+            self.local_model_download_progress_bar.setVisible(False)
+            self._local_model_download_bar_shown = False
+            return
         # Deliberately not the snapshot's first element: that folds in a merely
         # *claimed* entry (popped, still waiting for the slot). Measuring one of
         # those reports another model's directory growth as its progress and

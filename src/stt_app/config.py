@@ -25,11 +25,19 @@ DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 # old "Ctrl+Win+LShift") registers successfully and can then never fire.
 # Ctrl+Win+Space is deliberately absent — Windows owns it for input-language
 # switching.
+#
+# Function keys only, and no combination that a common editor already binds.
+# RegisterHotKey takes a combination *globally*: the foreground app never
+# sees it again. Falling back to `Ctrl+Shift+Space` would silently break
+# parameter hints in VS Code and Visual Studio and smart-complete in the
+# JetBrains IDEs, machine-wide, with no prompt and no way to opt out —
+# an unacceptable price for an automatic substitution the user never chose.
+# F9/F10/F12 with Ctrl+Alt or Ctrl+Win are unbound in mainstream editors.
 FALLBACK_HOTKEYS = (
     "Ctrl+Alt+F9",
-    "Ctrl+Shift+Space",
     "Ctrl+Win+F9",
-    "Ctrl+Alt+D",
+    "Ctrl+Alt+F8",
+    "Ctrl+Win+F8",
 )
 FALLBACK_HOTKEY = FALLBACK_HOTKEYS[0]
 # How often to try to reclaim the preferred hotkey while running on a fallback.

@@ -189,20 +189,26 @@ def test_new_segment_window_is_appended_not_aligned():
     )
 
 
-def test_new_segment_still_replaces_when_the_marker_is_absent():
+def test_the_append_happens_only_for_a_marked_new_segment():
     """The append must be driven by measured silence, never guessed at.
 
-    This is the counterpart of the test above and pins why the marker exists:
-    with the same two texts and no marker, the merge deliberately replaces,
-    because an unconditional append grows without bound while the microphone is
-    silent and the model hallucinates a fresh window every partial.
+    Asserting only the default path proves nothing -- it is unchanged, so it
+    passes with the whole feature removed. Compare the two calls instead: the
+    marker, and nothing else, is what turns a replace into an append. An
+    unconditional append grows without bound while the microphone is silent
+    and the model hallucinates a fresh window every partial.
     """
-    merged = merge_rolling_window_transcript(
-        "the first thing i said before the pause",
-        "and now something completely different",
-    )
+    previous = "the first thing i said before the pause"
+    window = "and now something completely different"
 
-    assert merged == "and now something completely different"
+    replaced = merge_rolling_window_transcript(previous, window)
+    appended = merge_rolling_window_transcript(previous, window, new_segment=True)
+
+    assert replaced == window, "an unmarked unalignable window must replace"
+    assert appended == f"{previous} {window}"
+    assert appended != replaced, (
+        "new_segment made no difference; the append path is not wired"
+    )
 
 
 def test_rollback_commit_lets_failed_insertion_text_be_offered_again():

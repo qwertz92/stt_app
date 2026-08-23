@@ -215,8 +215,11 @@ def test_the_slot_takes_a_cross_process_lock_on_the_cache_dir(monkeypatch, tmp_p
         lambda: during.append(list(held)),
     )
 
-    assert during == [[("acquire", r"C:\models")]]
-    assert held == [("acquire", r"C:\models"), ("release", r"C:\models")]
+    # The resource is the *normalized* cache path, not the raw setting:
+    # two spellings of one directory must map onto one lock.
+    expected = coordinator_module._cache_lock_resource(r"C:\models")
+    assert during == [[("acquire", expected)]]
+    assert held == [("acquire", expected), ("release", expected)]
 
 
 def test_an_empty_model_dir_maps_onto_one_shared_lock_identity():
@@ -311,4 +314,74 @@ def test_an_unlockable_filesystem_still_allows_downloads(monkeypatch, tmp_path):
         "m", r"C:\models", lambda: ran.append(True)
     )
     assert ran == [True]
+    assert coordinator.active() is None
+
+def test_waiting_for_another_process_is_observable_and_clears(monkeypatch, tmp_path):
+    """The UI must be able to say why nothing is happening.
+
+    Progress is directory growth, so while another process owns the cache
+    directory the bar reads a frozen 0% and the overlay claims to be
+    downloading -- verbatim the "0% forever" symptom the slot exists to
+    remove, reintroduced one level up.
+    """
+    from stt_app import model_download_coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module, "_download_lock_dir", lambda: tmp_path / "locks"
+    )
+    seen_while_waiting = []
+    coordinator = coordinator_module.ModelDownloadCoordinator()
+
+    class _SlowLock:
+        def __init__(self, resource, *, lock_dir):
+            pass
+
+        def acquire(self, *, cancel_check=None, poll_seconds=0.1):
+            seen_while_waiting.append(coordinator.waiting_for_other_process())
+            return True
+
+        def release(self):
+            pass
+
+    monkeypatch.setattr(coordinator_module, "CrossProcessLock", _SlowLock)
+
+    assert coordinator.waiting_for_other_process() is False
+    assert coordinator.acquire("m", r"C:\models", explicit=False) == (
+        coordinator_module.ACQUIRE_DOWNLOAD
+    )
+    assert seen_while_waiting == [True], "the wait was never observable"
+    assert coordinator.waiting_for_other_process() is False, (
+        "the flag stayed set after the lock was taken"
+    )
+    coordinator.release("m", r"C:\models", succeeded=True)
+    assert coordinator.waiting_for_other_process() is False
+
+
+def test_a_cancelled_cross_process_wait_clears_the_waiting_flag(
+    monkeypatch, tmp_path
+):
+    from stt_app import model_download_coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module, "_download_lock_dir", lambda: tmp_path / "locks"
+    )
+
+    class _NeverAvailable:
+        def __init__(self, resource, *, lock_dir):
+            pass
+
+        def acquire(self, *, cancel_check=None, poll_seconds=0.1):
+            return False
+
+        def release(self):  # pragma: no cover - never acquired
+            raise AssertionError("released a lock that was never acquired")
+
+    monkeypatch.setattr(coordinator_module, "CrossProcessLock", _NeverAvailable)
+    coordinator = coordinator_module.ModelDownloadCoordinator()
+
+    with pytest.raises(coordinator_module.ModelDownloadCanceled):
+        coordinator.acquire("m", r"C:\models", explicit=False,
+                            cancel_check=lambda: True)
+
+    assert coordinator.waiting_for_other_process() is False
     assert coordinator.active() is None

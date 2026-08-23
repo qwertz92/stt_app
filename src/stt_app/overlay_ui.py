@@ -402,8 +402,19 @@ class OverlayUI(QtWidgets.QWidget):
         root.addWidget(container)
 
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
-        self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
+        # Capture the baseline from a one-line state, *before* the real
+        # initial detail is applied. Compact states now grow to fit, so
+        # measuring after a detail line that already needs more than
+        # OVERLAY_DETAIL_MIN_HEIGHT bakes that overflow into the baseline --
+        # and `_update_detail_height` then adds the same overflow again on
+        # top of it. At the default 9 pt the initial line fits and nothing
+        # changes; at the larger system font sizes Windows offers under
+        # Accessibility > Text size it does not, and every state rendered
+        # permanently oversized (measured: 198 px for a one-line idle that
+        # should be 138 px at 12 pt, 234 px at 24 pt).
+        self.set_state("Idle", "Ready.")
         self._initial_compact_size = QtCore.QSize(self.size())
+        self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
         self._sync_always_on_top_button()
 
