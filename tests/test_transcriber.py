@@ -1085,12 +1085,18 @@ def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
             transcriber._maybe_emit_partial()
 
         merged = transcriber._stream_session.result.merged_text
+        # Count here, not after stop_stream(): the drain calls
+        # _maybe_emit_partial for every queued chunk, so a starved worker
+        # still reaches 120 decodes on the way out and a count read
+        # afterwards can never detect that `merged` was measured too early.
+        decoded_before_stop = len(decoded)
     finally:
         transcriber.stop_stream()
 
-    assert len(decoded) > spoken_decodes + 40, (
-        f"only {len(decoded)} windows were decoded; the hallucination loop "
-        "never reached the model, so this test proves nothing"
+    assert decoded_before_stop > spoken_decodes + 40, (
+        f"only {decoded_before_stop} windows were decoded before the "
+        "transcript was read; the hallucination loop never reached the "
+        "model, so this test proves nothing"
     )
     assert merged.startswith("das ist"), (
         f"the real speech was destroyed by hallucinations: {merged!r}"

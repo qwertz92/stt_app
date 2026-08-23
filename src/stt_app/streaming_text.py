@@ -185,9 +185,17 @@ def merge_rolling_window(
     """`merge_rolling_window_transcript`, plus how it resolved."""
     previous = normalize_stream_text(previous_text)
     current = normalize_stream_text(current_text)
+    # An empty window (trailing silence, or one that decodes to nothing) is
+    # not a correction and must not wipe the accumulated text. Reported as
+    # aligned only in the sense that nothing was contradicted -- callers that
+    # act on `aligned` must also require growth, because an empty decode
+    # corroborates nothing.
     if not previous or not current:
         return RollingMergeResult(current or previous, aligned=bool(previous))
     if new_segment:
+        # A measured pause longer than the window: this audio shares nothing
+        # with what came before, so there is no seam to find. Appended on
+        # trust, and reported as NOT aligned -- nothing corroborated it.
         return RollingMergeResult(
             stream_join_text(previous, current), aligned=False
         )
@@ -211,14 +219,23 @@ def merge_rolling_window(
             ).strip()
             return RollingMergeResult(joined, aligned=True)
 
+    # Unalignable: the window replaces the accumulated text, bounded by the
+    # floor so it can only discard what the current window added.
     protected = normalize_stream_text(protected_prefix)
     if not protected:
         return RollingMergeResult(current, aligned=False)
+    # Either comparison is enough, and BOTH are needed. Word-only was tried
+    # and reverted: `stream_join_text` welds leading punctuation onto the
+    # previous word, so the floor's last word gains a "." on the very call
+    # that pins it, the word check fails, and the whole dictation is
+    # replaced. Raw-only misses a provider that re-cases a committed word.
     if not (
         previous.startswith(protected)
         or stream_text_extends(protected, previous)
     ):
         return RollingMergeResult(current, aligned=False)
+    # The window may already contain the floor (a provider that re-emits from
+    # the start). Joining then duplicates it.
     if stream_text_extends(protected, current):
         return RollingMergeResult(current, aligned=False)
     return RollingMergeResult(stream_join_text(protected, current), aligned=False)

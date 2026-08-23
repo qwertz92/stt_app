@@ -1197,7 +1197,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   cannot reach past it. Without this, one admitted transient could cost the
   whole dictation: its hallucination becomes the text the next real window
   has to align against, that alignment fails, and the replace wiped
-  everything. Three properties this depends on, each wrong once:
+  everything. Properties this depends on, each wrong once:
   - **The floor check accepts a raw prefix OR a word prefix.** Word-only was
     tried and reverted: `stream_join_text` welds leading punctuation onto the
     previous word, so the floor's last word gains a "." on the very call that
@@ -1210,19 +1210,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     Both halves are load-bearing. Aligning is the corroboration: two
     overlapping windows agreed on the seam. Requiring growth stops a ratchet:
     whisper repeats the same invented phrase across windows sharing 96% of
-    their audio, two identical windows align trivially, and pinning that made
+    their audio, two IDENTICAL windows align trivially, and pinning that made
     the phrase permanent while the next drift appended a fresh one after it
     (measured: 53 words from 4 of real speech, growing linearly with the
     pause). A repeat leaves the text unchanged, so requiring growth skips
-    exactly that case.
+    exactly that case. It closes the identical-repeat ratchet only: a
+    hallucination that grows in an alignable way is indistinguishable from
+    speech to the merge and is still pinned. That is inherent to an
+    energy-gated, text-alignment design without a spectral VAD.
   - **Pinning only at a measured pause left a hole against its own boundary.**
     Alignment already fails around 7.2-8.0 s of silence, before `new_segment`
     fires at 8.0 s, so an ordinary thinking pause had neither overlap nor
     floor and the replace wiped the whole dictation. The text then went
     backwards, so the locked prefix could never advance again and live
     insertion froze for the rest of the session too.
-  - **The bound is one window's contribution**: a replace can only discard
-    what the current window added.
+  - **The bound is one growing window's contribution**: a replace discards
+    what the last window that ADDED text contributed, not what the
+    current one did (the current one added nothing, which is why the
+    floor stalled). Fuzzed worst case 8 words; typically 1-3.
   - **A hallucination that survives to the next pause is pinned permanently.**
     Accepted: bounded junk that stays beats real text that disappears.
 - **A window after a pause is appended only when it is shown to hold speech**:
@@ -1236,27 +1241,34 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   to anchor on and the window is taken on trust. That is the most dangerous
   input there is, so the decision measures the window that will *actually be
   decoded* with `vad.measure_longest_speech_run_s` and requires
-  `STREAMING_NEW_SEGMENT_MIN_SPEECH_S` (0.15 s) of above-threshold audio.
-  A peak measurement is not enough: a 5 ms keyboard click clears it, and each
-  click ending a pause then appended a fresh hallucination that the
-  merged-text callback pasted straight into the document (measured: the
-  transcript grew by one invented sentence per click). **The value is a two-sided
-  cut and both sides are transcript loss**, so it is set from measurement —
-  **measured the way production measures it**: the longest run in the whole
-  trailing window, with the candidate audio embedded in 7 s of room tone.
-  Slicing the sample into 300 ms excerpts instead truncates every run at
-  the excerpt edge and invents short values the code never computes; that
-  error once halved the threshold to 0.08, below every desk transient.
-  In production shape: real speech runs in `samples/benchmark_sample.wav`
-  are 0.240–0.360 s, a 150 ms word cut from it measures 0.150 s, decaying
-  desk transients reach 0.140 s (door latch, lip smack) and typing 0.020 s.
-  The cut sits in the gap at 0.18. Three earlier values were reverted for
-  deleting text: 0.35 dropped short answers, 0.15 was carried across the
-  100→20 ms bucket change without being rederived, and 0.08 admitted every
-  transient above. **An energy gate cannot separate a resonant thump from
-  a short word** — a heavy low-frequency knock measures 0.20 s, the same as
-  a 200 ms word — so the residual risk is handled by bounding the damage
-  (`protected_prefix`), not by moving this number further. A window that fails
+  `STREAMING_NEW_SEGMENT_MIN_SPEECH_S` (**0.08 s** — the value in
+  `config.py` is authoritative; read its comment before touching it) of
+  above-threshold audio. A peak measurement is not enough: a 5 ms keyboard
+  click clears it, and each click ending a pause appended a fresh
+  hallucination that the merged-text callback pasted straight into the
+  document.
+
+  **Both sides of this cut are transcript loss, and four values have already
+  been wrong.** The history matters, because three of them were set as if a
+  clean separation existed:
+
+  | value | why it was reverted |
+  | ----- | ------------------- |
+  | 0.35  | deleted short answers after a pause ("Ja.", "Stopp.") |
+  | 0.15  | carried across the 100—>20 ms bucket change without being rederived |
+  | 0.18  | deleted "Bitte." (0.085 s) and "Stopp." (0.100 s) |
+  | **0.08** | **current.** Blocks silence; admits transients, by design |
+
+  One derivation was also methodologically wrong and is worth not repeating:
+  it sliced the sample into 300 ms excerpts, which truncates every run at the
+  excerpt edge and invents short values the code never computes — production
+  measures the longest run in the whole trailing window.
+
+  **An energy gate cannot separate a resonant thump from a short word** — a
+  heavy low-frequency knock and a 200 ms word both measure ~0.20 s, and a key
+  clack (0.080 s) and "Bitte." (0.085 s) are one bucket apart. So the residual
+  risk is handled by bounding the damage (`protected_prefix`), never by moving
+  this number further. A window that fails
   this test is not decoded at all, because too little speech to append on
   trust is also too little to trust a *replace* — decoding it is how an
   invented sentence wiped a real dictation. The finalizer applies the same

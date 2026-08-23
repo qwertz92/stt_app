@@ -334,3 +334,40 @@ def test_the_protected_prefix_also_survives_a_recased_transcript():
         "hallo welt und weiter", "voellig anderes", protected_prefix="Hallo Welt"
     )
     assert recased == "Hallo Welt voellig anderes"
+
+
+def test_the_merge_reports_which_branch_resolved_it():
+    """`aligned` is a public contract now, so pin it directly.
+
+    The caller decides whether to pin the floor from this flag. Inferring it
+    from `text.startswith(previous)` was wrong in both directions -- once a
+    floor exists the replace branch also returns text starting with
+    `previous`, which is what let hallucinations be pinned permanently.
+    """
+    from stt_app.streaming_text import merge_rolling_window
+
+    # Overlapping windows: aligned.
+    aligned = merge_rolling_window("das ist der erste", "der erste teil davon")
+    assert aligned.aligned is True
+    assert aligned.text == "das ist der erste teil davon"
+
+    # A pause: appended on trust, corroborated by nothing.
+    appended = merge_rolling_window("erster teil", "ganz neuer text", new_segment=True)
+    assert appended.aligned is False
+    assert appended.text == "erster teil ganz neuer text"
+
+    # Unalignable with a floor: bounded replace, and NOT aligned even though
+    # the result starts with `previous` -- the case the old inference missed.
+    floor = "erster teil"
+    replaced = merge_rolling_window(
+        floor, "voellig anderes fenster", protected_prefix=floor
+    )
+    assert replaced.aligned is False
+    assert replaced.text.startswith(floor), (
+        "precondition: the bounded replace does start with previous"
+    )
+
+    # An empty window changes nothing and must not be treated as corroboration
+    # by a caller that only checks `aligned`.
+    empty = merge_rolling_window("erster teil", "")
+    assert empty.text == "erster teil"

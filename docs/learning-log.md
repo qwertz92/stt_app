@@ -61,8 +61,10 @@ round's fixes -- twice a fix was worse than the bug it replaced.
   Measured afterwards: the meter buckets at 100 ms, so a 5-50 ms click
   reports 0.10 s and a real 150 ms word reports 0.20 s. 0.35 s therefore
   deleted short answers spoken after a pause -- "Ja.", "Stop." -- silently.
-  The cut is 0.15 s, and the test now pins it from both sides (raise it and
-  the word test fails; lower it and the click test fails).
+  The cut was set to 0.15 s at the time. It moved twice more afterwards and
+  now sits at 0.08 -- see the table in AGENTS.md, and treat `config.py` as
+  authoritative. A log entry records what was believed on the day; do not
+  read a value out of one of these entries and act on it.
 - **A fix that pasted twice.** Rolling a failed live insert back is right
   only while the paste keystroke has not gone out. Two failure paths run
   after it, and the first attempt tagged them one exception class at a time

@@ -1028,7 +1028,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         #   same invented phrase across windows that share 96% of their audio,
         #   and two identical windows "align" trivially. Pinning that made the
         #   phrase permanent, and the next drift appended a fresh one after
-        #   it: measured at 52 words from 4 of real speech over 12 s, growing
+        #   it: measured at 53 words from 4 of real speech, growing
         #   linearly with the pause. A repeat leaves the text unchanged, so
         #   requiring growth skips exactly that case while real speech, which
         #   adds words, advances normally.
