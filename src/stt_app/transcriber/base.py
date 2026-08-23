@@ -34,34 +34,47 @@ class TranscriptionCanceled(Exception):
 # into the user's document. They are model metadata that leaked through the
 # decoder, never something that was said.
 #
-# Only the two forms actually observed are matched, and deliberately not a
-# bare "<xx>": that shape is indistinguishable from ordinary markup, and a
-# dictation about HTML would lose "<div>", "<br>" or "<tr>" -- "tr" is even a
-# real language code. Requiring either the pipe wrapper or a region subtag
-# separates the two cases without guessing.
+# The subtags are matched by SHAPE, not by "any alphanumerics". A pattern of
+# "<xx-anything>" reads far too much ordinary dictation as a locale and
+# deletes it without trace -- measured, it ate "<my-widget>", "<el-button>",
+# "<ion-button>", "<dom-if>" and "<log-2026>". A BCP-47 region is two
+# UPPERCASE letters or three digits and a script is four letters in title
+# case, none of which a web component or a filename looks like.
+#
+# A bare "<xx>" is deliberately not matched either: it cannot be told apart
+# from markup, and "<tr>", "<br>", "<td>" would go -- "tr" is even a real
+# language code.
+_LANGUAGE_SUBTAG = r"[A-Za-z]{2,3}"
+_REGION_SUBTAG = r"(?:[A-Z]{2}|[0-9]{3})"
+_SCRIPT_SUBTAG = r"[A-Z][a-z]{3}"
 _LANGUAGE_TAG_PATTERN = re.compile(
     "|".join(
         (
-            # <|en|>, <|de|>
-            r"<\|[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*\|>",
+            # <|en|>, <|de-DE|> -- the pipe wrapper is unambiguous on its own
+            rf"<\|{_LANGUAGE_SUBTAG}(?:-[A-Za-z0-9]{{2,8}})*\|>",
             # <de-DE>, <zh-Hans-CN>
-            r"<[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})+>",
+            rf"<{_LANGUAGE_SUBTAG}"
+            rf"(?:-{_SCRIPT_SUBTAG})?"
+            rf"-{_REGION_SUBTAG}>",
         )
     )
 )
 
 
 def strip_language_tags(text: str) -> str:
-    """Remove inline locale markers a model leaked into its transcript."""
+    """Remove inline locale markers a model leaked into its transcript.
+
+    Whitespace-preserving on purpose. This runs per decoded chunk in the
+    streaming path and the caller concatenates the results, so trimming the
+    ends would weld the last word of one chunk onto the first word of the
+    next ("Guten Tag" + " heute" becoming "Guten Tagheute").
+    """
     if not text or "<" not in text:
         return text
-    cleaned = _LANGUAGE_TAG_PATTERN.sub(" ", text)
+    cleaned = _LANGUAGE_TAG_PATTERN.sub("", text)
     if cleaned == text:
         return text
-    # Collapse only the whitespace the removal introduced, and keep the
-    # original leading/trailing shape so callers that join segments are
-    # unaffected.
-    return re.sub(r"[ 	]{2,}", " ", cleaned).strip()
+    return re.sub(r"[ 	]{2,}", " ", cleaned)
 
 class ITranscriber(ABC):
     #: Polled while the transcriber waits for something interruptible. Every

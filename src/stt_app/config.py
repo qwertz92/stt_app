@@ -37,8 +37,14 @@ DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 #                     Microsoft Excel. In-app rather than a global grab --
 #                     which is exactly why taking it globally is worse: Excel
 #                     would never receive the key again on that machine.
-#   Ctrl+Alt+F1/F6/F8/F11/F12  Intel Graphics registers these system-wide on
-#                     most Intel machines, and says F8 cannot be disabled.
+#   Ctrl+Alt+F1/F6/F8/F11/F12  the legacy Intel Graphics Control Panel could
+#                     register these system-wide, when it is installed and
+#                     its hotkeys are enabled -- often neither is true, and
+#                     the newer Command Center dropped the feature. Note
+#                     DEFAULT_CANCEL_HOTKEY and DEFAULT_SHOW_OVERLAY_HOTKEY
+#                     are in that range: they are user-visible defaults the
+#                     user can change and sees fail loudly, which is a very
+#                     different thing from a silent automatic substitution.
 #   Ctrl+Win+Space    Windows owns it for input-language switching
 # That rules out the whole Ctrl+Alt+F-key row. Ctrl+Win with a function key
 # is the space that is actually free: editors bind Ctrl+Alt and Ctrl+Shift
@@ -48,12 +54,13 @@ DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 # peripheral suites found no default on Win+Ctrl+F6..F9. All four were also
 # verified free on a normal desktop.
 #
-# F10/F11/F12 are deliberately absent: they are this app's own default
-# cancel, show-overlay and re-paste keys, and taking one as a recording
-# fallback would make the user's own second hotkey fail to register
-# "because another program has it" -- that other program being this one.
-# `_register_hotkey_with_fallback` also skips any fallback that collides
-# with the configured cancel/overlay/repaste hotkeys.
+# F10/F11/F12 are left out as a precaution only: the app's own defaults sit
+# on Ctrl+Alt+F11 and Ctrl+Alt+F12, and keeping the recording fallback out
+# of that number range avoids confusing a user who reads both lists. It is
+# not a technical collision -- Ctrl+Win+F11 and Ctrl+Alt+F11 are different
+# hotkeys, and all of Ctrl+Win+F10/F11/F12 measured free. The real guard is
+# in `_register_hotkey_with_fallback`, which skips any fallback equal to the
+# user's configured cancel, overlay or re-paste hotkey.
 FALLBACK_HOTKEYS = (
     "Ctrl+Win+F9",
     "Ctrl+Win+F8",
@@ -1200,6 +1207,16 @@ STREAMING_LIVE_INSERT_RETRY_LIMIT = 3
 # or cough after a long pause still qualifies and its invented sentence is
 # appended. The damage is bounded to that one window -- the unbounded growth
 # needs every window to qualify, which continuous silence no longer does.
+# Bucket size for that measurement, deliberately much finer than the batch
+# gate's SILENCE_GATE_WINDOW_MS. At 100 ms two keystrokes 100-150 ms apart
+# land in ADJACENT buckets, so the run never breaks and typing is
+# indistinguishable from a spoken word -- measured, typing at 120 wpm
+# reported a 1.5 s "speech" run. At 20 ms the silence between keystrokes
+# falls in its own bucket and breaks the run. Measured at 20 ms: a 150 ms
+# word reports 0.16 s, a 300 ms word 0.30 s, while two clicks 100 ms apart
+# report 0.02 s, a double-click 0.04 s, and typing at 80-120 wpm 0.02 s.
+STREAMING_SPEECH_RUN_WINDOW_MS = 20
+
 STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.15
 
 # How much audio may pile up while a remote streaming provider is still

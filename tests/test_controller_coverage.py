@@ -4,6 +4,8 @@ transcription_worker error branches, streaming abort, focus poll."""
 from __future__ import annotations
 
 import logging
+
+import pytest
 import os
 import concurrent.futures
 import threading
@@ -2546,6 +2548,62 @@ def test_a_suspended_stream_does_not_paste_into_the_other_window(monkeypatch):
 
         assert len(inserter.calls) == pasted_before, (
             f"pasted into the foreign window while suspended: {inserter.calls}"
+        )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "Ctrl+Win+F9",
+        "Win+Ctrl+F9",
+        "Control+Win+F9",
+        "Ctrl + Win + F9",
+        "ctrl+win+f9",
+        "  Ctrl+Win+F9  ",
+    ],
+)
+def test_the_fallback_guard_recognises_every_spelling_of_the_same_hotkey(spelling):
+    """Windows sees one hotkey; a text comparison sees six different strings.
+
+    The guard exists so a fallback never steals the key the user assigned to
+    Cancel. Comparing the typed string let a hand-edited settings.json walk
+    straight past it and reintroduce the collision.
+    """
+    from stt_app.config import FALLBACK_HOTKEYS
+    from stt_app.hotkey import HotkeyRegistrationError
+
+    registered: list[str] = []
+
+    class _OnlyPreferredIsBusy:
+        hotkey_id = 1
+        is_registered = False
+
+        def register(self, hotkey):
+            if hotkey == "Ctrl+Alt+Space":
+                raise HotkeyRegistrationError("in use by another program")
+            registered.append(hotkey)
+            self.is_registered = True
+
+        def unregister(self):
+            self.is_registered = False
+
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey="Ctrl+Alt+Space", cancel_hotkey=spelling)
+        ),
+        hotkey_manager=_OnlyPreferredIsBusy(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+    )
+    try:
+        registered.clear()
+        assert controller._register_hotkey_with_fallback() is True
+        assert registered == [FALLBACK_HOTKEYS[1]], (
+            f"cancel is bound to {spelling!r}, but the recording fallback took "
+            f"{registered} anyway"
         )
     finally:
         controller.shutdown()

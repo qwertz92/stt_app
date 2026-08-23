@@ -30,6 +30,7 @@ from ..config import (
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
     STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
+    STREAMING_SPEECH_RUN_WINDOW_MS,
     STREAMING_PARTIAL_WINDOW_S,
     VALID_MODEL_SIZES,
     language_modes_for_selection,
@@ -1021,7 +1022,10 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if max_bytes > 0 and len(snapshot) > max_bytes:
             snapshot = snapshot[-max_bytes:]
         speech_seconds = measure_longest_speech_run_s(
-            snapshot, self.stream_sample_rate, self.silence_gate_threshold
+            snapshot,
+            self.stream_sample_rate,
+            self.silence_gate_threshold,
+            window_ms=STREAMING_SPEECH_RUN_WINDOW_MS,
         )
         if speech_seconds is None:
             return False

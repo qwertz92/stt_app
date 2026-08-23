@@ -330,3 +330,45 @@ def test_nemotron_decode_strips_the_locale_marker_it_emits():
     assert "<de-DE>" not in decoded, f"locale marker reached the transcript: {decoded!r}"
     assert "<de-DE>" not in session.text
     assert decoded.strip() == "Hallo Welt"
+
+
+def test_a_locale_marker_split_across_decode_chunks_is_still_removed():
+    """A chunk boundary can fall inside the marker.
+
+    The model decodes in 560 ms chunks, so "<de-" can arrive in one and "DE>"
+    in the next. Neither half matches on its own; only the accumulated text
+    does. Without that second pass the marker reaches the document intact.
+    """
+    from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
+
+    class _Session:
+        def __init__(self):
+            self.text = ""
+
+    session = _Session()
+    for chunk in (["Guten", " Tag <de-"], ["DE> heute", " ist"]):
+        pieces = iter(chunk)
+        remaining = {"n": len(chunk)}
+
+        class _Generator:
+            def is_done(self):
+                return remaining["n"] <= 0
+
+            def generate_next_token(self):
+                remaining["n"] -= 1
+
+            def get_next_tokens(self):
+                return [object()]
+
+        class _Tokenizer:
+            def decode(self, _token):
+                return next(pieces, "")
+
+        session.generator = _Generator()
+        session.tokenizer_stream = _Tokenizer()
+        LocalNemotronTranscriber._decode_available(session)
+
+    assert "<de-DE>" not in session.text, f"marker survived: {session.text!r}"
+    assert session.text == "Guten Tag heute ist", (
+        f"word boundaries were corrupted: {session.text!r}"
+    )

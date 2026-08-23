@@ -227,8 +227,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   original queue behavior). The modifier-release wait above is what makes this
   safe: the historical "insert near a hotkey press fails" bug was the
   held-modifier Ctrl+V corruption. A streaming capture never allows
-  mid-recording pastes (live inserts write at the caret and a focus change
-  aborts the stream); an in-progress recording start/stop always blocks.
+  mid-recording pastes (live inserts write at the caret, and a focus change
+  suspends them); an in-progress recording start/stop always blocks.
   Deferral is decided per job in the flush
   (`_can_insert_during_active_recording`). In the UI this is folded into the
   "While transcribing" combo as a fourth choice (`insert_immediate` UI value in
@@ -1143,6 +1143,47 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   exactly as it can for a batch recording; the threshold is the same and is
   backed by the field data in the batch entry. The result surfaces as the
   ordinary "No speech detected" path.
+- **A focus change suspends live insertion; it no longer aborts the stream**:
+  live inserts write at the caret, so once another window is in front the
+  words land in the wrong document. Ending the whole dictation for that was
+  far more disruptive than the problem — people switch windows mid-thought
+  and everything said afterwards was gone. `_on_stream_focus_poll` now sets
+  `_stream_insertion_suspended`; the session keeps recording and the whole
+  tail past `committed_text` is inserted into the original window at stop.
+  Three things this depends on, each of which was wrong once:
+  - **The poll timer must be armed unconditionally.** Starting it only when
+    `STREAMING_ABORT_ON_FOCUS_CHANGE` was set made the suspension dead code
+    *and* removed the old protection, so partials pasted into whatever
+    window happened to be in front — strictly worse than the abort.
+  - **`live_text` must keep updating while suspended.** It is what
+    `_current_streaming_partial_text` prefers, so leaving it stale made an
+    abort or a dropped socket save the pre-switch text and silently drop
+    everything dictated after the switch. Only `committed_text` stays put —
+    that tracks what actually reached a document.
+  - `STREAMING_ABORT_ON_FOCUS_CHANGE` still selects the old hard abort, and
+    the tests for that behaviour opt into it explicitly.
+- **The post-pause speech measurement buckets at 20 ms, not 100 ms**
+  (`STREAMING_SPEECH_RUN_WINDOW_MS`). It takes the longest *unbroken* run
+  above the threshold, and the bucket size is what makes that meaningful: at
+  100 ms two keystrokes 100–150 ms apart fall into adjacent buckets, the run
+  never breaks, and typing at 120 wpm measured a 1.5 s "speech" run — longer
+  than most words. At 20 ms the gap between keystrokes gets its own bucket.
+  Measured: a 150 ms word 0.16 s and a 300 ms word 0.30 s, against 0.02 s
+  for typing at 80–120 wpm and 0.04 s for a mouse double-click. Summing all
+  loud buckets instead of taking the longest run does not work either — two
+  clicks 300 ms apart total exactly as much as one 150 ms word.
+- **Inline locale markers are stripped by subtag *shape***
+  (`transcriber/base.py:strip_language_tags`). Nemotron emits "<de-DE>" or
+  "<|en|>" inline in automatic-language mode and it was pasted into the
+  document. Matching "<xx-anything>" deletes far too much real dictation —
+  measured, it ate `<my-widget>`, `<el-button>`, `<dom-if>` and `<log-2026>`
+  — so a region must be two uppercase letters or three digits and a script
+  four letters in title case. A bare `<xx>` is never matched: `<tr>`, `<br>`
+  and `<td>` are markup, and "tr" is a real language code. The function must
+  **not** trim its result: it runs per decoded chunk and the caller
+  concatenates, so trimming welds "Guten Tag" onto "heute". Nemotron strips
+  the accumulated text too, because a chunk boundary can fall inside a
+  marker and neither half matches alone.
 - **A window after a pause is appended only when it is shown to hold speech**:
   `_StreamResult.silent_seconds` accumulates the skipped audio (tracked even
   when the gate is switched off — wiring two behaviours to one checkbox meant
@@ -1551,8 +1592,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Known limitations
 
-- Streaming: inserted text is append-only and never rewritten; focus-change
-  abort remains best-effort.
+- Streaming: inserted text is append-only and never rewritten. A focus
+  change suspends live insertion rather than aborting the session; the
+  detection is best-effort polling, so a very brief switch can be missed.
+- The post-pause append gate is an energy measurement, not a real VAD. A
+  sustained non-speech sound after a long pause (a ~400 ms cough or chair
+  scrape) can still authorise appending one hallucinated window.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - NVIDIA Parakeet remains intentionally unimplemented through NeMo; Nemotron

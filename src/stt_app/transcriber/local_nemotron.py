@@ -280,7 +280,15 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         # where decoded pieces become transcript, so batch, live partials
         # and the final text are all covered by a single rule.
         text = strip_language_tags(text)
-        session.text += text
+        # Strip the accumulated text as well. A chunk boundary can fall
+        # inside a marker ("<de-" then "DE>"), which neither half matches on
+        # its own; the concatenation does. The per-chunk pass above is still
+        # needed so live partials are clean as they are emitted.
+        combined = strip_language_tags(session.text + text)
+        if combined != session.text + text:
+            session.text = combined
+        else:
+            session.text += text
         return text
 
     def _process_samples(self, session: _InferenceSession, samples: np.ndarray) -> str:

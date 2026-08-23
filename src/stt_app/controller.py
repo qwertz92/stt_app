@@ -64,7 +64,7 @@ from .config import (
     language_modes_for_selection,
     supports_streaming,
 )
-from .hotkey import HotkeyManager, HotkeyRegistrationError
+from .hotkey import HotkeyManager, HotkeyRegistrationError, parse_hotkey
 from .last_recording_store import LastRecordingStore
 from .model_download_coordinator import (
     ACQUIRE_JOINED,
@@ -1033,6 +1033,7 @@ class DictationController(QtCore.QObject):
         # deliver its first callback from inside ``start()``; publishing these
         # references afterward silently dropped those first audio blocks.
         self._stream_abort_requested = False
+        self._stream_insertion_suspended = False
         self._stream_insert_failures = 0
         self._stream_text_state.reset()
         self._active_session_mode = "streaming"
@@ -1075,8 +1076,12 @@ class DictationController(QtCore.QObject):
         )
         self._active_batch_settings = None
         self._arm_audio_callback_watchdog(capture)
-        if STREAMING_ABORT_ON_FOCUS_CHANGE:
-            self._focus_poll_timer.start()
+        # Always armed. The poll itself decides what a focus change means
+        # (abort, or suspend insertion); gating the timer on the abort flag
+        # left the suspension unreachable and dropped the protection
+        # entirely -- live partials then pasted into whatever window
+        # happened to be in front.
+        self._focus_poll_timer.start()
         if not (
             self._stream_text_state.live_text
             or self._stream_text_state.last_partial_text
@@ -3567,10 +3572,23 @@ class DictationController(QtCore.QObject):
             if job_count > 1
             else f"{self._job_identity(job)} was"
         )
-        message = (
-            f"{identity} transcribed but could not be inserted. "
-            "The text is saved in history."
-        )
+        # The same distinction the foreground path makes: two failure paths
+        # run *after* the paste keystroke, so the text is probably already
+        # in the document. Claiming it "could not be inserted" and offering
+        # an Insert button then pastes it a second time -- the duplicate
+        # paste this class of bug keeps producing.
+        may_have_pasted = bool(self._last_insert_may_have_pasted)
+        if may_have_pasted:
+            message = (
+                f"{identity} was inserted, but the clipboard could not be "
+                "restored afterwards. Check the target window before "
+                "inserting it again. The text is saved in history."
+            )
+        else:
+            message = (
+                f"{identity} transcribed but could not be inserted. "
+                "The text is saved in history."
+            )
         self.background_insertion_failed.emit(message)
         if self._overlay_session_active() or self._foreground_delivery_pending:
             # A newer session owns the overlay (or is one statement away from
@@ -3586,7 +3604,9 @@ class DictationController(QtCore.QObject):
             "Error",
             detail,
             copy_text=text,
-            error_action=OVERLAY_ERROR_ACTION_INSERT,
+            error_action=(
+                None if may_have_pasted else OVERLAY_ERROR_ACTION_INSERT
+            ),
         )
         self._reveal_overlay_result(is_error=True)
 
@@ -3884,6 +3904,15 @@ class DictationController(QtCore.QObject):
                     )
                     return
         else:
+            # Keep the live text current even though nothing is pasted.
+            # `_current_streaming_partial_text` prefers `live_text`, so
+            # leaving it stale made an abort or a dropped socket save the
+            # text from before the window switch and silently drop
+            # everything dictated after it. Only `committed_text` stays
+            # where it is -- that tracks what actually reached a document,
+            # and the finalize inserts the whole tail past it at stop.
+            self._stream_text_state.live_text = display_text
+            self._stream_text_state.last_partial_text = display_text
             self._stream_last_partial_text = text
         if len(display_text) > STREAMING_OVERLAY_MAX_CHARS:
             display_text = display_text[-STREAMING_OVERLAY_MAX_CHARS:]
@@ -4893,19 +4922,35 @@ class DictationController(QtCore.QObject):
         # first, so a fallback that collided would make the cancel, overlay
         # or re-paste registration fail afterwards with "in use by another
         # program" -- the other program being this one.
-        reserved = {
-            combo.strip().casefold()
-            for combo in (
-                getattr(self._settings, "cancel_hotkey", ""),
-                getattr(self._settings, "show_overlay_hotkey", ""),
-                getattr(self._settings, "repaste_hotkey", ""),
-            )
-            if combo and combo.strip()
-        }
+        # Compare the parsed (modifiers, key) pair, not the typed string.
+        # "Ctrl+Win+F9", "Win+Ctrl+F9", "Control+Win+F9" and "Ctrl + Win + F9"
+        # are the same hotkey to Windows but four different strings, so a
+        # hand-edited settings.json walked straight past a text comparison.
+        reserved = set()
+        for combo in (
+            getattr(self._settings, "cancel_hotkey", ""),
+            getattr(self._settings, "show_overlay_hotkey", ""),
+            getattr(self._settings, "repaste_hotkey", ""),
+        ):
+            if not combo or not combo.strip():
+                continue
+            try:
+                reserved.add(parse_hotkey(combo))
+            except (ValueError, TypeError):
+                # An unparsable stored hotkey cannot be registered either,
+                # so it cannot collide with anything.
+                continue
         for fallback in FALLBACK_HOTKEYS:
             if fallback == preferred:
                 continue
-            if fallback.casefold() in reserved:
+            try:
+                fallback_key = parse_hotkey(fallback)
+            except (ValueError, TypeError):
+                self._logger.error(
+                    "Fallback hotkey %s is not a valid combination.", fallback
+                )
+                continue
+            if fallback_key in reserved:
                 self._logger.info(
                     "Skipping fallback hotkey %s: it is assigned to another "
                     "action in this app.",

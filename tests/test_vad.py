@@ -2,10 +2,12 @@ import math
 import struct
 
 import numpy as np
+import pytest
 
 from stt_app.config import (
     DEFAULT_SILENCE_GATE_THRESHOLD,
     STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
+    STREAMING_SPEECH_RUN_WINDOW_MS,
 )
 from stt_app.vad import EnergyVad, measure_longest_speech_run_s
 
@@ -107,41 +109,66 @@ def _pcm(milliseconds, amplitude, sample_rate=16000):
     )
 
 
-def test_scattered_transients_do_not_add_up_to_speech():
-    """Typing must not look like a spoken word.
+def _clicks(count, gap_ms, click_ms=5, amplitude=9000):
+    audio = _pcm(200, 20)
+    for _ in range(count):
+        audio += _pcm(click_ms, amplitude) + _pcm(gap_ms, 20)
+    return audio + _pcm(200, 20)
 
-    This meter decides whether a rolling window that follows a long pause may
-    be appended to the transcript on trust, so anything it mistakes for
-    speech becomes an invented sentence pasted into the document. A peak
-    reading is cleared by one 5 ms click. Summing every loud window is
-    cleared by two clicks 300 ms apart -- measured, they total exactly as
-    much as one 150 ms word. Only the longest unbroken run separates them:
-    speech is continuous, keystrokes are isolated spikes.
+
+def _run(pcm):
+    return measure_longest_speech_run_s(
+        pcm,
+        16000,
+        DEFAULT_SILENCE_GATE_THRESHOLD,
+        window_ms=STREAMING_SPEECH_RUN_WINDOW_MS,
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "count", "gap_ms", "click_ms"),
+    [
+        ("one click", 1, 300, 5),
+        ("two clicks 300 ms apart", 2, 300, 5),
+        ("two clicks 150 ms apart", 2, 150, 5),
+        ("two clicks 100 ms apart", 2, 100, 5),
+        ("a mouse double-click", 2, 80, 30),
+        ("typing at 80 wpm", 12, 150, 5),
+        ("typing at 120 wpm", 15, 100, 5),
+        ("one long 50 ms click", 1, 300, 50),
+    ],
+)
+def test_typing_is_never_mistaken_for_speech(label, count, gap_ms, click_ms):
+    """Keystrokes must not authorise appending a hallucinated window.
+
+    This meter decides whether a rolling window after a long pause may be
+    appended to the transcript on trust, so whatever it takes for speech
+    becomes an invented sentence pasted into the document.
+
+    The bucket size is what matters here, not the threshold. At 100 ms
+    buckets two keystrokes 100-150 ms apart land in ADJACENT buckets, the
+    run never breaks, and typing at 120 wpm measured a 1.5 s "speech" run --
+    longer than most words. At 20 ms the gap between keystrokes gets its own
+    bucket and breaks the run.
     """
-    threshold = DEFAULT_SILENCE_GATE_THRESHOLD
-    quiet = _pcm(300, 20)
-    click = _pcm(5, 9000)
-
-    one_click = quiet + click + quiet
-    two_clicks = quiet + click + _pcm(300, 20) + click + quiet
-    three_clicks = quiet + (click + _pcm(300, 20)) * 3
-    spoken_word = quiet + _pcm(150, 6000) + quiet
-
-    measure = measure_longest_speech_run_s
-    assert measure(one_click, 16000, threshold) < STREAMING_NEW_SEGMENT_MIN_SPEECH_S
-    assert measure(two_clicks, 16000, threshold) < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
-        "two clicks summed past the gate; the meter is adding runs instead "
-        "of taking the longest"
+    measured = _run(_clicks(count, gap_ms, click_ms=click_ms))
+    assert measured < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
+        f"{label} measured {measured:.3f}s and would be appended as speech"
     )
-    assert (
-        measure(three_clicks, 16000, threshold)
-        < STREAMING_NEW_SEGMENT_MIN_SPEECH_S
-    )
-    assert (
-        measure(spoken_word, 16000, threshold)
-        >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
-    ), "a real short word must still be able to extend the transcript"
 
+
+@pytest.mark.parametrize("duration_ms", [150, 200, 300, 600])
+def test_a_real_spoken_word_still_counts_as_speech(duration_ms):
+    """The other side of the cut: rejecting speech is transcript loss.
+
+    A short answer after a pause -- "Ja.", "Stop." -- must still be able to
+    extend the transcript. An earlier threshold dropped exactly these.
+    """
+    audio = _pcm(200, 20) + _pcm(duration_ms, 6000) + _pcm(200, 20)
+    measured = _run(audio)
+    assert measured >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
+        f"a {duration_ms} ms word measured {measured:.3f}s and would be dropped"
+    )
 
 def test_unmeasurable_audio_is_never_reported_as_silence():
     """Callers must not skip audio they could not measure."""

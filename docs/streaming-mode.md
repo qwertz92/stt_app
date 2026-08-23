@@ -38,7 +38,7 @@ Flow:
    word overlap. Nemotron and remote providers emit incremental session results.
 5. Controller inserts only stable append-only text deltas at the current caret.
 6. On stop hotkey, stream is finalized and only a safe remaining tail is appended.
-7. If target focus changes during streaming, session auto-aborts and plays a short alert beep.
+7. If the target window loses focus during streaming, the session keeps recording but stops pasting; everything captured meanwhile is inserted into the original window when the recording stops.
 
 Implementation detail:
 
