@@ -50,6 +50,10 @@ from .base import (
 
 logger = logging.getLogger(__name__)
 
+# How long a stream may run without a single quiet slice before the log
+# says the noise floor has disabled pause detection.
+_NOISE_FLOOR_WARN_AFTER_S = 20.0
+
 _STREAM_SENTINEL = object()
 _DOWNLOAD_ALLOW_PATTERNS: list[str] = [
     "config.json",
@@ -79,6 +83,8 @@ class _StreamResult:
     # window replaces only what follows it, so one bad window costs one
     # segment instead of the whole dictation.
     segment_floor: str = ""
+    quiet_slice_seen: bool = False
+    noise_floor_warned: bool = False
 
 
 @dataclass(frozen=True)
@@ -930,6 +936,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # unalignable, so it used to replace the whole accumulated transcript.
         new_audio = bytes(session.pcm_buffer[session.result.last_partial_size:])
         quiet_slice = self._stream_slice_is_quiet(new_audio)
+        self._warn_once_if_the_room_is_never_quiet(session, quiet_slice)
         if quiet_slice:
             # Tracked even when the gate is switched off: `silent_seconds` also
             # drives the pause detection below, and wiring two behaviours to one
@@ -993,18 +1000,21 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         if session.abort_requested.is_set():
             return
-        if new_segment and session.result.merged_text.strip():
-            # Everything up to here is final: the pause proved no later
+        if new_segment:
+            # Everything up to here is closed off: the pause proved no later
             # window shares audio with it.
             #
-            # Only ever grows, and only from text that is already accumulated.
-            # Assigning unconditionally let an empty first segment reset it,
-            # and with the silence gate switched off `new_segment` can fire on
-            # consecutive partials -- each one then pinned another window,
-            # so the floor grew by a hallucination per pause and none of it
-            # could ever be replaced again.
-            if len(session.result.merged_text) > len(session.result.segment_floor):
-                session.result.segment_floor = session.result.merged_text
+            # Two guards were added here and both were dead code -- the
+            # accumulated text only ever grows, so neither a length check nor
+            # an emptiness check can ever be false once a segment exists.
+            # Removed rather than left in place looking protective.
+            #
+            # Known limitation, not fixed here: if an admitted transient
+            # produced a hallucination in the previous segment, the pause pins
+            # it and no later window can remove it. That is the price of the
+            # bound -- junk that stays versus real text that disappears -- and
+            # it is bounded junk, one window worth.
+            session.result.segment_floor = session.result.merged_text
         session.result.merged_text = merge_rolling_window_transcript(
             session.result.merged_text,
             text,
@@ -1049,6 +1059,35 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             return False
         return speech_seconds >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
 
+    def _warn_once_if_the_room_is_never_quiet(
+        self, session: _StreamingSession, quiet_slice: bool
+    ) -> None:
+        """Say so when the noise floor disables the pause machinery entirely.
+
+        Everything here keys off `silence_gate_threshold`. In a room whose
+        floor sits above it -- a fan, HVAC, an open window, or simply a
+        microphone boosted by 10-30 dB in Windows -- no slice is ever quiet,
+        so `silent_seconds` never accumulates, `new_segment` never fires and
+        `segment_floor` is never set. The protection against a bad window
+        destroying the transcript is then silently absent. Nothing else
+        surfaces that, so it has to be in the log.
+        """
+        if quiet_slice or session.result.noise_floor_warned:
+            if quiet_slice:
+                session.result.quiet_slice_seen = True
+            return
+        elapsed = len(session.pcm_buffer) / (self.stream_sample_rate * 2)
+        if session.result.quiet_slice_seen or elapsed < _NOISE_FLOOR_WARN_AFTER_S:
+            return
+        session.result.noise_floor_warned = True
+        logger.warning(
+            "streaming_noise_floor_above_gate: no slice has been below "
+            "silence_gate_threshold=%.4f in %.0f s of audio. Pause detection "
+            "and the segment protection are inactive; raise the threshold in "
+            "Settings > Audio && Recording or reduce microphone gain.",
+            self.silence_gate_threshold,
+            elapsed,
+        )
     def _stream_slice_is_quiet(self, pcm_bytes: bytes) -> bool:
         """Is this stretch of stream audio below the speech threshold?
 

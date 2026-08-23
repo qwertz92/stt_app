@@ -1209,16 +1209,22 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 # production measures it (longest unbroken run at
 # STREAMING_SPEECH_RUN_WINDOW_MS, candidate embedded in 7 s of room tone):
 #
+# All of these are SYNTHETIC constructions -- the repository has no recorded
+# audio (samples/benchmark_sample.wav is sine tones from
+# scripts/generate_sample_audio.py). Treat them as shapes, not as ground
+# truth about German speech.
+#
 #   "Bitte." -- 2x80 ms voiced around an 85 ms tt-closure    0.085 s
-#   "Stopp." -- 90 ms, 50 ms closure, 90 ms, burst           0.102 s
-#   250 ms word with a 40 ms internal closure                0.120 s
+#   "Stopp." -- 2x90 ms voiced around a 50 ms closure        0.100 s
+#   250 ms word with a 40 ms internal closure                0.140 s
 #   "Ja." 180 ms continuous                                  0.180 s
 #
-#   mechanical key clack                                     0.080 s
+#   digital silence and room tone up to -50 dBFS             0.000 s
+#   mechanical key clack (18 ms decay)                       0.080 s
 #   knuckle knock / trackpad click                           0.100 s
 #   door latch / lip smack                                   0.140 s
 #   heavy low-frequency thump                                0.200 s
-#   typing at 80-120 wpm                                     0.020 s
+#   a breath, a sigh, paper rustle, a chair creak       0.35 - 0.70 s
 #
 # A voiceless closure is genuinely silent for 40-100 ms and breaks the run,
 # so what this meter reports for a short word is the longest *voiced piece*
@@ -1227,11 +1233,13 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 # each DELETED real words; a fourth (0.08 derived from 300 ms excerpts) was
 # right by accident, for the wrong reason.
 #
-# So this gate does NOT try to recognise speech. It filters the two things it
-# can actually distinguish -- continuous silence and repetitive keyboard
-# noise, which is what an open microphone during a pause really produces, and
-# what once grew the transcript to 896 junk words. An isolated resonant
-# transient passes, deliberately:
+# So this gate does NOT try to recognise speech, and it does not filter
+# keyboard noise either -- a single key clack measures exactly the cut, and
+# above ~130 wpm the decay tails bridge the gaps and typing reports seconds
+# of "speech". What it reliably blocks is SILENCE: digital silence and room
+# tone measure 0.000 s. That is the case that once grew the transcript to 896
+# junk words with an open microphone, and it is the only guarantee this gate
+# actually provides. Everything louder passes, deliberately:
 #
 #   deleting a word   -- silent, invisible, unrecoverable
 #   admitting a knock -- visible junk, bounded to the current segment by

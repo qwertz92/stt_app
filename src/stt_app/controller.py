@@ -320,6 +320,7 @@ class DictationController(QtCore.QObject):
         self._stream_preconnect_dropped = False
         self._stream_connect_generation = 0
         self._stream_connect_thread: threading.Thread | None = None
+        self._stream_connect_token: object | None = None
         self._active_stream_transcriber = None
         self._active_stream_runtime_lease: _TranscriberRuntimeLease | None = None
         self._active_stream_settings: AppSettings | None = None
@@ -888,6 +889,14 @@ class DictationController(QtCore.QObject):
         """
         self._stream_connect_generation += 1
         generation = self._stream_connect_generation
+        # Identifies THIS handshake. Only a later handshake replaces it, so a
+        # detached aborter can tell "my session is still the published one"
+        # from "a newer session owns this transcriber" without depending on
+        # counters the teardown path also touches, or on
+        # `_active_stream_transcriber`, which is briefly None while the next
+        # session is starting and is a shared cached object either way.
+        connect_token = object()
+        self._stream_connect_token = connect_token
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = []
             self._stream_preconnect_dropped = False
@@ -1115,21 +1124,23 @@ class DictationController(QtCore.QObject):
         # aborter wakes, the object it holds may be the one a NEW session is
         # using, and aborting then kills the new dictation.
         #
-        # The guard is object identity, NOT the connect generation. The
-        # caller runs `_reset_streaming_state()` one statement after this
-        # returns, and that bumps the generation too, so a generation check
-        # could never match: the abort was skipped every single time the
-        # detached path was taken -- which is exactly the case it exists for,
-        # a real remote handshake still in flight. The provider socket then
-        # stayed published and every later dictation failed with "Streaming
-        # session already active" until the app was restarted. Only a fake
-        # transcriber that connects instantly took the synchronous path, so
-        # the tests never saw it.
+        # Two guards have already been wrong here. The connect generation
+        # could never match, because the caller bumps it one statement later,
+        # so the abort was skipped every time the detached path was taken and
+        # the provider socket stayed published. Object identity was wrong in
+        # both directions: `_active_stream_transcriber` is None for a moment
+        # while the next session starts (the abort then tore down a session
+        # that was starting), and it is a shared cached object, so it says
+        # nothing about whether *this* handshake is still the published one.
+        #
+        # The token is set only by `_begin_stream_connect`, i.e. only a newer
+        # handshake can invalidate it.
+        token = self._stream_connect_token
 
         def _abort() -> None:
             if thread is not None and thread.is_alive():
                 thread.join(timeout=STREAMING_CONNECT_JOIN_TIMEOUT_S)
-            if self._active_stream_transcriber is transcriber:
+            if token is not None and self._stream_connect_token is not token:
                 self._logger.info(
                     "Skipping a stale stream abort: a newer session owns "
                     "this transcriber now."

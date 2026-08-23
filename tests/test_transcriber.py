@@ -1,4 +1,5 @@
 import io
+import logging
 import math
 import struct
 import threading
@@ -907,3 +908,46 @@ def test_the_segment_floor_is_wired_into_the_real_stream_worker():
     )
     assert transcriber._stream_session.result.merged_text.startswith(spoken)
     transcriber.stop_stream()
+
+
+def test_a_noise_floor_above_the_gate_is_reported(caplog):
+    """A room louder than the gate disables the pause machinery silently.
+
+    Everything keys off silence_gate_threshold: with no quiet slice,
+    silent_seconds never accumulates, new_segment never fires, and
+    segment_floor is never set -- so the protection against one bad window
+    destroying the transcript is simply absent. Nothing in the UI shows that,
+    so the log has to.
+    """
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            segment = types.SimpleNamespace(text="text")
+            info = types.SimpleNamespace(language="de", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _Model(),
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        with caplog.at_level(logging.WARNING):
+            # Continuous noise above the gate, longer than the warn delay.
+            for _ in range(250):
+                transcriber.push_audio_chunk(_ms(100, 400))
+            deadline = time.monotonic() + 10.0
+            while time.monotonic() < deadline and not any(
+                "streaming_noise_floor_above_gate" in record.getMessage()
+                for record in caplog.records
+            ):
+                time.sleep(0.02)
+
+        assert any(
+            "streaming_noise_floor_above_gate" in record.getMessage()
+            for record in caplog.records
+        ), "a room above the gate left no trace in the log"
+    finally:
+        transcriber.stop_stream()

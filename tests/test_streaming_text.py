@@ -305,23 +305,32 @@ def test_the_protected_prefix_never_duplicates_text():
     )
 
 
-def test_the_protected_prefix_compares_words_not_characters():
-    """Every other comparison in this module is word-based and case-folding.
+def test_the_protected_prefix_survives_a_window_that_starts_with_punctuation():
+    """The case that actually occurs, and the one a word-only check loses.
 
-    A raw `startswith` failed open whenever a provider re-cased a word -- the
-    merge legitimately takes the window text verbatim -- and it also matched
-    inside a word, so a floor of "hallo welt" truncated "hallo welten".
+    `stream_join_text` welds leading punctuation onto the previous word, so
+    the floor's last word gains a "." the moment the next window is merged --
+    on the very call that pins the floor. A word-based comparison then fails,
+    the floor is discarded, and the next unalignable window replaces the
+    entire dictation: silently, with nothing in history.
     """
+    floor = "Das war der erste Teil"
+    after_pause = merge_rolling_window_transcript(
+        floor, ". Und jetzt der zweite Teil", new_segment=True
+    )
+    assert after_pause == "Das war der erste Teil. Und jetzt der zweite Teil"
+
+    survived = merge_rolling_window_transcript(
+        after_pause, "erfundener Muell", protected_prefix=floor
+    )
+    assert survived.startswith(floor), (
+        f"the dictation before the pause was destroyed: {survived!r}"
+    )
+
+
+def test_the_protected_prefix_also_survives_a_recased_transcript():
+    """The other direction: a raw prefix check alone would miss this."""
     recased = merge_rolling_window_transcript(
         "hallo welt und weiter", "voellig anderes", protected_prefix="Hallo Welt"
     )
-    assert recased == "Hallo Welt voellig anderes", (
-        "a re-cased transcript silently disabled the floor"
-    )
-
-    partial_word = merge_rolling_window_transcript(
-        "hallo welten und mehr", "anderes", protected_prefix="hallo welt"
-    )
-    assert partial_word == "anderes", (
-        f"'welten' was truncated to 'welt': {partial_word!r}"
-    )
+    assert recased == "Hallo Welt voellig anderes"

@@ -240,11 +240,24 @@ def merge_rolling_window_transcript(
     protected = normalize_stream_text(protected_prefix)
     if not protected:
         return current
-    # Word-based and case-insensitive, like every other comparison here. A raw
-    # `startswith` failed open whenever a provider re-cased a word (the merge
-    # legitimately takes the window text verbatim), and it also matched inside
-    # a word -- floor "hallo welt" against "hallo welten" truncated "welten".
-    if not stream_text_extends(protected, previous):
+    # Either comparison is enough, and both are needed.
+    #
+    # The raw prefix check is the one that matters in practice: a window that
+    # begins with punctuation is welded onto the previous word by
+    # `stream_join_text` ("... Teil" + ". Und" -> "... Teil. Und"), so the
+    # floor's last word gains a "." and the WORD comparison fails. That
+    # happens on the very call that pins the floor, and the result was the
+    # whole dictation being replaced by one hallucinated sentence -- silently,
+    # with nothing in history. Word-only was tried and reverted for exactly
+    # this.
+    #
+    # The word-based check is kept as well: it costs nothing and covers a
+    # provider that re-cases an already-committed word, which the raw check
+    # would miss. Neither alone is correct.
+    if not (
+        previous.startswith(protected)
+        or stream_text_extends(protected, previous)
+    ):
         return current
     # The window may already contain the protected text (a provider that
     # re-emits from the start). Joining then duplicates it.

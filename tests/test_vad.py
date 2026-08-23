@@ -261,45 +261,60 @@ def test_a_word_with_an_internal_closure_still_counts_as_speech(
 
 
 @pytest.mark.parametrize(
-    ("label", "peak", "tau_ms", "hz"),
+    ("label", "amplitude"),
     [
-        ("typing at 120 wpm", None, None, None),
-        ("typing at 80 wpm", None, None, None),
+        ("digital silence", 0),
+        ("room tone at -54 dBFS", 20),
+        ("room tone at -50 dBFS", 30),
     ],
 )
-def test_repetitive_keyboard_noise_never_clears_the_post_pause_gate(
-    label, peak, tau_ms, hz
-):
-    """The reject side -- and deliberately only the repetitive part of it.
+def test_silence_never_clears_the_post_pause_gate(label, amplitude):
+    """The one guarantee this gate actually provides.
 
-    The two classes overlap: a knuckle knock measures 0.100 s and so does
-    "Bitte.". No threshold separates them, so this gate only filters the
-    noise that actually repeats during a pause. An isolated knock gets
-    through by design, and the damage from that is bounded instead --
-    see test_an_unalignable_window_cannot_destroy_an_earlier_segment.
+    An earlier version of this test asserted that typing is rejected, using
+    undecayed 5 ms clicks that measure 0.020 s -- four times below the cut,
+    so it never came near the branch. Measured with a realistic decay tail, a
+    single key clack measures exactly the cut and typing above ~130 wpm
+    reports seconds of "speech". The gate does NOT filter keyboard noise.
+
+    What it does block is silence, which is the case that once grew a
+    transcript to 896 invented words with an open microphone.
     """
-    if peak is None:
-        audio = _clicks(15, 100) if "120" in label else _clicks(12, 150)
-    else:
-        rate = 16000
-        audio = b"".join(
-            struct.pack(
-                "<h",
-                int(
-                    32767
-                    * peak
-                    * math.exp(-index / (rate * tau_ms / 1000))
-                    * math.sin(2 * math.pi * hz * index / rate)
-                ),
-            )
-            for index in range(int(rate * 0.25))
-        )
-    measured = _in_production_shape(audio)
+    measured = _in_production_shape(_pcm(500, amplitude))
     assert measured < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
-        f"{label} measured {measured:.3f}s and would append a hallucinated "
-        "window into the document"
+        f"{label} measured {measured:.3f}s and would let the model invent a "
+        "sentence from silence"
     )
 
+
+def test_the_gate_does_not_pretend_to_filter_keyboard_noise():
+    """Pin the limitation so nobody claims the guarantee is wider than it is.
+
+    Three rounds of review were spent on thresholds chosen as if keystrokes
+    and short words were separable. They are not: a mechanical key clack and
+    "Bitte." measure within one bucket of each other. Anyone tightening this
+    has to change these numbers first, deliberately.
+    """
+    rate = 16000
+    key_clack = b"".join(
+        struct.pack(
+            "<h",
+            int(
+                32767
+                * 0.6
+                * math.exp(-index / (rate * 18 / 1000))
+                * math.sin(2 * math.pi * 900 * index / rate)
+            ),
+        )
+        for index in range(int(rate * 0.25))
+    )
+    clack = _in_production_shape(key_clack, rate)
+    spoken = _in_production_shape(_word_with_closure(160, 85))
+
+    assert abs(clack - spoken) <= 0.02, (
+        f"a key clack measures {clack:.3f}s and a short word {spoken:.3f}s -- "
+        "if these have genuinely separated, the gate could be tightened"
+    )
 
 def test_the_overlap_between_short_speech_and_transients_is_acknowledged():
     """Pin the fact that the classes overlap, so nobody "fixes" it by raising

@@ -2828,3 +2828,55 @@ def test_a_slow_handshake_is_still_aborted_when_the_microphone_fails(monkeypatch
         released.set()
         controller.shutdown()
     _ = app
+
+
+def test_a_stale_abort_does_not_tear_down_a_newer_session():
+    """The skip branch, which had no test at all.
+
+    Two guards were already wrong here. A generation counter could never
+    match, because the teardown bumps it one statement later. Object identity
+    was wrong in both directions: `_active_stream_transcriber` is briefly None
+    while the next session starts, and it is a shared cached object either
+    way. The token is set only by a new handshake, so it answers exactly the
+    question that matters.
+    """
+    controller, app = _make_controller(overlay=FakeOverlay())
+    try:
+        # (a) Nothing newer: the orphan must be aborted.
+        orphan = FakeStreamingTranscriber()
+        controller._stream_connect_token = object()
+        controller._stream_connect_thread = None
+        controller._teardown_pending_stream_connect(orphan)
+        assert orphan.aborted is True, "an orphaned handshake was left published"
+
+        # (b) A newer handshake claims the slot while the abort is still
+        # joining. The detached aborter must leave it alone.
+        superseded = FakeStreamingTranscriber()
+        release = threading.Event()
+        joining = threading.Event()
+
+        def _slow_handshake():
+            joining.set()
+            release.wait(timeout=5.0)
+
+        thread = threading.Thread(target=_slow_handshake, daemon=True)
+        controller._stream_connect_token = object()
+        controller._stream_connect_thread = thread
+        thread.start()
+        assert joining.wait(timeout=5.0)
+
+        controller._teardown_pending_stream_connect(superseded)
+        # A newer handshake starts before the aborter wakes.
+        controller._stream_connect_token = object()
+        release.set()
+        thread.join(timeout=5.0)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not superseded.aborted:
+            time.sleep(0.01)
+
+        assert superseded.aborted is False, (
+            "the abort tore down a session that a newer handshake owns"
+        )
+    finally:
+        controller.shutdown()
+    _ = app
