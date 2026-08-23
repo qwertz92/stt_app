@@ -116,6 +116,20 @@ class UpdateDownloadDialog(QtWidgets.QDialog):
         self._signals.progress.connect(self._on_progress)
         self._signals.completed.connect(self._on_completed)
         self._signals.failed.connect(self._on_failed)
+        self._download_scheduled = False
+
+    def showEvent(self, event) -> None:
+        """Start downloading when the dialog is actually shown.
+
+        Scheduling this from the constructor meant merely *constructing* the
+        dialog began a multi-megabyte download, and the deferred timer fired
+        against whatever event loop ran next -- so a dialog that was never shown
+        still spawned a worker thread doing real filesystem and network work.
+        """
+        super().showEvent(event)
+        if self._download_scheduled:
+            return
+        self._download_scheduled = True
         QtCore.QTimer.singleShot(0, self._start_download)
 
     def reject(self) -> None:
