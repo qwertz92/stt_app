@@ -367,7 +367,35 @@ def test_the_merge_reports_which_branch_resolved_it():
         "precondition: the bounded replace does start with previous"
     )
 
-    # An empty window changes nothing and must not be treated as corroboration
-    # by a caller that only checks `aligned`.
+    # The three remaining replace exits. Each is the shape of the bug this
+    # flag exists to prevent -- a replace mistaken for corroboration pins
+    # junk permanently -- and mutation testing showed all three unasserted.
+    no_floor = merge_rolling_window("erster teil", "voellig anderes")
+    assert no_floor.aligned is False, "a replace with no floor is not alignment"
+
+    mismatched = merge_rolling_window(
+        "erster teil", "voellig anderes", protected_prefix="etwas anderes"
+    )
+    assert mismatched.aligned is False
+    assert mismatched.text == "voellig anderes"
+
+    already_contained = merge_rolling_window(
+        "alpha beta gamma delta", "alpha beta", protected_prefix="alpha beta"
+    )
+    assert already_contained.aligned is False
+    assert already_contained.text == "alpha beta"
+
+    # The re-anchored overlap IS alignment: the seam was found a few words
+    # into the window, past the boundary that cut a word in half.
+    reanchored = merge_rolling_window(
+        "das ist der erste teil", "XX der erste teil davon"
+    )
+    assert reanchored.aligned is True
+    assert reanchored.text == "das ist der erste teil davon"
+
+    # An empty window changes nothing. It reports aligned because nothing was
+    # contradicted, which is exactly why a caller must also require growth --
+    # an empty decode corroborates nothing.
     empty = merge_rolling_window("erster teil", "")
     assert empty.text == "erster teil"
+    assert empty.aligned is True

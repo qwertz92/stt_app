@@ -450,7 +450,7 @@ def _skip_pixel_exact_tests_on_the_offscreen_platform(request):
     AGENTS.md already says an offscreen run's layout failures are artifacts, but
     saying so did not stop it: both CI workflows set `QT_QPA_PLATFORM=offscreen`
     and the release gate ran the whole suite before the build step, so v0.8.0
-    was tagged and never published. The workflows no longer set it; this makes
+    was tagged and never published. quality.yml no longer sets it, and the release gate sets it deliberately so those assertions skip; this makes
     the failure mode impossible to reintroduce by accident.
     """
     markers = ("pixel_exact", "platform_dependent")

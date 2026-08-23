@@ -220,7 +220,9 @@ def merge_rolling_window(
             return RollingMergeResult(joined, aligned=True)
 
     # Unalignable: the window replaces the accumulated text, bounded by the
-    # floor so it can only discard what the current window added.
+    # floor. What that discards is what the last window that ADDED text
+    # contributed -- not what the current one did, which added nothing,
+    # which is why the floor stalled. Up to one full window of speech.
     protected = normalize_stream_text(protected_prefix)
     if not protected:
         return RollingMergeResult(current, aligned=False)

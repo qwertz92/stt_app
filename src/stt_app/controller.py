@@ -3344,7 +3344,14 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._stream_abort_requested = False
         self._stream_insert_failures = 0
-        self._last_transcript = text
+        # Only a real transcript replaces the last one. Assigning before the
+        # empty check meant a streaming session that produced nothing wiped
+        # the previous dictation from the tray's "Insert last transcript
+        # again", which then reported "No transcript available" while that
+        # dictation was still sitting in history. The batch silence-gate path
+        # already gets this right.
+        if text.strip():
+            self._last_transcript = text
 
         if not text.strip():
             self._mark_last_recording_completed()

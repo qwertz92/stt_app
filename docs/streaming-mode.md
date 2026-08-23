@@ -70,7 +70,7 @@ Characteristics:
   already inserted into the target application.
 - Stop action triggers `transcriber.stop_stream()` in background worker and
   only appends a remaining safe text delta.
-- Focus-signature guard aborts streaming when target focus/cursor changes.
+- Focus-signature guard suspends live insertion when the target focus or cursor changes; the recording continues and the rest is delivered at stop.
 - Abort path uses fast stream cancellation (no heavy final re-transcription) to keep abort beep low-latency.
 
 ### AudioCapture

@@ -2880,3 +2880,28 @@ def test_a_stale_abort_does_not_tear_down_a_newer_session():
     finally:
         controller.shutdown()
     _ = app
+
+
+def test_an_empty_streaming_result_keeps_the_previous_transcript():
+    """A dictation that produced nothing must not erase the one before it.
+
+    `_last_transcript` is what the tray's "Insert last transcript again" and
+    the overlay's Copy act on. Assigning it before the empty check meant an
+    empty streaming session reported "No transcript available" while the
+    earlier dictation was still in history. The batch silence-gate path
+    already got this right.
+    """
+    controller, app = _make_controller(overlay=FakeOverlay())
+    try:
+        controller._last_transcript = "die vorherige diktierte nachricht"
+        controller._active_session_mode = "streaming"
+        controller._streaming_recording = True
+
+        controller._on_transcription_ready("")
+
+        assert controller._last_transcript == "die vorherige diktierte nachricht", (
+            "an empty streaming result erased the previous transcript"
+        )
+    finally:
+        controller.shutdown()
+    _ = app

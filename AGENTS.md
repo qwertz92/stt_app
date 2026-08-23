@@ -1227,7 +1227,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **The bound is one growing window's contribution**: a replace discards
     what the last window that ADDED text contributed, not what the
     current one did (the current one added nothing, which is why the
-    floor stalled). Fuzzed worst case 8 words; typically 1-3.
+    floor stalled). The magnitude is one window: a `new_segment` window can carry up to
+    `STREAMING_PARTIAL_WINDOW_S` of freshly decoded speech.
   - **A hallucination that survives to the next pause is pinned permanently.**
     Accepted: bounded junk that stays beats real text that disappears.
 - **A window after a pause is appended only when it is shown to hold speech**:
@@ -1248,11 +1249,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   hallucination that the merged-text callback pasted straight into the
   document.
 
-  **Both sides of this cut are transcript loss, and four values have already
+  **Both sides of this cut are transcript loss, and three values have already
   been wrong.** The history matters, because three of them were set as if a
   clean separation existed:
 
-  | value | why it was reverted |
+  | value | status |
   | ----- | ------------------- |
   | 0.35  | deleted short answers after a pause ("Ja.", "Stopp.") |
   | 0.15  | carried across the 100—>20 ms bucket change without being rederived |
@@ -1665,8 +1666,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and room tone measure 0.000 s, which is the case that once grew a
   transcript to 896 invented words; a single key clack measures exactly the
   cut and typing above ~130 wpm reports seconds of "speech" because the decay
-  tails bridge the gaps. "Bitte." (0.085 s) and a key clack (0.080 s) are one
-  bucket apart, so no threshold separates them. Everything louder than
+  tails bridge the gaps. "Bitte." (0.085 s) and a key clack (0.080 s) are 0.005 s
+  apart, so no threshold separates them. Everything louder than
   silence passes and is bounded by `protected_prefix` rather than prevented.
 - **The whole pause mechanism is inert in a room above the silence gate.**
   With a noise floor over `silence_gate_threshold` no slice is ever quiet,

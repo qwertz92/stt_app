@@ -61,7 +61,7 @@ round's fixes -- twice a fix was worse than the bug it replaced.
   Measured afterwards: the meter buckets at 100 ms, so a 5-50 ms click
   reports 0.10 s and a real 150 ms word reports 0.20 s. 0.35 s therefore
   deleted short answers spoken after a pause -- "Ja.", "Stop." -- silently.
-  The cut was set to 0.15 s at the time. It moved twice more afterwards and
+  The cut was set to 0.15 s at the time. It moved three times more afterwards (0.08, 0.18, 0.08) and
   now sits at 0.08 -- see the table in AGENTS.md, and treat `config.py` as
   authoritative. A log entry records what was believed on the day; do not
   read a value out of one of these entries and act on it.

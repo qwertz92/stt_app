@@ -756,9 +756,9 @@ def _ms(milliseconds, amplitude, sample_rate=16000):
 @pytest.mark.parametrize(
     ("label", "tail", "must_append"),
     [
-        # 200 ms: just above the post-pause cut, which sits above every
-        # separable desk transient. A 150 ms word is deliberately below it --
-        # see test_the_known_cost_of_the_post_pause_gate_is_a_very_short_word.
+        # 200 ms is comfortably above the post-pause cut. The cut does NOT
+        # sit above every desk transient -- a key clack measures exactly it
+        # and a knuckle knock more -- see the table in config.py.
         ("a short spoken word", _ms(200, 6000), True),
         ("a keyboard click", _ms(5, 9000) + _ms(95, 20), False),
     ],
@@ -1037,7 +1037,7 @@ def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
       same invented phrase across windows that share 96% of their audio, and
       two identical windows align trivially -- pinning that made the phrase
       permanent and the next drift appended a fresh one after it. Measured
-      before the fix: 52 words from 4 of real speech, growing linearly.
+      before the fix: 53 words from 4 of real speech, growing linearly.
     """
     decoded = []
     real_windows = [

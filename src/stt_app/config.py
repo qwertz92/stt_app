@@ -1231,7 +1231,7 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 # door latch, the lip
 # smack and the heavy thump were measured during review but have no fixture
 # and the sustained-noise figures below are an estimate -- do not quote any
-# of those four as measured. Sustained human
+# of those as measured. Sustained human
 # noises (a breath, a sigh, paper rustle) run 0.35-0.70 s and pass easily,
 # but that figure is an estimate -- there is no fixture for it, so do not
 # quote it as measured.
