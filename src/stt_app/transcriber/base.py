@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Callable
@@ -26,6 +27,41 @@ class TranscriptionCanceled(Exception):
     so callers can distinguish a user cancel from a real failure.
     """
 
+
+# Locale markers some models emit inline in their output. Nemotron does this
+# in automatic-language mode: the transcript comes back with "<de-DE>" or
+# "<|en|>" spliced into the words, and those tokens are then pasted straight
+# into the user's document. They are model metadata that leaked through the
+# decoder, never something that was said.
+#
+# Only the two forms actually observed are matched, and deliberately not a
+# bare "<xx>": that shape is indistinguishable from ordinary markup, and a
+# dictation about HTML would lose "<div>", "<br>" or "<tr>" -- "tr" is even a
+# real language code. Requiring either the pipe wrapper or a region subtag
+# separates the two cases without guessing.
+_LANGUAGE_TAG_PATTERN = re.compile(
+    "|".join(
+        (
+            # <|en|>, <|de|>
+            r"<\|[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})*\|>",
+            # <de-DE>, <zh-Hans-CN>
+            r"<[A-Za-z]{2,3}(?:-[A-Za-z0-9]{2,8})+>",
+        )
+    )
+)
+
+
+def strip_language_tags(text: str) -> str:
+    """Remove inline locale markers a model leaked into its transcript."""
+    if not text or "<" not in text:
+        return text
+    cleaned = _LANGUAGE_TAG_PATTERN.sub(" ", text)
+    if cleaned == text:
+        return text
+    # Collapse only the whitespace the removal introduced, and keep the
+    # original leading/trailing shape so callers that join segments are
+    # unaffected.
+    return re.sub(r"[ 	]{2,}", " ", cleaned).strip()
 
 class ITranscriber(ABC):
     #: Polled while the transcriber waits for something interruptible. Every

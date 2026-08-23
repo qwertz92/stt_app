@@ -29,6 +29,7 @@ from .base import (
     StreamingCallback,
     StreamingErrorCallback,
     TranscriptionError,
+    strip_language_tags,
 )
 from .local_webgpu_asr import (
     download_webgpu_model_snapshot,
@@ -273,6 +274,12 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
                 piece = session.tokenizer_stream.decode(token)
                 if piece:
                     text += str(piece)
+        # In automatic-language mode this model emits its detected locale
+        # inline ("<de-DE>"), and that token would be pasted into the
+        # document as if it had been spoken. Stripped here, at the one point
+        # where decoded pieces become transcript, so batch, live partials
+        # and the final text are all covered by a single rule.
+        text = strip_language_tags(text)
         session.text += text
         return text
 

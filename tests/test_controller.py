@@ -763,6 +763,15 @@ def test_controller_prefers_caret_handle_for_insertion_target():
 
 
 def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
+    """Pins the opt-in hard abort.
+
+    The default no longer ends the session on a focus change -- it
+    suspends insertion and delivers the rest at stop -- so this has to
+    ask for the old behaviour explicitly.
+    """
+    monkeypatch.setattr(
+        "stt_app.controller.STREAMING_ABORT_ON_FOCUS_CHANGE", True
+    )
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
@@ -815,6 +824,15 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
 
 
 def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
+    """Pins the opt-in hard abort.
+
+    The default no longer ends the session on a focus change -- it
+    suspends insertion and delivers the rest at stop -- so this has to
+    ask for the old behaviour explicitly.
+    """
+    monkeypatch.setattr(
+        "stt_app.controller.STREAMING_ABORT_ON_FOCUS_CHANGE", True
+    )
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,

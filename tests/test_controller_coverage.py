@@ -25,6 +25,7 @@ from conftest import (
     FakeSettingsStore,
     FakeStreamingTranscriber,
     FakeTextInserter,
+    FakeWindowFocusHelper,
     ImmediateExecutor,
     make_controller as _make_controller,
 )
@@ -2430,6 +2431,122 @@ def test_the_reclaim_recovers_when_a_fallback_frees_up_after_a_total_failure():
             "the reclaim only ever retried the preferred hotkey"
         )
         assert controller._active_hotkey == FALLBACK_HOTKEYS[2]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_vad_auto_stop_is_logged(caplog):
+    """A recording that ends by itself must say so in the log.
+
+    Without this a VAD stop is indistinguishable from a hotkey stop, so a user
+    reporting "it stopped on its own and transcribed garbage" cannot be
+    answered from their log at all -- which is exactly what happened.
+    """
+    controller, app = _make_controller()
+    try:
+        with caplog.at_level(logging.INFO):
+            controller._auto_stop_from_vad()
+        assert any(
+            "recording_auto_stopped_by_vad" in record.getMessage()
+            for record in caplog.records
+        ), "a VAD auto-stop left no trace in the log"
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_switching_windows_during_a_stream_suspends_insertion_instead_of_aborting(
+    monkeypatch,
+):
+    """Tabbing away mid-dictation must not end the session.
+
+    Live insertion writes at the caret, so once another window is in front the
+    words would land in the wrong document -- but ending the whole dictation
+    for that was far more disruptive than the problem: people switch windows
+    mid-thought, and the rest of what they said was simply gone. The recording
+    now continues with insertion suspended.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    focus_helper = FakeWindowFocusHelper()
+
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        window_focus_helper=focus_helper,
+    )
+    try:
+        controller.start_recording()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not controller._streaming_recording:
+            app.processEvents()
+            time.sleep(0.01)
+        assert controller._streaming_recording is True
+
+        focus_helper.current = 987654  # the user switches to another window
+        controller._on_stream_focus_poll()
+
+        assert controller._streaming_recording is True, "the dictation was ended"
+        assert transcriber.aborted is False
+        assert controller._audio_capture is not None, "the microphone was closed"
+        assert controller._stream_insertion_suspended is True
+
+        # And it resumes on its own when the target comes back to the front.
+        focus_helper.current = focus_helper.captured
+        controller._on_stream_focus_poll()
+        assert controller._stream_insertion_suspended is False
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_suspended_stream_does_not_paste_into_the_other_window(monkeypatch):
+    """Suspended means suspended: no partial may reach the inserter."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    inserter = FakeTextInserter()
+    transcriber = FakeStreamingTranscriber()
+    focus_helper = FakeWindowFocusHelper()
+
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        window_focus_helper=focus_helper,
+    )
+    try:
+        controller.start_recording()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and not controller._streaming_recording:
+            app.processEvents()
+            time.sleep(0.01)
+
+        # Enough stable words that the locked prefix actually advances: it
+        # only commits words that survived a previous partial minus the
+        # stability guard and revision window.
+        base = "das ist ein laengerer satz mit vielen stabilen woertern"
+        controller._on_transcription_partial(base)
+        controller._on_transcription_partial(base + " und noch mehr davon")
+        pasted_before = len(inserter.calls)
+        assert pasted_before >= 1, "live insertion was not running to begin with"
+
+        focus_helper.current = 987654
+        controller._on_stream_focus_poll()
+        controller._on_transcription_partial(base + " und noch mehr davon hier")
+        controller._on_transcription_partial(base + " und noch mehr davon hier auch")
+
+        assert len(inserter.calls) == pasted_before, (
+            f"pasted into the foreign window while suspended: {inserter.calls}"
+        )
     finally:
         controller.shutdown()
     _ = app

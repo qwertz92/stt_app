@@ -19,10 +19,30 @@ from .update_installer import (
 # colours now live in ``dialog_style`` because every dialog needs them.
 UPDATE_DIALOG_STYLESHEET = DIALOG_STYLESHEET
 
+# Width for the single acknowledge button on the update status dialog.
+UPDATE_STATUS_BUTTON_MIN_WIDTH = 120
+
 
 def _style_dialog(dialog: QtWidgets.QWidget) -> None:
     apply_dialog_style(dialog)
 
+
+def _centre_dialog_buttons(box: QtWidgets.QMessageBox) -> None:
+    """Centre a message box's button row.
+
+    `QMessageBox` puts its buttons in a `QDialogButtonBox` that is stretched
+    to the right. With a single acknowledge button that leaves it stranded in
+    the corner, far from where the eye already is.
+    """
+    layout = box.layout()
+    if not isinstance(layout, QtWidgets.QGridLayout):
+        return
+    for index in range(layout.count()):
+        item = layout.itemAt(index)
+        widget = item.widget() if item is not None else None
+        if isinstance(widget, QtWidgets.QDialogButtonBox):
+            widget.setCenterButtons(True)
+            return
 
 def show_update_status_dialog(
     *,
@@ -37,6 +57,13 @@ def show_update_status_dialog(
     box.setIcon(icon)
     box.setStandardButtons(QtWidgets.QMessageBox.Ok)
     _style_dialog(box)
+    # The only button in the dialog, and Qt renders it 42 px wide in the
+    # bottom-right corner -- a small target for the one thing there is to do
+    # here. Give it a real width and centre it under the message.
+    ok_button = box.button(QtWidgets.QMessageBox.Ok)
+    if ok_button is not None:
+        ok_button.setMinimumWidth(UPDATE_STATUS_BUTTON_MIN_WIDTH)
+        _centre_dialog_buttons(box)
     box.exec()
 
 

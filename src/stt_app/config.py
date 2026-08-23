@@ -1213,7 +1213,16 @@ STREAMING_STABLE_WORD_GUARD = 1
 STREAMING_REVISION_WORD_WINDOW = 1
 STREAMING_OVERLAY_MAX_CHARS = 180
 STREAMING_LIVE_INSERT_ENABLED = True
-STREAMING_ABORT_ON_FOCUS_CHANGE = True
+# Whether losing focus ENDS a live stream, or only suspends insertion.
+#
+# It used to end it. Live insertion writes at the caret, so once another
+# window is in front the words would land in the wrong document -- but
+# throwing the whole session away for that is far more disruptive than the
+# problem: people switch windows mid-thought, and the rest of the dictation
+# was simply gone. With this False the session keeps recording, nothing is
+# pasted while the target is not in front, and everything is delivered when
+# the recording stops. Set it back to True for the old hard abort.
+STREAMING_ABORT_ON_FOCUS_CHANGE = False
 STREAMING_FOCUS_POLL_MS = 25
 STREAMING_BEEP_ON_ABORT = True
 STREAMING_ABORT_BEEP_HZ = 900

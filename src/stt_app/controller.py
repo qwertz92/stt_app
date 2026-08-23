@@ -324,6 +324,9 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings: AppSettings | None = None
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
+        # True while another window holds focus during a live stream: the
+        # session keeps recording, but nothing is pasted until it stops.
+        self._stream_insertion_suspended = False
         # Consecutive failed live inserts in the current streaming session.
         self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
@@ -1585,6 +1588,20 @@ class DictationController(QtCore.QObject):
         return True
 
     def _auto_stop_from_vad(self) -> None:
+        """Voice-activity detection ended the recording on its own.
+
+        Logged because it was not: a VAD stop looked exactly like a hotkey
+        stop in the log, so a recording that ended by itself was
+        indistinguishable from a bug. The user cannot tell either -- the
+        overlay just moves on to Processing -- so the log is the only place
+        this can be explained after the fact.
+        """
+        self._logger.info(
+            "recording_auto_stopped_by_vad vad_enabled=%s energy_threshold=%s "
+            "(no hotkey press; voice activity detection ended the recording)",
+            getattr(self._settings, "vad_enabled", "n/a"),
+            getattr(self._settings, "vad_energy_threshold", "n/a"),
+        )
         self.vad_auto_stop_requested.emit()
 
     def _play_start_beep(self) -> None:
@@ -1738,6 +1755,7 @@ class DictationController(QtCore.QObject):
             self._stream_preconnect_chunks = None
             self._stream_preconnect_dropped = False
         self._stream_abort_requested = False
+        self._stream_insertion_suspended = False
         self._stream_insert_failures = 0
         self._stream_text_state.reset()
         self._active_batch_settings = None
@@ -3818,7 +3836,7 @@ class DictationController(QtCore.QObject):
                 beep=STREAMING_BEEP_ON_ABORT,
             )
             return
-        if STREAMING_LIVE_INSERT_ENABLED:
+        if STREAMING_LIVE_INSERT_ENABLED and not self._stream_insertion_suspended:
             previous_committed = self._stream_text_state.committed_text
             append = self._stream_text_state.apply_partial_append_only(text)
             display_text = append.display_text
@@ -3886,15 +3904,40 @@ class DictationController(QtCore.QObject):
 
     @QtCore.Slot()
     def _on_stream_focus_poll(self) -> None:
+        """React to the target window losing focus during a live stream.
+
+        Live insertion writes at the caret, so once another window is in
+        front the words would land in the wrong document. Ending the whole
+        session for that was too blunt: users switch windows mid-thought,
+        and a dictation that was still going lost its remaining flow. The
+        session now keeps running with insertion suspended, and everything
+        recorded meanwhile is delivered at stop into the window the
+        recording started in.
+
+        `STREAMING_ABORT_ON_FOCUS_CHANGE` restores the old hard abort.
+        """
         if not self._streaming_recording or self._stream_abort_requested:
             return
-        if not STREAMING_ABORT_ON_FOCUS_CHANGE:
-            return
         if self._is_stream_target_active():
+            if self._stream_insertion_suspended:
+                self._stream_insertion_suspended = False
+                self._logger.info(
+                    "streaming_insertion_resumed: the recording target is in "
+                    "front again."
+                )
             return
-        self._request_stream_abort(
-            "Streaming aborted: target window focus changed.",
-            beep=STREAMING_BEEP_ON_ABORT,
+        if STREAMING_ABORT_ON_FOCUS_CHANGE:
+            self._request_stream_abort(
+                "Streaming aborted: target window focus changed.",
+                beep=STREAMING_BEEP_ON_ABORT,
+            )
+            return
+        if self._stream_insertion_suspended:
+            return
+        self._stream_insertion_suspended = True
+        self._logger.info(
+            "streaming_insertion_suspended: another window took focus; the "
+            "dictation continues and the rest is inserted when it stops."
         )
 
     @QtCore.Slot(str, bool)

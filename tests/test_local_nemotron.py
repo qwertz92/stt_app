@@ -287,3 +287,46 @@ def test_nemotron_capabilities_include_streaming_auto_and_german():
     assert NEMOTRON_LANGUAGE_IDS["vi"] == 33
     assert NEMOTRON_LANGUAGE_IDS["et"] == 60
     assert "el" not in modes
+
+
+def test_nemotron_decode_strips_the_locale_marker_it_emits():
+    """Wiring guard: the helper must actually be applied to decoded output.
+
+    Testing `strip_language_tags` alone proves nothing about this engine -- the
+    call can be removed from the decode path and that test stays green. This
+    drives the real decode loop with a tokenizer that emits the marker exactly
+    as the model does in automatic-language mode.
+    """
+    from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
+
+    pieces = iter(["<de-DE>", " Hallo", " Welt"])
+
+    class _Generator:
+        def __init__(self):
+            self.remaining = 3
+
+        def is_done(self):
+            return self.remaining <= 0
+
+        def generate_next_token(self):
+            self.remaining -= 1
+
+        def get_next_tokens(self):
+            return [object()]
+
+    class _TokenizerStream:
+        def decode(self, _token):
+            return next(pieces, "")
+
+    class _Session:
+        def __init__(self):
+            self.generator = _Generator()
+            self.tokenizer_stream = _TokenizerStream()
+            self.text = ""
+
+    session = _Session()
+    decoded = LocalNemotronTranscriber._decode_available(session)
+
+    assert "<de-DE>" not in decoded, f"locale marker reached the transcript: {decoded!r}"
+    assert "<de-DE>" not in session.text
+    assert decoded.strip() == "Hallo Welt"
