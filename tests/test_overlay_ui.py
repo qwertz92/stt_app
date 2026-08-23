@@ -647,6 +647,7 @@ def test_overlay_never_exceeds_max_height_including_container_border():
     assert overlay.height() >= overlay.minimumSizeHint().height()
 
 
+@pytest.mark.pixel_exact
 def test_overlay_reset_position_preserves_expanded_result_size():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -712,6 +713,7 @@ def test_overlay_processing_restores_initial_height_after_long_text():
     assert overlay.height() == initial_height
 
 
+@pytest.mark.pixel_exact
 def test_overlay_reset_position_uses_current_screen_corner(monkeypatch):
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -730,6 +732,7 @@ def test_overlay_reset_position_uses_current_screen_corner(monkeypatch):
     assert overlay.pos() == QtCore.QPoint(expected_x, expected_y)
 
 
+@pytest.mark.pixel_exact
 def test_overlay_apply_corner_setting_keeps_dragged_position(monkeypatch):
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -745,6 +748,7 @@ def test_overlay_apply_corner_setting_keeps_dragged_position(monkeypatch):
     assert overlay.pos() == dragged
 
 
+@pytest.mark.pixel_exact
 def test_overlay_apply_corner_setting_moves_when_corner_changes(monkeypatch):
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -819,6 +823,7 @@ def test_overlay_language_button_selects_supported_language():
     assert overlay._language_button.text() == "Lang: English"
 
 
+@pytest.mark.pixel_exact
 def test_overlay_language_button_draws_centered_chevron_and_opens_menu(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -919,6 +924,7 @@ def test_overlay_language_button_shows_fixed_auto_and_blocks_active_changes():
     assert overlay._language_button.isEnabled() is False
 
 
+@pytest.mark.pixel_exact
 def test_dragging_claims_the_manual_position_on_the_first_movement(monkeypatch):
     """A drag must own the position immediately, not only on mouse release.
 
@@ -951,6 +957,7 @@ def test_dragging_claims_the_manual_position_on_the_first_movement(monkeypatch):
     assert overlay.pos() == QtCore.QPoint(400, 300)
 
 
+@pytest.mark.pixel_exact
 def test_startup_updates_do_not_move_an_overlay_being_dragged(monkeypatch):
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
@@ -1015,25 +1022,30 @@ def test_a_short_compact_status_keeps_the_compact_size():
         overlay.close()
 
 @pytest.mark.pixel_exact
-def test_a_larger_system_font_does_not_inflate_the_compact_baseline(monkeypatch):
-    """Grow-to-fit must not be counted twice into the baseline.
+def test_the_compact_baseline_never_absorbs_the_grow_to_fit_overflow(monkeypatch):
+    """The baseline must be the structural height, at every font size.
 
-    The compact baseline used to be captured right after the initial detail
-    line was applied. Once compact states grew to fit, a first line needing
-    more than the minimum height baked that overflow into the baseline, and
-    every later compact state inherited it. At the default 9 pt the line
-    fits and nothing shows; at the larger sizes Windows offers under
-    Accessibility > Text size, it does not.
+    Compact states grow to fit. If the baseline is *measured* after any
+    state has been applied, whatever that state needed beyond
+    OVERLAY_DETAIL_MIN_HEIGHT is baked in -- and the height update then adds
+    the same overflow again, so every compact state renders too tall.
+    Measuring a deliberately short line only moves the threshold: the
+    minimum is a fixed 42 px, so at the larger sizes Windows offers under
+    Accessibility > Text size even "Ready." overflows it.
 
-    The falsifiable form: the baseline must not depend on how long the
-    initial detail happens to be. Build one overlay with a short initial
-    detail and one with a long one and compare -- with the old capture order
-    the second is taller for the same content.
+    Two independent checks, because either alone can pass while the bug
+    stands: the baseline must equal the structural height (no absorption),
+    and it must not depend on how long the initial detail happens to be.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     original_font = QtGui.QFont(app.font())
+    long_detail = (
+        "Hotkey: Ctrl+Alt+F9 - Ctrl+Alt+Space is used by another program; "
+        "taken back automatically once it is free. | Cancel: Ctrl+Alt+F12 | "
+        "Overlay: Ctrl+Alt+F11 | Re-paste: Ctrl+Alt+F10"
+    )
 
-    def _baseline_with(initial_detail, point_size):
+    def _build(initial_detail, point_size):
         font = QtGui.QFont(original_font)
         font.setPointSize(point_size)
         app.setFont(font)
@@ -1043,27 +1055,23 @@ def test_a_larger_system_font_does_not_inflate_the_compact_baseline(monkeypatch)
         overlay = OverlayUI()
         overlay.show()
         app.processEvents()
-        try:
-            overlay.set_state("Idle", "Ready.")
-            app.processEvents()
-            return overlay.height()
-        finally:
-            overlay.close()
+        return overlay
 
-    long_detail = (
-        "Hotkey: Ctrl+Alt+F9 - Ctrl+Alt+Space is used by another program; "
-        "taken back automatically once it is free. | Cancel: Ctrl+Alt+F12 | "
-        "Overlay: Ctrl+Alt+F11 | Re-paste: Ctrl+Alt+F10"
-    )
     try:
-        for point_size in (9, 12, 16):
-            short_start = _baseline_with("Ready.", point_size)
-            long_start = _baseline_with(long_detail, point_size)
-            assert short_start == long_start, (
-                f"{point_size}pt: the same one-line state renders "
-                f"{long_start}px after a long initial detail but "
-                f"{short_start}px after a short one -- the baseline "
-                "absorbed the first line's overflow"
-            )
+        # 24 pt matters: below it even a long first line happens to fit, so
+        # a test that stops at 16 pt passes while the defect is present.
+        for point_size in (9, 12, 16, 20, 24):
+            for initial_detail in ("Ready.", long_detail):
+                overlay = _build(initial_detail, point_size)
+                try:
+                    baseline = overlay._initial_compact_size.height()
+                    structural = overlay._compact_window_height()
+                    assert baseline == structural, (
+                        f"{point_size}pt: the baseline is {baseline}px "
+                        f"against a {structural}px structural height, so it "
+                        "absorbed the first line's overflow"
+                    )
+                finally:
+                    overlay.close()
     finally:
         app.setFont(original_font)

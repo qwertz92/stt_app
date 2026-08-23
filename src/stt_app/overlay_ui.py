@@ -402,18 +402,27 @@ class OverlayUI(QtWidgets.QWidget):
         root.addWidget(container)
 
         self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
-        # Capture the baseline from a one-line state, *before* the real
-        # initial detail is applied. Compact states now grow to fit, so
-        # measuring after a detail line that already needs more than
-        # OVERLAY_DETAIL_MIN_HEIGHT bakes that overflow into the baseline --
-        # and `_update_detail_height` then adds the same overflow again on
-        # top of it. At the default 9 pt the initial line fits and nothing
-        # changes; at the larger system font sizes Windows offers under
-        # Accessibility > Text size it does not, and every state rendered
-        # permanently oversized (measured: 198 px for a one-line idle that
-        # should be 138 px at 12 pt, 234 px at 24 pt).
+        # The baseline is computed structurally, never measured after a
+        # `set_state`. Compact states grow to fit, so measuring after any
+        # detail line that needs more than OVERLAY_DETAIL_MIN_HEIGHT bakes
+        # that overflow into the baseline -- and `_update_detail_height`
+        # then adds the same overflow again on top. Measuring a *short*
+        # line instead only moves the threshold: OVERLAY_DETAIL_MIN_HEIGHT
+        # is a fixed 42 px, so at the larger system font sizes Windows
+        # offers under Accessibility > Text size even "Ready." overflows it
+        # (measured at 24 pt: a 191 px baseline against a 184 px structural
+        # height, so every one-line state rendered 14 px too tall).
+        # Apply a state first so the container carries its stylesheet: the
+        # border becomes part of the contents margins, and measuring without
+        # it lands 2 px under the real layout minimum (the same trap
+        # `set_state` documents). Then take the baseline *structurally*
+        # rather than from `self.size()`.
         self.set_state("Idle", "Ready.")
-        self._initial_compact_size = QtCore.QSize(self.size())
+        self._layout.activate()
+        self.layout().activate()
+        self._initial_compact_size = QtCore.QSize(
+            self._target_window_width(), self._compact_window_height()
+        )
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
         self._sync_always_on_top_button()

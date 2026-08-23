@@ -748,3 +748,70 @@ def test_a_transient_after_a_long_pause_cannot_replace_or_extend_the_transcript(
 
     assert transcriber.stop_stream().strip() == "hello world"
     assert decoded == ["hello world"], "a transient must not be decoded"
+
+def _ms(milliseconds, amplitude, sample_rate=16000):
+    return _tone(int(sample_rate * milliseconds / 1000), amplitude)
+
+
+@pytest.mark.parametrize(
+    ("label", "tail", "must_append"),
+    [
+        ("a short spoken word", _ms(150, 6000), True),
+        ("a keyboard click", _ms(5, 9000) + _ms(95, 20), False),
+    ],
+    ids=["short-word", "click"],
+)
+def test_only_real_speech_after_a_pause_extends_the_transcript(
+    label, tail, must_append
+):
+    """The post-pause gate has to cut between a transient and a short word.
+
+    Both directions are transcript loss. Too permissive and a keyboard click
+    appends an invented sentence that is pasted into the document; too
+    strict and a short answer after a pause -- "Ja.", "Stop." -- is deleted
+    with no error and no log above DEBUG. An earlier threshold of 0.35 s did
+    exactly that: measured, a 150 ms word reports 0.20 s and was rejected.
+    """
+    outputs = iter(["hello world"] + [f"after{index}" for index in range(300)])
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            segment = types.SimpleNamespace(text=next(outputs, "x"))
+            info = types.SimpleNamespace(language="en", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _Model(),
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    transcriber.push_audio_chunk(_ms(100, 6000))
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and not (
+        transcriber._stream_session
+        and transcriber._stream_session.result.merged_text
+    ):
+        time.sleep(0.01)
+    assert transcriber._stream_session.result.merged_text == "hello world"
+
+    quiet_chunks = int(transcriber.stream_partial_window_s * 10) + 25
+    for _ in range(quiet_chunks):
+        transcriber.push_audio_chunk(_ms(100, 20))
+    time.sleep(0.15)
+    transcriber.push_audio_chunk(tail)
+    time.sleep(0.2)
+    transcriber._maybe_emit_partial()
+
+    merged = transcriber._stream_session.result.merged_text
+    transcriber.stop_stream()
+    if must_append:
+        assert merged.startswith("hello world") and merged != "hello world", (
+            f"{label} after a pause was dropped from the transcript: {merged!r}"
+        )
+    else:
+        assert merged == "hello world", (
+            f"{label} after a pause changed the transcript: {merged!r}"
+        )

@@ -998,6 +998,12 @@ class DictationController(QtCore.QObject):
         settings_snapshot = replace(self._settings)
         runtime_lease: _TranscriberRuntimeLease | None = None
         try:
+            # Cleared before the handshake starts, not after. The connect
+            # thread sets this flag when `start_stream` fails, and it wins
+            # the race against a later reset from this thread every time
+            # (measured 200/200), so resetting afterwards silently undid the
+            # very protection it exists for.
+            self._stream_chunk_error_reported = False
             runtime_lease = self._acquire_transcriber_runtime(settings_snapshot)
             transcriber = runtime_lease.transcriber
             self._begin_stream_connect(transcriber)
@@ -1023,7 +1029,6 @@ class DictationController(QtCore.QObject):
         # Publish the session before starting PortAudio. A stream is allowed to
         # deliver its first callback from inside ``start()``; publishing these
         # references afterward silently dropped those first audio blocks.
-        self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
         self._stream_insert_failures = 0
         self._stream_text_state.reset()
@@ -1096,9 +1101,22 @@ class DictationController(QtCore.QObject):
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = None
 
+        # The lease is released right after this returns, which puts the
+        # transcriber back in the shared cache -- so by the time a detached
+        # aborter wakes, the object it holds may be the one a NEW session is
+        # using. Aborting then kills the new dictation. Bind the generation
+        # and re-check it after the join.
+        generation = self._stream_connect_generation
+
         def _abort() -> None:
             if thread is not None and thread.is_alive():
                 thread.join(timeout=STREAMING_CONNECT_JOIN_TIMEOUT_S)
+            if generation != self._stream_connect_generation:
+                self._logger.info(
+                    "Skipping a stale stream abort: a newer session owns "
+                    "this transcriber now."
+                )
+                return
             try:
                 if hasattr(transcriber, "abort_stream"):
                     transcriber.abort_stream()
@@ -4148,9 +4166,25 @@ class DictationController(QtCore.QObject):
             # Two failure paths happen *after* the paste keystroke went out, so
             # the target may already hold the text. The streaming retry has to
             # know, or it offers the same words again and they land twice.
-            self._last_insert_may_have_pasted = isinstance(
-                exc, TextMayHaveBeenPastedError
-            )
+            may_have_pasted = isinstance(exc, TextMayHaveBeenPastedError)
+            self._last_insert_may_have_pasted = may_have_pasted
+            if may_have_pasted:
+                # The text is probably already in the document. Offering the
+                # usual Insert action would paste it a second time, and
+                # copying it over the clipboard is pointless when the paste
+                # itself succeeded -- only the cleanup failed. Report it and
+                # leave the transcript alone.
+                self._logger.warning(
+                    "Insertion reported a post-paste failure: %s", exc
+                )
+                if show_overlay_error:
+                    self._overlay.set_state(
+                        "Error",
+                        f"{exc} The text was most likely inserted; check the "
+                        "target window before inserting it again.",
+                        copy_text=insertion_text,
+                    )
+                return False
             allow_clipboard_fallback = bool(
                 getattr(exc, "allow_clipboard_fallback", True)
             )
@@ -4811,8 +4845,29 @@ class DictationController(QtCore.QObject):
                 "Preferred hotkey %s unavailable: %s", preferred, exc
             )
 
+        # Never take a combination the user has assigned to one of this
+        # app's own optional hotkeys. `_register_hotkey_with_fallback` runs
+        # first, so a fallback that collided would make the cancel, overlay
+        # or re-paste registration fail afterwards with "in use by another
+        # program" -- the other program being this one.
+        reserved = {
+            combo.strip().casefold()
+            for combo in (
+                getattr(self._settings, "cancel_hotkey", ""),
+                getattr(self._settings, "show_overlay_hotkey", ""),
+                getattr(self._settings, "repaste_hotkey", ""),
+            )
+            if combo and combo.strip()
+        }
         for fallback in FALLBACK_HOTKEYS:
             if fallback == preferred:
+                continue
+            if fallback.casefold() in reserved:
+                self._logger.info(
+                    "Skipping fallback hotkey %s: it is assigned to another "
+                    "action in this app.",
+                    fallback,
+                )
                 continue
             try:
                 self._hotkey_manager.register(fallback)
@@ -4856,6 +4911,18 @@ class DictationController(QtCore.QObject):
         preferred = self._settings.hotkey
         if self._active_hotkey == preferred:
             self._stop_hotkey_reclaim()
+            return
+        if not self._active_hotkey:
+            # Nothing is registered at all: the preferred key and every
+            # fallback were busy at startup. Retrying only the preferred one
+            # means the app never notices when a *fallback* frees up, and
+            # the user stays with no hotkey until they open Settings and
+            # save. Re-run the whole chain instead.
+            if self._transcription_runtime_active():
+                return
+            if self._register_hotkey_with_fallback():
+                self._hotkey_registration_ok = True
+                self.show_idle_status()
             return
         # Never swap the binding out from under a running dictation.
         if self._transcription_runtime_active():

@@ -26,18 +26,29 @@ DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 # Ctrl+Win+Space is deliberately absent — Windows owns it for input-language
 # switching.
 #
-# Function keys only, and no combination that a common editor already binds.
 # RegisterHotKey takes a combination *globally*: the foreground app never
-# sees it again. Falling back to `Ctrl+Shift+Space` would silently break
-# parameter hints in VS Code and Visual Studio and smart-complete in the
-# JetBrains IDEs, machine-wide, with no prompt and no way to opt out —
-# an unacceptable price for an automatic substitution the user never chose.
-# F9/F10/F12 with Ctrl+Alt or Ctrl+Win are unbound in mainstream editors.
+# sees it again. An automatic fallback the user never chose must therefore
+# not be something another program needs. Ruled out for that reason:
+#   Ctrl+Shift+Space  parameter hints in VS Code / Visual Studio,
+#                     smart-complete in the JetBrains IDEs
+#   Ctrl+Alt+D        a bound command in Visual Studio
+#   Ctrl+Alt+F8       "Quick Evaluate Expression" in the JetBrains IDEs
+#   Ctrl+Win+Space    Windows owns it for input-language switching
+# Ctrl+Win with a function key is the safest space left: editors bind
+# Ctrl+Alt and Ctrl+Shift combinations heavily and the Win modifier
+# hardly at all. All four were verified free on a normal desktop.
+#
+# F10/F11/F12 are deliberately absent: they are this app's own default
+# cancel, show-overlay and re-paste keys, and taking one as a recording
+# fallback would make the user's own second hotkey fail to register
+# "because another program has it" -- that other program being this one.
+# `_register_hotkey_with_fallback` also skips any fallback that collides
+# with the configured cancel/overlay/repaste hotkeys.
 FALLBACK_HOTKEYS = (
     "Ctrl+Alt+F9",
     "Ctrl+Win+F9",
-    "Ctrl+Alt+F8",
     "Ctrl+Win+F8",
+    "Ctrl+Win+F7",
 )
 FALLBACK_HOTKEY = FALLBACK_HOTKEYS[0]
 # How often to try to reclaim the preferred hotkey while running on a fallback.
@@ -1163,11 +1174,23 @@ STREAMING_LIVE_INSERT_RETRY_LIMIT = 3
 # APPENDED after a pause instead of aligned. A pause longer than the window
 # means the overlap search has nothing to anchor on, so such a window is taken
 # on trust -- and the model reliably invents words when the audio is mostly
-# quiet. A peak measurement is not enough here: one keyboard click or chair
-# creak clears it, and each one would append a fresh hallucination to the
-# transcript and paste it into the document. Requiring a third of a second of
-# actual above-threshold audio rejects transients while passing any real word.
-STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.35
+# quiet. A peak measurement is not enough: one keyboard click clears it, and
+# each one would append a fresh hallucination and paste it into the document.
+#
+# The value has to sit between a transient and the shortest real word, and
+# the meter buckets at SILENCE_GATE_WINDOW_MS (100 ms), so measurements are
+# quantised to tenths. Measured on this machine: a 5-50 ms click reports
+# 0.10 s (one bucket), a 150 ms word 0.20 s, a 250 ms word 0.30 s. 0.15 s is
+# therefore the only sensible cut -- it rejects every transient and passes
+# the shortest utterance. A higher value silently DELETES short answers
+# ("Ja.", "Stop.") spoken after a pause, which is transcript loss, not
+# protection.
+#
+# Known limit: this is an energy gate, not a VAD, so a ~400 ms chair scrape
+# or cough after a long pause still qualifies and its invented sentence is
+# appended. The damage is bounded to that one window -- the unbounded growth
+# needs every window to qualify, which continuous silence no longer does.
+STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.15
 
 # How much audio may pile up while a remote streaming provider is still
 # completing its network handshake. Deepgram waits up to 8 s for its socket and

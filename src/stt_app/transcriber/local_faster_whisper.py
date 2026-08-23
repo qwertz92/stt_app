@@ -963,7 +963,14 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 session.result.last_partial_at = time.monotonic()
                 session.result.last_partial_size = len(session.pcm_buffer)
                 return
-        session.result.silent_seconds = 0.0
+        if not quiet_slice:
+            # Reset only on audio that actually carried sound. Resetting
+            # unconditionally meant that with the gate switched off the
+            # counter was incremented and zeroed on the same call, so it
+            # never accumulated, `pause_exceeded_window` was never true, and
+            # the pause handling was silently dead -- the exact coupling the
+            # decoupling above was meant to remove.
+            session.result.silent_seconds = 0.0
 
         try:
             text = self._transcribe_current_stream_buffer(

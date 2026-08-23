@@ -2330,3 +2330,106 @@ def test_a_failed_reclaim_keeps_the_working_fallback_hotkey():
     finally:
         controller.shutdown()
     _ = app
+
+
+def test_a_fallback_never_steals_the_users_own_other_hotkeys():
+    """The recording fallback runs first, so a collision breaks the rest.
+
+    If the user assigned Ctrl+Alt+F9 to Cancel and the recording hotkey falls
+    back onto it, the cancel registration afterwards fails with "in use by
+    another program" -- the other program being this app.
+    """
+    from stt_app.config import FALLBACK_HOTKEYS
+    from stt_app.hotkey import HotkeyRegistrationError
+
+    registered: list[str] = []
+
+    class _OnlyPreferredIsBusy:
+        hotkey_id = 1
+        is_registered = False
+
+        def register(self, hotkey):
+            if hotkey == "Ctrl+Alt+Space":
+                raise HotkeyRegistrationError("in use by another program")
+            registered.append(hotkey)
+            self.is_registered = True
+
+        def unregister(self):
+            self.is_registered = False
+
+    manager = _OnlyPreferredIsBusy()
+    settings = AppSettings(
+        hotkey="Ctrl+Alt+Space",
+        cancel_hotkey=FALLBACK_HOTKEYS[0],
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+    )
+    try:
+        registered.clear()
+        assert controller._register_hotkey_with_fallback() is True
+        assert registered == [FALLBACK_HOTKEYS[1]], (
+            f"took {registered}, but {FALLBACK_HOTKEYS[0]} is the user's "
+            "cancel hotkey"
+        )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_the_reclaim_recovers_when_a_fallback_frees_up_after_a_total_failure():
+    """With nothing registered, retrying only the preferred key never recovers.
+
+    If every key is busy at startup the app has no hotkey at all. The reclaim
+    timer used to retry `settings.hotkey` alone, so a fallback becoming free a
+    minute later went unnoticed and the user stayed stuck until they opened
+    Settings and saved.
+    """
+    from stt_app.config import FALLBACK_HOTKEYS
+    from stt_app.hotkey import HotkeyRegistrationError
+
+    registered: list[str] = []
+
+    class _EverythingBusyAtFirst:
+        hotkey_id = 1
+        is_registered = False
+
+        def __init__(self):
+            self.free = set()
+
+        def register(self, hotkey):
+            if hotkey not in self.free:
+                raise HotkeyRegistrationError("in use by another program")
+            registered.append(hotkey)
+            self.is_registered = True
+
+        def unregister(self):
+            self.is_registered = False
+
+    manager = _EverythingBusyAtFirst()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey="Ctrl+Alt+Space")),
+        hotkey_manager=manager,
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+    )
+    try:
+        registered.clear()
+        assert controller._register_hotkey_with_fallback() is False
+        assert controller._active_hotkey == ""
+        assert controller._hotkey_reclaim_timer.isActive()
+
+        # A fallback -- not the preferred key -- becomes available.
+        manager.free.add(FALLBACK_HOTKEYS[2])
+        controller._reclaim_preferred_hotkey()
+
+        assert registered == [FALLBACK_HOTKEYS[2]], (
+            "the reclaim only ever retried the preferred hotkey"
+        )
+        assert controller._active_hotkey == FALLBACK_HOTKEYS[2]
+    finally:
+        controller.shutdown()
+    _ = app

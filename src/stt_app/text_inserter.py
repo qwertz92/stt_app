@@ -53,6 +53,7 @@ class ClipboardContentionError(TextInsertionError):
         super().__init__(message, allow_clipboard_fallback=False)
 
 
+
 class _ClipboardContentionAfterPaste(
     ClipboardContentionError, TextMayHaveBeenPastedError
 ):
@@ -312,6 +313,13 @@ class TextInserter:
             actual_mode = "send_input"
             paste_error: Exception | None = None
             restore_error: Exception | None = None
+            # Everything raised after this becomes True may already be in
+            # the target document. One flag rather than one exception class
+            # per raise site: the previous approach missed the most likely
+            # site of all (a clipboard read that fails because another
+            # program has the clipboard open), and the streaming retry then
+            # pasted the same words a second time.
+            paste_sent = False
             try:
                 self._backend.set_clipboard_text(text)
                 clipboard_marker = self._clipboard_sequence_number()
@@ -334,6 +342,7 @@ class TextInserter:
                 else:
                     self._backend.send_ctrl_v()
                     actual_mode = "send_input"
+                paste_sent = True
 
                 if actual_mode == "send_input":
                     if self._wait_for_paste_target_ready(target_hwnd):
@@ -377,13 +386,26 @@ class TextInserter:
                     except Exception as exc:
                         restore_error = exc
 
+            combined_error = (
+                TextMayHaveBeenPastedError if paste_sent else TextInsertionError
+            )
             if paste_error is not None and restore_error is not None:
-                raise TextInsertionError(
+                raise combined_error(
                     f"Failed to paste text ({paste_error}) and failed to restore clipboard ({restore_error})."
                 ) from paste_error
             if paste_error is not None:
-                if isinstance(paste_error, TextInsertionError):
+                if isinstance(paste_error, TextInsertionError) and (
+                    not paste_sent
+                    or isinstance(paste_error, TextMayHaveBeenPastedError)
+                ):
                     raise paste_error
+                if paste_sent:
+                    # Re-raise under the after-paste class so a caller that
+                    # retries cannot duplicate text that already landed.
+                    raise TextMayHaveBeenPastedError(
+                        str(paste_error)
+                        or f"Failed to insert transcribed text: {paste_error}"
+                    ) from paste_error
                 raise TextInsertionError(
                     f"Failed to insert transcribed text: {paste_error}"
                 ) from paste_error

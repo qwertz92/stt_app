@@ -7,6 +7,7 @@ from stt_app.text_inserter import (
     INPUT,
     TextInserter,
     TextInsertionError,
+    TextMayHaveBeenPastedError,
     _format_sendinput_failure,
 )
 
@@ -451,3 +452,54 @@ def test_format_sendinput_failure_zero_error_zero_sent():
 def test_input_struct_size_matches_windows_expectation():
     expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
     assert ctypes.sizeof(INPUT) == expected
+
+class _ClipboardBusyAfterPaste:
+    """A clipboard another program holds open once the paste has gone out."""
+
+    def __init__(self):
+        self.pasted = False
+        self.sequence = 1
+
+    def capture_clipboard_state(self):
+        return object()
+
+    def set_clipboard_text(self, text):
+        self.sequence += 1
+
+    def clipboard_sequence_number(self):
+        return self.sequence
+
+    def get_clipboard_text(self):
+        if self.pasted:
+            raise OSError("clipboard is open in another program")
+        return "hello"
+
+    def send_paste_with_mode(self, mode, target_hwnd=None):
+        self.pasted = True
+        return "send_input"
+
+    def restore_clipboard_state(self, state):
+        pass
+
+
+def test_a_failure_after_the_paste_keystroke_is_never_retryable():
+    """Classification has to follow the keystroke, not the raise site.
+
+    Streaming live insertion reads a failed insert as "those words are not
+    in the document" and offers them again on the next partial. That is
+    right only while the paste has not been sent. Here it has: the text is
+    in the target and only the verification read failed, because a clipboard
+    manager had the clipboard open -- an ordinary thing to have running.
+    Retrying pastes the phrase twice.
+    """
+    inserter = TextInserter(
+        backend=_ClipboardBusyAfterPaste(), sleep_fn=lambda seconds: None
+    )
+
+    with pytest.raises(TextInsertionError) as excinfo:
+        inserter.insert_text("hello")
+
+    assert isinstance(excinfo.value, TextMayHaveBeenPastedError), (
+        f"{type(excinfo.value).__name__} is retryable, so the streaming "
+        "retry will paste the same words a second time"
+    )

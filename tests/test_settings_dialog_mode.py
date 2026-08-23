@@ -3118,6 +3118,7 @@ def test_settings_dialog_logs_local_tab_timing(caplog, monkeypatch):
     _ = app
 
 
+@pytest.mark.pixel_exact
 def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(AppSettings())

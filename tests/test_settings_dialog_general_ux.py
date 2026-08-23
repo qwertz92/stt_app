@@ -136,6 +136,7 @@ def test_field_hints_are_closer_to_their_control_than_the_next_field(
     assert hint_to_next_control > control_to_hint
 
 
+@pytest.mark.pixel_exact
 def test_dynamic_engine_hints_keep_general_rows_stationary(
     dialog: SettingsDialog,
 ) -> None:
@@ -308,6 +309,7 @@ def test_microphone_picker_lists_devices_and_keeps_missing_selection(
     assert combo.currentData() == "Old Mic"
 
 
+@pytest.mark.pixel_exact
 def test_inline_field_buttons_match_their_field_height(
     dialog: SettingsDialog,
 ) -> None:
