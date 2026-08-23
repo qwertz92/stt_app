@@ -43,7 +43,27 @@ def measure_peak_windowed_rms(
     if sample_width != 2 or not frames:
         return None
 
-    samples = np.frombuffer(frames, dtype=np.int16).astype(np.float32) / 32768.0
+    return measure_peak_windowed_rms_pcm(frames, sample_rate, window_ms)
+
+
+def measure_peak_windowed_rms_pcm(
+    pcm_bytes: bytes,
+    sample_rate: int,
+    window_ms: int = SILENCE_GATE_WINDOW_MS,
+) -> float | None:
+    """Loudest windowed RMS of raw 16-bit PCM, or ``None`` if unmeasurable.
+
+    The streaming path holds raw PCM rather than a WAV container, and it needs
+    the same measurement the batch silence gate uses — speech models hallucinate
+    words from silence, so a window with no speech in it must not be decoded.
+    """
+    if not pcm_bytes or sample_rate <= 0:
+        return None
+    usable = len(pcm_bytes) - (len(pcm_bytes) % 2)
+    if usable <= 0:
+        return None
+    samples = np.frombuffer(pcm_bytes[:usable], dtype=np.int16).astype(np.float32)
+    samples /= 32768.0
     window = max(1, int(sample_rate * (max(1, window_ms) / 1000.0)))
     peak = 0.0
     for start in range(0, samples.size, window):

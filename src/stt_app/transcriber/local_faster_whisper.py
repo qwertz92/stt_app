@@ -19,6 +19,8 @@ from ..config import (
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODEL_SIZE,
     DOC_MODELS_PATH,
+    DEFAULT_SILENCE_GATE_ENABLED,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     DOC_SSL_PROXY_PATH,
     FASTER_WHISPER_MODEL_SIZES,
     LOCAL_ONNX_MODEL_SIZES,
@@ -34,6 +36,7 @@ from ..config import (
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ..streaming_text import merge_rolling_window_transcript
+from ..vad import measure_peak_windowed_rms_pcm
 from .base import (
     AudioInput,
     ITranscriber,
@@ -66,6 +69,10 @@ class _StreamResult:
     last_partial_at: float = 0.0
     last_partial_size: int = 0
     error_reported: bool = False
+    # Audio skipped as silence since the last decoded window. Once it exceeds
+    # the window length the next window can no longer overlap what was already
+    # transcribed, so it is a new segment and must be appended, not merged.
+    silent_seconds: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -485,6 +492,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         stream_partial_min_audio_s: float = STREAMING_PARTIAL_MIN_AUDIO_S,
         stream_partial_window_s: float = STREAMING_PARTIAL_WINDOW_S,
         stream_final_full_pass: bool = True,
+        silence_gate_enabled: bool = DEFAULT_SILENCE_GATE_ENABLED,
+        silence_gate_threshold: float = DEFAULT_SILENCE_GATE_THRESHOLD,
         model_factory=None,
         offline_mode: bool = False,
         model_dir: str = "",
@@ -501,6 +510,10 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self.stream_partial_min_audio_s = max(0.0, float(stream_partial_min_audio_s))
         self.stream_partial_window_s = max(0.0, float(stream_partial_window_s))
         self.stream_final_full_pass = bool(stream_final_full_pass)
+        # Streaming windows use the same gate as batch: a window with no speech
+        # in it must not be decoded, because the model invents words from it.
+        self.silence_gate_enabled = bool(silence_gate_enabled)
+        self.silence_gate_threshold = float(silence_gate_threshold)
         self._model_factory = model_factory or _default_model_factory
         self._model = None
         self._model_lock = threading.Lock()
@@ -837,14 +850,26 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 # Fast finalization: transcribe only the trailing window to
                 # cover audio after the last partial, then merge it into the
                 # accumulated live text instead of re-transcribing everything.
-                tail_text = self._transcribe_current_stream_buffer(
-                    max_window_seconds=self.stream_partial_window_s,
-                    session=session,
-                )
-                final_text = merge_rolling_window_transcript(
-                    session.result.merged_text,
-                    tail_text,
-                )
+                # The same silence gate as the partials. Without it a
+                # dictation that ends with a few seconds of quiet decoded one
+                # last hallucinated window here, and because a hallucination
+                # cannot be aligned the merge replaced the entire transcript
+                # with it -- the whole dictation lost at the last step.
+                if self._stream_tail_window_is_silent(session):
+                    final_text = session.result.merged_text
+                else:
+                    tail_text = self._transcribe_current_stream_buffer(
+                        max_window_seconds=self.stream_partial_window_s,
+                        session=session,
+                    )
+                    final_text = merge_rolling_window_transcript(
+                        session.result.merged_text,
+                        tail_text,
+                        new_segment=(
+                            session.result.silent_seconds
+                            >= self.stream_partial_window_s
+                        ),
+                    )
         except Exception as exc:
             session.result.error = exc
             return
@@ -875,6 +900,23 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if not should_emit:
             return
 
+        # Do not decode silence. faster-whisper invents words from it — that is
+        # why the batch silence gate exists — and here every invented window is
+        # unalignable, so it used to replace the whole accumulated transcript.
+        new_audio = bytes(session.pcm_buffer[session.result.last_partial_size:])
+        if self._stream_audio_is_silent(new_audio):
+            session.result.silent_seconds += len(new_audio) / (
+                self.stream_sample_rate * 2
+            )
+            session.result.last_partial_at = time.monotonic()
+            session.result.last_partial_size = len(session.pcm_buffer)
+            return
+
+        # A pause longer than the window means the coming window shares no audio
+        # with what is already transcribed, so it is genuinely new text.
+        new_segment = session.result.silent_seconds >= self.stream_partial_window_s
+        session.result.silent_seconds = 0.0
+
         try:
             text = self._transcribe_current_stream_buffer(
                 max_window_seconds=self.stream_partial_window_s,
@@ -893,16 +935,44 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         session.result.merged_text = merge_rolling_window_transcript(
             session.result.merged_text,
             text,
+            new_segment=new_segment,
         )
 
-        if callback is not None and text.strip():
+        # Emit the *merged* transcript, not the raw window. The controller kept
+        # its own copy of this merge over raw windows, so the same stitching ran
+        # twice and could disagree; and a raw window never contains the text
+        # already inserted, which froze live insertion for the rest of the
+        # session once the locked prefix no longer matched.
+        if callback is not None and session.result.merged_text.strip():
             try:
-                callback(text)
+                callback(session.result.merged_text)
             except Exception:
                 pass
 
         session.result.last_partial_at = time.monotonic()
         session.result.last_partial_size = len(session.pcm_buffer)
+
+    def _stream_audio_is_silent(self, pcm_bytes: bytes) -> bool:
+        """Report whether a stretch of stream audio is below the speech gate.
+
+        Unmeasurable audio (too short to fill a window) returns ``None`` from
+        the meter and is deliberately *not* treated as silence: refusing to
+        decode something we could not measure would drop real speech.
+        """
+        if not self.silence_gate_enabled:
+            return False
+        level = measure_peak_windowed_rms_pcm(pcm_bytes, self.stream_sample_rate)
+        return level is not None and level < self.silence_gate_threshold
+
+    def _stream_tail_window_is_silent(self, session: _StreamingSession) -> bool:
+        """Measure exactly the trailing window the finalizer would decode."""
+        snapshot = bytes(session.pcm_buffer)
+        if not snapshot:
+            return False
+        max_bytes = int(self.stream_partial_window_s * self.stream_sample_rate * 2)
+        if max_bytes > 0 and len(snapshot) > max_bytes:
+            snapshot = snapshot[-max_bytes:]
+        return self._stream_audio_is_silent(snapshot)
 
     def _transcribe_current_stream_buffer(
         self,

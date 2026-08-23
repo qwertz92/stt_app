@@ -1132,6 +1132,20 @@ DEFAULT_INPUT_DEVICE_NAME = ""
 STREAMING_PARTIAL_INTERVAL_S = 0.35
 STREAMING_PARTIAL_MIN_AUDIO_S = 0.25
 STREAMING_PARTIAL_WINDOW_S = 8.0
+# Consecutive failed live inserts before a streaming session gives up. A single
+# failure is usually transient — the user is holding a modifier key, so the
+# injected Ctrl+V would arrive as Ctrl+Alt+V — and ending the whole dictation
+# for that is far worse than skipping one update and retrying on the next
+# partial. A genuinely dead target still ends the session, just not instantly.
+STREAMING_LIVE_INSERT_RETRY_LIMIT = 12
+
+# How much audio may pile up while a remote streaming provider is still
+# completing its network handshake. Deepgram waits up to 8 s for its socket and
+# the AssemblyAI SDK connects synchronously, so the microphone is opened first
+# and the first seconds of speech are buffered until the stream is ready.
+# 16 kHz mono 16-bit is 32 kB/s, so this ceiling is about 60 s of audio; it only
+# exists so a connection that never completes cannot grow without bound.
+STREAMING_PRECONNECT_BUFFER_MAX_BYTES = 2_000_000
 STREAMING_STABLE_WORD_GUARD = 1
 STREAMING_REVISION_WORD_WINDOW = 1
 STREAMING_OVERLAY_MAX_CHARS = 180

@@ -66,6 +66,16 @@ class StreamingTextState:
             display_text=candidate_text,
         )
 
+    def rollback_commit(self, previous_committed: str) -> None:
+        """Undo a commit whose text never reached the target window.
+
+        `apply_partial_append_only` marks text as committed the moment it is
+        handed to the inserter. If that paste fails the text is *not* in the
+        document, so the commit has to be taken back or the words are lost for
+        good: the locked prefix would never offer them again.
+        """
+        self.committed_text = previous_committed
+
     def finalize_append_only(self, final_text: str) -> tuple[str, str]:
         normalized_final = normalize_stream_text(final_text)
         tail = append_only_stream_finalize_tail(
@@ -154,6 +164,7 @@ def merge_rolling_window_transcript(
     current_text: str,
     *,
     min_overlap_words: int = 2,
+    new_segment: bool = False,
 ) -> str:
     """Merge a trailing-audio-window transcript into the accumulated text.
 
@@ -170,6 +181,9 @@ def merge_rolling_window_transcript(
       defeated the whole search. Retrying the alignment a few words into the
       window recovers it.
 
+    ``new_segment`` marks a window that follows a pause longer than the window
+    itself, so it cannot overlap the accumulated text and is appended instead.
+
     A window that still cannot be aligned falls back to replacing the
     accumulated text. That loses text, but the alternative — appending — is
     worse: a silent microphone makes the model emit a fresh hallucination every
@@ -181,6 +195,13 @@ def merge_rolling_window_transcript(
     current = normalize_stream_text(current_text)
     if not previous or not current:
         return current or previous
+
+    if new_segment:
+        # The caller measured a silence longer than the window, so this window
+        # shares no audio with what is already transcribed. There is nothing to
+        # align: it is genuinely new speech and must be appended. Without this,
+        # speaking again after a long pause replaced everything said before it.
+        return stream_join_text(previous, current)
 
     merged = append_only_stream_partial_candidate(
         previous,

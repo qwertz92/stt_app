@@ -7,6 +7,7 @@ from ..config import (
     DEFAULT_ENGINE,
     DEFAULT_FUNASR_MODEL,
     DEFAULT_LOCAL_ONNX_DEVICE,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
@@ -73,6 +74,10 @@ def _create_local_transcriber(settings: AppSettings) -> ITranscriber:
         language_mode=settings.language_mode,
         vad_filter=settings.vad_enabled,
         stream_final_full_pass=settings.streaming_full_final_transcript,
+        silence_gate_enabled=getattr(settings, "silence_gate_enabled", True),
+        silence_gate_threshold=getattr(
+            settings, "silence_gate_threshold", DEFAULT_SILENCE_GATE_THRESHOLD
+        ),
         offline_mode=settings.offline_mode,
         model_dir=settings.model_dir,
         custom_vocabulary=getattr(settings, "custom_vocabulary", ""),

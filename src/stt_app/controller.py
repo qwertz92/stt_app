@@ -40,6 +40,8 @@ from .config import (
     HOTKEY_RECLAIM_INTERVAL_MS,
     LOCAL_WEBGPU_MODEL_SIZES,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
+    STREAMING_LIVE_INSERT_RETRY_LIMIT,
+    STREAMING_PRECONNECT_BUFFER_MAX_BYTES,
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
     STREAMING_BEEP_ON_ABORT,
@@ -193,6 +195,8 @@ class DictationController(QtCore.QObject):
     transcription_progress = QtCore.Signal(int, str)
     transcription_partial = QtCore.Signal(str)
     stream_runtime_failed = QtCore.Signal(str)
+    # generation, ok, error text -- a remote handshake finished off-thread
+    stream_connect_finished = QtCore.Signal(int, bool, str)
     stream_abort_requested = QtCore.Signal(str, bool)
     model_preload_done = QtCore.Signal(int, bool, str)  # generation, success, message
     # A queued transcription failed while a newer session owns the overlay.
@@ -239,6 +243,16 @@ class DictationController(QtCore.QObject):
         self._audio_device_listener: AudioDeviceChangeListener | None = None
         self._pending_audio_device_refresh = False
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+        # Remote streaming finalizes get their own worker. `_executor` is
+        # deliberately single-threaded so two local models never load at once,
+        # but a remote finalize runs no model at all -- `stop_stream()` drains a
+        # socket. Sharing the queue meant that pressing stop on an AssemblyAI or
+        # Deepgram dictation left it "Processing" until an unrelated local batch
+        # transcription ahead of it in the queue had finished. Still one worker,
+        # so remote finalizes stay serialized among themselves.
+        self._stream_finalize_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=1
+        )
         self._preload_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         self._preload_future: concurrent.futures.Future | None = None
         self._preload_generation = 0
@@ -268,6 +282,8 @@ class DictationController(QtCore.QObject):
         self._hotkey_notice: str | None = None
         # Which hotkey is actually registered right now. May differ from
         # settings.hotkey while another program holds the preferred one.
+        # Consecutive failed live inserts in the current streaming session.
+        self._stream_insert_failures = 0
         self._active_hotkey: str = ""
         self._hotkey_reclaim_timer = QtCore.QTimer(self)
         self._hotkey_reclaim_timer.setInterval(HOTKEY_RECLAIM_INTERVAL_MS)
@@ -286,11 +302,19 @@ class DictationController(QtCore.QObject):
         self._last_transcribe_settings: AppSettings | None = None
         self._active_batch_settings: AppSettings | None = None
         self._streaming_recording = False
+        # Audio captured while a remote provider is still connecting. The
+        # microphone is opened first so no speech is lost; these bytes are
+        # handed over in order the moment the stream is ready.
+        self._stream_preconnect_lock = threading.Lock()
+        self._stream_preconnect_chunks: list[bytes] | None = None
+        self._stream_preconnect_dropped = False
+        self._stream_connect_generation = 0
         self._active_stream_transcriber = None
         self._active_stream_runtime_lease: _TranscriberRuntimeLease | None = None
         self._active_stream_settings: AppSettings | None = None
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
+        self._stream_insert_failures = 0
         self._stream_text_state = StreamingTextState(
             stable_word_guard=STREAMING_STABLE_WORD_GUARD,
             revision_word_window=STREAMING_REVISION_WORD_WINDOW,
@@ -345,6 +369,7 @@ class DictationController(QtCore.QObject):
         self.transcription_progress.connect(self._on_transcription_progress_result)
         self.transcription_partial.connect(self._on_transcription_partial)
         self.stream_runtime_failed.connect(self._on_stream_runtime_failed)
+        self.stream_connect_finished.connect(self._on_stream_connect_finished)
         self.stream_abort_requested.connect(self._on_stream_abort_requested)
         self.model_preload_done.connect(self._on_model_preload_done)
         self.audio_devices_changed.connect(self._on_audio_devices_changed)
@@ -462,6 +487,7 @@ class DictationController(QtCore.QObject):
         self._reset_streaming_state()
         self._reset_transcriber_cache()
         self._executor.shutdown(wait=False, cancel_futures=True)
+        self._stream_finalize_executor.shutdown(wait=False, cancel_futures=True)
         self._preload_executor.shutdown(wait=False, cancel_futures=True)
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
@@ -828,16 +854,123 @@ class DictationController(QtCore.QObject):
             )
         )
 
+    def _begin_stream_connect(self, transcriber, settings_snapshot) -> None:
+        """Start the provider's stream without blocking the Qt thread.
+
+        A remote provider's `start_stream` performs a network handshake:
+        Deepgram waits up to 8 s for its socket and the AssemblyAI SDK connects
+        synchronously. Called inline that froze the whole UI -- overlay, tray
+        and settings -- for the entire handshake, right at the moment the user
+        pressed the hotkey and expected to start talking.
+
+        The microphone is therefore opened immediately and the handshake runs on
+        a worker thread. Audio recorded in the meantime is buffered and handed
+        over in order once the stream is ready, so nothing is lost; before this
+        the same seconds were lost anyway, only with a frozen window on top.
+
+        Local engines connect to nothing and return immediately, so they simply
+        pass straight through this path.
+        """
+        self._stream_connect_generation += 1
+        generation = self._stream_connect_generation
+        with self._stream_preconnect_lock:
+            self._stream_preconnect_chunks = []
+            self._stream_preconnect_dropped = False
+
+        def _connect() -> None:
+            try:
+                transcriber.start_stream(
+                    on_partial=self._emit_stream_partial,
+                    on_error=self._emit_stream_runtime_failure,
+                )
+            except BaseException as exc:  # noqa: BLE001 - reported to the user
+                self._discard_preconnect_buffer(generation)
+                self.stream_connect_finished.emit(
+                    generation, False, self._stream_connect_error_text(exc)
+                )
+                return
+            # Flush here, on this thread, while still ordered ahead of any
+            # further callback: `_on_stream_audio_chunk` keeps appending to the
+            # buffer until it is cleared under the same lock.
+            failure = self._flush_preconnect_buffer(generation, transcriber)
+            self.stream_connect_finished.emit(
+                generation, failure is None, failure or ""
+            )
+
+        threading.Thread(
+            target=_connect,
+            name="stt-stream-connect",
+            daemon=True,
+        ).start()
+
+    @staticmethod
+    def _stream_connect_error_text(exc: BaseException) -> str:
+        if isinstance(exc, NotImplementedError):
+            return str(exc) or "Streaming is not supported by this engine."
+        if isinstance(exc, TranscriptionError):
+            return str(exc) or "Streaming failed to start."
+        return f"Failed to start streaming: {exc}"
+
+    def _flush_preconnect_buffer(self, generation: int, transcriber) -> str | None:
+        """Hand buffered audio to the now-ready stream. Returns an error text."""
+        while True:
+            with self._stream_preconnect_lock:
+                if generation != self._stream_connect_generation:
+                    self._stream_preconnect_chunks = None
+                    return None
+                pending = self._stream_preconnect_chunks
+                if pending is None:
+                    return None
+                if not pending:
+                    # Empty and still current: clear the flag under the lock so
+                    # the next callback pushes directly and cannot overtake us.
+                    self._stream_preconnect_chunks = None
+                    dropped = self._stream_preconnect_dropped
+                    break
+                self._stream_preconnect_chunks = []
+            for chunk in pending:
+                try:
+                    transcriber.push_audio_chunk(chunk)
+                except Exception as exc:  # noqa: BLE001 - reported to the user
+                    self._logger.exception("Failed to flush buffered stream audio")
+                    return f"Streaming chunk push failed: {exc}"
+        if dropped:
+            self._logger.warning(
+                "streaming_preconnect_buffer_overflow: the provider took too "
+                "long to connect and buffered audio was dropped."
+            )
+        return None
+
+    def _discard_preconnect_buffer(self, generation: int) -> None:
+        with self._stream_preconnect_lock:
+            if generation == self._stream_connect_generation:
+                self._stream_preconnect_chunks = None
+
+    def _on_stream_connect_finished(
+        self, generation: int, ok: bool, error_text: str
+    ) -> None:
+        if generation != self._stream_connect_generation:
+            return  # a newer session replaced this one while it connected
+        if not ok:
+            self._on_stream_runtime_failed(error_text or "Streaming failed to start.")
+            return
+        if not self._streaming_recording or self._stream_abort_requested:
+            return
+        if not (
+            self._stream_text_state.live_text
+            or self._stream_text_state.last_partial_text
+        ):
+            self._set_listening_overlay(
+                "Streaming active. Speak now, press hotkey to finalize."
+            )
+
     def _start_streaming_recording(self) -> None:
         settings_snapshot = replace(self._settings)
         runtime_lease: _TranscriberRuntimeLease | None = None
         try:
             runtime_lease = self._acquire_transcriber_runtime(settings_snapshot)
             transcriber = runtime_lease.transcriber
-            transcriber.start_stream(
-                on_partial=self._emit_stream_partial,
-                on_error=self._emit_stream_runtime_failure,
-            )
+            self._begin_stream_connect(transcriber, settings_snapshot)
         except NotImplementedError as exc:
             if runtime_lease is not None:
                 runtime_lease.release()
@@ -862,6 +995,7 @@ class DictationController(QtCore.QObject):
         # references afterward silently dropped those first audio blocks.
         self._stream_chunk_error_reported = False
         self._stream_abort_requested = False
+        self._stream_insert_failures = 0
         self._stream_text_state.reset()
         self._active_session_mode = "streaming"
         self._streaming_recording = True
@@ -909,8 +1043,14 @@ class DictationController(QtCore.QObject):
             self._stream_text_state.live_text
             or self._stream_text_state.last_partial_text
         ):
+            with self._stream_preconnect_lock:
+                still_connecting = self._stream_preconnect_chunks is not None
             self._set_listening_overlay(
-                "Streaming active. Speak now, press hotkey to finalize."
+                # Honest about the handshake, and explicit that speaking now is
+                # safe -- the audio is being buffered, not thrown away.
+                "Connecting to the speech service. You can speak now."
+                if still_connecting
+                else "Streaming active. Speak now, press hotkey to finalize."
             )
 
     @staticmethod
@@ -1511,7 +1651,15 @@ class DictationController(QtCore.QObject):
 
     def _reset_streaming_state(self) -> None:
         self._focus_poll_timer.stop()
+        # Retire any handshake still in flight. Bumping the generation is what
+        # stops a late flush from pushing this session's audio into the next
+        # one, and stops its completion signal from touching the overlay.
+        self._stream_connect_generation += 1
+        with self._stream_preconnect_lock:
+            self._stream_preconnect_chunks = None
+            self._stream_preconnect_dropped = False
         self._stream_abort_requested = False
+        self._stream_insert_failures = 0
         self._stream_text_state.reset()
         self._active_batch_settings = None
         self._active_session_mode = "batch"
@@ -2094,6 +2242,19 @@ class DictationController(QtCore.QObject):
             job,
         )
 
+    def _stream_finalize_executor_for(self, settings: AppSettings):
+        """Pick the worker a stream finalize should run on.
+
+        Local streaming re-transcribes audio with the loaded model, so it stays
+        on the shared single worker that keeps model work serialized. A remote
+        finalize only closes a WebSocket and returns the text the provider has
+        already produced, so making it queue behind local model work is pure
+        latency with nothing to protect.
+        """
+        if settings.engine == DEFAULT_ENGINE:
+            return self._executor
+        return self._stream_finalize_executor
+
     def _submit_stream_finalize(self, *, source_audio_path: str = "") -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
@@ -2127,7 +2288,7 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark streaming recording as transcribing")
-        job.future = self._executor.submit(
+        job.future = self._stream_finalize_executor_for(settings).submit(
             self._finalize_stream_worker, request_token, transcriber, job
         )
         self._flush_deferred_background_results()
@@ -2857,6 +3018,21 @@ class DictationController(QtCore.QObject):
         transcriber = self._active_stream_transcriber
         if transcriber is None:
             return
+        # While a remote provider is still shaking hands the stream cannot take
+        # audio yet. Buffer instead of dropping: the microphone is deliberately
+        # opened before the handshake finishes so the user can start talking
+        # immediately.
+        with self._stream_preconnect_lock:
+            pending = self._stream_preconnect_chunks
+            if pending is not None:
+                buffered = sum(len(item) for item in pending)
+                if buffered + len(chunk) <= STREAMING_PRECONNECT_BUFFER_MAX_BYTES:
+                    pending.append(chunk)
+                else:
+                    # Keep the *oldest* audio: it holds the first words, and a
+                    # connection this slow is going to fail anyway.
+                    self._stream_preconnect_dropped = True
+                return
         try:
             transcriber.push_audio_chunk(chunk)
         except Exception as exc:
@@ -3003,6 +3179,7 @@ class DictationController(QtCore.QObject):
         self._active_stream_transcriber = None
         self._active_stream_settings = None
         self._stream_abort_requested = False
+        self._stream_insert_failures = 0
         self._last_transcript = text
 
         if not text.strip():
@@ -3522,18 +3699,40 @@ class DictationController(QtCore.QObject):
             )
             return
         if STREAMING_LIVE_INSERT_ENABLED:
+            previous_committed = self._stream_text_state.committed_text
             append = self._stream_text_state.apply_partial_append_only(text)
             display_text = append.display_text
             if append.insertion:
-                if not self._insert_text_at_target(
+                if self._insert_text_at_target(
                     append.insertion,
                     restore_focus=False,
                     copy_on_error=False,
                     show_overlay_error=False,
                 ):
-                    self._request_stream_abort(
-                        "Streaming aborted: failed to insert live text.",
-                        beep=STREAMING_BEEP_ON_ABORT,
+                    self._stream_insert_failures = 0
+                else:
+                    # Do not end the dictation over one failed paste. The usual
+                    # cause is a modifier key still held down, which turns the
+                    # injected Ctrl+V into Ctrl+Alt+V — transient, and fatal
+                    # only because this used to abort. Take the commit back so
+                    # the same words are offered again on the next partial.
+                    self._stream_text_state.rollback_commit(previous_committed)
+                    self._stream_insert_failures += 1
+                    if (
+                        self._stream_insert_failures
+                        >= STREAMING_LIVE_INSERT_RETRY_LIMIT
+                    ):
+                        self._request_stream_abort(
+                            "Streaming aborted: the target window kept "
+                            "rejecting inserted text.",
+                            beep=STREAMING_BEEP_ON_ABORT,
+                        )
+                        return
+                    self._logger.debug(
+                        "Live insert failed (%d/%d); retrying on the next "
+                        "partial.",
+                        self._stream_insert_failures,
+                        STREAMING_LIVE_INSERT_RETRY_LIMIT,
                     )
                     return
         else:

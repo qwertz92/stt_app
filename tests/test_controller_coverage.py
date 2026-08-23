@@ -6,9 +6,10 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from unittest.mock import MagicMock
 
-from stt_app.config import FALLBACK_HOTKEY
+from stt_app.config import DEFAULT_ENGINE, FALLBACK_HOTKEY
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionError
@@ -601,8 +602,19 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
         overlay=overlay,
     )
     controller.start_recording()
+    # The handshake runs off the Qt thread now (a remote provider blocks for
+    # seconds), so the failure arrives through a queued signal rather than
+    # inline. Pump until it lands instead of asserting on the same call stack.
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and overlay.states[-1][0] != "Error":
+        app.processEvents()
+        time.sleep(0.01)
+
     assert overlay.states[-1][0] == "Error"
     assert "model not loaded" in overlay.states[-1][1]
+    # And the failed start must not leave the microphone or the session behind.
+    assert controller._audio_capture is None
+    assert controller._streaming_recording is False
     controller.shutdown()
     _ = app
 
@@ -2066,4 +2078,135 @@ def test_the_preferred_hotkey_is_reclaimed_once_it_is_free():
     assert controller._hotkey_notice is None
     assert not controller._hotkey_reclaim_timer.isActive()
     controller.shutdown()
+    _ = app
+
+
+def test_a_slow_streaming_handshake_does_not_block_the_qt_thread(monkeypatch):
+    """Pressing the hotkey must not freeze the UI while a provider connects.
+
+    Deepgram waits up to 8 s for its socket and the AssemblyAI SDK connects
+    synchronously. Called on the Qt thread that froze the overlay, the tray and
+    the settings dialog for the whole handshake.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    release_connect = threading.Event()
+    connect_entered = threading.Event()
+
+    def slow_transcriber(_s, **kw):
+        transcriber = FakeStreamingTranscriber()
+
+        def slow_start(on_partial=None, on_error=None):
+            connect_entered.set()
+            assert release_connect.wait(timeout=30), "connect was never released"
+
+        transcriber.start_stream = slow_start
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", slow_transcriber)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    try:
+        started = time.monotonic()
+        controller.start_recording()
+        elapsed = time.monotonic() - started
+
+        assert connect_entered.wait(timeout=10), "the handshake never started"
+        assert elapsed < 2.0, (
+            f"start_recording blocked the Qt thread for {elapsed:.1f}s"
+        )
+        # The microphone is already open, so the user can talk immediately.
+        assert controller._audio_capture is not None
+        assert controller._streaming_recording is True
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_audio_recorded_while_connecting_is_delivered_in_order(monkeypatch):
+    """Speech during the handshake must reach the provider, not be dropped.
+
+    The microphone is opened before the provider is ready precisely so the
+    first words survive; that only helps if the buffered audio is handed over
+    afterwards, in the order it was recorded.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    overlay = FakeOverlay()
+    release_connect = threading.Event()
+    connect_entered = threading.Event()
+    pushed = []
+
+    def slow_transcriber(_s, **kw):
+        transcriber = FakeStreamingTranscriber()
+
+        def slow_start(on_partial=None, on_error=None):
+            connect_entered.set()
+            assert release_connect.wait(timeout=30)
+
+        transcriber.start_stream = slow_start
+        transcriber.push_audio_chunk = pushed.append
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", slow_transcriber)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    try:
+        controller.start_recording()
+        assert connect_entered.wait(timeout=10)
+
+        for index in range(4):
+            controller._on_stream_audio_chunk(bytes([index]) * 8)
+        assert pushed == [], "audio reached the provider before it was connected"
+
+        release_connect.set()
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and len(pushed) < 4:
+            app.processEvents()
+            time.sleep(0.01)
+
+        assert pushed == [bytes([index]) * 8 for index in range(4)]
+
+        # And once connected, later chunks go straight through in order.
+        controller._on_stream_audio_chunk(b"\x09" * 8)
+        assert pushed[-1] == b"\x09" * 8
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_remote_stream_finalize_does_not_queue_behind_a_local_batch_job():
+    """Stopping a remote dictation must not wait for unrelated model work.
+
+    `_executor` has one worker so two local models never load at once. A remote
+    finalize loads nothing -- it closes a socket -- so sharing that queue only
+    meant the transcript appeared minutes late when a local batch job happened
+    to be running.
+    """
+    controller, app = _make_controller()
+    try:
+        local = AppSettings(engine=DEFAULT_ENGINE)
+        remote = AppSettings(engine="deepgram")
+
+        assert controller._stream_finalize_executor_for(local) is controller._executor
+        assert (
+            controller._stream_finalize_executor_for(remote)
+            is controller._stream_finalize_executor
+        )
+        assert controller._stream_finalize_executor is not controller._executor
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_shutdown_stops_the_stream_finalize_worker():
+    """A forgotten executor keeps a non-daemon thread alive past quit."""
+    controller, app = _make_controller()
+    controller.shutdown()
+    assert controller._stream_finalize_executor._shutdown is True
     _ = app

@@ -1,5 +1,9 @@
 import io
+import math
+import struct
 import threading
+import time
+import types
 import wave
 
 import pytest
@@ -61,7 +65,20 @@ def _build_wav_bytes(sample_rate=16000):
 
 
 def _build_pcm16_chunk(sample_count=320):
-    return b"\x01\x00" * sample_count
+    """Audible 16-bit PCM.
+
+    The streaming path gates each window on audio energy -- faster-whisper
+    invents words from silence -- so a near-zero waveform is (correctly)
+    skipped, and these streaming tests would then assert against a path
+    that never runs.
+    """
+    import math
+    import struct
+
+    return b"".join(
+        struct.pack("<h", int(6000 * math.sin(index / 8.0)))
+        for index in range(sample_count)
+    )
 
 
 def test_local_transcriber_transcribe_batch_from_bytes():
@@ -570,3 +587,105 @@ def test_empty_custom_vocabulary_omits_initial_prompt():
     transcriber.transcribe_batch(_build_wav_bytes())
 
     assert model.calls[0]["initial_prompt"] is None
+
+
+def test_streaming_silence_after_speech_cannot_overwrite_the_transcript():
+    """A dictation that ends in silence must keep its text.
+
+    faster-whisper invents words from silence, and an invented window can never
+    be aligned against the accumulated text, so the merge replaced everything
+    with it. This drives the real worker: audible speech, then more than one
+    window's worth of silence that the model "transcribes" anyway. Both the
+    partial path and the finalizer must refuse to decode that silence.
+    """
+    lock = threading.Lock()
+    decoded = []
+
+    class _CountingModel:
+        def transcribe(self, *args, **kwargs):
+            with lock:
+                text = "real speech here" if not decoded else "hallucinated subtitle"
+                decoded.append(text)
+            segment = types.SimpleNamespace(text=text)
+            info = types.SimpleNamespace(language="en", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _CountingModel(),
+    )
+    def _wait_for(predicate, what):
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            if predicate():
+                return
+            time.sleep(0.01)
+        raise AssertionError(f"timed out waiting for {what}")
+
+    transcriber.start_stream(on_partial=lambda text: None)
+    # The worker thread owns the buffer, so wait for it to drain the queue
+    # rather than racing it.
+    transcriber.push_audio_chunk(_build_pcm16_chunk(1600))
+    _wait_for(lambda: bool(decoded), "the speech window to be decoded")
+    with lock:
+        decodes_after_speech = len(decoded)
+
+    # Longer than stream_partial_window_s, so the finalizer's trailing window
+    # holds nothing but this silence.
+    silent = b"".join(
+        struct.pack("<h", int(20 * math.sin(index / 8.0))) for index in range(1600)
+    )
+    silent_chunks = int(transcriber.stream_partial_window_s * 10) + 40
+    for _ in range(silent_chunks):
+        transcriber.push_audio_chunk(silent)
+    expected_bytes = len(_build_pcm16_chunk(1600)) + silent_chunks * len(silent)
+    _wait_for(
+        lambda: transcriber._stream_session is not None
+        and len(transcriber._stream_session.pcm_buffer) >= expected_bytes,
+        "the silence to reach the worker",
+    )
+
+    final_text = transcriber.stop_stream().strip()
+
+    with lock:
+        assert len(decoded) == decodes_after_speech, "silence must never be decoded"
+    assert final_text == "real speech here"
+
+
+def test_streaming_partial_callback_receives_the_merged_transcript():
+    """The callback must carry the whole transcript, not the latest window.
+
+    The controller's locked-prefix insertion compares against what it already
+    pasted; a raw window does not contain that text, so live insertion froze for
+    the rest of the session once the window rolled past it.
+    """
+    # The second window overlaps the first but does not contain it: only the
+    # merge produces the full text, so emitting the raw window is detectable.
+    windows = iter(["first window text", "window text plus more"])
+    seen = []
+
+    class _WindowModel:
+        def transcribe(self, *args, **kwargs):
+            segment = types.SimpleNamespace(text=next(windows, "plus more"))
+            info = types.SimpleNamespace(language="en", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _WindowModel(),
+    )
+    transcriber.start_stream(on_partial=seen.append)
+    for _ in range(2):
+        transcriber.push_audio_chunk(_build_pcm16_chunk(1600))
+        transcriber._maybe_emit_partial()
+    transcriber.stop_stream()
+
+    assert seen[-1] == "first window text plus more"
+    assert all(text.startswith("first window text") for text in seen)
+    assert "window text plus more" not in seen, "raw window leaked to the callback"

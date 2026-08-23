@@ -166,3 +166,57 @@ def test_streaming_text_state_accumulates_rolling_partials_append_only():
     assert third.insertion == " this is"
     assert state.committed_text == "hello world this is"
     assert state.live_text == "hello world this is working now today"
+
+
+def test_new_segment_window_is_appended_not_aligned():
+    """Speech after a long pause must extend the transcript, not replace it.
+
+    A rolling window that follows a silence longer than the window itself shares
+    no audio with what is already transcribed, so the overlap search can never
+    find a seam. Without the ``new_segment`` marker the unalignable window fell
+    through to the replace fallback and everything said before the pause was
+    lost.
+    """
+    merged = merge_rolling_window_transcript(
+        "the first thing i said before the pause",
+        "and now something completely different",
+        new_segment=True,
+    )
+
+    assert merged == (
+        "the first thing i said before the pause "
+        "and now something completely different"
+    )
+
+
+def test_new_segment_still_replaces_when_the_marker_is_absent():
+    """The append must be driven by measured silence, never guessed at.
+
+    This is the counterpart of the test above and pins why the marker exists:
+    with the same two texts and no marker, the merge deliberately replaces,
+    because an unconditional append grows without bound while the microphone is
+    silent and the model hallucinates a fresh window every partial.
+    """
+    merged = merge_rolling_window_transcript(
+        "the first thing i said before the pause",
+        "and now something completely different",
+    )
+
+    assert merged == "and now something completely different"
+
+
+def test_rollback_commit_lets_failed_insertion_text_be_offered_again():
+    state = StreamingTextState(stable_word_guard=0, revision_word_window=0)
+    state.apply_partial_append_only("hello world")
+    before_failed_paste = state.committed_text
+    failed = state.apply_partial_append_only("hello world and more")
+    assert failed.insertion.strip() == "hello world"
+
+    state.rollback_commit(before_failed_paste)
+    assert state.committed_text == before_failed_paste
+
+    # Those words never reached the document, so the next partial has to offer
+    # them again. Without the rollback the locked prefix has already moved past
+    # them and they can never be inserted for the rest of the session.
+    retry = state.apply_partial_append_only("hello world and more still")
+    assert retry.insertion.strip().startswith("hello world")
