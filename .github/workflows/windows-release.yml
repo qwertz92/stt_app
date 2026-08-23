@@ -47,10 +47,21 @@ jobs:
 
       - name: Run release quality gates
         shell: pwsh
-        # Deliberately no QT_QPA_PLATFORM: offscreen shifts widget metrics and
-        # fails the pixel-exact layout tests, which is what stopped v0.8.0 from
-        # ever being published -- the tag exists, the release does not, because
-        # this gate ran before the build step and failed on an artifact.
+        # offscreen is set here on purpose, and the pixel-exact layout tests
+        # skip themselves under it (see tests/conftest.py). Those tests
+        # compare widget geometry to the pixel, and offscreen reports metrics
+        # 1-4 px off, so under offscreen they fail for reasons that have
+        # nothing to do with the code. That is what stopped v0.8.0 from ever
+        # being published: the tag exists, the release does not, because this
+        # gate runs before the build step and failed on an artifact.
+        #
+        # A release gate has to be deterministic, so it runs in the one Qt
+        # environment that is guaranteed to exist on any runner. The skipped
+        # tests are not unverified: scripts/create_release.py runs the whole
+        # suite on a real platform plugin before the tag is ever created, and
+        # quality.yml runs it without offscreen on every push and PR.
+        env:
+          QT_QPA_PLATFORM: offscreen
         run: |
           uv run --no-sync ruff check .
           uv run --no-sync pytest -q

@@ -6,6 +6,7 @@ previously be captured only by retyping it or taking a screenshot.
 
 from __future__ import annotations
 
+import pytest
 from PySide6 import QtCore, QtWidgets
 
 from stt_app.dialog_style import (
@@ -23,6 +24,7 @@ def _is_selectable(widget) -> bool:
     return bool(widget.textInteractionFlags() & QtCore.Qt.TextSelectableByMouse)
 
 
+@pytest.mark.platform_dependent
 def test_qt_message_boxes_are_not_selectable_by_default():
     """Pins the Qt behaviour the filter exists to correct."""
     _app()

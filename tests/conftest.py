@@ -436,6 +436,11 @@ def pytest_configure(config):
         "pixel_exact: asserts exact widget geometry; skipped on the offscreen "
         "Qt platform, where metrics are 1-4 px off and failures are artifacts",
     )
+    config.addinivalue_line(
+        "markers",
+        "platform_dependent: asserts behaviour of the real Qt platform plugin "
+        "(defaults, native styling); skipped on the offscreen platform",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -448,10 +453,12 @@ def _skip_pixel_exact_tests_on_the_offscreen_platform(request):
     was tagged and never published. The workflows no longer set it; this makes
     the failure mode impossible to reintroduce by accident.
     """
-    if request.node.get_closest_marker("pixel_exact") is None:
+    markers = ("pixel_exact", "platform_dependent")
+    if all(request.node.get_closest_marker(name) is None for name in markers):
         return
     if os.environ.get("QT_QPA_PLATFORM", "").strip().lower() == "offscreen":
         pytest.skip(
-            "Pixel-exact layout assertions are meaningless on the offscreen Qt "
-            "platform (metrics shift 1-4 px); run on a real platform plugin."
+            "This assertion is meaningless on the offscreen Qt platform "
+            "(metrics shift 1-4 px and widget defaults differ); run it on a "
+            "real platform plugin."
         )
