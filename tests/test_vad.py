@@ -111,12 +111,6 @@ def _pcm(milliseconds, amplitude, sample_rate=16000):
     )
 
 
-def _clicks(count, gap_ms, click_ms=5, amplitude=9000):
-    audio = _pcm(200, 20)
-    for _ in range(count):
-        audio += _pcm(click_ms, amplitude) + _pcm(gap_ms, 20)
-    return audio + _pcm(200, 20)
-
 
 def _run(pcm):
     return measure_longest_speech_run_s(

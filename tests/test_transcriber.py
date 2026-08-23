@@ -1023,37 +1023,79 @@ def test_no_pause_length_can_destroy_the_earlier_dictation(pause_seconds):
 
 
 def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
-    """The 896-junk-words case, with the silence gate switched off.
+    """The 896-junk-words case, driven the way it actually happens.
 
-    With the gate off nothing stops a silent microphone from being decoded, so
-    every window is an invention. None of them can align, so each one is
-    bounded by the floor and replaces the previous invention instead of adding
-    to it. The real speech in front of them survives.
+    Two things an earlier version of this test got wrong, and both made it
+    prove nothing:
+
+    - `push_audio_chunk` only enqueues; the buffer grows on the worker
+      thread. A tight loop with no yield never lets the worker run, so only
+      the three real-speech windows were ever decoded and both assertions
+      were tautologies. The decode count is asserted here.
+    - Giving every hallucinated window a distinct text means no two of them
+      can align, so the dangerous path is never entered. Whisper repeats the
+      same invented phrase across windows that share 96% of their audio, and
+      two identical windows align trivially -- pinning that made the phrase
+      permanent and the next drift appended a fresh one after it. Measured
+      before the fix: 52 words from 4 of real speech, growing linearly.
     """
-    transcriber = _stream_with(
-        ["das ist echte sprache"] * 3
-        + [f"Untertitelung des ZDF {index}" for index in range(60)],
+    decoded = []
+    real_windows = [
+        "das ist",
+        "das ist der erste",
+        "das ist der erste teil",
+        "das ist der erste teil meiner nachricht",
+    ]
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            index = len(decoded)
+            if index < len(real_windows):
+                text = real_windows[index]
+            else:
+                # The same phrase for ten windows, then a drift -- the shape
+                # whisper actually produces from noise.
+                text = f"Untertitelung des ZDF {(index - len(real_windows)) // 10}"
+            decoded.append(text)
+            segment = types.SimpleNamespace(text=text)
+            info = types.SimpleNamespace(language="de", language_probability=1.0)
+            return [segment], info
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
         silence_gate_enabled=False,
+        model_factory=lambda *args, **kwargs: _Model(),
     )
     transcriber.start_stream(on_partial=lambda text: None)
     try:
-        for _ in range(3):
+        for _ in real_windows:
             transcriber.push_audio_chunk(_ms(300, 6000))
             time.sleep(0.06)
             transcriber._maybe_emit_partial()
         real = transcriber._stream_session.result.merged_text
-        assert real.startswith("das ist echte sprache")
+        spoken_decodes = len(decoded)
+        assert real.startswith("das ist"), real
 
-        for _ in range(40):
+        for _ in range(120):
+            time.sleep(0.004)
             transcriber.push_audio_chunk(_ms(100, 20))
             transcriber._maybe_emit_partial()
 
         merged = transcriber._stream_session.result.merged_text
-        assert merged.startswith(real), (
-            f"the real speech was destroyed by hallucinations: {merged!r}"
-        )
-        assert len(merged.split()) <= len(real.split()) + 8, (
-            f"the transcript grew without bound: {len(merged.split())} words"
-        )
     finally:
         transcriber.stop_stream()
+
+    assert len(decoded) > spoken_decodes + 40, (
+        f"only {len(decoded)} windows were decoded; the hallucination loop "
+        "never reached the model, so this test proves nothing"
+    )
+    assert merged.startswith("das ist"), (
+        f"the real speech was destroyed by hallucinations: {merged!r}"
+    )
+    assert len(merged.split()) <= 12, (
+        f"the transcript grew to {len(merged.split())} words over "
+        f"{len(decoded) - spoken_decodes} hallucinated windows: {merged!r}"
+    )

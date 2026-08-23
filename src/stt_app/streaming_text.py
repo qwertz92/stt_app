@@ -159,6 +159,70 @@ def stream_text_extends(base: str, candidate: str) -> bool:
     return common_prefix_len(base_words, candidate_words) == len(base_words)
 
 
+@dataclass(frozen=True, slots=True)
+class RollingMergeResult:
+    """How a rolling window was merged, not just the resulting text.
+
+    The caller has to know whether the window ALIGNED with what came before
+    or merely replaced it. Inferring that from `text.startswith(previous)`
+    is wrong in both directions: once a floor exists the replace branch also
+    returns something starting with `previous`, and the word-based keep
+    branch may re-case a word so the raw prefix no longer matches.
+    """
+
+    text: str
+    aligned: bool
+
+
+def merge_rolling_window(
+    previous_text: str,
+    current_text: str,
+    *,
+    min_overlap_words: int = 2,
+    new_segment: bool = False,
+    protected_prefix: str = "",
+) -> RollingMergeResult:
+    """`merge_rolling_window_transcript`, plus how it resolved."""
+    previous = normalize_stream_text(previous_text)
+    current = normalize_stream_text(current_text)
+    if not previous or not current:
+        return RollingMergeResult(current or previous, aligned=bool(previous))
+    if new_segment:
+        return RollingMergeResult(
+            stream_join_text(previous, current), aligned=False
+        )
+
+    merged = append_only_stream_partial_candidate(
+        previous, current, min_overlap_words=min_overlap_words
+    )
+    if stream_text_extends(previous, merged):
+        return RollingMergeResult(merged, aligned=True)
+
+    previous_words = split_stream_words(previous)
+    current_words = split_stream_words(current)
+    required_overlap = max(1, int(min_overlap_words))
+    for skip in range(1, _WINDOW_BOUNDARY_SKIP_WORDS + 1):
+        if skip >= len(current_words):
+            break
+        overlap = _suffix_prefix_overlap_len(previous_words, current_words[skip:])
+        if overlap >= required_overlap:
+            joined = " ".join(
+                previous_words + current_words[skip + overlap:]
+            ).strip()
+            return RollingMergeResult(joined, aligned=True)
+
+    protected = normalize_stream_text(protected_prefix)
+    if not protected:
+        return RollingMergeResult(current, aligned=False)
+    if not (
+        previous.startswith(protected)
+        or stream_text_extends(protected, previous)
+    ):
+        return RollingMergeResult(current, aligned=False)
+    if stream_text_extends(protected, current):
+        return RollingMergeResult(current, aligned=False)
+    return RollingMergeResult(stream_join_text(protected, current), aligned=False)
+
 def merge_rolling_window_transcript(
     previous_text: str,
     current_text: str,
@@ -194,77 +258,13 @@ def merge_rolling_window_transcript(
     bound and types hundreds of junk words into the user's document at
     finalization (measured: 896 words after two minutes of silence).
     """
-    previous = normalize_stream_text(previous_text)
-    current = normalize_stream_text(current_text)
-    if not previous or not current:
-        return current or previous
-
-    if new_segment:
-        # The caller measured a silence longer than the window, so this window
-        # shares no audio with what is already transcribed. There is nothing to
-        # align: it is genuinely new speech and must be appended. Without this,
-        # speaking again after a long pause replaced everything said before it.
-        return stream_join_text(previous, current)
-
-    merged = append_only_stream_partial_candidate(
-        previous,
-        current,
+    return merge_rolling_window(
+        previous_text,
+        current_text,
         min_overlap_words=min_overlap_words,
-    )
-    if stream_text_extends(previous, merged):
-        return merged
-
-    previous_words = split_stream_words(previous)
-    current_words = split_stream_words(current)
-    required_overlap = max(1, int(min_overlap_words))
-    for skip in range(1, _WINDOW_BOUNDARY_SKIP_WORDS + 1):
-        if skip >= len(current_words):
-            break
-        overlap = _suffix_prefix_overlap_len(previous_words, current_words[skip:])
-        if overlap >= required_overlap:
-            return " ".join(previous_words + current_words[skip + overlap:]).strip()
-
-    # Unalignable: the window replaces the accumulated text. `protected_prefix`
-    # bounds how much that may destroy. Everything before the start of the
-    # current segment is kept, because it was closed off by a measured pause
-    # and no later window can legitimately revise it.
-    #
-    # Without this, one bad window wipes the whole dictation, and that is a
-    # reachable chain rather than a theoretical one: the post-pause gate is an
-    # energy measurement and cannot separate a resonant desk thump from a
-    # short word (both measure ~0.20 s). An admitted thump appends an invented
-    # sentence, that sentence becomes the anchor the next real window has to
-    # align against, the alignment fails -- and everything said before the
-    # pause disappears. Bounding the replace turns a total loss into the loss
-    # of one segment, which is what the design always claimed.
-    protected = normalize_stream_text(protected_prefix)
-    if not protected:
-        return current
-    # Either comparison is enough, and both are needed.
-    #
-    # The raw prefix check is the one that matters in practice: a window that
-    # begins with punctuation is welded onto the previous word by
-    # `stream_join_text` ("... Teil" + ". Und" -> "... Teil. Und"), so the
-    # floor's last word gains a "." and the WORD comparison fails. That
-    # happens on the very call that pins the floor, and the result was the
-    # whole dictation being replaced by one hallucinated sentence -- silently,
-    # with nothing in history. Word-only was tried and reverted for exactly
-    # this.
-    #
-    # The word-based check is kept as well: it costs nothing and covers a
-    # provider that re-cases an already-committed word, which the raw check
-    # would miss. Neither alone is correct.
-    if not (
-        previous.startswith(protected)
-        or stream_text_extends(protected, previous)
-    ):
-        return current
-    # The window may already contain the protected text (a provider that
-    # re-emits from the start). Joining then duplicates it.
-    if stream_text_extends(protected, current):
-        return current
-    return stream_join_text(protected, current)
-
+        new_segment=new_segment,
+        protected_prefix=protected_prefix,
+    ).text
 
 def compute_stream_locked_prefix(
     committed: str,

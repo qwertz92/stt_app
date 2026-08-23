@@ -1203,18 +1203,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     previous word, so the floor's last word gains a "." on the very call that
     pins the floor, the word comparison fails, and the whole dictation is
     replaced. Raw-only misses a provider that re-cases a committed word.
-  - **The floor advances on every merge that keeps the accumulated text**,
-    not only after a measured pause. Every branch except the replace
-    fallback returns something with `previous` as a prefix, so that check is
-    exactly "a second window agreed with everything so far". Pinning only at
-    a pause left a hole right against its own boundary: alignment already
-    fails around 7.2-8.0 s of silence, before `new_segment` fires at 8.0 s,
-    so an ordinary thinking pause had no overlap AND no floor and the
-    replace wiped the whole dictation. The accumulated text then went
+  - **The floor advances only when a window ALIGNED and ADDED something**
+    (`merge_rolling_window` reports the branch; the caller must not infer it
+    from `startswith`, which is wrong in both directions -- once a floor
+    exists the replace branch also returns text starting with `previous`).
+    Both halves are load-bearing. Aligning is the corroboration: two
+    overlapping windows agreed on the seam. Requiring growth stops a ratchet:
+    whisper repeats the same invented phrase across windows sharing 96% of
+    their audio, two identical windows align trivially, and pinning that made
+    the phrase permanent while the next drift appended a fresh one after it
+    (measured: 53 words from 4 of real speech, growing linearly with the
+    pause). A repeat leaves the text unchanged, so requiring growth skips
+    exactly that case.
+  - **Pinning only at a measured pause left a hole against its own boundary.**
+    Alignment already fails around 7.2-8.0 s of silence, before `new_segment`
+    fires at 8.0 s, so an ordinary thinking pause had neither overlap nor
+    floor and the replace wiped the whole dictation. The text then went
     backwards, so the locked prefix could never advance again and live
     insertion froze for the rest of the session too.
-  - **The bound is therefore one window's contribution**, not one segment:
-    a replace can only discard what the current window added.
+  - **The bound is one window's contribution**: a replace can only discard
+    what the current window added.
   - **A hallucination that survives to the next pause is pinned permanently.**
     Accepted: bounded junk that stays beats real text that disappears.
 - **A window after a pause is appended only when it is shown to hold speech**:

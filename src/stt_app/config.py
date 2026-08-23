@@ -1226,7 +1226,11 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 #   heavy low-frequency thump                                0.200 s
 #   typing at 80-120 wpm                                     0.020 s
 #
-# Every row above has a construction in tests/test_vad.py. Sustained human
+# Rows with a construction in tests/test_vad.py: the four words, the key
+# clack, the knuckle knock and the room-tone levels. The door latch, the lip
+# smack and the heavy thump were measured during review but have no fixture,
+# and the sustained-noise figures below are an estimate -- do not quote any
+# of those four as measured. Sustained human
 # noises (a breath, a sigh, paper rustle) run 0.35-0.70 s and pass easily,
 # but that figure is an estimate -- there is no fixture for it, so do not
 # quote it as measured.

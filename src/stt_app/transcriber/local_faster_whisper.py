@@ -37,7 +37,7 @@ from ..config import (
     parse_custom_vocabulary,
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ..streaming_text import merge_rolling_window_transcript
+from ..streaming_text import merge_rolling_window, merge_rolling_window_transcript
 from ..vad import measure_longest_speech_run_s, measure_peak_windowed_rms_pcm
 from .base import (
     AudioInput,
@@ -1010,28 +1010,33 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             # later window can remove it. Bounded junk that stays beats real
             # text that disappears.
             session.result.segment_floor = previous_text
-        session.result.merged_text = merge_rolling_window_transcript(
+        merge = merge_rolling_window(
             previous_text,
             text,
             new_segment=new_segment,
             protected_prefix=session.result.segment_floor,
         )
-        # Advance the floor on any merge that KEPT the accumulated text, not
-        # only after a measured pause. Every branch except the replace
-        # fallback returns something with `previous` as a prefix, so this is
-        # exactly "a second window agreed with everything so far" -- and two
-        # overlapping windows agreeing is the strongest corroboration this
-        # design has.
+        session.result.merged_text = merge.text
+        # Advance the floor when a window ALIGNED with what came before and
+        # actually added something. Both halves are load-bearing:
         #
-        # Without it the floor only existed after an 8+ s pause, while
-        # alignment already fails a little earlier: a pause of roughly 7.2-8.0
-        # s left no floor AND no overlap, so the replace fallback wiped the
-        # whole dictation. An ordinary thinking pause lands squarely in that
-        # band, the text was gone from the document and from history, and
-        # because the accumulated text went backwards the locked prefix could
-        # never advance again -- live insertion froze for the rest of the
-        # session too.
-        if previous_text and session.result.merged_text.startswith(previous_text):
+        # - Aligning is the corroboration: two overlapping windows agreed on
+        #   the seam. Inferring that from `startswith` was wrong in both
+        #   directions -- once a floor exists the replace branch also returns
+        #   text starting with `previous`, which is what let junk be pinned.
+        # - Requiring growth is what stops the ratchet. Whisper repeats the
+        #   same invented phrase across windows that share 96% of their audio,
+        #   and two identical windows "align" trivially. Pinning that made the
+        #   phrase permanent, and the next drift appended a fresh one after
+        #   it: measured at 52 words from 4 of real speech over 12 s, growing
+        #   linearly with the pause. A repeat leaves the text unchanged, so
+        #   requiring growth skips exactly that case while real speech, which
+        #   adds words, advances normally.
+        if (
+            previous_text
+            and merge.aligned
+            and merge.text != previous_text
+        ):
             session.result.segment_floor = previous_text
 
         # Emit the *merged* transcript, not the raw window. The controller kept
