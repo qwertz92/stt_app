@@ -49,6 +49,9 @@ from stt_app.config import (  # noqa: E402
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
+from stt_app.model_download_coordinator import (  # noqa: E402
+    run_coordinated_download,
+)
 from stt_app.transcriber.local_faster_whisper import (  # noqa: E402
     cleanup_incomplete_model_download,
     download_model_snapshot,
@@ -114,9 +117,24 @@ def download_model(name: str, output_dir: str | None = None) -> str:
         sys.exit(1)
 
     print(f"Downloading {name} ({repo_id})...")
+    results: list[str] = []
 
     try:
-        path = download_model_snapshot(name, output_dir or "")
+        # Take the same slot the app uses. The lock is machine-wide, so running
+        # this script while the app is downloading no longer puts two writers in
+        # one cache directory -- it waits for the app instead. Without a
+        # `cancel_check` the wait ends only when the other side finishes, which
+        # is what a CLI download should do; Ctrl+C is handled below.
+        joined = not run_coordinated_download(
+            name,
+            output_dir or "",
+            lambda: results.append(download_model_snapshot(name, output_dir or "")),
+        )
+        if joined:
+            print("  Another process finished this model while we waited.")
+            path = download_model_snapshot(name, output_dir or "")
+        else:
+            path = results[0]
     except KeyboardInterrupt:
         removed_files, removed_bytes = cleanup_incomplete_model_download(
             name,

@@ -671,6 +671,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     no download can ever start again. A filesystem that cannot lock (some
     network shares) logs a warning and degrades to process-local serialization
     rather than making downloads impossible.
+  - The app's own download subprocess needs no lock of its own: the parent
+    holds the slot for the whole life of `_run_download_worker`.
+    `scripts/download_model.py` does take it, so running the script while the
+    app is downloading now waits instead of racing — the standalone script was
+    the one path the process-wide lock could never cover.
 - **Download progress measures the download *destination*, never a candidate
   copy**: because progress is cache growth, `estimate_cached_model_bytes` must
   watch exactly the directory the downloader writes into.
