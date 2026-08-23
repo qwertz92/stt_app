@@ -47,11 +47,25 @@ _KNOWN_LANGUAGE_CODES = sorted(
     key=len,
     reverse=True,
 )
-_LANGUAGE_ALTERNATION = "|".join(re.escape(code) for code in _KNOWN_LANGUAGE_CODES)
-# Optional BCP-47 script ("Hans") and region ("DE", "419"), case-insensitive
-# because a model may emit "<de-de>". The bare form requires at least one of
-# them: "<de>" on its own is indistinguishable from markup.
-_SUBTAGS = r"(?:-[A-Za-z]{4})?(?:-(?:[A-Za-z]{2}|[0-9]{3}))"
+# `(?i:...)` keeps the case-insensitivity on the language subtag only, so
+# "<DE-DE>" is caught while "<as-is>" is not.
+_LANGUAGE_ALTERNATION = "(?i:{})".format(
+    "|".join(re.escape(code) for code in _KNOWN_LANGUAGE_CODES)
+)
+# Optional BCP-47 script ("Hans"), then a MANDATORY region: two UPPERCASE
+# letters or three digits. The region case is load-bearing, and matching it
+# case-insensitively was a real regression -- 23 of the supported language
+# codes are ordinary English or German words ("as", "is", "it", "no", "so",
+# "or", "be", "my", "am", "he", "hi", "id", "la", "da", "ne", "ka", "ha",
+# "si", "ta", "te", "pa", "ba", "sa"), so "<as-is>", "<no-go>", "<is-ok>",
+# "<my-id>" and "<so-so>" were being deleted out of real dictation. A model
+# announcing a locale writes the region in upper case; a person dictating a
+# hyphenated word does not.
+#
+# The region is mandatory because "<de>" on its own is indistinguishable
+# from markup. A script-only tag ("<zh-Hans>") is therefore not matched --
+# accepted, since no model in use emits that form.
+_SUBTAGS = r"(?:-[A-Za-z]{4})?(?:-(?:[A-Z]{2}|[0-9]{3}))"
 _LANGUAGE_TAG_PATTERN = re.compile(
     "|".join(
         (
@@ -61,7 +75,6 @@ _LANGUAGE_TAG_PATTERN = re.compile(
             rf"<(?:{_LANGUAGE_ALTERNATION}){_SUBTAGS}>",
         )
     ),
-    re.IGNORECASE,
 )
 
 

@@ -4259,6 +4259,12 @@ class DictationController(QtCore.QObject):
                         f"{exc} The text was most likely inserted; check the "
                         "target window before inserting it again.",
                         copy_text=insertion_text,
+                        # Explicitly no action. Omitting this leaves Retry,
+                        # which re-transcribes the last *failed* recording --
+                        # cleared only on the foreground ready path, so from
+                        # a re-paste it can be an entirely different one and
+                        # lands on top of the text just inserted.
+                        error_action=OVERLAY_ERROR_ACTION_NONE,
                     )
                 return False
             allow_clipboard_fallback = bool(

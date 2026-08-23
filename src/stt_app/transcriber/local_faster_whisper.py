@@ -75,6 +75,10 @@ class _StreamResult:
     # the window length the next window can no longer overlap what was already
     # transcribed, so it is a new segment and must be appended, not merged.
     silent_seconds: float = 0.0
+    # Text closed off by an earlier measured pause. A later unalignable
+    # window replaces only what follows it, so one bad window costs one
+    # segment instead of the whole dictation.
+    segment_floor: str = ""
 
 
 @dataclass(frozen=True)
@@ -881,6 +885,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                     final_text = merge_rolling_window_transcript(
                         session.result.merged_text,
                         tail_text,
+                        protected_prefix=session.result.segment_floor,
                         # Same rule as the partial path: append only when the
                         # decoded window really holds speech. Reading
                         # `silent_seconds` alone let a transient at the end of a
@@ -988,10 +993,15 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         if session.abort_requested.is_set():
             return
+        if new_segment:
+            # Everything up to here is final: the pause proved no later
+            # window shares audio with it.
+            session.result.segment_floor = session.result.merged_text
         session.result.merged_text = merge_rolling_window_transcript(
             session.result.merged_text,
             text,
             new_segment=new_segment,
+            protected_prefix=session.result.segment_floor,
         )
 
         # Emit the *merged* transcript, not the raw window. The controller kept

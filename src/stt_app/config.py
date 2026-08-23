@@ -1205,28 +1205,35 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 # taken on trust -- and the model reliably invents words when the audio is
 # mostly quiet.
 #
-# Both sides of this cut are transcript loss, so it is set from measurement,
-# not intuition. Against the repository sample (samples/benchmark_sample.wav,
-# 33 overlapping 300 ms excerpts of real speech) and synthetic keyboard
-# input, using the longest unbroken run at STREAMING_SPEECH_RUN_WINDOW_MS:
+# Measured the way production measures it: the longest unbroken run in the
+# whole trailing window, with the candidate audio embedded in 7 s of room
+# tone. (An earlier derivation sliced the sample into 300 ms excerpts, which
+# truncates every run at the excerpt edge and invented short values that the
+# code never computes. That mistake is what produced the 0.08 below.)
 #
-#   real speech   5th percentile 0.100 s, median 0.200 s
-#   loudest transient tested  0.060 s (a single 50 ms click)
+#   real speech, contiguous runs in samples/benchmark_sample.wav
+#                             0.240, 0.260, 0.320, 0.360 s
+#   real speech cut to word length from the same file
+#                             a 150 ms word measures 0.150 s
+#   decaying desk transients  door latch 0.140, lip smack 0.140,
+#                             knuckle knock 0.100, trackpad 0.100,
+#                             mechanical key 0.080 s
 #   typing 80-120 wpm         0.020 s
 #
-#   cut 0.15 s -> 9 of 33 real excerpts rejected   (far too strict)
-#   cut 0.12 s -> 4 of 33 rejected
-#   cut 0.08 s -> 1 of 33 rejected, every transient still rejected
+# The gap between the loudest transient (0.140) and the quietest real run
+# (0.240) is where the cut belongs. 0.18 sits two buckets above every
+# transient measured and still accepts any word of 180 ms or more.
 #
-# 0.15 was carried over from the old 100 ms bucketing and never rechecked
-# against the finer measurement; at 20 ms it DELETED words with an internal
-# stop closure -- "Stopp." measures 0.12 s and "Bitte." 0.10 s, because a
-# voiceless closure is genuinely silent for 40-100 ms and breaks the run.
+# Both directions are transcript loss, but they are not symmetric, which is
+# why the cut leans high. A rejected short word costs that word. An admitted
+# transient appends an invented sentence AND becomes the alignment anchor
+# for the next window -- which then cannot align and REPLACES the whole
+# accumulated transcript. During a pause longer than the window the user is
+# far more likely to be typing or moving than to say a sub-180 ms word.
 #
-# Known limit: this is an energy gate, not a VAD, so a sustained non-speech
-# sound after a long pause (a ~400 ms cough or chair scrape measures 0.40 s)
-# still qualifies. The damage is bounded to that one window.
-STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.08
+# Two earlier values were reverted for deleting text: 0.35 dropped short
+# answers outright, and 0.08 admitted every desk transient listed above.
+STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.18
 
 # How much audio may pile up while a remote streaming provider is still
 # completing its network handshake. Deepgram waits up to 8 s for its socket and

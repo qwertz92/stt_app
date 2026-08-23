@@ -1191,6 +1191,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   concatenates, so trimming welds "Guten Tag" onto "heute". Nemotron strips
   the accumulated text too, because a chunk boundary can fall inside a
   marker and neither half matches alone.
+- **An unalignable window replaces only the current segment**
+  (`merge_rolling_window_transcript(protected_prefix=...)`). The post-pause
+  gate is an energy measurement and cannot separate a resonant desk thump
+  from a short word, so some hallucinated windows *will* be appended. What
+  must not follow is the cascade: the appended sentence becomes the text the
+  next real window has to align against, that alignment fails, and the
+  replace fallback then wiped **everything said before the pause**. Each
+  measured pause closes off the text before it as `segment_floor`, and a
+  later replace can never reach past it. This is what makes the documented
+  claim "the damage is bounded to one window" actually true; before it, one
+  desk knock could cost a whole dictation.
 - **A window after a pause is appended only when it is shown to hold speech**:
   `_StreamResult.silent_seconds` accumulates the skipped audio (tracked even
   when the gate is switched off — wiring two behaviours to one checkbox meant
@@ -1207,19 +1218,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   click ending a pause then appended a fresh hallucination that the
   merged-text callback pasted straight into the document (measured: the
   transcript grew by one invented sentence per click). **The value is a two-sided
-  cut and both sides are transcript loss**, so it is set from measurement.
-  Against the repository sample (33 overlapping 300 ms excerpts of real
-  speech) at `STREAMING_SPEECH_RUN_WINDOW_MS`: real speech has a 5th
-  percentile of 0.100 s and a median of 0.200 s, the loudest transient
-  tested measures 0.060 s and typing 0.020 s. A cut at 0.15 s rejected
-  **9 of 33 real excerpts**; 0.08 rejects one and still rejects every
-  transient. Two earlier values were reverted for deleting speech: 0.35 s
-  dropped short answers outright, and 0.15 s survived the bucket change
-  from 100 ms to 20 ms without being rederived, which then deleted words
-  with an internal stop closure ("Stopp." 0.12 s, "Bitte." 0.10 s — a
-  voiceless closure is genuinely silent for 40-100 ms and breaks the
-  run). It is an energy gate, not a VAD, so a ~400 ms chair scrape still
-  qualifies; that damage is bounded to one window. A window that fails
+  cut and both sides are transcript loss**, so it is set from measurement —
+  **measured the way production measures it**: the longest run in the whole
+  trailing window, with the candidate audio embedded in 7 s of room tone.
+  Slicing the sample into 300 ms excerpts instead truncates every run at
+  the excerpt edge and invents short values the code never computes; that
+  error once halved the threshold to 0.08, below every desk transient.
+  In production shape: real speech runs in `samples/benchmark_sample.wav`
+  are 0.240–0.360 s, a 150 ms word cut from it measures 0.150 s, decaying
+  desk transients reach 0.140 s (door latch, lip smack) and typing 0.020 s.
+  The cut sits in the gap at 0.18. Three earlier values were reverted for
+  deleting text: 0.35 dropped short answers, 0.15 was carried across the
+  100→20 ms bucket change without being rederived, and 0.08 admitted every
+  transient above. **An energy gate cannot separate a resonant thump from
+  a short word** — a heavy low-frequency knock measures 0.20 s, the same as
+  a 200 ms word — so the residual risk is handled by bounding the damage
+  (`protected_prefix`), not by moving this number further. A window that fails
   this test is not decoded at all, because too little speech to append on
   trust is also too little to trust a *replace* — decoding it is how an
   invented sentence wiped a real dictation. The finalizer applies the same
@@ -1610,11 +1624,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   detection is best-effort polling, so a very brief switch can be missed.
 - The post-pause append gate is an energy measurement, not a real VAD. A
   sustained non-speech sound after a long pause (a ~400 ms cough or chair
-  scrape) can still authorise appending one hallucinated window, and a
-  very quiet or heavily clipped short word after a pause can still fall
-  under the threshold and be dropped. Both cuts are measured against real
-  audio rather than guessed, but an energy gate cannot separate the two
-  cases perfectly.
+  scrape, or a heavy desk knock) can still authorise appending one
+  hallucinated window, and a word shorter than about 180 ms after a pause
+  is dropped. The speech side is measured against the real recording in
+  `samples/`; the transient side is synthetic, because the repository has
+  no recorded desk noise. An energy gate cannot separate the two cases —
+  a resonant thump and a 200 ms word both measure ~0.20 s — so an
+  admitted window is bounded by `protected_prefix` rather than prevented.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
 - NVIDIA Parakeet remains intentionally unimplemented through NeMo; Nemotron

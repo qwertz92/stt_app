@@ -756,7 +756,10 @@ def _ms(milliseconds, amplitude, sample_rate=16000):
 @pytest.mark.parametrize(
     ("label", "tail", "must_append"),
     [
-        ("a short spoken word", _ms(150, 6000), True),
+        # 200 ms: just above the post-pause cut, which sits above every
+        # separable desk transient. A 150 ms word is deliberately below it --
+        # see test_the_known_cost_of_the_post_pause_gate_is_a_very_short_word.
+        ("a short spoken word", _ms(200, 6000), True),
         ("a keyboard click", _ms(5, 9000) + _ms(95, 20), False),
     ],
     ids=["short-word", "click"],

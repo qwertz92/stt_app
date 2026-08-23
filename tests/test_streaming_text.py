@@ -226,3 +226,48 @@ def test_rollback_commit_lets_failed_insertion_text_be_offered_again():
     # them and they can never be inserted for the rest of the session.
     retry = state.apply_partial_append_only("hello world and more still")
     assert retry.insertion.strip().startswith("hello world")
+
+
+def test_an_unalignable_window_cannot_destroy_an_earlier_segment():
+    """One bad window must cost one segment, not the whole dictation.
+
+    This is a reachable chain, not a theoretical one. The post-pause gate is an
+    energy measurement and cannot separate a resonant desk thump from a short
+    word -- measured, both land around 0.20 s. An admitted thump appends an
+    invented sentence; that sentence becomes the text the next real window has
+    to align against; the alignment fails; and the replace fallback then wiped
+    everything said before the pause.
+    """
+    spoken_before = "das ist eine lange diktierte passage mit vielen woertern"
+    hallucination = "Untertitel von Stephanie Geiges"
+
+    after_pause = merge_rolling_window_transcript(
+        spoken_before, hallucination, new_segment=True
+    )
+    assert after_pause.startswith(spoken_before)
+
+    unprotected = merge_rolling_window_transcript(after_pause, "und weiter geht es")
+    assert unprotected == "und weiter geht es", (
+        "precondition: an unalignable window replaces everything by default"
+    )
+
+    protected = merge_rolling_window_transcript(
+        after_pause, "und weiter geht es", protected_prefix=spoken_before
+    )
+    assert protected == f"{spoken_before} und weiter geht es", (
+        f"the earlier segment was destroyed: {protected!r}"
+    )
+
+
+def test_the_protected_prefix_is_ignored_when_it_no_longer_matches():
+    """A floor that is not actually a prefix must not be spliced in.
+
+    Otherwise a stale floor from an earlier session or a revised transcript
+    would inject text that the provider never produced.
+    """
+    merged = merge_rolling_window_transcript(
+        "voellig anderer text",
+        "das neue fenster",
+        protected_prefix="etwas das nicht passt",
+    )
+    assert merged == "das neue fenster"

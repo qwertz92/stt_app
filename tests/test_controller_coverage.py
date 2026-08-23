@@ -672,6 +672,14 @@ def test_start_streaming_audio_capture_error_stops_transcriber(monkeypatch):
     )
     controller.start_recording()
     assert transcriber.started is True
+    # The abort waits for the provider handshake first and therefore runs on
+    # its own thread -- it must not block the Qt thread for up to
+    # STREAMING_CONNECT_JOIN_TIMEOUT_S. Asserting synchronously here passed
+    # only by luck and failed intermittently in a full run.
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline and not transcriber.aborted:
+        app.processEvents()
+        time.sleep(0.01)
     assert transcriber.aborted is True  # cleaned up without blocking finalize path
     assert transcriber.stopped is False
     assert overlay.states[-1][0] == "Error"
@@ -2731,6 +2739,42 @@ def test_a_post_paste_background_failure_offers_no_action_at_all(monkeypatch):
         assert overlay.state_kwargs[-1].get("error_action") == (
             OVERLAY_ERROR_ACTION_INSERT
         )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_foreground_post_paste_failure_also_offers_no_action(monkeypatch):
+    """The twin of the background case, missed when that one was fixed.
+
+    Reachable through "Insert last transcript again": a post-paste failure
+    there left a Retry button, and Retry re-transcribes the last FAILED
+    recording -- cleared only on the foreground ready path, so it can be an
+    entirely different recording pasted on top of what was just inserted.
+    """
+    from stt_app.config import OVERLAY_ERROR_ACTION_NONE
+    from stt_app.text_inserter import TextMayHaveBeenPastedError
+
+    overlay = FakeOverlay()
+
+    class _PastedThenFailed:
+        def insert_text_with_options(self, *args, **kwargs):
+            raise TextMayHaveBeenPastedError(
+                "Text pasted but clipboard restore failed: busy"
+            )
+
+        def insert_text(self, *args, **kwargs):
+            raise TextMayHaveBeenPastedError("Text pasted but restore failed")
+
+    controller, app = _make_controller(overlay=overlay, text_inserter=_PastedThenFailed())
+    try:
+        assert controller._insert_text_at_target("hallo welt", restore_focus=False) is (
+            False
+        )
+        assert overlay.states[-1][0] == "Error"
+        assert overlay.state_kwargs[-1].get("error_action") == (
+            OVERLAY_ERROR_ACTION_NONE
+        ), "a Retry button here re-transcribes a different recording"
     finally:
         controller.shutdown()
     _ = app

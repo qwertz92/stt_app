@@ -165,6 +165,7 @@ def merge_rolling_window_transcript(
     *,
     min_overlap_words: int = 2,
     new_segment: bool = False,
+    protected_prefix: str = "",
 ) -> str:
     """Merge a trailing-audio-window transcript into the accumulated text.
 
@@ -185,7 +186,9 @@ def merge_rolling_window_transcript(
     itself, so it cannot overlap the accumulated text and is appended instead.
 
     A window that still cannot be aligned falls back to replacing the
-    accumulated text. That loses text, but the alternative — appending — is
+    accumulated text, but only back to ``protected_prefix``: text closed off
+    by an earlier measured pause is never destroyed by a later window.
+    Replacing loses text, but the alternative — appending — is
     worse: a silent microphone makes the model emit a fresh hallucination every
     partial, none of which can ever align, so an append fallback grows without
     bound and types hundreds of junk words into the user's document at
@@ -220,6 +223,23 @@ def merge_rolling_window_transcript(
         overlap = _suffix_prefix_overlap_len(previous_words, current_words[skip:])
         if overlap >= required_overlap:
             return " ".join(previous_words + current_words[skip + overlap:]).strip()
+
+    # Unalignable: the window replaces the accumulated text. `protected_prefix`
+    # bounds how much that may destroy. Everything before the start of the
+    # current segment is kept, because it was closed off by a measured pause
+    # and no later window can legitimately revise it.
+    #
+    # Without this, one bad window wipes the whole dictation, and that is a
+    # reachable chain rather than a theoretical one: the post-pause gate is an
+    # energy measurement and cannot separate a resonant desk thump from a
+    # short word (both measure ~0.20 s). An admitted thump appends an invented
+    # sentence, that sentence becomes the anchor the next real window has to
+    # align against, the alignment fails -- and everything said before the
+    # pause disappears. Bounding the replace turns a total loss into the loss
+    # of one segment, which is what the design always claimed.
+    protected = normalize_stream_text(protected_prefix)
+    if protected and previous.startswith(protected):
+        return stream_join_text(protected, current)
     return current
 
 

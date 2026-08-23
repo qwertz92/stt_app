@@ -45,10 +45,9 @@ def test_default_abort_stream_raises():
         ("<|en|>Hello there", "Hello there"),
         ("<|de-DE|>Hallo", "Hallo"),
         ("<zh-Hans-CN> Ni hao", " Ni hao"),
-        # Lower case too -- a model may emit either.
-        ("<de-de> Hallo", " Hallo"),
-        ("<en-us> Hi", " Hi"),
         ("<es-419> Hola", " Hola"),
+        # An upper-case language subtag is still a locale.
+        ("<DE-DE> Hallo", " Hallo"),
         ("Text <en-US> mitten drin", "Text mitten drin"),
     ],
 )
@@ -82,6 +81,22 @@ def test_inline_locale_markers_are_removed_from_a_transcript(text, expected):
         "Oeffne <log-100> bitte",
         "Das <|pad|> Token bleibt",
         "<|bos|> und <|eos|> bleiben",
+        # 23 of the supported language codes are ordinary English or
+        # German words. Matching the region case-insensitively deleted
+        # every one of these out of real dictation.
+        "Der Code ist <as-is> zu uebernehmen",
+        "Das ist ein <no-go> fuer uns",
+        "Pruefe ob <is-ok> gesetzt ist",
+        "Setze <my-id> auf null",
+        "Es war <so-so>",
+        "<it-is> wahr und <he-is> da",
+        "<or-so> etwa",
+        # A lower-case region is deliberately NOT a locale. That is
+        # exactly what keeps the words above intact, and no model in
+        # use emits "<de-de>" -- the observed forms are "<de-DE>" and
+        # "<|en|>".
+        "<de-de> bleibt stehen",
+        "<en-us> bleibt auch",
         # Plain markup and maths.
         "Verwende <div> und </div>",
         "<tr> ist eine Tabellenzeile, nicht Tuerkisch",
