@@ -391,7 +391,7 @@ def make_controller(**kwargs):
 
 @pytest.fixture(autouse=True)
 def _keep_download_locks_out_of_the_real_appdata(tmp_path_factory, monkeypatch):
-    """Give every test its own directory for cross-process download locks.
+    r"""Give every test its own directory for cross-process download locks.
 
     The coordinator takes a real OS lock before downloading, and its default
     location is the user's `%APPDATA%\stt_app\locks`. Left alone, the suite

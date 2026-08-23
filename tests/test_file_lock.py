@@ -114,7 +114,7 @@ def test_cancel_check_stops_waiting_without_taking_the_lock(tmp_path):
 
 @pytest.mark.parametrize(
     "resource",
-    ["C:\very\long\path\that\is\not\a\legal\filename", "", "a" * 500],
+    [r"C:\very\long\path\that\is\not\a\legal\filename", "", "a" * 500],
 )
 def test_lock_filename_is_always_usable(tmp_path, resource):
     path = lock_path_for(resource, lock_dir=tmp_path)
