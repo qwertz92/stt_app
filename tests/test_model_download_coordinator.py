@@ -176,3 +176,139 @@ def test_concurrent_callers_never_overlap_and_never_leak():
     assert peak == 1, f"{peak} downloads ran at once"
     assert coordinator.active() is None
     assert not [m for m in ("a", "b", "c") if coordinator.has_explicit_interest(m, "")]
+
+
+def test_the_slot_takes_a_cross_process_lock_on_the_cache_dir(monkeypatch, tmp_path):
+    """Wiring guard: the OS lock must be held for the whole download.
+
+    Without this the coordinator is process-local again, and the benchmark
+    worker or a second copy of the app can write the same cache directory.
+    """
+    from stt_app import model_download_coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module, "_download_lock_dir", lambda: tmp_path / "locks"
+    )
+    held = []
+
+    class _RecordingLock:
+        def __init__(self, resource, *, lock_dir):
+            self.resource = resource
+
+        def acquire(self, *, cancel_check=None, poll_seconds=0.1):
+            held.append(("acquire", self.resource))
+            return True
+
+        def release(self):
+            held.append(("release", self.resource))
+
+    monkeypatch.setattr(coordinator_module, "CrossProcessLock", _RecordingLock)
+
+    coordinator = coordinator_module.ModelDownloadCoordinator()
+    monkeypatch.setattr(
+        coordinator_module, "model_download_coordinator", lambda: coordinator
+    )
+    during = []
+    coordinator_module.run_coordinated_download(
+        "some-model",
+        r"C:\models",
+        lambda: during.append(list(held)),
+    )
+
+    assert during == [[("acquire", r"C:\models")]]
+    assert held == [("acquire", r"C:\models"), ("release", r"C:\models")]
+
+
+def test_an_empty_model_dir_maps_onto_one_shared_lock_identity():
+    """Every caller with no configured Model Dir shares the default HF cache."""
+    from stt_app.model_download_coordinator import _cache_lock_resource
+
+    assert _cache_lock_resource("") == _cache_lock_resource("   ")
+    assert _cache_lock_resource("") != _cache_lock_resource(r"C:\models")
+
+
+def test_cancelling_while_waiting_for_another_process_frees_the_slot(
+    monkeypatch, tmp_path
+):
+    """A cancel during the cross-process wait must not strand the slot.
+
+    The in-process slot is claimed before the OS lock is attempted, so an
+    exception there would leave `_active` set for the process lifetime and no
+    download could ever start again.
+    """
+    from stt_app import model_download_coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module, "_download_lock_dir", lambda: tmp_path / "locks"
+    )
+
+    class _NeverAvailableLock:
+        def __init__(self, resource, *, lock_dir):
+            pass
+
+        def acquire(self, *, cancel_check=None, poll_seconds=0.1):
+            return False  # the caller's cancel_check fired
+
+        def release(self):  # pragma: no cover - never reached
+            raise AssertionError("released a lock that was never acquired")
+
+    monkeypatch.setattr(
+        coordinator_module, "CrossProcessLock", _NeverAvailableLock
+    )
+    coordinator = coordinator_module.ModelDownloadCoordinator()
+
+    with pytest.raises(coordinator_module.ModelDownloadCanceled):
+        coordinator.acquire("m", r"C:\models", explicit=True, cancel_check=lambda: True)
+
+    assert coordinator.active() is None, "the slot stayed held after a cancel"
+    assert not coordinator.has_explicit_interest("m", r"C:\models")
+    # And the slot is genuinely reusable afterwards.
+    monkeypatch.setattr(
+        coordinator_module,
+        "CrossProcessLock",
+        type(
+            "_OkLock",
+            (),
+            {
+                "__init__": lambda self, resource, *, lock_dir: None,
+                "acquire": lambda self, *, cancel_check=None, poll_seconds=0.1: True,
+                "release": lambda self: None,
+            },
+        ),
+    )
+    assert coordinator.acquire("m", r"C:\models", explicit=False) == (
+        coordinator_module.ACQUIRE_DOWNLOAD
+    )
+    coordinator.release("m", r"C:\models", succeeded=True)
+
+
+def test_an_unlockable_filesystem_still_allows_downloads(monkeypatch, tmp_path):
+    """A share that cannot lock must degrade, not block downloading entirely."""
+    from stt_app import model_download_coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module, "_download_lock_dir", lambda: tmp_path / "locks"
+    )
+
+    class _BrokenLock:
+        def __init__(self, resource, *, lock_dir):
+            pass
+
+        def acquire(self, *, cancel_check=None, poll_seconds=0.1):
+            raise coordinator_module.FileLockUnavailable("no locking here")
+
+        def release(self):  # pragma: no cover - never acquired
+            raise AssertionError("released a lock that was never acquired")
+
+    monkeypatch.setattr(coordinator_module, "CrossProcessLock", _BrokenLock)
+    coordinator = coordinator_module.ModelDownloadCoordinator()
+    monkeypatch.setattr(
+        coordinator_module, "model_download_coordinator", lambda: coordinator
+    )
+
+    ran = []
+    assert coordinator_module.run_coordinated_download(
+        "m", r"C:\models", lambda: ran.append(True)
+    )
+    assert ran == [True]
+    assert coordinator.active() is None

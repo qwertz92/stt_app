@@ -19,12 +19,19 @@ a second request for the *same* model waits for the running one instead of
 starting a rival process, and an explicit (user-requested) download is never
 cancelled by the implicit preload path.
 
-Scope: this is a *process*-wide lock, not a machine-wide one. The out-of-process
-benchmark worker and the standalone `scripts/download_model.py` each get their
-own coordinator, so running one of those alongside the app can still put two
-writers in one cache directory. Making that safe needs a lock file rather than a
-`threading.Condition`; it has not been needed, because both are deliberate
-developer actions rather than something the app does on its own.
+Scope: the slot is enforced at two levels. Inside one process a
+`threading.Condition` serializes callers and lets a second request for the same
+model join the running one. Across processes -- the out-of-process benchmark
+worker, `scripts/download_model.py`, a second copy of the app -- an OS-level
+lock on the cache directory (`file_lock.CrossProcessLock`) makes sure only one
+of them writes it at a time. Both levels are needed: the in-process half
+provides the join/interest behaviour the UI depends on, and only the OS half can
+see another process at all.
+
+The machine-wide lock is keyed on the *cache directory*, not on the model: two
+writers corrupt each other through the shared blob and ref trees even when they
+fetch different models, and the progress reading (directory growth) becomes
+meaningless for both.
 """
 
 from __future__ import annotations
@@ -34,7 +41,29 @@ from collections.abc import Callable
 import logging
 from dataclasses import dataclass
 
+from .app_paths import appdata_root
+from .file_lock import CrossProcessLock, FileLockUnavailable
+
 logger = logging.getLogger(__name__)
+
+
+def _download_lock_dir():
+    """Where the cross-process lock files live.
+
+    Deliberately *not* inside the model cache: the inventory scan walks that
+    tree and a stray lock file there would be read as an unknown model file.
+    """
+    return appdata_root() / "locks"
+
+
+def _cache_lock_resource(model_dir: str) -> str:
+    """Normalize a configured model dir into one lock identity.
+
+    An empty Model Dir means the default Hugging Face cache, which every such
+    caller shares, so they must all map onto the same lock.
+    """
+    normalized = str(model_dir or "").strip()
+    return normalized or "<default-huggingface-cache>"
 
 # Poll interval while waiting for the active download to finish. Short enough
 # that a cancel is honoured promptly, long enough not to spin.
@@ -87,6 +116,9 @@ class ModelDownloadCoordinator:
         # A waiting request counts: the implicit path must not delete the
         # partial download the waiting caller is about to resume from.
         self._explicit_interest: dict[tuple[str, str], int] = {}
+        # The OS lock held by whoever owns the slot. Only the slot owner ever
+        # touches it, so it needs no lock of its own beyond the condition.
+        self._cache_lock: CrossProcessLock | None = None
 
     # -- observation ------------------------------------------------------
 
@@ -163,7 +195,58 @@ class ModelDownloadCoordinator:
                         self._drop_explicit_interest(key)
                     return ACQUIRE_JOINED
             self._active = ActiveModelDownload(model_name, model_dir, bool(explicit))
+
+        # Held *outside* the condition: waiting for another process can take
+        # minutes, and blocking the condition would freeze every observer
+        # (`active()`, the progress poll, `has_explicit_interest`) with it.
+        try:
+            self._acquire_cache_lock(model_dir, cancel_check)
+        except BaseException:
+            # Give the in-process slot back; otherwise a cancel while waiting
+            # for another process leaves the slot held for the process lifetime
+            # and no download can ever start again.
+            with self._condition:
+                self._active = None
+                self._condition.notify_all()
+            raise
         return ACQUIRE_DOWNLOAD
+
+    def _acquire_cache_lock(
+        self,
+        model_dir: str,
+        cancel_check: Callable[[], bool] | None,
+    ) -> None:
+        lock = CrossProcessLock(
+            _cache_lock_resource(model_dir), lock_dir=_download_lock_dir()
+        )
+
+        def _should_stop() -> bool:
+            if _SHUTDOWN.is_set():
+                return True
+            return cancel_check is not None and cancel_check()
+
+        try:
+            acquired = lock.acquire(cancel_check=_should_stop)
+        except FileLockUnavailable as exc:
+            # A filesystem that cannot lock (some network shares) must not make
+            # downloading impossible. The in-process slot still holds, so this
+            # degrades to the previous behaviour rather than to nothing.
+            logger.warning(
+                "Cross-process download lock unavailable, falling back to "
+                "process-local serialization only: %s",
+                exc,
+            )
+            return
+        if not acquired:
+            if _SHUTDOWN.is_set():
+                raise ModelDownloadCanceled("The application is shutting down.")
+            raise ModelDownloadCanceled("Model download canceled.")
+        self._cache_lock = lock
+
+    def _release_cache_lock(self) -> None:
+        lock, self._cache_lock = self._cache_lock, None
+        if lock is not None:
+            lock.release()
 
     def _drop_explicit_interest(self, key: tuple[str, str]) -> None:
         with self._condition:
@@ -197,6 +280,7 @@ class ModelDownloadCoordinator:
             if succeeded:
                 key = (model_name, model_dir)
                 self._completed[key] = self._completed.get(key, 0) + 1
+            self._release_cache_lock()
             self._condition.notify_all()
         if explicit_release:
             self._drop_explicit_interest((model_name, model_dir))

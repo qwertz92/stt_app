@@ -387,3 +387,21 @@ def make_controller(**kwargs):
     )
     defaults.update(kwargs)
     return DictationController(**defaults), app
+
+
+@pytest.fixture(autouse=True)
+def _keep_download_locks_out_of_the_real_appdata(tmp_path_factory, monkeypatch):
+    """Give every test its own directory for cross-process download locks.
+
+    The coordinator takes a real OS lock before downloading, and its default
+    location is the user's `%APPDATA%\stt_app\locks`. Left alone, the suite
+    writes lock files into the real profile, and -- worse -- a test that leaves
+    one held can block an unrelated later test forever, because acquiring the
+    lock waits with no timeout by design.
+    """
+    from stt_app import model_download_coordinator
+
+    lock_dir = tmp_path_factory.mktemp("download-locks")
+    monkeypatch.setattr(
+        model_download_coordinator, "_download_lock_dir", lambda: lock_dir
+    )
