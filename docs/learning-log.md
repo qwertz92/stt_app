@@ -3,6 +3,55 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-23 (four adversarial rounds on the streaming and download work)
+
+The entry below records the fixes. This one records what reviewing them
+found, because three separate rounds each turned up defects in the previous
+round's fixes -- twice a fix was worse than the bug it replaced.
+
+- **A fix that deleted text.** The post-pause append was gated on 0.35 s of
+  measured speech to stop a keyboard click appending an invented sentence.
+  Measured afterwards: the meter buckets at 100 ms, so a 5-50 ms click
+  reports 0.10 s and a real 150 ms word reports 0.20 s. 0.35 s therefore
+  deleted short answers spoken after a pause -- "Ja.", "Stop." -- silently.
+  The cut is 0.15 s, and the test now pins it from both sides (raise it and
+  the word test fails; lower it and the click test fails).
+- **A fix that pasted twice.** Rolling a failed live insert back is right
+  only while the paste keystroke has not gone out. Two failure paths run
+  after it, and the first attempt tagged them one exception class at a time
+  -- missing the likeliest one of all, a clipboard verification read failing
+  because a clipboard manager holds the clipboard open. Classification is
+  now driven by a single `paste_sent` flag.
+- **A fix that moved a threshold instead of removing it.** Capturing the
+  overlay baseline after a *short* line instead of the real initial detail
+  looked correct at 9-16 pt and reproduced the bug above 20 pt, because the
+  detail minimum is a fixed 42 px. The baseline is now computed structurally
+  after the stylesheet is applied, and the test asserts baseline ==
+  structural height at five font sizes -- it catches the original bug and
+  the incomplete fix.
+- **A fix that could leave no hotkey at all.** `HotkeyManager.register`
+  unregisters the current binding before trying the new one and does not
+  restore it, so the reclaim timer could destroy a working fallback 30 s
+  after startup while the overlay still advertised it.
+- **A claim that was simply false.** "Silence tracking survives switching
+  the gate off" -- the counter was incremented and zeroed on the same call,
+  so the pause handling was dead whenever the gate was off.
+- **A release that never happened.** v0.8.0 is tagged and has no GitHub
+  release: both workflows ran the suite under `QT_QPA_PLATFORM=offscreen`,
+  which the project itself documents as producing false layout failures, and
+  that gate runs before the build step. The release gate now runs under
+  offscreen deliberately with those assertions skipping themselves, quality
+  runs without it on pushes, PRs and now tags, and both configurations were
+  verified by running the complete suite twice.
+
+**Method note.** Every fix was checked by reverting it and confirming its
+test fails. That caught four tests of my own that proved nothing: the
+merged-text assertion (the fake windows were nested, so the raw window
+passed too), the finalize-executor test (it exercised the selector, not the
+submit site), the new_segment "counterpart" (it asserted the unchanged
+default path), and the first baseline test (it compared two overlays that
+were both wrong). A test written alongside a fix is not evidence until the
+fix has been taken away.
 ## 2026-08-23 (streaming data loss, the Qt-thread freeze, machine-wide download lock)
 
 Five defects in the streaming path, all of which end in the user losing text,

@@ -1146,17 +1146,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **A window after a pause is appended only when it is shown to hold speech**:
   `_StreamResult.silent_seconds` accumulates the skipped audio (tracked even
   when the gate is switched off — wiring two behaviours to one checkbox meant
-  disabling the gate silently disabled the pause handling too). A window
+  disabling the gate silently disabled the pause handling too; the reset to
+  zero must stay inside the "this slice carried sound" branch, or the
+  counter is incremented and zeroed on the same call and never accumulates). A window
   arriving after more than `stream_partial_window_s` of silence shares no
   audio with what is already transcribed, so the overlap search has nothing
   to anchor on and the window is taken on trust. That is the most dangerous
   input there is, so the decision measures the window that will *actually be
   decoded* with `vad.measure_speech_seconds_pcm` and requires
-  `STREAMING_NEW_SEGMENT_MIN_SPEECH_S` of above-threshold audio in it.
+  `STREAMING_NEW_SEGMENT_MIN_SPEECH_S` (0.15 s) of above-threshold audio.
   A peak measurement is not enough: a 5 ms keyboard click clears it, and each
   click ending a pause then appended a fresh hallucination that the
   merged-text callback pasted straight into the document (measured: the
-  transcript grew by one invented sentence per click). A window that fails
+  transcript grew by one invented sentence per click). **The value is a two-sided
+  cut and both sides are transcript loss.** The meter buckets at
+  `SILENCE_GATE_WINDOW_MS`, so measurements are quantised to tenths: a
+  5-50 ms click reports 0.10 s and a 150 ms word 0.20 s. Raising it to
+  0.35 s was tried and reverted — it silently DELETED short answers
+  ("Ja.", "Stop.") spoken after a pause, with no error and no log above
+  debug. It is an energy gate, not a VAD, so a ~400 ms chair scrape still
+  qualifies; that damage is bounded to one window. A window that fails
   this test is not decoded at all, because too little speech to append on
   trust is also too little to trust a *replace* — decoding it is how an
   invented sentence wiped a real dictation. The finalizer applies the same
@@ -1178,7 +1187,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   post-paste clipboard-contention check and "text pasted but clipboard restore
   failed" — and rolling those back pastes the same words twice, up to the
   retry limit. They therefore raise `TextMayHaveBeenPastedError`, which the
-  retry refuses to act on; keep any new post-paste failure on that class.
+  retry refuses to act on. **Classification is driven by one `paste_sent`
+  flag, not by picking a class at each raise site** — that approach missed
+  the likeliest site of all, a clipboard verification read failing because
+  a clipboard manager had the clipboard open. A post-paste failure also
+  must not offer the Insert action, which would paste the text again.
   `STREAMING_LIVE_INSERT_RETRY_LIMIT` is deliberately small (3): each attempt
   runs on the Qt thread and a held modifier costs the full 1.5 s modifier-
   release timeout, so a large limit turns a stuck target into seconds of
