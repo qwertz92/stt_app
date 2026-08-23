@@ -37,7 +37,7 @@ from ..config import (
 )
 from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ..streaming_text import merge_rolling_window_transcript
-from ..vad import measure_peak_windowed_rms_pcm, measure_speech_seconds_pcm
+from ..vad import measure_longest_speech_run_s, measure_peak_windowed_rms_pcm
 from .base import (
     AudioInput,
     ITranscriber,
@@ -1020,7 +1020,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         max_bytes = int(self.stream_partial_window_s * self.stream_sample_rate * 2)
         if max_bytes > 0 and len(snapshot) > max_bytes:
             snapshot = snapshot[-max_bytes:]
-        speech_seconds = measure_speech_seconds_pcm(
+        speech_seconds = measure_longest_speech_run_s(
             snapshot, self.stream_sample_rate, self.silence_gate_threshold
         )
         if speech_seconds is None:

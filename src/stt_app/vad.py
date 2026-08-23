@@ -46,20 +46,23 @@ def measure_peak_windowed_rms(
     return measure_peak_windowed_rms_pcm(frames, sample_rate, window_ms)
 
 
-def measure_speech_seconds_pcm(
+def measure_longest_speech_run_s(
     pcm_bytes: bytes,
     sample_rate: int,
     threshold: float,
     window_ms: int = SILENCE_GATE_WINDOW_MS,
 ) -> float | None:
-    """Seconds of raw PCM whose windowed RMS is at or above ``threshold``.
+    """Longest *unbroken* stretch of raw PCM at or above ``threshold``.
 
-    A *peak* measurement answers "was there any sound?", which a single keyboard
-    click or a chair creak passes. Deciding to decode a rolling window needs the
-    stronger question "was there enough sound to be speech?", because the window
-    that follows a long pause is the most hallucination-prone input there is:
-    the model fills the silence with invented words, and that window is appended
-    rather than aligned.
+    A *peak* measurement answers "was there any sound?", which a single
+    keyboard click passes. Summing all the loud windows answers "was there
+    enough sound?", which two clicks 300 ms apart also pass -- measured, they
+    total exactly as much as one 150 ms word. Neither question separates
+    speech from typing.
+
+    The longest contiguous run does: a spoken word is continuous for its
+    whole duration, while transients are isolated spikes with silence
+    between them however many of them there are.
 
     Returns ``None`` when the audio cannot be measured at all, which callers
     must never treat as silence.
@@ -72,13 +75,16 @@ def measure_speech_seconds_pcm(
     samples = np.frombuffer(pcm_bytes[:usable], dtype=np.int16).astype(np.float32)
     samples /= 32768.0
     window = max(1, int(sample_rate * (max(1, window_ms) / 1000.0)))
-    loud_samples = 0
+    longest = 0
+    current = 0
     for start in range(0, samples.size, window):
         chunk = samples[start:start + window]
         if float(np.sqrt(np.mean(chunk * chunk))) >= threshold:
-            loud_samples += chunk.size
-    return loud_samples / float(sample_rate)
-
+            current += chunk.size
+            longest = max(longest, current)
+        else:
+            current = 0
+    return longest / float(sample_rate)
 
 def measure_peak_windowed_rms_pcm(
     pcm_bytes: bytes,

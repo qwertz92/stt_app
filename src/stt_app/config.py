@@ -33,10 +33,20 @@ DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 #                     smart-complete in the JetBrains IDEs
 #   Ctrl+Alt+D        a bound command in Visual Studio
 #   Ctrl+Alt+F8       "Quick Evaluate Expression" in the JetBrains IDEs
+#   Ctrl+Alt+F9       "Calculate all worksheets in all open workbooks" in
+#                     Microsoft Excel. In-app rather than a global grab --
+#                     which is exactly why taking it globally is worse: Excel
+#                     would never receive the key again on that machine.
+#   Ctrl+Alt+F1/F6/F8/F11/F12  Intel Graphics registers these system-wide on
+#                     most Intel machines, and says F8 cannot be disabled.
 #   Ctrl+Win+Space    Windows owns it for input-language switching
-# Ctrl+Win with a function key is the safest space left: editors bind
-# Ctrl+Alt and Ctrl+Shift combinations heavily and the Win modifier
-# hardly at all. All four were verified free on a normal desktop.
+# That rules out the whole Ctrl+Alt+F-key row. Ctrl+Win with a function key
+# is the space that is actually free: editors bind Ctrl+Alt and Ctrl+Shift
+# heavily and the Win modifier hardly at all, Windows itself uses only
+# Win+Ctrl+F4 (close virtual desktop), and a survey of PowerToys, Windows
+# Terminal, Teams, Zoom, Discord, the GPU vendor tools and the major
+# peripheral suites found no default on Win+Ctrl+F6..F9. All four were also
+# verified free on a normal desktop.
 #
 # F10/F11/F12 are deliberately absent: they are this app's own default
 # cancel, show-overlay and re-paste keys, and taking one as a recording
@@ -45,10 +55,10 @@ DEFAULT_HOTKEY = "Ctrl+Alt+Space"
 # `_register_hotkey_with_fallback` also skips any fallback that collides
 # with the configured cancel/overlay/repaste hotkeys.
 FALLBACK_HOTKEYS = (
-    "Ctrl+Alt+F9",
     "Ctrl+Win+F9",
     "Ctrl+Win+F8",
     "Ctrl+Win+F7",
+    "Ctrl+Win+F6",
 )
 FALLBACK_HOTKEY = FALLBACK_HOTKEYS[0]
 # How often to try to reclaim the preferred hotkey while running on a fallback.

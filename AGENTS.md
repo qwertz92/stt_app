@@ -1109,7 +1109,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   words typed into the user's document. That advice — gate the window on
   audio energy rather than making the merge more permissive — is now
   implemented: the caller measures the decoded window with
-  `vad.measure_speech_seconds_pcm` against `silence_gate_threshold` and only
+  `vad.measure_longest_speech_run_s` against `silence_gate_threshold` and only
   then passes `new_segment=True`. The merge itself is still not allowed to
   get more permissive on its own.
   **`StreamingTextState` deliberately does not join a candidate that has lost
@@ -1153,7 +1153,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   audio with what is already transcribed, so the overlap search has nothing
   to anchor on and the window is taken on trust. That is the most dangerous
   input there is, so the decision measures the window that will *actually be
-  decoded* with `vad.measure_speech_seconds_pcm` and requires
+  decoded* with `vad.measure_longest_speech_run_s` and requires
   `STREAMING_NEW_SEGMENT_MIN_SPEECH_S` (0.15 s) of above-threshold audio.
   A peak measurement is not enough: a 5 ms keyboard click clears it, and each
   click ending a pause then appended a fresh hallucination that the

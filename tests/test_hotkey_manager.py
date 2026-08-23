@@ -170,3 +170,73 @@ def test_power_resume_event_filter_calls_callback():
     assert handled is False
     assert result == 0
     assert calls == [True]
+
+
+def test_no_fallback_hotkey_steals_a_key_another_program_needs():
+    """RegisterHotKey takes a combination globally, so an automatic fallback
+    must not be one another program depends on. The user never chose it, gets
+    no prompt, and the other program simply stops receiving the key.
+
+    Ruled out by research, each for a real default:
+      Ctrl+Shift+Space  parameter hints (VS Code, Visual Studio), JetBrains
+      Ctrl+Alt+D        Visual Studio
+      Ctrl+Alt+F8       JetBrains "Quick Evaluate Expression"
+      Ctrl+Alt+F9       Excel "Calculate all worksheets in all open workbooks"
+      Ctrl+Alt+F1/F6/F8/F11/F12   Intel Graphics, registered system-wide
+      Ctrl+Win+Space    Windows input-language switching
+      Ctrl+Win+F4       Windows "close this virtual desktop"
+    """
+    from stt_app.config import FALLBACK_HOTKEYS
+
+    known_taken = {
+        "ctrl+shift+space",
+        "ctrl+alt+d",
+        "ctrl+alt+f1",
+        "ctrl+alt+f6",
+        "ctrl+alt+f8",
+        "ctrl+alt+f9",
+        "ctrl+alt+f11",
+        "ctrl+alt+f12",
+        "ctrl+win+space",
+        "ctrl+win+f4",
+    }
+    for combo in FALLBACK_HOTKEYS:
+        assert combo.casefold() not in known_taken, (
+            f"{combo} is a documented default of another program; taking it "
+            "globally removes it from that program machine-wide"
+        )
+
+
+def test_fallback_hotkeys_do_not_collide_with_the_apps_own_defaults():
+    """A fallback that equals this app's own cancel/overlay/re-paste default
+    would make that binding fail to register right afterwards, reporting
+    'in use by another program' -- the other program being this app."""
+    from stt_app.config import (
+        DEFAULT_CANCEL_HOTKEY,
+        DEFAULT_HOTKEY,
+        DEFAULT_SHOW_OVERLAY_HOTKEY,
+        FALLBACK_HOTKEYS,
+    )
+
+    own = {
+        combo.casefold()
+        for combo in (
+            DEFAULT_HOTKEY,
+            DEFAULT_CANCEL_HOTKEY,
+            DEFAULT_SHOW_OVERLAY_HOTKEY,
+        )
+        if combo
+    }
+    for combo in FALLBACK_HOTKEYS:
+        assert combo.casefold() not in own, f"{combo} is one of our own defaults"
+    assert len(set(FALLBACK_HOTKEYS)) == len(FALLBACK_HOTKEYS), "duplicate fallback"
+
+
+def test_every_fallback_is_a_registrable_combination():
+    """A fallback with a modifier as its key registers but can never fire."""
+    from stt_app.config import FALLBACK_HOTKEYS
+
+    for combo in FALLBACK_HOTKEYS:
+        modifiers, vk = parse_hotkey(combo)
+        assert modifiers, f"{combo} has no modifier"
+        assert vk, f"{combo} has no key"

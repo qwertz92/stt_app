@@ -1,6 +1,13 @@
+import math
+import struct
+
 import numpy as np
 
-from stt_app.vad import EnergyVad
+from stt_app.config import (
+    DEFAULT_SILENCE_GATE_THRESHOLD,
+    STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
+)
+from stt_app.vad import EnergyVad, measure_longest_speech_run_s
 
 
 def test_vad_detects_speech_then_silence_stop():
@@ -91,3 +98,53 @@ def test_unmeasurable_audio_is_not_reported_as_silence():
     assert measure_peak_windowed_rms(b"RIFF") is None
     silence = _wav_bytes_from_float(np.zeros(16000, dtype=np.float32))
     assert measure_peak_windowed_rms(silence) == 0.0
+
+def _pcm(milliseconds, amplitude, sample_rate=16000):
+    count = int(sample_rate * milliseconds / 1000)
+    return b"".join(
+        struct.pack("<h", int(amplitude * math.sin(index / 8.0)))
+        for index in range(count)
+    )
+
+
+def test_scattered_transients_do_not_add_up_to_speech():
+    """Typing must not look like a spoken word.
+
+    This meter decides whether a rolling window that follows a long pause may
+    be appended to the transcript on trust, so anything it mistakes for
+    speech becomes an invented sentence pasted into the document. A peak
+    reading is cleared by one 5 ms click. Summing every loud window is
+    cleared by two clicks 300 ms apart -- measured, they total exactly as
+    much as one 150 ms word. Only the longest unbroken run separates them:
+    speech is continuous, keystrokes are isolated spikes.
+    """
+    threshold = DEFAULT_SILENCE_GATE_THRESHOLD
+    quiet = _pcm(300, 20)
+    click = _pcm(5, 9000)
+
+    one_click = quiet + click + quiet
+    two_clicks = quiet + click + _pcm(300, 20) + click + quiet
+    three_clicks = quiet + (click + _pcm(300, 20)) * 3
+    spoken_word = quiet + _pcm(150, 6000) + quiet
+
+    measure = measure_longest_speech_run_s
+    assert measure(one_click, 16000, threshold) < STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+    assert measure(two_clicks, 16000, threshold) < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
+        "two clicks summed past the gate; the meter is adding runs instead "
+        "of taking the longest"
+    )
+    assert (
+        measure(three_clicks, 16000, threshold)
+        < STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+    )
+    assert (
+        measure(spoken_word, 16000, threshold)
+        >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+    ), "a real short word must still be able to extend the transcript"
+
+
+def test_unmeasurable_audio_is_never_reported_as_silence():
+    """Callers must not skip audio they could not measure."""
+    assert measure_longest_speech_run_s(b"", 16000, 0.004) is None
+    assert measure_longest_speech_run_s(b"\x00", 16000, 0.004) is None
+    assert measure_longest_speech_run_s(_pcm(100, 6000), 0, 0.004) is None

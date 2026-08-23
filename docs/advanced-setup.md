@@ -611,8 +611,8 @@ A short delay after SendInput prevents race conditions where the target app read
 
 - Uses Win32 `RegisterHotKey` with the configured key combination.
 - Default: `Ctrl+Alt+Space`. If another program already holds it, the app
-  falls back through `Ctrl+Alt+F9`, `Ctrl+Win+F9`, `Ctrl+Win+F8` and
-  `Ctrl+Win+F7`, shows which one it is using, and reclaims your own choice
+  falls back through `Ctrl+Win+F9`, `Ctrl+Win+F8`, `Ctrl+Win+F7` and
+  `Ctrl+Win+F6`, shows which one it is using, and reclaims your own choice
   as soon as it becomes free. The fallback is never written to settings.
 - A modifier alone (`Ctrl+Win+LShift` and similar) is rejected: Windows
   matches the exact modifier state, so such a combination registers
