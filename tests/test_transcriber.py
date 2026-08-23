@@ -1,5 +1,4 @@
 import io
-import logging
 import math
 import struct
 import threading
@@ -910,15 +909,29 @@ def test_the_segment_floor_is_wired_into_the_real_stream_worker():
     transcriber.stop_stream()
 
 
-def test_a_noise_floor_above_the_gate_is_reported(caplog):
+@pytest.mark.parametrize(
+    ("label", "amplitudes", "expected"),
+    [
+        ("a room above the gate throughout", [400] * 60, True),
+        # The case a latching flag could never report: the session starts
+        # quiet -- as every session does, between the hotkey and the first
+        # word -- and the fan comes on afterwards.
+        ("a fan that starts mid-dictation", [20] * 10 + [400] * 60, True),
+        ("an ordinary quiet room", [20, 6000] * 30, False),
+    ],
+)
+def test_a_noise_floor_above_the_gate_is_reported(
+    monkeypatch, label, amplitudes, expected
+):
     """A room louder than the gate disables the pause machinery silently.
 
     Everything keys off silence_gate_threshold: with no quiet slice,
-    silent_seconds never accumulates, new_segment never fires, and
-    segment_floor is never set -- so the protection against one bad window
-    destroying the transcript is simply absent. Nothing in the UI shows that,
-    so the log has to.
+    silent_seconds never accumulates, new_segment never fires, and no pause
+    ever closes off a segment -- so the protection against a bad window is
+    absent. Nothing in the UI shows that, so the log has to.
     """
+    monkeypatch.setattr(local_faster_whisper, "_NOISE_FLOOR_WARN_AFTER_S", 0.4)
+
     class _Model:
         def transcribe(self, *args, **kwargs):
             segment = types.SimpleNamespace(text="text")
@@ -934,20 +947,113 @@ def test_a_noise_floor_above_the_gate_is_reported(caplog):
     )
     transcriber.start_stream(on_partial=lambda text: None)
     try:
-        with caplog.at_level(logging.WARNING):
-            # Continuous noise above the gate, longer than the warn delay.
-            for _ in range(250):
-                transcriber.push_audio_chunk(_ms(100, 400))
-            deadline = time.monotonic() + 10.0
-            while time.monotonic() < deadline and not any(
-                "streaming_noise_floor_above_gate" in record.getMessage()
-                for record in caplog.records
-            ):
-                time.sleep(0.02)
+        for amplitude in amplitudes:
+            transcriber.push_audio_chunk(_ms(100, amplitude))
+            transcriber._maybe_emit_partial()
+            time.sleep(0.01)
+        warned = transcriber._stream_session.result.noise_floor_warned
+    finally:
+        transcriber.stop_stream()
 
-        assert any(
-            "streaming_noise_floor_above_gate" in record.getMessage()
-            for record in caplog.records
-        ), "a room above the gate left no trace in the log"
+    assert warned is expected, (
+        f"{label}: warned={warned}, expected {expected}"
+    )
+
+def _stream_with(model_texts, *, silence_gate_enabled=True):
+    outputs = iter(list(model_texts) + ["x"] * 200)
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            segment = types.SimpleNamespace(text=next(outputs, "x"))
+            info = types.SimpleNamespace(language="de", language_probability=1.0)
+            return [segment], info
+
+    return LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        silence_gate_enabled=silence_gate_enabled,
+        model_factory=lambda *args, **kwargs: _Model(),
+    )
+
+
+@pytest.mark.parametrize("pause_seconds", [6.0, 7.2, 7.5, 8.5, 12.0])
+def test_no_pause_length_can_destroy_the_earlier_dictation(pause_seconds):
+    """A thinking pause must never cost the text before it.
+
+    The floor used to be pinned only by a pause of at least
+    `stream_partial_window_s`, but alignment already fails a little earlier:
+    around 7.2-8.0 s a window shares too few words with the accumulated text to
+    anchor on, and there was no floor yet either. The replace fallback then
+    wiped the whole dictation -- from the document and from history -- and
+    because the accumulated text went backwards the locked prefix could never
+    advance again, so live insertion froze for the rest of the session too.
+    """
+    transcriber = _stream_with(
+        [
+            "das ist der erste",
+            "das ist der erste teil meiner",
+            "das ist der erste teil meiner nachricht",
+            "und jetzt kommt der zweite teil",
+        ]
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        for _ in range(3):
+            transcriber.push_audio_chunk(_ms(300, 6000))
+            time.sleep(0.08)
+            transcriber._maybe_emit_partial()
+        before = transcriber._stream_session.result.merged_text
+        assert before.startswith("das ist der erste")
+
+        for _ in range(int(pause_seconds * 10)):
+            transcriber.push_audio_chunk(_ms(100, 20))
+        time.sleep(0.12)
+        transcriber.push_audio_chunk(_ms(400, 6000))
+        time.sleep(0.2)
+        transcriber._maybe_emit_partial()
+
+        merged = transcriber._stream_session.result.merged_text
+        assert merged.startswith("das ist der erste"), (
+            f"a {pause_seconds}s pause destroyed the earlier dictation: {merged!r}"
+        )
+    finally:
+        transcriber.stop_stream()
+
+
+def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
+    """The 896-junk-words case, with the silence gate switched off.
+
+    With the gate off nothing stops a silent microphone from being decoded, so
+    every window is an invention. None of them can align, so each one is
+    bounded by the floor and replaces the previous invention instead of adding
+    to it. The real speech in front of them survives.
+    """
+    transcriber = _stream_with(
+        ["das ist echte sprache"] * 3
+        + [f"Untertitelung des ZDF {index}" for index in range(60)],
+        silence_gate_enabled=False,
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        for _ in range(3):
+            transcriber.push_audio_chunk(_ms(300, 6000))
+            time.sleep(0.06)
+            transcriber._maybe_emit_partial()
+        real = transcriber._stream_session.result.merged_text
+        assert real.startswith("das ist echte sprache")
+
+        for _ in range(40):
+            transcriber.push_audio_chunk(_ms(100, 20))
+            transcriber._maybe_emit_partial()
+
+        merged = transcriber._stream_session.result.merged_text
+        assert merged.startswith(real), (
+            f"the real speech was destroyed by hallucinations: {merged!r}"
+        )
+        assert len(merged.split()) <= len(real.split()) + 8, (
+            f"the transcript grew without bound: {len(merged.split())} words"
+        )
     finally:
         transcriber.stop_stream()

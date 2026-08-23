@@ -83,7 +83,7 @@ class _StreamResult:
     # window replaces only what follows it, so one bad window costs one
     # segment instead of the whole dictation.
     segment_floor: str = ""
-    quiet_slice_seen: bool = False
+    loud_since: float | None = None
     noise_floor_warned: bool = False
 
 
@@ -1000,27 +1000,39 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         if session.abort_requested.is_set():
             return
+        previous_text = session.result.merged_text
         if new_segment:
             # Everything up to here is closed off: the pause proved no later
             # window shares audio with it.
             #
-            # Two guards were added here and both were dead code -- the
-            # accumulated text only ever grows, so neither a length check nor
-            # an emptiness check can ever be false once a segment exists.
-            # Removed rather than left in place looking protective.
-            #
-            # Known limitation, not fixed here: if an admitted transient
-            # produced a hallucination in the previous segment, the pause pins
-            # it and no later window can remove it. That is the price of the
-            # bound -- junk that stays versus real text that disappears -- and
-            # it is bounded junk, one window worth.
-            session.result.segment_floor = session.result.merged_text
+            # Known limitation: if an admitted transient produced a
+            # hallucination in the previous segment, the pause pins it and no
+            # later window can remove it. Bounded junk that stays beats real
+            # text that disappears.
+            session.result.segment_floor = previous_text
         session.result.merged_text = merge_rolling_window_transcript(
-            session.result.merged_text,
+            previous_text,
             text,
             new_segment=new_segment,
             protected_prefix=session.result.segment_floor,
         )
+        # Advance the floor on any merge that KEPT the accumulated text, not
+        # only after a measured pause. Every branch except the replace
+        # fallback returns something with `previous` as a prefix, so this is
+        # exactly "a second window agreed with everything so far" -- and two
+        # overlapping windows agreeing is the strongest corroboration this
+        # design has.
+        #
+        # Without it the floor only existed after an 8+ s pause, while
+        # alignment already fails a little earlier: a pause of roughly 7.2-8.0
+        # s left no floor AND no overlap, so the replace fallback wiped the
+        # whole dictation. An ordinary thinking pause lands squarely in that
+        # band, the text was gone from the document and from history, and
+        # because the accumulated text went backwards the locked prefix could
+        # never advance again -- live insertion froze for the rest of the
+        # session too.
+        if previous_text and session.result.merged_text.startswith(previous_text):
+            session.result.segment_floor = previous_text
 
         # Emit the *merged* transcript, not the raw window. The controller kept
         # its own copy of this merge over raw windows, so the same stitching ran
@@ -1065,28 +1077,41 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         """Say so when the noise floor disables the pause machinery entirely.
 
         Everything here keys off `silence_gate_threshold`. In a room whose
-        floor sits above it -- a fan, HVAC, an open window, or simply a
-        microphone boosted by 10-30 dB in Windows -- no slice is ever quiet,
-        so `silent_seconds` never accumulates, `new_segment` never fires and
-        `segment_floor` is never set. The protection against a bad window
-        destroying the transcript is then silently absent. Nothing else
-        surfaces that, so it has to be in the log.
+        floor sits above it -- a fan, HVAC, an open window, or a microphone
+        boosted by 10-30 dB in Windows -- no slice is ever quiet, so
+        `silent_seconds` never accumulates, `new_segment` never fires and the
+        pause never closes off a segment. Nothing else surfaces that.
+
+        The condition is ROLLING, not "no quiet slice ever". A latching flag
+        was tried and was wrong twice over: every session starts with a
+        moment of silence between the hotkey and the first word, which
+        disabled the warning for good, and a fan that starts mid-dictation --
+        exactly the case worth reporting -- was never reported at all.
         """
-        if quiet_slice or session.result.noise_floor_warned:
-            if quiet_slice:
-                session.result.quiet_slice_seen = True
+        if quiet_slice:
+            session.result.loud_since = None
             return
-        elapsed = len(session.pcm_buffer) / (self.stream_sample_rate * 2)
-        if session.result.quiet_slice_seen or elapsed < _NOISE_FLOOR_WARN_AFTER_S:
+        now = time.monotonic()
+        if session.result.loud_since is None:
+            session.result.loud_since = now
+            return
+        if now - session.result.loud_since < _NOISE_FLOOR_WARN_AFTER_S:
+            return
+        # Reset the window so a long dictation reports at most once per
+        # stretch rather than on every partial.
+        session.result.loud_since = now
+        if session.result.noise_floor_warned:
             return
         session.result.noise_floor_warned = True
         logger.warning(
-            "streaming_noise_floor_above_gate: no slice has been below "
-            "silence_gate_threshold=%.4f in %.0f s of audio. Pause detection "
-            "and the segment protection are inactive; raise the threshold in "
-            "Settings > Audio && Recording or reduce microphone gain.",
+            "streaming_noise_floor_above_gate: no audio below "
+            "silence_gate_threshold=%.4f for %.0f s. If the room really is "
+            "this loud, pause detection and the segment protection are "
+            "inactive -- raise the threshold in Settings > Audio && Recording "
+            "or reduce microphone gain. Continuous speech without a pause "
+            "looks the same from here.",
             self.silence_gate_threshold,
-            elapsed,
+            _NOISE_FLOOR_WARN_AFTER_S,
         )
     def _stream_slice_is_quiet(self, pcm_bytes: bytes) -> bool:
         """Is this stretch of stream audio below the speech threshold?

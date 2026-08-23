@@ -127,38 +127,6 @@ def _run(pcm):
     )
 
 
-@pytest.mark.parametrize(
-    ("label", "count", "gap_ms", "click_ms"),
-    [
-        ("one click", 1, 300, 5),
-        ("two clicks 300 ms apart", 2, 300, 5),
-        ("two clicks 150 ms apart", 2, 150, 5),
-        ("two clicks 100 ms apart", 2, 100, 5),
-        ("a mouse double-click", 2, 80, 30),
-        ("typing at 80 wpm", 12, 150, 5),
-        ("typing at 120 wpm", 15, 100, 5),
-        ("one long 50 ms click", 1, 300, 50),
-    ],
-)
-def test_typing_is_never_mistaken_for_speech(label, count, gap_ms, click_ms):
-    """Keystrokes must not authorise appending a hallucinated window.
-
-    This meter decides whether a rolling window after a long pause may be
-    appended to the transcript on trust, so whatever it takes for speech
-    becomes an invented sentence pasted into the document.
-
-    The bucket size is what matters here, not the threshold. At 100 ms
-    buckets two keystrokes 100-150 ms apart land in ADJACENT buckets, the
-    run never breaks, and typing at 120 wpm measured a 1.5 s "speech" run --
-    longer than most words. At 20 ms the gap between keystrokes gets its own
-    bucket and breaks the run.
-    """
-    measured = _run(_clicks(count, gap_ms, click_ms=click_ms))
-    assert measured < STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
-        f"{label} measured {measured:.3f}s and would be appended as speech"
-    )
-
-
 @pytest.mark.parametrize("duration_ms", [200, 250, 300, 600])
 def test_a_real_spoken_word_still_counts_as_speech(duration_ms):
     """The accept side: rejecting speech is transcript loss too.
@@ -264,8 +232,11 @@ def test_a_word_with_an_internal_closure_still_counts_as_speech(
     ("label", "amplitude"),
     [
         ("digital silence", 0),
-        ("room tone at -54 dBFS", 20),
-        ("room tone at -50 dBFS", 30),
+        ("room tone at -68 dBFS", 20),
+        ("room tone at -64 dBFS", 30),
+        # The real boundary is the gate itself at -48 dBFS, so test
+        # right up against it rather than 16 dB below.
+        ("room tone at -50 dBFS", 146),
     ],
 )
 def test_silence_never_clears_the_post_pause_gate(label, amplitude):

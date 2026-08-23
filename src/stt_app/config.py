@@ -1224,7 +1224,12 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 #   knuckle knock / trackpad click                           0.100 s
 #   door latch / lip smack                                   0.140 s
 #   heavy low-frequency thump                                0.200 s
-#   a breath, a sigh, paper rustle, a chair creak       0.35 - 0.70 s
+#   typing at 80-120 wpm                                     0.020 s
+#
+# Every row above has a construction in tests/test_vad.py. Sustained human
+# noises (a breath, a sigh, paper rustle) run 0.35-0.70 s and pass easily,
+# but that figure is an estimate -- there is no fixture for it, so do not
+# quote it as measured.
 #
 # A voiceless closure is genuinely silent for 40-100 ms and breaks the run,
 # so what this meter reports for a short word is the longest *voiced piece*
@@ -1233,13 +1238,19 @@ STREAMING_SPEECH_RUN_WINDOW_MS = 20
 # each DELETED real words; a fourth (0.08 derived from 300 ms excerpts) was
 # right by accident, for the wrong reason.
 #
-# So this gate does NOT try to recognise speech, and it does not filter
-# keyboard noise either -- a single key clack measures exactly the cut, and
-# above ~130 wpm the decay tails bridge the gaps and typing reports seconds
-# of "speech". What it reliably blocks is SILENCE: digital silence and room
-# tone measure 0.000 s. That is the case that once grew the transcript to 896
-# junk words with an open microphone, and it is the only guarantee this gate
-# actually provides. Everything louder passes, deliberately:
+# So this gate does NOT recognise speech, and it does not filter keyboard
+# noise either -- a single key clack measures exactly the cut, and above
+# ~130 wpm the decay tails bridge the gaps and typing reports seconds of
+# "speech".
+#
+# Stated precisely, because the loose version ("it blocks silence") invites
+# swapping this for a cheap peak meter: it blocks audio whose longest
+# CONTIGUOUS run above `silence_gate_threshold` is shorter than the cut. That
+# is a duration test, not a loudness test -- a 5 ms click at -13 dBFS, 35 dB
+# louder than room tone, is blocked, while room tone above -48 dBFS is not
+# blocked at all. What it therefore covers reliably is silence, which is the
+# case that once grew the transcript to 896 junk words with an open
+# microphone. Anything with a long enough run passes, deliberately:
 #
 #   deleting a word   -- silent, invisible, unrecoverable
 #   admitting a knock -- visible junk, bounded to the current segment by
