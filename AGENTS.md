@@ -102,7 +102,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `dialog_style.py` | Shared message-box/dialog colours plus the app-wide filter that makes error text selectable |
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
-| `model_download_coordinator.py` | The single process-wide download slot; serializes every download path, including the ones transcribers start themselves |
+| `model_download_coordinator.py` | The single download slot; serializes every download path — in-process and, via `file_lock`, across processes |
+| `file_lock.py` | OS-level cross-process advisory lock (`msvcrt.locking` / `fcntl.flock`) used to make the download slot machine-wide |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `local_model_download_worker.py` | Subprocess entry point that downloads one model |
 | `local_model_scan.py` | Local model inventory scan shared by the app and its worker |
@@ -587,7 +588,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   dead. The whole body of `make_message_text_selectable` is guarded, because it
   runs from an event filter and an exception there escapes the caller's
   `show()`.
-- **There is exactly one download slot in the process**
+- **There is exactly one download slot, and it is enforced machine-wide**
   (`model_download_coordinator`). It exists because the controller's preload
   path and the Local tab's queue each used to spawn a worker against the same
   cache directory, which the user hit as three failures in one sitting:
@@ -646,10 +647,30 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     exception used to
     kill the thread holding the queue, leaving interest registered, the running
     flag set and the tab's controls disabled with no way back.
-  - The lock is process-wide, not machine-wide. The out-of-process benchmark
-    worker and `scripts/download_model.py` each get their own; accepted because
-    both are deliberate developer actions rather than something the app does on
-    its own.
+  - **The slot has two layers, and both are load-bearing.** Inside the process
+    a `threading.Condition` serializes callers and provides the join and
+    explicit-interest behaviour the Local tab depends on. Across processes an
+    OS-level lock (`file_lock.CrossProcessLock`, `msvcrt.locking` on Windows /
+    `fcntl.flock` elsewhere) covers the out-of-process benchmark worker,
+    `scripts/download_model.py`, and a second copy of the app — none of which
+    the in-process half can even see. It is a real kernel lock rather than a
+    PID file on purpose: the OS drops it when the owner exits for any reason,
+    so there is no stale-lock detection, no heartbeat, and no timeout that
+    guesses whether the other side is alive — the three things a PID file gets
+    wrong, each of which leaves downloading permanently broken.
+  - The machine-wide lock is keyed on the **cache directory**, not the model:
+    two writers corrupt each other through the shared blob and ref trees even
+    when fetching different models, and directory-growth progress becomes
+    meaningless for both. An empty Model Dir maps onto one shared identity
+    because every such caller uses the default Hugging Face cache.
+  - It is taken **after** the in-process slot and **outside** the condition —
+    waiting for another process can take minutes, and holding the condition
+    would freeze every observer (`active()`, the progress poll,
+    `has_explicit_interest`) with it. Every exit from that wait must hand the
+    in-process slot back, or a cancel strands it for the process lifetime and
+    no download can ever start again. A filesystem that cannot lock (some
+    network shares) logs a warning and degrades to process-local serialization
+    rather than making downloads impossible.
 - **Download progress measures the download *destination*, never a candidate
   copy**: because progress is cache growth, `estimate_cached_model_bytes` must
   watch exactly the directory the downloader writes into.
@@ -1093,6 +1114,61 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcribes only the trailing partial window and merges it into the
   provider-tracked live transcript, so stop returns quickly and the history
   entry matches the streamed text. Inserted text stays append-only either way.
+- **Streaming decodes nothing during silence, at either end**: faster-whisper
+  invents words from silence (the same reason the batch silence gate exists),
+  and in the streaming path an invented window can never be aligned against the
+  accumulated text, so the merge fell back to *replacing* it. Both the rolling
+  partial (`_maybe_emit_partial`) and the fast finalizer therefore measure the
+  audio they are about to decode with `measure_peak_windowed_rms_pcm` and skip
+  it below `silence_gate_threshold`. The finalizer measures exactly its own
+  trailing window (`_stream_tail_window_is_silent`); without that a dictation
+  that simply ended with a few quiet seconds lost its entire transcript at the
+  last step. Unmeasurable audio returns `None` from the meter and is never
+  treated as silence — refusing to decode something that could not be measured
+  would drop real speech.
+- **Silence that is skipped is counted, and the next window is appended**:
+  `_StreamResult.silent_seconds` accumulates the skipped audio, and a window
+  arriving after more than `stream_partial_window_s` of it is passed to
+  `merge_rolling_window_transcript(new_segment=True)`. Such a window shares no
+  audio with what is already transcribed, so the overlap search cannot find a
+  seam and the unalignable-window fallback would have replaced everything said
+  before the pause. The append must stay driven by *measured* silence: an
+  unconditional append is what grew to 896 junk words during two minutes of an
+  open microphone.
+- **The stream partial callback carries the merged transcript, not the window**:
+  the controller's locked-prefix insertion compares against what it has already
+  pasted, and a raw rolling window does not contain that text — so live
+  insertion froze for the rest of the session as soon as the window rolled past
+  it, while the overlay still reported progress. The transcriber merges and
+  emits `session.result.merged_text`; the controller must not re-merge.
+- **A live insert that fails gives its words back**: `apply_partial_append_only`
+  marks text committed the moment it is handed to the inserter, so a failed
+  paste would otherwise lose it for good — the locked prefix can never offer it
+  again. The controller calls `StreamingTextState.rollback_commit(previous)` and
+  retries; after `STREAMING_LIVE_INSERT_RETRY_LIMIT` consecutive failures it
+  aborts the session rather than dictating into a window that is not accepting
+  text.
+- **A remote stream handshake never runs on the Qt thread**: Deepgram waits up
+  to 8 s for its socket (`connected.wait(timeout=8.0)`) and the AssemblyAI SDK
+  connects synchronously. Called inline from `_start_streaming_recording` that
+  froze the overlay, tray and settings for the whole handshake, at exactly the
+  moment the user pressed the hotkey to start talking. `_begin_stream_connect`
+  opens the microphone first and runs the handshake on a worker thread; audio
+  recorded meanwhile is buffered (`_stream_preconnect_chunks`, bounded by
+  `STREAMING_PRECONNECT_BUFFER_MAX_BYTES`) and flushed **in order** on that same
+  worker before the completion signal, so nothing is lost. The buffer is cleared
+  and `_stream_connect_generation` bumped by `_reset_streaming_state`, which is
+  what stops a late flush from pushing one session's audio into the next. The
+  overlay says "Connecting… You can speak now" until the stream is live, because
+  the microphone genuinely is open. Consequence for tests: a stream-start
+  failure now arrives through a queued signal, not on the caller's stack.
+- **Remote stream finalizes have their own worker**: `_executor` stays
+  `max_workers=1` so two local models never load at once, but a remote finalize
+  loads nothing — `stop_stream()` drains a socket. Sharing that queue meant
+  pressing stop on an AssemblyAI or Deepgram dictation left it "Processing"
+  until an unrelated local batch transcription ahead of it had finished.
+  `_stream_finalize_executor_for` routes by engine; local streaming still
+  finalizes on the shared worker because it really does re-transcribe audio.
 - **Concurrent transcription mode + cooperative cancel**: a finished
   transcription is *never* discarded. `concurrent_transcription_mode`
   (`insert` default / `history` / `cancel`) decides what happens to the

@@ -3,6 +3,80 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-23 (streaming data loss, the Qt-thread freeze, machine-wide download lock)
+
+Five defects in the streaming path, all of which end in the user losing text,
+plus the download lock finally made real.
+
+- **Silence overwrote finished dictation, at both ends of the stream.**
+  faster-whisper invents words from silence. In the rolling-window path an
+  invented window can never be aligned against the accumulated text, so
+  `merge_rolling_window_transcript` fell through to its replace fallback and the
+  whole transcript became the hallucination. Both the partial path and the fast
+  finalizer now measure the audio they are about to decode
+  (`measure_peak_windowed_rms_pcm`, the same meter as the batch silence gate)
+  and skip it below the threshold. **The finalizer was the worse half**: a
+  dictation that simply ended with a few quiet seconds decoded one last
+  hallucinated trailing window and lost everything. Reproduced end to end
+  through the real worker: speech, then 12 s of near-silence the fake model
+  "transcribes" anyway -> before, `stop_stream()` returned
+  `"hallucinated subtitle"`; now it returns the real speech and the silence is
+  never decoded at all.
+- **Speaking again after a pause replaced everything before it.** A window
+  arriving after more than one window's worth of silence shares no audio with
+  the accumulated text, so the overlap search cannot find a seam and the same
+  replace fallback fired. `_StreamResult.silent_seconds` now counts the skipped
+  audio and marks such a window `new_segment=True`, which appends instead.
+  The append has to stay driven by *measured* silence -- an unconditional
+  append is exactly what produced 896 junk words during two minutes of an open
+  microphone in the previous round.
+- **Live insertion froze silently.** The transcriber emitted the raw rolling
+  window to `on_partial`, but the controller's locked prefix compares against
+  what it has already pasted, and a raw window does not contain that text. Once
+  the window rolled past the committed prefix, `compute_stream_locked_prefix`
+  could never advance again: insertion stopped for the rest of the session while
+  the overlay kept reporting progress. The transcriber now emits
+  `session.result.merged_text` and owns the merge; the controller no longer
+  duplicates it.
+- **A failed live paste threw its words away.** `apply_partial_append_only`
+  commits text the moment it hands it to the inserter, so a paste failure lost
+  it permanently -- the locked prefix would never offer it again. Added
+  `StreamingTextState.rollback_commit()`; the controller rolls back and retries,
+  and aborts the session after `STREAMING_LIVE_INSERT_RETRY_LIMIT` consecutive
+  failures rather than dictating into a window that refuses text.
+- **The remote handshake froze the whole UI.** Deepgram's `start_stream` waits
+  up to 8 s on `connected.wait(timeout=8.0)` and the AssemblyAI SDK connects
+  synchronously; both ran on the Qt thread from `_start_streaming_recording`.
+  Pressing the hotkey therefore froze the overlay, tray and settings for the
+  entire handshake -- at the exact moment the user wanted to start talking.
+  Now the microphone is opened first and the handshake runs on a worker thread;
+  audio recorded meanwhile is buffered and flushed in order before the
+  completion signal, so nothing is lost (it used to be lost anyway, just with a
+  frozen window on top). Measured in a test with a blocked fake handshake:
+  `start_recording()` returns in well under 2 s instead of holding the thread.
+- **Remote stop waited behind unrelated model work.** The single transcription
+  worker exists so two local models never load at once, but a remote finalize
+  loads nothing -- it drains a socket. Pressing stop on a Deepgram dictation
+  while a local batch job was running left it "Processing" until that job
+  finished. Remote finalizes got their own single worker; local streaming still
+  uses the shared one because it genuinely re-transcribes audio.
+- **The download lock is now machine-wide.** The coordinator only ever
+  serialized callers inside one process, which says nothing about the
+  out-of-process benchmark worker, `scripts/download_model.py`, or a second copy
+  of the app -- all of which can write the same Hugging Face cache. Added
+  `file_lock.CrossProcessLock` (`msvcrt.locking` on Windows, `fcntl.flock`
+  elsewhere), taken after the in-process slot and outside the condition so
+  observers are not frozen while waiting. A real kernel lock rather than a PID
+  file on purpose: the OS drops it when the owner dies, so there is no stale
+  state, no heartbeat, and no liveness timeout to get wrong. Verified with two
+  real OS processes: same cache dir serializes strictly, different cache dirs
+  still run in parallel, and `kill -9` on the holder frees it instantly.
+- **Method note.** Every fix was checked for vacuity by reverting it and
+  confirming its test fails. That caught one test of my own that proved nothing:
+  the merged-text assertion passed with the raw window too, because the second
+  fake window happened to contain the first. Making the windows genuinely
+  overlapping rather than nested fixed it.
+
 ## 2026-08-18 (empty Parakeet result looked like a skipped queue item)
 
 - **The queued WAV was transcribed.** `recording_20260818_211317_907096.wav`
