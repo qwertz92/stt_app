@@ -2281,6 +2281,65 @@ def test_a_remote_stream_finalize_does_not_queue_behind_a_local_batch_job():
     _ = app
 
 
+def test_a_remote_finalize_waits_behind_an_older_job_it_would_overtake():
+    """The fast lane must not paste a later dictation before an earlier one.
+
+    Everything else runs on the single shared worker, so results are delivered
+    in recording order. A remote finalize on its own worker can finish while an
+    older local job is still transcribing -- reachable by switching the engine
+    between two dictations -- and would then be pasted first.
+    """
+    controller, app = _make_controller()
+    try:
+        used = []
+
+        class _RecordingExecutor:
+            def __init__(self, label):
+                self.label = label
+
+            def submit(self, *args, **kwargs):
+                used.append(self.label)
+                return concurrent.futures.Future()
+
+            def shutdown(self, *args, **kwargs):
+                pass
+
+        controller._executor = _RecordingExecutor("shared")
+        controller._stream_finalize_executor = _RecordingExecutor("finalize")
+
+        # An older recording is still being transcribed.
+        older_token = controller._next_request_token()
+        older = controller._register_transcription_job(
+            older_token,
+            AppSettings(engine=DEFAULT_ENGINE),
+            "batch",
+        )
+        older.future = concurrent.futures.Future()
+
+        controller._active_stream_settings = AppSettings(engine="deepgram")
+        controller._active_stream_transcriber = FakeStreamingTranscriber()
+        controller._submit_stream_finalize()
+        assert used == ["shared"], (
+            "a remote finalize overtook an older, still running transcription"
+        )
+
+        # Once every older job has produced its result the fast lane is safe
+        # again: a foreground delivery flushes older results before its own
+        # paste. That includes the finalize job just submitted above, which is
+        # itself an older job for the next one.
+        for pending in list(controller._jobs.values()):
+            if pending.future is not None and not pending.future.done():
+                pending.future.set_result("older text")
+        used.clear()
+        controller._active_stream_settings = AppSettings(engine="deepgram")
+        controller._active_stream_transcriber = FakeStreamingTranscriber()
+        controller._submit_stream_finalize()
+        assert used == ["finalize"]
+    finally:
+        controller.shutdown()
+    _ = app
+
+
 def test_shutdown_stops_the_stream_finalize_worker():
     """A forgotten executor keeps a non-daemon thread alive past quit."""
     controller, app = _make_controller()

@@ -2399,7 +2399,22 @@ class DictationController(QtCore.QObject):
             job,
         )
 
-    def _stream_finalize_executor_for(self, settings: AppSettings):
+    def _has_undelivered_older_job(self, request_token: int) -> bool:
+        """True while a recording started before this one is still working."""
+        for token, job in list(self._jobs.items()):
+            if token >= request_token:
+                continue
+            future = job.future
+            if future is None or not future.done():
+                return True
+        return False
+
+    def _stream_finalize_executor_for(
+        self,
+        settings: AppSettings,
+        *,
+        request_token: int | None = None,
+    ):
         """Pick the worker a stream finalize should run on.
 
         Local streaming re-transcribes audio with the loaded model, so it stays
@@ -2407,8 +2422,23 @@ class DictationController(QtCore.QObject):
         finalize only closes a WebSocket and returns the text the provider has
         already produced, so making it queue behind local model work is pure
         latency with nothing to protect.
+
+        Order is the one thing that lane costs. Everything else runs on the
+        single shared worker, so transcripts are delivered in the order their
+        audio was recorded, and a foreground result additionally flushes the
+        deferred older ones before pasting its own. Neither holds for a result
+        that does not exist yet: a fast remote finalize can overtake an *older*
+        job that is still transcribing — reachable by switching the engine
+        between two dictations while the first one is still running — and the
+        later dictation would be pasted first. While such a job exists the
+        finalize joins the shared queue, which is exactly how it behaved before
+        this lane was added.
         """
         if settings.engine == DEFAULT_ENGINE:
+            return self._executor
+        if request_token is not None and self._has_undelivered_older_job(
+            request_token
+        ):
             return self._executor
         return self._stream_finalize_executor
 
@@ -2453,9 +2483,10 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark streaming recording as transcribing")
-        job.future = self._stream_finalize_executor_for(settings).submit(
-            self._finalize_stream_worker, request_token, transcriber, job
-        )
+        job.future = self._stream_finalize_executor_for(
+            settings,
+            request_token=request_token,
+        ).submit(self._finalize_stream_worker, request_token, transcriber, job)
         self._flush_deferred_background_results()
 
     def _release_stream_job_runtime(

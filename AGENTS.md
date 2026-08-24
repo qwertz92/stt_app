@@ -1346,8 +1346,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   executor, so those jobs serialize — this only changes delivery. The one
   exception is a remote stream finalize, which has its own single worker
   (`_stream_finalize_executor_for`) because it drains a socket instead of
-  loading a model: it can overlap one local batch job, so a remote
-  finalize can complete ahead of an earlier token. Each recording
+  loading a model: it can overlap one local batch job. **That lane is skipped
+  while an older job is still working** (`_has_undelivered_older_job`).
+  Delivery is otherwise in recording order — one shared worker runs everything
+  else in FIFO, and a foreground result flushes the deferred older ones before
+  pasting its own — but neither holds for a result that does not exist yet, so
+  a fast remote finalize could overtake an older transcription and paste the
+  *later* dictation first. Reaching it needs an engine switch between two
+  dictations while the first is still transcribing, which is narrow but real.
+  While such a job exists the finalize joins the shared queue, i.e. it behaves
+  exactly as it did before the lane existed. Each recording
   snapshots its target window into a `_TranscriptionJob`; the job also carries
   `background_delivery` (`insert`/`history`) and `aborting`. A result is
   "foreground" only when its token is active, no newer recording is active, and

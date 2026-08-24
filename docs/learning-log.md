@@ -3133,3 +3133,15 @@ plus the download lock finally made real.
   changed nothing and the test would have passed against a broken
   implementation. Both parametrized tests now assert up front that the
   parameter really is a change.
+- **The remote stream finalize lane could paste a later dictation first.** Its
+  own worker exists so that stopping a remote dictation does not queue behind
+  unrelated local model loading. The cost, found while answering a question
+  about it rather than from a report: everything else runs on one shared FIFO
+  worker, so delivery order equals recording order, and a foreground result
+  additionally flushes older deferred results before pasting its own — but
+  neither protects against a result that does not exist yet. A fast remote
+  finalize can finish while an older local transcription is still running.
+  Reaching it needs an engine switch between two dictations while the first is
+  still transcribing, so it is narrow, but it is not theoretical. The fix keeps
+  the fast lane only while no older job is pending; otherwise the finalize
+  joins the shared queue, exactly as before the lane existed.
