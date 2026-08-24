@@ -470,6 +470,54 @@ def test_save_api_keys_only_emits_settings_changed_for_effective_key_change():
     _ = app
 
 
+def test_saving_an_api_key_reports_the_credential_change_separately():
+    """A replaced key is invisible in AppSettings, so it needs its own signal.
+
+    ``has_*_key`` only flips when a key is added or removed. Overwriting one
+    with a different value leaves the saved settings identical, and the
+    controller would keep a transcriber built with the previous credential.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(has_openai_key=True))
+    secret_store = _FakeSecretStore()
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=secret_store,
+        app_logger=_FakeLogger(),
+    )
+    order: list[str] = []
+    dialog.provider_keys_changed.connect(lambda: order.append("keys"))
+    dialog.settings_changed.connect(lambda: order.append("settings"))
+
+    dialog.openai_key_edit.setText("replacement-key")
+    dialog._save_api_keys_only()
+
+    assert secret_store.set_calls == [("openai", "replacement-key")]
+    # The credential signal must come first: the controller has to drop the
+    # stale transcriber before it decides whether a preload is needed.
+    assert order == ["keys", "settings"]
+    _ = app
+
+
+def test_saving_settings_without_a_key_change_reports_no_credential_change():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings())
+    secret_store = _FakeSecretStore()
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=secret_store,
+        app_logger=_FakeLogger(),
+    )
+    keys_changed: list[bool] = []
+    dialog.provider_keys_changed.connect(lambda: keys_changed.append(True))
+
+    dialog._save_api_keys_only()
+
+    assert secret_store.set_calls == []
+    assert keys_changed == []
+    _ = app
+
+
 def test_settings_dialog_uses_app_window_icon():
     dialog, app, _secret_store = _make_dialog(AppSettings())
 

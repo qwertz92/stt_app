@@ -10,6 +10,7 @@ import os
 import concurrent.futures
 import threading
 import time
+from dataclasses import replace
 from unittest.mock import MagicMock
 
 from stt_app.config import DEFAULT_ENGINE, FALLBACK_HOTKEY
@@ -178,6 +179,9 @@ def test_overlapping_runtime_uses_isolated_instance_without_closing_shared(
 
     controller.cancel_current_action()
     assert controller._active_request_token is None
+    controller._settings_store._settings = replace(
+        controller.settings, model_size="medium"
+    )
     controller.reload_settings(re_register_hotkey=False)
     isolated_lease = controller._acquire_transcriber_runtime(controller.settings)
 

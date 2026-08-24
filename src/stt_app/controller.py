@@ -506,7 +506,35 @@ class DictationController(QtCore.QObject):
         self._stream_finalize_executor.shutdown(wait=False, cancel_futures=True)
         self._preload_executor.shutdown(wait=False, cancel_futures=True)
 
+    def _invalidate_transcriber_runtime(self) -> None:
+        """Drop the cached runtime, or hand the drop to whoever is using it."""
+        if self._transcription_runtime_active():
+            # A batch worker or an active stream still holds the cached
+            # transcriber. Closing it now could break that in-flight run (e.g.
+            # a keep-loaded ONNX subprocess or a live Nemotron stream). Defer the
+            # reset. The active shared lease applies it during release; an
+            # isolated lease leaves it for the next shared-cache acquisition.
+            # Changed settings and API keys therefore take effect without
+            # closing a runtime that is still executing.
+            with self._transcriber_runtime_state_lock:
+                self._pending_transcriber_cache_reset = True
+        else:
+            self._reset_transcriber_cache()
+
+    def invalidate_transcriber_credentials(self) -> None:
+        """Drop the cached runtime because a provider API key changed.
+
+        Keys are read from the secret store while a transcriber is built and
+        are not part of ``AppSettings``, so ``_transcriber_identity`` cannot see
+        a key that was *replaced* with a different value — only one that was
+        added or removed flips a ``has_*_key`` flag. The settings dialog
+        therefore reports a key change explicitly through its own signal.
+        """
+        self._logger.info("Provider credentials changed; rebuilding transcriber.")
+        self._invalidate_transcriber_runtime()
+
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
+        previous_settings = self._settings
         self._settings = self._settings_store.load()
         setter = getattr(self._secret_store, "set_insecure_fallback_enabled", None)
         if callable(setter):
@@ -522,18 +550,16 @@ class DictationController(QtCore.QObject):
         )
         self._sync_overlay_language_options()
         self._sync_warm_microphone_stream()
-        if self._transcription_runtime_active():
-            # A batch worker or an active stream still holds the cached
-            # transcriber. Closing it now could break that in-flight run (e.g.
-            # a keep-loaded ONNX subprocess or a live Nemotron stream). Defer the
-            # reset. The active shared lease applies it during release; an
-            # isolated lease leaves it for the next shared-cache acquisition.
-            # Changed settings and API keys therefore take effect without
-            # closing a runtime that is still executing.
-            with self._transcriber_runtime_state_lock:
-                self._pending_transcriber_cache_reset = True
-        else:
-            self._reset_transcriber_cache()
+        # Only tear the loaded runtime down when the saved settings would build
+        # a different one. Before this, *every* save closed it — overlay
+        # opacity, a hotkey, the completion tone — and the preload that follows
+        # reloaded a multi-gigabyte local model for a setting no transcriber
+        # reads. That is the same needless reload a language change used to
+        # cause, for a much larger set of settings.
+        if self._transcriber_identity(previous_settings) != self._transcriber_identity(
+            self._settings
+        ):
+            self._invalidate_transcriber_runtime()
         if re_register_hotkey:
             self._hotkey_registration_ok = self._register_hotkey_with_fallback()
             self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
@@ -554,12 +580,20 @@ class DictationController(QtCore.QObject):
     def on_settings_changed(self) -> None:
         """Reload settings after user applies changes in the settings dialog.
 
-        Re-registers the hotkey.  When the engine is local, triggers a
+        Re-registers the hotkey.  When the engine is local and the saved
+        settings describe a runtime that is not already loaded, triggers a
         background model preload so the first transcription is instant.
         """
         self.reload_settings(re_register_hotkey=True)
         if self._settings.engine == DEFAULT_ENGINE:
-            self._start_local_model_preload()
+            if self._local_model_preload_needed(self._settings):
+                self._start_local_model_preload()
+            else:
+                # The loaded runtime still matches the saved settings, so there
+                # is nothing to load. Refresh the idle line anyway: it prints
+                # the hotkey that is actually registered, which this very save
+                # may have changed.
+                self.show_idle_status()
         else:
             preload = self._preload_future
             self._preload_future = None
@@ -2502,6 +2536,36 @@ class DictationController(QtCore.QObject):
             preload = self._preload_future
         return bool(target_matches and preload is not None and not preload.done())
 
+    def _local_model_preload_needed(self, settings: AppSettings) -> bool:
+        """True unless the shared cache already holds exactly this runtime.
+
+        A settings save that changes nothing a transcriber is built from leaves
+        the preloaded model valid, so re-running the preload would close a
+        loaded model and load the identical one again.
+        """
+        if settings.engine != DEFAULT_ENGINE:
+            return False
+        if self._matching_model_preload_running(settings):
+            # This exact runtime is already being prepared; restarting would
+            # cancel that generation and start the same load from the top.
+            return False
+        key = self._model_preload_key(settings)
+        with self._preload_result_lock:
+            result = self._preload_results.get(key)
+        if result is None or result[1] is not None:
+            # Never preloaded, or the last attempt for this key failed. Retry:
+            # a save is exactly when the user expects a broken model to be
+            # picked up again.
+            return True
+        with self._transcriber_runtime_state_lock:
+            if self._pending_transcriber_cache_reset:
+                # The runtime is still in use but already condemned, so the
+                # successful preload above will not survive its release.
+                return True
+        with self._transcriber_cache_lock:
+            cached_key = self._transcriber_cache_key
+        return cached_key != self._transcriber_identity(settings)
+
     def _model_preload_failure(self, settings: AppSettings) -> str | None:
         if settings.engine != DEFAULT_ENGINE:
             return None
@@ -3207,14 +3271,24 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to push streaming audio chunk")
             self._emit_stream_runtime_failure(f"Streaming chunk push failed: {exc}")
 
-    def _get_or_create_transcriber(self, settings: AppSettings):
-        # ``language_mode`` is deliberately absent from the key: every provider
-        # reads the language when a request or stream starts, so a language
-        # change only has to be applied to the existing runtime (see
-        # ``set_language_mode`` below). Keying on it would throw away a loaded
-        # local model — several GB and seconds of load time — for a setting the
-        # runtime does not depend on.
-        cache_key = (
+    @staticmethod
+    def _transcriber_identity(settings: AppSettings) -> tuple[object, ...]:
+        """Everything ``create_transcriber`` bakes into the runtime it builds.
+
+        Two settings snapshots with an equal identity produce interchangeable
+        transcribers, so a loaded runtime may be reused across them and a save
+        that changes nothing here must not tear it down.
+
+        ``language_mode`` is deliberately absent: every provider reads the
+        language when a request or stream starts, so a language change only has
+        to be applied to the existing runtime (see ``set_language_mode`` in
+        ``_get_or_create_transcriber``). Keying on it would throw away a loaded
+        local model — several GB and seconds of load time — for a setting the
+        runtime does not depend on. API keys live in the secret store rather
+        than in ``AppSettings``, so they are handled separately by
+        ``invalidate_transcriber_credentials``.
+        """
+        return (
             settings.engine,
             settings.model_size,
             settings.vad_enabled,
@@ -3231,7 +3305,24 @@ class DictationController(QtCore.QObject):
             bool(getattr(settings, "keep_onnx_model_loaded", False)),
             bool(getattr(settings, "streaming_full_final_transcript", False)),
             getattr(settings, "local_onnx_device", ""),
+            # Constructor arguments of the transcribers themselves. They were
+            # missing while every settings save reset the cache unconditionally,
+            # which hid the omission; now that the reset is conditional, leaving
+            # them out would keep a runtime carrying the previous biasing prompt
+            # or the previous silence gate.
+            getattr(settings, "custom_vocabulary", ""),
+            bool(getattr(settings, "silence_gate_enabled", True)),
+            float(
+                getattr(
+                    settings,
+                    "silence_gate_threshold",
+                    DEFAULT_SILENCE_GATE_THRESHOLD,
+                )
+            ),
         )
+
+    def _get_or_create_transcriber(self, settings: AppSettings):
+        cache_key = self._transcriber_identity(settings)
         if (
             settings.engine == DEFAULT_ENGINE
             and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES

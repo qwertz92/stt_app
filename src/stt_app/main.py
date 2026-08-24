@@ -327,6 +327,12 @@ def _create_tray_icon(
             last_recording_store=last_recording_store,
             local_model_inventory_store=local_model_inventory_store,
         )
+        # Connected before ``settings_changed``: a save emits the key signal
+        # first, and the controller must have dropped a transcriber built with
+        # the old credentials before it decides whether a preload is needed.
+        dialog.provider_keys_changed.connect(
+            controller.invalidate_transcriber_credentials
+        )
         dialog.settings_changed.connect(controller.on_settings_changed)
         dialog.settings_changed.connect(
             lambda: _restore_overlay_after_settings_save(overlay, settings_store)

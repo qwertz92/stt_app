@@ -386,6 +386,11 @@ class _PersistenceMixin:
     def _save_api_keys_only(self) -> None:
         previous_settings = self._loaded_settings
         key_states, key_storage_errors, changed = self._persist_provider_key_changes()
+        if changed:
+            # Report the credential change before any settings signal below, so
+            # the controller drops a transcriber holding the previous key even
+            # when the rest of this save fails.
+            self.provider_keys_changed.emit()
         metadata_changed = (
             self.insecure_key_storage_checkbox.isChecked()
             != bool(getattr(self._loaded_settings, "allow_insecure_key_storage", False))
@@ -726,6 +731,8 @@ class _PersistenceMixin:
         key_states, key_storage_errors, key_storage_changed = (
             self._persist_provider_key_changes()
         )
+        if key_storage_changed:
+            self.provider_keys_changed.emit()
         if key_storage_errors or key_storage_changed:
             self._show_key_storage_result(key_storage_errors, key_storage_changed)
         if key_storage_errors:

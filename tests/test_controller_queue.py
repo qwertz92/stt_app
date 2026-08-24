@@ -1213,7 +1213,11 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     controller._transcriber_cache = sentinel
     controller._transcriber_cache_key = ("local", "small")
 
-    # Saving settings while the job is active must not close the runtime now.
+    # Saving a setting the runtime is built from, while the job is active,
+    # must not close the runtime now.
+    controller._settings_store._settings = replace(
+        controller.settings, model_size="medium"
+    )
     controller.reload_settings(re_register_hotkey=False)
 
     assert controller._pending_transcriber_cache_reset is True

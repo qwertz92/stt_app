@@ -3107,3 +3107,29 @@ plus the download lock finally made real.
   needed to read was the text they could not see. Compact now grows to fit up
   to a bounded cap and adds only the overflow to the window, leaving the
   ordinary short idle overlay at exactly its previous size.
+- **Every settings save threw the loaded model away.** Reported as "I only
+  changed something small and it reloaded the model". Confirmed at the source
+  rather than guessed: `reload_settings` reset the transcriber cache
+  unconditionally and `on_settings_changed` then preloaded unconditionally, so
+  overlay opacity, a hotkey, a beep tone or the history limit each closed a
+  multi-gigabyte local runtime and loaded the identical one again. The
+  language-mode exemption fixed earlier was one instance of this; the general
+  rule is now `_transcriber_identity(settings)` — the single description of
+  what `create_transcriber` bakes in — with the reset and the preload both
+  conditional on it.
+  Two things the unconditional reset had been hiding:
+  - **Three constructor arguments were missing from the cache key**
+    (`custom_vocabulary`, `silence_gate_enabled`, `silence_gate_threshold`).
+    Harmless only because the cache was discarded on every save anyway;
+    making the reset conditional without adding them would have kept a runtime
+    with the previous biasing prompt or silence gate. This is the general
+    hazard when removing a blunt invalidation: it was masking the precise one.
+  - **A replaced API key is invisible in `AppSettings`.** `has_*_key` flips
+    only on add/remove, so overwriting a key with a different value leaves the
+    settings snapshot byte-identical. Needed its own signal
+    (`provider_keys_changed`) rather than a settings comparison.
+  A test-authoring trap worth remembering: the first parametrized case for
+  `keep_onnx_model_loaded` passed `True`, which is already the default, so it
+  changed nothing and the test would have passed against a broken
+  implementation. Both parametrized tests now assert up front that the
+  parameter really is a change.

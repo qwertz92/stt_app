@@ -1,6 +1,8 @@
 import concurrent.futures
 import logging
+from dataclasses import replace
 
+import pytest
 from PySide6 import QtGui, QtWidgets
 
 from stt_app.config import (
@@ -2005,5 +2007,181 @@ def test_system_resume_closes_cached_webgpu_runtime():
     assert cached.closed is True
     assert controller._transcriber_cache is None
     assert controller._transcriber_cache_key is None
+    controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# A settings save reloads the model only when the model actually changed
+# ---------------------------------------------------------------------------
+
+
+_RUNTIME_BASE_SETTINGS = AppSettings(
+    engine="local",
+    model_size="small",
+    hotkey=FALLBACK_HOTKEY,
+    vad_enabled=False,
+    silence_gate_enabled=True,
+    silence_gate_threshold=0.004,
+    custom_vocabulary="",
+    local_onnx_device="auto",
+    streaming_full_final_transcript=False,
+    model_dir="",
+    keep_onnx_model_loaded=True,
+)
+
+
+def _controller_with_loaded_model(settings):
+    """Controller that already holds a preloaded runtime for ``settings``."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    preloads: list[bool] = []
+    controller._start_local_model_preload = lambda: preloads.append(True)
+    closed: list[object] = []
+    controller._close_cached_transcriber = closed.append
+    cached = object()
+    controller._transcriber_cache = cached
+    controller._transcriber_cache_key = controller._transcriber_identity(settings)
+    with controller._preload_result_lock:
+        controller._preload_results[controller._model_preload_key(settings)] = (
+            controller._preload_generation,
+            None,
+        )
+    return controller, app, preloads, closed, cached
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"overlay_opacity_percent": 55},
+        {"completion_beep_enabled": True},
+        {"history_max_items": 123},
+        {"insert_target": "current_window"},
+        {"language_mode": "de"},
+        {"overlay_corner": "top-left"},
+        {"keep_transcript_in_clipboard": True},
+    ],
+    ids=lambda change: next(iter(change)),
+)
+def test_a_save_that_does_not_change_the_runtime_keeps_the_loaded_model(change):
+    """Saving an unrelated setting must not close and reload the model.
+
+    Every save used to reset the transcriber cache, so changing the overlay
+    opacity or a beep tone threw away a multi-gigabyte local model and preloaded
+    the identical one again.
+    """
+    settings = _RUNTIME_BASE_SETTINGS
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
+
+    saved = replace(settings, **change)
+    # Guard against a parameter that happens to repeat the default: it would
+    # make this test pass without changing anything at all.
+    assert saved != settings
+    controller._settings_store._settings = saved
+    controller.on_settings_changed()
+
+    assert closed == []
+    assert controller._transcriber_cache is cached
+    assert controller._pending_transcriber_cache_reset is False
+    assert preloads == []
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"model_size": "medium"},
+        {"engine": "groq"},
+        {"custom_vocabulary": "Kubernetes, Nemotron"},
+        {"silence_gate_enabled": False},
+        {"silence_gate_threshold": 0.02},
+        {"vad_enabled": True},
+        {"model_dir": "D:/models"},
+        {"local_onnx_device": "cpu"},
+        {"streaming_full_final_transcript": True},
+        {"offline_mode": True},
+        {"keep_onnx_model_loaded": False},
+        {"groq_model": "whisper-large-v3"},
+        {"azure_endpoint": "https://example.cognitiveservices.azure.com"},
+    ],
+    ids=lambda change: next(iter(change)),
+)
+def test_a_save_that_changes_the_runtime_drops_the_loaded_model(change):
+    """Anything a transcriber is constructed from must still invalidate it."""
+    settings = _RUNTIME_BASE_SETTINGS
+    controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
+
+    saved = replace(settings, **change)
+    assert controller._transcriber_identity(
+        saved
+    ) != controller._transcriber_identity(settings)
+    controller._settings_store._settings = saved
+    controller.on_settings_changed()
+
+    assert closed == [cached]
+    assert controller._transcriber_cache is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_save_that_changes_the_model_starts_a_preload():
+    settings = _RUNTIME_BASE_SETTINGS
+    controller, app, preloads, _closed, _cached = _controller_with_loaded_model(
+        settings
+    )
+
+    controller._settings_store._settings = replace(settings, model_size="medium")
+    controller.on_settings_changed()
+
+    assert preloads == [True]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_save_retries_a_preload_that_previously_failed():
+    """A failed model is retried on the next save even if nothing changed.
+
+    A save is exactly when the user expects a fix (a freed disk, a repaired
+    download) to be picked up.
+    """
+    settings = _RUNTIME_BASE_SETTINGS
+    controller, app, preloads, _closed, _cached = _controller_with_loaded_model(
+        settings
+    )
+    with controller._preload_result_lock:
+        controller._preload_results[controller._model_preload_key(settings)] = (
+            controller._preload_generation,
+            "Model failed to load.",
+        )
+
+    controller.on_settings_changed()
+
+    assert preloads == [True]
+    controller.shutdown()
+    _ = app
+
+
+def test_invalidate_transcriber_credentials_drops_the_cached_runtime():
+    """A replaced API key is invisible in AppSettings, so it needs its own path.
+
+    ``has_*_key`` only flips when a key is added or removed; overwriting one
+    with a different value leaves the settings snapshot byte-identical.
+    """
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine="groq", has_groq_key=True)
+    controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
+
+    controller.invalidate_transcriber_credentials()
+
+    assert closed == [cached]
+    assert controller._transcriber_cache is None
     controller.shutdown()
     _ = app

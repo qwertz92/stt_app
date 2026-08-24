@@ -1425,6 +1425,32 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   reload and transcribing one recording in another language evicted the model
   the next dictation needed. `tests/test_factory.py` asserts the setter exists
   and works for every engine — keep that guard.
+- **A settings save reloads the model only when the model changed**: the
+  language exemption above was one case of a broader defect. `reload_settings`
+  used to reset the transcriber cache on *every* save and `on_settings_changed`
+  to preload unconditionally, so changing the overlay opacity, a hotkey, or the
+  completion tone closed a multi-gigabyte local model and loaded the identical
+  one again. `_transcriber_identity(settings)` is now the single description of
+  what `create_transcriber` bakes in; the reset runs only when it differs, and
+  `_local_model_preload_needed` starts a preload only when the shared cache
+  does not already hold that exact runtime (a previously *failed* preload is
+  still retried on every save, which is when the user expects a fix to be
+  picked up). Two consequences to keep intact:
+  - **The identity must list every constructor argument.** The unconditional
+    reset hid three omissions — `custom_vocabulary`, `silence_gate_enabled`
+    and `silence_gate_threshold` were absent, which was harmless only because
+    the cache was thrown away anyway. A parametrized test asserts a reload for
+    each field and a *no* reload for unrelated ones, and both halves guard
+    against a no-op parameter (a value equal to the default would make the
+    test pass without testing anything, which happened once with
+    `keep_onnx_model_loaded`).
+  - **API keys are not in `AppSettings`.** `has_*_key` flips only when a key is
+    added or removed, so replacing a key with a different value leaves the
+    settings snapshot byte-identical and the identity cannot see it. The
+    settings dialog therefore emits `provider_keys_changed` in addition to
+    `settings_changed`, and `main` connects it to
+    `controller.invalidate_transcriber_credentials` *before* the settings
+    signal so the stale runtime is gone before the preload decision runs.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can

@@ -139,6 +139,10 @@ class SettingsDialog(
     benchmark_case_finished = QtCore.Signal(object)
     benchmark_finished = QtCore.Signal(bool, str, object)
     settings_changed = QtCore.Signal()
+    # Emitted in addition to ``settings_changed`` whenever a provider API key
+    # was actually written or deleted. Keys live in the secret store, so the
+    # controller cannot tell a replaced key from the settings snapshot alone.
+    provider_keys_changed = QtCore.Signal()
     # Manual microphone-list refresh; the controller re-enumerates PortAudio
     # because it owns the streams that must be idle for that.
     audio_device_refresh_requested = QtCore.Signal()
