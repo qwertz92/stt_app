@@ -468,12 +468,21 @@ class _LocalModelsMixin:
         self.local_models_list.blockSignals(True)
         try:
             self.local_models_list.clear()
+            queue_positions = self._local_model_download_queue_positions()
+            queue_length = len(queue_positions)
             for model_name in VALID_MODEL_SIZES:
                 download_state = self._local_model_download_state(model_name)
                 if download_state == "active":
                     status = "Downloading"
                 elif download_state == "queued":
-                    status = "Queued"
+                    position = queue_positions.get(model_name)
+                    # A single waiting model needs no place number; with several
+                    # of them the number is the whole point.
+                    status = (
+                        f"Queued, {position} of {queue_length}"
+                        if position is not None and queue_length > 1
+                        else "Queued"
+                    )
                 else:
                     status = (
                         "Downloaded"
@@ -854,6 +863,19 @@ class _LocalModelsMixin:
         if self._preload_downloading_model() == model_name:
             return "active"
         return ""
+
+    def _local_model_download_queue_positions(self) -> dict[str, int]:
+        """1-based place in line for each model waiting for the download slot.
+
+        Only one model downloads at a time, so several rows reading just
+        "Queued" left the order — and therefore which one starts next —
+        invisible.
+        """
+        _active, queued, _running = self._local_model_download_snapshot()
+        positions: dict[str, int] = {}
+        for index, (name, _model_dir) in enumerate(queued, start=1):
+            positions.setdefault(name, index)
+        return positions
 
     def _local_model_download_pending_names(self) -> set[str]:
         active, queued, _running = self._local_model_download_snapshot()

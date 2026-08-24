@@ -568,7 +568,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **Local model download queue**: Settings downloads run serially through one
   worker process so Hugging Face cache writes and network usage remain
   predictable and the active download can be terminated safely. Additional
-  models can be queued while a download is active. Cancel clears the queue and
+  models can be queued while a download is active, and each waiting row shows
+  its place (`Queued, 2 of 3`) because only one download runs at a time and
+  several rows reading just "Queued" hid the order. Parallel downloads are
+  deliberately not offered: the total bandwidth is the same, while every extra
+  writer needs its own worker process, its own progress row, and its own share
+  of the cancel/partial-cleanup bookkeeping. Cancel clears the queue and
   removes unusable `*.incomplete` files while preserving completed files for a
   later resume. Progress and its rolling transfer rate are approximate because
   they are derived from cache growth and the estimated total sizes in

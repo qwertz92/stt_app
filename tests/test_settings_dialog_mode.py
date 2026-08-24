@@ -3893,3 +3893,64 @@ def test_settings_history_double_click_copies_entry(monkeypatch, tmp_path):
     assert copied == [entry.text]
     assert dialog.history_copy_button.text() == "Copied"
     _ = app
+
+
+def _local_model_row_text(dialog: SettingsDialog, model_name: str) -> str:
+    for index in range(dialog.local_models_list.count()):
+        item = dialog.local_models_list.item(index)
+        if str(item.data(QtCore.Qt.UserRole) or "") == model_name:
+            return item.text()
+    raise AssertionError(f"{model_name} is not listed")
+
+
+def test_waiting_downloads_show_their_place_in_the_queue():
+    """Several rows reading only "Queued" hid which model starts next.
+
+    One download runs at a time, so the order of the waiting ones is the only
+    thing that answers "when does mine start".
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    with dialog._local_model_download_lock:
+        dialog._local_model_download_active = ("tiny", "")
+        dialog._local_model_download_worker_running = True
+        dialog._local_model_download_queue.extend(
+            [("small", ""), ("medium", ""), ("large-v3", "")]
+        )
+
+    dialog._refresh_local_models_list([])
+
+    assert "Downloading" in _local_model_row_text(dialog, "tiny")
+    assert "Queued, 1 of 3" in _local_model_row_text(dialog, "small")
+    assert "Queued, 2 of 3" in _local_model_row_text(dialog, "medium")
+    assert "Queued, 3 of 3" in _local_model_row_text(dialog, "large-v3")
+
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_single_waiting_download_shows_no_place_number():
+    """"Queued, 1 of 1" is noise; the number only helps when there is an order."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    with dialog._local_model_download_lock:
+        dialog._local_model_download_active = ("tiny", "")
+        dialog._local_model_download_worker_running = True
+        dialog._local_model_download_queue.append(("small", ""))
+
+    dialog._refresh_local_models_list([])
+
+    row = _local_model_row_text(dialog, "small")
+    assert "Queued" in row
+    assert "of 1" not in row
+
+    dialog.deleteLater()
+    _ = app
