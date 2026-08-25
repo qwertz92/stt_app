@@ -72,7 +72,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `audio_device_listener.py` | Event-driven MMDevice endpoint notifications (default capture switch, hot-plug) via a comtypes `IMMNotificationClient`; inert without COM |
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
-| `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js |
+| `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate` |
 | `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models) |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
@@ -750,6 +750,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   newer recording. Background/import history entries never replace the
   foreground transcript's Edit target. VAD auto-stop crosses from the audio
   worker through a Qt signal before touching controller/UI state.
+  The snapshot cannot observe a half-written file either: `save_recording` and
+  `snapshot_managed_recording` take the same `lock_for_path` lock, and the
+  write is atomic, so a snapshot taken while dictation overwrites the managed
+  recording either predates the new one entirely or sees all of it. Both
+  properties are pinned by tests -- the interleaving one in
+  `tests/test_store_concurrency.py`.
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),
@@ -1375,10 +1381,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Explicit cancel — the overlay per-row ✕, Clear queue, and the Cancel button —
   goes through `_request_job_stop` (delivery `history`): it sets `aborting` (so a
   not-yet-started worker skips and a cooperative transcriber stops) and cancels
-  the future if it has not started. Real mid-run abort exists for faster-whisper
-  via `set_cancel_check` (polled between segments → raises `TranscriptionCanceled`
-  → worker emits `transcription_canceled`); other engines only skip-if-not-started
-  and otherwise run to completion with their result kept in history.
+  the future if it has not started. **Every local engine can now be stopped
+  mid-run**; the remote providers still only skip-if-not-started and otherwise
+  run to completion with their result kept in history. See "Cancelling a
+  running local transcription" below for how each local engine does it.
   Stopping the pending streaming finalize ends that streaming session:
   `_request_job_stop` clears the session state so the next recording is not
   blocked behind a finalize that now resolves history-only. Clear queue routes
@@ -1421,6 +1427,51 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcription delivers itself later with no duplicate. Normal (non-cancel)
   flow keeps the `_active_request_token` guard so background text is not
   inserted mid-foreground-session.
+- **Cancelling a running local transcription**: every local engine polls
+  `set_cancel_check` during its compute and raises `TranscriptionCanceled`;
+  before this, Cancel only worked for faster-whisper. The others kept a CPU
+  core busy, held their model in memory, **and held the single
+  `max_workers=1` transcription worker**, so the next dictation queued behind
+  a job the user had already given up on. Worse, a preload started afterwards
+  waits for the *shared* runtime lease that the stuck job owns, so the overlay
+  then reports "still loading" forever while each dictation quietly pays for
+  its own isolated runtime. Reported from the field: an accidental Canary run
+  that Cancel could not stop.
+  - `faster-whisper` — between segments (unchanged).
+  - `onnx-asr` (Parakeet, Canary) — onnx-asr offers no hook and
+    `recognize()` is one blocking call whose encoder pass alone runs for
+    seconds. `_install_cancel_hooks` therefore walks the loaded model for its
+    `InferenceSession` objects and wraps `run` so every call carries a
+    `RunOptions` the app owns; a watchdog thread polls the cancel check every
+    `_CANCEL_POLL_INTERVAL_S` and sets `terminate`, which ONNX Runtime honours
+    from another thread within milliseconds. Measured on the real Canary and
+    Parakeet models: 0.66 s to cancel against a 4.46 s / 3.21 s run. Three
+    properties are load-bearing: the handle is **per call**, because ONNX
+    Runtime never clears `terminate` and a reused handle would fail the next
+    transcription instantly; the abort surfaces as a generic ORT `Fail`, so it
+    is mapped to `TranscriptionCanceled` **only when we asked for it**, never
+    by matching the message; and the wrapped sessions are shared, so
+    `transcribe_batch` serializes on `_inference_lock` — overlapping runs would
+    let one job's cancel abort the other. A session stays fully usable after an
+    abort (verified), so the model is not reloaded.
+  - `Nemotron` — one check per fixed 560 ms chunk in the batch loop.
+  - Cohere/Granite Node runtime — the response reader polls between its 0.25 s
+    ticks; a cancel **kills the child process**, because the request is already
+    in flight and the child would otherwise keep transcribing. That discards
+    the loaded model, which is the point: freeing the CPU and the memory is
+    what Cancel is for.
+  The pre-run check must sit **before the model load**, not only before the
+  run: a job cancelled while it waited in the queue would otherwise still pull
+  a multi-gigabyte model into memory to throw the result away.
+- **The preload says which half of its work is running**: a preload downloads
+  and then loads, and only the first half has measurable progress (the bar is
+  directory growth). Reporting both as a download printed a frozen
+  "Downloading ... approx. 100%" for a model that was already complete on
+  disk, and the recording-start notice said "is still loading" while a
+  multi-gigabyte fetch was running. `_preload_phase` holds
+  `(generation, phase)`; it is generation-scoped so a retired worker cannot
+  describe what the current preload is doing, and `_preload_phase_word` feeds
+  both the recording-start notice and the streaming-mode refusal.
 - **A language change never reloads a runtime**: `language_mode` is
   deliberately absent from both the transcriber cache key and the preload key.
   Every engine takes the language as a per-request/per-session parameter

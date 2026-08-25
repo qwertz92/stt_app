@@ -3107,6 +3107,9 @@ plus the download lock finally made real.
   needed to read was the text they could not see. Compact now grows to fit up
   to a bounded cap and adds only the overflow to the window, leaving the
   ordinary short idle overlay at exactly its previous size.
+
+## 2026-08-26
+
 - **Every settings save threw the loaded model away.** Reported as "I only
   changed something small and it reloaded the model". Confirmed at the source
   rather than guessed: `reload_settings` reset the transcriber cache
@@ -3191,3 +3194,50 @@ plus the download lock finally made real.
   ~70 Mbit/s line, ABBA-ordered against CDN warming: 2 workers 76.7/77.6 s, 8
   workers 76.6/76.4 s. The value stays at 2, now with the measurement written
   next to it so it is not re-litigated.
+- **Cancel did nothing for three of the four local engines.** Reported from a
+  real session: an accidentally selected Canary run kept a CPU core at ~50 %
+  after Cancel, its model stayed in memory, and one transcription sat in the
+  queue forever. Confirmed at the source -- only faster-whisper ever polled
+  `set_cancel_check` during compute; onnx-asr, Nemotron and the Cohere/Granite
+  Node runtime installed the hook and never read it. The consequences went
+  further than the one job: the stuck run holds the single `max_workers=1`
+  worker *and* the shared runtime lease, so a preload started afterwards blocks
+  on that lease, the overlay reports "still loading" for a model that is
+  loaded, and each later dictation quietly builds its own isolated Node
+  runtime. Two of the three follow-up symptoms the user reported in the same
+  message were this one bug seen from a different angle.
+  - onnx-asr was the interesting case, because `recognize()` is a single
+    blocking call. ONNX Runtime does support aborting a run in flight --
+    `RunOptions.terminate` set from another thread -- but onnx-asr never lets a
+    caller supply RunOptions. Measured before building anything: with the
+    model's sessions wrapped, a terminate set 1.0 s into a 4.6 s encoder pass
+    aborted it in 1.01 s, raising a generic `Fail`, and the *same session was
+    fully usable afterwards*. That last measurement is what made the design
+    viable -- otherwise a cancel would cost a full model reload.
+  - The end-to-end numbers on the real models: Canary 0.67 s to cancel against
+    a 4.46 s run, Parakeet 0.66 s against 3.21 s, and both transcribed
+    correctly immediately afterwards.
+  - Three traps, each found by a test rather than by reading: `TranscriptionCanceled`
+    is not a `TranscriptionError`, so the two engines whose `transcribe_batch`
+    wrapped `except Exception` relabelled the cancel as a failure; the pre-run
+    check has to sit before the *model load*, not only before the run, or a job
+    cancelled while queued still pulls gigabytes into memory; and the first
+    version of the pre-run test was vacuous, because a second check further
+    down kept it passing after the first was removed.
+- **"Downloading ... approx. 100%" for a model that was already on disk.** The
+  same message also invited recording during what was actually a model load.
+  A preload does two things -- fetch, then load -- and only the first has
+  measurable progress, because the progress bar is directory growth. Both
+  halves reported themselves as a download, so a Cohere/Granite load (a Node
+  process plus an ONNX graph, tens of seconds) printed a frozen 100 % download.
+  The phase is now tracked as `(generation, phase)`, generation-scoped so a
+  retired preload worker cannot describe what the current one is doing.
+- **The Import Audio / last-recording interference the user asked about does
+  not exist -- and now has a test that says so.** The question was whether
+  transcribing the managed last recording can be corrupted by dictating over
+  it. It cannot: `save_recording` and `snapshot_managed_recording` take the
+  same `lock_for_path` lock and the write is atomic, so the snapshot either
+  predates the new recording entirely or sees all of it, and the import then
+  works on immutable in-memory bytes. Two tests already covered the
+  compare-and-set identity half; the interleaving half was only an argument, so
+  it is now a test that pauses inside the write and proves the reader blocks.
