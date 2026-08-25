@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 
 from stt_app.benchmark_history import (
     BenchmarkHistoryEntry,
@@ -183,3 +184,64 @@ def test_last_recording_instances_assign_one_shared_recording_id(tmp_path):
     assert snapshots[0] is not None
     assert snapshots[1] is not None
     assert snapshots[0].recording_id == snapshots[1].recording_id
+
+
+def test_an_import_snapshot_can_never_read_a_half_written_recording(
+    tmp_path,
+    monkeypatch,
+):
+    """The Import Audio tab reads the managed last recording while dictation
+    keeps overwriting it. Both sides take the same path-scoped lock, so a
+    snapshot either predates a new recording entirely or sees all of it -- it
+    can never observe a partially written file."""
+    from stt_app import last_recording_store as module
+
+    audio_path = tmp_path / "last_recording.wav"
+    state_path = tmp_path / "last_recording.json"
+    writer_store = LastRecordingStore(audio_path=audio_path, state_path=state_path)
+    reader_store = LastRecordingStore(audio_path=audio_path, state_path=state_path)
+    writer_store.save_recording(b"RIFF-first", keep_after_success=False)
+
+    write_started = threading.Event()
+    release_write = threading.Event()
+    original_write = module.atomic_write_bytes
+
+    def paused_write(path, payload):
+        if Path(path) == audio_path:
+            write_started.set()
+            assert release_write.wait(timeout=5)
+        original_write(path, payload)
+
+    monkeypatch.setattr(module, "atomic_write_bytes", paused_write)
+
+    snapshots: list[object] = []
+    writer = threading.Thread(
+        target=lambda: writer_store.save_recording(
+            b"RIFF-second-and-longer",
+            keep_after_success=False,
+        )
+    )
+    reader = threading.Thread(
+        target=lambda: snapshots.append(
+            reader_store.snapshot_managed_recording(audio_path)
+        )
+    )
+    writer.start()
+    assert write_started.wait(timeout=5)
+    reader.start()
+    # The reader must be blocked on the shared lock, not reading the file the
+    # writer is in the middle of replacing.
+    reader.join(timeout=0.3)
+    assert reader.is_alive() is True
+    assert snapshots == []
+
+    release_write.set()
+    writer.join(timeout=5)
+    reader.join(timeout=5)
+    assert writer.is_alive() is False
+    assert reader.is_alive() is False
+
+    assert len(snapshots) == 1
+    snapshot = snapshots[0]
+    assert snapshot is not None
+    assert snapshot.audio_bytes == b"RIFF-second-and-longer"
