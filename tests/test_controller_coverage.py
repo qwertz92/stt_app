@@ -28,6 +28,7 @@ from conftest import (
     make_controller as _make_controller,
 )
 
+from stt_app import controller as controller_module
 from stt_app.config import DEFAULT_ENGINE, FALLBACK_HOTKEY
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
@@ -643,6 +644,109 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
     # And the failed start must not leave the microphone or the session behind.
     assert controller._audio_capture is None
     assert controller._streaming_recording is False
+    controller.shutdown()
+    _ = app
+
+
+def _preloading_controller(monkeypatch, model_size="large-v3-turbo"):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="batch",
+        model_size=model_size,
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    controller._preload_future = _RunningFuture()
+    controller._preload_target_key = controller._model_preload_key(settings)
+    return controller, app, overlay, settings
+
+
+def test_the_recording_message_names_the_preload_phase_it_is_actually_in(monkeypatch):
+    """A preload downloads first and then loads. Both were reported as
+    "still loading", which understated a multi-gigabyte fetch."""
+    controller, app, overlay, _settings = _preloading_controller(monkeypatch)
+    controller._preload_phase = (
+        controller._preload_generation,
+        controller_module._PRELOAD_PHASE_DOWNLOAD,
+    )
+
+    controller.start_recording()
+
+    assert "is still downloading" in overlay.states[-1][1]
+    assert "is still loading" not in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_the_recording_message_says_loading_once_the_download_is_done(monkeypatch):
+    controller, app, overlay, _settings = _preloading_controller(monkeypatch)
+    controller._preload_phase = (
+        controller._preload_generation,
+        controller_module._PRELOAD_PHASE_LOAD,
+    )
+
+    controller.start_recording()
+
+    assert "is still loading" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_preload_that_is_only_loading_never_claims_to_be_downloading(monkeypatch):
+    """The progress bar measures directory growth. During the load phase
+    nothing grows, so a fully downloaded model printed a frozen
+    "Downloading ... approx. 100%"."""
+    controller, app, _overlay, _settings = _preloading_controller(monkeypatch)
+    controller._preload_target_model = "large-v3-turbo"
+    controller._preload_phase = (
+        controller._preload_generation,
+        controller_module._PRELOAD_PHASE_LOAD,
+    )
+
+    detail = controller._preload_progress_detail()
+
+    assert "Loading 'large-v3-turbo' into memory." in detail
+    assert "ownload" not in detail
+    assert "%" not in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_the_download_phase_still_reports_measured_progress(monkeypatch):
+    controller, app, _overlay, _settings = _preloading_controller(monkeypatch)
+    controller._preload_target_model = "large-v3-turbo"
+    controller._preload_phase = (
+        controller._preload_generation,
+        controller_module._PRELOAD_PHASE_DOWNLOAD,
+    )
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.estimate_cached_model_bytes",
+        lambda *_args, **_kwargs: 100 * 1024 * 1024,
+    )
+
+    detail = controller._preload_progress_detail()
+
+    assert "ownload" in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stale_phase_from_an_earlier_preload_is_ignored(monkeypatch):
+    """Phases are generation-scoped: a worker retired by a newer preload must
+    not describe what the current one is doing."""
+    controller, app, _overlay, _settings = _preloading_controller(monkeypatch)
+    controller._preload_phase = (
+        controller._preload_generation - 1,
+        controller_module._PRELOAD_PHASE_DOWNLOAD,
+    )
+
+    assert controller._current_preload_phase() == ""
+    assert controller._preload_phase_word() == "loading"
     controller.shutdown()
     _ = app
 

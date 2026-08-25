@@ -112,6 +112,11 @@ _EMPTY_MODEL_TRANSCRIPT_MESSAGE = (
     "The model returned no text for this recording."
 )
 
+# The two halves of a local model preload. They fail, progress and finish for
+# entirely different reasons, and only the first one has measurable progress.
+_PRELOAD_PHASE_DOWNLOAD = "download"
+_PRELOAD_PHASE_LOAD = "load"
+
 
 def _join_transcripts(texts: list[str]) -> str:
     """Join transcripts for one paste, separating them by a single space
@@ -395,6 +400,13 @@ class DictationController(QtCore.QObject):
         self._preload_download_process: subprocess.Popen | None = None
         self._preload_downloading_model: str | None = None
         self._preload_downloading_dir: str = ""
+        # Which half of the preload is running, as (generation, phase). A
+        # preload downloads first and then loads the model into memory, and the
+        # two take very different amounts of time for different reasons -- an
+        # ONNX/Node runtime load is minutes of work with nothing arriving on
+        # disk. Reporting both as "Downloading" printed a frozen "approx. 100%"
+        # for an already complete model.
+        self._preload_phase: tuple[int, str] | None = None
         self._preload_download_lock = threading.Lock()
         self._request_token_counter = 0
         self._active_request_token: int | None = None
@@ -829,8 +841,8 @@ class DictationController(QtCore.QObject):
             ):
                 self._overlay.set_state(
                     "Error",
-                    "Model is still loading. Streaming starts after the selected "
-                    "model is ready.",
+                    f"Model is still {self._preload_phase_word()}. Streaming "
+                    "starts after the selected model is ready.",
                 )
                 return
 
@@ -898,6 +910,7 @@ class DictationController(QtCore.QObject):
             self._start_batch_recording(
                 replace(self._settings),
                 waiting_for_model=preload_running,
+                preload_phase_word=self._preload_phase_word(),
             )
         finally:
             pending_toggles = self._pending_toggle_after_start_count
@@ -919,6 +932,7 @@ class DictationController(QtCore.QObject):
         settings_snapshot: AppSettings,
         *,
         waiting_for_model: bool = False,
+        preload_phase_word: str = "loading",
     ) -> None:
         capture = self._build_audio_capture()
         self._active_batch_settings = settings_snapshot
@@ -950,7 +964,8 @@ class DictationController(QtCore.QObject):
                 for part in (
                     (
                         f"Selected model '{settings_snapshot.model_size}' is still "
-                        "loading. You can record now; transcription will wait for it."
+                        f"{preload_phase_word}. You can record now; transcription "
+                        "will wait for it."
                         if waiting_for_model
                         else ""
                     ),
@@ -2614,6 +2629,31 @@ class DictationController(QtCore.QObject):
             getattr(settings, "local_onnx_device", ""),
         )
 
+    def _set_preload_phase(self, generation: int, phase: str) -> None:
+        with self._preload_result_lock:
+            if generation == self._preload_generation:
+                self._preload_phase = (generation, phase)
+
+    def _preload_phase_word(self) -> str:
+        """"downloading" or "loading" -- whichever the preload is actually doing.
+
+        Saying "loading" while a multi-gigabyte fetch is running understates the
+        wait, and saying "downloading" during the load claims network activity
+        for a model that is already complete on disk.
+        """
+        if self._current_preload_phase() == _PRELOAD_PHASE_DOWNLOAD:
+            return "downloading"
+        return "loading"
+
+    def _current_preload_phase(self) -> str:
+        """Phase of the preload that is running now, or "" when none is."""
+        with self._preload_result_lock:
+            phase = self._preload_phase
+            generation = self._preload_generation
+        if phase is None or phase[0] != generation:
+            return ""
+        return phase[1]
+
     def _matching_model_preload_running(self, settings: AppSettings) -> bool:
         if settings.engine != DEFAULT_ENGINE:
             return False
@@ -2767,6 +2807,7 @@ class DictationController(QtCore.QObject):
             self._preload_canceled_generations.discard(generation)
             self._preload_target_key = key
             self._preload_results[key] = (generation, None)
+            self._preload_phase = (generation, _PRELOAD_PHASE_DOWNLOAD)
         self._overlay.set_state("Processing", "Loading selected model...")
         self._preload_target_model = settings.model_size
         try:
@@ -2809,6 +2850,15 @@ class DictationController(QtCore.QObject):
                 f"cache before downloading '{model_name}'. You can start "
                 "recording now; transcription waits for this model. Use "
                 "Cancel to abort."
+            )
+        if self._current_preload_phase() == _PRELOAD_PHASE_LOAD:
+            # Nothing is being fetched any more. The progress bar measures
+            # directory growth, so during the load it printed a frozen
+            # "approx. 100%" next to the word "Downloading" for a model that
+            # was already complete on disk.
+            return (
+                f"Loading '{model_name}' into memory. You can start recording "
+                "now; transcription waits for this model."
             )
         downloaded_bytes = estimate_cached_model_bytes(
             model_name,
@@ -2872,6 +2922,7 @@ class DictationController(QtCore.QObject):
             self.model_preload_done.emit(generation, False, "Model preload canceled.")
             return
 
+        self._set_preload_phase(generation, _PRELOAD_PHASE_LOAD)
         runtime_lease: _TranscriberRuntimeLease | None = None
         try:
             runtime_lease = self._acquire_transcriber_runtime(
