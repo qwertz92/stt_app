@@ -16,6 +16,7 @@ import io
 import logging
 import threading
 import wave
+from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
@@ -29,7 +30,13 @@ from ..config import (
     PARAKEET_MODEL_SIZE,
     language_modes_for_selection,
 )
-from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
+from .base import (
+    AudioInput,
+    ITranscriber,
+    ProgressReporter,
+    TranscriptionCanceled,
+    TranscriptionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +45,82 @@ _ONNX_ASR_MODEL_NAMES: dict[str, str] = {
     PARAKEET_MODEL_SIZE: "nemo-parakeet-tdt-0.6b-v3",
     CANARY_MODEL_SIZE: "nemo-canary-1b-v2",
 }
+
+# How often the watchdog asks whether the user cancelled. ONNX Runtime reacts
+# to the terminate flag within a few milliseconds, so this interval is the
+# whole perceived cancel latency.
+_CANCEL_POLL_INTERVAL_S = 0.1
+# Depth of the search for the model's ONNX sessions. onnx-asr keeps them two
+# levels down (``model.asr._encoder``) and three for the resamplers
+# (``model.resampler._preprocessors[rate]``).
+_SESSION_SEARCH_MAX_DEPTH = 5
+
+
+class _RunAbortHandle:
+    """The abort switch shared by every ONNX Runtime call of one recognize().
+
+    ONNX Runtime aborts a run that is already executing when ``terminate`` is
+    set on the ``RunOptions`` it was started with, from any thread. That is the
+    only way to interrupt this runtime: onnx-asr exposes no callback, and its
+    encoder pass is a single call that runs for seconds on a long recording.
+    """
+
+    def __init__(self) -> None:
+        import onnxruntime as rt
+
+        self.options = rt.RunOptions()
+        self.aborted = False
+
+    def abort(self) -> None:
+        self.aborted = True
+        # Latches: ONNX Runtime never clears it, which is why each transcription
+        # builds a fresh handle instead of reusing one.
+        self.options.terminate = True
+
+
+class _CancelWatchdog:
+    """Polls the cancel check and trips the abort handle when it fires."""
+
+    def __init__(
+        self,
+        handle: _RunAbortHandle,
+        cancel_check: Callable[[], bool] | None,
+    ) -> None:
+        self._handle = handle
+        self._cancel_check = cancel_check
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._cancel_check is None:
+            return
+        self._thread = threading.Thread(
+            target=self._poll,
+            name="stt_app_onnx_asr_cancel",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        thread = self._thread
+        self._thread = None
+        if thread is not None:
+            thread.join(timeout=_CANCEL_POLL_INTERVAL_S * 5)
+
+    def _poll(self) -> None:
+        check = self._cancel_check
+        if check is None:
+            return
+        while not self._stop.wait(_CANCEL_POLL_INTERVAL_S):
+            try:
+                canceled = bool(check())
+            except Exception:
+                logger.exception("onnx-asr cancel check raised; ignoring")
+                return
+            if canceled:
+                self._handle.abort()
+                return
 
 
 def _pcm_bytes_to_float32(data: bytes) -> np.ndarray:
@@ -98,6 +181,11 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         self._language_mode = self._normalize_language_mode(language_mode)
         self._model: object | None = None
         self._model_lock = threading.Lock()
+        # One recognize() at a time: the abort handle below is per call and the
+        # wrapped sessions are shared, so overlapping runs would let a cancel
+        # for one abort the other.
+        self._inference_lock = threading.Lock()
+        self._abort_handle: _RunAbortHandle | None = None
         # Reported to the benchmark and the runtime status line. This runtime is
         # CPU-only by construction: onnx-asr offers no DirectML path that can
         # coexist with the ONNX Runtime the app already ships (installing
@@ -196,7 +284,7 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             f"Loading {self.model_size}: {self.runtime_status_text()}..."
         )
         try:
-            return onnx_asr.load_model(
+            model = onnx_asr.load_model(
                 _ONNX_ASR_MODEL_NAMES[self.model_size],
                 str(model_path),
                 quantization="int8",
@@ -205,6 +293,79 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             raise TranscriptionError(
                 f"Failed to load local model '{self.model_size}': {exc}"
             ) from exc
+        self._install_cancel_hooks(model)
+        return model
+
+    def _install_cancel_hooks(self, model: object) -> int:
+        """Route every ONNX Runtime call of this model through our RunOptions.
+
+        onnx-asr has no cancel hook of its own: ``recognize()`` is one blocking
+        call, and for a minute of audio its encoder pass alone runs for seconds
+        while pressing Cancel does nothing -- the transcription keeps a CPU core
+        busy and blocks the single transcription worker behind it. Wrapping the
+        sessions is what makes ``RunOptions.terminate`` reachable.
+
+        Returns the number of wrapped sessions. Zero means the runtime's layout
+        changed; the transcription still runs, only its mid-run cancel is gone.
+        """
+        import onnxruntime as rt
+
+        sessions: list[object] = []
+        seen: set[int] = set()
+
+        def collect(obj: object, depth: int) -> None:
+            if depth > _SESSION_SEARCH_MAX_DEPTH or id(obj) in seen:
+                return
+            seen.add(id(obj))
+            if isinstance(obj, rt.InferenceSession):
+                sessions.append(obj)
+                return
+            if isinstance(obj, dict):
+                children: object = obj.values()
+            elif isinstance(obj, (list, tuple, set)):
+                children = obj
+            elif hasattr(obj, "__dict__"):
+                children = vars(obj).values()
+            else:
+                return
+            for child in list(children):  # type: ignore[call-overload]
+                collect(child, depth + 1)
+
+        collect(model, 0)
+        for session in sessions:
+            self._wrap_session_run(session)
+        if not sessions:
+            logger.warning(
+                "No ONNX sessions found on the loaded '%s' model; a running "
+                "transcription cannot be canceled.",
+                self.model_size,
+            )
+        return len(sessions)
+
+    def _wrap_session_run(self, session: object) -> None:
+        original = session.run  # type: ignore[attr-defined]
+
+        def run_with_abort(
+            output_names: object,
+            input_feed: object,
+            run_options: object = None,
+            _original: Callable[..., object] = original,
+        ) -> object:
+            handle = self._abort_handle
+            if handle is None:
+                return _original(output_names, input_feed, run_options)
+            if handle.aborted:
+                # Between two calls of a decode loop: stop without waiting for
+                # ONNX Runtime to notice the flag.
+                raise TranscriptionCanceled()
+            if run_options is not None:
+                logger.debug(
+                    "Replacing caller-supplied RunOptions so the run stays "
+                    "cancelable; onnx-asr 0.12 passes none."
+                )
+            return _original(output_names, input_feed, handle.options)
+
+        session.run = run_with_abort  # type: ignore[attr-defined]
 
     def preload_model(self) -> None:
         with self._model_lock:
@@ -217,7 +378,20 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
 
     # -- transcription ----------------------------------------------------
 
+    def _raise_if_canceled(self) -> None:
+        check = self._cancel_check
+        if check is None:
+            return
+        try:
+            canceled = bool(check())
+        except Exception:
+            logger.exception("onnx-asr cancel check raised; ignoring")
+            return
+        if canceled:
+            raise TranscriptionCanceled()
+
     def transcribe_batch(self, audio_source: AudioInput) -> str:
+        self._raise_if_canceled()
         if isinstance(audio_source, (str, Path)):
             waveform, sample_rate = _read_wav_float32(Path(audio_source))
         elif isinstance(audio_source, (bytes, bytearray)):
@@ -239,14 +413,29 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             model = self._model
 
         self._emit_progress(f"Transcribing with {self.runtime_status_text()}...")
-        try:
-            text = model.recognize(  # type: ignore[attr-defined]
-                waveform,
-                sample_rate=sample_rate,
-                **self._recognize_kwargs(),
-            )
-        except Exception as exc:
-            raise TranscriptionError(
-                f"Local transcription failed for '{self.model_size}': {exc}"
-            ) from exc
+        with self._inference_lock:
+            self._raise_if_canceled()
+            handle = _RunAbortHandle()
+            self._abort_handle = handle
+            watchdog = _CancelWatchdog(handle, self._cancel_check)
+            watchdog.start()
+            try:
+                text = model.recognize(  # type: ignore[attr-defined]
+                    waveform,
+                    sample_rate=sample_rate,
+                    **self._recognize_kwargs(),
+                )
+            except TranscriptionCanceled:
+                raise
+            except Exception as exc:
+                if handle.aborted:
+                    # ONNX Runtime reports the abort as a generic Fail; it is a
+                    # user cancel, not a transcription failure.
+                    raise TranscriptionCanceled() from exc
+                raise TranscriptionError(
+                    f"Local transcription failed for '{self.model_size}': {exc}"
+                ) from exc
+            finally:
+                watchdog.stop()
+                self._abort_handle = None
         return str(text or "").strip()

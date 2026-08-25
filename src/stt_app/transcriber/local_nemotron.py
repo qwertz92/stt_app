@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import logging
 import queue
 import threading
 import wave
@@ -29,6 +30,7 @@ from .base import (
     ProgressReporter,
     StreamingCallback,
     StreamingErrorCallback,
+    TranscriptionCanceled,
     TranscriptionError,
     strip_language_tags,
 )
@@ -36,6 +38,8 @@ from .local_webgpu_asr import (
     download_webgpu_model_snapshot,
     resolve_cached_webgpu_model_path,
 )
+
+logger = logging.getLogger(__name__)
 
 _STREAM_SENTINEL = object()
 _DEFAULT_CHUNK_SAMPLES = 8_960
@@ -308,10 +312,28 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         session.generator.set_inputs(inputs)
         return self._decode_available(session)
 
+    def _raise_if_canceled(self) -> None:
+        check = self._cancel_check
+        if check is None:
+            return
+        try:
+            canceled = bool(check())
+        except Exception:
+            logger.exception("Nemotron cancel check raised; ignoring")
+            return
+        if canceled:
+            raise TranscriptionCanceled()
+
     def _transcribe_samples(self, samples: np.ndarray) -> str:
         with self._inference_lock:
+            self._raise_if_canceled()
             session = self._create_session()
             for offset in range(0, len(samples), self._chunk_samples):
+                # One check per fixed 560 ms chunk. Without it Cancel could not
+                # stop a running transcription at all: it would keep a core busy
+                # and hold the single transcription worker for the whole
+                # recording.
+                self._raise_if_canceled()
                 self._process_samples(
                     session,
                     samples[offset : offset + self._chunk_samples],
@@ -323,7 +345,7 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         try:
             samples = self._load_wav_samples(audio_source)
             return self._transcribe_samples(samples)
-        except TranscriptionError:
+        except (TranscriptionError, TranscriptionCanceled):
             raise
         except Exception as exc:
             raise TranscriptionError(f"Nemotron transcription failed: {exc}") from exc

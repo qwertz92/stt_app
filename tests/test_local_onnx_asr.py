@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import io
+import threading
+import time
 import wave
 
 import numpy as np
@@ -20,9 +22,13 @@ from stt_app.config import (
     supports_streaming,
 )
 from stt_app.settings_store import AppSettings
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.factory import create_transcriber
-from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
+from stt_app.transcriber.local_onnx_asr import (
+    LocalOnnxAsrTranscriber,
+    _CancelWatchdog,
+    _RunAbortHandle,
+)
 
 
 def _wav_bytes(samples: np.ndarray, sample_rate: int = 16000, channels: int = 1):
@@ -208,3 +214,199 @@ def test_dropping_an_unsupported_language_is_logged(caplog):
 
     assert transcriber._language_mode != "auto"
     assert any("translate" in record.message for record in caplog.records)
+
+
+# --------------------------------------------------------------------------
+# Cancelling a running transcription
+#
+# onnx-asr exposes no cancel hook: `recognize()` is one blocking call. Pressing
+# Cancel therefore did nothing -- the run kept a core busy, held its model in
+# memory, and blocked the single transcription worker behind it. The engine now
+# routes every ONNX Runtime call through a RunOptions it can terminate.
+# --------------------------------------------------------------------------
+
+
+class _AbortAwareModel:
+    """Stands in for a long ONNX run that ONNX Runtime aborts on terminate."""
+
+    def __init__(self, transcriber, *, fail_message="Exiting due to terminate flag"):
+        self._transcriber = transcriber
+        self._fail_message = fail_message
+        self.started = 0
+
+    def recognize(self, _waveform, **_kwargs):
+        self.started += 1
+        for _ in range(200):
+            handle = self._transcriber._abort_handle
+            if handle is not None and handle.aborted:
+                # ONNX Runtime reports the abort as a generic Fail.
+                raise RuntimeError(self._fail_message)
+            time.sleep(0.01)
+        return "finished"
+
+
+def test_a_cancel_before_the_run_starts_never_reaches_the_model():
+    transcriber, fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
+    transcriber.set_cancel_check(lambda: True)
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+    assert fake.calls == []
+
+
+def test_a_job_canceled_while_queued_does_not_load_the_model_first():
+    """The check has to come before the load, not only before the run: a job
+    canceled while it waited in the queue would otherwise still pull a
+    multi-gigabyte model into memory just to throw the result away."""
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    loads: list[int] = []
+
+    def _never() -> object:
+        loads.append(1)
+        raise AssertionError("the model must not be loaded for a canceled job")
+
+    transcriber._load_model = _never  # type: ignore[method-assign]
+    transcriber.set_cancel_check(lambda: True)
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+    assert loads == []
+
+
+def test_a_cancel_during_the_run_aborts_it_and_reports_a_cancel():
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    model = _AbortAwareModel(transcriber)
+    transcriber._model = model
+    canceled = threading.Event()
+    transcriber.set_cancel_check(canceled.is_set)
+    threading.Timer(0.05, canceled.set).start()
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+
+    assert model.started == 1
+    # The handle is per call, so the next transcription starts uncancelled.
+    assert transcriber._abort_handle is None
+
+
+def test_a_real_runtime_failure_is_not_relabelled_as_a_cancel():
+    """Only an abort we asked for becomes TranscriptionCanceled; anything else
+    must stay a failure the user is told about."""
+
+    class _BrokenModel:
+        def recognize(self, _waveform, **_kwargs):
+            raise RuntimeError("graph is corrupt")
+
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    transcriber._model = _BrokenModel()
+    transcriber.set_cancel_check(lambda: False)
+    with pytest.raises(TranscriptionError, match="graph is corrupt"):
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+
+
+def test_a_raising_cancel_check_does_not_fail_the_transcription():
+    def broken_check():
+        raise ValueError("check exploded")
+
+    transcriber, fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
+    transcriber.set_cancel_check(broken_check)
+    assert (
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+        == "recognized text"
+    )
+    assert len(fake.calls) == 1
+
+
+class _StubSession:
+    """Shaped like onnxruntime.InferenceSession for the hook installer."""
+
+    def __init__(self):
+        self.seen_run_options = []
+
+    def run(self, _output_names, _input_feed, run_options=None):
+        self.seen_run_options.append(run_options)
+        return ["out"]
+
+
+def _patch_session_type(monkeypatch):
+    import onnxruntime
+
+    monkeypatch.setattr(onnxruntime, "InferenceSession", _StubSession)
+
+
+def test_every_session_of_the_loaded_model_is_wrapped(monkeypatch):
+    """onnx-asr keeps its sessions two and three levels down; a shallower search
+    would leave the resamplers -- and therefore part of the run -- uncancelable."""
+    _patch_session_type(monkeypatch)
+
+    class _Asr:
+        def __init__(self):
+            self._encoder = _StubSession()
+            self._decoder = _StubSession()
+
+    class _Resampler:
+        def __init__(self):
+            self._preprocessors = {16000: _StubSession(), 8000: _StubSession()}
+
+    class _Model:
+        def __init__(self):
+            self.asr = _Asr()
+            self.resampler = _Resampler()
+
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    assert transcriber._install_cancel_hooks(_Model()) == 4
+
+
+def test_a_model_without_sessions_is_reported_but_still_usable(monkeypatch, caplog):
+    import logging
+
+    _patch_session_type(monkeypatch)
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    with caplog.at_level(logging.WARNING):
+        assert transcriber._install_cancel_hooks(object()) == 0
+    assert any("cannot be canceled" in record.message for record in caplog.records)
+
+
+def test_a_wrapped_session_forwards_our_run_options_and_stops_between_calls():
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    session = _StubSession()
+    transcriber._wrap_session_run(session)
+
+    # No transcription in flight: the caller's own options are left alone.
+    session.run(["y"], {"x": 1})
+    assert session.seen_run_options == [None]
+
+    handle = _RunAbortHandle()
+    transcriber._abort_handle = handle
+    session.run(["y"], {"x": 1})
+    assert session.seen_run_options[-1] is handle.options
+
+    handle.abort()
+    with pytest.raises(TranscriptionCanceled):
+        session.run(["y"], {"x": 1})
+    # The aborted call never reached the runtime.
+    assert len(session.seen_run_options) == 2
+
+
+def test_the_watchdog_trips_the_handle_and_stops_cleanly():
+    handle = _RunAbortHandle()
+    canceled = threading.Event()
+    watchdog = _CancelWatchdog(handle, canceled.is_set)
+    watchdog.start()
+    try:
+        assert handle.aborted is False
+        canceled.set()
+        deadline = time.monotonic() + 2.0
+        while not handle.aborted and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert handle.aborted is True
+        assert handle.options.terminate is True
+    finally:
+        watchdog.stop()
+
+
+def test_the_watchdog_without_a_cancel_check_starts_no_thread():
+    handle = _RunAbortHandle()
+    watchdog = _CancelWatchdog(handle, None)
+    watchdog.start()
+    assert watchdog._thread is None
+    watchdog.stop()
+    assert handle.aborted is False

@@ -24,7 +24,7 @@ from stt_app.config import (
     MODEL_REPO_MAP,
 )
 from stt_app.transcriber import local_webgpu_asr
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.local_webgpu_asr import (
     LocalOnnxWebGpuTranscriber,
     download_webgpu_model_snapshot,
@@ -848,6 +848,95 @@ def test_reader_retains_only_bounded_process_local_stderr():
     assert state.stderr_lines[-1] == "diagnostic-399"
     assert "diagnostic-388" in transcriber._stderr_tail(state)
     assert "diagnostic-387" not in transcriber._stderr_tail(state)
+
+
+def test_a_cancel_stops_waiting_for_the_child_and_kills_it(monkeypatch, tmp_path):
+    """Cancel used to do nothing here: the request had already been written, so
+    the Node child kept transcribing -- CPU busy, model still in memory -- while
+    the parent blocked on the response. Killing it is what actually stops the
+    work."""
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    process = _FakeProcess()
+    read_count = 0
+
+    def fake_read(self, state, deadline):
+        nonlocal read_count
+        read_count += 1
+        if read_count == 1:  # startup handshake
+            return {"ok": True, "device": "cpu", "gpuAvailable": False}
+        # Reproduce the real reader's cancel poll rather than blocking forever.
+        self._raise_if_canceled()
+        raise AssertionError("the cancelled wait must not reach the response")
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_ensure_snapshot", lambda self: tmp_path
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_start_reader_threads", lambda self, state: None
+    )
+    monkeypatch.setattr(LocalOnnxWebGpuTranscriber, "_read_json_message", fake_read)
+    monkeypatch.setattr(
+        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess, "Popen", lambda command, **kwargs: process
+    )
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        device="cpu",
+        node_path="node",
+        runner_path=runner,
+    )
+    # Cancel only once the request is in flight -- that is the case the fix is
+    # about; a cancel before it is covered by the next test.
+    transcriber.set_cancel_check(lambda: "transcribe" in process.stdin.getvalue())
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(b"RIFF")
+
+    assert process.stdin.getvalue().count("transcribe") == 1
+    assert process.terminated is True
+    assert transcriber._process_state is None
+
+
+def test_a_cancel_before_the_request_starts_no_child(monkeypatch, tmp_path):
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    started: list[object] = []
+    monkeypatch.setattr(
+        local_webgpu_asr,
+        "_ensure_js_runtime_available",
+        lambda node_path, runner: started.append(runner),
+    )
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        device="cpu",
+        node_path="node",
+        runner_path=runner,
+    )
+    transcriber.set_cancel_check(lambda: True)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(b"RIFF")
+
+    assert started == []
+
+
+def test_the_response_reader_polls_the_cancel_check():
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="cohere-transcribe-03-2026")
+    process = _FakeProcess()
+    state = local_webgpu_asr._NodeProcessState(
+        process,
+        queue.Queue(),
+        deque(maxlen=local_webgpu_asr._STDERR_MAX_LINES),
+    )
+    transcriber.set_cancel_check(lambda: True)
+    started = time.monotonic()
+    with pytest.raises(TranscriptionCanceled):
+        transcriber._read_json_message(state, time.monotonic() + 30)
+    # Not a timeout: it returns immediately rather than after the deadline.
+    assert time.monotonic() - started < 1.0
 
 
 def test_protocol_timeout_kills_child_and_next_request_starts_fresh(

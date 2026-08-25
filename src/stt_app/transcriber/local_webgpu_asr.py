@@ -30,7 +30,13 @@ from ..config import (
     language_modes_for_selection,
 )
 from ..model_download_coordinator import run_coordinated_download
-from .base import AudioInput, ITranscriber, ProgressReporter, TranscriptionError
+from .base import (
+    AudioInput,
+    ITranscriber,
+    ProgressReporter,
+    TranscriptionCanceled,
+    TranscriptionError,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -926,6 +932,18 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         with state.stderr_lock:
             return "\n".join(list(state.stderr_lines)[-12:]).strip()
 
+    def _raise_if_canceled(self) -> None:
+        check = self._cancel_check
+        if check is None:
+            return
+        try:
+            canceled = bool(check())
+        except Exception:
+            logger.exception("ONNX/WebGPU cancel check raised; ignoring")
+            return
+        if canceled:
+            raise TranscriptionCanceled()
+
     def _read_json_message(
         self,
         state: _NodeProcessState,
@@ -933,6 +951,10 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
     ) -> dict[str, Any]:
         skipped: list[str] = []
         while True:
+            # The child owns a whole Node process; without this poll Cancel
+            # could not stop a running transcription, and the runtime kept a
+            # core busy and its model in memory until the request finished.
+            self._raise_if_canceled()
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 detail = self._stderr_tail(state)
@@ -1059,6 +1081,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         temp_path: Path | None = None
         restart_after_cpu_fallback = False
+        self._raise_if_canceled()
         try:
             if isinstance(audio_source, bytes):
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
@@ -1102,7 +1125,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                             "ONNX/WebGPU runtime returned an unexpected response id "
                             f"({response.get('id')!r}, expected {request_id})."
                         )
-                except _RuntimeProtocolError:
+                except (_RuntimeProtocolError, TranscriptionCanceled):
+                    # The child is still working on this request and will write
+                    # its response later, so the stream cannot be reused. Killing
+                    # it is also what actually frees the CPU and the loaded
+                    # model, which is the point of pressing Cancel.
                     self._discard_process_locked(state)
                     raise
 
@@ -1126,7 +1153,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                         "the next request so WebGPU/DirectML can be retried."
                     )
                 return str(response.get("text") or "").strip()
-        except TranscriptionError:
+        except (TranscriptionError, TranscriptionCanceled):
             raise
         except Exception as exc:
             raise TranscriptionError(

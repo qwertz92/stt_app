@@ -15,7 +15,7 @@ from stt_app.config import (
     supports_streaming,
 )
 from stt_app.transcriber import local_nemotron
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
 
 
@@ -160,6 +160,52 @@ def test_batch_transcription_uses_dml_then_cpu_fallback(monkeypatch, tmp_path):
     assert transcriber.runtime_details_text == "Fallback attempts: dml: DML unavailable"
     assert [config.providers for config in runtime.configs] == [["dml"], []]
     assert runtime.generators[0].runtime_options["lang_id"] == "9"
+
+
+def test_a_cancel_stops_a_running_batch_transcription(monkeypatch, tmp_path):
+    """Without a check inside the chunk loop, Cancel could not stop a running
+    Nemotron transcription: it kept a core busy and held the single
+    transcription worker for the whole recording."""
+    runtime = _FakeRuntime()
+    transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")
+    # Four 560 ms chunks; cancel once the second one has been processed.
+    audio = _wav_bytes(8_960 * 4)
+    processed: list[int] = []
+    original = transcriber._process_samples
+
+    def counting(session, samples):
+        processed.append(len(samples))
+        return original(session, samples)
+
+    transcriber._process_samples = counting  # type: ignore[method-assign]
+    transcriber.set_cancel_check(lambda: len(processed) >= 2)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(audio)
+
+    assert len(processed) == 2
+
+
+def test_a_cancel_before_the_first_chunk_creates_no_session(monkeypatch, tmp_path):
+    runtime = _FakeRuntime()
+    transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")
+    transcriber.set_cancel_check(lambda: True)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes())
+
+    assert runtime.generators == []
+
+
+def test_a_raising_cancel_check_does_not_fail_a_nemotron_batch(monkeypatch, tmp_path):
+    runtime = _FakeRuntime()
+    transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")
+
+    def broken() -> bool:
+        raise ValueError("check exploded")
+
+    transcriber.set_cancel_check(broken)
+    assert transcriber.transcribe_batch(_wav_bytes()) == "hello world"
 
 
 def test_true_streaming_emits_incremental_text(monkeypatch, tmp_path):
