@@ -41,7 +41,7 @@ class _Response(io.BytesIO):
 def test_validated_version_rejects_url_and_path_injection():
     module = _load_setup_node_module()
 
-    with pytest.raises(ValueError, match="Invalid Node.js version"):
+    with pytest.raises(ValueError, match=r"Invalid Node\.js version"):
         module._validated_version("24.18.0/../../payload")
 
 
@@ -95,9 +95,11 @@ def test_safe_extract_rejects_parent_traversal(tmp_path):
     archive_path.write_bytes(_zip_bytes({"../outside.txt": b"escaped"}))
     target = tmp_path / "target"
 
-    with zipfile.ZipFile(archive_path) as archive:
-        with pytest.raises(RuntimeError, match="Unsafe path"):
-            module._extract_zip_safely(archive, target)
+    with (
+        zipfile.ZipFile(archive_path) as archive,
+        pytest.raises(RuntimeError, match="Unsafe path"),
+    ):
+        module._extract_zip_safely(archive, target)
 
     assert not (tmp_path / "outside.txt").exists()
 

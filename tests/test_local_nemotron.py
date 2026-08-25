@@ -14,8 +14,8 @@ from stt_app.config import (
     language_modes_for_selection,
     supports_streaming,
 )
-from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber import local_nemotron
+from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
 
 
@@ -354,21 +354,30 @@ def test_decoding_never_rewrites_text_it_already_emitted():
         remaining = {"n": len(chunk)}
 
         class _Generator:
+            # Bound explicitly rather than closed over: the loop rebinds
+            # `remaining` and `pieces` on every iteration, so a class that
+            # captured them would read whichever chunk happened to be last.
+            def __init__(self, state):
+                self._state = state
+
             def is_done(self):
-                return remaining["n"] <= 0
+                return self._state["n"] <= 0
 
             def generate_next_token(self):
-                remaining["n"] -= 1
+                self._state["n"] -= 1
 
             def get_next_tokens(self):
                 return [object()]
 
         class _Tokenizer:
-            def decode(self, _token):
-                return next(pieces, "")
+            def __init__(self, source):
+                self._source = source
 
-        session.generator = _Generator()
-        session.tokenizer_stream = _Tokenizer()
+            def decode(self, _token):
+                return next(self._source, "")
+
+        session.generator = _Generator(remaining)
+        session.tokenizer_stream = _Tokenizer(pieces)
         before = session.text
         LocalNemotronTranscriber._decode_available(session)
         seen.append(before)

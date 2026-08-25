@@ -36,8 +36,8 @@ from pathlib import Path
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from stt_app.config import FASTER_WHISPER_MODEL_SIZES, MODEL_REPO_MAP  # noqa: E402
-from stt_app.persistence import atomic_write_text  # noqa: E402
+from stt_app.config import FASTER_WHISPER_MODEL_SIZES, MODEL_REPO_MAP
+from stt_app.persistence import atomic_write_text
 
 IMPORTABLE_MODEL_REPO_MAP = {
     name: MODEL_REPO_MAP[name] for name in FASTER_WHISPER_MODEL_SIZES
@@ -126,9 +126,9 @@ def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
     if not has_vocab:
         missing.append("vocabulary.txt or vocabulary.json")
 
-    for optional in OPTIONAL_FILES:
-        if (source_dir / optional).is_file():
-            found.append(optional)
+    found.extend(
+        optional for optional in OPTIONAL_FILES if (source_dir / optional).is_file()
+    )
 
     # Check for Git LFS pointers (common when git-lfs is not installed)
     model_bin = source_dir / "model.bin"

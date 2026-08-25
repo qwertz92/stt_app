@@ -16,22 +16,22 @@ class _FakeUser32:
         self.valid_windows: set[int] = set()
         self.hidden_windows: set[int] = set()
 
-    def GetForegroundWindow(self) -> int:  # noqa: N802 - Win32 name
+    def GetForegroundWindow(self) -> int:
         return self.foreground
 
-    def GetWindowThreadProcessId(self, hwnd, lp) -> int:  # noqa: N802
+    def GetWindowThreadProcessId(self, hwnd, lp) -> int:
         lp._obj.value = (
             self.own_process_id if hwnd in self.own_windows else 4242
         )
         return 1
 
-    def GetWindowLongW(self, hwnd, _index) -> int:  # noqa: N802
+    def GetWindowLongW(self, hwnd, _index) -> int:
         return _WS_EX_TOOLWINDOW if hwnd in self.tool_windows else 0
 
-    def IsWindow(self, hwnd) -> int:  # noqa: N802
+    def IsWindow(self, hwnd) -> int:
         return 1 if hwnd in self.valid_windows else 0
 
-    def IsWindowVisible(self, hwnd) -> int:  # noqa: N802
+    def IsWindowVisible(self, hwnd) -> int:
         return 0 if hwnd in self.hidden_windows else 1
 
 

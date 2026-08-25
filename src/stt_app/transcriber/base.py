@@ -3,8 +3,8 @@ from __future__ import annotations
 import logging
 import re
 from abc import ABC, abstractmethod
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from ..config import DEFAULT_LANGUAGE_MODE, VALID_LANGUAGE_MODES
 

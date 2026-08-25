@@ -1,7 +1,7 @@
 from importlib import metadata
 
-from stt_app import __version__
 import stt_app.benchmark_environment as benchmark_environment
+from stt_app import __version__
 
 
 def test_framework_versions_include_python_node_and_source_runtimes(monkeypatch):

@@ -24,7 +24,7 @@ class BenchmarkEnvironment:
     node: str = ""
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any] | None) -> "BenchmarkEnvironment":
+    def from_dict(cls, raw: dict[str, Any] | None) -> BenchmarkEnvironment:
         if not isinstance(raw, dict):
             return cls()
         gpus = raw.get("gpus", [])

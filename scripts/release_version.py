@@ -5,10 +5,9 @@ import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
-
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC = REPO_ROOT / "src"
@@ -51,7 +50,7 @@ class ReleaseVersion:
     patch: int
 
     @classmethod
-    def parse(cls, value: str) -> "ReleaseVersion":
+    def parse(cls, value: str) -> ReleaseVersion:
         match = RELEASE_TAG_RE.fullmatch(str(value or "").strip())
         if not match:
             raise ReleaseVersionError(

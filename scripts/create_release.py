@@ -3,8 +3,8 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 from release_version import (
     REPO_ROOT,
@@ -15,7 +15,6 @@ from release_version import (
     read_version_files,
     verify_release,
 )
-
 
 RELEASE_METADATA_PATHS = [
     "pyproject.toml",

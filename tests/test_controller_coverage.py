@@ -3,22 +3,15 @@ transcription_worker error branches, streaming abort, focus poll."""
 
 from __future__ import annotations
 
-import logging
-
-import pytest
-import os
 import concurrent.futures
+import logging
+import os
 import threading
 import time
 from dataclasses import replace
 from unittest.mock import MagicMock
 
-from stt_app.config import DEFAULT_ENGINE, FALLBACK_HOTKEY
-from stt_app.last_recording_store import LastRecordingStore
-from stt_app.settings_store import AppSettings
-from stt_app.transcriber.base import TranscriptionError
-from stt_app.transcript_history import TranscriptHistoryStore
-
+import pytest
 from conftest import (
     FakeCapture,
     FakeCaptureFails,
@@ -30,9 +23,16 @@ from conftest import (
     FakeTextInserter,
     FakeWindowFocusHelper,
     ImmediateExecutor,
+)
+from conftest import (
     make_controller as _make_controller,
 )
 
+from stt_app.config import DEFAULT_ENGINE, FALLBACK_HOTKEY
+from stt_app.last_recording_store import LastRecordingStore
+from stt_app.settings_store import AppSettings
+from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcript_history import TranscriptHistoryStore
 
 # ---------------------------------------------------------------------------
 # Shutdown tests

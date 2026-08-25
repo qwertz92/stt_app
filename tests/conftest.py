@@ -181,7 +181,7 @@ class FakeOverlay:
 
     def ensure_compact_size(self):
         self.compact_calls += 1
-        return None
+        return
 
 
 class FakeTextInserter:
@@ -250,7 +250,7 @@ class FakeWindowFocusHelper:
 class ImmediateExecutor:
     def submit(self, fn, *args, **kwargs):
         fn(*args, **kwargs)
-        return None
+        return
 
     def shutdown(self, wait=False, cancel_futures=False):
         pass
@@ -301,7 +301,7 @@ class FakeStreamingTranscriber:
 
 
 class FakeCapture:
-    instances: list["FakeCapture"] = []
+    instances: list[FakeCapture] = []
 
     def __init__(self, *args, **kwargs):
         self.chunk_callback = kwargs.get("chunk_callback")
@@ -344,7 +344,7 @@ class FakeLastRecordingStore:
     def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
         self.saved.append((bytes(wav_bytes), bool(keep_after_success)))
         self._available = bool(wav_bytes)
-        return None
+        return
 
     def mark_transcribing(self, *, engine: str, model: str, mode: str) -> None:
         self.transcribing.append((engine, model, mode))
@@ -376,17 +376,17 @@ class FakeLastRecordingStore:
 def make_controller(**kwargs):
     """Create a DictationController with sensible defaults for testing."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    defaults = dict(
-        settings_store=FakeSettingsStore(
+    defaults = {
+        "settings_store": FakeSettingsStore(
             AppSettings(hotkey=FALLBACK_HOTKEY, keep_transcript_in_clipboard=False)
         ),
-        hotkey_manager=FakeHotkeyManager(),
-        cancel_hotkey_manager=FakeCancelHotkeyManager(),
-        overlay=FakeOverlay(),
-        text_inserter=FakeTextInserter(),
-        logger=logging.getLogger("test.controller"),
-        window_focus_helper=FakeWindowFocusHelper(),
-    )
+        "hotkey_manager": FakeHotkeyManager(),
+        "cancel_hotkey_manager": FakeCancelHotkeyManager(),
+        "overlay": FakeOverlay(),
+        "text_inserter": FakeTextInserter(),
+        "logger": logging.getLogger("test.controller"),
+        "window_focus_helper": FakeWindowFocusHelper(),
+    }
     defaults.update(kwargs)
     return DictationController(**defaults), app
 

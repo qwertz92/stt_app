@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import threading
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -64,7 +64,7 @@ def _quarantine_single_file(path: Path) -> Path | None:
     if not path.exists():
         return None
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     base_name = f"{path.name}.corrupt.{timestamp}"
     target = path.with_name(base_name)
     counter = 1

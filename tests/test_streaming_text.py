@@ -87,7 +87,7 @@ def test_rolling_window_merge_replaces_rather_than_appends_when_unalignable():
     ):
         accumulated = merge_rolling_window_transcript(accumulated, hallucination)
 
-    assert len(accumulated.split()) <= len("so this is the real dictation i spoke".split()) + 5
+    assert len(accumulated.split()) <= len(["so", "this", "is", "the", "real", "dictation", "i", "spoke"]) + 5
 
 
 def test_rolling_window_merge_still_stitches_a_normal_overlap():

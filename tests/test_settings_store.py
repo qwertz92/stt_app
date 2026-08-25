@@ -1,14 +1,13 @@
 import json
 
 from stt_app.config import (
-    DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
+    DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CANCEL_HOTKEY,
-    DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_DEEPGRAM_MODEL,
-    DEFAULT_ENGINE,
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_ENGINE,
     DEFAULT_HISTORY_MAX_ITEMS,
     DEFAULT_HOTKEY,
     DEFAULT_KEEP_ONNX_MODEL_LOADED,
@@ -18,17 +17,18 @@ from stt_app.config import (
     DEFAULT_MODEL_SIZE,
     DEFAULT_OPENAI_MODEL,
     DEFAULT_OVERLAY_ALWAYS_ON_TOP,
-    DEFAULT_OVERLAY_OPACITY_PERCENT,
     DEFAULT_OVERLAY_CORNER,
+    DEFAULT_OVERLAY_OPACITY_PERCENT,
     DEFAULT_PASTE_MODE,
     DEFAULT_RECORDINGS_MAX_COUNT,
     DEFAULT_SAVE_LAST_WAV,
+    DEFAULT_SHOW_OVERLAY_HOTKEY,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
+    parse_custom_vocabulary,
 )
-from stt_app.config import parse_custom_vocabulary
 from stt_app.persistence import backup_path
-from stt_app.settings_store import AppSettings, CURRENT_SCHEMA_VERSION, SettingsStore
+from stt_app.settings_store import CURRENT_SCHEMA_VERSION, AppSettings, SettingsStore
 
 
 def test_load_defaults_creates_file(tmp_path):

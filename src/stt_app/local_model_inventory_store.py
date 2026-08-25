@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,7 +18,7 @@ _CURRENT_SCHEMA_VERSION = 1
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 def _normalize_model_dir(model_dir: str | None) -> str:
@@ -42,7 +42,7 @@ class LocalModelInventoryEntry:
     updated_at: str = ""
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "LocalModelInventoryEntry":
+    def from_dict(cls, raw: dict[str, Any]) -> LocalModelInventoryEntry:
         return cls(
             cached_models=_normalize_cached_models(raw.get("cached_models", [])),
             updated_at=str(raw.get("updated_at", "")).strip(),
@@ -61,7 +61,7 @@ class LocalModelInventoryState:
     entries: dict[str, LocalModelInventoryEntry] = field(default_factory=dict)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "LocalModelInventoryState":
+    def from_dict(cls, raw: dict[str, Any]) -> LocalModelInventoryState:
         entries: dict[str, LocalModelInventoryEntry] = {}
         entries_raw = raw.get("entries", {})
         if isinstance(entries_raw, dict):

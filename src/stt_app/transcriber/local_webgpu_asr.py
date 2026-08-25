@@ -469,7 +469,7 @@ def _verify_downloaded_layout(
     label: str,
     repo_id: str,
     local_dir: Path,
-    layout: "_OnnxModelLayout",
+    layout: _OnnxModelLayout,
 ) -> None:
     """Refuse to call a download finished while the weights are absent.
 
@@ -557,7 +557,7 @@ def _default_node_path() -> str | None:
         if resolved:
             return resolved
 
-    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
     candidate = Path(program_files) / "nodejs" / "node.exe"
     if candidate.is_file():
         return str(candidate)
@@ -610,8 +610,7 @@ def _run_transformers_import_probe(
         ],
         cwd=str(cwd),
         text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        capture_output=True,
         timeout=30,
         check=False,
     )
@@ -646,8 +645,7 @@ def _ensure_js_runtime_available(node_path: str, runner: Path) -> None:
                     [npm_path, "install"],
                     cwd=str(source_root),
                     text=True,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
+                    capture_output=True,
                     timeout=300,
                     check=False,
                 )

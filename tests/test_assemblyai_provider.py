@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import types
 import threading
+import types
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -11,7 +11,6 @@ import pytest
 
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.base import TranscriptionError
-
 
 # ---------------------------------------------------------------------------
 # Fake assemblyai module for injection
@@ -258,9 +257,11 @@ class TestAssemblyAIErrorHandling:
         t._language_mode = "auto"
         t._aai = None  # Force lazy import
 
-        with patch.dict("sys.modules", {"assemblyai": None}):
-            with pytest.raises(TranscriptionError, match="assemblyai.*not installed"):
-                t._get_aai()
+        with (
+            patch.dict("sys.modules", {"assemblyai": None}),
+            pytest.raises(TranscriptionError, match=r"assemblyai.*not installed"),
+        ):
+            t._get_aai()
 
 
 # ---------------------------------------------------------------------------
@@ -733,11 +734,11 @@ class TestFactoryAssemblyAI:
 
     def test_factory_local_unchanged(self):
         """Local engine routing still works after factory changes."""
+        from stt_app.settings_store import AppSettings
         from stt_app.transcriber.factory import create_transcriber
         from stt_app.transcriber.local_faster_whisper import (
             LocalFasterWhisperTranscriber,
         )
-        from stt_app.settings_store import AppSettings
 
         settings = AppSettings(engine="local", model_size="small")
         t = create_transcriber(settings)

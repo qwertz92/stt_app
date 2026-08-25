@@ -141,7 +141,7 @@ def test_pump_events_ignores_non_prefixed_lines():
             + "\n",
         ]
     )
-    events: "queue.Queue" = queue.Queue()
+    events: queue.Queue = queue.Queue()
     benchmark_process._pump_events(stream, events)
 
     collected = []
@@ -224,7 +224,7 @@ def test_nonzero_exit_is_error_even_after_streamed_case(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(benchmark_process, "start_benchmark_process", lambda _p: process)
 
-    with pytest.raises(RuntimeError, match="code 7.*1 completed case"):
+    with pytest.raises(RuntimeError, match=r"code 7.*1 completed case"):
         benchmark_process._stream_benchmark_process(
             tmp_path / "options.json",
             progress_callback=None,

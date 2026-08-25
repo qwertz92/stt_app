@@ -9,6 +9,8 @@ from __future__ import annotations
 import threading
 import time
 
+import pytest
+
 from stt_app.model_download_coordinator import (
     ACQUIRE_DOWNLOAD,
     ACQUIRE_JOINED,
@@ -16,8 +18,6 @@ from stt_app.model_download_coordinator import (
     ModelDownloadCoordinator,
     model_download_coordinator,
 )
-
-import pytest
 
 
 def test_a_second_downloader_waits_instead_of_racing_the_first():

@@ -10,12 +10,11 @@ from unittest.mock import patch
 
 import pytest
 
+from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.deepgram_provider import (
     DEFAULT_DEEPGRAM_MODEL,
     DeepgramTranscriber,
 )
-from stt_app.transcriber.base import TranscriptionError
-
 
 # ---------------------------------------------------------------------------
 # Helpers: fake HTTP responses
@@ -337,7 +336,7 @@ class TestDeepgramErrorHandling:
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
         )
         t = DeepgramTranscriber(api_key="bad-key")
-        with pytest.raises(TranscriptionError, match="Authentication failed.*401"):
+        with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
@@ -346,7 +345,7 @@ class TestDeepgramErrorHandling:
             url="", code=402, msg="Payment Required", hdrs={}, fp=None
         )
         t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(TranscriptionError, match="Insufficient credits.*402"):
+        with pytest.raises(TranscriptionError, match=r"Insufficient credits.*402"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
@@ -355,7 +354,7 @@ class TestDeepgramErrorHandling:
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
         )
         t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(TranscriptionError, match="Rate limit.*429"):
+        with pytest.raises(TranscriptionError, match=r"Rate limit.*429"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")
@@ -372,7 +371,7 @@ class TestDeepgramErrorHandling:
         """SSL errors produce a message mentioning Zscaler/proxy."""
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = DeepgramTranscriber(api_key="key")
-        with pytest.raises(TranscriptionError, match="SSL.*Zscaler"):
+        with pytest.raises(TranscriptionError, match=r"SSL.*Zscaler"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.deepgram_provider.urllib.request.urlopen")

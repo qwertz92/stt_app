@@ -1,7 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
-from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -364,9 +364,13 @@ class HistoryDialog(QtWidgets.QDialog):
                         entries[change.current_start:change.current_stop],
                     )
                 elif change.kind == "update":
+                    # `update` is only produced for equally sized ranges
+                    # (see `diff_history_entry_lists`), so a mismatch here
+                    # would be a bug rather than a case to tolerate.
                     for row, entry in zip(
                         range(change.previous_start, change.previous_stop),
                         entries[change.current_start:change.current_stop],
+                        strict=True,
                     ):
                         self._populate_row(row, entry)
                 elif change.kind == "replace":

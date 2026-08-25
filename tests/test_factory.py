@@ -10,14 +10,14 @@ from stt_app.config import (
     language_modes_for_selection,
 )
 from stt_app.settings_store import AppSettings
-from stt_app.transcriber.factory import create_transcriber
-from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 from stt_app.transcriber.azure_provider import AzureLlmSpeechTranscriber
 from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
-from stt_app.transcriber.openai_provider import OpenAITranscriber
+from stt_app.transcriber.factory import create_transcriber
+from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
+from stt_app.transcriber.openai_provider import OpenAITranscriber
 
 
 def test_factory_local_returns_local_transcriber():
@@ -172,7 +172,7 @@ def test_every_local_runtime_can_change_its_language_without_being_recreated():
     which is exactly why the controller applies the language to the live
     instance instead of rebuilding it.
     """
-    for model_size in LOCAL_ONNX_MODEL_SIZES + ("small",):
+    for model_size in (*LOCAL_ONNX_MODEL_SIZES, "small"):
         settings = AppSettings(engine="local", model_size=model_size)
         transcriber = create_transcriber(settings)
 

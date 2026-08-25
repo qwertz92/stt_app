@@ -14,7 +14,8 @@ from __future__ import annotations
 
 import logging
 import sys
-from typing import Callable
+from collections.abc import Callable
+from typing import ClassVar
 
 # ``on_change`` kinds. "default": the Windows default capture device changed.
 # "topology": a device was added/removed or changed state (any data flow; the
@@ -33,14 +34,16 @@ if sys.platform == "win32":
         from ctypes.wintypes import DWORD, LPCWSTR
 
         import comtypes
-        from comtypes import COMMETHOD, COMObject, GUID, IUnknown
+        from comtypes import COMMETHOD, GUID, COMObject, IUnknown
 
         class _PROPERTYKEY(ctypes.Structure):
             _fields_ = [("fmtid", GUID), ("pid", DWORD)]
 
         class IMMNotificationClient(IUnknown):
             _iid_ = GUID("{7991EEC9-7E89-4D85-8390-6C703CEC60C0}")
-            _methods_ = [
+            # comtypes reads this plain class-level list when it builds
+            # the COM vtable.
+            _methods_: ClassVar = [
                 COMMETHOD(
                     [],
                     HRESULT,
@@ -81,7 +84,9 @@ if sys.platform == "win32":
             # Only Register/Unregister are called; the preceding methods exist
             # to keep the vtable layout correct.
             _iid_ = GUID("{A95664D2-9614-4F35-A746-DE8DB63617E6}")
-            _methods_ = [
+            # comtypes reads this plain class-level list when it builds
+            # the COM vtable.
+            _methods_: ClassVar = [
                 COMMETHOD(
                     [],
                     HRESULT,
@@ -124,7 +129,9 @@ if sys.platform == "win32":
         )
 
         class _NotificationClient(COMObject):
-            _com_interfaces_ = [IMMNotificationClient]
+
+            # list from the class dict when it builds the COM vtable.
+            _com_interfaces_ = [IMMNotificationClient]  # noqa: RUF012
 
             def __init__(
                 self,

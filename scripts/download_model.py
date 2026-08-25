@@ -42,7 +42,7 @@ import sys
 # Add src/ to path so we can import from the package.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from stt_app.config import (  # noqa: E402
+from stt_app.config import (
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
     LOCAL_NEMOTRON_MODEL_SIZES,
@@ -50,10 +50,10 @@ from stt_app.config import (  # noqa: E402
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
-from stt_app.model_download_coordinator import (  # noqa: E402
+from stt_app.model_download_coordinator import (
     run_coordinated_download,
 )
-from stt_app.transcriber.local_faster_whisper import (  # noqa: E402
+from stt_app.transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
     download_model_snapshot,
 )
@@ -229,10 +229,7 @@ def main() -> None:
             print(f"  {name:20s} -> {repo_id}{note}")
         return
 
-    if args.all:
-        models = list(MODELS.keys())
-    else:
-        models = [args.model]
+    models = list(MODELS.keys()) if args.all else [args.model]
 
     for name in models:
         download_model(name, args.output_dir)

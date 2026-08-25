@@ -155,9 +155,11 @@ class TestFunAsrBatch:
     def test_task_failed_raises(self):
         ws = FakeWS([_event("task-failed", error_message="bad request")])
         t = FunAsrTranscriber(api_key="sk")
-        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
-            with pytest.raises(TranscriptionError, match="task failed.*bad request"):
-                t.transcribe_batch(_wav_bytes())
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError, match=r"task failed.*bad request"),
+        ):
+            t.transcribe_batch(_wav_bytes())
 
     def test_progress_callback(self):
         ws = FakeWS([

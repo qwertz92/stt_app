@@ -56,11 +56,11 @@ def multipart_form_data(
         quoted_name = _quoted_header_parameter(name, label="field name")
         lines.extend(
             [
-                f"--{boundary}\r\n".encode("utf-8"),
+                f"--{boundary}\r\n".encode(),
                 (
                     f'Content-Disposition: form-data; name="{quoted_name}"\r\n\r\n'
-                ).encode("utf-8"),
-                f"{value}\r\n".encode("utf-8"),
+                ).encode(),
+                f"{value}\r\n".encode(),
             ]
         )
 
@@ -72,15 +72,15 @@ def multipart_form_data(
         raise ValueError("Multipart content type must be a non-empty single line.")
     lines.extend(
         [
-            f"--{boundary}\r\n".encode("utf-8"),
+            f"--{boundary}\r\n".encode(),
             (
                 f'Content-Disposition: form-data; name="{quoted_field_name}"; '
                 f'filename="{quoted_filename}"\r\n'
-            ).encode("utf-8"),
-            f"Content-Type: {safe_content_type}\r\n\r\n".encode("utf-8"),
+            ).encode(),
+            f"Content-Type: {safe_content_type}\r\n\r\n".encode(),
             data,
             b"\r\n",
-            f"--{boundary}--\r\n".encode("utf-8"),
+            f"--{boundary}--\r\n".encode(),
         ]
     )
 

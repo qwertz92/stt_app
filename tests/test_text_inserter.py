@@ -3,8 +3,8 @@ import ctypes
 import pytest
 
 from stt_app.text_inserter import (
-    ClipboardContentionError,
     INPUT,
+    ClipboardContentionError,
     TextInserter,
     TextInsertionError,
     TextMayHaveBeenPastedError,

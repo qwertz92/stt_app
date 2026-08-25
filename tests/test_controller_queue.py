@@ -8,14 +8,6 @@ signals directly.
 import logging
 from dataclasses import replace
 
-from PySide6 import QtCore, QtGui
-
-from stt_app.controller import _TranscriptionJob
-from stt_app.settings_store import AppSettings
-from stt_app.text_inserter import TextInsertionError
-from stt_app.transcript_history import TranscriptHistoryStore
-from stt_app.config import FALLBACK_HOTKEY
-
 from conftest import (
     FakeCapture,
     FakeOverlay,
@@ -25,6 +17,13 @@ from conftest import (
     FakeWindowFocusHelper,
     make_controller,
 )
+from PySide6 import QtCore, QtGui
+
+from stt_app.config import FALLBACK_HOTKEY
+from stt_app.controller import _TranscriptionJob
+from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
+from stt_app.transcript_history import TranscriptHistoryStore
 
 
 class DeferredExecutor:
@@ -35,7 +34,7 @@ class DeferredExecutor:
 
     def submit(self, fn, *args, **kwargs):
         self.calls.append((fn, args, kwargs))
-        return None
+        return
 
     def shutdown(self, wait=False, cancel_futures=False):
         pass
@@ -336,7 +335,7 @@ def test_hotkey_during_recording_start_stops_after_start(
 
 
 def test_history_mode_keeps_but_does_not_insert(monkeypatch, tmp_path):
-    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="history"
     )
 
@@ -356,7 +355,7 @@ def test_background_insert_failure_does_not_overwrite_clipboard(
     monkeypatch,
     tmp_path,
 ):
-    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
 
@@ -514,7 +513,7 @@ def test_canceled_job_progress_does_not_restore_processing_overlay(
 
 
 def test_transcription_canceled_signal_removes_job(monkeypatch, tmp_path):
-    controller, app, overlay, _inserter, _focus, history = _make_queue_controller(
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
         monkeypatch, tmp_path, mode="insert"
     )
 

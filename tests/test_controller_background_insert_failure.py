@@ -7,11 +7,6 @@ goes missing without the user noticing. These tests pin the reporting.
 
 import logging
 
-from stt_app.config import FALLBACK_HOTKEY, OVERLAY_ERROR_ACTION_INSERT
-from stt_app.settings_store import AppSettings
-from stt_app.text_inserter import TextInsertionError
-from stt_app.transcript_history import TranscriptHistoryStore
-
 from conftest import (
     FakeCapture,
     FakeOverlay,
@@ -22,6 +17,11 @@ from conftest import (
     make_controller,
 )
 from test_controller_queue import DeferredExecutor
+
+from stt_app.config import FALLBACK_HOTKEY, OVERLAY_ERROR_ACTION_INSERT
+from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
+from stt_app.transcript_history import TranscriptHistoryStore
 
 
 def _make_controller(monkeypatch, tmp_path, *, immediate_insert=False):

@@ -4,8 +4,8 @@ import io
 import logging
 import threading
 import wave
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 import numpy as np
 import sounddevice as sd
@@ -449,11 +449,10 @@ class AudioCapture:
         self._stream = None
         if self._warm_attached:
             self._warm_attached = False
-            if self._warm_stream is not None:
-                # Only detach; the shared warm stream keeps running for the
-                # next recording.
-                if active_callback is not None:
-                    self._warm_stream.detach(active_callback)
+            # Only detach; the shared warm stream keeps running for the
+            # next recording.
+            if self._warm_stream is not None and active_callback is not None:
+                self._warm_stream.detach(active_callback)
 
         if stream is not None:
             _close_input_stream(

@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterable
-from dataclasses import asdict, dataclass
-from dataclasses import replace
-from datetime import datetime, timezone
+from dataclasses import asdict, dataclass, replace
+from datetime import UTC, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
@@ -43,7 +42,7 @@ class TranscriptHistoryEntry:
     source_audio_path: str = ""
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "TranscriptHistoryEntry":
+    def from_dict(cls, raw: dict[str, Any]) -> TranscriptHistoryEntry:
         return cls(
             created_at=str(raw.get("created_at", "")),
             text=str(raw.get("text", "")),
@@ -64,8 +63,8 @@ class TranscriptHistoryEntry:
         mode: str,
         source_recording_id: str = "",
         source_audio_path: str = "",
-    ) -> "TranscriptHistoryEntry":
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ) -> TranscriptHistoryEntry:
+        timestamp = datetime.now(UTC).isoformat(timespec="seconds")
         return cls(
             created_at=timestamp,
             text=str(text or ""),
@@ -408,5 +407,5 @@ def format_history_timestamp(value: str, display_timezone: str = "local") -> str
     if dt.tzinfo is None:
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     if mode == DISPLAY_TIMEZONE_UTC:
-        return f"{dt.astimezone(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')} UTC"
+        return f"{dt.astimezone(UTC).strftime('%Y-%m-%d %H:%M:%S')} UTC"
     return dt.astimezone().strftime("%Y-%m-%d %H:%M:%S")

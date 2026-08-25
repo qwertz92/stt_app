@@ -130,7 +130,7 @@ def test_resolve_without_any_input_device_names_the_real_cause(monkeypatch):
     The default path used to fail deep inside PortAudio with "Error querying
     device -1", which told the user nothing.
     """
-    monkeypatch.setattr(audio_devices, "list_input_devices", lambda: [])
+    monkeypatch.setattr(audio_devices, "list_input_devices", list)
 
     with pytest.raises(audio_devices.NoInputDeviceError) as excinfo:
         resolve_input_device("")

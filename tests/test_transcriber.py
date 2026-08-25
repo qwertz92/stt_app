@@ -8,8 +8,8 @@ import wave
 
 import pytest
 
-from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber import local_faster_whisper
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
 

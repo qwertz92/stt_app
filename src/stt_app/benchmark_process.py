@@ -24,8 +24,9 @@ import subprocess
 import sys
 import tempfile
 import threading
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .benchmark_worker import BENCHMARK_EVENT_PREFIX
 from .local_benchmark import BenchmarkCancelled, BenchmarkCase, _case_from_dict
@@ -96,7 +97,7 @@ def _stream_benchmark_process(
     cancel_check: Callable[[], bool] | None,
 ) -> list[BenchmarkCase]:
     process = start_benchmark_process(options_path)
-    events: "queue.Queue[Any]" = queue.Queue()
+    events: queue.Queue[Any] = queue.Queue()
     stderr_tail: collections.deque[str] = collections.deque(maxlen=_STDERR_TAIL_LINES)
 
     stdout_reader = threading.Thread(
@@ -170,7 +171,7 @@ def _stream_benchmark_process(
     return cases
 
 
-def _pump_events(stream, events: "queue.Queue[Any]") -> None:
+def _pump_events(stream, events: queue.Queue[Any]) -> None:
     try:
         if stream is None:
             return
@@ -188,7 +189,7 @@ def _pump_events(stream, events: "queue.Queue[Any]") -> None:
         events.put(_EOF)
 
 
-def _pump_stderr(stream, tail: "collections.deque[str]") -> None:
+def _pump_stderr(stream, tail: collections.deque[str]) -> None:
     if stream is None:
         return
     for line in stream:

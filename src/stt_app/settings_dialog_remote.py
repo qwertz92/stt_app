@@ -2,19 +2,19 @@
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
 
 from PySide6 import QtCore, QtWidgets
 
 from .config import DEFAULT_ENGINE, DEFAULT_LANGUAGE_MODE
 from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
-    _emit_background_signal,
-    _remote_provider_label,
     _REMOTE_PROVIDER_GRID_SPACING_PX,
     _REMOTE_PROVIDERS,
+    _emit_background_signal,
+    _remote_provider_label,
     _WheelPassthroughComboBox,
 )
 
@@ -705,7 +705,7 @@ class _RemoteProvidersMixin:
         self.test_conn_button.setEnabled(True)
         self.test_conn_target_combo.setEnabled(True)
         self._active_connection_test_thread = None
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")  # noqa: DTZ005 (shown to the user in their own time zone)
         for provider, (provider_ok, provider_msg) in details.items():
             self._remember_provider_connection_test(
                 provider,

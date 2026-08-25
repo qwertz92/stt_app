@@ -25,33 +25,32 @@ from .config import (
     PARAKEET_MODEL_SIZE,
     VALID_DISPLAY_TIMEZONES,
     VALID_ENGINES,
+    VALID_INSERT_TARGETS,
     VALID_LANGUAGE_MODES,
     VALID_MODEL_SIZES,
     VALID_MODES,
     VALID_OVERLAY_CORNERS,
-    VALID_INSERT_TARGETS,
     VALID_PASTE_MODES,
     language_modes_for_selection,
     supports_streaming,
 )
 from .settings_dialog_helpers import (
-    LOCAL_MODEL_LABELS,
-    local_model_label,
-    local_model_precision_label,
-    model_choices_for_engine,
     _CONCURRENT_MODE_UI_CHOICES,
-    _INSERT_TARGET_LABELS,
     _ENGINE_LABELS,
     _HISTORY_TIMEZONE_LABELS,
+    _INSERT_TARGET_LABELS,
     _MODE_LABELS,
     _OVERLAY_CORNER_LABELS,
     _PASTE_MODE_LABELS,
     _REMOTE_MODEL_CHOICES,
     _REMOTE_MODEL_DEFAULTS,
+    LOCAL_MODEL_LABELS,
     _WheelPassthroughComboBox,
+    local_model_label,
+    local_model_precision_label,
+    model_choices_for_engine,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
-
 
 # Mirrors the Benchmark tab's ONNX Device choices so a device proven faster in a
 # benchmark can be selected for daily dictation with the same wording.

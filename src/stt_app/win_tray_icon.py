@@ -25,6 +25,7 @@ import ctypes
 import ctypes.wintypes as wintypes
 import logging
 import sys
+from typing import ClassVar
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -163,7 +164,7 @@ class Win32TrayApi:
     # instance is collected. One class, one dispatcher, per-window handlers.
     _class_registered = False
     _dispatcher: WNDPROC | None = None
-    _handlers: dict[int, object] = {}
+    _handlers: ClassVar[dict[int, object]] = {}
 
     def __init__(self) -> None:
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
@@ -463,18 +464,18 @@ class WindowsTrayIcon(QtCore.QObject):
         self._api.delete_icon(self._hwnd)
         self._visible = False
 
-    def setToolTip(self, tooltip: str) -> None:  # noqa: N802 - Qt API name
+    def setToolTip(self, tooltip: str) -> None:
         self._tooltip = str(tooltip or "")
         if self._visible:
             self._api.update_tooltip(self._hwnd, self._tooltip)
 
-    def setContextMenu(self, menu: QtWidgets.QMenu) -> None:  # noqa: N802
+    def setContextMenu(self, menu: QtWidgets.QMenu) -> None:
         self._context_menu = menu
 
-    def contextMenu(self) -> QtWidgets.QMenu | None:  # noqa: N802
+    def contextMenu(self) -> QtWidgets.QMenu | None:
         return self._context_menu
 
-    def showMessage(  # noqa: N802 - Qt API name
+    def showMessage(
         self,
         title: str,
         message: str,

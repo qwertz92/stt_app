@@ -9,9 +9,9 @@ quick "try the bigger model on this one" needs no detour through Settings.
 from __future__ import annotations
 
 import threading
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
-from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -24,13 +24,13 @@ from .config import (
     VALID_ENGINES,
     language_modes_for_selection,
 )
+from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _ENGINE_LABELS,
     _REMOTE_MODEL_DEFAULTS,
     model_choices_for_engine,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
-from .dialog_style import make_label_selectable
 from .ui_feedback import (
     BUTTON_FEEDBACK_STYLESHEET,
     reserve_button_width_for_texts,
@@ -353,7 +353,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
 
             try:
                 ok, text = transcribe(path, settings, _progress)
-            except Exception as exc:  # noqa: BLE001 - reported to the user
+            except Exception as exc:
                 ok, text = False, str(exc)
             _emit(self, "_run_finished", bool(ok), str(text))
 

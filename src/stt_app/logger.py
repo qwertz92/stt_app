@@ -44,7 +44,7 @@ class AppLogger:
         """
         lines: list[str] = []
         # Oldest backup first so the copied text stays chronological.
-        for path in self._rotated_log_paths() + [self._log_path]:
+        for path in [*self._rotated_log_paths(), self._log_path]:
             if not path.exists():
                 continue
             lines.extend(

@@ -2,9 +2,9 @@
 
 from dataclasses import replace
 
-import stt_app.controller as controller_module
-
 from conftest import FakeCapture, make_controller
+
+import stt_app.controller as controller_module
 
 
 class _StubWarmStream:

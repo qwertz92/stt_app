@@ -1,8 +1,8 @@
 """Shared widgets, constants and pure helpers for the settings dialog."""
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -11,20 +11,20 @@ from .config import (
     ASSEMBLYAI_MODELS,
     AZURE_SPEECH_MODELS,
     DEEPGRAM_MODELS,
-    DEFAULT_ENGINE,
-    LOCAL_ONNX_MODEL_PRECISION,
-    VALID_MODEL_SIZES,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_DEEPGRAM_MODEL,
     DEFAULT_ELEVENLABS_MODEL,
+    DEFAULT_ENGINE,
     DEFAULT_FUNASR_MODEL,
     DEFAULT_GROQ_MODEL,
     DEFAULT_OPENAI_MODEL,
     ELEVENLABS_MODELS,
     FUNASR_MODELS,
     GROQ_MODELS,
+    LOCAL_ONNX_MODEL_PRECISION,
     OPENAI_MODELS,
+    VALID_MODEL_SIZES,
 )
 from .local_benchmark import _format_seconds
 

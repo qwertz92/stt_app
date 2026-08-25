@@ -2,11 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-
 from typing import Protocol
 
-from .config import KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
 from .app_paths import insecure_keys_path
+from .config import KEYRING_SERVICE_NAME, LEGACY_KEYRING_SERVICE_NAMES
 from .persistence import atomic_write_json, lock_for_path
 
 
@@ -60,11 +59,11 @@ class KeyringSecretStore:
                 return {}
         if not isinstance(payload, dict):
             return {}
-        result: dict[str, str] = {}
-        for key, value in payload.items():
-            if isinstance(key, str) and isinstance(value, str) and value.strip():
-                result[key] = value
-        return result
+        return {
+            key: value
+            for key, value in payload.items()
+            if isinstance(key, str) and isinstance(value, str) and value.strip()
+        }
 
     def _write_insecure_store(self, payload: dict[str, str]) -> None:
         atomic_write_json(

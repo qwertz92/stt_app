@@ -28,7 +28,7 @@ class ModelDownloadProgress:
     @property
     def percent(self) -> int | None:
         fraction = self.fraction
-        return None if fraction is None else int(round(fraction * 100))
+        return None if fraction is None else round(fraction * 100)
 
 
 class ModelDownloadSpeedTracker:
@@ -135,7 +135,7 @@ def format_model_download_progress(
         progress_bar = ""
         if include_progress_bar and progress.fraction is not None:
             width = 18
-            filled = int(round(progress.fraction * width))
+            filled = round(progress.fraction * width)
             progress_bar = f" [{'#' * filled}{'.' * (width - filled)}]"
         detail = (
             f"Downloading '{progress.model_name}': approx. {progress.percent}%"

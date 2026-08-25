@@ -36,8 +36,8 @@ import re
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Callable
 
 # ModelScope is API-compatible enough for our narrow needs. The endpoint can be
 # overridden for testing or if a different mirror host becomes preferable.

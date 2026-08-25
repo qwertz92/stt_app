@@ -4,12 +4,12 @@ import csv
 import math
 import statistics
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from .benchmark_environment import BenchmarkEnvironment
-from .csv_safety import spreadsheet_safe_mapping
 from .config import (
     CANARY_MODEL_SIZE,
     LOCAL_MODEL_RUNTIME,
@@ -19,6 +19,7 @@ from .config import (
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     nemotron_provider_order,
 )
+from .csv_safety import spreadsheet_safe_mapping
 
 
 class BenchmarkCancelled(RuntimeError):
@@ -770,8 +771,8 @@ def _environment_csv_values(
 
 
 __all__ = [
-    "BenchmarkCase",
     "BenchmarkCancelled",
+    "BenchmarkCase",
     "BenchmarkRun",
     "_case_from_dict",
     "_format_number",

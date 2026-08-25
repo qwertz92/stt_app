@@ -367,7 +367,7 @@ def test_microphone_refresh_requests_controller_reenumeration(
     dialog: SettingsDialog,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("stt_app.audio_devices.list_input_devices", lambda: [])
+    monkeypatch.setattr("stt_app.audio_devices.list_input_devices", list)
     requests: list[bool] = []
     dialog.audio_device_refresh_requested.connect(
         lambda: requests.append(True)

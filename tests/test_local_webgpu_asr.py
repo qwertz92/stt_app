@@ -23,8 +23,8 @@ from stt_app.config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
 )
-from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber import local_webgpu_asr
+from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.local_webgpu_asr import (
     LocalOnnxWebGpuTranscriber,
     download_webgpu_model_snapshot,

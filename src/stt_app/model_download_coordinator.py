@@ -37,10 +37,10 @@ meaningless for both.
 
 from __future__ import annotations
 
+import logging
 import os
 import threading
 from collections.abc import Callable
-import logging
 from dataclasses import dataclass
 
 from .app_paths import appdata_root

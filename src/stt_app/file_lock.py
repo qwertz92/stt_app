@@ -90,7 +90,7 @@ class CrossProcessLock:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             # Opened for writing because Windows byte-range locks require write
             # access on the handle.
-            self._handle = open(self._path, "a+b")
+            self._handle = open(self._path, "a+b")  # noqa: SIM115 (held until release)
         except OSError as exc:
             raise FileLockUnavailable(
                 f"Could not open the lock file {self._path}: {exc}"

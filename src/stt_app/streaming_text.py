@@ -341,7 +341,11 @@ def _suffix_prefix_overlap_len(left: list[str], right: list[str]) -> int:
     for size in range(max_size, 0, -1):
         left_tail = left[-size:]
         right_head = right[:size]
-        if all(_stream_words_match(a, b) for a, b in zip(left_tail, right_head)):
+        # Equal length by construction: both are `size`-long slices.
+        if all(
+            _stream_words_match(a, b)
+            for a, b in zip(left_tail, right_head, strict=True)
+        ):
             return size
     return 0
 

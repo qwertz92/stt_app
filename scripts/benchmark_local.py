@@ -8,7 +8,7 @@ import os
 import sys
 import time
 from dataclasses import asdict
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,18 +18,6 @@ from stt_app.benchmark_environment import (
     BenchmarkEnvironment,
     collect_benchmark_environment,
 )
-from stt_app.local_benchmark import (
-    BenchmarkCase,
-    BenchmarkRun,  # noqa: F401 - re-exported for script tests and JSON helpers.
-    _case_from_dict,
-    _format_number,
-    _format_seconds,
-    normalize_webgpu_benchmark_devices,
-    run_benchmark_cases as _shared_run_benchmark_cases,
-    _safe_float,
-    _successful_cases as _shared_successful_cases,
-    _write_csv as _shared_write_csv,
-)
 from stt_app.config import (
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
@@ -37,6 +25,24 @@ from stt_app.config import (
     MODEL_ESTIMATED_SIZE_MB,
     MODEL_REPO_MAP,
     VALID_MODEL_SIZES,
+)
+from stt_app.local_benchmark import (
+    BenchmarkCase,
+    BenchmarkRun,  # noqa: F401 - re-exported for script tests and JSON helpers.
+    _case_from_dict,
+    _format_number,
+    _format_seconds,
+    _safe_float,
+    normalize_webgpu_benchmark_devices,
+)
+from stt_app.local_benchmark import (
+    _successful_cases as _shared_successful_cases,
+)
+from stt_app.local_benchmark import (
+    _write_csv as _shared_write_csv,
+)
+from stt_app.local_benchmark import (
+    run_benchmark_cases as _shared_run_benchmark_cases,
 )
 from stt_app.transcriber.local_faster_whisper import (
     download_model_snapshot,
@@ -554,7 +560,7 @@ def main() -> int:
         return 2
 
     print("local transcription benchmark")
-    print(f"timestamp: {datetime.now(timezone.utc).isoformat()}")
+    print(f"timestamp: {datetime.now(UTC).isoformat()}")
     print(f"audio: {audio_path.resolve()}")
     print(f"models: {', '.join(model_names)}")
     print(f"device: {args.device}")
@@ -587,7 +593,10 @@ def main() -> int:
     for model_name in model_names:
         if model_name in LOCAL_WEBGPU_MODEL_SIZES:
             for webgpu_device in webgpu_devices:
-                case_params.append(
+                # PERF401 wants list.extend; the appended value is a multi-field dict
+                # literal built from the enclosing loop variables, and a generator
+                # expression would only make it harder to read.
+                case_params.append(  # noqa: PERF401
                     {
                         "audio_path": audio_path,
                         "model_name": model_name,
@@ -627,7 +636,10 @@ def main() -> int:
             )
             continue
         for compute_type in compute_types:
-            case_params.append(
+            # PERF401 wants list.extend; the appended value is a multi-field dict
+            # literal built from the enclosing loop variables, and a generator
+            # expression would only make it harder to read.
+            case_params.append(  # noqa: PERF401
                 {
                     "audio_path": audio_path,
                     "model_name": model_name,
@@ -688,7 +700,7 @@ def main() -> int:
 
     if args.json_out is not None:
         payload = {
-            "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+            "timestamp_utc": datetime.now(UTC).isoformat(),
             "audio_path": str(audio_path.resolve()),
             "device": args.device,
             "onnx_devices": webgpu_devices,

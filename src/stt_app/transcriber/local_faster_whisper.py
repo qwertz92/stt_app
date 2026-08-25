@@ -9,29 +9,29 @@ import tempfile
 import threading
 import time
 import wave
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_LANGUAGE_MODE,
     DEFAULT_MODEL_SIZE,
-    DOC_MODELS_PATH,
     DEFAULT_SILENCE_GATE_ENABLED,
     DEFAULT_SILENCE_GATE_THRESHOLD,
+    DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
     FASTER_WHISPER_MODEL_SIZES,
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
     MODELS_WITHOUT_MODELSCOPE_MIRROR,
     STREAMING_ABORT_JOIN_TIMEOUT_S,
+    STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
     STREAMING_PARTIAL_INTERVAL_S,
     STREAMING_PARTIAL_MIN_AUDIO_S,
-    STREAMING_NEW_SEGMENT_MIN_SPEECH_S,
-    STREAMING_SPEECH_RUN_WINDOW_MS,
     STREAMING_PARTIAL_WINDOW_S,
+    STREAMING_SPEECH_RUN_WINDOW_MS,
     VALID_MODEL_SIZES,
     language_modes_for_selection,
     parse_custom_vocabulary,
@@ -233,11 +233,11 @@ def _directory_size_bytes(root: Path) -> int:
 
 def cached_model_paths(model_name: str, model_dir: str = "") -> list[Path]:
     """Return existing local directories that contain the model cache."""
-    existing: list[Path] = []
-    for candidate in _model_cache_dirs(model_name, model_dir):
-        if candidate.exists():
-            existing.append(candidate)
-    return existing
+    return [
+        candidate
+        for candidate in _model_cache_dirs(model_name, model_dir)
+        if candidate.exists()
+    ]
 
 
 def delete_cached_model(model_name: str, model_dir: str = "") -> int:

@@ -115,8 +115,7 @@ def create_ssl_context() -> ssl.SSLContext | None:
     ca_bundle = resolve_ca_bundle()
     if ca_bundle is None:
         return None
-    ctx = ssl.create_default_context(cafile=ca_bundle)
-    return ctx
+    return ssl.create_default_context(cafile=ca_bundle)
 
 
 def is_ssl_error(exc: Exception) -> bool:

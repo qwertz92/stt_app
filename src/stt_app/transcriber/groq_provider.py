@@ -20,7 +20,8 @@ from ..config import (
     language_modes_for_selection,
     parse_custom_vocabulary,
 )
-from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
+from ..ssl_utils import create_ssl_context
+from ..ssl_utils import is_ssl_error as _is_ssl_error
 from .base import (
     AudioInput,
     ITranscriber,

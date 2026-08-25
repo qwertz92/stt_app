@@ -362,10 +362,10 @@ MODEL_REPO_MAP: dict[str, str] = {
 }
 
 LOCAL_MODEL_RUNTIME: dict[str, str] = {
-    **{name: "faster-whisper" for name in FASTER_WHISPER_MODEL_SIZES},
-    **{name: "onnx-webgpu" for name in LOCAL_WEBGPU_MODEL_SIZES},
-    **{name: "onnxruntime-genai" for name in LOCAL_NEMOTRON_MODEL_SIZES},
-    **{name: "onnx-asr" for name in LOCAL_ONNX_ASR_MODEL_SIZES},
+    **dict.fromkeys(FASTER_WHISPER_MODEL_SIZES, "faster-whisper"),
+    **dict.fromkeys(LOCAL_WEBGPU_MODEL_SIZES, "onnx-webgpu"),
+    **dict.fromkeys(LOCAL_NEMOTRON_MODEL_SIZES, "onnxruntime-genai"),
+    **dict.fromkeys(LOCAL_ONNX_ASR_MODEL_SIZES, "onnx-asr"),
 }
 
 # Approximate model sizes for UI progress estimation.
@@ -1020,7 +1020,7 @@ LOCAL_ENGLISH_ONLY_MODELS = ("distil-large-v3.5",)
 LOCAL_BATCH_ONLY_MODELS = LOCAL_WEBGPU_MODEL_SIZES + LOCAL_ONNX_ASR_MODEL_SIZES
 # Models that must never expose Auto. Cohere needs an explicit language; Canary
 # would otherwise translate to English instead of transcribing.
-LOCAL_EXPLICIT_LANGUAGE_MODELS = LOCAL_WEBGPU_MODEL_SIZES + (CANARY_MODEL_SIZE,)
+LOCAL_EXPLICIT_LANGUAGE_MODELS = (*LOCAL_WEBGPU_MODEL_SIZES, CANARY_MODEL_SIZE)
 MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "cohere-transcribe-03-2026"): COHERE_LANGUAGE_MODES,
     ("local", "granite-4.0-1b-speech"): GRANITE_LANGUAGE_MODES,
@@ -1051,9 +1051,7 @@ def supports_streaming(engine: str, model_size: str = "") -> bool:
     normalized_model = str(model_size or "").strip()
     if normalized_engine not in STREAMING_ENGINES:
         return False
-    if normalized_engine == DEFAULT_ENGINE and normalized_model in LOCAL_BATCH_ONLY_MODELS:
-        return False
-    return True
+    return not (normalized_engine == DEFAULT_ENGINE and normalized_model in LOCAL_BATCH_ONLY_MODELS)
 
 
 def language_modes_for_selection(

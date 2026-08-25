@@ -11,8 +11,8 @@ from unittest.mock import patch
 import pytest
 
 from stt_app.transcriber.azure_provider import (
-    AzureLlmSpeechTranscriber,
     DEFAULT_AZURE_SPEECH_MODEL,
+    AzureLlmSpeechTranscriber,
     build_transcribe_url,
     normalize_azure_endpoint,
 )
@@ -215,21 +215,21 @@ class TestAzureBatchTranscription:
     def test_http_401_maps_to_auth_error(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(401)
         t = AzureLlmSpeechTranscriber(api_key="bad", endpoint=_ENDPOINT)
-        with pytest.raises(TranscriptionError, match="Authentication failed.*401"):
+        with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
     def test_http_404_maps_to_endpoint_error(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(404)
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
-        with pytest.raises(TranscriptionError, match="Endpoint not found.*404"):
+        with pytest.raises(TranscriptionError, match=r"Endpoint not found.*404"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
     def test_http_429_maps_to_rate_limit(self, mock_urlopen):
         mock_urlopen.side_effect = _http_error(429)
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
-        with pytest.raises(TranscriptionError, match="Rate limit exceeded.*429"):
+        with pytest.raises(TranscriptionError, match=r"Rate limit exceeded.*429"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.azure_provider.urllib.request.urlopen")
@@ -246,7 +246,7 @@ class TestAzureBatchTranscription:
     def test_ssl_error_message_contains_proxy_hint(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = AzureLlmSpeechTranscriber(api_key="k", endpoint=_ENDPOINT)
-        with pytest.raises(TranscriptionError, match="SSL.*proxy"):
+        with pytest.raises(TranscriptionError, match=r"SSL.*proxy"):
             t.transcribe_batch(b"RIFF fake")
 
     def test_missing_file_path_maps_to_friendly_error(self):

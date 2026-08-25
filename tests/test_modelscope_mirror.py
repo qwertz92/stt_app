@@ -523,7 +523,7 @@ def test_list_repo_files_exposes_checksum(monkeypatch):
         "_open",
         lambda *_args, **_kwargs: _FakeJsonResponse(payload),
     )
-    files = dict((entry[0], entry[2]) for entry in ms.list_repo_files("org/model"))
+    files = {entry[0]: entry[2] for entry in ms.list_repo_files("org/model")}
     assert files["model.bin"] == "a" * 64
     # A malformed digest is dropped rather than trusted.
     assert files["config.json"] is None

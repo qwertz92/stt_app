@@ -150,7 +150,7 @@ def test_ctrl_c_copies_every_selected_transcript(monkeypatch, tmp_path):
     dialog._on_selection_changed()
 
     dialog._table.setFocus()
-    QtGui.QShortcut  # the dialog installs one on the table
+    # The dialog installs a QtGui.QShortcut on the table.
     dialog._copy_shortcut.activated.emit()
     app.processEvents()
 

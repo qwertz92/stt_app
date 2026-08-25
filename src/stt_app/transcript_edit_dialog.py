@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from PySide6 import QtCore, QtWidgets
+
 from .dialog_style import make_label_selectable
 
 

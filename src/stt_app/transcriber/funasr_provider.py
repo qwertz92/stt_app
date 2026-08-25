@@ -35,7 +35,8 @@ from ..config import (
     FUNASR_WS_URL_INTL,
     language_modes_for_selection,
 )
-from ..ssl_utils import create_ssl_context, is_ssl_error as _is_ssl_error
+from ..ssl_utils import create_ssl_context
+from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import format_ssl_error_message, normalize_transcript_text
 from .base import (
     AudioInput,

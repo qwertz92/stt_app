@@ -61,7 +61,7 @@ def test_bump_validates_all_metadata_before_writing(tmp_path):
         encoding="utf-8",
     )
 
-    with pytest.raises(module.ReleaseVersionError, match="uv.lock"):
+    with pytest.raises(module.ReleaseVersionError, match=r"uv\.lock"):
         module.bump_version("0.2.2", root=tmp_path)
 
     assert module._read_project_version(tmp_path / "pyproject.toml") == "0.2.1"
@@ -109,7 +109,7 @@ def test_verify_release_rejects_metadata_mismatch(tmp_path):
     module = _load_release_version_module()
     _write_version_project(tmp_path, "0.2.1")
 
-    with pytest.raises(module.ReleaseVersionError, match="pyproject.toml"):
+    with pytest.raises(module.ReleaseVersionError, match=r"pyproject\.toml"):
         module.verify_release("v0.2.2", root=tmp_path)
 
 

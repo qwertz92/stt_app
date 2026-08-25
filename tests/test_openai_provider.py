@@ -145,7 +145,7 @@ class TestOpenAIBatchTranscription:
             url="", code=401, msg="Unauthorized", hdrs={}, fp=None
         )
         t = OpenAITranscriber(api_key="bad-key")
-        with pytest.raises(TranscriptionError, match="Authentication failed.*401"):
+        with pytest.raises(TranscriptionError, match=r"Authentication failed.*401"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
@@ -154,14 +154,14 @@ class TestOpenAIBatchTranscription:
             url="", code=429, msg="Too Many Requests", hdrs={}, fp=None
         )
         t = OpenAITranscriber(api_key="key")
-        with pytest.raises(TranscriptionError, match="Rate limit exceeded.*429"):
+        with pytest.raises(TranscriptionError, match=r"Rate limit exceeded.*429"):
             t.transcribe_batch(b"RIFF fake")
 
     @patch("stt_app.transcriber.openai_provider.urllib.request.urlopen")
     def test_ssl_error_message_contains_proxy_hint(self, mock_urlopen):
         mock_urlopen.side_effect = Exception("ssl: certificate_verify_failed")
         t = OpenAITranscriber(api_key="key")
-        with pytest.raises(TranscriptionError, match="SSL.*proxy"):
+        with pytest.raises(TranscriptionError, match=r"SSL.*proxy"):
             t.transcribe_batch(b"RIFF fake")
 
 

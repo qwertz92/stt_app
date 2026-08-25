@@ -8,9 +8,9 @@ limit persistence, limit widget updates).
 """
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
-from typing import Callable
 
 from PySide6 import QtWidgets
 
@@ -55,11 +55,11 @@ def prompt_import_overflow(
     box.setWindowTitle("Import exceeds history size")
     box.setIcon(QtWidgets.QMessageBox.Question)
     box.setText(
-        (
+        
             f"Import contains {import_count} entries, but only {free_slots} "
             f"slot{'s' if free_slots != 1 else ''} are free "
             f"(current max: {max_items})."
-        )
+        
     )
     box.setInformativeText(
         "Choose whether to import only free slots or switch to unlimited storage."
@@ -101,7 +101,7 @@ def run_history_export(
     suggested = (
         Path.home()
         / "Documents"
-        / f"dictation_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        / f"dictation_history_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"  # noqa: DTZ005 (local time names a file the user saves)
     )
     path, _filter = QtWidgets.QFileDialog.getSaveFileName(
         parent,

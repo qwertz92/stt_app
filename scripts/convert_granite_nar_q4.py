@@ -133,12 +133,12 @@ def make_algo_config(method: str, bits: int, block: int):
     import onnxruntime.quantization.matmul_nbits_quantizer as mq
     from onnxruntime.quantization.quant_utils import QuantFormat
 
-    kw = dict(
-        block_size=block,
-        bits=bits,
-        quant_format=QuantFormat.QOperator,  # -> com.microsoft.MatMulNBits
-        op_types_to_quantize=("MatMul",),
-    )
+    kw = {
+        "block_size": block,
+        "bits": bits,
+        "quant_format": QuantFormat.QOperator,  # -> com.microsoft.MatMulNBits
+        "op_types_to_quantize": ("MatMul",),
+    }
     if method == "hqq":
         return mq.HQQWeightOnlyQuantConfig(**kw)
     if method == "rtn":

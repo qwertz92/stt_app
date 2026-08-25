@@ -21,7 +21,9 @@ def start_model_download_process(
     # write enough diagnostics to fill an unread pipe. A seekable temporary
     # file keeps the polling callers non-blocking while preserving the final
     # error message for display.
-    error_log = tempfile.TemporaryFile(mode="w+t", encoding="utf-8")
+    error_log = tempfile.TemporaryFile(  # noqa: SIM115 (outlives this call)
+        mode="w+t", encoding="utf-8"
+    )
     try:
         process = subprocess.Popen(
             command,

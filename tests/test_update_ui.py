@@ -4,8 +4,8 @@ from pathlib import Path
 
 from PySide6 import QtWidgets
 
-from stt_app.update_checker import UpdateCheckResult
 from stt_app import update_ui
+from stt_app.update_checker import UpdateCheckResult
 from stt_app.update_ui import UPDATE_DIALOG_STYLESHEET, UpdateDownloadDialog
 
 

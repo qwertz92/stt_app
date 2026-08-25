@@ -6,9 +6,8 @@ from unittest.mock import patch
 
 import pytest
 
-from stt_app.transcriber.groq_provider import GroqTranscriber
 from stt_app.transcriber.base import TranscriptionError
-
+from stt_app.transcriber.groq_provider import GroqTranscriber
 
 # ---------------------------------------------------------------------------
 # Fake Groq client for injection
@@ -312,7 +311,7 @@ class TestGroqErrorHandling:
                 )()
 
         t = GroqTranscriber(api_key="key", groq_client_class=SSLClient)
-        with pytest.raises(TranscriptionError, match="SSL.*Zscaler"):
+        with pytest.raises(TranscriptionError, match=r"SSL.*Zscaler"):
             t.transcribe_batch(b"RIFF fake")
 
     def test_auth_error_gives_clear_message(self):
@@ -353,9 +352,11 @@ class TestGroqErrorHandling:
         t._model = "whisper-large-v3-turbo"
         t._groq_class = None
 
-        with patch.dict("sys.modules", {"groq": None}):
-            with pytest.raises(TranscriptionError, match="groq.*not installed"):
-                t._get_groq_class()
+        with (
+            patch.dict("sys.modules", {"groq": None}),
+            pytest.raises(TranscriptionError, match=r"groq.*not installed"),
+        ):
+            t._get_groq_class()
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +375,7 @@ class TestGroqConnectionTest:
     def test_no_whisper_models_still_ok(self):
         cls = _make_fake_groq_class(model_ids=["llama-3"])
         t = GroqTranscriber(api_key="key", groq_client_class=cls)
-        ok, msg = t.test_connection()
+        ok, _msg = t.test_connection()
         assert ok is True
 
     def test_connection_failure(self):

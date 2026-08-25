@@ -4,7 +4,7 @@ import csv
 import math
 import zipfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from xml.sax.saxutils import escape
@@ -41,7 +41,7 @@ class BenchmarkOptions:
     model_dir: str = ""
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "BenchmarkOptions":
+    def from_dict(cls, raw: dict[str, Any]) -> BenchmarkOptions:
         model_names = raw.get("model_names", [])
         webgpu_devices = raw.get("webgpu_devices", [])
         return cls(
@@ -95,7 +95,7 @@ class BenchmarkHistoryEntry:
     environment: BenchmarkEnvironment = field(default_factory=BenchmarkEnvironment)
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "BenchmarkHistoryEntry":
+    def from_dict(cls, raw: dict[str, Any]) -> BenchmarkHistoryEntry:
         cases_payload = raw.get("cases", [])
         cases = [
             _case_from_dict(item)
@@ -127,8 +127,8 @@ class BenchmarkHistoryEntry:
         options: BenchmarkOptions,
         cases: list[BenchmarkCase],
         environment: BenchmarkEnvironment | None = None,
-    ) -> "BenchmarkHistoryEntry":
-        timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    ) -> BenchmarkHistoryEntry:
+        timestamp = datetime.now(UTC).isoformat(timespec="seconds")
         return cls(
             created_at=timestamp,
             status=str(status or "completed"),
@@ -370,7 +370,10 @@ def _export_rows(entry: BenchmarkHistoryEntry) -> list[list[Any]]:
         status = "ok" if case.error is None else "error"
         runs = case.runs or [None]
         for run in runs:
-            rows.append(
+            # PERF401 wants list.extend here; the row is a 20-field literal
+            # built from two loop variables, and folding it into a generator
+            # expression makes it unreadable for no measurable gain.
+            rows.append(  # noqa: PERF401
                 [
                     entry.created_at,
                     entry.status,
@@ -462,10 +465,10 @@ def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
         "| " + " | ".join(_escape_markdown_cell(header) for header in headers) + " |",
         "| " + " | ".join("---" for _header in headers) + " |",
     ]
-    for row in rows:
-        lines.append(
-            "| " + " | ".join(_escape_markdown_cell(value) for value in row) + " |"
-        )
+    lines.extend(
+        "| " + " | ".join(_escape_markdown_cell(value) for value in row) + " |"
+        for row in rows
+    )
     return "\n".join(lines)
 
 

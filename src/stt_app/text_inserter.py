@@ -5,6 +5,7 @@ import ctypes.wintypes
 import threading
 import time
 from dataclasses import dataclass
+from typing import ClassVar
 
 from .config import (
     CLIPBOARD_SETTLE_S,
@@ -197,7 +198,7 @@ class Win32ClipboardBackend:
         )
 
     class _ClipboardContext:
-        def __init__(self, backend: "Win32ClipboardBackend") -> None:
+        def __init__(self, backend: Win32ClipboardBackend) -> None:
             self._backend = backend
 
         def __enter__(self):
@@ -219,7 +220,7 @@ class Win32ClipboardBackend:
             win32clipboard.CloseClipboard()
             return False
 
-    def _clipboard_opened(self) -> "Win32ClipboardBackend._ClipboardContext":
+    def _clipboard_opened(self) -> Win32ClipboardBackend._ClipboardContext:
         return self._ClipboardContext(self)
 
     def _send_wm_paste(self, target_hwnd: int | None = None) -> bool:
@@ -563,7 +564,8 @@ class HARDWAREINPUT(ctypes.Structure):
 
 
 class _INPUTUNION(ctypes.Union):
-    _fields_ = [
+    # ctypes' metaclass reads this plain class-level list from the class dict.
+    _fields_: ClassVar = [
         ("mi", MOUSEINPUT),
         ("ki", KEYBDINPUT),
         ("hi", HARDWAREINPUT),

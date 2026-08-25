@@ -307,7 +307,7 @@ def test_the_overlap_between_short_speech_and_transients_is_acknowledged():
         f"{knuckle_knock:.3f}s -- if these have genuinely separated, the "
         "threshold reasoning in config.py needs revisiting"
     )
-    assert STREAMING_NEW_SEGMENT_MIN_SPEECH_S <= shortest_word, (
+    assert shortest_word >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S, (
         "the cut is above the shortest realistic word, so that word is "
         "silently deleted after a pause"
     )

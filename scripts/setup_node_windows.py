@@ -64,7 +64,7 @@ def _existing_node() -> str | None:
     found = shutil.which("node") or shutil.which("node.exe")
     if found:
         return found
-    program_files = os.environ.get("ProgramFiles", r"C:\Program Files")
+    program_files = os.environ.get("PROGRAMFILES", r"C:\Program Files")
     candidate = Path(program_files) / "nodejs" / "node.exe"
     if candidate.is_file():
         return str(candidate)
@@ -129,7 +129,7 @@ def _download(version: str, dest_zip: Path) -> None:
                 )
             print(f"Verified SHA-256: {actual}")
             return
-        except Exception as exc:  # noqa: BLE001 (report and try the next mirror)
+        except Exception as exc:
             dest_zip.unlink(missing_ok=True)
             errors.append(f"{archive_url}: {exc}")
     raise RuntimeError(
@@ -157,12 +157,11 @@ def _set_node_path_env(node_exe: Path) -> bool:
         subprocess.run(
             ["setx", "STT_APP_NODE_PATH", str(node_exe)],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
         return True
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"WARNING: could not set STT_APP_NODE_PATH automatically: {exc}")
         return False
 
@@ -192,7 +191,7 @@ def configure_corporate_ca(target_dir: Path) -> None:
             for cert, encoding, _trust in ssl.enum_certificates(store):
                 if encoding == "x509_asn":
                     pems.append(ssl.DER_cert_to_PEM_cert(cert))
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
     if not pems:
         return
@@ -203,12 +202,11 @@ def configure_corporate_ca(target_dir: Path) -> None:
         subprocess.run(
             ["setx", "NODE_EXTRA_CA_CERTS", str(bundle)],
             check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             text=True,
         )
         print("Set NODE_EXTRA_CA_CERTS (takes effect for newly started programs).")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         print(f"WARNING: could not set NODE_EXTRA_CA_CERTS: {exc}")
         print(f'    setx NODE_EXTRA_CA_CERTS "{bundle}"')
 

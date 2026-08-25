@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import threading
-from datetime import datetime
+import time
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -16,8 +16,8 @@ from .config import (
 )
 from .dialog_style import styled_message_box
 from .settings_dialog_helpers import (
-    _emit_background_signal,
     _ENGINE_LABELS,
+    _emit_background_signal,
     _set_transcriber_progress_callback,
     _WheelPassthroughComboBox,
 )
@@ -356,7 +356,11 @@ class _ImportTabMixin:
         self._start_import_transcription(path)
 
     def _start_import_transcription(self, path: str) -> None:
-        self._import_progress_started_at = datetime.now()
+        # A monotonic clock, not the wall clock: this measures how long the
+        # transcription has been running, and a DST change or an NTP correction
+        # in the middle of a long import would otherwise jump the counter or
+        # make it negative.
+        self._import_progress_started_at = time.monotonic()
         self._set_import_progress("Preparing transcription...")
         self.import_result_label.setStyleSheet("color: #555;")
         self.import_result_text.clear()
@@ -452,9 +456,7 @@ class _ImportTabMixin:
         if self._import_progress_started_at is None:
             self.import_result_label.setText(message)
             return
-        elapsed = int(
-            (datetime.now() - self._import_progress_started_at).total_seconds()
-        )
+        elapsed = int(time.monotonic() - self._import_progress_started_at)
         self.import_result_label.setText(f"{message} ({elapsed}s)")
 
     def _on_import_transcription_progress(self, text: str) -> None:

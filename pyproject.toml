@@ -46,6 +46,55 @@ include = [
     "src/stt_app/assets/app_icon.ico",
 ]
 
+[tool.ruff]
+target-version = "py312"
+# Only feeds the fixers that need a width; E501 is deliberately not selected,
+# because reflowing existing code buys nothing and hides real findings in noise.
+line-length = 88
+
+[tool.ruff.lint]
+# Written out on purpose instead of inheriting ruff's defaults. A default set is
+# the vendor's opinion at one version and it moves: an upgrade would otherwise
+# either start hiding a finding or turn the gate red on unchanged code without
+# anyone having chosen the rule.
+select = [
+    "E4",   # pycodestyle: import placement
+    "E7",   # pycodestyle: statement-level errors
+    "E9",   # pycodestyle: syntax/IO errors
+    "F",    # pyflakes
+    "I",    # import order
+    "A",    # shadowed builtins
+    "B",    # bugbear: real defect patterns
+    "C4",   # comprehension misuse
+    "DTZ",  # naive datetime
+    "FLY",  # static string joins
+    "G",    # logging call misuse
+    "ICN",  # import conventions
+    "ISC",  # implicit string concatenation
+    "LOG",  # logging module misuse
+    "PERF", # obvious performance traps
+    "PIE",  # miscellaneous lints
+    "RET",  # return-path simplification
+    "RUF",  # ruff's own checks
+    "SIM",  # simplifications
+    "T20",  # stray print()
+    "UP",   # syntax outdated for the pinned Python
+]
+ignore = [
+    # SIM105: try/except/pass is the deliberate shape for best-effort Win32, Qt
+    # and filesystem teardown in this app, and nearly every one of those sites
+    # carries a comment naming what may fail. contextlib.suppress finds no
+    # defect here; it only moves that comment away from the call it explains.
+    "SIM105",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test doubles keep mutable class attributes as recording buffers, and a few
+# tests deliberately assert on a broad exception type or a False literal.
+"tests/**" = ["B011", "B017", "RUF012"]
+# These are command-line tools; their printed output is the interface.
+"scripts/**" = ["T20"]
+
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]

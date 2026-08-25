@@ -12,6 +12,7 @@ from .config import (
     DEFAULT_HISTORY_MAX_ITEMS,
     HISTORY_MAX_ITEMS_MAX,
 )
+from .dialog_style import make_label_selectable
 from .history_audio import resolve_history_audio_path, reveal_path_in_file_manager
 from .history_ui_actions import (
     format_history_count_label,
@@ -32,7 +33,6 @@ from .transcript_history import (
     recent_entries_change_plan,
 )
 from .ui_feedback import restore_vertical_scrollbar, set_button_feedback_state
-from .dialog_style import make_label_selectable
 
 
 class _HistoryTabMixin:
@@ -385,9 +385,13 @@ class _HistoryTabMixin:
                         entries[change.current_start : change.current_stop],
                     )
                 elif change.kind == "update":
+                    # `update` is only produced for equally sized ranges
+                    # (see `diff_history_entry_lists`), so a mismatch here
+                    # would be a bug rather than a case to tolerate.
                     for row, entry in zip(
                         range(change.previous_start, change.previous_stop),
                         entries[change.current_start : change.current_stop],
+                        strict=True,
                     ):
                         self._update_history_item(row, entry)
                 elif change.kind == "replace":

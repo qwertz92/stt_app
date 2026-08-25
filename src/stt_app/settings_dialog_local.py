@@ -15,6 +15,7 @@ from .config import (
     LOCAL_WEBGPU_MODEL_SIZES,
     VALID_MODEL_SIZES,
 )
+from .dialog_style import make_label_selectable
 from .local_model_download import (
     model_download_process_error,
     terminate_model_download_process,
@@ -31,7 +32,6 @@ from .settings_dialog_helpers import (
     _LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS,
     _emit_background_signal,
 )
-from .dialog_style import make_label_selectable
 from .ui_feedback import restore_vertical_scrollbar
 
 _logger = logging.getLogger(__name__)
@@ -1097,18 +1097,15 @@ class _LocalModelsMixin:
                     interest_already_registered=True,
                 )
             except ModelDownloadCanceled:
-                result = ("canceled", "", 0, 0)
-                return result
+                return ("canceled", "", 0, 0)
             if outcome == ACQUIRE_JOINED:
                 # The preload path finished this exact model while we waited.
-                result = ("success", "", 0, 0)
-                return result
+                return ("success", "", 0, 0)
 
             acquired = True
             with self._local_model_download_lock:
                 self._local_model_download_active = (model_name, model_dir)
-            result = self._run_download_worker(model_name, model_dir)
-            return result
+            return self._run_download_worker(model_name, model_dir)
         finally:
             with self._local_model_download_lock:
                 if self._local_model_download_active == (model_name, model_dir):
@@ -1418,9 +1415,7 @@ class _LocalModelsMixin:
         self._local_model_download_bar_shown = False
         if success:
             color = "#1b5e20"
-        elif text.startswith("Completed with errors"):
-            color = "#b26a00"
-        elif text.startswith("Download canceled"):
+        elif text.startswith(("Completed with errors", "Download canceled")):
             color = "#b26a00"
         else:
             color = "#b71c1c"

@@ -69,7 +69,7 @@ def run_from_options(options: dict) -> int:
     except BenchmarkCancelled:
         _emit({"event": "canceled"})
         return 0
-    except Exception as exc:  # noqa: BLE001 - reported to the parent verbatim
+    except Exception as exc:
         _emit({"event": "error", "message": str(exc)})
         return 1
     _emit({"event": "done"})

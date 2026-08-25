@@ -9,6 +9,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 from . import __version__
 from .app_icon import load_app_icon
+from .app_paths import appdata_root
 from .config import (
     APP_DISPLAY_NAME,
     APP_LOGGER_NAME,
@@ -18,15 +19,15 @@ from .config import (
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
     SESSION_START_LOG_MARKER,
 )
-from .history_dialog import HistoryDialog
 from .controller import DictationController
 from .dialog_style import install_selectable_message_text, styled_message_box
-from .model_download_coordinator import request_download_shutdown
+from .history_dialog import HistoryDialog
 from .hotkey import HotkeyManager, QtHotkeyEventFilter, QtPowerResumeEventFilter
 from .last_recording_store import LastRecordingStore
 from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process
 from .logger import AppLogger
+from .model_download_coordinator import request_download_shutdown
 from .overlay_ui import OverlayUI
 from .secret_store import KeyringSecretStore
 from .settings_dialog import SettingsDialog
@@ -37,7 +38,6 @@ from .transcript_history import TranscriptHistoryStore
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
 from .win_tray_icon import create_tray_icon
-from .app_paths import appdata_root
 
 
 def _set_windows_app_user_model_id() -> None:

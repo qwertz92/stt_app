@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -25,7 +25,7 @@ _CURRENT_SCHEMA_VERSION = 1
 
 
 def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    return datetime.now(UTC).isoformat(timespec="seconds")
 
 
 @dataclass(slots=True)
@@ -44,7 +44,7 @@ class LastRecordingState:
     completed_at: str = ""
 
     @classmethod
-    def from_dict(cls, raw: dict[str, Any]) -> "LastRecordingState":
+    def from_dict(cls, raw: dict[str, Any]) -> LastRecordingState:
         status = str(raw.get("status", "captured")).strip().lower() or "captured"
         if status not in RECOVERABLE_RECORDING_STATUSES | {"completed"}:
             status = "captured"

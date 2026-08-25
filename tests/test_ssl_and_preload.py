@@ -28,7 +28,6 @@ from stt_app.transcriber.local_faster_whisper import (
     find_cached_models,
 )
 
-
 # ---------------------------------------------------------------------------
 # SSL error detection
 # ---------------------------------------------------------------------------
@@ -674,8 +673,9 @@ class TestAssemblyAISSLDetection:
 
 class TestAssemblyAITestConnection:
     def test_successful_connection(self):
-        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
         from unittest.mock import MagicMock
+
+        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 
         t = AssemblyAITranscriber(api_key="test-key")
 
@@ -690,8 +690,9 @@ class TestAssemblyAITestConnection:
         assert "OK" in msg
 
     def test_auth_failure(self):
-        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
         import urllib.error
+
+        from stt_app.transcriber.assemblyai_provider import AssemblyAITranscriber
 
         t = AssemblyAITranscriber(api_key="bad-key")
 

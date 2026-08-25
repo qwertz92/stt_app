@@ -28,7 +28,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
     "check your internet connection". These five were each probed against the
     ModelScope API on 2026-08-18 and answered 404.
     """
-    assert MODELS_WITHOUT_MODELSCOPE_MIRROR == frozenset(
+    assert frozenset(
         {
             "distil-large-v3.5",
             "parakeet-tdt-0.6b-v3",
@@ -36,7 +36,7 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
             "granite-speech-4.1-2b-plus",
             "granite-speech-4.1-2b-nar",
         }
-    )
+    ) == MODELS_WITHOUT_MODELSCOPE_MIRROR
 
 
 @pytest.mark.parametrize(
