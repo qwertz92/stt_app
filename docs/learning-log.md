@@ -3145,3 +3145,49 @@ plus the download lock finally made real.
   still transcribing, so it is narrow, but it is not theoretical. The fix keeps
   the fast lane only while no older job is pending; otherwise the finalize
   joins the shared queue, exactly as before the lane existed.
+- **A repository sweep, after being asked for "a serious list, or fix it".**
+  What it found, in descending order of how badly the docs or the gate had
+  drifted from the code:
+  - **Ruff had no configuration at all**, so the CI gate checked pyflakes plus a
+    few pycodestyle errors and nothing else. With an explicit rule set it found,
+    among 247 findings, three that were real: the Import Audio elapsed counter
+    measured wall-clock time (a DST or NTP correction would jump or reverse it),
+    three `zip()` calls silently truncated on a length mismatch they in fact
+    cannot have, and a test bound loop variables through closures. This is the
+    concrete case for writing the rule set out instead of inheriting defaults.
+  - **`distil-large-v3.5` was listed at 756 MB; its `model.bin` is 1513 MB.**
+    Because the download percentage is derived from that table, the bar read
+    "approx. 100%" halfway through and then kept counting. Every entry is now
+    measured against the repository with the download allow-patterns applied;
+    `medium`, `tiny`, `base` and `large-v3` were off by 4-9% as well, and the
+    same wrong numbers appeared in four documents.
+  - **The docs said Parakeet was "not implemented"** in `models.md` 200 lines
+    below a table listing it as the fastest local model, in the README's
+    document index, and as a "Status" line in its own evaluation note. All three
+    were written before the onnx-asr engine existed and were only ever true of
+    the *NeMo* path.
+  - **The benchmark could not measure a setting the General tab offers.**
+    Nemotron takes an ONNX device policy in daily use, but the benchmark
+    expanded device targets only for the `onnx-webgpu` runtime, so "All explicit
+    targets" ran it once on `auto`.
+  - **Canary + language "Auto" failed only when its turn came.** The runner
+    refuses that combination for a good reason (it would translate instead of
+    transcribe), but with several models selected the whole run finished before
+    the user could see why one of them had failed. Reported from a real
+    benchmark run on another machine, and reproduced from the code alone.
+- **A credential change must not unload a local model.** The provider-key signal
+  added earlier that day invalidated the cached runtime unconditionally, so
+  saving an OpenAI key threw away a multi-gigabyte faster-whisper model that
+  reads no API key at all. Caught by the user asking why that would ever be
+  necessary. The signal now carries the affected provider names and the
+  invalidation is scoped to the engine that is actually loaded. Worth
+  remembering as a pattern: a blunt invalidation looks harmless while the code
+  around it is equally blunt, and only becomes visible once the surrounding
+  logic gets precise.
+- **Download parallelism was measured rather than argued.** The undocumented
+  `max_workers=2` for ONNX snapshots looked like a throttle worth raising. It is
+  not: every one of these models is one dominant weight file (Parakeet 652 of
+  671 MB), so file-level parallelism has nothing to distribute. Four runs on a
+  ~70 Mbit/s line, ABBA-ordered against CDN warming: 2 workers 76.7/77.6 s, 8
+  workers 76.6/76.4 s. The value stays at 2, now with the measurement written
+  next to it so it is not re-litigated.

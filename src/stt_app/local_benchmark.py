@@ -423,6 +423,36 @@ def _run_webgpu_case(**kwargs) -> BenchmarkCase:
     return _run_onnx_case(**kwargs)
 
 
+def benchmark_device_targets(
+    runtime: str,
+    requested: list[str],
+    fallback_device: str,
+) -> list[str]:
+    """Device targets to measure for one model.
+
+    ONNX/WebGPU models run once per requested target. Nemotron sits in the same
+    ONNX Device picker in Settings, so it has to be measurable on a pinned
+    device too — otherwise the General tab offers a choice the benchmark can
+    never compare, and "All explicit targets" silently measured it on `auto`
+    only. It runs on ONNX Runtime GenAI, which has no WebGPU provider, so
+    several requested targets resolve to the same provider order; each is
+    renamed to what it will actually run on and duplicates are dropped, because
+    reporting one configuration twice under two names is worse than not
+    offering it.
+    """
+    if runtime == "onnx-webgpu":
+        return list(requested)
+    if runtime != "onnxruntime-genai":
+        return [fallback_device]
+    targets: list[str] = []
+    for target in requested:
+        order = nemotron_provider_order(target)
+        resolved = target if len(order) > 1 else order[0]
+        if resolved not in targets:
+            targets.append(resolved)
+    return targets or [fallback_device]
+
+
 def run_benchmark_cases(
     *,
     audio_path: str | Path,
@@ -445,19 +475,21 @@ def run_benchmark_cases(
     cases: list[BenchmarkCase] = []
     webgpu_device_targets = normalize_webgpu_benchmark_devices(webgpu_devices)
     total_cases = sum(
-        len(webgpu_device_targets)
-        if LOCAL_MODEL_RUNTIME.get(model_name) == "onnx-webgpu"
-        else 1
+        len(
+            benchmark_device_targets(
+                LOCAL_MODEL_RUNTIME.get(model_name, ""),
+                webgpu_device_targets,
+                device,
+            )
+        )
         for model_name in model_names
     )
     case_index = 0
     for model_name in model_names:
         _raise_if_canceled(cancel_check)
         runtime = LOCAL_MODEL_RUNTIME.get(model_name, "")
-        device_targets = (
-            webgpu_device_targets
-            if runtime == "onnx-webgpu"
-            else [device]
+        device_targets = benchmark_device_targets(
+            runtime, webgpu_device_targets, device
         )
         for device_target in device_targets:
             _raise_if_canceled(cancel_check)

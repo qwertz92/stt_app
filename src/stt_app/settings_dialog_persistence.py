@@ -12,7 +12,6 @@ from .config import (
     DEFAULT_AZURE_SPEECH_MODEL,
     DEFAULT_CANCEL_HOTKEY,
     DEFAULT_COMPLETION_BEEP_TONE,
-    DEFAULT_LOCAL_ONNX_DEVICE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_CUSTOM_VOCABULARY,
     DEFAULT_DEEPGRAM_MODEL,
@@ -21,12 +20,13 @@ from .config import (
     DEFAULT_ENGINE,
     DEFAULT_FUNASR_MODEL,
     DEFAULT_HOTKEY,
+    DEFAULT_INSERT_TARGET,
     DEFAULT_LANGUAGE_MODE,
+    DEFAULT_LOCAL_ONNX_DEVICE,
     DEFAULT_MODE,
     DEFAULT_OVERLAY_CORNER,
-    DEFAULT_INSERT_TARGET,
-    DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_PASTE_MODE,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_START_BEEP_TONE,
 )
 from .hotkey import parse_hotkey
@@ -326,7 +326,14 @@ class _PersistenceMixin:
                 states[provider] = False
         return states
 
-    def _persist_provider_key_changes(self) -> tuple[dict[str, bool], list[str], bool]:
+    def _persist_provider_key_changes(
+        self,
+    ) -> tuple[dict[str, bool], list[str], list[str]]:
+        """Persist pending key edits and report which providers changed.
+
+        The provider names matter, not just "something changed": the controller
+        only has to rebuild a runtime that actually uses the changed key.
+        """
         errors: list[str] = []
         option_error = self._apply_secret_store_options()
         if option_error is not None:
@@ -334,8 +341,8 @@ class _PersistenceMixin:
             states = self._stored_provider_key_states()
             self._refresh_provider_key_statuses()
             self._update_import_engine_note()
-            return states, errors, False
-        changed = False
+            return states, errors, []
+        changed: list[str] = []
         pending_clear = set(self._provider_pending_clear)
 
         for provider in _REMOTE_API_KEY_PROVIDERS:
@@ -347,7 +354,7 @@ class _PersistenceMixin:
             if value:
                 try:
                     self._secret_store.set_api_key(provider, value)
-                    changed = True
+                    changed.append(provider)
                     key_field.clear()
                     self._provider_pending_clear.discard(provider)
                     self._clear_provider_connection_test(provider)
@@ -356,7 +363,7 @@ class _PersistenceMixin:
             elif provider in pending_clear:
                 try:
                     self._secret_store.delete_api_key(provider)
-                    changed = True
+                    changed.append(provider)
                     self._provider_pending_clear.discard(provider)
                     self._clear_provider_connection_test(provider)
                 except Exception as exc:
@@ -390,12 +397,14 @@ class _PersistenceMixin:
             # Report the credential change before any settings signal below, so
             # the controller drops a transcriber holding the previous key even
             # when the rest of this save fails.
-            self.provider_keys_changed.emit()
+            self.provider_keys_changed.emit(list(changed))
         metadata_changed = (
             self.insecure_key_storage_checkbox.isChecked()
             != bool(getattr(self._loaded_settings, "allow_insecure_key_storage", False))
         )
-        self._show_key_storage_result(key_storage_errors, changed or metadata_changed)
+        self._show_key_storage_result(
+            key_storage_errors, bool(changed) or metadata_changed
+        )
         if key_storage_errors:
             # Credential backends are not transactional. If another provider
             # was updated before a later operation failed, invalidate cached
@@ -732,9 +741,11 @@ class _PersistenceMixin:
             self._persist_provider_key_changes()
         )
         if key_storage_changed:
-            self.provider_keys_changed.emit()
+            self.provider_keys_changed.emit(list(key_storage_changed))
         if key_storage_errors or key_storage_changed:
-            self._show_key_storage_result(key_storage_errors, key_storage_changed)
+            self._show_key_storage_result(
+                key_storage_errors, bool(key_storage_changed)
+            )
         if key_storage_errors:
             if key_storage_changed:
                 self.settings_changed.emit()

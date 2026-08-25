@@ -336,9 +336,9 @@ def test_provider_connection_test_result_persists_between_dialogs(tmp_path):
         provider_connection_test_store=ProviderConnectionTestStore(store_path),
     )
 
-    assert "Last test (2026-06-19 17:30:00): \u2713 OpenAI OK" == (
+    assert (
         reopened._provider_last_test_labels["openai"].text()
-    )
+    ) == "Last test (2026-06-19 17:30:00): \u2713 OpenAI OK"
     assert "color: #1b5e20" in reopened._provider_last_test_labels[
         "openai"
     ].styleSheet()
@@ -486,7 +486,9 @@ def test_saving_an_api_key_reports_the_credential_change_separately():
         app_logger=_FakeLogger(),
     )
     order: list[str] = []
-    dialog.provider_keys_changed.connect(lambda: order.append("keys"))
+    reported: list[list[str]] = []
+    dialog.provider_keys_changed.connect(lambda p: order.append("keys"))
+    dialog.provider_keys_changed.connect(reported.append)
     dialog.settings_changed.connect(lambda: order.append("settings"))
 
     dialog.openai_key_edit.setText("replacement-key")
@@ -496,6 +498,9 @@ def test_saving_an_api_key_reports_the_credential_change_separately():
     # The credential signal must come first: the controller has to drop the
     # stale transcriber before it decides whether a preload is needed.
     assert order == ["keys", "settings"]
+    # The controller only rebuilds a runtime that uses the changed key, so the
+    # provider name has to travel with the signal.
+    assert reported == [["openai"]]
     _ = app
 
 
@@ -509,7 +514,7 @@ def test_saving_settings_without_a_key_change_reports_no_credential_change():
         app_logger=_FakeLogger(),
     )
     keys_changed: list[bool] = []
-    dialog.provider_keys_changed.connect(lambda: keys_changed.append(True))
+    dialog.provider_keys_changed.connect(lambda p: keys_changed.append(p))
 
     dialog._save_api_keys_only()
 

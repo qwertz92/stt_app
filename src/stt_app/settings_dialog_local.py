@@ -96,9 +96,10 @@ class _LocalModelsMixin:
             "Offline mode (use cached models only, no internet)"
         )
         self.offline_mode_checkbox.setToolTip(
-            "When enabled, sets local_files_only=True so faster-whisper never "
-            "attempts to download models. The model must already be cached "
-            "locally (see README for offline setup instructions)."
+            "When enabled, no local engine downloads anything: faster-whisper, "
+            "Nemotron, Parakeet/Canary and the ONNX/WebGPU models all load from "
+            "the cache only. The selected model must already be present (see "
+            "README for offline setup instructions)."
         )
         form.addRow("", self.offline_mode_checkbox)
 

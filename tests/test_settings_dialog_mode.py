@@ -15,6 +15,7 @@ from stt_app.benchmark_history import (
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
+from stt_app.config import CANARY_MODEL_SIZE
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
@@ -2063,7 +2064,7 @@ def test_failed_key_set_and_delete_are_not_reported_as_changes():
 
     _states, errors, changed = dialog._persist_provider_key_changes()
 
-    assert changed is False
+    assert changed == []
     assert errors == ["OpenAI: set blocked"]
     assert dialog.openai_key_edit.text() == "new-key"
 
@@ -2071,7 +2072,7 @@ def test_failed_key_set_and_delete_are_not_reported_as_changes():
     dialog._mark_provider_key_for_clear("groq")
     _states, errors, changed = dialog._persist_provider_key_changes()
 
-    assert changed is False
+    assert changed == []
     assert errors == ["Groq delete: delete blocked"]
     assert "groq" in dialog._provider_pending_clear
     _ = app
@@ -2850,7 +2851,10 @@ def test_benchmark_controls_explain_their_options():
     )
 
     assert "fastest" in dialog.benchmark_compute_type_combo.toolTip()
-    assert "Cohere and Granite" in dialog.benchmark_webgpu_device_combo.toolTip()
+    # Nemotron is measured on these targets too, so the tooltip must name it.
+    assert (
+        "Cohere, Granite and Nemotron" in dialog.benchmark_webgpu_device_combo.toolTip()
+    )
     assert "reduce noise" in dialog.benchmark_runs_spin.toolTip()
     assert "Beam size controls decoding breadth" in dialog.benchmark_beam_size_spin.toolTip()
     assert "fixed language removes one source of model guesswork" in dialog.benchmark_language_combo.toolTip()
@@ -3130,11 +3134,11 @@ def test_settings_dialog_show_respects_screen_bounds_and_remote_tab_width():
 
     dialog.show()
     app.processEvents()
-    remote_index = [
+    remote_index = next(
         index
         for index in range(dialog.tabs.count())
         if dialog.tabs.tabText(index) == "Remote"
-    ][0]
+    )
     dialog.tabs.setCurrentIndex(remote_index)
     app.processEvents()
     remote_tab = dialog.tabs.currentWidget()
@@ -3951,6 +3955,46 @@ def test_a_single_waiting_download_shows_no_place_number():
     row = _local_model_row_text(dialog, "small")
     assert "Queued" in row
     assert "of 1" not in row
+
+    dialog.deleteLater()
+    _ = app
+
+
+def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(tmp_path):
+    """Canary would translate instead of transcribing, so Auto must be refused.
+
+    The runner already rejects this per model, but only once that model's turn
+    comes: with several models selected the whole benchmark ran to the end
+    before the user saw why exactly one of them had failed.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF0000WAVE")
+    dialog.benchmark_audio_edit.setText(str(audio))
+    dialog._selected_benchmark_model_names = lambda: ["small", CANARY_MODEL_SIZE]
+    started: list[bool] = []
+    dialog._benchmark_options_from_widgets = lambda **_kw: started.append(True)
+    dialog.benchmark_language_combo.setCurrentIndex(
+        dialog.benchmark_language_combo.findData("auto")
+    )
+
+    dialog._run_local_benchmark()
+
+    assert started == [], "the benchmark started despite the unusable language"
+    assert "Canary cannot detect the language" in dialog.benchmark_status_label.text()
+
+    # With an explicit language the same selection is allowed through.
+    dialog.benchmark_language_combo.setCurrentIndex(
+        dialog.benchmark_language_combo.findData("de")
+    )
+    dialog._run_local_benchmark()
+
+    assert started == [True]
 
     dialog.deleteLater()
     _ = app

@@ -8,74 +8,75 @@ import re
 import subprocess
 import threading
 import time
-from datetime import datetime
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import datetime
 from pathlib import Path
-from typing import Callable
+from typing import NamedTuple
 
 from PySide6 import QtCore, QtGui
 
-from .app_paths import resolve_recordings_dir
 from . import audio_devices
+from .app_paths import resolve_recordings_dir
 from .audio_capture import AudioCapture, AudioCaptureError, WarmMicrophoneStream
 from .audio_device_listener import AudioDeviceChangeListener
 from .config import (
-    AUDIO_CHANNELS,
     AUDIO_CAPTURE_FIRST_CALLBACK_TIMEOUT_MS,
+    AUDIO_CHANNELS,
     AUDIO_DEVICE_CHANGE_SETTLE_MS,
     AUDIO_SAMPLE_RATE,
     CONCURRENT_TRANSCRIPTION_MODE_CANCEL,
     CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
     CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     DEFAULT_CANCEL_HOTKEY,
+    DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_CONCURRENT_TRANSCRIPTION_MODE,
     DEFAULT_ENGINE,
     DEFAULT_INSERT_TARGET,
     DEFAULT_SILENCE_GATE_THRESHOLD,
-    INSERT_TARGET_CURRENT_WINDOW,
-    DEFAULT_COMPLETION_BEEP_TONE,
     DEFAULT_START_BEEP_TONE,
     DOC_MODELS_PATH,
     FALLBACK_HOTKEYS,
     HOTKEY_RECLAIM_INTERVAL_MS,
+    INSERT_TARGET_CURRENT_WINDOW,
     LOCAL_WEBGPU_MODEL_SIZES,
-    STREAMING_ABORT_ON_FOCUS_CHANGE,
-    STREAMING_CONNECT_JOIN_TIMEOUT_S,
-    STREAMING_LIVE_INSERT_RETRY_LIMIT,
-    STREAMING_PRECONNECT_BUFFER_MAX_BYTES,
-    STREAMING_ABORT_BEEP_DURATION_MS,
-    STREAMING_ABORT_BEEP_HZ,
-    STREAMING_BEEP_ON_ABORT,
-    STREAMING_FOCUS_POLL_MS,
-    STREAMING_LIVE_INSERT_ENABLED,
-    STREAMING_OVERLAY_MAX_CHARS,
-    STREAMING_REVISION_WORD_WINDOW,
-    STREAMING_STABLE_WORD_GUARD,
-    OVERLAY_OPACITY_MAX_PERCENT,
-    OVERLAY_OPACITY_MIN_PERCENT,
-    OVERLAY_RESULT_REVEAL_MS,
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
     OVERLAY_ERROR_REVEAL_MS,
     OVERLAY_NOTICE_MS,
+    OVERLAY_OPACITY_MAX_PERCENT,
+    OVERLAY_OPACITY_MIN_PERCENT,
+    OVERLAY_RESULT_REVEAL_MS,
+    STREAMING_ABORT_BEEP_DURATION_MS,
+    STREAMING_ABORT_BEEP_HZ,
+    STREAMING_ABORT_ON_FOCUS_CHANGE,
+    STREAMING_BEEP_ON_ABORT,
+    STREAMING_CONNECT_JOIN_TIMEOUT_S,
+    STREAMING_FOCUS_POLL_MS,
+    STREAMING_LIVE_INSERT_ENABLED,
+    STREAMING_LIVE_INSERT_RETRY_LIMIT,
+    STREAMING_OVERLAY_MAX_CHARS,
+    STREAMING_PRECONNECT_BUFFER_MAX_BYTES,
+    STREAMING_REVISION_WORD_WINDOW,
+    STREAMING_STABLE_WORD_GUARD,
     VAD_ENERGY_THRESHOLD_MIN,
-    VALID_START_BEEP_TONES,
     VAD_MAX_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
+    VALID_START_BEEP_TONES,
     language_modes_for_selection,
     supports_streaming,
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError, parse_hotkey
 from .last_recording_store import LastRecordingStore
-from .model_download_coordinator import (
-    ACQUIRE_JOINED,
-    ModelDownloadCanceled,
-    model_download_coordinator,
-)
 from .local_model_download import (
     model_download_process_error,
     start_model_download_process,
     terminate_model_download_process,
+)
+from .model_download_coordinator import (
+    ACQUIRE_JOINED,
+    ModelDownloadCanceled,
+    model_download_coordinator,
 )
 from .model_download_progress import (
     ModelDownloadSpeedTracker,
@@ -92,9 +93,9 @@ from .text_inserter import (
     TextInsertionError,
     TextMayHaveBeenPastedError,
 )
-from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .transcriber import create_transcriber
 from .transcriber.base import TranscriptionCanceled, TranscriptionError
+from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .vad import EnergyVad, measure_peak_windowed_rms
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
 
@@ -171,7 +172,7 @@ class _TranscriberRuntimeLease:
 
     def __init__(
         self,
-        controller: "DictationController",
+        controller: DictationController,
         transcriber: object,
         *,
         owns_shared_lock: bool,
@@ -194,6 +195,36 @@ class _TranscriberRuntimeLease:
         self._controller._release_transcriber_runtime(
             owns_shared_lock=self._owns_shared_lock
         )
+
+
+class _TranscriberIdentity(NamedTuple):
+    """Named form of what ``create_transcriber`` bakes into a runtime.
+
+    A plain tuple would do for the equality comparison this is used for, but
+    the credential path also has to ask *which engine* is currently loaded, and
+    reading that out of an anonymous slot is the kind of assumption that breaks
+    silently when a field is inserted.
+    """
+
+    engine: str
+    model_size: str
+    vad_enabled: bool
+    offline_mode: bool
+    model_dir: str
+    groq_model: str
+    openai_model: str
+    deepgram_model: str
+    assemblyai_model: str
+    elevenlabs_model: str
+    azure_speech_model: str
+    azure_endpoint: str
+    funasr_model: str
+    keep_onnx_model_loaded: bool
+    streaming_full_final_transcript: bool
+    local_onnx_device: str
+    custom_vocabulary: str
+    silence_gate_enabled: bool
+    silence_gate_threshold: float
 
 
 class DictationController(QtCore.QObject):
@@ -521,16 +552,38 @@ class DictationController(QtCore.QObject):
         else:
             self._reset_transcriber_cache()
 
-    def invalidate_transcriber_credentials(self) -> None:
-        """Drop the cached runtime because a provider API key changed.
+    def invalidate_transcriber_credentials(
+        self,
+        providers: Sequence[str] | None = None,
+    ) -> None:
+        """Drop the cached runtime when a key *it actually uses* changed.
 
         Keys are read from the secret store while a transcriber is built and
         are not part of ``AppSettings``, so ``_transcriber_identity`` cannot see
         a key that was *replaced* with a different value — only one that was
         added or removed flips a ``has_*_key`` flag. The settings dialog
         therefore reports a key change explicitly through its own signal.
+
+        A key belongs to exactly one engine, so this must not be a blanket
+        invalidation: a loaded local model reads no API key at all, and a Groq
+        runtime does not care about an OpenAI key. Throwing either away would
+        cost a multi-gigabyte reload for a credential it never touches.
+        Selecting that provider later changes ``settings.engine``, which the
+        identity does see.
         """
-        self._logger.info("Provider credentials changed; rebuilding transcriber.")
+        with self._transcriber_cache_lock:
+            cached_key = self._transcriber_cache_key
+        loaded_engine = getattr(cached_key, "engine", None)
+        if loaded_engine is None or loaded_engine == DEFAULT_ENGINE:
+            # Nothing cached, or a local model, which uses no credentials.
+            return
+        changed = {str(name) for name in providers or ()}
+        if changed and loaded_engine not in changed:
+            return
+        self._logger.info(
+            "Credentials changed for the loaded '%s' runtime; rebuilding it.",
+            loaded_engine,
+        )
         self._invalidate_transcriber_runtime()
 
     def reload_settings(self, re_register_hotkey: bool = True) -> None:
@@ -769,14 +822,17 @@ class DictationController(QtCore.QObject):
                 and self._matching_model_preload_running(self._settings)
             )
 
-            if preload_running and self._settings.engine == DEFAULT_ENGINE:
-                if self._settings.mode == "streaming":
-                    self._overlay.set_state(
-                        "Error",
-                        "Model is still loading. Streaming starts after the selected "
-                        "model is ready.",
-                    )
-                    return
+            if (
+                preload_running
+                and self._settings.engine == DEFAULT_ENGINE
+                and self._settings.mode == "streaming"
+            ):
+                self._overlay.set_state(
+                    "Error",
+                    "Model is still loading. Streaming starts after the selected "
+                    "model is ready.",
+                )
+                return
 
             preload_failure = self._model_preload_failure(self._settings)
             if preload_failure is not None:
@@ -941,7 +997,7 @@ class DictationController(QtCore.QObject):
                     on_partial=self._emit_stream_partial,
                     on_error=self._emit_stream_runtime_failure,
                 )
-            except BaseException as exc:  # noqa: BLE001 - reported to the user
+            except BaseException as exc:
                 # Stop the audio callback before dropping the buffer.
                 # Otherwise it falls through to push_audio_chunk on a
                 # transcriber whose start_stream just raised, and *that*
@@ -1008,7 +1064,7 @@ class DictationController(QtCore.QObject):
             for chunk in pending:
                 try:
                     transcriber.push_audio_chunk(chunk)
-                except Exception as exc:  # noqa: BLE001 - reported to the user
+                except Exception as exc:
                     self._logger.exception("Failed to flush buffered stream audio")
                     return f"Streaming chunk push failed: {exc}"
         if dropped:
@@ -1199,7 +1255,7 @@ class DictationController(QtCore.QObject):
     def _audio_capture_runtime_context(capture: AudioCapture) -> tuple[bool, int]:
         """Snapshot diagnostics before ``capture.stop()`` mutates its state."""
         try:
-            warm_value = getattr(capture, "uses_warm_stream")
+            warm_value = capture.uses_warm_stream
         except (AttributeError, RuntimeError):
             warm_value = getattr(capture, "_warm_attached", False)
         try:
@@ -1270,7 +1326,7 @@ class DictationController(QtCore.QObject):
 
         warm_stream, callback_count = self._audio_capture_runtime_context(capture)
         try:
-            has_received_audio = bool(getattr(capture, "has_received_audio"))
+            has_received_audio = bool(capture.has_received_audio)
         except (AttributeError, RuntimeError):
             has_received_audio = callback_count > 0
         if has_received_audio:
@@ -1778,7 +1834,7 @@ class DictationController(QtCore.QObject):
             root = self._resolve_recordings_dir()
             target_dir = os.path.abspath(root)
             os.makedirs(target_dir, exist_ok=True)
-            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")  # noqa: DTZ005 (local time on purpose: this names a file the user browses)
             path = os.path.join(target_dir, f"recording_{stamp}.wav")
             capture.save_wav(Path(path), wav_bytes)
             self._prune_recordings(target_dir, self._settings.recordings_max_count)
@@ -3303,7 +3359,7 @@ class DictationController(QtCore.QObject):
             self._emit_stream_runtime_failure(f"Streaming chunk push failed: {exc}")
 
     @staticmethod
-    def _transcriber_identity(settings: AppSettings) -> tuple[object, ...]:
+    def _transcriber_identity(settings: AppSettings) -> _TranscriberIdentity:
         """Everything ``create_transcriber`` bakes into the runtime it builds.
 
         Two settings snapshots with an equal identity produce interchangeable
@@ -3319,31 +3375,37 @@ class DictationController(QtCore.QObject):
         than in ``AppSettings``, so they are handled separately by
         ``invalidate_transcriber_credentials``.
         """
-        return (
-            settings.engine,
-            settings.model_size,
-            settings.vad_enabled,
-            getattr(settings, "offline_mode", False),
-            getattr(settings, "model_dir", ""),
-            getattr(settings, "groq_model", ""),
-            getattr(settings, "openai_model", ""),
-            getattr(settings, "deepgram_model", ""),
-            getattr(settings, "assemblyai_model", ""),
-            getattr(settings, "elevenlabs_model", ""),
-            getattr(settings, "azure_speech_model", ""),
-            getattr(settings, "azure_endpoint", ""),
-            getattr(settings, "funasr_model", ""),
-            bool(getattr(settings, "keep_onnx_model_loaded", False)),
-            bool(getattr(settings, "streaming_full_final_transcript", False)),
-            getattr(settings, "local_onnx_device", ""),
+        return _TranscriberIdentity(
+            engine=settings.engine,
+            model_size=settings.model_size,
+            vad_enabled=settings.vad_enabled,
+            offline_mode=bool(getattr(settings, "offline_mode", False)),
+            model_dir=getattr(settings, "model_dir", ""),
+            groq_model=getattr(settings, "groq_model", ""),
+            openai_model=getattr(settings, "openai_model", ""),
+            deepgram_model=getattr(settings, "deepgram_model", ""),
+            assemblyai_model=getattr(settings, "assemblyai_model", ""),
+            elevenlabs_model=getattr(settings, "elevenlabs_model", ""),
+            azure_speech_model=getattr(settings, "azure_speech_model", ""),
+            azure_endpoint=getattr(settings, "azure_endpoint", ""),
+            funasr_model=getattr(settings, "funasr_model", ""),
+            keep_onnx_model_loaded=bool(
+                getattr(settings, "keep_onnx_model_loaded", False)
+            ),
+            streaming_full_final_transcript=bool(
+                getattr(settings, "streaming_full_final_transcript", False)
+            ),
+            local_onnx_device=getattr(settings, "local_onnx_device", ""),
             # Constructor arguments of the transcribers themselves. They were
             # missing while every settings save reset the cache unconditionally,
             # which hid the omission; now that the reset is conditional, leaving
             # them out would keep a runtime carrying the previous biasing prompt
             # or the previous silence gate.
-            getattr(settings, "custom_vocabulary", ""),
-            bool(getattr(settings, "silence_gate_enabled", True)),
-            float(
+            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
+            silence_gate_enabled=bool(
+                getattr(settings, "silence_gate_enabled", True)
+            ),
+            silence_gate_threshold=float(
                 getattr(
                     settings,
                     "silence_gate_threshold",
@@ -3498,18 +3560,17 @@ class DictationController(QtCore.QObject):
             final_insertion, final_text = self._stream_text_state.finalize_append_only(
                 text
             )
-            if final_insertion:
-                if not self._insert_text_at_target(
-                    final_insertion,
-                    restore_focus=True,
-                    target_handle=target_handle,
-                    target_signature=target_signature,
-                ):
-                    self._reveal_overlay_result(is_error=True)
-                    self._mark_last_recording_completed()
-                    self._last_transcribe_settings = None
-                    self._reset_streaming_state()
-                    return
+            if final_insertion and not self._insert_text_at_target(
+                final_insertion,
+                restore_focus=True,
+                target_handle=target_handle,
+                target_signature=target_signature,
+            ):
+                self._reveal_overlay_result(is_error=True)
+                self._mark_last_recording_completed()
+                self._last_transcribe_settings = None
+                self._reset_streaming_state()
+                return
             self._overlay.set_state("Done", final_text)
         else:
             if not self._insert_text_at_target(

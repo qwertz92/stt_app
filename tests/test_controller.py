@@ -3,20 +3,8 @@ import logging
 from dataclasses import replace
 
 import pytest
-from PySide6 import QtGui, QtWidgets
-
-from stt_app.config import (
-    DEFAULT_HOTKEY,
-    FALLBACK_HOTKEY,
-    OVERLAY_ERROR_ACTION_INSERT,
-)
-import stt_app.controller as controller_module
-from stt_app.controller import DictationController
-from stt_app.settings_store import AppSettings
-from stt_app.text_inserter import TextInsertionError
-from stt_app.transcript_history import TranscriptHistoryStore
-
 from conftest import (
+    FailSubmitExecutor,
     FakeCapture,
     FakeHotkeyManager,
     FakeHotkeyManagerAllFail,
@@ -26,10 +14,21 @@ from conftest import (
     FakeStreamingTranscriber,
     FakeTextInserter,
     FakeWindowFocusHelper,
-    FailSubmitExecutor,
     ImmediateExecutor,
     make_controller,
 )
+from PySide6 import QtGui, QtWidgets
+
+import stt_app.controller as controller_module
+from stt_app.config import (
+    DEFAULT_HOTKEY,
+    FALLBACK_HOTKEY,
+    OVERLAY_ERROR_ACTION_INSERT,
+)
+from stt_app.controller import DictationController
+from stt_app.settings_store import AppSettings
+from stt_app.text_inserter import TextInsertionError
+from stt_app.transcript_history import TranscriptHistoryStore
 
 
 class DeferredExecutor:
@@ -38,7 +37,7 @@ class DeferredExecutor:
 
     def submit(self, fn, *args, **kwargs):
         self.calls.append((fn, args, kwargs))
-        return None
+        return
 
     def shutdown(self, wait=False, cancel_futures=False):
         pass
@@ -2170,7 +2169,7 @@ def test_a_save_retries_a_preload_that_previously_failed():
     _ = app
 
 
-def test_invalidate_transcriber_credentials_drops_the_cached_runtime():
+def test_invalidate_transcriber_credentials_drops_the_runtime_using_that_key():
     """A replaced API key is invisible in AppSettings, so it needs its own path.
 
     ``has_*_key`` only flips when a key is added or removed; overwriting one
@@ -2179,9 +2178,41 @@ def test_invalidate_transcriber_credentials_drops_the_cached_runtime():
     settings = replace(_RUNTIME_BASE_SETTINGS, engine="groq", has_groq_key=True)
     controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
 
-    controller.invalidate_transcriber_credentials()
+    controller.invalidate_transcriber_credentials(["groq"])
 
     assert closed == [cached]
     assert controller._transcriber_cache is None
+    controller.shutdown()
+    _ = app
+
+
+def test_an_api_key_change_never_unloads_a_local_model():
+    """A local model reads no API key, so a key change must not cost a reload.
+
+    Selecting the remote provider later changes ``settings.engine``, which the
+    transcriber identity does see; until then the loaded model is untouched.
+    """
+    settings = _RUNTIME_BASE_SETTINGS
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(settings)
+
+    controller.invalidate_transcriber_credentials(["openai"])
+
+    assert closed == []
+    assert controller._transcriber_cache is cached
+    assert controller._pending_transcriber_cache_reset is False
+    assert preloads == []
+    controller.shutdown()
+    _ = app
+
+
+def test_a_key_change_for_another_provider_keeps_the_loaded_runtime():
+    """A Groq runtime does not care about an OpenAI key."""
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine="groq", has_groq_key=True)
+    controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
+
+    controller.invalidate_transcriber_credentials(["openai", "deepgram"])
+
+    assert closed == []
+    assert controller._transcriber_cache is cached
     controller.shutdown()
     _ = app

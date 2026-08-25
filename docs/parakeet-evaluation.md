@@ -9,11 +9,17 @@ The current canonical evaluation is:
 
 ## Current decision
 
-- **Status:** Not implemented by design.
+This note is about the **NeMo/PyTorch path only**. The model itself ships: since
+the onnx-asr engine was added, `parakeet-tdt-0.6b-v3` is a selectable local
+model and the fastest one in the app. See
+[Models & Offline Setup](models.md#available-models).
+
+- **Status:** The NeMo runtime is not implemented, by design.
 - **Decision:** Do not add the official NVIDIA NeMo Parakeet path to the
   production app.
 - **Reason:** The official path remains NVIDIA-centered and does not solve the
-  target Intel GPU use case.
+  target Intel GPU use case. The community ONNX export reaches the same model
+  without a second heavyweight ML runtime.
 
 ## What changed
 

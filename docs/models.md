@@ -4,14 +4,17 @@ Everything about model choices, downloading, and configuring models for offline 
 
 ## Available models
 
-The app has three local runtime families:
+The app has four local runtime families:
 
 - **GPU-accelerated ONNX models** — Cohere Transcribe and IBM Granite Speech, run
   on the GPU through WebGPU via a Node.js helper. These are the highest-accuracy
-  local models and, on a machine with a working GPU, usually faster than the
-  Whisper models too. Batch mode only.
+  local models and, on a machine with a working GPU, usually more accurate than
+  the Whisper models. Batch mode only.
 - **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
+- **onnx-asr models** (Parakeet TDT, Canary) — pure Python, CPU only, no Node.js
+  and no GPU. Parakeet is the fastest local model in this app by a wide margin
+  (RTF ~0.045 on a Ryzen 5 7600X). Batch mode only.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
@@ -31,13 +34,13 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 
 | Model | Runtime | Size | Languages | Best for |
 |-------|---------|------|-----------|----------|
-| `tiny` | CTranslate2 | ~75 MB | Multilingual | Quick testing, fallback |
-| `base` | CTranslate2 | ~141 MB | Multilingual | Light usage |
-| `small` | CTranslate2 | ~484 MB | Multilingual | **Default — good balance for German + English** |
-| `medium` | CTranslate2 | ~1.4 GB | Multilingual | Better quality, slower |
-| `large-v3` | CTranslate2 | ~3.1 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
-| `large-v3-turbo` | CTranslate2 | ~809 MB | Multilingual | Fast + high quality — pruned version of large-v3 |
-| `distil-large-v3.5` | CTranslate2 | ~756 MB | **English only** | Fastest high-quality English transcription |
+| `tiny` | CTranslate2 | ~78 MB | Multilingual | Quick testing, fallback |
+| `base` | CTranslate2 | ~148 MB | Multilingual | Light usage |
+| `small` | CTranslate2 | ~486 MB | Multilingual | **Default — good balance for German + English** |
+| `medium` | CTranslate2 | ~1.53 GB | Multilingual | Better quality, slower |
+| `large-v3` | CTranslate2 | ~3.09 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
+| `large-v3-turbo` | CTranslate2 | ~1.62 GB | Multilingual | Fast + high quality — pruned version of large-v3 |
+| `distil-large-v3.5` | CTranslate2 | ~1.52 GB | **English only** | Fastest high-quality English transcription |
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
 | `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** — Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
@@ -49,9 +52,11 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 
 ### Which model should I use?
 
-If you have a GPU and Node.js, start with the GPU/ONNX models: on a machine with a
-working GPU they are usually *both* more accurate and faster than the Whisper
-models. The Whisper models remain a solid, zero-setup CPU baseline. The surest way
+Accuracy and speed no longer point at the same model. For **accuracy** with a GPU
+and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v3`
+is the fastest option here and needs neither: it measured RTF ~0.045 on a Ryzen 5
+7600X CPU, which beats the GPU models on their GPU. The Whisper models remain a
+solid, zero-setup CPU baseline with the broadest language coverage. The surest way
 to choose is to run the [benchmark](advanced-setup.md#benchmarking) on your own
 hardware.
 
@@ -247,8 +252,9 @@ dictation when warm latency matters more than RAM/VRAM use.
 app. It appears in the browser/web ONNX bundle, but the app process uses the
 Node ONNX runtime where the practical targets are DirectML, WebGPU, and CPU.
 
-NVIDIA Parakeet is still not implemented. Its best-supported local path is the
-NeMo/PyTorch stack, which would add a second heavyweight Python ML runtime and
+NVIDIA Parakeet ships as `parakeet-tdt-0.6b-v3` through the pure-Python
+`onnx-asr` runtime (CPU only). What remains unimplemented is the *official
+NeMo/PyTorch path*, which would add a second heavyweight Python ML runtime and
 does not solve the Intel-GPU requirement cleanly. See
 [Local ASR Model Candidates - 2026 Re-evaluation](local-asr-model-candidates-2026.md).
 
@@ -295,7 +301,7 @@ runtime wheel.
 
 ## First-time model download
 
-On first use, the app downloads the selected model automatically from HuggingFace Hub. The `small` model (~484 MB) takes about a minute. After that, it loads from cache in seconds.
+On first use, the app downloads the selected model automatically from HuggingFace Hub. The `small` model (~486 MB) takes about a minute. After that, it loads from cache in seconds.
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 

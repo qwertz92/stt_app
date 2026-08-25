@@ -217,9 +217,9 @@ Approximate current downloads:
 | Model | Runtime | Approximate download |
 | --- | --- | ---: |
 | `tiny` | CTranslate2 | 75 MB |
-| `small` | CTranslate2 | 484 MB |
+| `small` | CTranslate2 | 486 MB |
 | `medium` | CTranslate2 | 1.4 GB |
-| `large-v3-turbo` | CTranslate2 | 809 MB |
+| `large-v3-turbo` | CTranslate2 | 1622 MB |
 | `cohere-transcribe-03-2026` | q4 ONNX | 2.13 GB |
 | `granite-4.0-1b-speech` | q4 ONNX | 1.84 GB |
 | `granite-speech-4.1-2b` | q4 Transformers.js ONNX | 1.84 GB |

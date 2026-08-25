@@ -175,9 +175,38 @@ def test_run_benchmark_cases_routes_nemotron_to_onnx_runtime(monkeypatch, tmp_pa
         webgpu_devices="all",
     )
 
-    assert len(calls) == 1
-    assert calls[0]["device"] == "dml"
-    assert [case.compute_type for case in cases] == ["onnx-int4"]
+    # Routed to the ORT GenAI case, and measured on the ONNX device targets:
+    # "all" is webgpu/dml/cpu, and Nemotron has no WebGPU provider, so it runs
+    # on DirectML and CPU rather than twice on DirectML.
+    assert [call["device"] for call in calls] == ["dml", "cpu"]
+    assert [case.compute_type for case in cases] == ["onnx-int4", "onnx-int4"]
+
+
+def test_nemotron_is_measurable_on_a_pinned_device():
+    """Settings lets Nemotron be pinned to a device, so it must be comparable.
+
+    Before this the benchmark always ran it on `auto`, so the General tab
+    offered a choice no measurement could support.
+    """
+    targets = local_benchmark.benchmark_device_targets
+
+    assert targets("onnxruntime-genai", ["cpu"], "auto") == ["cpu"]
+    assert targets("onnxruntime-genai", ["auto"], "auto") == ["auto"]
+    # No WebGPU provider in ORT GenAI: every GPU flavour is DirectML, and the
+    # duplicate is dropped instead of reporting one run twice.
+    assert targets("onnxruntime-genai", ["webgpu", "dml", "cpu"], "auto") == [
+        "dml",
+        "cpu",
+    ]
+    assert targets("onnxruntime-genai", ["gpu", "cpu"], "auto") == ["dml", "cpu"]
+    # Unchanged for the other runtimes.
+    assert targets("onnx-webgpu", ["webgpu", "dml", "cpu"], "auto") == [
+        "webgpu",
+        "dml",
+        "cpu",
+    ]
+    assert targets("faster-whisper", ["webgpu", "cpu"], "auto") == ["auto"]
+    assert targets("onnx-asr", ["webgpu", "cpu"], "auto") == ["auto"]
 
 
 def test_run_benchmark_cases_does_not_route_unknown_model_to_faster_whisper(

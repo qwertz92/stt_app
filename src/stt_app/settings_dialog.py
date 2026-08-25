@@ -10,8 +10,8 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from datetime import datetime
-from typing import TYPE_CHECKING, Callable
+from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -22,6 +22,12 @@ from .benchmark_history import (
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
+
+# Runs the benchmark out-of-process so heavy model loading/inference never
+# freezes the Qt UI; same signature/return as the pure function, and the name
+# is kept so ``stt_app.settings_dialog.run_benchmark_cases`` stays the seam
+# tests patch.
+from .benchmark_process import run_benchmark_cases
 from .config import (
     APP_LOGGER_NAME,
     DEFAULT_ASSEMBLYAI_MODEL,
@@ -30,13 +36,9 @@ from .config import (
     DEFAULT_ELEVENLABS_MODEL,
     DEFAULT_FUNASR_MODEL,
 )
+from .dialog_style import make_label_selectable
 from .last_recording_store import LastRecordingStore
 from .local_benchmark import BenchmarkCase
-# Runs the benchmark out-of-process so heavy model loading/inference never
-# freezes the Qt UI; same signature/return as the pure function, and the name
-# is kept so ``stt_app.settings_dialog.run_benchmark_cases`` stays the seam
-# tests patch.
-from .benchmark_process import run_benchmark_cases
 from .local_model_download import start_model_download_process
 from .local_model_inventory_store import LocalModelInventoryStore
 from .local_model_scan import scan_cached_models_out_of_process as _scan_cached_models
@@ -54,7 +56,6 @@ from .settings_dialog_helpers import (
     _COMPACT_TABLE_ROW_EXTRA_PX,
     _DEFAULT_SETTINGS_DIALOG_SIZE,
     _DIALOG_SCREEN_MARGIN,
-    _emit_background_signal,
     _FIELD_HINT_MIN_WIDTH_PX,
     _GENERAL_FORM_LABEL_EXTRA_PX,
     _LOCAL_MODEL_AUTO_REFRESH_DELAY_MS,
@@ -64,6 +65,7 @@ from .settings_dialog_helpers import (
     _PROVIDER_STATUS_BADGE_TEXTS,
     _REMOTE_PROVIDER_LABEL_EXTRA_PX,
     _app_hotkey_to_qt_hotkey_text,
+    _emit_background_signal,
     _hotkey_token_set,
     _hotkeys_conflict,
     _qt_hotkey_sequence_to_app_hotkey,
@@ -89,29 +91,28 @@ from .transcript_history import (
 from .ui_feedback import BUTTON_FEEDBACK_STYLESHEET, reserve_button_width_for_texts
 from .update_checker import UpdateCheckResult, check_for_updates
 from .update_ui import show_update_available_dialog, show_update_status_dialog
-from .dialog_style import make_label_selectable
 
 if TYPE_CHECKING:
     from .controller import DictationController
 
 __all__ = [
-    'SettingsDialog',
-    'TranscriptEditDialog',
-    '_scan_cached_models',
-    'start_model_download_process',
-    'cleanup_incomplete_model_download',
-    'delete_cached_model',
-    'estimate_cached_model_bytes',
-    'run_benchmark_cases',
     '_DEFAULT_SETTINGS_DIALOG_SIZE',
     '_LOCAL_MODEL_SCAN_SESSION_CACHE',
     '_LOCAL_MODEL_SCAN_SESSION_VERIFIED_DIRS',
     '_PROVIDER_STATUS_BADGE_TEXTS',
+    'SettingsDialog',
+    'TranscriptEditDialog',
     '_app_hotkey_to_qt_hotkey_text',
-    '_hotkeys_conflict',
-    '_qt_hotkey_text_to_app_hotkey',
-    '_qt_hotkey_sequence_to_app_hotkey',
     '_hotkey_token_set',
+    '_hotkeys_conflict',
+    '_qt_hotkey_sequence_to_app_hotkey',
+    '_qt_hotkey_text_to_app_hotkey',
+    '_scan_cached_models',
+    'cleanup_incomplete_model_download',
+    'delete_cached_model',
+    'estimate_cached_model_bytes',
+    'run_benchmark_cases',
+    'start_model_download_process',
     'threading',
     'time',
 ]
@@ -140,9 +141,11 @@ class SettingsDialog(
     benchmark_finished = QtCore.Signal(bool, str, object)
     settings_changed = QtCore.Signal()
     # Emitted in addition to ``settings_changed`` whenever a provider API key
-    # was actually written or deleted. Keys live in the secret store, so the
-    # controller cannot tell a replaced key from the settings snapshot alone.
-    provider_keys_changed = QtCore.Signal()
+    # was actually written or deleted, carrying the affected provider names.
+    # Keys live in the secret store, so the controller cannot tell a replaced
+    # key from the settings snapshot alone, and it only has to rebuild a
+    # runtime that uses the changed key.
+    provider_keys_changed = QtCore.Signal(list)
     # Manual microphone-list refresh; the controller re-enumerates PortAudio
     # because it owns the streams that must be idle for that.
     audio_device_refresh_requested = QtCore.Signal()
@@ -269,7 +272,9 @@ class SettingsDialog(
         self._active_connection_test_thread: threading.Thread | None = None
         self._active_update_check_thread: threading.Thread | None = None
         self._import_progress_message = ""
-        self._import_progress_started_at: datetime | None = None
+        # Monotonic seconds, not a wall-clock timestamp; see
+        # `_start_import_transcription`.
+        self._import_progress_started_at: float | None = None
         self._import_progress_timer = QtCore.QTimer(self)
         self._import_progress_timer.setInterval(1000)
         self._import_progress_timer.timeout.connect(

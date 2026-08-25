@@ -370,14 +370,18 @@ LOCAL_MODEL_RUNTIME: dict[str, str] = {
 
 # Approximate model sizes for UI progress estimation.
 # Values are decimal megabytes (MB), not MiB.
+# Measured against the actual repositories with the download allow-patterns,
+# not copied from a model card: `distil-large-v3.5` was listed at 756 MB while
+# its CTranslate2 `model.bin` is 1513 MB, so the download bar reached "approx.
+# 100%" at half the transfer and then kept counting.
 MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
-    "tiny": 75,
-    "base": 141,
-    "small": 484,
-    "medium": 1_400,
-    "large-v3": 3_000,
+    "tiny": 78,
+    "base": 148,
+    "small": 486,
+    "medium": 1_531,
+    "large-v3": 3_091,
     "large-v3-turbo": 1_622,
-    "distil-large-v3.5": 756,
+    "distil-large-v3.5": 1_516,
     # Selectable local ONNX downloads. Cohere, Granite 4.0, and Granite 4.1 2B
     # are q4 Transformers.js packages; Granite 4.1 Plus/NAR use the smallest
     # currently published INT8 tier.

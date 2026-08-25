@@ -1463,7 +1463,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     settings dialog therefore emits `provider_keys_changed` in addition to
     `settings_changed`, and `main` connects it to
     `controller.invalidate_transcriber_credentials` *before* the settings
-    signal so the stale runtime is gone before the preload decision runs.
+    signal so the stale runtime is gone before the preload decision runs. That
+    signal **carries the affected provider names**, and the invalidation is
+    scoped to them: a key belongs to exactly one engine, so a loaded local
+    model (which reads no key at all) and a Groq runtime under an OpenAI key
+    change are both left alone. Selecting that provider later changes
+    `settings.engine`, which the identity does see. The loaded engine is read
+    from `_TranscriberIdentity.engine` rather than a tuple slot, which is why
+    the identity is a `NamedTuple`.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can
@@ -1530,6 +1537,44 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and kept. Keep the pure in-process function for the CLI and the worker; only
   the settings dialog goes through the process path. Wire new worker args into
   the frozen entry point (`main.py`) and the PyInstaller `hiddenimports`.
+- **Every ONNX-device choice must be measurable**: the General tab pins
+  `local_onnx_device` for Cohere/Granite *and* Nemotron, so the benchmark has
+  to be able to compare the same targets. It used to expand
+  `webgpu_device_targets` only for the `onnx-webgpu` runtime and run Nemotron
+  on the hardcoded `device="auto"`, so "All explicit targets" silently
+  measured nothing for it. `local_benchmark.benchmark_device_targets` is the
+  one place that maps a runtime plus the requested targets onto the cases to
+  run, and both the case loop and `total_cases` go through it. For Nemotron it
+  renames each target to the provider it actually resolves to
+  (`nemotron_provider_order`) and drops duplicates: ORT GenAI has no WebGPU
+  provider, so `webgpu`, `gpu` and `dml` are one configuration and reporting
+  it three times under three names would be worse than not offering it.
+- **Canary needs an explicit language, and the benchmark says so before the
+  run**: `run_benchmark_cases` refuses Canary without a language, because
+  onnx-asr hardcodes `<|en|>` and the model would *translate* German instead of
+  transcribing it. That refusal happens per model, i.e. only when that model's
+  turn comes, so with several models selected the whole run finished before the
+  single failure was visible. `_run_local_benchmark` now rejects the
+  combination up front, mirroring the existing German/English-only guard.
+- **Model size estimates are measured, not copied**: `MODEL_ESTIMATED_SIZE_MB`
+  drives the download percentage, so a wrong number is directly visible.
+  `distil-large-v3.5` was listed at 756 MB against a real 1513 MB `model.bin`,
+  so its bar read "approx. 100%" at half the transfer and kept counting. Verify
+  a new entry against the repository with the download allow-patterns applied.
+- **Download parallelism is a measured non-lever**: `snapshot_download`'s
+  `max_workers` parallelizes across *files*, and every local ONNX model is one
+  dominant weight file (Parakeet 652 of 671 MB), so it cannot help. Measured on
+  a ~70 Mbit/s line: 2 workers 76.7/77.6 s against 8 workers 76.6/76.4 s. Do
+  not raise it without a new measurement, and do not add parallel *model*
+  downloads: the bandwidth is shared either way while every extra writer needs
+  its own worker process, progress row and cancel/cleanup bookkeeping.
+- **Ruff's rule set is written out, never inherited**: `pyproject.toml` names
+  every selected rule and every ignore with its reason. Before this ruff ran on
+  its bare defaults, so the CI gate checked pyflakes and a handful of
+  pycodestyle errors only — a naive-datetime elapsed counter, three unchecked
+  `zip()` length assumptions and loop-variable closures all passed it. A ruff
+  upgrade must be allowed to surface new findings; it must never silently
+  change what the gate means.
 - **Benchmark transcripts are first-class results**: every measured run stores
   and exports its complete transcript. The Benchmark tab renders History as a
   column table and compares each model/device run with run 1; keep all runs
@@ -1729,6 +1774,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the threshold on synthetic evidence alone.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
 - Clipboard restore: Unicode text only.
-- NVIDIA Parakeet remains intentionally unimplemented through NeMo; Nemotron
-  uses the separate ONNX Runtime GenAI path. See
+- The NVIDIA *NeMo* runtime remains intentionally unimplemented. Parakeet itself
+  ships through the pure-Python onnx-asr path and Nemotron through ONNX Runtime
+  GenAI, so no NeMo/PyTorch stack is needed. See
   `docs/local-asr-model-candidates-2026.md` for rationale.

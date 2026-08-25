@@ -14,7 +14,12 @@ from .benchmark_history import (
     BenchmarkOptions,
     export_benchmark_entry,
 )
-from .config import LOCAL_ENGLISH_ONLY_MODELS, LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS
+from .config import (
+    CANARY_MODEL_SIZE,
+    LOCAL_ENGLISH_ONLY_MODELS,
+    LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
+)
+from .dialog_style import make_label_selectable
 from .local_benchmark import (
     BenchmarkCancelled,
     BenchmarkCase,
@@ -24,14 +29,13 @@ from .local_benchmark import (
     normalize_webgpu_benchmark_devices,
 )
 from .settings_dialog_helpers import (
+    _INLINE_FIELD_BUTTON_SPACING_PX,
     _benchmark_status_text,
     _emit_background_signal,
-    _INLINE_FIELD_BUTTON_SPACING_PX,
     _WheelPassthroughComboBox,
     _WheelPassthroughSpinBox,
 )
 from .ui_feedback import restore_vertical_scrollbar
-from .dialog_style import make_label_selectable
 
 _BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(860, 880)
 _BENCHMARK_WINDOW_MINIMUM_SIZE = QtCore.QSize(680, 560)
@@ -879,8 +883,10 @@ class _BenchmarkMixin:
             if value in LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS:
                 self.benchmark_webgpu_device_combo.addItem(label, value)
         self.benchmark_webgpu_device_combo.setToolTip(
-            "Controls only Cohere and Granite ONNX benchmarks. Auto tries GPU first "
-            "and falls back to CPU; GPU-only fails instead of using CPU."
+            "Applies to the local ONNX models: Cohere, Granite and Nemotron. Auto "
+            "tries GPU first and falls back to CPU; GPU-only fails instead of using "
+            "CPU. Nemotron has no WebGPU provider, so every GPU target means "
+            "DirectML for it and duplicate targets are measured once."
         )
         webgpu_device_note = QtWidgets.QLabel(
             "ONNX target selection. Faster-whisper models ignore this and use the standard Device setting."
@@ -1309,6 +1315,17 @@ class _BenchmarkMixin:
                 "#b71c1c",
             )
             return
+        if language_value == "auto" and CANARY_MODEL_SIZE in model_names:
+            # The runner refuses this case per model, but only once that model's
+            # turn comes: with several models selected the whole run finished
+            # before the user saw why exactly one of them had failed.
+            self._set_benchmark_status(
+                "Canary cannot detect the language and would translate instead "
+                "of transcribing. Choose German or English, or deselect "
+                f"{CANARY_MODEL_SIZE}.",
+                "#b71c1c",
+            )
+            return
 
         self._set_benchmark_status("Running benchmark...", "#555")
         compute_type = str(self.benchmark_compute_type_combo.currentData() or "int8")
@@ -1655,7 +1672,7 @@ class _BenchmarkMixin:
         suggested = (
             Path.home()
             / "Documents"
-            / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+            / f"benchmark_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"  # noqa: DTZ005 (local time names a file the user saves)
         )
         path, selected_filter = QtWidgets.QFileDialog.getSaveFileName(
             self,

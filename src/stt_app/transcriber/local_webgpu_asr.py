@@ -447,6 +447,13 @@ def download_webgpu_model_snapshot(model_name: str, model_dir: str = "") -> str:
         # symlinks, which can fail on Windows without Developer Mode/admin
         # privileges (WinError 1314).
         "local_dir": str(local_dir),
+        # Parallel *files*, which barely matters for these repos: every ONNX
+        # model is dominated by one weight file (Parakeet 652 of 671 MB,
+        # Cohere 2016 of 2128 MB), so extra workers have nothing to do.
+        # Measured against the Parakeet snapshot on a ~70 Mbit/s line, two runs
+        # each: 2 workers 76.7 s / 77.6 s, 8 workers 76.6 s / 76.4 s -- a 0.9 %
+        # difference, i.e. noise. Kept at 2 because raising it buys nothing and
+        # costs another concurrent writer per download.
         "max_workers": 2,
     }
 

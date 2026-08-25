@@ -1,25 +1,24 @@
 import os
 import signal
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import pytest
-
 from PySide6 import QtCore, QtGui, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.app_icon import app_icon_path, load_app_icon
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
-    _HistoryDialogPresenter,
-    _TrayUpdateChecker,
     _create_tray_icon,
-    _refresh_local_model_inventory_in_background,
+    _HistoryDialogPresenter,
     _install_signal_handlers,
     _last_recording_already_transcribed,
     _prompt_recoverable_last_recording,
+    _refresh_local_model_inventory_in_background,
     _restore_after_system_resume,
     _restore_overlay_after_settings_save,
+    _TrayUpdateChecker,
 )
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
@@ -80,6 +79,7 @@ class FakeController:
         self.audio_device_refresh_calls = 0
         self.repaste_calls = 0
         self.credentials_invalidated = 0
+        self.credentials_providers: list[str] = []
         self.settings = AppSettings()
 
     def toggle_recording(self):
@@ -103,8 +103,9 @@ class FakeController:
     def on_settings_changed(self):
         self.settings_changed_calls += 1
 
-    def invalidate_transcriber_credentials(self):
+    def invalidate_transcriber_credentials(self, providers=None):
         self.credentials_invalidated += 1
+        self.credentials_providers = list(providers or ())
 
     def refresh_hotkey_registration(self):
         self.hotkey_refresh_calls += 1
@@ -270,7 +271,7 @@ def test_tray_toggle_action_calls_controller():
         open_history_dialog=lambda: None,
     )
     menu = tray._context_menu
-    toggle_action = [a for a in menu.actions() if a.text() == "Toggle Dictation"][0]
+    toggle_action = next(a for a in menu.actions() if a.text() == "Toggle Dictation")
     toggle_action.trigger()
     assert controller.toggle_calls == 1
 
@@ -290,7 +291,7 @@ def test_tray_show_overlay_action_calls_controller():
         open_history_dialog=lambda: None,
     )
     menu = tray._context_menu
-    show_action = [a for a in menu.actions() if a.text() == "Show overlay"][0]
+    show_action = next(a for a in menu.actions() if a.text() == "Show overlay")
     show_action.trigger()
     assert controller.bring_overlay_calls == 1
 
@@ -491,7 +492,7 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
 
     class FakeSettingsDialog(QtWidgets.QDialog):
         settings_changed = QtCore.Signal()
-        provider_keys_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
         audio_device_refresh_requested = QtCore.Signal()
 
         def __init__(self, *args, **kwargs):
@@ -556,7 +557,7 @@ def test_tray_reuses_hidden_settings_dialog_and_retains_busy_state(monkeypatch):
 
     class FakeSettingsDialog(QtWidgets.QDialog):
         settings_changed = QtCore.Signal()
-        provider_keys_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
         audio_device_refresh_requested = QtCore.Signal()
 
         def __init__(self, *args, **kwargs):
@@ -611,7 +612,7 @@ def test_tray_prepares_settings_dialog_without_showing(monkeypatch):
 
     class FakeSettingsDialog(QtWidgets.QDialog):
         settings_changed = QtCore.Signal()
-        provider_keys_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
         audio_device_refresh_requested = QtCore.Signal()
 
         def __init__(self, *args, **kwargs):
@@ -875,8 +876,8 @@ def test_legacy_recording_match_checks_past_newer_history_entry(tmp_path):
     audio_mtime = 1_800_000_000
     os.utime(store.audio_path, (audio_mtime, audio_mtime))
     history = TranscriptHistoryStore(path=tmp_path / "history.json")
-    matching_time = datetime.fromtimestamp(audio_mtime + 60, timezone.utc).isoformat()
-    newer_time = datetime.fromtimestamp(audio_mtime + 600, timezone.utc).isoformat()
+    matching_time = datetime.fromtimestamp(audio_mtime + 60, UTC).isoformat()
+    newer_time = datetime.fromtimestamp(audio_mtime + 600, UTC).isoformat()
     history.add_entry(
         TranscriptHistoryEntry(
             text="matching legacy transcript",
