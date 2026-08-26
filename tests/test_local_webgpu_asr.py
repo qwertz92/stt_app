@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import json
 import queue
+import re
 import shutil
 import subprocess
 import sys
@@ -1004,3 +1005,67 @@ def test_node_wav_and_protocol_parsers_reject_malformed_bounds(tmp_path):
     assert "exceeds the file bounds" in result["wavError"]
     assert result["command"] == "shutdown"
     assert result["protocolError"] == "Protocol request must be a JSON object."
+
+
+def _probe_imports(monkeypatch) -> set[str]:
+    """The package names `_run_transformers_import_probe` actually imports."""
+    captured: list[list[str]] = []
+
+    def fake_run(command, **_kwargs):
+        captured.append(list(command))
+        raise AssertionError("the probe must not be executed here")
+
+    monkeypatch.setattr(local_webgpu_asr.subprocess, "run", fake_run)
+    with pytest.raises(AssertionError):
+        local_webgpu_asr._run_transformers_import_probe("node", Path("."))
+    script = captured[0][-1]
+    return set(re.findall(r"import\(['\"]([^'\"]+)['\"]\)", script))
+
+
+def _runner_imports() -> set[str]:
+    """The bare package specifiers `webgpu_asr_runner.mjs` imports."""
+    runner = (
+        Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
+    )
+    source = runner.read_text(encoding="utf-8")
+    specifiers = set(
+        re.findall(r"""(?:^import .*? from |await import\()["']([^"']+)["']""",
+                   source, re.MULTILINE)
+    )
+    return {
+        name
+        for name in specifiers
+        if not name.startswith(("node:", ".", "/"))
+        and not name.startswith("pathToFileURL")
+    }
+
+
+def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
+    """Probing an undeclared package makes the repair unreachable.
+
+    The probe's failure branch runs `npm install`, which installs exactly what
+    `package.json` asks for. `@huggingface/tokenizers` and `onnxruntime-node`
+    resolve today only because npm hoists them out of
+    `@huggingface/transformers`; probing for them meant that if that hoist ever
+    changed, every ONNX dictation would end in "run npm install" and the
+    reinstall could never fix it.
+    """
+    root = Path(__file__).resolve().parents[1]
+    declared = set(json.loads((root / "package.json").read_text("utf-8"))["dependencies"])
+    probed = _probe_imports(monkeypatch)
+
+    # An empty set is a subset of everything, so both halves are asserted.
+    assert probed
+    assert probed <= declared
+
+
+def test_the_runtime_probe_covers_everything_the_runner_imports(monkeypatch):
+    """The other direction: a package the runner needs must be probed.
+
+    The probe exists to turn a missing dependency into one actionable message
+    instead of a crash mid-dictation, so it has to check the full set.
+    """
+    needed = _runner_imports()
+
+    assert needed
+    assert needed <= _probe_imports(monkeypatch)

@@ -541,16 +541,24 @@ def _run_transformers_import_probe(
     node_path: str,
     cwd: Path,
 ) -> subprocess.CompletedProcess[str]:
+    """Check the one package `webgpu_asr_runner.mjs` imports.
+
+    It must stay in step with both the runner and `package.json`. The probe
+    used to also import `@huggingface/tokenizers` and `onnxruntime-node`,
+    which the runner stopped importing when the raw Granite graph paths were
+    retired and which `package.json` never declared -- they resolve today only
+    because npm hoists them out of `@huggingface/transformers`. Probing for an
+    undeclared package makes the repair unreachable: `npm install` installs
+    what `package.json` asks for, so if the hoist ever changed, the probe
+    would fail, the reinstall would not fix it, and every ONNX dictation would
+    end in "run npm install" forever.
+    """
     return subprocess.run(
         [
             node_path,
             "--input-type=module",
             "-e",
-            (
-                "await import('@huggingface/transformers'); "
-                "await import('@huggingface/tokenizers'); "
-                "await import('onnxruntime-node')"
-            ),
+            "await import('@huggingface/transformers')",
         ],
         cwd=str(cwd),
         text=True,
