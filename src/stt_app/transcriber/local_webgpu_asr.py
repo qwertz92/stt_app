@@ -19,7 +19,6 @@ from ..config import (
     CANARY_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
     DOC_MODELS_PATH,
-    LOCAL_ONNX_AUTO_CPU_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_DEVICE_POLICIES,
@@ -91,26 +90,6 @@ _Q4_DOWNLOAD_ALLOW_PATTERNS = (
     "onnx/*_q4.onnx_data_*",
 )
 
-_GRANITE_4_1_INT8_BASE_DOWNLOAD_ALLOW_PATTERNS = (
-    ".gitattributes",
-    "README.md",
-    "LICENSE",
-    "granite_export_metadata.json",
-    "preprocessor_config.json",
-    "processor_config.json",
-    "special_tokens_map.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "test_fixtures/*",
-    "int8/*.onnx",
-    "int8/*.onnx_data",
-)
-
-_GRANITE_4_1_AR_INT8_DOWNLOAD_ALLOW_PATTERNS = (
-    *_GRANITE_4_1_INT8_BASE_DOWNLOAD_ALLOW_PATTERNS,
-    "chat_template.jinja",
-)
-
 _NEMOTRON_INT4_DOWNLOAD_ALLOW_PATTERNS = (
     ".gitattributes",
     "README.md",
@@ -142,39 +121,6 @@ _GRANITE_4_0_Q4_REQUIRED_FILES = (
     "onnx/embed_tokens_q4.onnx_data",
     "onnx/decoder_model_merged_q4.onnx",
     "onnx/decoder_model_merged_q4.onnx_data",
-)
-
-_GRANITE_4_1_AR_INT8_REQUIRED_FILES = (
-    "chat_template.jinja",
-    "granite_export_metadata.json",
-    # The Plus export ships `processor_config.json` (mel parameters nested under
-    # `audio_processor`); only the NAR export ships a flat
-    # `preprocessor_config.json`. Requiring the NAR name here made a fully
-    # downloaded Plus invisible to `resolve_cached_webgpu_model_path`.
-    "processor_config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "int8/encoder.onnx",
-    "int8/encoder.onnx_data",
-    "int8/embed_tokens.onnx",
-    "int8/embed_tokens.onnx_data",
-    "int8/prompt_encode.onnx",
-    "int8/prompt_encode.onnx_data",
-    "int8/decode_step.onnx",
-    "int8/decode_step.onnx_data",
-)
-
-_GRANITE_4_1_NAR_INT8_REQUIRED_FILES = (
-    "granite_export_metadata.json",
-    "preprocessor_config.json",
-    "tokenizer.json",
-    "tokenizer_config.json",
-    "int8/encoder.onnx",
-    "int8/encoder.onnx_data",
-    "int8/embed_tokens.onnx",
-    "int8/embed_tokens.onnx_data",
-    "int8/editor.onnx",
-    "int8/editor.onnx_data",
 )
 
 _NEMOTRON_INT4_REQUIRED_FILES = (
@@ -211,20 +157,6 @@ _GRANITE_4_1_AR_Q4_LAYOUT = _OnnxModelLayout(
     precision="q4",
     allow_patterns=_Q4_DOWNLOAD_ALLOW_PATTERNS,
     required_files=_GRANITE_4_0_Q4_REQUIRED_FILES,
-)
-
-_GRANITE_4_1_AR_INT8_LAYOUT = _OnnxModelLayout(
-    name="granite_4_1_ar_int8",
-    precision="int8",
-    allow_patterns=_GRANITE_4_1_AR_INT8_DOWNLOAD_ALLOW_PATTERNS,
-    required_files=_GRANITE_4_1_AR_INT8_REQUIRED_FILES,
-)
-
-_GRANITE_4_1_NAR_INT8_LAYOUT = _OnnxModelLayout(
-    name="granite_4_1_nar_int8",
-    precision="int8",
-    allow_patterns=_GRANITE_4_1_INT8_BASE_DOWNLOAD_ALLOW_PATTERNS,
-    required_files=_GRANITE_4_1_NAR_INT8_REQUIRED_FILES,
 )
 
 # NeMo exports served by the pure-Python onnx-asr runtime. Both repos also ship
@@ -274,8 +206,6 @@ _MODEL_LAYOUTS: dict[str, _OnnxModelLayout] = {
     "cohere-transcribe-03-2026": _COHERE_Q4_LAYOUT,
     "granite-4.0-1b-speech": _GRANITE_4_0_Q4_LAYOUT,
     "granite-speech-4.1-2b": _GRANITE_4_1_AR_Q4_LAYOUT,
-    "granite-speech-4.1-2b-plus": _GRANITE_4_1_AR_INT8_LAYOUT,
-    "granite-speech-4.1-2b-nar": _GRANITE_4_1_NAR_INT8_LAYOUT,
     "nemotron-3.5-asr-streaming-0.6b-int4": _NEMOTRON_INT4_LAYOUT,
     PARAKEET_MODEL_SIZE: _PARAKEET_INT8_LAYOUT,
     CANARY_MODEL_SIZE: _CANARY_INT8_LAYOUT,
@@ -716,17 +646,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 "Unsupported ONNX/WebGPU device policy "
                 f"'{device}'. Use one of: {', '.join(LOCAL_WEBGPU_DEVICE_POLICIES)}."
             )
-        auto_cpu_preferred = (
-            device == "auto" and model_size in LOCAL_ONNX_AUTO_CPU_MODELS
-        )
-        if auto_cpu_preferred:
-            device = "cpu"
         ProgressReporter.__init__(self)
         self.model_size = model_size
         # Needs self.model_size, so this must run after it is assigned above.
         self.set_language_mode(language_mode)
         self.device = device
-        self._auto_cpu_preferred = auto_cpu_preferred
         self.dtype = str(dtype or LOCAL_ONNX_MODEL_PRECISION.get(model_size) or "q4")
         self.offline_mode = offline_mode
         self.model_dir = (model_dir or "").strip()
@@ -762,21 +686,11 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
 
     def runtime_status_text(self) -> str:
         if not self._runtime_device:
-            if self._auto_cpu_preferred:
-                return (
-                    "ONNX runtime not loaded yet. Device policy: CPU preferred "
-                    "for this model."
-                )
             policy = _DEVICE_POLICY_LABELS.get(self.device, self.device)
             return f"ONNX runtime not loaded yet. Device policy: {policy}."
         label = _RUNTIME_DEVICE_LABELS.get(self._runtime_device, self._runtime_device)
         if self._runtime_device in _ACCELERATED_DEVICES:
             return f"ONNX runtime active on {label}."
-        if self._auto_cpu_preferred:
-            return (
-                "ONNX runtime active on CPU (preferred for this model because "
-                "its encoder is incompatible with WebGPU and DirectML)."
-            )
         if self.device == "cpu":
             return "ONNX runtime active on CPU (selected device policy)."
         return (
@@ -850,12 +764,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 if str(detail).strip()
             ]
         if self._runtime_device not in _ACCELERATED_DEVICES:
-            if self._auto_cpu_preferred:
-                self.runtime_warning = (
-                    "This model intentionally uses CPU because its encoder is "
-                    "incompatible with WebGPU and DirectML in the current runtime."
-                )
-            elif self.device == "cpu":
+            if self.device == "cpu":
                 self.runtime_warning = (
                     "The CPU device policy is selected. This model may be much "
                     "slower than the CTranslate2 Whisper models."

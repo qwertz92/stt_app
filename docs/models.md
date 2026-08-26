@@ -22,10 +22,11 @@ The app has four local runtime families:
 Granite Speech 4.1 2B (the base autoregressive model) runs as a q4
 Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0, and
 currently tops the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
-for accuracy. The Plus and NAR variants are different architectures with no
-faithful q4 package yet, so they stay on the raw INT8 ONNX path; see
+for accuracy. The Plus and NAR variants were **retired on 2026-08-26**: their
+exports cannot use any GPU here, they measured 4.6x and 42x slower than the base
+4.1 2B on WebGPU, and their transcripts were unusable. See
 [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md) for the
-full status and what would change that. Granite 4.0 q4 remains as a smaller GPU
+measurements and what upstream would have to change. Granite 4.0 q4 remains as a smaller GPU
 fallback and may be retired once Granite 4.1 is established on real hardware,
 since 4.1 supersedes it on accuracy.
 
@@ -44,8 +45,6 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `cohere-transcribe-03-2026` | ONNX/WebGPU | ~2.13 GB q4 | 14 explicit languages; no Auto | High-quality local ASR, batch mode only |
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
 | `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** — Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
-| `granite-speech-4.1-2b-plus` | ONNX INT8 AR | ~4.1 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 Plus, speaker tags/timestamps (raw INT8, CPU-bound), batch mode only |
-| `granite-speech-4.1-2b-nar` | ONNX INT8 NAR | ~2.5 GB INT8 | Auto + `de/en/fr/es/pt` | Granite 4.1 NAR, non-autoregressive (raw INT8, CPU-bound), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
 | `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest local model** — RTF ~0.045 on CPU, no GPU or Node.js needed, batch mode only |
 | `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet, ~3x slower, batch mode only |
@@ -122,11 +121,11 @@ samples before changing the default.
 Cohere Transcribe and IBM Granite Speech are selectable under the normal local
 model list, but they are not CTranslate2 models. They use a separate Node.js
 ONNX runtime and run in **batch mode only**. Cohere, Granite 4.0, and Granite
-4.1 2B use Transformers.js q4 ONNX packages loaded through the high-level
-`GraniteSpeechForConditionalGeneration` pipeline. The Granite 4.1 Plus and NAR
-variants still use raw ONNX Runtime graphs at INT8 precision. The helper process
-is kept alive only while a transcription or benchmark case is active, so the app
-does not keep a large ONNX runtime idling after normal dictation.
+4.1 2B all use Transformers.js q4 ONNX packages loaded through the high-level
+`GraniteSpeechForConditionalGeneration` pipeline -- there is exactly one ONNX
+path here since the raw-graph variants were retired. The helper process is kept
+alive only while a transcription or benchmark case is active, so the app does
+not keep a large ONNX runtime idling after normal dictation.
 
 Granite 4.1 2B uses the q4 package
 [`onnx-community/granite-speech-4.1-2b-ONNX`](https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX),
@@ -136,31 +135,10 @@ verified on an Intel Arc A750 to load on **WebGPU** (no `Einsum` shader failure)
 and transcribe German, English, and French correctly at roughly 0.13–0.19
 real-time factor — materially faster than the raw CPU path.
 
-The Granite 4.1 Plus (autoregressive) raw export uses encoder, token embedding,
-prompt-encode, and decode-step graphs plus a host-side audio-token splice and
-KV-cache loop. The NAR export uses encoder, token embedding, and editor graphs
-with CTC draft decoding and insertion slots. These are separate runtime paths,
-not one shared flag.
-
-These raw Granite 4.1 graphs run through `onnxruntime-node` execution providers.
-In `auto`/`gpu` mode the app attempts WebGPU first, then DirectML, then CPU (the
-DirectML execution provider ships with `onnxruntime-node` on Windows). In
-practice they **often still run on CPU**: real hardware testing showed WebGPU
-failing to compile a valid GPU shader for the encoder's `Einsum` operator (a
-tensor-contraction op; explained in the
-[Local ONNX Runtime Guide](local-onnx-runtime.md)) and DirectML failing on
-unsupported operators. The active device is reported through the runtime
-status, so confirm it there. Plus and NAR have no faithful q4 Transformers.js
-package, so they cannot yet use the cleaner WebGPU pipeline path; see
-[Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md).
-
 Community GGUF builds
-([2B Q4_K](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF),
-Plus, NAR) exist for the CrispASR/GGUF runtime and cannot be loaded by the app's
-ONNX paths. The
-[Plus](https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx) and
-[NAR](https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx) ONNX
-repositories the app uses still ship INT8 as their smallest compatible tier.
+([2B Q4_K](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF), and others)
+exist for the CrispASR/GGUF runtime and cannot be loaded by the app's ONNX
+paths.
 
 ### Nemotron 3.5 cache-aware streaming
 
@@ -214,21 +192,17 @@ The model-aware lists are based on the current primary documentation:
 
 The runtime automatically tries an ONNX GPU target first and falls back to CPU
 if no compatible GPU runtime loads. Cohere, Granite 4.0, and Granite 4.1 2B try
-WebGPU, then DirectML on Windows. The Granite 4.1 Plus/NAR raw ONNX graphs use
-the same device policy in the direct `onnxruntime-node` path: WebGPU, then
-DirectML on Windows, then CPU. The app shows a red warning under the model
-selector because pure CPU fallback can be much slower than the CTranslate2
-Whisper models.
+WebGPU, then DirectML on Windows, then CPU. The app shows a red warning under
+the model selector because pure CPU fallback can be much slower than the
+CTranslate2 Whisper models.
 
 The app also falls back from DirectML/WebGPU to CPU during transcription when a
 model loads on a GPU runtime but the first generation call fails because an ONNX
 operator is not supported by that provider. Benchmark `GPU only` may move
 between WebGPU and DirectML, but intentionally does not use CPU fallback, so GPU
 provider failures remain visible. Benchmark summaries and exports retain the
-concise fallback reason. On the tested Intel Arc A750, Granite 4.0 and Granite
-4.1 2B use the Transformers.js pipeline graph and work on WebGPU; the raw
-Granite 4.1 Plus/NAR graphs load on WebGPU but fail at first inference while
-creating an `Einsum` shader, so `auto` falls back to CPU for those variants.
+concise fallback reason. On the tested Intel Arc A750, Cohere, Granite 4.0 and
+Granite 4.1 2B use the Transformers.js pipeline graph and work on WebGPU.
 
 Node.js cannot decode arbitrary audio files through `AudioContext`. The ONNX
 runner decodes WAV input itself and passes Float32 audio directly to
@@ -284,10 +258,7 @@ dictation:
 | `WebGPU only` / `DirectML only` | Pin one backend |
 | `CPU only` | Never try the GPU |
 
-Two models ignore `Auto` and always use CPU, because their encoder cannot run on
-WebGPU or DirectML: **Granite 4.1 2B Plus** and **Granite 4.1 2B NAR**. Choosing
-an explicit GPU target for them still forces the attempt, so a future runtime fix
-can be re-tested. Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU
+Nemotron runs on ONNX Runtime GenAI, which has DirectML and CPU
 only, so every GPU choice means DirectML for it. Parakeet and Canary run through
 `onnx-asr` on CPU and ignore the setting entirely; the row is disabled while one
 of them is selected.
@@ -358,8 +329,6 @@ ML Applications" category rule (see
   | `distil-large-v3.5` | `distil-whisper/distil-large-v3.5-ct2` |
   | `parakeet-tdt-0.6b-v3` | `istupakov/parakeet-tdt-0.6b-v3-onnx` |
   | `canary-1b-v2` | `istupakov/canary-1b-v2-onnx` |
-  | `granite-speech-4.1-2b-plus` | `smcleod/ibm-granite-speech-4.1-2b-plus-onnx` |
-  | `granite-speech-4.1-2b-nar` | `smcleod/ibm-granite-speech-4.1-2b-nar-onnx` |
 
   On a network that blocks Hugging Face wholesale these models cannot be
   fetched at all, and the app says so instead of blaming the connection. The
@@ -458,7 +427,7 @@ uv run python scripts/import_model.py C:\Downloads\faster-whisper-small
 The import script is intentionally CTranslate2-only. For Cohere and Granite,
 use `scripts/download_model.py`; it downloads only the ONNX precision tier
 required by the app (q4 for Cohere, Granite 4.0, and Granite 4.1 2B; INT8 for
-Granite 4.1 Plus/NAR) and stores it in a real local folder to avoid Windows
+Parakeet and Canary) and stores it in a real local folder to avoid Windows
 symlink privilege errors.
 
 <details>
@@ -476,8 +445,6 @@ git clone https://huggingface.co/distil-whisper/distil-large-v3.5-ct2
 git clone https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX
 git clone https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX
 git clone https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX
-git clone https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-plus-onnx
-git clone https://huggingface.co/smcleod/ibm-granite-speech-4.1-2b-nar-onnx
 ```
 
 </details>

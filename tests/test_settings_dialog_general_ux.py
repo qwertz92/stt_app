@@ -468,7 +468,7 @@ def test_language_note_names_the_selected_model_family(dialog):
     assert "Granite" not in canary_note
     assert "translat" in canary_note.lower()
 
-    granite_note = note_for("granite-speech-4.1-2b-plus")
+    granite_note = note_for("granite-speech-4.1-2b")
     assert "Granite" not in granite_note
 
     assert "detects the language itself" in note_for("parakeet-tdt-0.6b-v3")

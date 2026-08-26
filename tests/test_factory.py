@@ -194,16 +194,6 @@ def test_local_onnx_device_setting_reaches_the_transcriber():
         assert transcriber.device == device
 
 
-def test_local_onnx_device_auto_keeps_the_per_model_cpu_preference():
-    nar = AppSettings(
-        engine="local", model_size="granite-speech-4.1-2b-nar", local_onnx_device="auto"
-    )
-    explicit = replace(nar, local_onnx_device="webgpu")
-
-    assert create_transcriber(nar).device == "cpu"
-    assert create_transcriber(explicit).device == "webgpu"
-
-
 def test_device_policy_reaches_nemotron_as_a_provider_order():
     """Nemotron is offered in the ONNX Device picker, so the choice must reach
     it. ORT GenAI has DirectML and CPU only, so every GPU policy means DML."""

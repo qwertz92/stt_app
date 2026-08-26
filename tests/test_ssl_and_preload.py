@@ -429,7 +429,7 @@ class TestEstimateCachedModelBytes:
         sibling `models--<repo>` folder. An unrelated full-repo copy left there
         (e.g. fp32 weights pulled by a conversion experiment) must not be
         reported as this download's progress."""
-        model_name = "granite-speech-4.1-2b-nar"
+        model_name = "granite-speech-4.1-2b"
         repo_id = MODEL_REPO_MAP[model_name]
         repo_basename = repo_id.rsplit("/", 1)[-1]
 
@@ -441,11 +441,13 @@ class TestEstimateCachedModelBytes:
             / "fp32"
         )
         foreign.mkdir(parents=True)
-        (foreign / "editor.onnx_data").write_bytes(b"\x00" * 5_000)
+        (foreign / "audio_encoder.onnx_data").write_bytes(b"\x00" * 5_000)
 
-        destination = tmp_path / repo_basename / "int8"
+        destination = tmp_path / repo_basename / "onnx"
         destination.mkdir(parents=True)
-        (destination / "encoder.onnx_data").write_bytes(b"\x00" * 700)
+        (destination / "audio_encoder_q4.onnx_data").write_bytes(
+            b"\x00" * 700
+        )
 
         with patch(
             "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
@@ -497,9 +499,10 @@ class TestEstimateCachedModelBytes:
     ):
         """The combination that matters: destination absent *and* a foreign copy
         of the same repo present. Falling back to the largest candidate here
-        reported the NAR repo's fp32 conversion weights as this download's
-        progress, which is the original 10078/2490 MB bug."""
-        model_name = "granite-speech-4.1-2b-nar"
+        reported a repo's fp32 conversion weights as this download's progress,
+        which is the original 10078/2490 MB bug (found on the since-retired NAR
+        variant)."""
+        model_name = "granite-speech-4.1-2b"
         repo_id = MODEL_REPO_MAP[model_name]
 
         foreign = (
@@ -510,7 +513,7 @@ class TestEstimateCachedModelBytes:
             / "fp32"
         )
         foreign.mkdir(parents=True)
-        (foreign / "editor.onnx_data").write_bytes(b"\x00" * 9_000)
+        (foreign / "audio_encoder.onnx_data").write_bytes(b"\x00" * 9_000)
         assert not (tmp_path / repo_id.rsplit("/", 1)[-1]).exists()
 
         with (

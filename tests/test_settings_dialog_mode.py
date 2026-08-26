@@ -466,29 +466,6 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     _ = app
 
 
-def test_granite_nar_runtime_note_explains_cpu_preference():
-    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(
-        AppSettings(
-            engine="local",
-            mode="batch",
-            model_size="granite-speech-4.1-2b-nar",
-            language_mode="de",
-        )
-    )
-    dialog = SettingsDialog(
-        settings_store=store,
-        secret_store=_FakeSecretStore(),
-        app_logger=_FakeLogger(),
-    )
-
-    note = dialog.local_model_runtime_warning_label.text()
-    assert "Batch mode only" in note
-    assert "uses CPU by default" in note
-    assert "WebGPU or DirectML" in note
-    _ = app
-
-
 def test_local_model_labels_show_onnx_precision_tags():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
@@ -507,11 +484,7 @@ def test_local_model_labels_show_onnx_precision_tags():
     )
     assert "[INT8]" in _combo_text_for_data(
         dialog.model_combo,
-        "granite-speech-4.1-2b-plus",
-    )
-    assert "[INT8]" in _combo_text_for_data(
-        dialog.model_combo,
-        "granite-speech-4.1-2b-nar",
+        "parakeet-tdt-0.6b-v3",
     )
     assert "[INT4]" in _combo_text_for_data(
         dialog.model_combo,
@@ -528,7 +501,7 @@ def test_local_model_runtime_note_is_short_and_attached_to_model_choice():
         app_logger=_FakeLogger(),
     )
 
-    model_index = dialog.model_combo.findData("granite-speech-4.1-2b-plus")
+    model_index = dialog.model_combo.findData("granite-speech-4.1-2b")
     assert model_index >= 0
     dialog.model_combo.setCurrentIndex(model_index)
 
@@ -542,6 +515,7 @@ def test_local_model_runtime_note_is_short_and_attached_to_model_choice():
     assert "Granite 4.1" not in warning_text
     assert "raw ONNX" not in warning_text
     assert len(warning_text) < 180
+
     _ = app
 
 
@@ -1255,7 +1229,7 @@ def test_settings_history_import_overflow_switches_to_unlimited(
     _ = app
 
 
-def test_granite_language_options_follow_selected_variant():
+def test_language_options_follow_the_selected_local_model():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(
         AppSettings(
@@ -1279,12 +1253,20 @@ def test_granite_language_options_follow_selected_variant():
         "ja",
     ]
 
-    plus_index = dialog.model_combo.findData("granite-speech-4.1-2b-plus")
-    dialog.model_combo.setCurrentIndex(plus_index)
+    # Parakeet accepts no language at all, so the picker must collapse to Auto.
+    parakeet_index = dialog.model_combo.findData("parakeet-tdt-0.6b-v3")
+    assert parakeet_index >= 0
+    dialog.model_combo.setCurrentIndex(parakeet_index)
 
-    assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_item_enabled(dialog.language_combo, "pt") is True
-    assert _combo_item_enabled(dialog.language_combo, "ja") is False
+    assert _combo_data(dialog.language_combo) == ["auto"]
+
+    # Canary is the mirror image: every language except Auto.
+    canary_index = dialog.model_combo.findData("canary-1b-v2")
+    assert canary_index >= 0
+    dialog.model_combo.setCurrentIndex(canary_index)
+
+    assert _combo_item_enabled(dialog.language_combo, "auto") is False
+    assert _combo_item_enabled(dialog.language_combo, "de") is True
     _ = app
 
 

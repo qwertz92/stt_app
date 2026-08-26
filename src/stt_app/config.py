@@ -156,7 +156,7 @@ DEFAULT_OFFLINE_MODE = False
 DEFAULT_KEEP_ONNX_MODEL_LOADED = True
 # Execution-device policy for the local ONNX engines. "auto" keeps the existing
 # behaviour (GPU first, CPU fallback, with the per-model CPU preference in
-# LOCAL_ONNX_AUTO_CPU_MODELS applied); the rest let the user pin a device when a
+# per-model preference applied); the rest let the user pin a device when a
 # benchmark shows one is better on their hardware.
 DEFAULT_LOCAL_ONNX_DEVICE = "auto"
 DEFAULT_START_BEEP_ENABLED = False
@@ -226,8 +226,6 @@ LOCAL_WEBGPU_MODEL_SIZES = (
     "cohere-transcribe-03-2026",
     "granite-4.0-1b-speech",
     "granite-speech-4.1-2b",
-    "granite-speech-4.1-2b-plus",
-    "granite-speech-4.1-2b-nar",
 )
 
 NEMOTRON_MODEL_SIZE = "nemotron-3.5-asr-streaming-0.6b-int4"
@@ -255,23 +253,15 @@ MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
         "distil-large-v3.5",
         PARAKEET_MODEL_SIZE,
         CANARY_MODEL_SIZE,
-        "granite-speech-4.1-2b-plus",
-        "granite-speech-4.1-2b-nar",
     }
 )
 
-GRANITE_4_1_MODEL_SIZES = (
-    "granite-speech-4.1-2b",
-    "granite-speech-4.1-2b-plus",
-    "granite-speech-4.1-2b-nar",
-)
+GRANITE_4_1_MODEL_SIZES = ("granite-speech-4.1-2b",)
 
 LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "cohere-transcribe-03-2026": "q4",
     "granite-4.0-1b-speech": "q4",
     "granite-speech-4.1-2b": "q4",
-    "granite-speech-4.1-2b-plus": "int8",
-    "granite-speech-4.1-2b-nar": "int8",
     NEMOTRON_MODEL_SIZE: "int4",
     PARAKEET_MODEL_SIZE: "int8",
     CANARY_MODEL_SIZE: "int8",
@@ -281,8 +271,6 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
     "cohere-transcribe-03-2026": "ONNX/WebGPU q4",
     "granite-4.0-1b-speech": "ONNX/WebGPU q4",
     "granite-speech-4.1-2b": "ONNX/WebGPU q4",
-    "granite-speech-4.1-2b-plus": "ONNX INT8 AR",
-    "granite-speech-4.1-2b-nar": "ONNX INT8 NAR",
     NEMOTRON_MODEL_SIZE: "ORT GenAI INT4, 560 ms streaming",
     PARAKEET_MODEL_SIZE: "onnx-asr INT8 TDT, CPU",
     CANARY_MODEL_SIZE: "onnx-asr INT8 AED, CPU",
@@ -290,8 +278,6 @@ LOCAL_ONNX_MODEL_RUNTIME_LABELS: dict[str, str] = {
 
 GRANITE_4_1_REPO_MAP: dict[str, str] = {
     "granite-speech-4.1-2b": "onnx-community/granite-speech-4.1-2b-ONNX",
-    "granite-speech-4.1-2b-plus": "smcleod/ibm-granite-speech-4.1-2b-plus-onnx",
-    "granite-speech-4.1-2b-nar": "smcleod/ibm-granite-speech-4.1-2b-nar-onnx",
 }
 
 LOCAL_WEBGPU_DEVICE_POLICIES = ("auto", "gpu", "cpu", "dml", "webgpu")
@@ -314,20 +300,6 @@ def nemotron_provider_order(device_policy: str) -> tuple[str, ...]:
     return NEMOTRON_DEVICE_PROVIDER_ORDER.get(
         str(device_policy or "").strip().lower(), ("dml", "cpu")
     )
-
-# Models whose known-fastest compatible path is CPU. Explicit non-auto benchmark
-# targets still bypass this policy so future runtime fixes can be re-evaluated.
-# Both raw-graph Granite 4.1 models share the conformer encoder whose block-local
-# attention no GPU execution provider here can run (WebGPU fails the `Einsum`
-# shader, DirectML cannot execute the 5-D attention MatMuls). Their WebGPU
-# sessions still *create* successfully and only fail at inference, so the
-# load-time probe cannot detect it: without this policy every dictation paid a
-# full WebGPU load plus a doomed attempt before falling back, measured at 75-110 s
-# versus 13.6 s on CPU for the same clip.
-LOCAL_ONNX_AUTO_CPU_MODELS = (
-    "granite-speech-4.1-2b-nar",
-    "granite-speech-4.1-2b-plus",
-)
 
 LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS: dict[str, tuple[str, ...]] = {
     "auto": ("auto",),
@@ -388,8 +360,6 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "cohere-transcribe-03-2026": 2_128,
     "granite-4.0-1b-speech": 1_843,
     "granite-speech-4.1-2b": 1_843,
-    "granite-speech-4.1-2b-plus": 4_065,
-    "granite-speech-4.1-2b-nar": 2_490,
     NEMOTRON_MODEL_SIZE: 793,
     # Measured from the int8 downloads: 670.48 MB and 1029.33 MB.
     PARAKEET_MODEL_SIZE: 670,
@@ -735,7 +705,6 @@ CANARY_LANGUAGE_MODES = (
     "it", "lt", "lv", "mt", "nl", "pl", "pt", "ro", "ru", "sk", "sl", "sv", "uk",
 )
 GRANITE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt", "ja")
-GRANITE_NO_JAPANESE_LANGUAGE_MODES = ("auto", "de", "en", "fr", "es", "pt")
 # Bare app language codes for Nemotron's transcription-ready and broad-coverage
 # locales. "no" maps to the official Norwegian Bokmal prompt ID.
 NEMOTRON_LANGUAGE_IDS: dict[str, int] = {
@@ -1029,8 +998,6 @@ MODEL_LANGUAGE_MODES: dict[tuple[str, str], tuple[str, ...]] = {
     ("local", "cohere-transcribe-03-2026"): COHERE_LANGUAGE_MODES,
     ("local", "granite-4.0-1b-speech"): GRANITE_LANGUAGE_MODES,
     ("local", "granite-speech-4.1-2b"): GRANITE_LANGUAGE_MODES,
-    ("local", "granite-speech-4.1-2b-plus"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
-    ("local", "granite-speech-4.1-2b-nar"): GRANITE_NO_JAPANESE_LANGUAGE_MODES,
     ("local", NEMOTRON_MODEL_SIZE): NEMOTRON_LANGUAGE_MODES,
     ("local", PARAKEET_MODEL_SIZE): PARAKEET_LANGUAGE_MODES,
     ("local", CANARY_MODEL_SIZE): CANARY_LANGUAGE_MODES,

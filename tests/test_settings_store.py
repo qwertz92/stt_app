@@ -296,7 +296,10 @@ def test_webgpu_local_model_is_valid(tmp_path):
     assert settings.model_size == "cohere-transcribe-03-2026"
 
 
-def test_granite_4_1_int8_local_model_is_valid(tmp_path):
+def test_a_retired_local_model_falls_back_to_the_default(tmp_path):
+    """The two raw-graph Granite 4.1 variants were removed on 2026-08-26. A
+    settings file that still names one must open on the default model rather
+    than failing to build a transcriber."""
     settings_path = tmp_path / "settings.json"
     settings_path.write_text(
         json.dumps({"engine": "local", "model_size": "granite-speech-4.1-2b-nar"}),
@@ -306,7 +309,7 @@ def test_granite_4_1_int8_local_model_is_valid(tmp_path):
     settings = SettingsStore(settings_path).load()
 
     assert settings.engine == "local"
-    assert settings.model_size == "granite-speech-4.1-2b-nar"
+    assert settings.model_size == DEFAULT_MODEL_SIZE
 
 
 def test_elevenlabs_engine_is_valid(tmp_path):

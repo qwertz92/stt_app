@@ -3241,3 +3241,48 @@ plus the download lock finally made real.
   works on immutable in-memory bytes. Two tests already covered the
   compare-and-set identity half; the interleaving half was only an argument, so
   it is now a test that pauses inside the write and proves the reader blocks.
+- **Granite 4.1 Plus and NAR retired; the raw ONNX graph runtime went with
+  them.** Asked to remove NAR after a benchmark, and asked what Plus was still
+  for. The measurements answered both at once (user's own run, 2026-08-25,
+  German dictation, all device targets): base 4.1 2B **RTF 0.100 on WebGPU**
+  with correct German; NAR **0.460, CPU only, word-salad transcript**; Plus
+  **4.161, CPU only, hallucinated** -- slower than real time, 42x the base
+  model. For scale, Parakeet does the same job at 0.043 on plain CPU.
+  - The graph-level cause was confirmed rather than assumed, by reading the
+    exports: the two smcleod encoders contain **48 `Einsum` nodes each**, all
+    `b m h c d, c r d -> b m h c r`; the `onnx-community` export of the base
+    model contains **zero** and writes the same attention as
+    Reshape/Transpose/MatMul. So the answer to "why does 2B run on the GPU and
+    Plus does not" is the export, not the model.
+  - Removing both (rather than only NAR) is what let the whole raw
+    `onnxruntime-node` path go: ~670 lines of the JS runner, the INT8 layouts,
+    the per-model auto-CPU preference, and the top-level `onnxruntime-node`
+    dependency. `npm ls onnxruntime-node` now shows exactly one nested copy --
+    the one Transformers.js pins -- which retires the two-native-runtimes
+    hazard the pin note was about. Verified afterwards by transcribing with
+    Cohere and Granite 4.1 2B on WebGPU.
+  - A settings file still naming a retired model needs no migration:
+    `settings_store` already falls back to the default for an unknown
+    `model_size`. That is now a test rather than an assumption.
+- **A patch helper that truncated a file before it knew what to write.** My
+  `edit()` wrapper was `io.open(p, "w").write(fn(s))` -- Python opens (and
+  truncates) before evaluating `fn`, so when the substitution assertion failed
+  the file was left empty. Recovered from git. Compute the new content first,
+  then open for writing.
+- **Parakeet on DirectML: still impossible, and it is not a pinning problem.**
+  Another agent had suggested it as a ~2x speedup blocked by "pip problems".
+  Both halves check out, and PyPI metadata settles it without an experiment:
+  `onnxruntime-genai-directml` 0.14.1 requires `onnxruntime-directml>=1.26.0`,
+  and the latest published `onnxruntime-directml` is **1.24.4** -- the required
+  releases do not exist. Meanwhile `onnxruntime-genai` 0.15.2 (Nemotron)
+  requires `onnxruntime>=1.28.0`, which the DirectML distribution cannot
+  provide since it shares the same `onnxruntime` package directory. That is the
+  mechanical reason the earlier mixed install died with "API version [26] is not
+  available". A second isolated Python environment would work, and would save
+  ~1.3 s per minute of dictation on the already-fastest engine; not worth a
+  second venv, a subprocess protocol and a packaging story.
+- **ORT 1.28.0 -> 1.29.0 is worth ~4% for Parakeet.** Measured in a throwaway
+  venv against the same 62.7 s clip, three runs each: best RTF 0.05523 vs
+  0.05774, and every 1.29 run beat every 1.28 run. `onnxruntime-genai` 0.15.2
+  loads and runs Nemotron against 1.29 as well. Small but free; kept out of the
+  release commit because it changes the native runtime under three engines.

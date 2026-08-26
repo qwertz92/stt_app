@@ -1,5 +1,35 @@
 # Granite Speech 4.1 ONNX Variants: Pipeline-Path Status & Future Work
 
+> ## Retired on 2026-08-26
+>
+> **`granite-speech-4.1-2b-plus` and `granite-speech-4.1-2b-nar` are no longer
+> selectable models**, and the raw `onnxruntime-node` graph runtime that served
+> them was removed with them. This document stays as the research record of why
+> they never worked well and what would have to change upstream.
+>
+> What decided it, from a benchmark run on the user's own machine (2026-08-25,
+> German dictation, all three device targets):
+>
+> | model | best device | RTF | transcript |
+> | --- | --- | --- | --- |
+> | `granite-speech-4.1-2b` (pipeline q4) | WebGPU | **0.100** | correct German |
+> | `granite-speech-4.1-2b-nar` (raw INT8) | CPU only | 0.460 | unusable word salad |
+> | `granite-speech-4.1-2b-plus` (raw INT8) | CPU only | **4.161** | hallucinated; slower than real time |
+> | `parakeet-tdt-0.6b-v3` (onnx-asr INT8) | CPU | 0.043 | correct German |
+>
+> Both raw variants failed on WebGPU **and** on DirectML. The graph-level reason
+> was confirmed by inspecting the exports directly: the two smcleod encoders
+> contain **48 `Einsum` nodes each**, all
+> `b m h c d, c r d -> b m h c r` -- a 5-dimensional contraction that the WebGPU
+> execution provider has no shader for and DirectML cannot execute. The
+> `onnx-community` export of the base 4.1 2B writes the same attention as
+> Reshape/Transpose/MatMul and contains **zero** `Einsum` nodes. It is the
+> export, not the model, that cannot use a GPU.
+>
+> Bringing them back needs a published export without those nodes (or an
+> execution provider that implements them), plus a q4 package -- the same three
+> blockers this document already describes.
+
 Last verified: **2026-06-17** (on the Windows / Intel Arc A750 development machine,
 with live Hugging Face access and a working WebGPU runtime).
 

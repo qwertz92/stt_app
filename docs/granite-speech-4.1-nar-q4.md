@@ -1,6 +1,8 @@
 # Granite Speech 4.1 NAR: q4 self-conversion, the pipeline fix, and the GPU question
 
-Status: **living research record** (last updated 2026-06-24). This is the durable
+Status: **retired research record** (investigation closed 2026-08-26; see
+[granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.md)
+for the measurements that ended it). Last updated 2026-06-24. This is the durable
 write-up of the NAR q4 investigation so the work — and the dead-ends — do not have
 to be repeated. It is also the source text for the eventual Hugging Face model card.
 
@@ -152,15 +154,10 @@ Source must be **FP32**, not fp16w: the fp16w graphs hide weights behind
 the same op the AR q4 packages use). It is *not* `ai.onnx`-only, so these graphs
 are **not** compatible with the Rust `ort`/parakeet-rs contract smcleod targets.
 
-Reproduce:
-```bash
-# HQQ (highest quality, needs torch):
-uv run --with onnx --with onnx-ir --with torch \
-    python scripts/convert_granite_nar_q4.py --method hqq --out-dir <dir>
-# RTN (fast, torch-free):
-uv run --with onnx --with onnx-ir \
-    python scripts/convert_granite_nar_q4.py --method rtn --out-dir <dir>
-```
+The converter itself (`scripts/convert_granite_nar_q4.py`) was deleted when
+NAR was retired on 2026-08-26; recover it from git history if the
+investigation is ever reopened. It took `--method hqq` (highest quality,
+needs torch) or `--method rtn` (fast, torch-free) plus `--out-dir`.
 Conversion cost: ~16–32 GB RAM peak (FP32 editor is 6.5 GB; HQQ adds torch),
 ~10–17 GB transient disk, ~40 s (RTN) to ~5 min (HQQ) for the editor.
 

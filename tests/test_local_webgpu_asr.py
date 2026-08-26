@@ -127,12 +127,10 @@ def test_selectable_webgpu_models_use_granite_4_1_2b_q4_and_keep_4_0_q4():
     for model_name in GRANITE_4_1_MODEL_SIZES:
         assert model_name in LOCAL_WEBGPU_MODEL_SIZES
         assert model_name in MODEL_REPO_MAP
-    # Granite 4.1 2B now ships as a q4 Transformers.js package on the pipeline
-    # path; Plus and NAR stay on the raw INT8 graph tier until a verified q4
-    # package exists for them.
+    # Granite 4.1 2B ships as a q4 Transformers.js package on the pipeline
+    # path. The raw INT8 graph tier (Plus, NAR) was retired on 2026-08-26, so
+    # every selectable ONNX model now runs through that one pipeline.
     assert LOCAL_ONNX_MODEL_PRECISION["granite-speech-4.1-2b"] == "q4"
-    assert LOCAL_ONNX_MODEL_PRECISION["granite-speech-4.1-2b-plus"] == "int8"
-    assert LOCAL_ONNX_MODEL_PRECISION["granite-speech-4.1-2b-nar"] == "int8"
     assert MODEL_REPO_MAP["granite-speech-4.1-2b"] == (
         "onnx-community/granite-speech-4.1-2b-ONNX"
     )
@@ -250,73 +248,6 @@ def test_download_webgpu_model_snapshot_uses_granite_4_1_2b_q4_patterns(
     assert "int8/*.onnx" not in kwargs["allow_patterns"]
 
 
-def test_download_webgpu_model_snapshot_uses_granite_4_1_plus_int8_patterns(
-    monkeypatch,
-    tmp_path,
-):
-    calls = []
-
-    def fake_snapshot_download(repo_id, **kwargs):
-        calls.append((repo_id, kwargs))
-        _materialise_required_files(
-            repo_id, kwargs["local_dir"], kwargs.get("allow_patterns")
-        )
-        return str(tmp_path / "snapshot")
-
-    monkeypatch.setitem(
-        sys.modules,
-        "huggingface_hub",
-        SimpleNamespace(snapshot_download=fake_snapshot_download),
-    )
-
-    result = download_webgpu_model_snapshot(
-        "granite-speech-4.1-2b-plus",
-        str(tmp_path),
-    )
-
-    assert result == str(tmp_path / "snapshot")
-    repo_id, kwargs = calls[0]
-    assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b-plus"]
-    assert kwargs["local_dir"] == str(tmp_path / "ibm-granite-speech-4.1-2b-plus-onnx")
-    assert kwargs["max_workers"] == 2
-    assert "int8/*.onnx" in kwargs["allow_patterns"]
-    assert "int8/*.onnx_data" in kwargs["allow_patterns"]
-    assert "chat_template.jinja" in kwargs["allow_patterns"]
-    assert "onnx/*_q4.onnx" not in kwargs["allow_patterns"]
-
-
-def test_download_webgpu_model_snapshot_uses_granite_4_1_nar_int8_patterns(
-    monkeypatch,
-    tmp_path,
-):
-    calls = []
-
-    def fake_snapshot_download(repo_id, **kwargs):
-        calls.append((repo_id, kwargs))
-        _materialise_required_files(
-            repo_id, kwargs["local_dir"], kwargs.get("allow_patterns")
-        )
-        return str(tmp_path / "snapshot")
-
-    monkeypatch.setitem(
-        sys.modules,
-        "huggingface_hub",
-        SimpleNamespace(snapshot_download=fake_snapshot_download),
-    )
-
-    download_webgpu_model_snapshot("granite-speech-4.1-2b-nar", str(tmp_path))
-
-    repo_id, kwargs = calls[0]
-    assert repo_id == MODEL_REPO_MAP["granite-speech-4.1-2b-nar"]
-    assert kwargs["local_dir"] == str(tmp_path / "ibm-granite-speech-4.1-2b-nar-onnx")
-    assert "int8/editor.onnx" not in kwargs["allow_patterns"]
-    assert "int8/*.onnx" in kwargs["allow_patterns"]
-    assert "int8/*.onnx_data" in kwargs["allow_patterns"]
-    assert "chat_template.jinja" not in kwargs["allow_patterns"]
-    assert "test_fixtures/*" in kwargs["allow_patterns"]
-    assert "onnx/*_q4.onnx" not in kwargs["allow_patterns"]
-
-
 @pytest.mark.parametrize("model_name", LOCAL_ONNX_MODEL_SIZES)
 def test_download_destination_matches_the_local_dir_actually_downloaded_into(
     monkeypatch,
@@ -365,16 +296,6 @@ def test_required_file_validation_accepts_granite_4_1_2b_q4_snapshot(tmp_path):
     assert find_cached_webgpu_models(str(tmp_path)) == ["granite-speech-4.1-2b"]
 
 
-def test_required_file_validation_accepts_granite_4_1_nar_int8_snapshot(tmp_path):
-    snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b-nar")
-
-    assert (
-        resolve_cached_webgpu_model_path("granite-speech-4.1-2b-nar", str(tmp_path))
-        == snapshot
-    )
-    assert find_cached_webgpu_models(str(tmp_path)) == ["granite-speech-4.1-2b-nar"]
-
-
 def test_required_file_validation_rejects_incomplete_granite_4_1_snapshot(tmp_path):
     snapshot = _write_required_snapshot(tmp_path, "granite-speech-4.1-2b")
     (snapshot / "onnx/decoder_model_merged_q4.onnx_data").unlink()
@@ -420,65 +341,13 @@ def test_granite_4_1_transcriber_allows_auto_and_french_language():
     assert french_transcriber._language_arg() == "fr"
 
 
-def test_granite_4_1_transcriber_defaults_to_int8_dtype():
-    transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b-nar",
-        language_mode="en",
-    )
-
-    assert transcriber.dtype == "int8"
-    assert transcriber.device == "cpu"
-    assert "CPU preferred for this model" in transcriber.runtime_status_text()
-
-    transcriber._set_runtime_status("cpu", False, [])
-
-    assert "preferred for this model" in transcriber.runtime_status_text()
-    assert "intentionally uses CPU" in transcriber.runtime_warning
-    assert "fallback was not available" not in transcriber.runtime_status_text()
-
-
-def test_granite_4_1_plus_prefers_cpu_like_nar():
-    """Plus shares NAR's conformer encoder, whose block-local attention no GPU
-    execution provider here can run. Its WebGPU session still creates fine and
-    only fails at inference, so without this preference every dictation paid a
-    doomed WebGPU load plus a failed attempt before falling back."""
-    transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b-plus",
-        language_mode="en",
-    )
-
-    assert transcriber.device == "cpu"
-    assert "CPU preferred for this model" in transcriber.runtime_status_text()
-
-
-def test_granite_4_1_plus_explicit_gpu_target_bypasses_cpu_preference():
-    transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b-plus",
-        language_mode="en",
-        device="webgpu",
-    )
-
-    assert transcriber.device == "webgpu"
-
-
-def test_granite_4_1_plus_required_files_match_the_published_repo():
-    """The Plus export ships `processor_config.json`; only the NAR export ships a
-    flat `preprocessor_config.json`. Requiring the NAR name made a fully
-    downloaded Plus invisible and unusable."""
-    plus_required = set(local_webgpu_asr._REQUIRED_FILES["granite-speech-4.1-2b-plus"])
-    nar_required = set(local_webgpu_asr._REQUIRED_FILES["granite-speech-4.1-2b-nar"])
-
-    assert "processor_config.json" in plus_required
-    assert "preprocessor_config.json" not in plus_required
-    assert "preprocessor_config.json" in nar_required
-
-
 @pytest.mark.parametrize("model_name", LOCAL_ONNX_MODEL_SIZES)
 def test_every_required_file_is_covered_by_the_download_allow_patterns(model_name):
     """A required file the download never fetches is unrecoverable at runtime:
     the snapshot check fails, an online retry re-downloads, the allow-pattern
     for a nonexistent file matches nothing, and the same check fails again.
-    This is what made Granite 4.1 Plus permanently unusable."""
+    This is what made the (since retired) Granite 4.1 Plus permanently
+    unusable."""
     layout = local_webgpu_asr._MODEL_LAYOUTS[model_name]
 
     for relative in layout.required_files:
@@ -487,19 +356,9 @@ def test_every_required_file_is_covered_by_the_download_allow_patterns(model_nam
         ), f"{model_name}: '{relative}' is required but no allow-pattern fetches it"
 
 
-def test_granite_4_1_nar_explicit_gpu_target_bypasses_cpu_preference():
-    transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b-nar",
-        language_mode="en",
-        device="dml",
-    )
-
-    assert transcriber.device == "dml"
-
-
 def test_explicit_cpu_policy_does_not_report_failed_gpu_fallback():
     transcriber = LocalOnnxWebGpuTranscriber(
-        model_size="granite-speech-4.1-2b-plus",
+        model_size="granite-speech-4.1-2b",
         language_mode="en",
         device="cpu",
     )

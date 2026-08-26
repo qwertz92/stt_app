@@ -73,7 +73,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `transcriber/local_faster_whisper.py` | Batch + streaming via faster-whisper; `find_cached_models`; `preload_model`; cooperative batch cancel via `set_cancel_check` |
 | `transcriber/local_nemotron.py` | Batch + true cache-aware streaming for Nemotron 3.5 INT4 via ONNX Runtime GenAI |
 | `transcriber/local_onnx_asr.py` | Batch-only NVIDIA NeMo models (Parakeet TDT, Canary) via the pure-Python `onnx-asr` runtime; CPU only, no Node.js; mid-run cancel via ONNX Runtime `RunOptions.terminate` |
-| `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models) |
+| `transcriber/local_webgpu_asr.py` | Shared local ONNX inventory/download helpers plus the batch-only Cohere/Granite Node.js runtime (supported daily-use GPU models); cancel kills the child |
 | `transcriber/assemblyai_provider.py` | Batch + streaming via AssemblyAI SDK |
 | `transcriber/openai_provider.py` | Batch via OpenAI API |
 | `transcriber/groq_provider.py` | Batch via Groq SDK |
@@ -695,10 +695,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_model_cache_dirs` — that exists for detection/delete/cleanup and
   legitimately includes both the flat and `models--<repo>` layouts plus the
   default cache. Sizing those made a foreign directory masquerade as the
-  download: `scripts/convert_granite_nar_q4.py` pulls the NAR repo's fp32
-  weights with `cache_dir=` (9.4 GB in `models--smcleod--…-nar-onnx`), so the
-  NAR download reported a fixed `10078/2490 MB, approx. 100%, measuring speed`
-  while the real flat destination was still filling. A parametrized test pins
+  download: a conversion script pulled a repo's fp32 weights with `cache_dir=`
+  (9.4 GB in `models--smcleod--…-nar-onnx`, since retired), so that download
+  reported a fixed `10078/2490 MB, approx. 100%, measuring speed` while the real
+  flat destination was still filling. A parametrized test pins
   `webgpu_download_destination` to the `local_dir` actually downloaded into so
   the two cannot drift. Snapshot entries that are symlinks are skipped when
   summing, because `stat()` follows them into an already-counted blob and would
@@ -939,46 +939,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   high-level Transformers.js `GraniteSpeechForConditionalGeneration` pipeline.
   Granite 4.1 2B points at `onnx-community/granite-speech-4.1-2b-ONNX` (verified
   on WebGPU / Arc A750 on 2026-06-17: correct de/en/fr, no `Einsum` crash).
-  Granite 4.1 **Plus** and **NAR** stay on raw INT8 `onnxruntime-node` graph
-  sessions because they are different architectures (`granite_speech_plus` /
-  `granite_speech_nar`) with no faithful q4 Transformers.js package — see
-  `docs/granite-speech-4.1-onnx-variants.md` for the full status, the three
-  blockers, and what would change that. Do not relabel a Plus build as base
-  `granite_speech` to force it onto the pipeline path: that produces broken
-  English (verified with the valoomba build).
-  The raw Granite 4.1 Plus/NAR graphs run through `onnxruntime-node` execution
-  providers: `webgpu_asr_runner.mjs` `ortExecutionProviders` returns
-  `webgpu`/`dml`/`cpu`. DirectML ships with `onnxruntime-node` on Windows. NAR's
-  conformer encoder is verified CPU-only in this runtime (WebGPU `Einsum` shader
-  failure; DirectML cannot execute its 5-D attention MatMuls), so NAR normalizes
-  the normal `auto` policy to CPU and avoids retrying known-broken GPU paths on
-  every dictation. Explicit WebGPU/DirectML benchmark targets still bypass this
-  preference so a future runtime or graph fix can be detected. **Plus shares that
-  encoder and therefore shares the preference** (`LOCAL_ONNX_AUTO_CPU_MODELS`):
-  its WebGPU session *creates* successfully and only fails at inference on the
-  same `/encoder/layers.0/attn/Einsum` node, so the load-time probe cannot detect
-  it and `_should_restart_after_cpu_fallback` tore the process down after every
-  CPU fallback — measured at 75-110 s per dictation versus 13.6 s on CPU.
-  The active device is reported in runtime
-  status, and diagnostics must distinguish this intentional CPU preference
-  (or an explicit CPU policy) from a real failed GPU fallback. These raw paths
-  are separate from the Cohere / Granite 4.0 / Granite
-  4.1 2B Transformers.js pipeline path.
-  **The two raw-graph repos disagree on the audio-config filename**: the NAR
-  export ships a flat `preprocessor_config.json`, the Plus export ships
-  `processor_config.json` with the same mel parameters nested under
-  `audio_processor`. The Plus required-file list was copied from NAR's and
-  demanded the NAR name, so `resolve_cached_webgpu_model_path` returned `None`
-  for a fully downloaded Plus: it never appeared as cached, offline runs raised
-  "not cached locally", and an online run would re-download and fail the same
-  check forever because the allow-pattern for a nonexistent file matches
-  nothing. `Granite41AudioFrontend` already accepts both shapes
-  (`config?.melspec_kwargs || config`), so the runner resolves the filename via
-  `readGranite41AudioConfig`. When adding a raw-graph model, verify every
-  required file against the actual repo listing rather than copying a sibling's
-  list — a required file that the repo does not ship is unrecoverable at
-  runtime, and a test asserts each required file is covered by the download
-  allow-patterns.
+  **Granite 4.1 Plus and NAR were retired on 2026-08-26**, and the raw
+  `onnxruntime-node` graph runtime that served them was removed with them, so
+  there is exactly one ONNX inference path here and `onnxruntime-node` is no
+  longer a top-level npm dependency (Transformers.js keeps its own nested pin).
+  They were removed on measurement, not preference: on the user's machine the
+  base 4.1 2B ran at RTF 0.100 on WebGPU while NAR managed 0.460 and Plus 4.161
+  -- both CPU-only, both with unusable transcripts. The graph-level cause is
+  recorded in `docs/granite-speech-4.1-onnx-variants.md`: their encoders carry
+  48 `Einsum` nodes each (`b m h c d, c r d -> b m h c r`, a 5-D contraction the
+  WebGPU EP has no shader for and DirectML cannot execute), while the
+  `onnx-community` export of the base model writes the same attention as
+  Reshape/Transpose/MatMul and has none. Before re-adding any raw-graph model,
+  read that document and verify every required file against the actual repo
+  listing rather than copying a sibling's list -- a required file the repo does
+  not ship is unrecoverable at runtime, and a test asserts each required file is
+  covered by the download allow-patterns. Do not relabel a Plus build as base
+  `granite_speech` to force it onto the pipeline path either: that produces
+  broken English (verified with the valoomba build).
   `keep_onnx_model_loaded` now defaults to **on**: the flag only takes effect
   once such a model is selected, and without it every single dictation pays the
   full Node + ONNX load while faster-whisper and Nemotron stay warm. With it on
@@ -1009,15 +987,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   pressing the recording hotkey does not block on model loading. Its internal
   runtime VAD follows the app's VAD setting. The language UI exposes only the
   transcription-ready and broad-coverage official prompt IDs.
-- **onnxruntime-node follows the Transformers.js pin**: Transformers.js
-  hard-pins an exact `onnxruntime-node` version (1.24.3 across 4.0-4.2), and
-  the Cohere/Granite pipeline models always run on that nested pin. Do not
-  bump the top-level `onnxruntime-node` beyond it: npm then installs two
-  different native ORT runtimes into one Node process (observed API-version
-  mismatch warnings), and only the raw Granite Plus/NAR paths would use the
-  newer copy. Revisit when Transformers.js itself moves its pin; forcing a
-  newer version via `overrides` is upstream-untested and needs explicit
-  pipeline verification. A 2026-07-21 benchmark found Transformers.js
+- **`onnxruntime-node` is no longer a direct dependency**: it was only ever
+  needed by the raw Granite 4.1 Plus/NAR graph sessions, which were retired on
+  2026-08-26. The pipeline models run on the copy Transformers.js pins itself
+  (exactly 1.24.3 across 4.0-4.2), so `npm ls onnxruntime-node` must show one
+  nested entry and nothing at the top level. **Do not add it back.** Declaring
+  a newer version alongside makes npm install two different native ORT runtimes
+  into one Node process (observed API-version mismatch warnings), and nothing
+  in the app would use the newer copy. A 2026-07-21 benchmark found Transformers.js
   4.1->4.2 and CTranslate2 4.7.1->4.8.1 performance-neutral on AMD hardware
   (CT2 4.8.0's int8 PACKED_GEMM speedup is Intel-MKL-only). Re-checked on
   2026-08-11 against Transformers.js 4.2.0: the nested pin is still exactly
@@ -1074,9 +1051,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   "ONNX Device" row now feeds the same policy (`LOCAL_WEBGPU_DEVICE_POLICIES`)
   into `LocalOnnxWebGpuTranscriber`, with the same wording as the benchmark
   choices so a device proven faster there can be selected for real use.
-  `auto` keeps every existing behaviour, including the per-model CPU
-  preference in `LOCAL_ONNX_AUTO_CPU_MODELS`; an explicit target still bypasses
-  that preference. Unlike `language_mode`, the device **is** part of the
+  `auto` keeps every existing behaviour. (A per-model CPU preference,
+  `LOCAL_ONNX_AUTO_CPU_MODELS`, existed for the two retired raw-graph Granite
+  variants and was removed with them; re-add it if a model ever again loads on
+  a GPU and only fails at inference, which a load-time probe cannot detect.)
+  Unlike `language_mode`, the device **is** part of the
   transcriber cache key *and* the preload key: it is baked into the loaded
   runtime, so changing it must reload rather than reuse. An unknown stored
   value falls back to `auto` via `normalize_local_onnx_device` instead of

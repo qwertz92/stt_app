@@ -135,7 +135,7 @@ Right-click the **system tray icon** → **Quit**.
 | [Streaming Mode](docs/streaming-mode.md) | Developers | Streaming architecture and tradeoffs |
 | [Local ONNX Runtime Guide](docs/local-onnx-runtime.md) | Developers | How the GPU/ONNX local models run (WebGPU, DirectML, CPU, memory) |
 | [How q4 Conversion Works](docs/local-onnx-q4-conversion.md) | Curious users | What q4 means, q4 vs int4, why 1B/2B local model downloads are ~2 GB |
-| [Granite 4.1 ONNX Variants](docs/granite-speech-4.1-onnx-variants.md) | Developers | Status of the 4.1 2B / Plus / NAR variants and what would enable them |
+| [Granite 4.1 ONNX Variants](docs/granite-speech-4.1-onnx-variants.md) | Developers | Why only the base 4.1 2B is shipped, and why Plus and NAR were retired |
 | [Parakeet Evaluation](docs/parakeet-evaluation.md) | Developers | Decision record: why the NVIDIA NeMo runtime is not used (the model itself ships via onnx-asr) |
 | [Cohere Transcribe Evaluation](docs/cohere-transcribe-evaluation.md) | Developers | Notes on the Cohere Transcribe local model |
 | [FLEURS & Fun-ASR Evaluation](docs/funasr-and-fleurs-evaluation.md) | Developers | Background on the FLEURS benchmark and the Alibaba Fun-ASR engine |

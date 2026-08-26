@@ -290,8 +290,8 @@ Alibaba). ModelScope mirrors the same repository IDs (`onnx-community/…`,
 redirecting back to Hugging Face, so it is typically reached even when the
 Hugging Face category is blocked. No configuration is required. To disable the
 fallback, set `STT_APP_DISABLE_MODELSCOPE=1`. A few repositories are not
-mirrored there (e.g. `distil-large-v3.5`, the `smcleod` Granite 4.1 Plus/NAR
-ONNX repos); for those, use a machine without the category block or ask IT to
+mirrored there (e.g. `distil-large-v3.5`, the Parakeet and Canary ONNX
+repos); for those, use a machine without the category block or ask IT to
 allow the Hugging Face hosts above.
 
 **If ModelScope is *also* blocked.** ModelScope worked in our environment, but

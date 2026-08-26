@@ -58,7 +58,7 @@ Status update on 2026-06-17:
 - Granite Speech 4.1 2B now uses a q4 Transformers.js package
   (`onnx-community/granite-speech-4.1-2b-ONNX`) on the same WebGPU pipeline as
   Granite 4.0 and currently tops the Open ASR Leaderboard. Granite 4.1 Plus and
-  NAR remain on the raw INT8 path; see
+  NAR were retired on 2026-08-26; see
   [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md).
 
 The on-device benchmark plan (now completed) compared:

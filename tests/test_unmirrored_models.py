@@ -25,16 +25,15 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
 
     Deriving the parametrization below from the set itself would keep every
     test green if an entry were dropped -- the models would quietly go back to
-    "check your internet connection". These five were each probed against the
-    ModelScope API on 2026-08-18 and answered 404.
+    "check your internet connection". Each was probed against the ModelScope
+    API on 2026-08-18 and answered 404. The two raw-graph Granite 4.1 variants
+    that were also in this set were retired on 2026-08-26.
     """
     assert frozenset(
         {
             "distil-large-v3.5",
             "parakeet-tdt-0.6b-v3",
             "canary-1b-v2",
-            "granite-speech-4.1-2b-plus",
-            "granite-speech-4.1-2b-nar",
         }
     ) == MODELS_WITHOUT_MODELSCOPE_MIRROR
 
@@ -45,8 +44,6 @@ def test_the_unmirrored_set_is_exactly_what_was_verified():
         "distil-large-v3.5",
         "parakeet-tdt-0.6b-v3",
         "canary-1b-v2",
-        "granite-speech-4.1-2b-plus",
-        "granite-speech-4.1-2b-nar",
     ],
 )
 def test_unmirrored_download_error_does_not_blame_the_connection(model_name):
