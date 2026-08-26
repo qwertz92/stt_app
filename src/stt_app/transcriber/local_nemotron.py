@@ -32,6 +32,7 @@ from .base import (
     StreamingErrorCallback,
     TranscriptionCanceled,
     TranscriptionError,
+    canceled_download_is_a_cancel,
     strip_language_tags,
 )
 from .local_webgpu_asr import (
@@ -156,14 +157,17 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         try:
             # Through the single slot: a cache miss here is a real download and
             # must not race the preload path or the Local tab's queue.
-            run_coordinated_download(
-                self.model_size,
-                self.model_dir,
-                lambda: download_webgpu_model_snapshot(
-                    self.model_size, self.model_dir
-                ),
-                cancel_check=self._cancel_check,
-            )
+            with canceled_download_is_a_cancel():
+                run_coordinated_download(
+                    self.model_size,
+                    self.model_dir,
+                    lambda: download_webgpu_model_snapshot(
+                        self.model_size, self.model_dir
+                    ),
+                    cancel_check=self._cancel_check,
+                )
+        except TranscriptionCanceled:
+            raise
         except Exception as exc:
             raise TranscriptionError(
                 f"Failed to download Nemotron model '{self.model_size}': {exc}"
@@ -312,18 +316,6 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         session.generator.set_inputs(inputs)
         return self._decode_available(session)
 
-    def _raise_if_canceled(self) -> None:
-        check = self._cancel_check
-        if check is None:
-            return
-        try:
-            canceled = bool(check())
-        except Exception:
-            logger.exception("Nemotron cancel check raised; ignoring")
-            return
-        if canceled:
-            raise TranscriptionCanceled()
-
     def _transcribe_samples(self, samples: np.ndarray) -> str:
         with self._inference_lock:
             self._raise_if_canceled()
@@ -343,6 +335,11 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         try:
+            # Before the WAV decode and before `_inference_lock`: a job
+            # canceled while it waited in the queue would otherwise still
+            # decode the whole recording, and could then block behind an
+            # older run holding that lock.
+            self._raise_if_canceled()
             samples = self._load_wav_samples(audio_source)
             return self._transcribe_samples(samples)
         except (TranscriptionError, TranscriptionCanceled):

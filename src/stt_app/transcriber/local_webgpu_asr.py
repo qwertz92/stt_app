@@ -35,6 +35,7 @@ from .base import (
     ProgressReporter,
     TranscriptionCanceled,
     TranscriptionError,
+    canceled_download_is_a_cancel,
 )
 
 logger = logging.getLogger(__name__)
@@ -726,14 +727,17 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         try:
             # Through the single slot: a cache miss here is a real download and
             # must not race the preload path or the Local tab's queue.
-            run_coordinated_download(
-                self.model_size,
-                self.model_dir,
-                lambda: download_webgpu_model_snapshot(
-                    self.model_size, self.model_dir
-                ),
-                cancel_check=self._cancel_check,
-            )
+            with canceled_download_is_a_cancel():
+                run_coordinated_download(
+                    self.model_size,
+                    self.model_dir,
+                    lambda: download_webgpu_model_snapshot(
+                        self.model_size, self.model_dir
+                    ),
+                    cancel_check=self._cancel_check,
+                )
+        except TranscriptionCanceled:
+            raise
         except Exception as exc:
             raise TranscriptionError(
                 f"Failed to download ONNX/WebGPU model '{self.model_size}': {exc}"
@@ -840,18 +844,6 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         # ``deque`` has no slice support; take the last 12 via list().
         with state.stderr_lock:
             return "\n".join(list(state.stderr_lines)[-12:]).strip()
-
-    def _raise_if_canceled(self) -> None:
-        check = self._cancel_check
-        if check is None:
-            return
-        try:
-            canceled = bool(check())
-        except Exception:
-            logger.exception("ONNX/WebGPU cancel check raised; ignoring")
-            return
-        if canceled:
-            raise TranscriptionCanceled()
 
     def _read_json_message(
         self,

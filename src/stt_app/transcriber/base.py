@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import logging
 import re
 from abc import ABC, abstractmethod
@@ -7,6 +8,8 @@ from collections.abc import Callable
 from pathlib import Path
 
 from ..config import DEFAULT_LANGUAGE_MODE, VALID_LANGUAGE_MODES
+
+_base_logger = logging.getLogger(__name__)
 
 AudioInput = bytes | str | Path
 StreamingCallback = Callable[[str], None]
@@ -26,6 +29,25 @@ class TranscriptionCanceled(Exception):
     this when it returns True. It is intentionally not a ``TranscriptionError``
     so callers can distinguish a user cancel from a real failure.
     """
+
+
+@contextlib.contextmanager
+def canceled_download_is_a_cancel():
+    """Report a canceled model download as a canceled transcription.
+
+    A transcriber that finds its model missing downloads it from its own load
+    path, and that download waits for the single machine-wide slot. Pressing
+    Cancel there raises ``ModelDownloadCanceled``, which every local engine
+    then presented as "Failed to download ...", i.e. an error dialog for
+    something the user had just asked for. It is also what a shutdown raises,
+    which is not a failure either.
+    """
+    from ..model_download_coordinator import ModelDownloadCanceled
+
+    try:
+        yield
+    except ModelDownloadCanceled as exc:
+        raise TranscriptionCanceled(str(exc)) from exc
 
 
 # Locale markers some models emit inline in their output. Nemotron does this
@@ -107,6 +129,10 @@ class ITranscriber(ABC):
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         raise NotImplementedError
 
+    #: Latched once a cancel check has raised, so the traceback is logged
+    #: exactly once per installed check instead of on every poll.
+    _cancel_check_failed = False
+
     def set_cancel_check(self, cancel_check: Callable[[], bool] | None) -> None:
         """Install the callable polled during cancellable waits.
 
@@ -115,6 +141,36 @@ class ITranscriber(ABC):
         attribute is the same one.
         """
         self._cancel_check = cancel_check
+        self._cancel_check_failed = False
+
+    def _is_cancel_requested(self) -> bool:
+        """Whether the installed check asks to stop, never raising.
+
+        A check that raises must not fail the transcription: it is a
+        controller-side callable, and losing a finished dictation because a
+        cancel poll misbehaved is strictly worse than not being cancellable.
+        The traceback is logged once per installed check -- the ONNX/WebGPU
+        reader polls this every 0.25 s, so a broken check otherwise wrote the
+        same traceback to the log several times a second for the whole run.
+        """
+        check = self._cancel_check
+        if check is None:
+            return False
+        try:
+            return bool(check())
+        except Exception:
+            if not self._cancel_check_failed:
+                self._cancel_check_failed = True
+                _base_logger.exception(
+                    "%s cancel check raised; ignoring it for this run.",
+                    type(self).__name__,
+                )
+            return False
+
+    def _raise_if_canceled(self) -> None:
+        """Stop the current transcription if a cancel was requested."""
+        if self._is_cancel_requested():
+            raise TranscriptionCanceled()
 
     def set_language_mode(self, mode: str) -> None:
         """Apply a language selection to an already-created transcriber.

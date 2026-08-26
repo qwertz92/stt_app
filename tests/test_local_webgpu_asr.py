@@ -768,6 +768,14 @@ def test_a_cancel_before_the_request_starts_no_child(monkeypatch, tmp_path):
         "_ensure_js_runtime_available",
         lambda node_path, runner: started.append(runner),
     )
+
+    def _no_child(*_args, **_kwargs):
+        raise AssertionError("a canceled job must not spawn the Node runtime")
+
+    # Sandboxed on purpose: without this a regression would launch a real
+    # Node process instead of failing, and the assertion below only observes
+    # a proxy for that.
+    monkeypatch.setattr(local_webgpu_asr.subprocess, "Popen", _no_child)
     transcriber = LocalOnnxWebGpuTranscriber(
         model_size="cohere-transcribe-03-2026",
         device="cpu",
@@ -796,6 +804,86 @@ def test_the_response_reader_polls_the_cancel_check():
         transcriber._read_json_message(state, time.monotonic() + 30)
     # Not a timeout: it returns immediately rather than after the deadline.
     assert time.monotonic() - started < 1.0
+
+
+def test_the_reader_keeps_polling_while_it_waits_not_only_on_entry():
+    """A check that is already true on entry proves only the first poll.
+
+    The real case is a Cancel pressed *during* a transcription that has been
+    running for seconds: the check turns true long after the reader started
+    waiting, and it is the per-iteration poll that has to notice.
+    """
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="cohere-transcribe-03-2026")
+    state = local_webgpu_asr._NodeProcessState(
+        _FakeProcess(),
+        queue.Queue(),
+        deque(maxlen=local_webgpu_asr._STDERR_MAX_LINES),
+    )
+    polls = []
+
+    def cancel_after_three_polls() -> bool:
+        polls.append(1)
+        return len(polls) > 3
+
+    transcriber.set_cancel_check(cancel_after_three_polls)
+
+    started = time.monotonic()
+    with pytest.raises(TranscriptionCanceled):
+        transcriber._read_json_message(state, time.monotonic() + 30)
+    elapsed = time.monotonic() - started
+
+    assert len(polls) == 4
+    # Four iterations of the 0.25 s queue poll, nowhere near the 30 s deadline.
+    assert 0.5 < elapsed < 5.0
+
+
+def test_a_cancel_reaches_the_real_reader_and_kills_the_child(monkeypatch, tmp_path):
+    """The same case as above, through the unmocked read path.
+
+    ``test_a_cancel_stops_waiting_for_the_child_and_kills_it`` replaces
+    ``_read_json_message`` entirely, so it can only prove what the caller does
+    with the exception. Here the handshake is answered through the real queue
+    and the transcribe response never arrives, which is what a running
+    transcription looks like from the parent side.
+    """
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    process = _FakeProcess()
+
+    def answer_handshake(self, state):
+        state.stdout_queue.put(
+            json.dumps({"ok": True, "device": "cpu", "gpuAvailable": False})
+        )
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_ensure_snapshot", lambda self: tmp_path
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_start_reader_threads", answer_handshake
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr.subprocess, "Popen", lambda command, **kwargs: process
+    )
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        device="cpu",
+        node_path="node",
+        runner_path=runner,
+    )
+    transcriber.request_timeout_s = 30
+    transcriber.set_cancel_check(lambda: "transcribe" in process.stdin.getvalue())
+
+    started = time.monotonic()
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(b"RIFF")
+
+    assert time.monotonic() - started < 5.0
+    assert process.stdin.getvalue().count("transcribe") == 1
+    assert process.terminated is True
+    assert transcriber._process_state is None
 
 
 def test_protocol_timeout_kills_child_and_next_request_starts_fresh(

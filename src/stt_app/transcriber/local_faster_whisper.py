@@ -46,6 +46,7 @@ from .base import (
     StreamingErrorCallback,
     TranscriptionCanceled,
     TranscriptionError,
+    canceled_download_is_a_cancel,
 )
 
 logger = logging.getLogger(__name__)
@@ -541,7 +542,6 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         # Kept as a test/debug convenience for inspecting a non-running buffer.
         # Live workers never read this alias; they receive their session object.
         self._stream_pcm_buffer = bytearray()
-        self._cancel_check: Callable[[], bool] | None = None
 
     def set_cancel_check(self, cancel_check: Callable[[], bool] | None) -> None:
         """Install a callable polled during batch decoding to stop early.
@@ -551,15 +551,6 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         the whole recording.
         """
         self._cancel_check = cancel_check
-
-    def _is_cancel_requested(self) -> bool:
-        check = self._cancel_check
-        if check is None:
-            return False
-        try:
-            return bool(check())
-        except Exception:
-            return False
 
     def _ensure_model(self):
         if self._model is not None:
@@ -599,12 +590,13 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             return
         from ..model_download_coordinator import run_coordinated_download
 
-        run_coordinated_download(
-            self.model_size,
-            self._model_dir,
-            lambda: download_model_snapshot(self.model_size, self._model_dir),
-            cancel_check=self._cancel_check,
-        )
+        with canceled_download_is_a_cancel():
+            run_coordinated_download(
+                self.model_size,
+                self._model_dir,
+                lambda: download_model_snapshot(self.model_size, self._model_dir),
+                cancel_check=self._cancel_check,
+            )
 
     def preload_model(self) -> None:
         """Eagerly load/download the model.  Raises on failure."""

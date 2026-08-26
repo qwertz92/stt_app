@@ -36,6 +36,7 @@ from .base import (
     ProgressReporter,
     TranscriptionCanceled,
     TranscriptionError,
+    canceled_download_is_a_cancel,
 )
 
 logger = logging.getLogger(__name__)
@@ -50,9 +51,13 @@ _ONNX_ASR_MODEL_NAMES: dict[str, str] = {
 # to the terminate flag within a few milliseconds, so this interval is the
 # whole perceived cancel latency.
 _CANCEL_POLL_INTERVAL_S = 0.1
-# Depth of the search for the model's ONNX sessions. onnx-asr keeps them two
-# levels down (``model.asr._encoder``) and three for the resamplers
-# (``model.resampler._preprocessors[rate]``).
+# Depth of the search for the model's ONNX sessions. Verified against onnx-asr
+# 0.12: two levels for the encoder/decoder (``model.asr._encoder``), three for
+# the resamplers (``model.resampler._preprocessors[rate]``) and **four** for
+# the mel preprocessor, which onnx-asr wraps twice
+# (``model.asr._preprocessor.preprocessor._preprocessor``, i.e.
+# ``ConcurrentPreprocessor`` -> ``OnnxPreprocessor`` -> ``InferenceSession``).
+# 5 leaves one level of headroom.
 _SESSION_SEARCH_MAX_DEPTH = 5
 
 
@@ -186,6 +191,9 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         # for one abort the other.
         self._inference_lock = threading.Lock()
         self._abort_handle: _RunAbortHandle | None = None
+        # The sessions whose run() we replaced, so close() can put the
+        # originals back -- see `_unwrap_cancel_hooks`.
+        self._wrapped_sessions: list[object] = []
         # Reported to the benchmark and the runtime status line. This runtime is
         # CPU-only by construction: onnx-asr offers no DirectML path that can
         # coexist with the ONNX Runtime the app already ships (installing
@@ -256,12 +264,13 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         from .local_faster_whisper import download_model_snapshot
 
         # Through the single slot, like every other download in the process.
-        run_coordinated_download(
-            self.model_size,
-            self.model_dir,
-            lambda: download_model_snapshot(self.model_size, self.model_dir),
-            cancel_check=self._cancel_check,
-        )
+        with canceled_download_is_a_cancel():
+            run_coordinated_download(
+                self.model_size,
+                self.model_dir,
+                lambda: download_model_snapshot(self.model_size, self.model_dir),
+                cancel_check=self._cancel_check,
+            )
         cached = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
         if cached is None:
             raise TranscriptionError(
@@ -312,14 +321,19 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
 
         sessions: list[object] = []
         seen: set[int] = set()
-
-        def collect(obj: object, depth: int) -> None:
+        # An explicit work list rather than a recursive local function: a
+        # closure that calls itself is a reference cycle through its own cell,
+        # and the cell also holds `sessions`. That kept every session alive
+        # until the cyclic collector ran -- defeating the unwrapping below.
+        pending: list[tuple[object, int]] = [(model, 0)]
+        while pending:
+            obj, depth = pending.pop()
             if depth > _SESSION_SEARCH_MAX_DEPTH or id(obj) in seen:
-                return
+                continue
             seen.add(id(obj))
             if isinstance(obj, rt.InferenceSession):
                 sessions.append(obj)
-                return
+                continue
             if isinstance(obj, dict):
                 children: object = obj.values()
             elif isinstance(obj, (list, tuple, set)):
@@ -327,13 +341,17 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
             elif hasattr(obj, "__dict__"):
                 children = vars(obj).values()
             else:
-                return
-            for child in list(children):  # type: ignore[call-overload]
-                collect(child, depth + 1)
+                continue
+            # Snapshot: ``vars(obj).values()`` is a live view.
+            pending.extend(
+                (child, depth + 1)
+                for child in list(children)  # type: ignore[call-overload]
+            )
 
-        collect(model, 0)
+        self._unwrap_cancel_hooks()
         for session in sessions:
             self._wrap_session_run(session)
+        self._wrapped_sessions = sessions
         if not sessions:
             logger.warning(
                 "No ONNX sessions found on the loaded '%s' model; a running "
@@ -367,6 +385,27 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
 
         session.run = run_with_abort  # type: ignore[attr-defined]
 
+    def _unwrap_cancel_hooks(self) -> None:
+        """Restore each session's own ``run`` so the model can be freed.
+
+        ``session.run = run_with_abort`` stores the wrapper in the session's
+        instance ``__dict__``, and the wrapper holds the original *bound*
+        method, whose ``__self__`` is that same session. That is a reference
+        cycle, so dropping ``self._model`` freed nothing until the cyclic
+        collector happened to run a generation-2 pass -- a several-hundred-
+        megabyte runtime stayed resident after ``close()``, which is exactly
+        the symptom cancelling was supposed to fix. The wrapper also closes
+        over ``self``, so the transcriber was pinned by the session too.
+        """
+        for session in self._wrapped_sessions:
+            try:
+                session.__dict__.pop("run", None)
+            except Exception:  # pragma: no cover - defensive
+                logger.debug(
+                    "Could not restore an ONNX session's run().", exc_info=True
+                )
+        self._wrapped_sessions = []
+
     def preload_model(self) -> None:
         with self._model_lock:
             if self._model is None:
@@ -374,21 +413,10 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
 
     def close(self) -> None:
         with self._model_lock:
+            self._unwrap_cancel_hooks()
             self._model = None
 
     # -- transcription ----------------------------------------------------
-
-    def _raise_if_canceled(self) -> None:
-        check = self._cancel_check
-        if check is None:
-            return
-        try:
-            canceled = bool(check())
-        except Exception:
-            logger.exception("onnx-asr cancel check raised; ignoring")
-            return
-        if canceled:
-            raise TranscriptionCanceled()
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         self._raise_if_canceled()

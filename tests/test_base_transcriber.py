@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 
-from stt_app.transcriber.base import ITranscriber, strip_language_tags
+from stt_app.transcriber.base import (
+    ITranscriber,
+    TranscriptionCanceled,
+    strip_language_tags,
+)
 
 
 class MinimalTranscriber(ITranscriber):
@@ -36,6 +42,56 @@ def test_default_abort_stream_raises():
     t = MinimalTranscriber()
     with pytest.raises(NotImplementedError):
         t.abort_stream()
+
+
+def test_no_cancel_check_never_cancels():
+    t = MinimalTranscriber()
+    assert t._is_cancel_requested() is False
+    t._raise_if_canceled()
+
+
+def test_a_requested_cancel_raises():
+    t = MinimalTranscriber()
+    t.set_cancel_check(lambda: True)
+    assert t._is_cancel_requested() is True
+    with pytest.raises(TranscriptionCanceled):
+        t._raise_if_canceled()
+
+
+def test_a_raising_cancel_check_is_logged_once_not_once_per_poll(caplog):
+    """A broken check must not fail the run, and must not flood the log.
+
+    The ONNX/WebGPU reader polls this every 0.25 s for the whole
+    transcription, so logging the traceback per poll wrote the same stack
+    several times a second and buried everything else in the log file.
+    """
+    t = MinimalTranscriber()
+    t.set_cancel_check(lambda: (_ for _ in ()).throw(ValueError("check exploded")))
+
+    with caplog.at_level(logging.ERROR, logger="stt_app.transcriber.base"):
+        for _ in range(5):
+            assert t._is_cancel_requested() is False
+            t._raise_if_canceled()
+
+    tracebacks = [record for record in caplog.records if record.exc_info]
+    assert len(tracebacks) == 1
+    assert "MinimalTranscriber" in tracebacks[0].getMessage()
+
+
+def test_installing_a_new_cancel_check_re_arms_the_log():
+    """The latch is per installed check, not per transcriber.
+
+    The runtime is cached and reused across dictations, so latching for the
+    object's lifetime would hide a check that starts failing later.
+    """
+    t = MinimalTranscriber()
+    t.set_cancel_check(lambda: (_ for _ in ()).throw(ValueError("boom")))
+    t._is_cancel_requested()
+    assert t._cancel_check_failed is True
+
+    t.set_cancel_check(lambda: False)
+
+    assert t._cancel_check_failed is False
 
 @pytest.mark.parametrize(
     ("text", "expected"),

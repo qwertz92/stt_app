@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import gc
 import io
 import threading
 import time
 import wave
+import weakref
 
 import numpy as np
 import pytest
@@ -332,27 +334,114 @@ def _patch_session_type(monkeypatch):
     monkeypatch.setattr(onnxruntime, "InferenceSession", _StubSession)
 
 
-def test_every_session_of_the_loaded_model_is_wrapped(monkeypatch):
-    """onnx-asr keeps its sessions two and three levels down; a shallower search
-    would leave the resamplers -- and therefore part of the run -- uncancelable."""
-    _patch_session_type(monkeypatch)
+class _OnnxAsrShapedModel:
+    """The onnx-asr 0.12 object graph, at the depths it really uses.
+
+    Encoder/decoder sit two levels down, the resampler's preprocessors three,
+    and the mel preprocessor **four** -- onnx-asr wraps it as
+    ``ConcurrentPreprocessor.preprocessor -> OnnxPreprocessor._preprocessor``.
+    A search that stopped at three would leave that one uncancelable.
+    """
 
     class _Asr:
         def __init__(self):
             self._encoder = _StubSession()
-            self._decoder = _StubSession()
+            self._decoder_joint = _StubSession()
+            self._preprocessor = _OnnxAsrShapedModel._ConcurrentPreprocessor()
+
+    class _ConcurrentPreprocessor:
+        def __init__(self):
+            self.preprocessor = _OnnxAsrShapedModel._OnnxPreprocessor()
+
+    class _OnnxPreprocessor:
+        def __init__(self):
+            self._preprocessor = _StubSession()
 
     class _Resampler:
         def __init__(self):
             self._preprocessors = {16000: _StubSession(), 8000: _StubSession()}
 
-    class _Model:
-        def __init__(self):
-            self.asr = _Asr()
-            self.resampler = _Resampler()
+    def __init__(self):
+        self.asr = _OnnxAsrShapedModel._Asr()
+        self.resampler = _OnnxAsrShapedModel._Resampler()
+
+    def sessions(self):
+        return [
+            self.asr._encoder,
+            self.asr._decoder_joint,
+            self.asr._preprocessor.preprocessor._preprocessor,
+            *self.resampler._preprocessors.values(),
+        ]
+
+
+def test_every_session_of_the_loaded_model_is_wrapped(monkeypatch):
+    """The deepest session onnx-asr uses is four levels down.
+
+    A shallower search would leave the mel preprocessor -- and therefore part
+    of every run -- uncancelable, while still reporting hooks as installed.
+    """
+    _patch_session_type(monkeypatch)
+    model = _OnnxAsrShapedModel()
 
     transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
-    assert transcriber._install_cancel_hooks(_Model()) == 4
+
+    assert transcriber._install_cancel_hooks(model) == 5
+    for session in model.sessions():
+        assert "run" in session.__dict__
+
+
+def test_close_restores_every_session_so_the_model_can_be_freed(monkeypatch):
+    """Wrapping ``run`` creates a reference cycle that outlives ``close()``.
+
+    ``session.run = wrapper`` puts the wrapper in the session's own
+    ``__dict__``, and the wrapper holds the original *bound* method, whose
+    ``__self__`` is that session. With the cyclic collector switched off
+    nothing below can be freed unless the wrapper is removed again -- which is
+    what a user sees as "the model is still in memory after cancelling".
+    """
+    _patch_session_type(monkeypatch)
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    model = _OnnxAsrShapedModel()
+    transcriber._install_cancel_hooks(model)
+    transcriber._model = model
+    refs = [weakref.ref(session) for session in model.sessions()]
+    refs.append(weakref.ref(model))
+
+    gc.disable()
+    try:
+        del model
+        transcriber.close()
+        # Refcounting alone has to be enough here.
+        assert [ref() for ref in refs] == [None] * len(refs)
+    finally:
+        gc.enable()
+    assert transcriber._wrapped_sessions == []
+
+
+def test_reloading_a_model_does_not_keep_the_previous_sessions_alive(monkeypatch):
+    """A second load must release the first load's sessions.
+
+    ``_wrapped_sessions`` is what ``close()`` walks, so a stale entry would
+    both pin a discarded runtime and try to unwrap a session that is gone.
+    """
+    _patch_session_type(monkeypatch)
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    first = _OnnxAsrShapedModel()
+    transcriber._install_cancel_hooks(first)
+    ref = weakref.ref(first.sessions()[0])
+
+    second = _OnnxAsrShapedModel()
+    transcriber._install_cancel_hooks(second)
+
+    assert set(map(id, transcriber._wrapped_sessions)) == set(
+        map(id, second.sessions())
+    )
+    gc.disable()
+    try:
+        del first
+        assert ref() is None
+    finally:
+        gc.enable()
 
 
 def test_a_model_without_sessions_is_reported_but_still_usable(monkeypatch, caplog):
@@ -401,6 +490,23 @@ def test_the_watchdog_trips_the_handle_and_stops_cleanly():
         assert handle.options.terminate is True
     finally:
         watchdog.stop()
+
+
+def test_onnx_runtime_still_offers_the_terminate_switch_we_rely_on():
+    """The whole mid-run cancel rests on this one ONNX Runtime API.
+
+    ``RunOptions.terminate`` is the only way to stop an ``InferenceSession``
+    call from another thread. If an upgrade renames or removes it, the cancel
+    silently stops working -- every unit test above uses a stub session and
+    would still pass. It latches: ORT never clears the flag, which is why the
+    handle is rebuilt per transcription instead of reused.
+    """
+    import onnxruntime as rt
+
+    options = rt.RunOptions()
+    assert options.terminate is False
+    options.terminate = True
+    assert options.terminate is True
 
 
 def test_the_watchdog_without_a_cancel_check_starts_no_thread():

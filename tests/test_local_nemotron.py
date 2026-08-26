@@ -197,6 +197,31 @@ def test_a_cancel_before_the_first_chunk_creates_no_session(monkeypatch, tmp_pat
     assert runtime.generators == []
 
 
+def test_a_cancel_is_seen_before_the_recording_is_decoded(monkeypatch, tmp_path):
+    """The first check has to come before `_load_wav_samples`.
+
+    Decoding runs on the single transcription worker and takes proportionally
+    to the recording length, so a job canceled while it waited in the queue
+    still delayed every dictation behind it -- and it then had to wait for
+    `_inference_lock` before the old first check could even run.
+    """
+    runtime = _FakeRuntime()
+    transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")
+    decoded: list[int] = []
+
+    def counting(audio_source):
+        decoded.append(1)
+        raise AssertionError("a canceled job must not decode its recording")
+
+    transcriber._load_wav_samples = counting  # type: ignore[method-assign]
+    transcriber.set_cancel_check(lambda: True)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes())
+
+    assert decoded == []
+
+
 def test_a_raising_cancel_check_does_not_fail_a_nemotron_batch(monkeypatch, tmp_path):
     runtime = _FakeRuntime()
     transcriber = _transcriber(monkeypatch, tmp_path, runtime, language_mode="de")
