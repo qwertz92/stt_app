@@ -327,9 +327,13 @@ def _create_tray_icon(
             last_recording_store=last_recording_store,
             local_model_inventory_store=local_model_inventory_store,
         )
-        # Connected before ``settings_changed``: a save emits the key signal
-        # first, and the controller must have dropped a transcriber built with
-        # the old credentials before it decides whether a preload is needed.
+        # A replaced API key never reaches ``AppSettings`` -- ``has_*_key``
+        # only flips when a key is added or removed -- so without this
+        # connection a runtime keeps running on the previous credential.
+        # The ordering that makes it work is the dialog's *emit* order (it
+        # emits this signal before ``settings_changed``), not the order of
+        # these two ``connect`` calls: they are different signals, so
+        # connection order does not relate them.
         dialog.provider_keys_changed.connect(
             controller.invalidate_transcriber_credentials
         )

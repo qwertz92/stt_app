@@ -1995,17 +1995,57 @@ def test_system_resume_closes_cached_webgpu_runtime():
 
     cached = CachedWebGpuTranscriber()
     controller._transcriber_cache = cached
-    controller._transcriber_cache_key = (
-        "local",
-        "cohere-transcribe-03-2026",
-        "auto",
-    )
+    controller._transcriber_cache_key = controller._transcriber_identity(settings)
 
     controller.handle_system_resume()
 
     assert cached.closed is True
     assert controller._transcriber_cache is None
     assert controller._transcriber_cache_key is None
+    controller.shutdown()
+    _ = app
+
+
+def test_system_resume_reads_the_onnx_model_from_the_cache_key_by_name():
+    """The cache key alone must be able to trigger the resume teardown.
+
+    A runtime that does not expose ``model_size`` leaves the key as the only
+    evidence that an ONNX/WebGPU model is loaded, and the key is a NamedTuple:
+    reading it positionally would silently move onto another field as soon as
+    one is inserted.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        engine="local",
+        model_size="cohere-transcribe-03-2026",
+        hotkey=FALLBACK_HOTKEY,
+        keep_onnx_model_loaded=True,
+    )
+    controller, _app = make_controller(
+        settings_store=FakeSettingsStore(settings),
+        logger=logging.getLogger("test.controller"),
+    )
+
+    class OpaqueRuntime:
+        """No ``model_size``/``runtime_device`` attributes at all."""
+
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    cached = OpaqueRuntime()
+    controller._transcriber_cache = cached
+    key = controller._transcriber_identity(settings)
+    assert key.model_size == "cohere-transcribe-03-2026"
+
+    controller._transcriber_cache_key = key
+
+    controller.handle_system_resume()
+
+    assert cached.closed is True
+    assert controller._transcriber_cache is None
     controller.shutdown()
     _ = app
 
@@ -2067,6 +2107,10 @@ def _controller_with_loaded_model(settings):
         {"language_mode": "de"},
         {"overlay_corner": "top-left"},
         {"keep_transcript_in_clipboard": True},
+        # A remote provider's model/endpoint is not part of a *local* runtime,
+        # so changing one must not close the loaded local model.
+        {"groq_model": "whisper-large-v3"},
+        {"azure_endpoint": "https://example.cognitiveservices.azure.com"},
     ],
     ids=lambda change: next(iter(change)),
 )
@@ -2109,8 +2153,6 @@ def test_a_save_that_does_not_change_the_runtime_keeps_the_loaded_model(change):
         {"streaming_full_final_transcript": True},
         {"offline_mode": True},
         {"keep_onnx_model_loaded": False},
-        {"groq_model": "whisper-large-v3"},
-        {"azure_endpoint": "https://example.cognitiveservices.azure.com"},
     ],
     ids=lambda change: next(iter(change)),
 )
@@ -2214,5 +2256,87 @@ def test_a_key_change_for_another_provider_keeps_the_loaded_runtime():
 
     assert closed == []
     assert controller._transcriber_cache is cached
+    controller.shutdown()
+    _ = app
+
+
+def test_a_bare_provider_string_is_not_iterated_character_by_character():
+    """``providers="groq"`` must name one provider, not four letters.
+
+    A string is iterable, so the membership test compared ``"groq"`` against
+    ``{"g", "r", "o", "q"}``: the runtime whose key had just been replaced was
+    the one case that silently kept running.
+    """
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine="groq", has_groq_key=True)
+    controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
+
+    controller.invalidate_transcriber_credentials("groq")
+
+    assert closed == [cached]
+    assert controller._transcriber_cache is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_cache_key_that_is_not_an_identity_invalidates_unconditionally():
+    """An unrecognized key must fail towards dropping a stale credential.
+
+    The engine is read off the key, so a key of another shape has no engine to
+    compare and would otherwise leave a runtime holding a revoked API key.
+    """
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine="groq", has_groq_key=True)
+    controller, app, _preloads, closed, cached = _controller_with_loaded_model(settings)
+    controller._transcriber_cache_key = ("groq", "whisper-large-v3-turbo")
+
+    controller.invalidate_transcriber_credentials(["openai"])
+
+    assert closed == [cached]
+    assert controller._transcriber_cache is None
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("engine", "change", "reloads"),
+    [
+        ("groq", {"groq_model": "whisper-large-v3"}, True),
+        ("groq", {"openai_model": "gpt-4o-transcribe"}, False),
+        ("groq", {"model_size": "medium"}, False),
+        ("groq", {"has_groq_key": True}, True),
+        ("azure", {"azure_endpoint": "https://other.cognitiveservices.azure.com"}, True),
+        ("azure", {"azure_speech_model": "mai-transcribe-1"}, True),
+        ("azure", {"groq_model": "whisper-large-v3"}, False),
+        ("azure", {"allow_insecure_key_storage": True}, True),
+        ("openai", {"openai_model": "gpt-4o-transcribe"}, True),
+        ("openai", {"custom_vocabulary": "Kubernetes"}, True),
+        # ElevenLabs exposes no biasing input, so the term list never reaches it.
+        ("elevenlabs", {"custom_vocabulary": "Kubernetes"}, False),
+        ("elevenlabs", {"model_size": "medium"}, False),
+    ],
+    ids=lambda value: value if isinstance(value, str) else str(value),
+)
+def test_a_remote_identity_reads_only_the_fields_that_engine_uses(
+    engine, change, reloads
+):
+    """Each engine's identity must cover its own constructor arguments only.
+
+    Listing every provider's model field for every engine would reload a Groq
+    runtime because an unrelated Azure endpoint was typed in; omitting one
+    would keep a runtime built from the previous value.
+    """
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine=engine)
+    saved = replace(settings, **change)
+    # Guard against a parameter that repeats the current value: it would make
+    # the "no reload" half pass without testing anything.
+    assert saved != settings
+
+    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+        settings
+    )
+    changed = controller._transcriber_identity(saved) != (
+        controller._transcriber_identity(settings)
+    )
+
+    assert changed is reloads
     controller.shutdown()
     _ = app

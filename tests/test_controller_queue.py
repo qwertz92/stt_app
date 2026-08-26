@@ -1210,7 +1210,9 @@ def test_reload_settings_defers_transcriber_cache_reset_during_active_job(
     )
     runtime_lease = controller._acquire_transcriber_runtime(controller.settings)
     controller._transcriber_cache = sentinel
-    controller._transcriber_cache_key = ("local", "small")
+    controller._transcriber_cache_key = controller._transcriber_identity(
+        controller.settings
+    )
 
     # Saving a setting the runtime is built from, while the job is active,
     # must not close the runtime now.

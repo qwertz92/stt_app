@@ -551,6 +551,59 @@ def test_tray_double_click_presents_settings_dialog(monkeypatch):
     assert instances[0].activate_calls == 2
 
 
+def test_settings_dialog_key_changes_reach_the_controller(monkeypatch):
+    """The credential signal must actually be wired to the controller.
+
+    A replaced API key never reaches ``AppSettings`` -- ``has_*_key`` only
+    flips when a key is added or removed -- so this connection is the only
+    thing that stops a runtime from going on using the previous credential.
+    The provider names have to travel with it: a blanket invalidation would
+    unload a multi-gigabyte local model for a key it never reads.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    instances = []
+
+    class FakeSettingsDialog(QtWidgets.QDialog):
+        settings_changed = QtCore.Signal()
+        provider_keys_changed = QtCore.Signal(list)
+        audio_device_refresh_requested = QtCore.Signal()
+
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            instances.append(self)
+
+        def show(self):
+            pass
+
+        def showNormal(self):
+            pass
+
+        def prepare_for_first_show(self):
+            return None
+
+    monkeypatch.setattr(main_module, "SettingsDialog", FakeSettingsDialog)
+    controller = FakeController()
+
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.DoubleClick)
+    assert len(instances) == 1
+
+    instances[0].provider_keys_changed.emit(["groq", "openai"])
+
+    assert controller.credentials_invalidated == 1
+    assert controller.credentials_providers == ["groq", "openai"]
+    _ = tray
+
+
 def test_tray_reuses_hidden_settings_dialog_and_retains_busy_state(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     instances = []

@@ -112,8 +112,10 @@ _EMPTY_MODEL_TRANSCRIPT_MESSAGE = (
     "The model returned no text for this recording."
 )
 
-# The two halves of a local model preload. They fail, progress and finish for
-# entirely different reasons, and only the first one has measurable progress.
+# The stages of a local model preload. They fail, progress and finish for
+# entirely different reasons, and only the download has measurable progress --
+# a queued preload and a running load both have none, for opposite reasons.
+_PRELOAD_PHASE_QUEUED = "queued"
 _PRELOAD_PHASE_DOWNLOAD = "download"
 _PRELOAD_PHASE_LOAD = "load"
 
@@ -202,6 +204,38 @@ class _TranscriberRuntimeLease:
         )
 
 
+# Which provider's API key each engine reads, and therefore whose presence is
+# part of that engine's runtime identity. The local engine reads none.
+_ENGINE_KEY_FLAGS: dict[str, str] = {
+    "assemblyai": "has_assemblyai_key",
+    "openai": "has_openai_key",
+    "groq": "has_groq_key",
+    "deepgram": "has_deepgram_key",
+    "elevenlabs": "has_elevenlabs_key",
+    "azure": "has_azure_key",
+    "funasr": "has_funasr_key",
+}
+
+# Which ``AppSettings`` field carries the model name each remote engine sends.
+# Only one is ever read, so they collapse into a single identity slot: editing
+# the Groq model must not reload a loaded local model.
+_ENGINE_MODEL_FIELDS: dict[str, str] = {
+    "assemblyai": "assemblyai_model",
+    "openai": "openai_model",
+    "groq": "groq_model",
+    "deepgram": "deepgram_model",
+    "elevenlabs": "elevenlabs_model",
+    "azure": "azure_speech_model",
+    "funasr": "funasr_model",
+}
+
+# Remote engines that pass the biasing prompt through to their provider. The
+# rest expose no such input, so the setting cannot change their runtime.
+_ENGINES_USING_CUSTOM_VOCABULARY = frozenset(
+    {DEFAULT_ENGINE, "assemblyai", "openai", "groq", "deepgram"}
+)
+
+
 class _TranscriberIdentity(NamedTuple):
     """Named form of what ``create_transcriber`` bakes into a runtime.
 
@@ -209,27 +243,36 @@ class _TranscriberIdentity(NamedTuple):
     the credential path also has to ask *which engine* is currently loaded, and
     reading that out of an anonymous slot is the kind of assumption that breaks
     silently when a field is inserted.
+
+    Every field is optional and defaults to a neutral value, because the
+    identity is built **per engine**: a field the selected engine never reads
+    stays at its default. Without that, editing an Azure endpoint threw away a
+    multi-gigabyte local model that had never heard of Azure.
     """
 
     engine: str
-    model_size: str
-    vad_enabled: bool
-    offline_mode: bool
-    model_dir: str
-    groq_model: str
-    openai_model: str
-    deepgram_model: str
-    assemblyai_model: str
-    elevenlabs_model: str
-    azure_speech_model: str
-    azure_endpoint: str
-    funasr_model: str
-    keep_onnx_model_loaded: bool
-    streaming_full_final_transcript: bool
-    local_onnx_device: str
-    custom_vocabulary: str
-    silence_gate_enabled: bool
-    silence_gate_threshold: float
+    model_size: str = ""
+    vad_enabled: bool = False
+    offline_mode: bool = False
+    model_dir: str = ""
+    keep_onnx_model_loaded: bool = False
+    streaming_full_final_transcript: bool = False
+    local_onnx_device: str = ""
+    custom_vocabulary: str = ""
+    silence_gate_enabled: bool = False
+    silence_gate_threshold: float = 0.0
+    # Remote engines only. One slot, because exactly one provider's model is
+    # read for a given engine.
+    remote_model: str = ""
+    azure_endpoint: str = ""
+    # Not the key itself -- keys never enter ``AppSettings``. This is whether
+    # the engine has one *at all*: losing or gaining a key changes what the
+    # runtime can do, while replacing one with a different value is invisible
+    # here and is handled by ``provider_keys_changed``. The storage flag is
+    # included because switching it off can make a stored key unreadable
+    # without any key operation happening.
+    has_api_key: bool = False
+    allow_insecure_key_storage: bool = False
 
 
 class DictationController(QtCore.QObject):
@@ -585,10 +628,27 @@ class DictationController(QtCore.QObject):
         """
         with self._transcriber_cache_lock:
             cached_key = self._transcriber_cache_key
-        loaded_engine = getattr(cached_key, "engine", None)
-        if loaded_engine is None or loaded_engine == DEFAULT_ENGINE:
-            # Nothing cached, or a local model, which uses no credentials.
+        if cached_key is None:
             return
+        if not isinstance(cached_key, _TranscriberIdentity):
+            # Something other than an identity is cached. Rather than skip the
+            # invalidation because a name lookup missed -- which would leave a
+            # runtime holding a revoked key -- fall back to the safe direction.
+            self._logger.warning(
+                "Cached transcriber key is %s, not a runtime identity; "
+                "invalidating unconditionally.",
+                type(cached_key).__name__,
+            )
+            self._invalidate_transcriber_runtime()
+            return
+        loaded_engine = cached_key.engine
+        if loaded_engine == DEFAULT_ENGINE:
+            # A local model, which uses no credentials.
+            return
+        if isinstance(providers, str):
+            # A bare string is iterable: {"g", "r", "o", "q"} matches no engine
+            # and would silently invalidate nothing.
+            providers = [providers]
         changed = {str(name) for name in providers or ()}
         if changed and loaded_engine not in changed:
             return
@@ -691,6 +751,11 @@ class DictationController(QtCore.QObject):
         # nothing was being recorded — pressing the hotkey again to "start"
         # then really stopped the running capture mid-sentence.
         if self._overlay_session_active():
+            return
+        if self._preload_owns_overlay():
+            # A running preload writes the status line every 600 ms. Replacing
+            # it with "Idle" only produces two content swaps and two window
+            # resizes before the next tick repaints the same progress.
             return
         if not self._hotkey_registration_ok:
             self._overlay.set_state(
@@ -2072,9 +2137,9 @@ class DictationController(QtCore.QObject):
                 cache_key = self._transcriber_cache_key
                 cached_model = str(getattr(cached, "model_size", "") or "")
                 cached_device = str(getattr(cached, "runtime_device", "") or "")
-                cache_model = ""
-                if isinstance(cache_key, tuple) and len(cache_key) > 1:
-                    cache_model = str(cache_key[1] or "")
+                # By name: an inserted field would silently move a positional
+                # read onto the wrong value and stop this teardown from firing.
+                cache_model = str(getattr(cache_key, "model_size", "") or "")
                 should_reset = cached is not None and (
                     cached_model in LOCAL_WEBGPU_MODEL_SIZES
                     or cache_model in LOCAL_WEBGPU_MODEL_SIZES
@@ -2608,26 +2673,20 @@ class DictationController(QtCore.QObject):
 
     # -- Model preloading -----------------------------------------------------
 
-    @staticmethod
-    def _model_preload_key(settings: AppSettings) -> tuple[object, ...]:
-        """Identity of the selected local runtime that preload prepares.
+    @classmethod
+    def _model_preload_key(cls, settings: AppSettings) -> _TranscriberIdentity:
+        """Identity of the local runtime a preload prepares.
 
-        Mirrors the transcriber cache key and likewise excludes
-        ``language_mode``: the loaded runtime is the same for every language,
-        so a language switch must not invalidate a finished preload.
+        Deliberately the *same* value as the transcriber cache key, not a
+        parallel subset of it. While the two differed, a save that changed a
+        field only the identity knew about condemned the loaded runtime and
+        then skipped the preload that would rebuild it, because
+        ``_local_model_preload_needed`` returns early while a preload with a
+        "matching" key is running -- so the user was left on the Idle line with
+        no model and no indication, and the next dictation paid a full cold
+        load.
         """
-        return (
-            settings.engine,
-            settings.model_size,
-            settings.vad_enabled,
-            bool(getattr(settings, "offline_mode", False)),
-            getattr(settings, "model_dir", ""),
-            bool(getattr(settings, "keep_onnx_model_loaded", False)),
-            bool(getattr(settings, "streaming_full_final_transcript", False)),
-            # Unlike language_mode, the execution device is baked into the
-            # loaded runtime: switching it must reload, not reuse.
-            getattr(settings, "local_onnx_device", ""),
-        )
+        return cls._transcriber_identity(settings)
 
     def _set_preload_phase(self, generation: int, phase: str) -> None:
         with self._preload_result_lock:
@@ -2644,6 +2703,16 @@ class DictationController(QtCore.QObject):
         if self._current_preload_phase() == _PRELOAD_PHASE_DOWNLOAD:
             return "downloading"
         return "loading"
+
+    def _preload_owns_overlay(self) -> bool:
+        """True while a running preload is writing the overlay's status line.
+
+        ``show_idle_status`` would otherwise replace live download progress with
+        "Idle" until the next 600 ms poll repaints it -- two content swaps and
+        two window resizes for nothing.
+        """
+        preload = self._preload_future
+        return preload is not None and not preload.done()
 
     def _current_preload_phase(self) -> str:
         """Phase of the preload that is running now, or "" when none is."""
@@ -2807,7 +2876,11 @@ class DictationController(QtCore.QObject):
             self._preload_canceled_generations.discard(generation)
             self._preload_target_key = key
             self._preload_results[key] = (generation, None)
-            self._preload_phase = (generation, _PRELOAD_PHASE_DOWNLOAD)
+            # Not DOWNLOAD yet: `_preload_executor` runs one worker at a time,
+            # so this one may sit queued behind an unrelated model's load for
+            # minutes. Claiming the download phase there printed a frozen
+            # "Downloading ... approx. 100%" for a model nothing was fetching.
+            self._preload_phase = (generation, _PRELOAD_PHASE_QUEUED)
         self._overlay.set_state("Processing", "Loading selected model...")
         self._preload_target_model = settings.model_size
         try:
@@ -2851,7 +2924,14 @@ class DictationController(QtCore.QObject):
                 "recording now; transcription waits for this model. Use "
                 "Cancel to abort."
             )
-        if self._current_preload_phase() == _PRELOAD_PHASE_LOAD:
+        phase = self._current_preload_phase()
+        if phase == _PRELOAD_PHASE_QUEUED:
+            return (
+                f"Waiting for the previous model before preparing "
+                f"'{model_name}'. You can start recording now; transcription "
+                "waits for this model."
+            )
+        if phase == _PRELOAD_PHASE_LOAD:
             # Nothing is being fetched any more. The progress bar measures
             # directory growth, so during the load it printed a frozen
             # "approx. 100%" next to the word "Downloading" for a model that
@@ -2907,6 +2987,7 @@ class DictationController(QtCore.QObject):
         key: tuple[object, ...],
     ) -> None:
         """Background worker: eagerly load the configured local model."""
+        self._set_preload_phase(generation, _PRELOAD_PHASE_DOWNLOAD)
         try:
             self._download_model_for_preload(settings, generation)
         except RuntimeError as exc:
@@ -3417,51 +3498,69 @@ class DictationController(QtCore.QObject):
         transcribers, so a loaded runtime may be reused across them and a save
         that changes nothing here must not tear it down.
 
+        The identity is built **per engine** and leaves every field the chosen
+        engine does not read at its default. Listing all of them unconditionally
+        was itself the defect this exists to prevent, one level up: pasting an
+        Azure endpoint unloaded a multi-gigabyte local model that never reads it.
+
         ``language_mode`` is deliberately absent: every provider reads the
         language when a request or stream starts, so a language change only has
         to be applied to the existing runtime (see ``set_language_mode`` in
         ``_get_or_create_transcriber``). Keying on it would throw away a loaded
-        local model — several GB and seconds of load time — for a setting the
-        runtime does not depend on. API keys live in the secret store rather
-        than in ``AppSettings``, so they are handled separately by
-        ``invalidate_transcriber_credentials``.
+        local model -- several GB and seconds of load time -- for a setting the
+        runtime does not depend on. The API key *value* likewise never enters
+        ``AppSettings``; replacing one is handled by
+        ``invalidate_transcriber_credentials``, while gaining or losing one
+        shows up here as ``has_api_key``.
         """
+        engine = settings.engine
+        vocabulary = (
+            getattr(settings, "custom_vocabulary", "")
+            if engine in _ENGINES_USING_CUSTOM_VOCABULARY
+            else ""
+        )
+        if engine == DEFAULT_ENGINE or engine not in _ENGINE_MODEL_FIELDS:
+            # `create_transcriber` falls back to the local path for an unknown
+            # engine, so an unknown one must produce the local identity too.
+            return _TranscriberIdentity(
+                engine=engine,
+                model_size=settings.model_size,
+                vad_enabled=settings.vad_enabled,
+                offline_mode=bool(getattr(settings, "offline_mode", False)),
+                model_dir=getattr(settings, "model_dir", ""),
+                keep_onnx_model_loaded=bool(
+                    getattr(settings, "keep_onnx_model_loaded", False)
+                ),
+                streaming_full_final_transcript=bool(
+                    getattr(settings, "streaming_full_final_transcript", False)
+                ),
+                local_onnx_device=getattr(settings, "local_onnx_device", ""),
+                custom_vocabulary=vocabulary,
+                silence_gate_enabled=bool(
+                    getattr(settings, "silence_gate_enabled", True)
+                ),
+                silence_gate_threshold=float(
+                    getattr(
+                        settings,
+                        "silence_gate_threshold",
+                        DEFAULT_SILENCE_GATE_THRESHOLD,
+                    )
+                ),
+            )
         return _TranscriberIdentity(
-            engine=settings.engine,
-            model_size=settings.model_size,
-            vad_enabled=settings.vad_enabled,
-            offline_mode=bool(getattr(settings, "offline_mode", False)),
-            model_dir=getattr(settings, "model_dir", ""),
-            groq_model=getattr(settings, "groq_model", ""),
-            openai_model=getattr(settings, "openai_model", ""),
-            deepgram_model=getattr(settings, "deepgram_model", ""),
-            assemblyai_model=getattr(settings, "assemblyai_model", ""),
-            elevenlabs_model=getattr(settings, "elevenlabs_model", ""),
-            azure_speech_model=getattr(settings, "azure_speech_model", ""),
-            azure_endpoint=getattr(settings, "azure_endpoint", ""),
-            funasr_model=getattr(settings, "funasr_model", ""),
-            keep_onnx_model_loaded=bool(
-                getattr(settings, "keep_onnx_model_loaded", False)
+            engine=engine,
+            custom_vocabulary=vocabulary,
+            remote_model=str(
+                getattr(settings, _ENGINE_MODEL_FIELDS[engine], "") or ""
             ),
-            streaming_full_final_transcript=bool(
-                getattr(settings, "streaming_full_final_transcript", False)
+            azure_endpoint=(
+                getattr(settings, "azure_endpoint", "") if engine == "azure" else ""
             ),
-            local_onnx_device=getattr(settings, "local_onnx_device", ""),
-            # Constructor arguments of the transcribers themselves. They were
-            # missing while every settings save reset the cache unconditionally,
-            # which hid the omission; now that the reset is conditional, leaving
-            # them out would keep a runtime carrying the previous biasing prompt
-            # or the previous silence gate.
-            custom_vocabulary=getattr(settings, "custom_vocabulary", ""),
-            silence_gate_enabled=bool(
-                getattr(settings, "silence_gate_enabled", True)
+            has_api_key=bool(
+                getattr(settings, _ENGINE_KEY_FLAGS.get(engine, ""), False)
             ),
-            silence_gate_threshold=float(
-                getattr(
-                    settings,
-                    "silence_gate_threshold",
-                    DEFAULT_SILENCE_GATE_THRESHOLD,
-                )
+            allow_insecure_key_storage=bool(
+                getattr(settings, "allow_insecure_key_storage", False)
             ),
         )
 

@@ -751,6 +751,89 @@ def test_a_stale_phase_from_an_earlier_preload_is_ignored(monkeypatch):
     _ = app
 
 
+def test_the_preload_worker_stamps_each_phase_as_it_reaches_it(monkeypatch):
+    """The phase words are only honest if the worker actually stamps them.
+
+    Every other test in this group sets ``_preload_phase`` by hand, so all of
+    them would still pass if the worker stamped nothing at all.
+    """
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    seen: list[str] = []
+
+    def fake_download(_settings, _generation):
+        seen.append(controller._current_preload_phase())
+
+    class FakeLease:
+        transcriber = None
+
+        def release(self):
+            return None
+
+    def fake_acquire(_settings, allow_isolated=True):
+        seen.append(controller._current_preload_phase())
+        return FakeLease()
+
+    monkeypatch.setattr(controller, "_download_model_for_preload", fake_download)
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", fake_acquire)
+
+    controller._preload_model_worker(settings, generation, key)
+
+    assert seen == [
+        controller_module._PRELOAD_PHASE_DOWNLOAD,
+        controller_module._PRELOAD_PHASE_LOAD,
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_preload_does_not_claim_to_be_downloading(monkeypatch):
+    """One preload worker runs at a time, so a second one waits.
+
+    Stamping DOWNLOAD at submit printed a frozen "Downloading ... approx.
+    100%" for a model nothing was fetching yet -- exactly the message the user
+    reported seeing for an already complete download.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        mode="batch",
+        model_size="large-v3-turbo",
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    submitted: list[tuple] = []
+
+    class BlockedExecutor:
+        def submit(self, *args, **kwargs):
+            submitted.append(args)
+            return _RunningFuture()
+
+        def shutdown(self, *args, **kwargs):
+            return None
+
+    controller._preload_executor = BlockedExecutor()
+
+    controller._start_local_model_preload()
+
+    assert submitted
+    assert (
+        controller._current_preload_phase()
+        == controller_module._PRELOAD_PHASE_QUEUED
+    )
+    assert controller._preload_phase_word() == "loading"
+    detail = controller._preload_progress_detail()
+    assert "Waiting for the previous model" in detail
+    assert "ownload" not in detail
+    assert "%" not in detail
+    controller.shutdown()
+    _ = app
+
+
 def test_preload_progress_poll_skips_during_recording_start():
     overlay = FakeOverlay()
     controller, app = _make_controller(overlay=overlay)
