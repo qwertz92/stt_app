@@ -201,6 +201,8 @@ def test_an_import_snapshot_can_never_read_a_half_written_recording(
     writer_store = LastRecordingStore(audio_path=audio_path, state_path=state_path)
     reader_store = LastRecordingStore(audio_path=audio_path, state_path=state_path)
     writer_store.save_recording(b"RIFF-first", keep_after_success=False)
+    first_id = writer_store.load().recording_id
+    assert first_id
 
     write_started = threading.Event()
     release_write = threading.Event()
@@ -245,3 +247,9 @@ def test_an_import_snapshot_can_never_read_a_half_written_recording(
     snapshot = snapshots[0]
     assert snapshot is not None
     assert snapshot.audio_bytes == b"RIFF-second-and-longer"
+    # Bytes and identity must come from the *same* recording. A snapshot that
+    # paired the new audio with the previous id would let its completion be
+    # attributed to a recording those bytes never belonged to, which is the
+    # whole reason the snapshot carries both.
+    assert snapshot.recording_id == writer_store.load().recording_id
+    assert snapshot.recording_id != first_id

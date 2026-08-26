@@ -920,14 +920,16 @@ class DictationController(QtCore.QObject):
                 self._settings.engine,
                 self._settings.model_size,
             ):
-                if (
-                    self._settings.engine == DEFAULT_ENGINE
-                    and self._settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
-                ):
+                if self._settings.engine == DEFAULT_ENGINE:
+                    # Any batch-only *local* model, not just the ONNX/WebGPU
+                    # ones: Parakeet and Canary are batch-only too and fell
+                    # into the branch below, which told a user who is already
+                    # on the local engine to "use local".
                     detail = (
-                        "Streaming is not available for the selected ONNX/WebGPU "
-                        "local model. Switch to batch mode, or choose a "
-                        "faster-whisper local model for streaming."
+                        f"Streaming is not available for the local model "
+                        f"'{self._settings.model_size}'. Switch to batch mode, "
+                        "or choose a faster-whisper or Nemotron local model "
+                        "for streaming."
                     )
                 else:
                     detail = (

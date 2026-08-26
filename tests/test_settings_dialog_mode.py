@@ -200,13 +200,28 @@ def _combo_data(combo: QtWidgets.QComboBox) -> list[str]:
 
 
 def _combo_item_enabled(combo: QtWidgets.QComboBox, value: str) -> bool:
+    """Whether ``value`` is offered *and* selectable.
+
+    A missing entry raises instead of returning False. "Offered but greyed
+    out" and "gone entirely" are different behaviours, and folding them
+    together let every `is False` assertion keep passing if the option
+    disappeared -- which is a regression, not the state being asserted.
+    """
     idx = combo.findData(value)
-    if idx < 0:
-        return False
+    assert idx >= 0, f"{value!r} is not offered at all: {_combo_data(combo)}"
     item = combo.model().item(idx)
-    if item is None:
-        return False
+    assert item is not None, f"{value!r} has no model item"
     return bool(item.isEnabled())
+
+
+def _combo_offers(combo: QtWidgets.QComboBox, value: str) -> bool:
+    """Whether ``value`` appears in the combo at all.
+
+    The language combo *removes* modes a model cannot do, while the mode combo
+    *disables* them -- two different behaviours that need two different
+    assertions. Using the enabled check for both hid that distinction.
+    """
+    return combo.findData(value) >= 0
 
 
 def _combo_text_for_data(combo: QtWidgets.QComboBox, value: str) -> str:
@@ -396,8 +411,8 @@ def test_assemblyai_streaming_locks_language_to_auto():
     assert dialog.language_combo.currentData() == "auto"
     assert dialog.language_combo.isEnabled() is False
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_item_enabled(dialog.language_combo, "de") is False
-    assert _combo_item_enabled(dialog.language_combo, "en") is False
+    assert _combo_offers(dialog.language_combo, "de") is False
+    assert _combo_offers(dialog.language_combo, "en") is False
     assert "fixed to Auto" in dialog.language_note_label.text()
     _ = app
 
@@ -422,7 +437,7 @@ def test_local_distil_model_limits_language_to_auto_and_english():
     assert dialog.language_combo.currentData() == "auto"
     assert dialog.language_combo.isEnabled() is True
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_item_enabled(dialog.language_combo, "de") is False
+    assert _combo_offers(dialog.language_combo, "de") is False
     assert _combo_item_enabled(dialog.language_combo, "en") is True
     assert "English-only model" in dialog.language_note_label.text()
     _ = app
@@ -450,7 +465,7 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     assert _combo_item_enabled(dialog.mode_combo, "streaming") is False
     assert dialog.language_combo.currentData() == "de"
     assert dialog.language_combo.isEnabled() is True
-    assert _combo_item_enabled(dialog.language_combo, "auto") is False
+    assert _combo_offers(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "de") is True
     assert _combo_item_enabled(dialog.language_combo, "en") is True
     assert _combo_item_enabled(dialog.language_combo, "fr") is True
@@ -542,7 +557,7 @@ def test_nemotron_model_enables_true_streaming_and_directml_fallback_note():
     assert _combo_item_enabled(dialog.language_combo, "bg") is True
     assert _combo_item_enabled(dialog.language_combo, "vi") is True
     assert _combo_item_enabled(dialog.language_combo, "et") is True
-    assert _combo_item_enabled(dialog.language_combo, "el") is False
+    assert _combo_offers(dialog.language_combo, "el") is False
     assert "automatic language detection" in dialog.language_note_label.text()
     assert "560 ms streaming" in dialog.engine_indicator.text()
     assert "DirectML" in dialog.local_model_runtime_warning_label.text()
@@ -566,8 +581,8 @@ def test_switching_assemblyai_mode_updates_language_options():
     assert _combo_data(dialog.language_combo) == ["auto"]
     assert dialog.language_combo.isEnabled() is False
     assert _combo_item_enabled(dialog.language_combo, "auto") is True
-    assert _combo_item_enabled(dialog.language_combo, "de") is False
-    assert _combo_item_enabled(dialog.language_combo, "en") is False
+    assert _combo_offers(dialog.language_combo, "de") is False
+    assert _combo_offers(dialog.language_combo, "en") is False
 
     batch_idx = dialog.mode_combo.findData("batch")
     dialog.mode_combo.setCurrentIndex(batch_idx)
@@ -578,7 +593,7 @@ def test_switching_assemblyai_mode_updates_language_options():
     assert _combo_item_enabled(dialog.language_combo, "en") is True
     assert _combo_item_enabled(dialog.language_combo, "ja") is True
     assert _combo_item_enabled(dialog.language_combo, "tr") is True
-    assert _combo_item_enabled(dialog.language_combo, "pl") is False
+    assert _combo_offers(dialog.language_combo, "pl") is False
     _ = app
 
 
@@ -1265,7 +1280,7 @@ def test_language_options_follow_the_selected_local_model():
     assert canary_index >= 0
     dialog.model_combo.setCurrentIndex(canary_index)
 
-    assert _combo_item_enabled(dialog.language_combo, "auto") is False
+    assert _combo_offers(dialog.language_combo, "auto") is False
     assert _combo_item_enabled(dialog.language_combo, "de") is True
     _ = app
 
@@ -1283,7 +1298,7 @@ def test_deepgram_language_options_follow_selected_model():
     nova_2_index = dialog.remote_model_combo.findData("nova-2")
     dialog.remote_model_combo.setCurrentIndex(nova_2_index)
 
-    assert _combo_item_enabled(dialog.language_combo, "ar") is False
+    assert _combo_offers(dialog.language_combo, "ar") is False
     assert _combo_item_enabled(dialog.language_combo, "fr") is True
     _ = app
 

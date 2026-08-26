@@ -315,12 +315,24 @@ def test_start_recording_rejects_streaming_for_remote_engine():
     _ = app
 
 
-def test_start_recording_rejects_streaming_for_batch_only_local_model(monkeypatch):
+@pytest.mark.parametrize(
+    "model_size",
+    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "canary-1b-v2"],
+)
+def test_start_recording_rejects_streaming_for_batch_only_local_model(
+    monkeypatch, model_size
+):
+    """The refusal must name the *model*, and must not contradict itself.
+
+    Only the ONNX/WebGPU models took the local branch, so Parakeet and Canary
+    -- batch-only through a different runtime -- fell into the remote branch
+    and were told to "use local" while the local engine was already selected.
+    """
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         engine="local",
         mode="streaming",
-        model_size="cohere-transcribe-03-2026",
+        model_size=model_size,
     )
     overlay = FakeOverlay()
     monkeypatch.setattr(
@@ -337,8 +349,33 @@ def test_start_recording_rejects_streaming_for_batch_only_local_model(monkeypatc
     controller.start_recording()
 
     assert overlay.states[-1][0] == "Error"
-    assert "ONNX/WebGPU" in overlay.states[-1][1]
-    assert "batch mode" in overlay.states[-1][1].lower()
+    detail = overlay.states[-1][1]
+    assert model_size in detail
+    assert "batch mode" in detail.lower()
+    # It must not tell a local user to "use local".
+    assert "selected provider" not in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_start_recording_rejects_streaming_for_a_batch_only_provider():
+    """The other branch still has to talk about the provider, not a model."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="openai",
+        mode="streaming",
+        has_openai_key=True,
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    controller.start_recording()
+
+    assert overlay.states[-1][0] == "Error"
+    assert "selected provider" in overlay.states[-1][1]
     controller.shutdown()
     _ = app
 
