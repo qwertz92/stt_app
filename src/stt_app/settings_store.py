@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -91,6 +92,8 @@ from .persistence import (
     parse_json_bool,
     quarantine_corrupt_file,
 )
+
+logger = logging.getLogger(__name__)
 
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
 _HISTORY_RETENTION_SCHEMA_VERSION = 16
@@ -285,6 +288,18 @@ class AppSettings:
 
         model_size = str(merged.get("model_size", DEFAULT_MODEL_SIZE)).lower()
         if model_size not in VALID_MODEL_SIZES:
+            # A model this build no longer offers -- a typo, or one that was
+            # retired between versions (Granite 4.1 Plus/NAR on 2026-08-26).
+            # The substitution used to be completely silent, so a user whose
+            # selection disappeared had no way to find out what happened.
+            if model_size:
+                logger.warning(
+                    "Stored model '%s' is not offered by this version; "
+                    "falling back to '%s'. Pick a model in Settings to make "
+                    "the choice explicit again.",
+                    model_size,
+                    DEFAULT_MODEL_SIZE,
+                )
             model_size = DEFAULT_MODEL_SIZE
 
         hotkey = str(merged.get("hotkey", DEFAULT_HOTKEY))

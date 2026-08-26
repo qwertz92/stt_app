@@ -1,4 +1,5 @@
 import json
+import logging
 
 from stt_app.config import (
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
@@ -310,6 +311,39 @@ def test_a_retired_local_model_falls_back_to_the_default(tmp_path):
 
     assert settings.engine == "local"
     assert settings.model_size == DEFAULT_MODEL_SIZE
+
+
+def test_a_retired_local_model_says_why_it_was_replaced(tmp_path, caplog):
+    """The substitution above must be findable, not silent.
+
+    A user whose selected model disappears sees a different model in Settings
+    and nothing anywhere explaining it. The log line is what turns "the app
+    changed my model" into an answerable question.
+    """
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(
+        json.dumps({"engine": "local", "model_size": "granite-speech-4.1-2b-plus"}),
+        encoding="utf-8",
+    )
+
+    with caplog.at_level(logging.WARNING, logger="stt_app.settings_store"):
+        SettingsStore(settings_path).load()
+
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("granite-speech-4.1-2b-plus" in message for message in messages)
+    assert any(DEFAULT_MODEL_SIZE in message for message in messages)
+
+
+def test_a_settings_file_without_a_model_logs_nothing(tmp_path, caplog):
+    """A fresh file simply has no model yet; that is not worth a warning."""
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps({"engine": "local"}), encoding="utf-8")
+
+    with caplog.at_level(logging.WARNING, logger="stt_app.settings_store"):
+        settings = SettingsStore(settings_path).load()
+
+    assert settings.model_size == DEFAULT_MODEL_SIZE
+    assert caplog.records == []
 
 
 def test_elevenlabs_engine_is_valid(tmp_path):

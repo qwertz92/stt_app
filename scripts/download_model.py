@@ -21,9 +21,10 @@ Usage examples:
 After downloading, the models are ready for offline use.  Set "Offline mode"
 in the app settings, and optionally set "Model Dir" to the --output-dir path.
 faster-whisper models use CTranslate2. Cohere, Granite 4.0, and Granite Speech
-4.1 2B use q4 ONNX/WebGPU snapshots. Granite Speech 4.1 Plus/NAR use the
-published INT8 raw ONNX tiers and require the JavaScript runtime from
-package.json. Nemotron 3.5 uses the INT4 ONNX Runtime GenAI streaming export.
+4.1 2B use q4 ONNX/WebGPU snapshots and require the JavaScript runtime from
+package.json. Parakeet and Canary use INT8 ONNX through the pure-Python
+onnx-asr runtime. Nemotron 3.5 uses the INT4 ONNX Runtime GenAI streaming
+export.
 
 If Hugging Face is unreachable (e.g. a corporate proxy such as Zscaler that
 blocks the whole "Generative AI and ML Applications" category), the download

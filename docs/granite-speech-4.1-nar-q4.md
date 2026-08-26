@@ -4,7 +4,8 @@ Status: **retired research record** (investigation closed 2026-08-26; see
 [granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.md)
 for the measurements that ended it). Last updated 2026-06-24. This is the durable
 write-up of the NAR q4 investigation so the work — and the dead-ends — do not have
-to be repeated. It is also the source text for the eventual Hugging Face model card.
+to be repeated. It was also drafted as the source text for a Hugging Face model
+card; nothing was published, and the retirement below ended that plan.
 
 Related: [granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.md),
 [local-onnx-q4-conversion.md](local-onnx-q4-conversion.md),
@@ -13,6 +14,16 @@ Related: [granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.
 ---
 
 ## TL;DR (read this first)
+
+> **Contradicted by later field data.** Point 1 below records NAR as fixed and
+> transcribing correctly after the 2026-06-24 pipeline repair. The user's
+> 2026-08-25 benchmark, on a real 24.3 s German dictation through the shipped
+> app, produced degraded German with words merged and dropped ("istt, egal, ob
+> ich local oder remoteripiiere und zum will"). The two were never reconciled:
+> the repair was verified on a controlled English/German gate clip, the
+> benchmark on live dictation. NAR was retired before anyone had to decide
+> which is representative, so treat "transcribes correctly" below as scoped to
+> that gate clip.
 
 1. **NAR was completely broken in this app at every precision** (including the
    shipped INT8). It emitted token garbage. **Root cause found and fixed** — a
@@ -287,6 +298,13 @@ or integration change and needs its own parity/benchmark loop.
 ---
 
 ## Decisions & plan
+
+> **Superseded on 2026-08-26.** NAR was removed from the app together with the
+> whole raw `onnxruntime-node` path, so none of the decisions below are open
+> any more: nothing is shipped, nothing was published to Hugging Face, and the
+> q4 builds exist only in the local scratch directories listed above. They are
+> kept as the record of what was decided at the time and why. Reviving any of
+> it means re-opening the retirement decision first.
 
 - **Ship the NAR pipeline fix** (`webgpu_asr_runner.mjs`) regardless — it makes the
   shipped INT8 NAR actually work.

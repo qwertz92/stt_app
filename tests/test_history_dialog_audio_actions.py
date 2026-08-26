@@ -255,6 +255,52 @@ def test_retranscribe_dialog_uses_the_chosen_language_and_entry_model(tmp_path):
     assert settings.language_mode == "en"
 
 
+def test_retranscribe_dialog_says_when_the_entrys_model_is_gone(tmp_path):
+    """Retranscribing exists to repeat a run, so a substitution must be visible.
+
+    Granite 4.1 Plus and NAR were removed on 2026-08-26. Their history entries
+    still offer Retranscribe, and the picker silently fell back to another
+    model -- producing a transcript that looks like a repeat of the entry but
+    came from a different model.
+    """
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    entry = _entry(engine="local", model="granite-speech-4.1-2b-nar")
+
+    dialog = RetranscribeDialog(
+        entry=entry,
+        audio_path=audio,
+        base_settings=AppSettings(engine="local", model_size="small"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    assert dialog._model_combo.findData("granite-speech-4.1-2b-nar") < 0
+    note = dialog._language_note.text()
+    assert "granite-speech-4.1-2b-nar" in note
+    assert "no longer offers" in note
+    assert dialog.selected_model() in note
+
+
+def test_retranscribe_dialog_says_nothing_when_the_entrys_model_is_available(
+    tmp_path,
+):
+    """The other half: the note must stay empty for an ordinary repeat."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="large-v3-turbo"),
+        audio_path=audio,
+        base_settings=AppSettings(engine="local", model_size="small"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+
+    assert dialog._model_combo.findData("large-v3-turbo") >= 0
+    assert dialog._language_note.text() == ""
+
+
 def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):
     QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(

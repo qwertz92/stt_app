@@ -264,32 +264,47 @@ class RetranscribeDialog(QtWidgets.QDialog):
             if self._select_data(self._language_combo, candidate):
                 break
         self._language_combo.setEnabled(self._language_combo.count() > 1)
-        self._update_language_note(preferred)
+        self._update_substitution_note(preferred)
 
-    def _update_language_note(self, requested: str = "") -> None:
-        """Warn when a model translates under the wrong language.
+    def _update_substitution_note(self, requested: str = "") -> None:
+        """Say whenever this run will not repeat the entry exactly.
 
-        Canary has no auto-detect, so a history entry recorded with `auto` (the
-        app default) silently lands on the first offered language. Running an
-        English recording that way stores a German *translation* as a new
-        history entry, which is why this must be visible rather than logged.
+        Two ways that happens, both silent before:
+
+        * The entry's **model** was removed from the app (Granite 4.1 Plus and
+          NAR on 2026-08-26), so the picker quietly offers another one and the
+          new transcript is not comparable with the old.
+        * The entry's **language** is unavailable for the chosen model. Canary
+          has no auto-detect, so an entry recorded with `auto` (the app
+          default) lands on the first offered language, and running an English
+          recording that way stores a German *translation* as a new entry.
         """
         if not hasattr(self, "_language_note"):
             return
-        if self.selected_model() != CANARY_MODEL_SIZE:
-            self._language_note.setText("")
-            return
-        selected = self.selected_language_mode()
-        note = (
-            "Canary cannot detect the language. Pick the one actually spoken - "
-            "with the wrong one it translates instead of transcribing."
-        )
-        if requested and requested != selected:
-            note = (
-                f"This entry's language ({requested}) is unavailable here, so "
-                f"{selected} was chosen. " + note
+        parts: list[str] = []
+        if (
+            self._entry_model
+            and self.selected_engine() == self._entry_engine
+            and self._model_combo.findData(self._entry_model) < 0
+        ):
+            parts.append(
+                f"This entry was recorded with '{self._entry_model}', which "
+                f"this version no longer offers, so "
+                f"{self.selected_model()} was chosen instead."
             )
-        self._language_note.setText(note)
+        if self.selected_model() == CANARY_MODEL_SIZE:
+            selected = self.selected_language_mode()
+            if requested and requested != selected:
+                parts.append(
+                    f"This entry's language ({requested}) is unavailable "
+                    f"here, so {selected} was chosen."
+                )
+            parts.append(
+                "Canary cannot detect the language. Pick the one actually "
+                "spoken - with the wrong one it translates instead of "
+                "transcribing."
+            )
+        self._language_note.setText(" ".join(parts))
 
     def _on_engine_changed(self) -> None:
         # Keep the entry's model when the user returns to its engine.

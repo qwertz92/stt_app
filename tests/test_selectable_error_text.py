@@ -58,7 +58,7 @@ def test_a_long_error_is_wrapped_and_kept_whole():
     app = _app()
     install_selectable_message_text(app)
     message = (
-        "Model download failed for granite-speech-4.1-2b-plus: "
+        "Model download failed for granite-speech-4.1-2b: "
         "HTTPSConnectionPool(host=huggingface.co, port=443): Max retries exceeded "
         "with url /resolve/main/int8/encoder.onnx_data (caused by ConnectionReset)"
     )

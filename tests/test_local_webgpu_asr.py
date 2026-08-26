@@ -17,7 +17,7 @@ from types import SimpleNamespace
 import pytest
 
 from stt_app.config import (
-    GRANITE_4_1_MODEL_SIZES,
+    GRANITE_4_1_REPO_MAP,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
@@ -125,7 +125,7 @@ def test_selectable_webgpu_models_use_granite_4_1_2b_q4_and_keep_4_0_q4():
     assert "granite-4.0-1b-speech" in LOCAL_WEBGPU_MODEL_SIZES
     assert "granite-4.0-1b-speech" in MODEL_REPO_MAP
     assert LOCAL_ONNX_MODEL_PRECISION["granite-4.0-1b-speech"] == "q4"
-    for model_name in GRANITE_4_1_MODEL_SIZES:
+    for model_name in GRANITE_4_1_REPO_MAP:
         assert model_name in LOCAL_WEBGPU_MODEL_SIZES
         assert model_name in MODEL_REPO_MAP
     # Granite 4.1 2B ships as a q4 Transformers.js package on the pipeline

@@ -336,8 +336,10 @@ def resolve_cached_webgpu_model_root(
     Returns the root rather than the snapshot directory because a HuggingFace
     snapshot entry may be a symlink into `blobs/`, which a size sum has to skip.
     Requiring a valid snapshot is what keeps an unrelated copy of the same repo
-    out of the measurement: the NAR repo's fp32 conversion weights live under
-    `models--<repo>` and carry none of the required `int8/*` files.
+    out of the measurement. The case that proved it: `convert_granite_nar_q4.py`
+    pulled the (now retired) NAR repo's fp32 weights with `cache_dir=`, 9.4 GB
+    under `models--<repo>` carrying none of the required files, and sizing that
+    made the real download report 100% while it was half done.
     """
     for root in _model_cache_dirs(model_name, model_dir):
         if _valid_snapshot_path(model_name, root) is not None:

@@ -3,6 +3,96 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-26 (adversarial round on the cancel, preload-phase and retirement work)
+
+A review round over the three preceding commits found nine defects worth
+recording, several of them in the *fixes themselves* rather than in the code
+they touched.
+
+- **A cancel that frees nothing.** `LocalOnnxAsrTranscriber` wraps every ONNX
+  session's `run` so `RunOptions.terminate` becomes reachable. The wrapper is
+  stored in the session's own `__dict__` and holds the original *bound*
+  method, whose `__self__` is that session -- a reference cycle, so `close()`
+  freed nothing until a generation-2 collection happened to run. The whole
+  point of the cancel was to release the CPU *and the model*. Fixed by
+  restoring each session's `run` in `close()`.
+  - The first attempt still failed its own test: `_install_cancel_hooks`
+    walked the model with a **recursive local function**, and a closure that
+    calls itself is a second cycle through its own cell -- which also held the
+    list of collected sessions. An explicit work list fixed it. Lesson: when a
+    test asserts an object is freed, disable the cyclic collector
+    (`gc.disable()`), or refcount-only bugs pass.
+- **Pressing Cancel during a download reported a failure.** All four local
+  engines surfaced `ModelDownloadCanceled` as "Failed to download ..." -- an
+  error dialog for the thing the user had just asked to stop. It is also what
+  shutdown raises. One shared context manager in `ITranscriber` now maps it to
+  `TranscriptionCanceled`.
+- **A cancel check that raises logged a traceback every 0.25 s.** The
+  ONNX/WebGPU reader polls it for the whole transcription. Latched to once per
+  installed check.
+- **A preload key that was not the runtime identity.** `_model_preload_key`
+  described fewer fields than `_transcriber_identity`, so a successful preload
+  could be credited to a runtime built from different settings. They are now
+  the same function.
+- **An identity that read fields its engine never touches.** Listing every
+  provider's model field unconditionally meant pasting an Azure endpoint
+  unloaded a multi-gigabyte *local* model. The identity is now built per
+  engine -- and building it that way exposed two fields that had been missing
+  entirely (`has_api_key`, `allow_insecure_key_storage`).
+- **`invalidate_transcriber_credentials("groq")` invalidated nothing.** A
+  string is iterable, so the membership test compared `"groq"` against
+  `{"g", "r", "o", "q"}`. Every caller happened to pass a list, but the
+  signature accepted the string form.
+- **The JavaScript probe outlived its packages.** After the raw Granite paths
+  were deleted, `_run_transformers_import_probe` still imported
+  `@huggingface/tokenizers` and `onnxruntime-node`. Both resolve today only
+  because npm hoists them out of `@huggingface/transformers`; neither is
+  declared. Had that hoist changed, the probe would fail, its own `npm
+  install` repair could not have fixed it, and every ONNX dictation would end
+  in "run npm install" forever. Two tests now pin the probe to the runner's
+  imports and to `package.json`.
+- **A published number that was never counted.** The retirement write-up said
+  the NAR/Plus encoders carry **48 `Einsum` nodes**; that came from
+  `grep -c -o`, which counts *lines*, not occurrences. Re-counted three ways
+  against the actual graphs -- protobuf `op_type` fields, distinct exporter
+  node names, and `equation` attributes -- the answer is **16**, matching the
+  repository's own 2026-06-24 record. The raw byte string appears 80 times.
+  Corrected in four places. Also corrected: DirectML does not fail on
+  `Einsum`. The benchmark's own error text names
+  `/encoder/layers.0/attn/MatMul/MatMulScaleFusion/` -- the fused 5-D MatMul.
+  Two different nodes, two unrelated reasons, one wrong sentence repeated
+  everywhere.
+- **Benchmark figures quoted from memory instead of from the file.** Re-read
+  from `benchmark_history.json` (2026-08-25, a real 24.3 s German dictation,
+  best of two runs): base 2B **0.098** on WebGPU, NAR **0.434**, Plus
+  **4.138**, Parakeet **0.042**. The write-up had 0.100/0.460/4.161/0.043 and
+  called NAR's output "word salad" -- an overstatement; the transcript is
+  degraded German with words merged and dropped, not unrelated to the audio.
+  Plus's 4.138 is a *consequence* of a degenerate loop (it repeated one clause
+  to the 1024-token cap), not an independent speed measurement, which is what
+  reconciles it with the earlier 0.81 on a clip where it terminated normally.
+  The retirement decision does not depend on any of this: both encoders are
+  GPU-incapable here at the graph level, both are slower than the base model
+  even in their most favourable measurement, and Parakeet beats all of them on
+  plain CPU. But "roughly six times faster than Granite 2B" in `AGENTS.md` was
+  wrong for the same reason and is now **2.3x** (0.042 against 0.098).
+- **Retirement leftovers.** The removal missed: `_run_transformers_import_probe`
+  (above), a stale `GRANITE_4_1_MODEL_SIZES` used only by a test, present-tense
+  prose naming the deleted `loadGranite41NarRuntime`, a "publish to Hugging
+  Face" plan that ended, "every selectable ONNX model uses the pipeline" (two
+  of the three local ONNX runtimes do not), and two `LOCAL_MODEL_LABELS`
+  entries. The labels were **kept on purpose** so a history row recorded with
+  a retired model still reads as a name, and are now marked "(removed)"; a
+  test pins that split. Two user-visible gaps also came out of it: a stored
+  model that no longer exists fell back to the default with no log line, and
+  the Retranscribe dialog silently substituted another model for an entry
+  recorded with a retired one. Both now say so.
+- **~9 GB of orphaned cache with no way to reclaim it.** The Local tab lists
+  only models the app currently offers, so a retired model's snapshot becomes
+  invisible rather than deletable. Documented with the exact directories and
+  measured sizes in `docs/models.md` rather than building an orphan-scanner
+  for a one-off.
+
 ## 2026-08-23 (rounds five to eight: what repeated review actually caught)
 
 Eight adversarial rounds ran over the streaming work. Every one found a real
@@ -3245,11 +3335,18 @@ plus the download lock finally made real.
   them.** Asked to remove NAR after a benchmark, and asked what Plus was still
   for. The measurements answered both at once (user's own run, 2026-08-25,
   German dictation, all device targets): base 4.1 2B **RTF 0.100 on WebGPU**
-  with correct German; NAR **0.460, CPU only, word-salad transcript**; Plus
-  **4.161, CPU only, hallucinated** -- slower than real time, 42x the base
-  model. For scale, Parakeet does the same job at 0.043 on plain CPU.
+  with correct German; NAR **0.434, CPU only, German with words merged and
+  dropped**; Plus **4.138, CPU only, looping one clause to the 1024-token cap**
+  -- slower than real time, 42x the base model. For scale, Parakeet does the
+  same job at 0.042 on plain CPU. (Figures re-read from
+  `benchmark_history.json` on 2026-08-26, best of the two runs; the first write-up
+  quoted 0.100/0.460/4.161/0.043 and called NAR's output "word salad", which
+  overstated it -- the transcript is degraded, not unrelated to the audio.
+  Plus's 4.138 is a consequence of the loop, not an independent speed number:
+  its earlier 0.81 on a 16.9 s English clip is what a normally terminating run
+  costs.)
   - The graph-level cause was confirmed rather than assumed, by reading the
-    exports: the two smcleod encoders contain **48 `Einsum` nodes each**, all
+    exports: the two smcleod encoders contain **16 `Einsum` nodes each**, all
     `b m h c d, c r d -> b m h c r`; the `onnx-community` export of the base
     model contains **zero** and writes the same attention as
     Reshape/Transpose/MatMul. So the answer to "why does 2B run on the GPU and

@@ -40,3 +40,27 @@ def test_a_model_that_cannot_stream_is_declared_batch_only():
     streaming path must say so or the Mode picker offers a mode that fails."""
     for model_name in config.LOCAL_WEBGPU_MODEL_SIZES + config.LOCAL_ONNX_ASR_MODEL_SIZES:
         assert config.supports_streaming("local", model_name) is False, model_name
+
+
+def test_every_label_entry_is_either_selectable_or_marked_removed():
+    """A label for a model nobody can select is either stale or a history aid.
+
+    Granite 4.1 Plus and NAR keep entries on purpose, so a history row recorded
+    with one still reads as a name. Anything else left behind here is a table
+    the retirement forgot -- the exact class of half-finished change this file
+    exists to catch.
+    """
+    unselectable = set(LOCAL_MODEL_LABELS) - set(config.VALID_MODEL_SIZES)
+
+    assert unselectable == {
+        "granite-speech-4.1-2b-plus",
+        "granite-speech-4.1-2b-nar",
+    }
+    for model_name in unselectable:
+        assert "removed" in LOCAL_MODEL_LABELS[model_name].lower(), model_name
+
+
+@pytest.mark.parametrize("model_name", sorted(set(config.VALID_MODEL_SIZES)))
+def test_no_selectable_model_is_labelled_as_removed(model_name: str):
+    """The other direction: a retired label must never reach a live picker."""
+    assert "removed" not in LOCAL_MODEL_LABELS[model_name].lower()

@@ -944,11 +944,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   there is exactly one ONNX inference path here and `onnxruntime-node` is no
   longer a top-level npm dependency (Transformers.js keeps its own nested pin).
   They were removed on measurement, not preference: on the user's machine the
-  base 4.1 2B ran at RTF 0.100 on WebGPU while NAR managed 0.460 and Plus 4.161
-  -- both CPU-only, both with unusable transcripts. The graph-level cause is
+  base 4.1 2B ran at RTF 0.098 on WebGPU while NAR managed 0.434 and Plus 4.138
+  -- both CPU-only, NAR with merged and dropped German words, Plus looping one
+  clause to the token limit (which is also what makes its 4.138 so bad: it is
+  autoregressive and kept generating). The graph-level cause is
   recorded in `docs/granite-speech-4.1-onnx-variants.md`: their encoders carry
-  48 `Einsum` nodes each (`b m h c d, c r d -> b m h c r`, a 5-D contraction the
-  WebGPU EP has no shader for and DirectML cannot execute), while the
+  16 `Einsum` nodes each (`b m h c d, c r d -> b m h c r`, a 5-D contraction the
+  WebGPU EP has no shader for), plus the 5-D attention `MatMul`s DirectML
+  cannot execute, while the
   `onnx-community` export of the base model writes the same attention as
   Reshape/Transpose/MatMul and has none. Before re-adding any raw-graph model,
   read that document and verify every required file against the actual repo
@@ -968,9 +971,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
   Keep faster-whisper as the stable local default until real target-hardware
   benchmarks justify switching.
-  The Granite 4.1 Plus (AR) and NAR raw paths must stay separate from each other
-  and from the pipeline path because their ONNX graph contracts differ. Keep
-  `granite-4.0-1b-speech` selectable as a smaller q4 option until real
+  Keep `granite-4.0-1b-speech` selectable as a smaller q4 option until real
   benchmarks justify removing it.
 - **Nemotron 3.5 true streaming**:
   `nemotron-3.5-asr-streaming-0.6b-int4` uses the published 793 MB multilingual
@@ -998,7 +999,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   4.1->4.2 and CTranslate2 4.7.1->4.8.1 performance-neutral on AMD hardware
   (CT2 4.8.0's int8 PACKED_GEMM speedup is Intel-MKL-only). Re-checked on
   2026-08-11 against Transformers.js 4.2.0: the nested pin is still exactly
-  1.24.3, so the top-level version stays there. `onnxruntime-node`'s
+  1.24.3. `onnxruntime-node`'s
   `postinstall` being blocked by npm 12's install-script policy is harmless —
   the package ships its native binaries bundled and reports cpu/dml/webgpu.
 - **`sharp` is pinned forward through `overrides`**: `@huggingface/transformers`
@@ -1017,9 +1018,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `local_webgpu_asr`, whose allow-patterns fetch only the int8 tier (both repos
   also ship fp32 graphs worth 2.4 GB and 3.3 GB).
   Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **RTF 0.046 EN /
-  0.043 DE**, Canary 1029 MB at RTF 0.134 / 0.135 — Parakeet is roughly ten
-  times faster than Granite NAR and six times faster than Granite 2B *on the
-  GPU*, so a GPU path is not needed to make it the quickest local option.
+  0.043 DE**, Canary 1029 MB at RTF 0.134 / 0.135. The 2026-08-25 benchmark put
+  Granite Speech 4.1 2B at 0.100 on WebGPU, so Parakeet on plain CPU is about
+  **2.3x** faster than the best local GPU model — a GPU path is not needed to
+  make it the quickest local option. (An earlier "six times" here compared
+  against a stale Granite figure; the ratio moved when the base 2B was measured
+  on the q4 pipeline path.)
   **Never add `onnxruntime-directml`.** It installs happily beside
   `onnxruntime` — `pip check` reports nothing wrong — but both distributions
   own the same `onnxruntime/` package directory (620 of 625 files), so the

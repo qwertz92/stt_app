@@ -290,9 +290,9 @@ but preserves files that finished downloading so a later retry can reuse them.
 The command-line download script applies the same cleanup after `Ctrl+C`.
 
 For Cohere and Granite, source checkouts use the system Node.js executable. If
-`@huggingface/transformers`, `@huggingface/tokenizers`, or `onnxruntime-node`
-is missing, the app attempts `npm install`
-automatically from the repository root on first ONNX use. The packaged Windows
+`@huggingface/transformers` is missing, the app attempts `npm install`
+automatically from the repository root on first ONNX use. That is the only
+declared JavaScript dependency; `onnxruntime-node` comes with it. The packaged Windows
 release includes the JavaScript dependency tree when `node_modules` is present
 at build time, but it still needs a Node.js executable unless the distribution
 bundle adds one separately. Set `STT_APP_NODE_PATH` if Node.js is installed in a
@@ -527,6 +527,28 @@ The cache uses HuggingFace's internal directory format, not flat files:
 ```
 
 This is why you cannot just drop files into a folder — the download script and import script handle this structure automatically.
+
+### Reclaiming disk from retired models
+
+The Local tab lists and deletes only models the app currently offers, so when a
+model is retired its downloaded snapshot stays on disk and becomes invisible to
+that list. Granite Speech 4.1 **Plus** and **NAR** were retired on 2026-08-26
+and are the only case so far; if you ever downloaded them, their caches are
+still there and can be deleted by hand. Measured on the development machine:
+
+| directory (under `%USERPROFILE%\.cache\huggingface\hub`) | size |
+| --- | --- |
+| `ibm-granite-speech-4.1-2b-plus-onnx` | 3.8 GB |
+| `ibm-granite-speech-4.1-2b-nar-onnx` | 2.4 GB |
+| `granite-speech-4.1-2b-plus-ONNX` | 1.8 GB |
+| `models--smcleod--ibm-granite-speech-4.1-2b-nar-onnx` | 1.0 GB |
+| `models--smcleod--ibm-granite-speech-4.1-2b-plus-onnx` | 8 MB |
+| `models--valoomba--granite-speech-4.1-2b-plus-ONNX` | negligible |
+
+Delete them only if you are not keeping them for your own experiments; the app
+will never use them again. If you set a custom **Model Dir**, look there
+instead. Nothing else in the cache is orphaned — every other directory belongs
+to a model the app still offers.
 
 ### Custom Model Dir
 

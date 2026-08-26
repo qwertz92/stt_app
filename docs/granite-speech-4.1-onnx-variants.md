@@ -8,20 +8,32 @@
 > they never worked well and what would have to change upstream.
 >
 > What decided it, from a benchmark run on the user's own machine (2026-08-25,
-> German dictation, all three device targets):
+> a real 24.3 s German dictation -- not the synthetic sample -- across all three
+> device targets, best of two runs, read back from `benchmark_history.json`):
 >
 > | model | best device | RTF | transcript |
 > | --- | --- | --- | --- |
-> | `granite-speech-4.1-2b` (pipeline q4) | WebGPU | **0.100** | correct German |
-> | `granite-speech-4.1-2b-nar` (raw INT8) | CPU only | 0.460 | unusable word salad |
-> | `granite-speech-4.1-2b-plus` (raw INT8) | CPU only | **4.161** | hallucinated; slower than real time |
-> | `parakeet-tdt-0.6b-v3` (onnx-asr INT8) | CPU | 0.043 | correct German |
+> | `granite-speech-4.1-2b` (pipeline q4) | WebGPU | **0.098** | correct German |
+> | `granite-speech-4.1-2b-nar` (raw INT8) | CPU only | 0.434 | degraded German: words merged and dropped ("istt, egal, ob ich local oder remoteripiiere und zum will") |
+> | `granite-speech-4.1-2b-plus` (raw INT8) | CPU only | **4.138** | degenerate loop: one clause repeated to the token limit |
+> | `parakeet-tdt-0.6b-v3` (onnx-asr INT8) | CPU | 0.042 | correct German |
+>
+> Plus's 4.138 is a *consequence* of that loop rather than an independent speed
+> measurement: it is autoregressive, so it kept generating until the 1024-token
+> cap. Its earlier 0.81 on a 16.9 s English clip (2026-06-24) is the honest
+> figure for a run that terminates normally -- still three times slower than the
+> base model. NAR's 0.434 matches its earlier 0.49 and needs no explanation.
 >
 > Both raw variants failed on WebGPU **and** on DirectML. The graph-level reason
 > was confirmed by inspecting the exports directly: the two smcleod encoders
-> contain **48 `Einsum` nodes each**, all
+> contain **16 `Einsum` nodes each**, all
 > `b m h c d, c r d -> b m h c r` -- a 5-dimensional contraction that the WebGPU
-> execution provider has no shader for and DirectML cannot execute. The
+> execution provider has no shader for
+> (`/encoder/layers.0/attn/Einsum`: *Failed to create a WebGPU compute
+> pipeline*). DirectML fails on a different node in the same attention block,
+> the fused 5-D MatMul (`/encoder/layers.0/attn/MatMul/MatMulScaleFusion/`:
+> *the parameter is incorrect*); the 2026-06-24 inspection counted 32 high-rank
+> MatMuls. The
 > `onnx-community` export of the base 4.1 2B writes the same attention as
 > Reshape/Transpose/MatMul and contains **zero** `Einsum` nodes. It is the
 > export, not the model, that cannot use a GPU.
@@ -46,18 +58,20 @@ see [local-onnx-q4-conversion.md](local-onnx-q4-conversion.md) and
 
 ## Summary
 
-| Variant | HF `model_type` | App runtime path | q4 pipeline today? | Blocker |
+| Variant | HF `model_type` | App runtime path | q4 pipeline? | Blocker |
 | --- | --- | --- | --- | --- |
 | `granite-speech-4.1-2b` (AR) | `granite_speech` | **q4 Transformers.js pipeline** | **Yes** | — (shipped) |
-| `granite-speech-4.1-2b-plus` (AR) | `granite_speech_plus` | raw INT8 graphs | No | distinct architecture; no faithful q4; no JS class |
-| `granite-speech-4.1-2b-nar` (NAR) | `granite_speech_nar` | raw INT8 graphs | No | non-autoregressive; no JS class; no q4 |
+| `granite-speech-4.1-2b-plus` (AR) | `granite_speech_plus` | raw INT8 graphs (removed 2026-08-26) | No | distinct architecture; no faithful q4; no JS class |
+| `granite-speech-4.1-2b-nar` (NAR) | `granite_speech_nar` | raw INT8 graphs (removed 2026-08-26) | No | non-autoregressive; no JS class; no q4 |
 
 "AR" = autoregressive (token-by-token generation). "NAR" = non-autoregressive
 (parallel decoding). "Pipeline path" = the high-level Transformers.js
 `GraniteSpeechForConditionalGeneration` class on WebGPU, the same path used by
-`granite-4.0-1b-speech`. "Raw path" = hand-written `onnxruntime-node` graph
-sessions in `webgpu_asr_runner.mjs` (CPU-bound in practice; see the WebGPU
-`Einsum` shader bug noted in `local-onnx-runtime.md`).
+`granite-4.0-1b-speech`. "Raw path" = the hand-written `onnxruntime-node` graph
+sessions that used to live in `webgpu_asr_runner.mjs` (CPU-bound in practice;
+see the WebGPU `Einsum` shader bug noted in `local-onnx-runtime.md`). That code
+was deleted on 2026-08-26 together with the two models; everything below
+describes the state at that point, in the past tense where it names code.
 
 ## Why the base 2B works (reference)
 
@@ -74,7 +88,7 @@ transcribe German, English, and French correctly at roughly 0.13–0.19 real-tim
 factor on the Arc A750. The app therefore points `granite-speech-4.1-2b` at this
 repo and routes it through the pipeline path.
 
-## Plus — why it stays on the raw INT8 path
+## Plus — why it stayed on the raw INT8 path
 
 ### What "Plus" is
 
@@ -192,7 +206,7 @@ capitalization. The base 2B already transcribes de/en/fr well on WebGPU. Plus is
 therefore low priority unless its specific rich-transcription features become a
 product requirement.
 
-## NAR — why it stays on the raw INT8 path
+## NAR — why it stayed on the raw INT8 path
 
 `granite-speech-4.1-2b-nar` has `model_type: granite_speech_nar` (architecture is
 non-autoregressive, with a CTC draft + an "editor" pass and insertion slots, and
@@ -206,9 +220,10 @@ It cannot use the pipeline path because:
 - There is **no** Transformers.js q4 build (only `smcleod` raw INT8 ONNX, a GGUF
   build for the CrispASR/llama.cpp runtime, and MLX builds for Apple silicon).
 
-NAR therefore stays on the app's existing raw `onnxruntime-node` path
-(`loadGranite41NarRuntime` in `webgpu_asr_runner.mjs`), which executes the model's
-real exported graphs. Making NAR fast on the GPU would require either upstream
+NAR therefore stayed on the app's raw `onnxruntime-node` path
+(`loadGranite41NarRuntime` in `webgpu_asr_runner.mjs`, both removed on
+2026-08-26), which executed the model's real exported graphs. Making NAR fast
+on the GPU would require either upstream
 Transformers.js NAR support or a custom WebGPU runtime for its graph contract —
 both substantial. Re-check: a future `onnx-community/granite-speech-4.1-2b-nar-ONNX`
 or `granite_speech_nar` support in Transformers.js.

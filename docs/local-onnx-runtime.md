@@ -70,9 +70,13 @@ architecture.
 | `dml` | Force ONNX Runtime DirectML | Diagnostic only for current Cohere/Granite |
 | `cpu` | Force CPU | Most compatible, usually slowest |
 
-Every selectable ONNX model uses the high-level Transformers.js pipeline
-(verified on WebGPU, see below). `auto`/`gpu` mode attempts WebGPU, then
-DirectML, then CPU; confirm the active device in the runtime status.
+The device policy above applies to the **Cohere/Granite** models, which are
+the ones that run through the high-level Transformers.js pipeline (verified on
+WebGPU, see below). `auto`/`gpu` mode attempts WebGPU, then DirectML, then CPU;
+confirm the active device in the runtime status. The other two local ONNX
+paths are separate runtimes: Nemotron uses ONNX Runtime GenAI (next paragraph),
+and Parakeet/Canary use the pure-Python `onnx-asr` runtime, which is CPU-only
+here and therefore not offered in the device picker at all.
 
 Nemotron attempts DirectML and then CPU through ORT GenAI. The normal dependency
 lock currently installs the CPU package because the published
@@ -127,9 +131,12 @@ Observed on the target Windows/Intel Arc A750 machine:
   failed at their first inference while ONNX Runtime Web compiled the `Einsum`
   compute pipeline. (`Einsum`, short for *Einstein summation*, is a general
   tensor-contraction operator — a flexible matrix-multiply used here inside the
-  audio encoder.) Their encoders contained 48 such nodes, all
+  audio encoder.) Their encoders contained 16 such nodes, all
   `b m h c d, c r d -> b m h c r`; the `onnx-community` export of the base 4.1
   2B writes the same attention as Reshape/Transpose/MatMul and contains none.
+  DirectML fails on a different node in the same attention block, the fused
+  5-D MatMul (`/encoder/layers.0/attn/MatMul/MatMulScaleFusion/`), not on
+  `Einsum`.
   That is the whole reason a Transformers.js q4 package is the cleaner GPU
   route, and why those two variants were removed on 2026-08-26.
 - DirectML loads the models but fails during inference:

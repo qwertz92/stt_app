@@ -155,9 +155,10 @@ DEFAULT_OFFLINE_MODE = False
 # turn it off; existing settings files keep whatever they stored.
 DEFAULT_KEEP_ONNX_MODEL_LOADED = True
 # Execution-device policy for the local ONNX engines. "auto" keeps the existing
-# behaviour (GPU first, CPU fallback, with the per-model CPU preference in
-# per-model preference applied); the rest let the user pin a device when a
-# benchmark shows one is better on their hardware.
+# behaviour (GPU first, CPU fallback); the rest let the user pin a device when
+# a benchmark shows one is better on their hardware. The per-model CPU
+# preference this used to mention went away with Granite 4.1 Plus/NAR, the only
+# two models that needed it.
 DEFAULT_LOCAL_ONNX_DEVICE = "auto"
 DEFAULT_START_BEEP_ENABLED = False
 DEFAULT_START_BEEP_TONE = "soft"
@@ -256,8 +257,6 @@ MODELS_WITHOUT_MODELSCOPE_MIRROR = frozenset(
     }
 )
 
-GRANITE_4_1_MODEL_SIZES = ("granite-speech-4.1-2b",)
-
 LOCAL_ONNX_MODEL_PRECISION: dict[str, str] = {
     "cohere-transcribe-03-2026": "q4",
     "granite-4.0-1b-speech": "q4",
@@ -355,8 +354,7 @@ MODEL_ESTIMATED_SIZE_MB: dict[str, int] = {
     "large-v3-turbo": 1_622,
     "distil-large-v3.5": 1_516,
     # Selectable local ONNX downloads. Cohere, Granite 4.0, and Granite 4.1 2B
-    # are q4 Transformers.js packages; Granite 4.1 Plus/NAR use the smallest
-    # currently published INT8 tier.
+    # are q4 Transformers.js packages.
     "cohere-transcribe-03-2026": 2_128,
     "granite-4.0-1b-speech": 1_843,
     "granite-speech-4.1-2b": 1_843,

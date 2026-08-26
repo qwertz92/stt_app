@@ -44,8 +44,12 @@ the **same WebGPU pipeline as Granite 4.0** — verified on the Arc A750 on
 2026-06-17 with correct German, English, and French output and no `Einsum` crash.
 The **Plus and NAR** variants used raw INT8 `onnxruntime-node` graphs whose first
 WebGPU inference failed when ONNX Runtime Web could not build a valid shader
-module for the encoder's `Einsum` operator; DirectML could not execute it
-either. They were retired on 2026-08-26. The clean q4 export avoids that
+module for the encoder's `Einsum` operator
+(`/encoder/layers.0/attn/Einsum`). DirectML failed on a *different* node in the
+same attention block -- the fused 5-D MatMul
+(`/encoder/layers.0/attn/MatMul/MatMulScaleFusion/`, "the parameter is
+incorrect") -- so neither GPU provider could run the encoder, for two unrelated
+reasons. They were retired on 2026-08-26. The clean q4 export avoids that
 operator entirely — which is exactly why the 2B model moved to the pipeline
 path.
 

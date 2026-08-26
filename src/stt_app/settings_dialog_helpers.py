@@ -188,12 +188,12 @@ LOCAL_MODEL_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b": (
         "IBM Granite Speech 4.1 2B (~1.84 GB, ONNX/WebGPU)"
     ),
-    "granite-speech-4.1-2b-plus": (
-        "IBM Granite Speech 4.1 2B Plus (~4.1 GB, ONNX)"
-    ),
-    "granite-speech-4.1-2b-nar": (
-        "IBM Granite Speech 4.1 2B NAR (~2.5 GB, ONNX)"
-    ),
+    # Retired on 2026-08-26 (see docs/granite-speech-4.1-onnx-variants.md).
+    # They are not in VALID_MODEL_SIZES, so they appear in no picker; these
+    # entries exist only so a history row recorded with one still reads as a
+    # model name instead of a raw identifier.
+    "granite-speech-4.1-2b-plus": "IBM Granite Speech 4.1 2B Plus (removed)",
+    "granite-speech-4.1-2b-nar": "IBM Granite Speech 4.1 2B NAR (removed)",
     "nemotron-3.5-asr-streaming-0.6b-int4": (
         "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB, true 560 ms streaming)"
     ),

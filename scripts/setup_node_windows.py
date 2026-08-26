@@ -2,8 +2,9 @@
 r"""Deterministic, no-admin Node.js bootstrap for the GPU/ONNX (WebGPU) models.
 
 The Cohere and IBM Granite Speech models run through a small Node.js helper
-(`@huggingface/transformers` + `onnxruntime-node`). They therefore need a
-Node.js runtime on the machine that runs the app (native Windows, not WSL).
+(`@huggingface/transformers`, which brings its own pinned `onnxruntime-node`).
+They therefore need a Node.js runtime on the machine that runs the app (native
+Windows, not WSL).
 
 On locked-down corporate machines the usual installers fail:
 
