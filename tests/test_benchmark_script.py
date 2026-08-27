@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import importlib.util
 import sys
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -592,3 +594,125 @@ def test_canary_refuses_to_benchmark_without_a_language(tmp_path):
             language=None,
             warmup=False,
         )
+
+
+def test_a_case_runs_off_the_main_thread_so_ctrl_c_can_reach_the_model():
+    """The in-process path must not block Ctrl+C inside the model call.
+
+    `--no-isolated-case` used to call `_run_case` on the main thread, where a
+    signal handler cannot run while the process sits in `InferenceSession.run`.
+    """
+    module = _load_benchmark_module()
+    threads: list[str] = []
+
+    def _fake_run_case(**_kwargs):
+        threads.append(threading.current_thread().name)
+        return local_benchmark.BenchmarkCase(
+            model="parakeet-tdt-0.6b-v3",
+            device="cpu",
+            compute_type="int8",
+            download_seconds=0.0,
+            load_seconds=0.5,
+            runs=[],
+        )
+
+    module._run_case = _fake_run_case
+    case = module._run_case_threaded({"model_name": "parakeet-tdt-0.6b-v3"})
+
+    assert case.model == "parakeet-tdt-0.6b-v3"
+    assert threads == ["benchmark-case"], (
+        "the case ran on the main thread, where Ctrl+C is not delivered until "
+        "the blocking model call returns"
+    )
+
+
+def test_ctrl_c_during_a_case_sets_the_flag_the_model_polls():
+    """The interrupt must reach the running model, not just the shell."""
+    module = _load_benchmark_module()
+    module._cancel_requested.clear()
+    entered = threading.Event()
+    observed: list[bool] = []
+
+    def _fake_run_case(**_kwargs):
+        entered.set()
+        # Stand in for the blocking model call: poll the same check the real
+        # transcribers are handed.
+        for _ in range(200):
+            if module._cancel_check():
+                observed.append(True)
+                raise local_benchmark.BenchmarkCancelled("Benchmark canceled.")
+            time.sleep(0.01)
+        raise AssertionError("the cancel flag never reached the case")
+
+    module._run_case = _fake_run_case
+    real_join = threading.Thread.join
+
+    def _join_that_interrupts(self, timeout=None):
+        real_join(self, timeout)
+        if entered.is_set() and not module._cancel_requested.is_set():
+            raise KeyboardInterrupt
+
+    threading.Thread.join = _join_that_interrupts
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._run_case_threaded({"model_name": "canary-1b-v2"})
+    finally:
+        threading.Thread.join = real_join
+        module._cancel_requested.clear()
+
+    assert observed == [True], "the running case never saw the cancel"
+
+
+def test_a_case_failure_is_reported_from_the_worker_thread():
+    """An exception on the worker thread must not be swallowed."""
+    module = _load_benchmark_module()
+
+    def _fake_run_case(**_kwargs):
+        raise RuntimeError("model load failed")
+
+    module._run_case = _fake_run_case
+    with pytest.raises(RuntimeError, match="model load failed"):
+        module._run_case_threaded({"model_name": "small"})
+
+
+def test_the_case_hands_its_cancel_check_to_the_benchmark_run(tmp_path):
+    """Without this the flag Ctrl+C sets never reaches the transcriber."""
+    module = _load_benchmark_module()
+    seen: dict[str, object] = {}
+
+    def _fake_run(**kwargs):
+        seen.update(kwargs)
+        return [
+            local_benchmark.BenchmarkCase(
+                model="parakeet-tdt-0.6b-v3",
+                device="cpu",
+                compute_type="int8",
+                download_seconds=0.0,
+                load_seconds=0.5,
+                runs=[],
+            )
+        ]
+
+    module._shared_run_benchmark_cases = _fake_run
+    module._run_case(
+        audio_path=tmp_path / "sample.wav",
+        model_name="parakeet-tdt-0.6b-v3",
+        device="cpu",
+        compute_type="int8",
+        runs=1,
+        beam_size=1,
+        language=None,
+        vad_filter=False,
+        warmup=False,
+        threads=0,
+    )
+
+    module._cancel_requested.clear()
+    check = seen.get("cancel_check")
+    assert callable(check), "the benchmark run was started without a cancel check"
+    assert check() is False
+    module._cancel_requested.set()
+    try:
+        assert check() is True, "the cancel check is not wired to the Ctrl+C flag"
+    finally:
+        module._cancel_requested.clear()

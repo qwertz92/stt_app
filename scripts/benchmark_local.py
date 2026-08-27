@@ -6,6 +6,7 @@ import math
 import multiprocessing as mp
 import os
 import sys
+import threading
 import time
 from dataclasses import asdict
 from datetime import UTC, datetime
@@ -27,6 +28,7 @@ from stt_app.config import (
     VALID_MODEL_SIZES,
 )
 from stt_app.local_benchmark import (
+    BenchmarkCancelled,
     BenchmarkCase,
     BenchmarkRun,  # noqa: F401 - re-exported for script tests and JSON helpers.
     _case_from_dict,
@@ -328,6 +330,59 @@ def _ensure_models_available(
     return download_times
 
 
+# Set from the main thread when Ctrl+C arrives; read by the model through
+# `cancel_check`. A plain `Event` rather than a signal handler because the
+# handler would have to run while the main thread sits inside a blocking C
+# call, which is exactly when Python cannot run it.
+_cancel_requested = threading.Event()
+
+# How long to let a canceled case wind down before returning to the shell.
+# ONNX Runtime honours `terminate` within milliseconds; faster-whisper checks
+# between segments, so a long segment can take a little longer.
+_CASE_CANCEL_JOIN_TIMEOUT_S = 10.0
+
+
+def _cancel_check() -> bool:
+    return _cancel_requested.is_set()
+
+
+def _run_case_threaded(params: dict[str, Any]) -> BenchmarkCase:
+    """Run one case off the main thread so Ctrl+C is delivered promptly.
+
+    A case spends nearly all of its wall clock inside one blocking C call
+    (`InferenceSession.run`, `WhisperModel.transcribe`). Python runs a signal
+    handler only when the main thread executes bytecode, so with the case on
+    the main thread Ctrl+C is not seen until that call returns -- measured at
+    4.5 s for one Canary run, multiplied by `--runs`. On a worker thread the
+    main thread stays in `join()`, where the interrupt arrives at once, and the
+    flag it sets reaches the model through `cancel_check`.
+
+    `--isolated-case` (the default) gets the same promptness by terminating the
+    child process instead; this is the path for `--no-isolated-case`.
+    """
+    result: dict[str, Any] = {}
+
+    def work() -> None:
+        try:
+            result["case"] = _run_case(**params)
+        except BaseException as exc:  # re-raised on the main thread
+            result["error"] = exc
+
+    worker = threading.Thread(target=work, name="benchmark-case", daemon=True)
+    worker.start()
+    try:
+        while worker.is_alive():
+            worker.join(timeout=0.15)
+    except KeyboardInterrupt:
+        _cancel_requested.set()
+        worker.join(timeout=_CASE_CANCEL_JOIN_TIMEOUT_S)
+        raise
+    error = result.get("error")
+    if error is not None:
+        raise error
+    return result["case"]
+
+
 def _run_case(
     *,
     audio_path: Path,
@@ -356,6 +411,7 @@ def _run_case(
         threads=threads,
         webgpu_devices=[webgpu_device],
         progress_callback=lambda text: print(f"  {text}", flush=True),
+        cancel_check=_cancel_check,
     )
     if not cases:
         return BenchmarkCase(
@@ -672,7 +728,9 @@ def main() -> int:
                 case = _run_case_isolated(params)
             else:
                 try:
-                    case = _run_case(**params)
+                    case = _run_case_threaded(params)
+                except BenchmarkCancelled:
+                    raise
                 except Exception as exc:
                     case = BenchmarkCase(
                         model=str(params["model_name"]),
@@ -688,7 +746,7 @@ def main() -> int:
             if case.error:
                 failures += 1
             cases.append(case)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, BenchmarkCancelled):
         interrupted = True
         print("")
         print("Interrupted by user (Ctrl+C).")
