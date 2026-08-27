@@ -862,11 +862,133 @@ def test_a_queued_preload_does_not_claim_to_be_downloading(monkeypatch):
         controller._current_preload_phase()
         == controller_module._PRELOAD_PHASE_QUEUED
     )
-    assert controller._preload_phase_word() == "loading"
+    assert controller._preload_phase_word() == "waiting for another model to finish"
     detail = controller._preload_progress_detail()
     assert "Waiting for the previous model" in detail
     assert "ownload" not in detail
     assert "%" not in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch):
+    """A cancel from the download slot must not be recorded as a failure.
+
+    The transcriber's own load path downloads through the single machine-wide
+    slot, and an explicit cancel (or shutdown) raises there. Reported as
+    "could not be loaded", it was also *persisted* for that preload key, so
+    the next dictation re-raised the stored failure instead of retrying.
+    """
+    from stt_app.transcriber.base import TranscriptionCanceled
+
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda gen, ok, message: done.append((gen, ok, message))
+    )
+
+    class CanceledLease:
+        transcriber = None
+
+        def release(self):
+            return None
+
+    monkeypatch.setattr(
+        controller, "_download_model_for_preload", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        controller,
+        "_acquire_transcriber_runtime",
+        lambda *_a, **_k: (_ for _ in ()).throw(
+            TranscriptionCanceled("Model download canceled.")
+        ),
+    )
+
+    controller._preload_model_worker(settings, generation, key)
+
+    assert done and done[-1][1] is False
+    assert "canceled" in done[-1][2].lower()
+    assert "could not be loaded" not in done[-1][2]
+    # Nothing persisted, so the next save retries instead of re-raising.
+    with controller._preload_result_lock:
+        assert controller._preload_results[key][1] is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finished_preload_stops_describing_a_phase(monkeypatch):
+    """`_current_preload_phase` promises "" when no preload is running.
+
+    Leaving the last phase behind meant it kept answering "load" for the rest
+    of the session, so any later reader would describe a preload that ended.
+    """
+    controller, app, _overlay, _settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    controller._preload_phase = (generation, controller_module._PRELOAD_PHASE_LOAD)
+    assert controller._current_preload_phase() == controller_module._PRELOAD_PHASE_LOAD
+
+    controller._on_model_preload_done(generation, True, "Model loaded: x")
+
+    assert controller._current_preload_phase() == ""
+    controller.shutdown()
+    _ = app
+
+
+def test_switching_to_a_remote_engine_stops_describing_a_phase(monkeypatch):
+    """The second place that ends a preload without a completion signal.
+
+    `on_settings_changed` cancels the running preload outright when the new
+    engine is remote, so `_on_model_preload_done` never runs for it. Leaving
+    the phase behind made `_preload_phase_word()` keep answering "downloading"
+    for a fetch that had been canceled.
+    """
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    controller._preload_phase = (
+        controller._preload_generation,
+        controller_module._PRELOAD_PHASE_DOWNLOAD,
+    )
+    assert controller._preload_phase_word() == "downloading"
+    controller._settings_store._settings = replace(settings, engine="openai")
+
+    controller.on_settings_changed()
+
+    assert controller._current_preload_phase() == ""
+    controller.shutdown()
+    _ = app
+
+
+def test_a_preload_never_hides_a_failed_hotkey_registration(monkeypatch):
+    """`reload_settings` calls `show_idle_status` to reprint the hotkey.
+
+    Gating the whole method on a running preload swallowed the four
+    registration errors too -- the one thing a background model load must not
+    hide, because the user's hotkey then silently does nothing.
+    """
+    controller, app, overlay, _settings = _preloading_controller(monkeypatch)
+    controller._hotkey_registration_ok = False
+    controller._hotkey_notice = "Ctrl+Alt+D is held by another program."
+
+    controller.show_idle_status()
+
+    assert overlay.states[-1][0] == "Error"
+    assert "another program" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_running_preload_still_suppresses_the_plain_idle_line(monkeypatch):
+    """The other half: with the hotkeys fine, the progress text stays."""
+    controller, app, overlay, _settings = _preloading_controller(monkeypatch)
+    controller._hotkey_registration_ok = True
+    controller._cancel_hotkey_registration_ok = True
+    controller._show_overlay_hotkey_registration_ok = True
+    controller._repaste_hotkey_registration_ok = True
+
+    controller.show_idle_status()
+
+    assert overlay.states == []
     controller.shutdown()
     _ = app
 

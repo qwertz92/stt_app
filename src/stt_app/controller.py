@@ -39,6 +39,8 @@ from .config import (
     FALLBACK_HOTKEYS,
     HOTKEY_RECLAIM_INTERVAL_MS,
     INSERT_TARGET_CURRENT_WINDOW,
+    LOCAL_NEMOTRON_MODEL_SIZES,
+    LOCAL_ONNX_ASR_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
@@ -724,6 +726,8 @@ class DictationController(QtCore.QObject):
             self._preload_future = None
             self._preload_progress_timer.stop()
             self._preload_target_model = None
+            with self._preload_result_lock:
+                self._preload_phase = None
             self._cancel_preload_generation(self._preload_generation)
             self._preload_cancel_requested = False
             self._terminate_preload_download_process()
@@ -752,11 +756,6 @@ class DictationController(QtCore.QObject):
         # then really stopped the running capture mid-sentence.
         if self._overlay_session_active():
             return
-        if self._preload_owns_overlay():
-            # A running preload writes the status line every 600 ms. Replacing
-            # it with "Idle" only produces two content swaps and two window
-            # resizes before the next tick repaints the same progress.
-            return
         if not self._hotkey_registration_ok:
             self._overlay.set_state(
                 "Error",
@@ -782,6 +781,16 @@ class DictationController(QtCore.QObject):
                 self._repaste_hotkey_notice
                 or "Re-paste hotkey registration failed.",
             )
+            return
+        if self._preload_owns_overlay():
+            # A running preload writes the status line every 600 ms. Replacing
+            # it with "Idle" only produces two content swaps and two window
+            # resizes before the next tick repaints the same progress.
+            #
+            # Below the hotkey branches on purpose: a failed registration is
+            # the one thing a preload must not hide. `reload_settings` calls
+            # this specifically to reprint a hotkey the save may have changed,
+            # and gating that above the error branches swallowed it.
             return
 
         # Show what is actually registered. The stored preference is kept even
@@ -2696,14 +2705,19 @@ class DictationController(QtCore.QObject):
                 self._preload_phase = (generation, phase)
 
     def _preload_phase_word(self) -> str:
-        """"downloading" or "loading" -- whichever the preload is actually doing.
+        """What the preload is actually doing, for "the model is still ...".
 
-        Saying "loading" while a multi-gigabyte fetch is running understates the
-        wait, and saying "downloading" during the load claims network activity
-        for a model that is already complete on disk.
+        Saying "loading" while a multi-gigabyte fetch is running understates
+        the wait; saying "downloading" during the load claims network activity
+        for a model that is already complete on disk; and a preload still
+        queued behind another one is doing neither, which is why it gets its
+        own word rather than borrowing "loading".
         """
-        if self._current_preload_phase() == _PRELOAD_PHASE_DOWNLOAD:
+        phase = self._current_preload_phase()
+        if phase == _PRELOAD_PHASE_DOWNLOAD:
             return "downloading"
+        if phase == _PRELOAD_PHASE_QUEUED:
+            return "waiting for another model to finish"
         return "loading"
 
     def _preload_owns_overlay(self) -> bool:
@@ -3028,6 +3042,15 @@ class DictationController(QtCore.QObject):
             preload = getattr(transcriber, "preload_model", None)
             if callable(preload):
                 preload()
+        except TranscriptionCanceled:
+            # The transcriber's own download reached the cancelled download
+            # slot (an explicit cancel, or shutdown). That is not a broken
+            # model: the branch below would both show "could not be loaded"
+            # and *persist* that failure for this key, so the next dictation
+            # would re-raise it instead of retrying.
+            self._record_model_preload_result(key, generation, None)
+            self.model_preload_done.emit(generation, False, "Model preload canceled.")
+            return
         except Exception as exc:
             if self._preload_generation_was_canceled(generation):
                 self._record_model_preload_result(key, generation, None)
@@ -3086,6 +3109,11 @@ class DictationController(QtCore.QObject):
                     self._preload_generation,
                 )
                 return
+            # Nothing is downloading or loading any more. Leaving the last
+            # phase behind made `_current_preload_phase()` keep answering
+            # "load" forever, contradicting its own "or empty when none is
+            # running" contract for any later reader.
+            self._preload_phase = None
         self._preload_progress_timer.stop()
         self._preload_target_model = None
         self._terminate_preload_download_process()
@@ -3524,19 +3552,46 @@ class DictationController(QtCore.QObject):
         if engine == DEFAULT_ENGINE or engine not in _ENGINE_MODEL_FIELDS:
             # `create_transcriber` falls back to the local path for an unknown
             # engine, so an unknown one must produce the local identity too.
+            #
+            # "local" is four different runtimes and they read different
+            # settings, so the per-engine scoping above has to continue one
+            # level down: listing all ten fields made Parakeet reload its
+            # 670 MB model when the user typed a custom-vocabulary term that
+            # onnx-asr never receives. The branches below mirror
+            # `_create_local_transcriber` exactly -- keep them in step.
+            model_size = settings.model_size
+            common = {
+                "engine": engine,
+                "model_size": model_size,
+                "offline_mode": bool(getattr(settings, "offline_mode", False)),
+                "model_dir": getattr(settings, "model_dir", ""),
+            }
+            if model_size in LOCAL_ONNX_ASR_MODEL_SIZES:
+                # onnx-asr takes nothing else, and is CPU-only, so the device
+                # policy never reaches it either.
+                return _TranscriberIdentity(**common)
+            if model_size in LOCAL_NEMOTRON_MODEL_SIZES:
+                return _TranscriberIdentity(
+                    **common,
+                    vad_enabled=settings.vad_enabled,
+                    local_onnx_device=getattr(settings, "local_onnx_device", ""),
+                )
+            if model_size in LOCAL_WEBGPU_MODEL_SIZES:
+                return _TranscriberIdentity(
+                    **common,
+                    local_onnx_device=getattr(settings, "local_onnx_device", ""),
+                    # Not a constructor argument, but it decides whether
+                    # `_get_or_create_transcriber` caches this runtime at all.
+                    keep_onnx_model_loaded=bool(
+                        getattr(settings, "keep_onnx_model_loaded", False)
+                    ),
+                )
             return _TranscriberIdentity(
-                engine=engine,
-                model_size=settings.model_size,
+                **common,
                 vad_enabled=settings.vad_enabled,
-                offline_mode=bool(getattr(settings, "offline_mode", False)),
-                model_dir=getattr(settings, "model_dir", ""),
-                keep_onnx_model_loaded=bool(
-                    getattr(settings, "keep_onnx_model_loaded", False)
-                ),
                 streaming_full_final_transcript=bool(
                     getattr(settings, "streaming_full_final_transcript", False)
                 ),
-                local_onnx_device=getattr(settings, "local_onnx_device", ""),
                 custom_vocabulary=vocabulary,
                 silence_gate_enabled=bool(
                     getattr(settings, "silence_gate_enabled", True)
@@ -3558,9 +3613,7 @@ class DictationController(QtCore.QObject):
             azure_endpoint=(
                 getattr(settings, "azure_endpoint", "") if engine == "azure" else ""
             ),
-            has_api_key=bool(
-                getattr(settings, _ENGINE_KEY_FLAGS.get(engine, ""), False)
-            ),
+            has_api_key=bool(getattr(settings, _ENGINE_KEY_FLAGS[engine], False)),
             allow_insecure_key_storage=bool(
                 getattr(settings, "allow_insecure_key_storage", False)
             ),

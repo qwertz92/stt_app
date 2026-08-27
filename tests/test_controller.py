@@ -1,6 +1,7 @@
 import concurrent.futures
 import logging
 from dataclasses import replace
+from pathlib import Path
 
 import pytest
 from conftest import (
@@ -21,9 +22,11 @@ from PySide6 import QtGui, QtWidgets
 
 import stt_app.controller as controller_module
 from stt_app.config import (
+    DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
+    VALID_ENGINES,
 )
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
@@ -2010,9 +2013,9 @@ def test_system_resume_reads_the_onnx_model_from_the_cache_key_by_name():
     """The cache key alone must be able to trigger the resume teardown.
 
     A runtime that does not expose ``model_size`` leaves the key as the only
-    evidence that an ONNX/WebGPU model is loaded, and the key is a NamedTuple:
-    reading it positionally would silently move onto another field as soon as
-    one is inserted.
+    evidence that an ONNX/WebGPU model is loaded. The key is read by name:
+    ``model_size`` sits at index 1 today, so a positional read happens to
+    agree -- which is exactly why the field order is pinned separately below.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
@@ -2111,6 +2114,10 @@ def _controller_with_loaded_model(settings):
         # so changing one must not close the loaded local model.
         {"groq_model": "whisper-large-v3"},
         {"azure_endpoint": "https://example.cognitiveservices.azure.com"},
+        # The base settings select faster-whisper, which reads neither of
+        # these -- they belong to the ONNX runtimes.
+        {"local_onnx_device": "cpu"},
+        {"keep_onnx_model_loaded": False},
     ],
     ids=lambda change: next(iter(change)),
 )
@@ -2149,10 +2156,8 @@ def test_a_save_that_does_not_change_the_runtime_keeps_the_loaded_model(change):
         {"silence_gate_threshold": 0.02},
         {"vad_enabled": True},
         {"model_dir": "D:/models"},
-        {"local_onnx_device": "cpu"},
         {"streaming_full_final_transcript": True},
         {"offline_mode": True},
-        {"keep_onnx_model_loaded": False},
     ],
     ids=lambda change: next(iter(change)),
 )
@@ -2170,6 +2175,65 @@ def test_a_save_that_changes_the_runtime_drops_the_loaded_model(change):
 
     assert closed == [cached]
     assert controller._transcriber_cache is None
+    controller.shutdown()
+    _ = app
+
+
+# Which settings each *local* runtime is actually built from. "local" is four
+# different transcriber classes, so scoping the identity by engine alone still
+# reloaded a 670 MB Parakeet model when a faster-whisper-only field changed.
+_LOCAL_RUNTIME_FIELDS = [
+    # (model_size, change, must_reload)
+    ("small", {"custom_vocabulary": "Kubernetes"}, True),
+    ("small", {"silence_gate_threshold": 0.02}, True),
+    ("small", {"streaming_full_final_transcript": True}, True),
+    ("small", {"vad_enabled": True}, True),
+    ("small", {"local_onnx_device": "cpu"}, False),
+    ("small", {"keep_onnx_model_loaded": False}, False),
+    ("parakeet-tdt-0.6b-v3", {"offline_mode": True}, True),
+    ("parakeet-tdt-0.6b-v3", {"model_dir": "D:/models"}, True),
+    ("parakeet-tdt-0.6b-v3", {"custom_vocabulary": "Kubernetes"}, False),
+    ("parakeet-tdt-0.6b-v3", {"vad_enabled": True}, False),
+    ("parakeet-tdt-0.6b-v3", {"silence_gate_threshold": 0.02}, False),
+    ("parakeet-tdt-0.6b-v3", {"local_onnx_device": "cpu"}, False),
+    ("parakeet-tdt-0.6b-v3", {"keep_onnx_model_loaded": False}, False),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"vad_enabled": True}, True),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"local_onnx_device": "cpu"}, True),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"custom_vocabulary": "K8s"}, False),
+    ("cohere-transcribe-03-2026", {"local_onnx_device": "cpu"}, True),
+    ("cohere-transcribe-03-2026", {"keep_onnx_model_loaded": False}, True),
+    ("cohere-transcribe-03-2026", {"custom_vocabulary": "Kubernetes"}, False),
+    ("cohere-transcribe-03-2026", {"vad_enabled": True}, False),
+]
+
+
+@pytest.mark.parametrize(
+    ("model_size", "change", "reloads"),
+    _LOCAL_RUNTIME_FIELDS,
+    ids=[
+        f"{model}-{next(iter(change))}" for model, change, _ in _LOCAL_RUNTIME_FIELDS
+    ],
+)
+def test_a_local_identity_reads_only_what_its_own_runtime_takes(
+    model_size, change, reloads
+):
+    """`_create_local_transcriber` picks one of four classes, each with its own
+    constructor arguments. The identity has to follow that split, or a setting
+    one runtime never receives still costs the others a full reload."""
+    settings = replace(_RUNTIME_BASE_SETTINGS, model_size=model_size)
+    saved = replace(settings, **change)
+    # Guard against a parameter that repeats the current value, which would
+    # make the "no reload" half pass without testing anything.
+    assert saved != settings
+
+    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+        settings
+    )
+    changed = controller._transcriber_identity(saved) != (
+        controller._transcriber_identity(settings)
+    )
+
+    assert changed is reloads
     controller.shutdown()
     _ = app
 
@@ -2258,6 +2322,70 @@ def test_a_key_change_for_another_provider_keeps_the_loaded_runtime():
     assert controller._transcriber_cache is cached
     controller.shutdown()
     _ = app
+
+
+def test_every_remote_engine_is_in_both_identity_maps():
+    """A new engine must appear in both maps, or its identity is silently wrong.
+
+    `_transcriber_identity` falls back to the *local* branch for an engine it
+    does not recognize, which produces an identity with no model and no key
+    flag -- so changing that provider's model would never rebuild its runtime,
+    and two settings that differ only in the custom vocabulary would compare
+    equal while `create_transcriber` still passes it through.
+    """
+    remote = set(VALID_ENGINES) - {DEFAULT_ENGINE}
+
+    assert set(controller_module._ENGINE_MODEL_FIELDS) == remote
+    assert set(controller_module._ENGINE_KEY_FLAGS) == remote
+    # The names must resolve, too: a typo would read a default forever.
+    defaults = AppSettings()
+    for engine in remote:
+        assert hasattr(defaults, controller_module._ENGINE_MODEL_FIELDS[engine])
+        assert hasattr(defaults, controller_module._ENGINE_KEY_FLAGS[engine])
+
+
+@pytest.mark.parametrize("engine", sorted(set(VALID_ENGINES) - {DEFAULT_ENGINE}))
+def test_each_remote_engine_reads_its_own_model_field_and_key_flag(engine):
+    """Every provider, not just the three that happened to be parametrized."""
+    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+        replace(_RUNTIME_BASE_SETTINGS, engine=engine)
+    )
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine=engine)
+    base = controller._transcriber_identity(settings)
+
+    model_field = controller_module._ENGINE_MODEL_FIELDS[engine]
+    key_flag = controller_module._ENGINE_KEY_FLAGS[engine]
+    own_model = replace(settings, **{model_field: "some-other-model"})
+    own_key = replace(settings, **{key_flag: not getattr(settings, key_flag)})
+
+    assert controller._transcriber_identity(own_model) != base
+    assert controller._transcriber_identity(own_key) != base
+    for other, other_flag in controller_module._ENGINE_KEY_FLAGS.items():
+        if other == engine:
+            continue
+        foreign = replace(settings, **{other_flag: not getattr(settings, other_flag)})
+        assert controller._transcriber_identity(foreign) == base, other
+    controller.shutdown()
+    _ = app
+
+
+def test_the_identity_field_order_is_not_load_bearing():
+    """Nothing may read ``_TranscriberIdentity`` positionally.
+
+    It is a NamedTuple, so ``key[1]`` compiles and returns *a* value; the
+    resume teardown used to read the model that way. Inserting a field would
+    have moved it onto ``vad_enabled`` and silently stopped closing the GPU
+    runtime on resume. This asserts the current order so that a future insert
+    fails here -- next to the reminder -- instead of in that teardown.
+    """
+    assert controller_module._TranscriberIdentity._fields[:2] == (
+        "engine",
+        "model_size",
+    )
+    # And that the readers use names, not indices.
+    source = Path(controller_module.__file__).read_text(encoding="utf-8")
+    assert "cache_key[" not in source
+    assert "cached_key[" not in source
 
 
 def test_a_bare_provider_string_is_not_iterated_character_by_character():
