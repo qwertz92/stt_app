@@ -106,3 +106,33 @@ def test_a_real_download_failure_is_still_an_error(monkeypatch, make_loader):
     with pytest.raises((TranscriptionError, OSError)) as excinfo:
         load()
     assert not isinstance(excinfo.value, TranscriptionCanceled)
+
+
+def test_a_canceled_download_ends_a_benchmark_instead_of_failing_a_case(
+    monkeypatch, tmp_path
+):
+    """A benchmark model load reaches the same download slot.
+
+    `run_benchmark_cases` turns every non-`BenchmarkCancelled` exception into a
+    recorded case with an `error`, and those rows are written to the persistent
+    benchmark history. Pressing Cancel while a benchmark was fetching a model
+    therefore left a permanent "error" row for something the user stopped.
+    """
+    from stt_app import local_benchmark
+
+    def _cancel_the_download(**_kwargs):
+        raise TranscriptionCanceled("Model download canceled.")
+
+    monkeypatch.setattr(local_benchmark, "_run_case", _cancel_the_download)
+    audio = tmp_path / "sample.wav"
+    audio.write_bytes(b"RIFF")
+    recorded: list[object] = []
+
+    with pytest.raises(local_benchmark.BenchmarkCancelled):
+        local_benchmark.run_benchmark_cases(
+            audio_path=audio,
+            model_names=["small"],
+            case_callback=recorded.append,
+        )
+
+    assert recorded == []

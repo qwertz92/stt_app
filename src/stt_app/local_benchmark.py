@@ -20,6 +20,7 @@ from .config import (
     nemotron_provider_order,
 )
 from .csv_safety import spreadsheet_safe_mapping
+from .transcriber.base import TranscriptionCanceled
 
 
 class BenchmarkCancelled(RuntimeError):
@@ -555,6 +556,12 @@ def run_benchmark_cases(
                     )
             except BenchmarkCancelled:
                 raise
+            except TranscriptionCanceled as exc:
+                # A transcriber's own model download hit the cancelled
+                # download slot (an explicit cancel, or shutdown). That ends
+                # the run; recording it as a failed case would leave a
+                # permanent "error" row for something the user stopped.
+                raise BenchmarkCancelled(str(exc) or "Benchmark canceled.") from exc
             except Exception as exc:
                 case = BenchmarkCase(
                     model=model_name,
