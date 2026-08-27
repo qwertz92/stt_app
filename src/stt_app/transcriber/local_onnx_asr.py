@@ -412,7 +412,15 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 self._model = self._load_model()
 
     def close(self) -> None:
-        with self._model_lock:
+        # `_inference_lock` too, in the same order `transcribe_batch` takes
+        # them. Unwrapping while a `recognize()` is in flight would silently
+        # switch that run back to the unhooked `run`: the watchdog would keep
+        # setting `terminate` on a `RunOptions` nobody passes any more, and
+        # the run would finish in full with no log line -- turning the cancel
+        # this class exists for back off. No caller reaches that today (every
+        # close path waits for the runtime lease), but the class must not
+        # depend on that.
+        with self._model_lock, self._inference_lock:
             self._unwrap_cancel_hooks()
             self._model = None
 

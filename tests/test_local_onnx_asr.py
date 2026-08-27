@@ -390,6 +390,35 @@ def test_every_session_of_the_loaded_model_is_wrapped(monkeypatch):
         assert "run" in session.__dict__
 
 
+def test_close_waits_for_a_run_in_flight_before_unwrapping(monkeypatch):
+    """Unwrapping mid-run would silently switch that run back to plain `run`.
+
+    The watchdog would keep setting `terminate` on a `RunOptions` object
+    nobody passes any more, so the transcription would finish in full with no
+    log line -- the cancel this class exists for, turned off. No caller
+    reaches that today (every close path waits for the runtime lease first),
+    but the class must not depend on its callers for that.
+    """
+    _patch_session_type(monkeypatch)
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    transcriber._model = _OnnxAsrShapedModel()
+    transcriber._install_cancel_hooks(transcriber._model)
+    finished = threading.Event()
+
+    transcriber._inference_lock.acquire()
+    closer = threading.Thread(target=lambda: (transcriber.close(), finished.set()))
+    closer.start()
+    try:
+        assert not finished.wait(0.3), "close() unwrapped during a run"
+    finally:
+        transcriber._inference_lock.release()
+    closer.join(timeout=5.0)
+
+    assert finished.is_set()
+    assert transcriber._model is None
+    assert transcriber._wrapped_sessions == []
+
+
 def test_close_restores_every_session_so_the_model_can_be_freed(monkeypatch):
     """Wrapping ``run`` creates a reference cycle that outlives ``close()``.
 

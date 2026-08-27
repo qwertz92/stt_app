@@ -78,6 +78,35 @@ def test_a_raising_cancel_check_is_logged_once_not_once_per_poll(caplog):
     assert "MinimalTranscriber" in tracebacks[0].getMessage()
 
 
+def test_every_transcriber_re_arms_the_log_through_the_base_setter():
+    """A subclass override must not drop the latch reset.
+
+    The runtimes are cached for the whole app lifetime and a fresh cancel
+    check is installed per job, so an override that only assigns
+    `_cancel_check` turns "logged once per installed check" into once per
+    process -- and the second broken check that session is then silent.
+    """
+    from stt_app.transcriber.local_faster_whisper import (
+        LocalFasterWhisperTranscriber,
+    )
+    from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
+
+    for transcriber in (
+        MinimalTranscriber(),
+        LocalFasterWhisperTranscriber(model_size="small"),
+        LocalOnnxAsrTranscriber(model_size="parakeet-tdt-0.6b-v3"),
+    ):
+        transcriber.set_cancel_check(
+            lambda: (_ for _ in ()).throw(ValueError("boom"))
+        )
+        transcriber._is_cancel_requested()
+        assert transcriber._cancel_check_failed is True, type(transcriber).__name__
+
+        transcriber.set_cancel_check(lambda: False)
+
+        assert transcriber._cancel_check_failed is False, type(transcriber).__name__
+
+
 def test_installing_a_new_cancel_check_re_arms_the_log():
     """The latch is per installed check, not per transcriber.
 

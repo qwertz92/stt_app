@@ -550,7 +550,10 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         lets a long batch transcription be aborted promptly without finishing
         the whole recording.
         """
-        self._cancel_check = cancel_check
+        # Through the base class: it also re-arms the once-per-check log latch,
+        # and this runtime is cached for the whole app lifetime, so skipping
+        # that reduced "once per installed check" to once per process.
+        super().set_cancel_check(cancel_check)
 
     def _ensure_model(self):
         if self._model is not None:
