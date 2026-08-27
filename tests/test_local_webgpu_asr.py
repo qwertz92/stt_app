@@ -1019,7 +1019,25 @@ def _probe_imports(monkeypatch) -> set[str]:
     with pytest.raises(AssertionError):
         local_webgpu_asr._run_transformers_import_probe("node", Path("."))
     script = captured[0][-1]
-    return set(re.findall(r"import\(['\"]([^'\"]+)['\"]\)", script))
+    return set(_IMPORT_SPECIFIER.findall(script))
+
+
+# Every ES-module form that can pull in a package, so a new dependency added
+# as a multi-line named import, a side-effect import, or a re-export is caught
+# too -- a single-line-only pattern silently misses three of the four.
+_IMPORT_SPECIFIER = re.compile(
+    r"(?:"
+    r"^[ \t]*(?:import|export)\s[\s\S]*?\sfrom\s*"  # named / default / re-export
+    r"|^[ \t]*import\s*"  # side-effect import
+    r"|\bimport\("  # dynamic import()
+    r")"
+    r"""['\"]([^'\"]+)['\"]""",
+    re.MULTILINE,
+)
+
+# A named import spread over several lines, kept out of the parametrize
+# list so the test source itself stays easy to scan.
+_MULTILINE_IMPORT = 'import {\n  a,\n  b,\n} from "pkg-b";'
 
 
 def _runner_imports() -> set[str]:
@@ -1028,15 +1046,11 @@ def _runner_imports() -> set[str]:
         Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
     )
     source = runner.read_text(encoding="utf-8")
-    specifiers = set(
-        re.findall(r"""(?:^import .*? from |await import\()["']([^"']+)["']""",
-                   source, re.MULTILINE)
-    )
+    specifiers = set(_IMPORT_SPECIFIER.findall(source))
     return {
         name
         for name in specifiers
         if not name.startswith(("node:", ".", "/"))
-        and not name.startswith("pathToFileURL")
     }
 
 
@@ -1057,6 +1071,28 @@ def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
     # An empty set is a subset of everything, so both halves are asserted.
     assert probed
     assert probed <= declared
+
+
+@pytest.mark.parametrize(
+    ("source", "expected"),
+    [
+        ('import { x } from "pkg-a";', {"pkg-a"}),
+        (_MULTILINE_IMPORT, {"pkg-b"}),
+        ('import "pkg-c";', {"pkg-c"}),
+        ('export { z } from "pkg-d";', {"pkg-d"}),
+        ('const m = await import("pkg-e");', {"pkg-e"}),
+        ('import { readFileSync } from "node:fs";', {"node:fs"}),
+    ],
+    ids=["named", "multiline", "side-effect", "re-export", "dynamic", "builtin"],
+)
+def test_the_import_scanner_sees_every_module_form(source, expected):
+    """The dependency guards below are only as good as this pattern.
+
+    A single-line `import ... from` pattern misses a multi-line named import,
+    a side-effect import and a re-export -- three ordinary ways to add the
+    dependency the guards exist to catch.
+    """
+    assert set(_IMPORT_SPECIFIER.findall(source)) == expected
 
 
 def test_the_runtime_probe_covers_everything_the_runner_imports(monkeypatch):
