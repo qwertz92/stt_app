@@ -233,8 +233,15 @@ CUSTOM_VOCABULARY_MAX_TERMS = 100
 #     model.bin
 #     tokenizer.json
 #     vocabulary.txt
-# Then use the download script: python scripts/download_model.py --model small
-# It handles the correct directory structure automatically.
+# Then use the download script, which handles the layout itself:
+#   python scripts/download_model.py            # the default model
+#   python scripts/download_model.py --model small
+#
+# The two layouts are not interchangeable. The faster-whisper models use the
+# HuggingFace models--<repo>/snapshots/<id> structure above; the ONNX models,
+# the default included, are written into a flat folder named after the
+# repository instead, which is why --output-dir is not simply a cache_dir for
+# them.
 DEFAULT_MODEL_DIR = ""
 
 FASTER_WHISPER_MODEL_SIZES = (

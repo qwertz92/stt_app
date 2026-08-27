@@ -890,6 +890,11 @@ def test_streaming_partial_insertions_continue_after_revisions():
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         mode="streaming",
+        # A streaming-capable model explicitly. These tests call the partial
+        # handlers directly, so they never reach the controller's refusal --
+        # but a settings object describing a combination the app rejects is
+        # not what any of them means to set up.
+        model_size="small",
         keep_transcript_in_clipboard=False,
     )
     inserter = FakeTextInserter()
@@ -937,6 +942,11 @@ def test_streaming_partial_revision_can_shrink_live_tail():
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         mode="streaming",
+        # A streaming-capable model explicitly. These tests call the partial
+        # handlers directly, so they never reach the controller's refusal --
+        # but a settings object describing a combination the app rejects is
+        # not what any of them means to set up.
+        model_size="small",
         keep_transcript_in_clipboard=False,
     )
     inserter = FakeTextInserter()
@@ -970,6 +980,11 @@ def test_streaming_partial_insertions_handle_rolling_local_windows():
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
         mode="streaming",
+        # A streaming-capable model explicitly. These tests call the partial
+        # handlers directly, so they never reach the controller's refusal --
+        # but a settings object describing a combination the app rejects is
+        # not what any of them means to set up.
+        model_size="small",
         keep_transcript_in_clipboard=False,
     )
     inserter = FakeTextInserter()

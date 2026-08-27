@@ -209,7 +209,9 @@ def main() -> None:
         "--output-dir",
         default=None,
         help=(
-            "Custom download directory (sets cache_dir for huggingface_hub). "
+            "Custom download directory. For faster-whisper models this is "
+            "huggingface_hub's cache_dir; the ONNX models, including the "
+            "default, are written into a flat folder under it instead. "
             "If omitted, uses the default HuggingFace cache "
             "(%%USERPROFILE%%\\.cache\\huggingface\\hub on Windows)."
         ),

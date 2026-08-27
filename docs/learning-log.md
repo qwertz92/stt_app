@@ -3,6 +3,149 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-28 (fifth adversarial round: a stranded lock, and a suite that downloaded models)
+
+Three reviewers over the previous round's commits. The pattern held for the
+fifth time: the round found defects in the fixes the round before it made,
+including two of mine that had been committed with a mutation check.
+
+### The HIGH one: a lease nobody owned
+
+`_build_audio_capture` sat after the block whose three `except` arms release
+the streaming runtime lease and before the lease is stored in
+`_active_stream_runtime_lease`. Nothing owned it in that window, and the call
+can raise -- `float(vad_energy_threshold)` on a corrupt stored value, or the
+`AudioCapture` constructor. Measured on a real controller with the call
+patched to raise: `runtime_in_use` True, `active_count` 1,
+`_active_stream_runtime_lease` None, and a later shared acquire returning
+False. That is the process-lifetime failure the *previous* round had written
+four lines of comment about while hardening a statement that cannot raise
+(`set_cancel_check` assigns two attributes). Every later preload and audio
+import would block forever, every dictation would build its own isolated
+runtime, and `_transcription_runtime_active()` would stay True so no deferred
+cache reset could ever run.
+
+### Both of the previous round's UI fixes were incomplete
+
+- **The retranscribe note's worst case was bounded by the wrong set.** It
+  measured the longest entry in `LOCAL_MODEL_LABELS`, but the note interpolates
+  `local_model_short_label(self._entry_model)`, which returns an unrecognised
+  id verbatim -- and `_entry_model` comes from a history entry, so a History
+  import can carry anything. Measured with a 63-character id at the dialog's
+  own minimum width: 60 px reserved for a note that takes 75. The reservation
+  now takes the longer of the widest known label and this entry's own.
+  Rewriting the test around it corrected the invariant too: it had compared
+  heights *across* dialogs, which is wrong once each dialog's worst case
+  depends on its own entry. What must not change is the height *within* one
+  dialog as the user works the model picker, so the test now drives every
+  entry in the combo at four widths.
+- **The caption tuples were right and untied.** Nothing linked
+  `RECORD_BUTTON_CAPTIONS` and friends to the captions the code actually sets,
+  and the commit that introduced the constants left the literals in place at
+  three call sites. Both fixed, with a test that drives every runtime caption
+  path and asserts each observed caption is in the tuple that sizes its button.
+
+### A vacuous assertion that a mutation check had passed
+
+The assertion added to `test_a_download_canceled_during_a_preload_is_not_a_broken_model`
+was answered by the cache-key branch, not the condemned-runtime branch its
+comment described: `_preloading_controller` never sets
+`_transcriber_cache_key`, so the final `cached_key != identity` comparison
+already returns True. My earlier mutation run had reported it detected --
+because a *different* test I had added in the same batch covers that branch.
+Two tests, one mutation, and the attribution was wrong. The fixture now sets
+the cache key, and the mutation is detected by the test that claims it.
+
+### My own CLI cancel fix reintroduced the defect it removed
+
+The wind-down after Ctrl+C was one `worker.join(timeout=10.0)`. On Windows
+CPython's lock acquire ignores the interrupt flag, so no signal is delivered
+until the call returns. Measured on this machine:
+
+| call | interrupt sent | KeyboardInterrupt raised |
+| ---- | -------------- | ------------------------ |
+| `while alive: join(0.15)` | 0.500 s | 0.630 s |
+| `join(6.0)` | 0.500 s | 6.011 s |
+| `join()` | 0.500 s | 8.000 s (thread's full life) |
+
+So it is the *timeout* that makes the interrupt arrive, not the join -- the
+timeout returns to bytecode, where the pending signal fires. The docstring
+had credited the join. Every wait is now a poll against a deadline, and four
+smaller holes in the same handler are closed: the worker starts inside the
+`try` (an interrupt in the few bytecodes after `start()` escaped without ever
+setting the cancel flag), a case that finished in the instant of the interrupt
+is kept rather than discarded, a case outliving the wind-down budget is
+reported (the thread is a daemon, so `transcriber.close()` never runs and the
+Cohere/Granite `node.exe` is orphaned), and the isolated worker no longer
+records a `BenchmarkCancelled` as a failed benchmark case.
+
+### The test suite was downloading models
+
+Isolating the Hugging Face cache per test -- so the inventory tests stop
+depending on which models the developer happens to have -- immediately turned
+one faster-whisper unit test into a real `snapshot_download` that ran for 42 s
+and would have written 486 MB. It injects a fake model factory and never
+wanted a download; it was only fast because the cache was warm. **That is what
+a clean CI runner has been doing on every run.** The fixture now points
+`HF_HOME`/`HF_HUB_CACHE` at an empty directory, forces `HF_HUB_OFFLINE`,
+disables the ModelScope fallback (plain urllib, it does not read
+`HF_HUB_OFFLINE`), and stubs out the pre-fetch itself.
+
+Two attempts before that one were wrong and are worth recording:
+
+- Gating the pre-fetch on "the caller supplied its own model factory" looked
+  clean and broke the two tests that exist to assert the pre-fetch happens --
+  they inject a factory precisely to observe the ordering.
+- Stubbing `_has_valid_model_snapshot` instead of the method above it made
+  every Whisper model look installed, because that predicate is also what
+  `find_cached_models` detects with.
+
+The files that test the download path take the real method back through a
+shared fixture, which is the same seam used deliberately rather than by
+accident.
+
+### One cache root on one side, two on the other
+
+The ONNX inventory and loader searched a single root while `delete_cached_model`
+always spanned both the Model Dir and the default cache. So a model fetched by
+`scripts/download_model.py`, which writes into the default cache, went
+invisible the moment a Model Dir was set: the Local tab reported it missing,
+the preload downloaded it again, and Delete would then remove the copy the scan
+had never listed. Now symmetric. `webgpu_download_destination` is untouched, so
+download progress still measures the one directory a download writes into.
+
+### Documentation that contradicted the code, and numbers that were not sourced
+
+Changing the default model reached further than the commit did. `quick-start.md`
+still told a new user the first dictation downloads "the `small` Whisper model
+(~486 MB)"; `models.md` marked `small` as the default nine lines above the table
+that marks Parakeet as the default; `README.md`'s settings table said `small`;
+and the candidate evaluation's headline paragraph still said Parakeet "is not
+implemented". All corrected.
+
+The numbers were worse, and the fix was to go back to the source.
+`benchmark_history.json` holds one run measuring both models on the *same* 24.3 s
+German recording at `device=cpu`: Parakeet 0.0428/0.0423, `small` 0.152/0.1553.
+So the honest figures are **0.042 against 0.152, a 3.6x difference on one clip**.
+What had been published instead was "RTF 0.046 EN / 0.043 DE against 0.151":
+0.043 is the German number this repository had corrected to 0.042 two days
+earlier and written down as a misquote; 0.151 comes from an older run on a
+different clip; and no English Parakeet measurement exists in the history at
+all. The "25 European languages" claim turned out to be true and unsourced --
+the model card in the downloaded snapshot lists exactly 25 codes -- so it is
+now attributed rather than asserted.
+
+Three offline paths had also lost the default model: it has no ModelScope
+mirror (the script's docstring promised one for everything), it was missing
+from the git-clone list, and the SSL help box matched a substring only the
+mirrored error message carries, so an unmirrored model got a bare "Download
+failed" where `--model small` got the CA-bundle guidance. `import_model.py`
+was the worst of them: it validated files before checking the model, so a
+Parakeet folder was told to download `model.bin`, `tokenizer.json` and
+`vocabulary.txt` from a repository that contains none of them, and the
+accurate "this script imports CTranslate2 models only" message was
+unreachable.
+
 ## 2026-08-27 (third and fourth adversarial rounds, and the default model)
 
 Two more review rounds over the previous rounds' commits. The pattern from

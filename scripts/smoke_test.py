@@ -36,7 +36,6 @@ def main() -> int:
     from stt_app.secret_store import KeyringSecretStore
     from stt_app.settings_store import SettingsStore
     from stt_app.text_inserter import TextInserter
-    from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 
     print("[2/5] Basic initialization")
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -61,10 +60,17 @@ def main() -> int:
             optional_failures.append(f"Microphone probe failed: {exc}")
 
     if args.check_model:
-        print("[4/5] Checking faster-whisper model load")
+        # The configured model, not a hardcoded `small`. Hardcoding it meant
+        # the smoke test could pass while the runtime this install actually
+        # transcribes with was never exercised -- and on a clean machine it
+        # pulled 486 MB of a model the default configuration does not use.
+        from stt_app.transcriber.factory import create_transcriber
+
+        settings = SettingsStore().load()
+        print(f"[4/5] Checking local model load ({settings.model_size})")
         try:
-            transcriber = LocalFasterWhisperTranscriber(model_size="small")
-            transcriber._ensure_model()
+            transcriber = create_transcriber(settings)
+            transcriber.preload_model()
             print("Model load succeeded")
         except Exception as exc:
             optional_failures.append(f"Model load failed: {exc}")

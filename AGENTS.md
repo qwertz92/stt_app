@@ -1932,6 +1932,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Known limitations
 
+- **Cancel reaches a download only while it is *waiting* for the slot, not
+  while it is transferring.** `run_coordinated_download` passes `cancel_check`
+  into `acquire()`, so with the slot free -- the ordinary single-user case --
+  the check is polled zero times and the transfer runs to completion.
+  `snapshot_download` exposes no progress or cancel callback, and the
+  ModelScope fallback reads its response in a plain loop with no poll. The
+  visible consequence: with `keep_onnx_model_loaded` off, a Cohere/Granite
+  model's only download is the one its transcriber starts from its own load
+  path, and pressing Cancel during a multi-gigabyte fetch does nothing while
+  that job holds the single `max_workers=1` transcription worker. The Local
+  tab's own queue is unaffected -- it downloads in a child process and Cancel
+  kills it. Closing this properly means routing the transcriber's load-path
+  download through that same worker process; a poll inside the mirror loop
+  would only cover the fallback and would make Cancel look like it works.
 - Streaming: inserted text is append-only and never rewritten. A focus
   change suspends live insertion rather than aborting the session; the
   detection is best-effort polling, so a very brief switch can be missed.

@@ -174,7 +174,7 @@ _START_BEEP_TONE_LABELS: dict[str, str] = {
 LOCAL_MODEL_LABELS: dict[str, str] = {
     "tiny": "tiny (~75 MB)",
     "base": "base (~141 MB)",
-    "small": "small (~484 MB)",
+    "small": "small (~486 MB)",
     "medium": "medium (~1.4 GB)",
     "large-v3": "large-v3 (~3 GB, multilingual)",
     "large-v3-turbo": "large-v3-turbo (~809 MB, multilingual, fast)",

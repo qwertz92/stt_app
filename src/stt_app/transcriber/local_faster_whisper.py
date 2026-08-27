@@ -433,11 +433,16 @@ def _has_valid_model_snapshot(cache_dir: Path, required_files: set[str]) -> bool
 
 
 def find_cached_models(model_dir: str = "") -> list[str]:
-    """Scan HF cache (and optional custom model_dir) for locally available models.
+    """Scan HF cache (and optional custom model_dir) for cached models.
 
-    Returns a list of short model names (e.g. ``["tiny", "small"]``) that
-    have a valid snapshot directory with at least ``config.json`` and
-    ``model.bin``.
+    Returns short model names (e.g. ``["small", "parakeet-tdt-0.6b-v3"]``) in
+    the canonical order of ``VALID_MODEL_SIZES``.
+
+    Two different checks, because the two families are stored differently: a
+    faster-whisper model needs a snapshot directory carrying at least
+    ``config.json`` and ``model.bin``, while the ONNX models are delegated to
+    ``find_cached_webgpu_models``, which validates each model's own required
+    file list. Both search the configured Model Dir and the default cache.
     """
     found: set[str] = set()
 
