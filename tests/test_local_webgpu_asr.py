@@ -1018,26 +1018,75 @@ def _probe_imports(monkeypatch) -> set[str]:
     monkeypatch.setattr(local_webgpu_asr.subprocess, "run", fake_run)
     with pytest.raises(AssertionError):
         local_webgpu_asr._run_transformers_import_probe("node", Path("."))
-    script = captured[0][-1]
+    script = _strip_js_comments(captured[0][-1])
     return set(_IMPORT_SPECIFIER.findall(script))
 
 
-# Every ES-module form that can pull in a package, so a new dependency added
-# as a multi-line named import, a side-effect import, or a re-export is caught
-# too -- a single-line-only pattern silently misses three of the four.
+# A tiny JS lexer, because a bare pattern reads comments and template
+# literals as code: a commented-out `import "old-pkg"` and an error message
+# containing ` from "..."` both registered as dependencies. Strings are kept --
+# the specifier lives in one -- but template literals are blanked, since no
+# import specifier is ever written as one.
+_JS_COMMENT_OR_STRING = re.compile(
+    r'"(?:[^"\\\n]|\\.)*"'
+    r"|'(?:[^'\\\n]|\\.)*'"
+    r"|`(?:[^`\\]|\\.)*`"
+    r"|//[^\n]*"
+    r"|/\*[\s\S]*?\*/",
+)
+
+
+def _strip_js_comments(source: str) -> str:
+    def replace(match: re.Match[str]) -> str:
+        text = match.group(0)
+        if text.startswith(("//", "/*")):
+            # A space, not "", so `a/*c*/from "x"` does not become `afrom`.
+            return " " * len(text)
+        if text.startswith("`"):
+            return "``"
+        return text
+
+    return _JS_COMMENT_OR_STRING.sub(replace, source)
+
+
+# Every ES-module form that can pull in a package. A single-line
+# `import ... from` pattern misses four of them, and the one the runner
+# actually uses is the dynamic `import()` -- so a Prettier reflow of that one
+# line used to silence the guard completely.
 _IMPORT_SPECIFIER = re.compile(
     r"(?:"
-    r"^[ \t]*(?:import|export)\s[\s\S]*?\sfrom\s*"  # named / default / re-export
-    r"|^[ \t]*import\s*"  # side-effect import
-    r"|\bimport\("  # dynamic import()
+    # Named / default / re-export. The middle may span lines but must not
+    # cross a statement boundary or contain `(` or a backtick, which is what
+    # keeps `export function f() { ... from "x" ... }` out.
+    r"(?:^|;)[ \t]*(?:import|export)\s[^;(]*?\sfrom\s*"
+    # Side-effect import. Also after `;`, so `import "a"; import "b";` is two.
+    r"|(?:^|;)[ \t]*import\s*"
+    # Dynamic import(), with any whitespace or newline before the specifier.
+    r"|\bimport\s*\(\s*"
     r")"
     r"""['\"]([^'\"]+)['\"]""",
     re.MULTILINE,
 )
 
-# A named import spread over several lines, kept out of the parametrize
-# list so the test source itself stays easy to scan.
-_MULTILINE_IMPORT = 'import {\n  a,\n  b,\n} from "pkg-b";'
+# Forms kept out of the parametrize list so the test source stays scannable.
+_MULTILINE_IMPORT = '''import {
+  a,
+  b,
+} from "pkg-b";'''
+_MULTILINE_DYNAMIC_IMPORT = '''const m = await import(
+  "pkg-x"
+);'''
+_COMMENTED_OUT_IMPORT = '''/*
+import "old-pkg";
+*/
+import "pkg-y";'''
+_STRING_THAT_LOOKS_LIKE_AN_IMPORT = '''export default 1;
+const s = " from 'ghost'";'''
+_URL_IN_A_STRING = '''const home = "https://example.invalid/n";
+import "pkg-u";'''
+_TEMPLATE_LITERAL_FROM = '''export function f() {
+  return `copied from "not-a-pkg"`;
+}'''
 
 
 def _runner_imports() -> set[str]:
@@ -1045,7 +1094,7 @@ def _runner_imports() -> set[str]:
     runner = (
         Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
     )
-    source = runner.read_text(encoding="utf-8")
+    source = _strip_js_comments(runner.read_text(encoding="utf-8"))
     specifiers = set(_IMPORT_SPECIFIER.findall(source))
     return {
         name
@@ -1082,8 +1131,29 @@ def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
         ('export { z } from "pkg-d";', {"pkg-d"}),
         ('const m = await import("pkg-e");', {"pkg-e"}),
         ('import { readFileSync } from "node:fs";', {"node:fs"}),
+        (_MULTILINE_DYNAMIC_IMPORT, {"pkg-x"}),
+        ('const m = await import (/* why not */ "pkg-z");', {"pkg-z"}),
+        ('import "pkg-1"; import "pkg-2";', {"pkg-1", "pkg-2"}),
+        (_COMMENTED_OUT_IMPORT, {"pkg-y"}),
+        (_TEMPLATE_LITERAL_FROM, set()),
+        (_URL_IN_A_STRING, {"pkg-u"}),
+        (_STRING_THAT_LOOKS_LIKE_AN_IMPORT, set()),
     ],
-    ids=["named", "multiline", "side-effect", "re-export", "dynamic", "builtin"],
+    ids=[
+        "named",
+        "multiline",
+        "side-effect",
+        "re-export",
+        "dynamic",
+        "builtin",
+        "multiline-dynamic",
+        "spaced-dynamic-with-comment",
+        "two-on-one-line",
+        "commented-out",
+        "template-literal",
+        "url-in-a-string",
+        "string-that-looks-like-an-import",
+    ],
 )
 def test_the_import_scanner_sees_every_module_form(source, expected):
     """The dependency guards below are only as good as this pattern.
@@ -1092,7 +1162,7 @@ def test_the_import_scanner_sees_every_module_form(source, expected):
     a side-effect import and a re-export -- three ordinary ways to add the
     dependency the guards exist to catch.
     """
-    assert set(_IMPORT_SPECIFIER.findall(source)) == expected
+    assert set(_IMPORT_SPECIFIER.findall(_strip_js_comments(source))) == expected
 
 
 def test_the_runtime_probe_covers_everything_the_runner_imports(monkeypatch):
