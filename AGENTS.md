@@ -1740,6 +1740,31 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   stale worker cannot publish failure/readiness into a newer preload. Batch may
   use an isolated runtime with the same settings when a live stream leases the
   shared runtime, preventing a stream-finalizer/executor deadlock.
+- **`stt_app/transcriber/__init__.py` resolves its names lazily (PEP 562)**:
+  importing any submodule runs the package first, so
+  `import stt_app.transcriber.local_faster_whisper` used to pull in the
+  AssemblyAI, Azure, Deepgram, ElevenLabs, Fun-ASR, Groq and OpenAI modules
+  with it. The download and inventory-scan worker subprocesses do exactly
+  that and paid 0.232 s / 330 modules per launch for provider code they never
+  call; they now pay 0.114 s / 234. `__getattr__` caches each resolved name in
+  `globals()`, `__all__` is derived from the lazy map, and a test pins both
+  the public surface (so a name cannot be dropped by editing the map alone)
+  and the agreement between the `TYPE_CHECKING` imports and that map -- a name
+  typed for static checkers but missing from the map is an `AttributeError`
+  no type checker can see. Do not add an eager import back: the `if
+  TYPE_CHECKING` block is what keeps editors and linters working.
+- **The benchmark CLI cancels by thread, the app cancels by killing the
+  process**: `scripts/benchmark_local.py --isolated-case` (the default) and
+  the Settings benchmark both terminate the child process, which is why
+  `run_benchmark_cases`' `cancel_check` had no production caller. The
+  `--no-isolated-case` path ran the case on the main thread, where Python
+  cannot run a signal handler while the process sits inside
+  `InferenceSession.run` -- Ctrl+C was invisible until the call returned
+  (4.46 s for one Canary run, times `--runs`). `_run_case_threaded` runs the
+  case on a worker thread and keeps the main thread in `join()`, and the flag
+  Ctrl+C sets is handed to the model as `cancel_check`, which ONNX Runtime
+  honours mid-run. The case-level `except Exception` must keep re-raising
+  `BenchmarkCancelled` first, or a cancel is recorded as a failed case.
 - **Normal transcription stays threaded, not isolated**: batch/stream
   transcription runs in the shared `max_workers=1` executor with models
   preloaded (remote stream finalizes excepted — see the concurrent-mode
