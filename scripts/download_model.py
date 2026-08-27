@@ -3,7 +3,7 @@
 
 Usage examples:
 
-    # Download the default model (small) to the default HuggingFace cache:
+    # Download the app's default model to the default HuggingFace cache:
     python scripts/download_model.py
 
     # Download a specific model:
@@ -44,6 +44,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from stt_app.config import (
+    DEFAULT_MODEL_SIZE,
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
     LOCAL_NEMOTRON_MODEL_SIZES,
@@ -182,8 +183,12 @@ def main() -> None:
     )
     parser.add_argument(
         "--model",
-        default="small",
-        help=f"Model to download (default: small). Choices: {', '.join(MODELS)}",
+        # Taken from the app's own default so the two cannot drift.
+        default=DEFAULT_MODEL_SIZE,
+        help=(
+            f"Model to download (default: {DEFAULT_MODEL_SIZE}). "
+            f"Choices: {', '.join(MODELS)}"
+        ),
     )
     parser.add_argument(
         "--output-dir",

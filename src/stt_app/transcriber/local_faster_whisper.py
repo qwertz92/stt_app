@@ -16,8 +16,8 @@ from pathlib import Path
 from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_CUSTOM_VOCABULARY,
+    DEFAULT_FASTER_WHISPER_MODEL_SIZE,
     DEFAULT_LANGUAGE_MODE,
-    DEFAULT_MODEL_SIZE,
     DEFAULT_SILENCE_GATE_ENABLED,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     DOC_MODELS_PATH,
@@ -495,7 +495,7 @@ def _default_model_factory(*args, **kwargs):
 class LocalFasterWhisperTranscriber(ITranscriber):
     def __init__(
         self,
-        model_size: str = DEFAULT_MODEL_SIZE,
+        model_size: str = DEFAULT_FASTER_WHISPER_MODEL_SIZE,
         language_mode: str = DEFAULT_LANGUAGE_MODE,
         device: str = "auto",
         compute_type: str = "int8",
@@ -598,7 +598,10 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 self.model_size,
                 self._model_dir,
                 lambda: download_model_snapshot(self.model_size, self._model_dir),
-                cancel_check=self._cancel_check,
+                # `_is_cancel_requested`, not the raw attribute: a check that
+                # raises must never fail the work, and the coordinator re-raises
+                # whatever escapes it.
+                cancel_check=self._is_cancel_requested,
             )
 
     def preload_model(self) -> None:

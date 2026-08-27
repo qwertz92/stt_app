@@ -64,8 +64,8 @@ hardware.
 | Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` (GPU) |
 | High accuracy, fastest on GPU | `cohere-transcribe-03-2026` (GPU) |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` |
-| Fastest local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (CPU) |
-| No GPU / zero setup, German + English | `small` (default, CPU) |
+| Zero setup: fastest local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (default, CPU) |
+| Whisper on CPU, German + English, supports streaming | `small` |
 | Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, maximum speed | `distil-large-v3.5` |
 | Smaller GPU model / Granite 4.0 fallback | `granite-4.0-1b-speech` |
@@ -343,7 +343,7 @@ If the app cannot reach HuggingFace Hub (corporate firewall, air-gapped network,
 ### Method 1: Download script (recommended)
 
 ```powershell
-# Download the default model (small):
+# Download the default model (parakeet-tdt-0.6b-v3):
 uv run python scripts/download_model.py
 
 # Download a specific model:

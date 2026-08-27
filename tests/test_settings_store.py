@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 
@@ -932,3 +933,67 @@ def test_local_onnx_device_round_trips_and_rejects_unknown_values(tmp_path):
     store = SettingsStore(tmp_path / "settings.json")
     store.save(replace(store.load(), local_onnx_device="webgpu"))
     assert store.load().local_onnx_device == "webgpu"
+
+
+def test_the_out_of_the_box_defaults_describe_a_runnable_combination():
+    """A fresh install must work without opening Settings once.
+
+    The default model is Parakeet: fastest local model by a wide margin, no
+    GPU and no Node.js, and it detects its own language. It is also batch-only
+    and offers no explicit language, so the other three defaults have to agree
+    with that or the first run starts in a state the app itself rejects.
+    """
+    from stt_app.config import (
+        DEFAULT_ENGINE,
+        DEFAULT_LANGUAGE_MODE,
+        DEFAULT_MODE,
+        DEFAULT_MODEL_SIZE,
+        PARAKEET_MODEL_SIZE,
+        VALID_MODEL_SIZES,
+        language_modes_for_selection,
+        supports_streaming,
+    )
+
+    assert DEFAULT_MODEL_SIZE == PARAKEET_MODEL_SIZE
+    assert DEFAULT_MODEL_SIZE in VALID_MODEL_SIZES
+    # Parakeet cannot stream, so the default mode must not be streaming.
+    assert DEFAULT_MODE == "batch"
+    assert not supports_streaming(DEFAULT_ENGINE, DEFAULT_MODEL_SIZE)
+    # ... and the default language must be one the model actually offers.
+    assert DEFAULT_LANGUAGE_MODE in language_modes_for_selection(
+        DEFAULT_ENGINE, DEFAULT_MODEL_SIZE
+    )
+
+
+def test_a_stored_model_is_never_replaced_by_the_new_default(tmp_path):
+    """Changing `DEFAULT_MODEL_SIZE` must not touch an existing install.
+
+    The default is only a fallback for an absent key, so someone who chose
+    faster-whisper `small` keeps it across the version that moved the default
+    to Parakeet.
+    """
+    from stt_app.config import DEFAULT_MODEL_SIZE
+
+    assert DEFAULT_MODEL_SIZE != "small", "pick a different stand-in below"
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+    store.save(dataclasses.replace(store.load(), model_size="small"))
+
+    assert SettingsStore(settings_path).load().model_size == "small"
+
+
+def test_faster_whisper_still_defaults_to_a_faster_whisper_model():
+    """`LocalFasterWhisperTranscriber` had `DEFAULT_MODEL_SIZE` as its own
+    default argument, which now names a model it cannot load."""
+    import inspect
+
+    from stt_app.config import FASTER_WHISPER_MODEL_SIZES
+    from stt_app.transcriber.local_faster_whisper import (
+        LocalFasterWhisperTranscriber,
+    )
+
+    default = inspect.signature(
+        LocalFasterWhisperTranscriber.__init__
+    ).parameters["model_size"].default
+
+    assert default in FASTER_WHISPER_MODEL_SIZES

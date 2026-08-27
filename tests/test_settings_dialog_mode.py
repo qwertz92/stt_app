@@ -257,7 +257,9 @@ def _send_wheel_event(widget: QtWidgets.QWidget) -> None:
 
 def test_streaming_mode_is_selectable_and_persisted():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    store = _FakeSettingsStore(AppSettings(mode="batch"))
+    # A faster-whisper size explicitly: the default local model is the
+    # batch-only Parakeet, whose streaming entry is correctly disabled.
+    store = _FakeSettingsStore(AppSettings(mode="batch", model_size="small"))
     dialog = SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
@@ -378,7 +380,11 @@ def test_switching_to_non_streaming_engine_resets_mode_to_batch():
     """Changing to a non-streaming engine auto-switches mode from streaming to batch."""
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     # Start with local + streaming (valid combo).
-    store = _FakeSettingsStore(AppSettings(engine="local", mode="streaming"))
+    # A faster-whisper size explicitly: the default local model is the
+    # batch-only Parakeet, so local+streaming would not be a valid combo.
+    store = _FakeSettingsStore(
+        AppSettings(engine="local", mode="streaming", model_size="small")
+    )
     dialog = SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),
@@ -3047,7 +3053,12 @@ def test_import_language_selection_is_independent_from_general_settings(
 
     controller = _Controller()
     dialog = SettingsDialog(
-        settings_store=_FakeSettingsStore(AppSettings(language_mode="de")),
+        # The import tab inherits the main model, and the default one
+        # (Parakeet) offers only automatic detection -- so an explicit
+        # language is only selectable with a model that has languages.
+        settings_store=_FakeSettingsStore(
+            AppSettings(language_mode="de", model_size="small")
+        ),
         secret_store=_FakeSecretStore(),
         app_logger=_FakeLogger(),
         controller=controller,
@@ -3602,7 +3613,7 @@ def test_history_import_engine_selection_applies_without_switching_main_engine()
             return True, "ok"
 
     controller = _Controller()
-    store = _FakeSettingsStore(AppSettings(engine="local"))
+    store = _FakeSettingsStore(AppSettings(engine="local", model_size="small"))
     dialog = SettingsDialog(
         settings_store=store,
         secret_store=_FakeSecretStore(),

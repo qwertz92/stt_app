@@ -24,7 +24,8 @@ comparison lives in:
 [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)**
 (~5.3% mean English WER) and is one of the recommended high-quality local models.
 Granite 4.0 remains a smaller GPU fallback. Confirm German/English quality on your
-own audio before changing the zero-setup `small` default.
+own audio before changing the zero-setup CPU default. (Superseded 2026-08-27:
+that default is now `parakeet-tdt-0.6b-v3`, not `small`.)
 
 ## Runtime Findings
 

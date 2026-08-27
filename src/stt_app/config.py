@@ -86,7 +86,29 @@ DEFAULT_SHOW_OVERLAY_HOTKEY_ID = 3
 DEFAULT_REPASTE_HOTKEY = ""
 DEFAULT_REPASTE_HOTKEY_ID = 4
 
-DEFAULT_MODEL_SIZE = "small"
+# NVIDIA NeMo models served by the pure-Python `onnx-asr` runtime; the rest of
+# their wiring is further down. Declared here because the default names one.
+PARAKEET_MODEL_SIZE = "parakeet-tdt-0.6b-v3"
+CANARY_MODEL_SIZE = "canary-1b-v2"
+
+# What a fresh install transcribes with. Parakeet, not faster-whisper `small`:
+# it is the fastest local model by a wide margin (measured on a Ryzen 5 7600X,
+# CPU only: RTF 0.046 EN / 0.043 DE), needs neither a GPU nor Node.js, detects
+# its language itself across 25 European locales, and is a 670 MB download
+# against `small`'s 484 MB. Someone trying the app without opening Settings
+# gets fast, accurate dictation out of the box instead of the slowest sensible
+# Whisper size.
+#
+# The one thing it costs is streaming: Parakeet is batch-only, and `DEFAULT_MODE`
+# is `batch`, so the out-of-the-box combination is consistent -- picking
+# streaming in Settings names the model in the disabled entry's tooltip.
+# Changing this does not touch an existing install: `SettingsStore.load` only
+# falls back to the default when the key is absent.
+DEFAULT_MODEL_SIZE = PARAKEET_MODEL_SIZE
+# What `LocalFasterWhisperTranscriber` loads when its caller names no model.
+# Separate from `DEFAULT_MODEL_SIZE` since that one is no longer a
+# faster-whisper size, and passing it would build a model that cannot load.
+DEFAULT_FASTER_WHISPER_MODEL_SIZE = "small"
 DEFAULT_LANGUAGE_MODE = "auto"
 DEFAULT_ENGINE = "local"
 DEFAULT_MODE = "batch"
@@ -234,9 +256,8 @@ LOCAL_NEMOTRON_MODEL_SIZES = (NEMOTRON_MODEL_SIZE,)
 
 # NVIDIA NeMo models served by the pure-Python `onnx-asr` runtime. They need no
 # Node.js and no new ONNX Runtime: onnx-asr resolves the same `onnxruntime`
-# distribution the app already carries for Nemotron.
-PARAKEET_MODEL_SIZE = "parakeet-tdt-0.6b-v3"
-CANARY_MODEL_SIZE = "canary-1b-v2"
+# distribution the app already carries for Nemotron. The two ids are declared
+# further up, next to `DEFAULT_MODEL_SIZE`, which names one of them.
 LOCAL_ONNX_ASR_MODEL_SIZES = (PARAKEET_MODEL_SIZE, CANARY_MODEL_SIZE)
 
 LOCAL_ONNX_MODEL_SIZES = (

@@ -54,7 +54,9 @@ Status update on 2026-06-17:
   [Local Benchmark Results](benchmarks/README.md).
 - Cohere, Granite 4.0, and Granite 4.1 2B are selectable local GPU models, now
   recommended over the Whisper models on a machine with a working GPU. The
-  zero-setup `small` default remains for machines without a GPU or Node.js.
+  zero-setup CPU default remains for machines without a GPU or Node.js.
+  (Superseded 2026-08-27: that default is now `parakeet-tdt-0.6b-v3`,
+  which is both faster and smaller-footprint than `small` on CPU.)
 - Granite Speech 4.1 2B now uses a q4 Transformers.js package
   (`onnx-community/granite-speech-4.1-2b-ONNX`) on the same WebGPU pipeline as
   Granite 4.0 and currently tops the Open ASR Leaderboard. Granite 4.1 Plus and
@@ -559,9 +561,13 @@ operator or WebGPU runtime issue can change the estimate materially.
 ## Final recommendation
 
 Cohere Transcribe and IBM Granite Speech are selectable local GPU models,
-recommended over the Whisper models on a machine with a working GPU. The
-zero-setup `small` Whisper model remains the default for machines without a GPU
-or Node.js.
+recommended over the Whisper models on a machine with a working GPU. A
+zero-setup CPU model remains the default for machines without a GPU or Node.js.
+
+> **Superseded 2026-08-27.** That default is now `parakeet-tdt-0.6b-v3`
+> (onnx-asr, CPU, int8), not `small`: RTF 0.046 against 0.151 on the same
+> Ryzen 5 7600X, with the same "no GPU, no Node.js" property. It is batch-only,
+> which matches the `batch` default mode.
 
 The highest-value validation order is:
 

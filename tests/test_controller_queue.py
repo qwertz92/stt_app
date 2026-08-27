@@ -52,6 +52,9 @@ def _make_queue_controller(monkeypatch, tmp_path, *, mode):
         hotkey=FALLBACK_HOTKEY,
         keep_transcript_in_clipboard=False,
         concurrent_transcription_mode=mode,
+        # A faster-whisper size explicitly: several of these tests switch to
+        # streaming, and the default local model is the batch-only Parakeet.
+        model_size="small",
         # These tests drive the queue with synthetic silent audio, which the
         # silence gate would (correctly) refuse to transcribe.
         silence_gate_enabled=False,

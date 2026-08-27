@@ -88,19 +88,21 @@ also support streaming.
 |----------|-------------------|---------|------|
 | Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` | ONNX/WebGPU q4 | ~1.84 GB |
 | High accuracy on a GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
-| Fastest local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` | onnx-asr int8 | ~670 MB |
+| Zero-setup default: fastest local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` (default) | onnx-asr int8 | ~670 MB |
 | Higher German accuracy than Parakeet, still CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI int4 | ~793 MB |
-| Zero-setup default (CPU, multilingual) | `small` (default) | CTranslate2 | ~486 MB |
+| Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |
 | Better Whisper quality, still fast | `large-v3-turbo` | CTranslate2 | ~1.62 GB |
 | English only, fast Whisper | `distil-large-v3.5` | CTranslate2 | ~1.52 GB |
 | Quick testing / low resources | `tiny` | CTranslate2 | ~78 MB |
 
-The default is `small` because it runs anywhere with no extra setup. For speed
-without any setup, `parakeet-tdt-0.6b-v3` measured a real-time factor of ~0.045
-on a Ryzen 5 7600X — faster on the CPU than the GPU models are on the GPU. For
-maximum accuracy with a GPU and Node.js, prefer `granite-speech-4.1-2b` or
-`cohere-transcribe-03-2026`. Then run the
+The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
+measured a real-time factor of ~0.045 on a Ryzen 5 7600X — faster on the CPU
+than the GPU models are on the GPU. It transcribes 25 European languages and
+detects the language itself. The one thing it cannot do is live streaming
+(batch only), so switch to `small` or `nemotron-3.5-asr-streaming-0.6b-int4`
+for that. For maximum accuracy with a GPU and Node.js, prefer
+`granite-speech-4.1-2b` or `cohere-transcribe-03-2026`. Then run the
 [benchmark](docs/advanced-setup.md#benchmarking) to find the best model for
 *your* hardware. See [Models & Offline Setup](docs/models.md) for details. On
 first use, the selected model downloads automatically; after that it loads from

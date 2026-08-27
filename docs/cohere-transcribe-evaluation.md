@@ -11,7 +11,9 @@ The current canonical evaluation is:
 
 - `cohere-transcribe-03-2026` is a selectable local ONNX/WebGPU model and one of
   the recommended high-quality options. Batch mode only.
-- The default model stays `small` because it needs no GPU or Node.js.
+- The default model stays a CPU model that needs no GPU or Node.js.
+  (Superseded 2026-08-27: that default is now `parakeet-tdt-0.6b-v3`,
+  not `small` -- same zero-setup properties, measurably faster.)
 - On the tested Ryzen 7600X + Arc A750 it runs at RTF 0.071 on WebGPU (0.137 on
   CPU) — faster than `small` or `large-v3-turbo`. See
   [Local Benchmark Results](benchmarks/README.md).

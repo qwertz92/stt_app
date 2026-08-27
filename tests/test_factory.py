@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import replace
 
 from stt_app.config import (
+    DEFAULT_MODEL_SIZE,
     LOCAL_ONNX_MODEL_SIZES,
     VALID_ENGINES,
     language_modes_for_selection,
@@ -16,12 +17,15 @@ from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
 from stt_app.transcriber.factory import create_transcriber
 from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
 from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
+from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 from stt_app.transcriber.openai_provider import OpenAITranscriber
 
 
 def test_factory_local_returns_local_transcriber():
-    settings = AppSettings(engine="local")
+    # Explicit: the default local model is Parakeet (onnx-asr), so
+    # `AppSettings(engine="local")` alone no longer describes faster-whisper.
+    settings = AppSettings(engine="local", model_size="small")
     t = create_transcriber(settings)
     assert isinstance(t, LocalFasterWhisperTranscriber)
 
@@ -96,9 +100,22 @@ def test_factory_deepgram_returns_deepgram_transcriber():
 
 
 def test_factory_unknown_engine_falls_back_to_local():
-    settings = AppSettings(engine="unknown_provider_xyz")
+    settings = AppSettings(engine="unknown_provider_xyz", model_size="small")
     t = create_transcriber(settings)
     assert isinstance(t, LocalFasterWhisperTranscriber)
+
+
+def test_factory_unknown_engine_falls_back_to_the_default_local_model():
+    """The fallback must follow `DEFAULT_MODEL_SIZE`, not stay on Whisper.
+
+    `_create_local_transcriber` dispatches on `model_size`, so an unrecognised
+    engine with the default model has to build the same runtime a fresh
+    install does.
+    """
+    settings = AppSettings(engine="unknown_provider_xyz")
+
+    assert settings.model_size == DEFAULT_MODEL_SIZE
+    assert isinstance(create_transcriber(settings), LocalOnnxAsrTranscriber)
 
 
 def test_factory_unknown_engine_with_webgpu_model_preserves_webgpu_runtime():
@@ -122,11 +139,15 @@ def test_factory_unknown_engine_with_nemotron_preserves_nemotron_runtime():
 
 
 def test_factory_local_passes_stream_final_full_pass():
-    settings = AppSettings(engine="local", streaming_full_final_transcript=True)
+    # A faster-whisper size explicitly: this flag only exists on that runtime,
+    # and the default local model is now the batch-only Parakeet.
+    settings = AppSettings(
+        engine="local", model_size="small", streaming_full_final_transcript=True
+    )
     t = create_transcriber(settings)
     assert t.stream_final_full_pass is True
 
-    settings = AppSettings(engine="local")
+    settings = AppSettings(engine="local", model_size="small")
     t = create_transcriber(settings)
     assert t.stream_final_full_pass is False
 

@@ -1019,8 +1019,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   whatever they stored.
   The resolved runtime device is reported through transcriber progress messages
   so the overlay/import UI can show whether WebGPU, DirectML, or CPU was used.
-  Keep faster-whisper as the stable local default until real target-hardware
-  benchmarks justify switching.
+  **`DEFAULT_MODEL_SIZE` is `parakeet-tdt-0.6b-v3`, not a Whisper model**
+  (changed 2026-08-27). The earlier note here said to keep faster-whisper
+  "until real target-hardware benchmarks justify switching"; those benchmarks
+  now exist and say the opposite. Parakeet measured RTF 0.046 EN / 0.043 DE on
+  a Ryzen 5 7600X against `small`'s 0.151 -- roughly 3.3x faster on the same
+  CPU, for 670 MB against 484 MB, with 25 European languages and its own
+  language detection. It keeps everything that made `small` the default: pure
+  Python, CPU only, no GPU, no Node.js. The one capability it drops is
+  streaming (`onnx-asr` is batch-only), and `DEFAULT_MODE` is `batch`, so the
+  out-of-the-box combination is consistent; a user who switches to streaming
+  mode is told to pick a streaming model. Changing this constant does not
+  touch an existing install -- `SettingsStore.load` falls back to the default
+  only when the key is absent -- so it is strictly a first-run decision.
+  `DEFAULT_FASTER_WHISPER_MODEL_SIZE` (`small`) stays the default *within*
+  that runtime, which is what `LocalFasterWhisperTranscriber` and the
+  benchmark CLI use.
   Keep `granite-4.0-1b-speech` selectable as a smaller q4 option until real
   benchmarks justify removing it.
 - **Nemotron 3.5 true streaming**:
