@@ -29,7 +29,7 @@ from conftest import (
 )
 
 from stt_app import controller as controller_module
-from stt_app.config import DEFAULT_ENGINE, FALLBACK_HOTKEY
+from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE, FALLBACK_HOTKEY
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionError
@@ -559,7 +559,13 @@ def test_start_recording_waits_to_invite_speech_until_capture_started(monkeypatc
 
 
 def test_start_streaming_waits_to_invite_speech_until_capture_started(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
@@ -599,7 +605,13 @@ def test_start_streaming_waits_to_invite_speech_until_capture_started(monkeypatc
 
 
 def test_start_streaming_forwards_audio_delivered_inside_capture_start(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     transcriber = FakeStreamingTranscriber()
 
@@ -650,7 +662,13 @@ def test_start_batch_recording_audio_capture_error(monkeypatch):
 
 
 def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
 
     def fail_transcriber(_s, **kw):
@@ -930,6 +948,14 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     # reported as preloaded and never retried.
     with controller._transcriber_runtime_state_lock:
         assert controller._pending_transcriber_cache_reset is True
+    # ...and the point of condemning it: the next save preloads again instead
+    # of treating the canceled model as ready. The worker has returned, so the
+    # executor future this helper leaves running is finished by the time a
+    # later save asks -- otherwise the "already being prepared" branch answers
+    # first and this would assert nothing about the cancel.
+    with controller._preload_result_lock:
+        controller._preload_future = None
+    assert controller._local_model_preload_needed(settings) is True
     assert released == [True]
     # Installed for the load, then cleared: the runtime is shared and cached
     # for the app's lifetime, so a leaked check would cancel the next job.
@@ -1078,7 +1104,13 @@ def test_preload_progress_poll_skips_during_recording_start():
 
 
 def test_start_streaming_audio_capture_error_stops_transcriber(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     transcriber = FakeStreamingTranscriber()
 
@@ -1109,7 +1141,13 @@ def test_start_streaming_audio_capture_error_stops_transcriber(monkeypatch):
 
 
 def test_start_recording_waits_while_stream_finalize_is_in_progress(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     create_calls = {"count": 0}
 
@@ -1250,7 +1288,13 @@ def test_stop_recording_logs_pre_stop_warm_stream_context(caplog):
 
 
 def test_audio_callback_watchdog_aborts_streaming_capture(monkeypatch, caplog):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     transcriber = FakeStreamingTranscriber()
     FakeCapture.instances = []
@@ -1278,7 +1322,13 @@ def test_audio_callback_watchdog_aborts_streaming_capture(monkeypatch, caplog):
 
 
 def test_stop_recording_streaming_with_abort_requested(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     transcriber = FakeStreamingTranscriber()
     capture = FakeCapture()
@@ -1463,7 +1513,13 @@ def test_on_transcription_partial_ignored_after_abort_requested():
 
 
 def test_stream_runtime_failure_cleans_up_active_session(monkeypatch):
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     last_recording_store = FakeLastRecordingStore()
     transcriber = FakeStreamingTranscriber(push_raises=RuntimeError("push failed"))
@@ -1710,8 +1766,12 @@ def test_stop_recording_persists_last_recording_and_marks_transcribing(monkeypat
     controller.stop_recording()
 
     assert last_recording_store.saved == [(b"RIFF", False)]
-    assert last_recording_store.transcribing == [("local", "small", "batch")]
-    assert submitted == [(1, b"RIFF", "batch", "small")]
+    # The default model, whatever it is -- this test is about the recording
+    # being persisted and marked, not about which model transcribes it.
+    assert last_recording_store.transcribing == [
+        ("local", DEFAULT_MODEL_SIZE, "batch")
+    ]
+    assert submitted == [(1, b"RIFF", "batch", DEFAULT_MODEL_SIZE)]
     controller.shutdown()
     _ = app
 
@@ -2541,7 +2601,13 @@ def test_a_slow_streaming_handshake_does_not_block_the_qt_thread(monkeypatch):
     synchronously. Called on the Qt thread that froze the overlay, the tray and
     the settings dialog for the whole handshake.
     """
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     release_connect = threading.Event()
     connect_entered = threading.Event()
@@ -2590,7 +2656,13 @@ def test_audio_recorded_while_connecting_is_delivered_in_order(monkeypatch):
     first words survive; that only helps if the buffered audio is handed over
     afterwards, in the order it was recorded.
     """
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     release_connect = threading.Event()
     connect_entered = threading.Event()
@@ -2957,7 +3029,13 @@ def test_switching_windows_during_a_stream_suspends_insertion_instead_of_abortin
     mid-thought, and the rest of what they said was simply gone. The recording
     now continues with insertion suspended.
     """
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     overlay = FakeOverlay()
     transcriber = FakeStreamingTranscriber()
     focus_helper = FakeWindowFocusHelper()
@@ -2998,7 +3076,13 @@ def test_switching_windows_during_a_stream_suspends_insertion_instead_of_abortin
 
 def test_a_suspended_stream_does_not_paste_into_the_other_window(monkeypatch):
     """Suspended means suspended: no partial may reach the inserter."""
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     inserter = FakeTextInserter()
     transcriber = FakeStreamingTranscriber()
     focus_helper = FakeWindowFocusHelper()
@@ -3151,7 +3235,13 @@ def test_the_focus_poll_timer_is_actually_armed_when_a_stream_starts(monkeypatch
     removed the abort it replaced, so live partials pasted into whatever window
     was in front -- and the suite stayed green.
     """
-    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
     monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
     monkeypatch.setattr(
         "stt_app.controller.create_transcriber",
@@ -3285,7 +3375,13 @@ def test_a_slow_handshake_is_still_aborted_when_the_microphone_fails(monkeypatch
     )
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(
-            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming")
+            AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
         ),
         overlay=FakeOverlay(),
     )

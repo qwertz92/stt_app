@@ -400,11 +400,17 @@ def test_a_close_between_the_two_locks_stops_the_run_instead_of_unhooking_it():
     the transcription would finish in full with no log line -- the cancel
     silently off. The progress callback fires in exactly that gap, which is
     how this drives it deterministically.
+
+    It raises a `TranscriptionError` and not a `TranscriptionCanceled`: a
+    `close()` also runs for a settings save and for a resume-driven reset,
+    and the controller renders a cancel as a bare "canceled" with no text and
+    no Retry, which would present a runtime the user did not stop as one they
+    did -- and drop the recording.
     """
     transcriber, _fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
     transcriber.set_progress_callback(lambda _message: transcriber.close())
 
-    with pytest.raises(TranscriptionCanceled):
+    with pytest.raises(TranscriptionError, match="closed while this transcription"):
         transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.float32)))
 
 

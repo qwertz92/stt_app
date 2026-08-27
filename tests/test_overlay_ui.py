@@ -1115,10 +1115,23 @@ def test_the_no_action_error_state_shows_neither_retry_nor_insert():
 
 
 def _painted_text_span(label: QtWidgets.QLabel) -> tuple[int, int]:
-    """Bounding x-range of the label's rendered glyphs, in label coordinates."""
+    """Bounding x-range of the label's rendered glyphs, in label coordinates.
+
+    `DrawChildren` alone, because `render()`'s default flags include
+    `DrawWindowBackground`, which fills the whole region with an opaque
+    palette brush. With the default flags every pixel passes the alpha test
+    and this returns `(0, width - 1)` for any content -- so it would measure
+    the label's rectangle, not its text, and could not tell a centred label
+    from a left-aligned one (measured: both `(0, 111)`).
+    """
     image = QtGui.QImage(label.size(), QtGui.QImage.Format_ARGB32)
     image.fill(QtCore.Qt.transparent)
-    label.render(image)
+    label.render(
+        image,
+        QtCore.QPoint(),
+        QtGui.QRegion(),
+        QtWidgets.QWidget.RenderFlags(QtWidgets.QWidget.DrawChildren),
+    )
     xs = [
         x
         for y in range(image.height())
@@ -1126,6 +1139,10 @@ def _painted_text_span(label: QtWidgets.QLabel) -> tuple[int, int]:
         if image.pixelColor(x, y).alpha() > 24
     ]
     assert xs, f"the state label painted nothing for {label.text()!r}"
+    assert len(xs) < image.width() * image.height(), (
+        "every pixel is opaque, so this is measuring the label rectangle "
+        "rather than its glyphs"
+    )
     return min(xs), max(xs)
 
 
@@ -1262,29 +1279,31 @@ def test_the_header_button_groups_stay_equally_wide():
     """
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     overlay = OverlayUI()
-    header = overlay._header_widget
-    header.layout().activate()
-    spacing = header.layout().spacing()
+    try:
+        header = overlay._header_widget
+        header.layout().activate()
+        spacing = header.layout().spacing()
 
-    left = (
-        overlay._record_button.width()
-        + spacing
-        + overlay._always_on_top_button.width()
-    )
-    right = overlay._clear_button.width() + spacing + overlay._copy_button.width()
-    assert left == right, (
-        f"header button groups differ: {left} px left, {right} px right, so "
-        f"the status text sits {(left - right) / 2:+.1f} px off centre"
-    )
+        left = (
+            overlay._record_button.width()
+            + spacing
+            + overlay._always_on_top_button.width()
+        )
+        right = overlay._clear_button.width() + spacing + overlay._copy_button.width()
+        assert left == right, (
+            f"header button groups differ: {left} px left, {right} px right, "
+            f"so the status text sits {(left - right) / 2:+.1f} px off centre"
+        )
 
-    label = overlay._state_label
-    label_left = label.mapTo(header, QtCore.QPoint(0, 0)).x()
-    label_right = label_left + label.width()
-    assert label_left + label_right == header.width(), (
-        f"the label span [{label_left}, {label_right}] is not symmetric "
-        f"within the {header.width()} px header"
-    )
-    overlay.close()
+        label = overlay._state_label
+        label_left = label.mapTo(header, QtCore.QPoint(0, 0)).x()
+        label_right = label_left + label.width()
+        assert label_left + label_right == header.width(), (
+            f"the label span [{label_left}, {label_right}] is not symmetric "
+            f"within the {header.width()} px header"
+        )
+    finally:
+        overlay.close()
 
 
 def test_balancing_never_pins_a_header_button_under_its_own_caption(caplog):
@@ -1292,37 +1311,55 @@ def test_balancing_never_pins_a_header_button_under_its_own_caption(caplog):
 
     `_balance_header_flanks` sizes each group from `minimumWidth()`, which is
     the width `setFixedWidth` pinned. A button that is *not* pinned reports
-    the style minimum instead -- near zero -- so its group measures too narrow
-    and the deficit it is widened by is spread evenly over its members: the
-    unpinned one then lands far below the width its caption needs. The flanks
-    still come out equal, so the centring and no-jump assertions both still
-    pass while the caption is clipped.
+    the style minimum instead -- near zero -- so the group measures far too
+    narrow and the deficit it is widened by is spread evenly over its members:
+    the unpinned one then lands below the width its caption needs. The two
+    flanks still come out equal, so both the centring and the no-jump
+    assertions still pass while the caption is clipped.
 
     It takes a group of two to see it, which is the real header's shape: with
     one button per group the same wrong number appears in the group width and
     in the deficit and cancels out. Asserting the precondition afterwards
     cannot catch it either -- the balancing itself calls `setFixedWidth`, so
-    by then every button reports as pinned.
+    by then every button looks pinned.
+
+    The caption measured must be the *widest the button can ever show*, not
+    the one it happens to carry at construction: the real pin button is still
+    empty at that point and Copy still says "Copy", so a `sizeHint()` taken
+    then would be far too small for "Floating" and "Copied".
     """
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
-    wide_left = QtWidgets.QPushButton("Left")
-    wide_left.setFixedWidth(200)
     pinned = QtWidgets.QPushButton("Pinned")
     pinned.setFixedWidth(64)
-    unpinned = QtWidgets.QPushButton("A rather long caption")
+    # Empty at measuring time, exactly like the real pin button.
+    unpinned = QtWidgets.QPushButton("")
+    captions = ("short", "A rather long caption")
+    unpinned.setText(captions[-1])
     natural = unpinned.sizeHint().width()
+    unpinned.setText("")
     assert unpinned.minimumWidth() < natural, "the stand-in is already pinned"
+    # Derived, not hardcoded: the left flank has to be the wider one for the
+    # right one to be widened at all, and `natural` moves with the system font.
+    wide_left = QtWidgets.QPushButton("Left")
+    wide_left.setFixedWidth(64 + 6 + natural + 20)
 
     with caplog.at_level(logging.WARNING, logger=overlay_ui_module.__name__):
-        OverlayUI._balance_header_flanks(6, (wide_left,), (pinned, unpinned))
+        OverlayUI._balance_header_flanks(
+            6, ((wide_left, ("Left",)),), ((pinned, ("Pinned",)), (unpinned, captions))
+        )
 
     assert unpinned.minimumWidth() >= natural, (
-        f"the caption needs {natural} px but the button was pinned to "
+        f"the widest caption needs {natural} px but the button was pinned to "
         f"{unpinned.minimumWidth()} px"
     )
+    # The caption is restored, not left on whichever one measured widest.
+    assert unpinned.text() == ""
     # The flanks are still equal -- which is exactly why nothing else catches
     # a clipped caption here.
     assert wide_left.minimumWidth() == (
         pinned.minimumWidth() + 6 + unpinned.minimumWidth()
     )
     assert "not fixed-width" in caplog.text
+    # The warning has to name something: `button.text()` is empty here, which
+    # is the very case that made the old message useless.
+    assert "A rather long caption" in caplog.text

@@ -744,7 +744,10 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                     lambda: download_webgpu_model_snapshot(
                         self.model_size, self.model_dir
                     ),
-                    cancel_check=self._cancel_check,
+                    # `_is_cancel_requested`, not the raw attribute: a check that
+                    # raises must never fail the work, and the coordinator re-raises
+                    # whatever escapes it.
+                    cancel_check=self._is_cancel_requested,
                 )
         except TranscriptionCanceled:
             raise

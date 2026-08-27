@@ -81,35 +81,73 @@ def test_a_raising_cancel_check_is_logged_once_not_once_per_poll(caplog):
     assert "MinimalTranscriber" in tracebacks[0].getMessage()
 
 
-def _transcriber_classes_assigning_the_cancel_check(path: Path) -> list[str]:
-    """`self._cancel_check = ...` inside an ITranscriber subclass, by AST.
+# Classes that own a field of this name without being a transcriber. Every
+# entry is a place the scan below deliberately does not protect, so keep it
+# short and say why.
+_CANCEL_CHECK_FIELD_OWNERS = {
+    # A helper thread that owns the very check it polls; it has no base
+    # setter to go through.
+    "_CancelWatchdog",
+}
 
-    Class-aware on purpose: a plain text scan flags `_CancelWatchdog`, a
-    helper that legitimately owns a field of that name and is not a
-    transcriber at all.
+
+def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
+    """Every `self._cancel_check = ...` in one file, with its class, by AST.
+
+    Deliberately *not* restricted to classes whose bases name `ITranscriber`.
+    That filter looked precise and was porous in four ways, each of which a
+    new runtime could hit: a base imported under an alias, a subclass of a
+    subclass, an annotated assignment, and `setattr(self, "_cancel_check",
+    ...)`. Flagging every assignment and naming the two legitimate owners is
+    both simpler and strictly more conservative. A plain text scan is still
+    not enough -- it cannot tell which class the `self` belongs to.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders: list[str] = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.ClassDef):
-            continue
-        bases = {
-            base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
-            for base in node.bases
-        }
-        if "ITranscriber" not in bases:
-            continue
-        offenders.extend(
-            f"{path.name}:{child.lineno}: {node.name} assigns "
-            "self._cancel_check directly"
-            for child in ast.walk(node)
-            if isinstance(child, ast.Assign)
-            for target in child.targets
-            if isinstance(target, ast.Attribute)
+
+    def _is_self_cancel_check(target: ast.expr) -> bool:
+        return (
+            isinstance(target, ast.Attribute)
             and target.attr == "_cancel_check"
             and isinstance(target.value, ast.Name)
             and target.value.id == "self"
         )
+
+    def _is_setattr_call(node: ast.AST) -> bool:
+        return (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "setattr"
+            and len(node.args) >= 2
+            and isinstance(node.args[0], ast.Name)
+            and node.args[0].id == "self"
+            and isinstance(node.args[1], ast.Constant)
+            and node.args[1].value == "_cancel_check"
+        )
+
+    def _visit(node: ast.AST, class_name: str | None) -> None:
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.ClassDef):
+                # The *nearest* enclosing class owns the assignment, so a
+                # nested class is not blamed on the one around it.
+                _visit(child, child.name)
+                continue
+            targets: list[ast.expr] = []
+            if isinstance(child, ast.Assign):
+                targets = list(child.targets)
+            elif isinstance(child, ast.AnnAssign):
+                targets = [child.target]
+            hit = any(_is_self_cancel_check(target) for target in targets)
+            hit = hit or _is_setattr_call(child)
+            if hit and class_name not in _CANCEL_CHECK_FIELD_OWNERS:
+                offenders.append(
+                    f"{path.name}:{child.lineno}: "
+                    f"{class_name or '<module>'} assigns self._cancel_check "
+                    "directly"
+                )
+            _visit(child, class_name)
+
+    _visit(tree, None)
     return offenders
 
 
@@ -125,12 +163,13 @@ def test_no_transcriber_assigns_the_cancel_check_behind_the_base_setter():
     once per process.
     """
     package = Path(stt_app.transcriber.__file__).parent
+    # `rglob`, not `glob`: a runtime added in a subpackage is exactly the kind
+    # of new code this guards.
+    scanned = [path for path in sorted(package.rglob("*.py")) if path.name != "base.py"]
+    assert len(scanned) >= 10, f"the scan found almost nothing: {scanned}"
     offenders: list[str] = []
-    for path in sorted(package.glob("*.py")):
-        if path.name == "base.py":
-            # The base class is where the attribute legitimately lives.
-            continue
-        offenders.extend(_transcriber_classes_assigning_the_cancel_check(path))
+    for path in scanned:
+        offenders.extend(_classes_assigning_the_cancel_check(path))
 
     assert not offenders, (
         "assign the cancel check through `super().set_cancel_check(...)` so "
@@ -273,3 +312,99 @@ def test_stripping_preserves_the_spaces_between_decoded_chunks():
     assert "".join(strip_language_tags(chunk) for chunk in chunks) == (
         "Guten Tag heute ist"
     )
+
+
+_ALIASED_BASE = """
+from .base import ITranscriber as Base
+
+
+class Aliased(Base):
+    def set_cancel_check(self, cancel_check):
+        self._cancel_check = cancel_check
+"""
+
+_INDIRECT_SUBCLASS = """
+from .base import ITranscriber
+
+
+class Middle(ITranscriber):
+    pass
+
+
+class Leaf(Middle):
+    def set_cancel_check(self, cancel_check):
+        self._cancel_check = cancel_check
+"""
+
+_ANNOTATED_ASSIGNMENT = """
+from collections.abc import Callable
+
+from .base import ITranscriber
+
+
+class Annotated(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        self._cancel_check: Callable[[], bool] | None = cancel_check
+"""
+
+_SETATTR = """
+from .base import ITranscriber
+
+
+class ViaSetattr(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        setattr(self, "_cancel_check", cancel_check)
+"""
+
+_NESTED_CLASS = """
+from .base import ITranscriber
+
+
+class Outer(ITranscriber):
+    class Inner:
+        def arm(self, cancel_check):
+            self._cancel_check = cancel_check
+"""
+
+_THROUGH_THE_BASE_SETTER = """
+from .base import ITranscriber
+
+
+class Correct(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        super().set_cancel_check(cancel_check)
+        self._extra = cancel_check
+"""
+
+_ALLOWED_OWNER = """
+class _CancelWatchdog:
+    def __init__(self, cancel_check):
+        self._cancel_check = cancel_check
+"""
+
+
+@pytest.mark.parametrize(
+    ("label", "source", "expected"),
+    [
+        ("base imported under an alias", _ALIASED_BASE, ["Aliased"]),
+        ("a subclass of a subclass", _INDIRECT_SUBCLASS, ["Leaf"]),
+        ("an annotated assignment", _ANNOTATED_ASSIGNMENT, ["Annotated"]),
+        ("setattr instead of an assignment", _SETATTR, ["ViaSetattr"]),
+        # The nearest enclosing class owns it, so the report names `Inner`.
+        ("a nested class", _NESTED_CLASS, ["Inner"]),
+        ("the correct override", _THROUGH_THE_BASE_SETTER, []),
+        ("the one allowed field owner", _ALLOWED_OWNER, []),
+    ],
+    ids=lambda value: value if isinstance(value, str) else "",
+)
+def test_the_cancel_check_scan_sees_each_shape_it_used_to_miss(
+    tmp_path, label, source, expected
+):
+    """Each case here is a way the previous base-name filter was porous."""
+    path = tmp_path / "runtime.py"
+    path.write_text(source, encoding="utf-8")
+
+    offenders = _classes_assigning_the_cancel_check(path)
+
+    named = [offender.split(": ", 1)[1].split(" assigns")[0] for offender in offenders]
+    assert named == expected, f"{label}: {offenders}"

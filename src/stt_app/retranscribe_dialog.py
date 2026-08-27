@@ -28,6 +28,8 @@ from .dialog_style import make_label_selectable
 from .settings_dialog_helpers import (
     _ENGINE_LABELS,
     _REMOTE_MODEL_DEFAULTS,
+    LOCAL_MODEL_LABELS,
+    local_model_short_label,
     model_choices_for_engine,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
@@ -44,6 +46,18 @@ TranscribeCallable = Callable[
 
 _PREVIEW_MIN_LINES = 4
 _RESULT_MIN_LINES = 6
+_CANARY_LANGUAGE_WARNING = (
+    "Canary cannot detect the language. Pick the one actually spoken - with "
+    "the wrong one it translates instead of transcribing."
+)
+# The widest name the substitution sentence can carry, so the reserved height
+# below is measured against the real worst case rather than today's wording.
+_LONGEST_MODEL_NAME = max(
+    (local_model_short_label(name) for name in LOCAL_MODEL_LABELS),
+    key=len,
+    default="",
+)
+
 _DEFAULT_SIZE = QtCore.QSize(640, 620)
 _MINIMUM_SIZE = QtCore.QSize(560, 460)
 
@@ -128,9 +142,8 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # the model changed. (The multiplier is in the dialog's font while the
         # label renders at 11 px, which is why two dialog lines were already
         # worth about two and a half label lines.)
-        self._language_note.setMinimumHeight(
-            self.fontMetrics().lineSpacing() * 3 + 6
-        )
+        self._minimum_note_height = self.fontMetrics().lineSpacing() * 3 + 6
+        self._language_note.setMinimumHeight(self._minimum_note_height)
         # `heightForWidth` explicitly, not by accident: the dialog is
         # resizable down to `_MINIMUM_SIZE`, and at 560 px the worst-case note
         # needs 60 px against the 54 px reserved above, so without it the last
@@ -147,6 +160,20 @@ class RetranscribeDialog(QtWidgets.QDialog):
         note_policy.setHeightForWidth(True)
         self._language_note.setSizePolicy(note_policy)
         self._language_note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
+        # The longest note this dialog can ever show, so the reservation can
+        # be re-measured whenever the width changes. Composed from the same
+        # sentences `_update_substitution_note` builds, with the longest model
+        # name of all, so it cannot drift from the real worst case.
+        self._worst_case_note = " ".join(
+            (
+                f"This entry was recorded with '{_LONGEST_MODEL_NAME}', which "
+                f"this version no longer offers, so {_LONGEST_MODEL_NAME} was "
+                f"chosen instead.",
+                "This entry's language (auto) is unavailable here, so de was "
+                "chosen.",
+                _CANARY_LANGUAGE_WARNING,
+            )
+        )
         language_box = QtWidgets.QWidget()
         language_layout = QtWidgets.QVBoxLayout(language_box)
         language_layout.setContentsMargins(0, 0, 0, 0)
@@ -285,6 +312,57 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._language_combo.setEnabled(self._language_combo.count() > 1)
         self._update_substitution_note(preferred)
 
+    def resizeEvent(self, event) -> None:
+        """Keep the note's reservation matched to the current width.
+
+        The reservation is what stops the widgets below moving when the note's
+        *text* changes, and a line count only covers the width it was measured
+        at. The dialog is resizable down to `_MINIMUM_SIZE` with a size grip,
+        and at 560 px the worst-case note needs 60 px against the 54 px three
+        lines reserve -- so changing the model there moved everything below it.
+        Re-measuring the worst case at the live width keeps the reservation
+        correct at every size, at the cost of the note area growing when the
+        user narrows the dialog, which is a resize they asked for.
+        """
+        super().resizeEvent(event)
+        self._reserve_note_height()
+
+    def showEvent(self, event) -> None:
+        # The first resize arrives before the form layout has given the note
+        # its real width, so the reservation computed there would be measured
+        # against a stale one.
+        super().showEvent(event)
+        self._reserve_note_height()
+
+    def _reserve_note_height(self) -> None:
+        note = getattr(self, "_language_note", None)
+        if note is None:
+            return
+        # No `layout().activate()` here: measured on this dialog, the label's
+        # `width()` is already current in both `showEvent` and `resizeEvent`,
+        # and forcing the layout changed the read width in none of the five
+        # observed calls. The one stale read happens during construction,
+        # before the first layout, and `width() <= 0` is not what guards it --
+        # the show that follows re-measures at the real width.
+        width = note.width()
+        if width <= 0:
+            return
+        # Measured through the label itself rather than a bare QFontMetrics:
+        # the note renders at the stylesheet's 11 px and wraps under the
+        # label's own margins, so anything measured beside it disagrees with
+        # what is actually laid out.
+        original = note.text()
+        try:
+            note.setText(self._worst_case_note)
+            needed = note.heightForWidth(width)
+        finally:
+            note.setText(original)
+        reserved = max(self._minimum_note_height, needed)
+        # Only on a change: `setMinimumHeight` can trigger another resize, and
+        # this runs from `resizeEvent`.
+        if note.minimumHeight() != reserved:
+            note.setMinimumHeight(reserved)
+
     def _update_substitution_note(self, requested: str = "") -> None:
         """Say whenever this run will not repeat the entry exactly.
 
@@ -307,9 +385,13 @@ class RetranscribeDialog(QtWidgets.QDialog):
             and self._model_combo.findData(self._entry_model) < 0
         ):
             parts.append(
-                f"This entry was recorded with '{self._entry_model}', which "
-                f"this version no longer offers, so "
-                f"{self.selected_model()} was chosen instead."
+                # The names the user recognises, not the raw settings ids --
+                # the same reason the streaming tooltip stopped quoting them.
+                f"This entry was recorded with "
+                f"'{local_model_short_label(self._entry_model)}', which this "
+                f"version no longer offers, so "
+                f"{local_model_short_label(self.selected_model())} was chosen "
+                f"instead."
             )
         if self.selected_model() == CANARY_MODEL_SIZE:
             selected = self.selected_language_mode()
@@ -318,11 +400,7 @@ class RetranscribeDialog(QtWidgets.QDialog):
                     f"This entry's language ({requested}) is unavailable "
                     f"here, so {selected} was chosen."
                 )
-            parts.append(
-                "Canary cannot detect the language. Pick the one actually "
-                "spoken - with the wrong one it translates instead of "
-                "transcribing."
-            )
+            parts.append(_CANARY_LANGUAGE_WARNING)
         self._language_note.setText(" ".join(parts))
 
     def _on_engine_changed(self) -> None:

@@ -3105,8 +3105,20 @@ class DictationController(QtCore.QObject):
         finally:
             if runtime_lease is not None:
                 # Before the release, so the next owner of the shared runtime
-                # never inherits this preload's generation check.
-                self._set_transcriber_cancel_check(runtime_lease.transcriber, None)
+                # never inherits this preload's generation check -- and
+                # guarded, like the other two clear sites, because skipping
+                # `release()` would strand `_transcriber_runtime_lock` for the
+                # process lifetime: every later preload and import would block
+                # forever and every dictation would quietly build its own
+                # isolated multi-gigabyte runtime.
+                try:
+                    self._set_transcriber_cancel_check(
+                        runtime_lease.transcriber, None
+                    )
+                except Exception:
+                    self._logger.exception(
+                        "Failed to clear the preload transcriber cancel hook"
+                    )
                 runtime_lease.release()
 
         if self._preload_generation_was_canceled(generation):

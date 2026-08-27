@@ -8,7 +8,10 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from stt_app import history_dialog as history_dialog_module
 from stt_app.history_dialog import HistoryDialog
 from stt_app.retranscribe_dialog import RetranscribeDialog
-from stt_app.settings_dialog_helpers import model_choices_for_engine
+from stt_app.settings_dialog_helpers import (
+    local_model_short_label,
+    model_choices_for_engine,
+)
 from stt_app.settings_store import AppSettings, SettingsStore
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
@@ -279,9 +282,12 @@ def test_retranscribe_dialog_says_when_the_entrys_model_is_gone(tmp_path):
 
     assert dialog._model_combo.findData("granite-speech-4.1-2b-nar") < 0
     note = dialog._language_note.text()
-    assert "granite-speech-4.1-2b-nar" in note
+    # The recognisable name, not the raw settings id -- the note is prose the
+    # user reads, and the id matches nothing on screen.
+    assert local_model_short_label("granite-speech-4.1-2b-nar") in note
+    assert "granite-speech-4.1-2b-nar" not in note
     assert "no longer offers" in note
-    assert dialog.selected_model() in note
+    assert local_model_short_label(dialog.selected_model()) in note
 
 
 def test_retranscribe_dialog_says_nothing_when_the_entrys_model_is_available(
@@ -362,21 +368,74 @@ def test_the_retranscribe_note_is_not_clipped_at_the_dialog_minimum_width():
         base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
         transcribe=lambda *args, **kwargs: (True, ""),
     )
-    dialog.show()
-    app.processEvents()
-    note = dialog._language_note
-    assert "Canary" in note.text(), note.text()
-
     try:
+        dialog.show()
+        app.processEvents()
+        note = dialog._language_note
+        assert "Canary" in note.text(), note.text()
+
         for width in (dialog.width(), 600, dialog.minimumWidth()):
-            dialog.resize(width, dialog.height())
-            app.processEvents()
-            assert note.heightForWidth(note.width()) <= note.height(), (
-                f"at dialog width {width} the note needs "
-                f"{note.heightForWidth(note.width())} px but has {note.height()}"
-            )
+                dialog.resize(width, dialog.height())
+                app.processEvents()
+                assert note.heightForWidth(note.width()) <= note.height(), (
+                    f"at dialog width {width} the note needs "
+                    f"{note.heightForWidth(note.width())} px but has "
+                    f"{note.height()}"
+                )
     finally:
         dialog.close()
+
+
+def test_the_retranscribe_note_does_not_move_the_layout_at_any_width():
+    """The reservation has to hold at every width the user can drag to.
+
+    A line count only covers the width it was measured at. At 560 px the
+    worst-case note needs 60 px against the 54 px three lines reserve, so
+    changing the model there used to move everything below the note. The
+    reservation is therefore re-measured from the longest note this dialog
+    can compose, at the live width.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialogs = []
+    try:
+        for entry_model, current_model in (
+            ("large-v3-turbo", "small"),
+            ("granite-speech-4.1-2b-nar", "canary-1b-v2"),
+        ):
+            dialog = RetranscribeDialog(
+                entry=_entry(engine="local", model=entry_model),
+                audio_path=Path(__file__),
+                base_settings=AppSettings(engine="local", model_size=current_model),
+                transcribe=lambda *args, **kwargs: (True, ""),
+            )
+            dialog.show()
+            app.processEvents()
+            dialogs.append(dialog)
+
+        # The last width is below the dialog's own minimum on purpose: the
+        # reservation has to be right for whatever width the widget is given,
+        # and only a width narrower than the one it was shown at exercises the
+        # resize-time re-measurement rather than the show-time one.
+        for dialog in dialogs:
+            dialog.setMinimumWidth(320)
+        for width in (dialogs[0].width(), 600, 560, 320):
+            heights = []
+            for dialog in dialogs:
+                dialog.resize(width, dialog.height())
+                app.processEvents()
+                note = dialog._language_note
+                heights.append(note.height())
+                assert note.heightForWidth(note.width()) <= note.height(), (
+                    f"clipped at width {width}"
+                )
+            assert len(set(heights)) == 1, (
+                f"at dialog width {width} an empty note reserves "
+                f"{heights[0]} px but the worst case takes {heights[1]} px, "
+                "so changing the model moves everything below it"
+            )
+    finally:
+        for dialog in dialogs:
+            dialog.close()
 
 
 def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):

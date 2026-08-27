@@ -269,7 +269,10 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 self.model_size,
                 self.model_dir,
                 lambda: download_model_snapshot(self.model_size, self.model_dir),
-                cancel_check=self._cancel_check,
+                # `_is_cancel_requested`, not the raw attribute: a check that
+                # raises must never fail the work, and the coordinator re-raises
+                # whatever escapes it.
+                cancel_check=self._is_cancel_requested,
             )
         cached = resolve_cached_webgpu_model_path(self.model_size, self.model_dir)
         if cached is None:
@@ -462,9 +465,14 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 # that today (the runtime lease serialises every close path),
                 # and this is what keeps that from being a dependency on the
                 # callers.
-                raise TranscriptionCanceled(
+                # A `TranscriptionError`, not a cancel: `close()` also runs
+                # for a settings save and for a resume-driven reset, and the
+                # controller renders a cancel as a bare "canceled" with no
+                # text and no Retry. An error names the cause and keeps the
+                # recording retryable.
+                raise TranscriptionError(
                     "The local runtime was closed while this transcription "
-                    "was starting."
+                    "was starting. Try again."
                 )
             handle = _RunAbortHandle()
             self._abort_handle = handle

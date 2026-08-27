@@ -690,6 +690,8 @@ def test_controller_streaming_mode_uses_transcriber_streaming(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
+        # Explicit: the default local model is the batch-only Parakeet.
+        model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
     )
@@ -779,6 +781,8 @@ def test_controller_streaming_aborts_when_focus_changes(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
+        # Explicit: the default local model is the batch-only Parakeet.
+        model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
     )
@@ -840,6 +844,8 @@ def test_controller_streaming_aborts_when_focus_control_changes(monkeypatch):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY,
+        # Explicit: the default local model is the batch-only Parakeet.
+        model_size="small",
         mode="streaming",
         keep_transcript_in_clipboard=False,
     )
@@ -2100,6 +2106,27 @@ def _controller_with_loaded_model(settings):
     return controller, app, preloads, closed, cached
 
 
+def _assert_reload_outcome(controller, reloads, *, preloads, closed, cached):
+    """Assert what a save actually did to the loaded runtime.
+
+    `reloads=True` means the save must have dropped the cached runtime;
+    `False` means it must have left it alone. Only a *local* engine also
+    preloads -- a remote provider has no model to load, so its runtime is
+    rebuilt on the next request instead.
+    """
+    engine = controller._settings_store._settings.engine
+    expected_preloads = [True] if reloads and engine == "local" else []
+    if reloads:
+        assert closed == [cached], "the changed runtime was not closed"
+    else:
+        assert closed == [], "an unchanged runtime was closed"
+        assert controller._transcriber_cache is cached
+        assert controller._pending_transcriber_cache_reset is False
+    assert preloads == expected_preloads, (
+        f"engine {engine!r} with reloads={reloads} produced {preloads}"
+    )
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -2247,14 +2274,18 @@ def test_a_local_identity_reads_only_what_its_own_runtime_takes(
     # make the "no reload" half pass without testing anything.
     assert saved != settings
 
-    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(
         settings
     )
-    changed = controller._transcriber_identity(saved) != (
-        controller._transcriber_identity(settings)
-    )
+    controller._settings_store._settings = saved
+    controller.on_settings_changed()
 
-    assert changed is reloads
+    # Asserted on the observable outcome rather than on the identity tuple:
+    # an identity that changed but did not reach the cache reset, or a reset
+    # that ran without a preload, would both pass a bare identity comparison.
+    _assert_reload_outcome(
+        controller, reloads, preloads=preloads, closed=closed, cached=cached
+    )
     controller.shutdown()
     _ = app
 
@@ -2290,14 +2321,18 @@ def test_nemotron_reloads_only_when_the_resolved_provider_order_changes(
     saved = replace(settings, local_onnx_device=second)
     assert saved != settings
 
-    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(
         settings
     )
-    changed = controller._transcriber_identity(saved) != (
-        controller._transcriber_identity(settings)
-    )
+    controller._settings_store._settings = saved
+    controller.on_settings_changed()
 
-    assert changed is reloads
+    # Asserted on the observable outcome rather than on the identity tuple:
+    # an identity that changed but did not reach the cache reset, or a reset
+    # that ran without a preload, would both pass a bare identity comparison.
+    _assert_reload_outcome(
+        controller, reloads, preloads=preloads, closed=closed, cached=cached
+    )
     controller.shutdown()
     _ = app
 
@@ -2522,13 +2557,59 @@ def test_a_remote_identity_reads_only_the_fields_that_engine_uses(
     # the "no reload" half pass without testing anything.
     assert saved != settings
 
+    controller, app, preloads, closed, cached = _controller_with_loaded_model(
+        settings
+    )
+    controller._settings_store._settings = saved
+    controller.on_settings_changed()
+
+    # Asserted on the observable outcome rather than on the identity tuple:
+    # an identity that changed but did not reach the cache reset, or a reset
+    # that ran without a preload, would both pass a bare identity comparison.
+    _assert_reload_outcome(
+        controller, reloads, preloads=preloads, closed=closed, cached=cached
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_condemned_runtime_is_preloaded_again_even_though_the_key_matches():
+    """The cache key alone is not enough to call a runtime ready.
+
+    A runtime that is still in use but already condemned
+    (`_pending_transcriber_cache_reset`) is closed the moment its last owner
+    releases it, so the matching cache key describes a model that is about to
+    disappear. Without this branch the save that condemned it would skip the
+    preload and the next dictation would load the model on the hotkey press.
+    """
+    settings = _RUNTIME_BASE_SETTINGS
     controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
         settings
     )
-    changed = controller._transcriber_identity(saved) != (
-        controller._transcriber_identity(settings)
-    )
+    # Exactly the state that makes every other branch say "no preload needed":
+    # a successful result for this key and a cache key that matches it.
+    assert controller._local_model_preload_needed(settings) is False
 
-    assert changed is reloads
+    with controller._transcriber_runtime_state_lock:
+        controller._pending_transcriber_cache_reset = True
+
+    assert controller._local_model_preload_needed(settings) is True
+    controller.shutdown()
+    _ = app
+
+
+def test_a_remote_engine_never_asks_for_a_local_preload():
+    """Both call sites check the engine too, so this is the helper's own
+    guard: it must not be dropped on the assumption a caller always checks."""
+    settings = replace(_RUNTIME_BASE_SETTINGS, engine="groq")
+    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+        settings
+    )
+    # Without this the stored "already preloaded" result answers first and the
+    # engine guard is never reached.
+    with controller._preload_result_lock:
+        controller._preload_results.clear()
+
+    assert controller._local_model_preload_needed(settings) is False
     controller.shutdown()
     _ = app

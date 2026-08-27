@@ -1022,31 +1022,46 @@ def _probe_imports(monkeypatch) -> set[str]:
     return set(_IMPORT_SPECIFIER.findall(script))
 
 
-# A tiny JS lexer, because a bare pattern reads comments and template
-# literals as code: a commented-out `import "old-pkg"` and an error message
-# containing ` from "..."` both registered as dependencies. Strings are kept --
-# the specifier lives in one -- but template literals are blanked, since no
-# import specifier is ever written as one.
-_JS_COMMENT_OR_STRING = re.compile(
+BACKTICK = chr(96)
+
+# A tiny JS lexer, because a bare pattern reads comments, template literals
+# and regex literals as code: a commented-out `import "old-pkg"`, an error
+# message containing ` from "..."`, and a regex holding `/*` all changed what
+# the scan found. Strings are kept -- the specifier lives in one -- while
+# comments, template literals and regex literals are blanked.
+#
+# The regex-literal alternative must come *before* the comment ones, or
+# `/[/*]/` starts a block comment that swallows the file up to the next `*/`.
+# A leading `/` is a regex only where an expression may start, which is what
+# the single-character lookbehind approximates; after an operand it is
+# division and is left alone.
+_JS_TOKEN = re.compile(
     r'"(?:[^"\\\n]|\\.)*"'
     r"|'(?:[^'\\\n]|\\.)*'"
     r"|`(?:[^`\\]|\\.)*`"
+    r"|(?<=[=(,:\[!&|?{};])[ \t]*"
+    r"/(?:[^/\\\n\[]|\\.|\[(?:[^\]\\]|\\.)*\])+/[gimsuyvd]*"
     r"|//[^\n]*"
     r"|/\*[\s\S]*?\*/",
 )
 
 
 def _strip_js_comments(source: str) -> str:
+    """Blank comments, template literals and regex literals; keep strings."""
+
     def replace(match: re.Match[str]) -> str:
         text = match.group(0)
-        if text.startswith(("//", "/*")):
-            # A space, not "", so `a/*c*/from "x"` does not become `afrom`.
+        stripped = text.lstrip(" \t")
+        if stripped.startswith(("//", "/*")):
+            # Spaces, not "", so `a/*c*/from "x"` does not become `afrom`.
             return " " * len(text)
-        if text.startswith("`"):
-            return "``"
+        if stripped.startswith("/"):
+            return " " * len(text)  # regex literal
+        if stripped.startswith("`"):
+            return text[: len(text) - len(stripped)] + "``"
         return text
 
-    return _JS_COMMENT_OR_STRING.sub(replace, source)
+    return _JS_TOKEN.sub(replace, source)
 
 
 # Every ES-module form that can pull in a package. A single-line
@@ -1082,8 +1097,20 @@ import "old-pkg";
 import "pkg-y";'''
 _STRING_THAT_LOOKS_LIKE_AN_IMPORT = '''export default 1;
 const s = " from 'ghost'";'''
-_URL_IN_A_STRING = '''const home = "https://example.invalid/n";
-import "pkg-u";'''
+# Discriminating on purpose. A URL in a string does not test string handling:
+# without it the `//` is eaten as a line comment, but the damage stops at the
+# newline and the next line's import is still found. On one line it does.
+_COMMENT_MARKER_IN_A_STRING = '''const u = "a//b"; import "pkg-u";'''
+# Likewise, a template literal inside `export function f()` is already blocked
+# by the `(` in the named-import bound, so it proves nothing about blanking.
+_TEMPLATE_LITERAL_BANNER = (
+    '''export const banner = ''' + BACKTICK + '''built from "nowhere"''' + BACKTICK + ''';'''
+)
+# A regex literal holding `/*` starts a block comment for a naive lexer, which
+# then swallows everything up to the next real `*/` -- including the import.
+_REGEX_WITH_A_COMMENT_MARKER = '''const token = /[/*]/;
+import "pkg-r";
+/* an ordinary block comment further down */'''
 _TEMPLATE_LITERAL_FROM = '''export function f() {
   return `copied from "not-a-pkg"`;
 }'''
@@ -1136,7 +1163,9 @@ def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
         ('import "pkg-1"; import "pkg-2";', {"pkg-1", "pkg-2"}),
         (_COMMENTED_OUT_IMPORT, {"pkg-y"}),
         (_TEMPLATE_LITERAL_FROM, set()),
-        (_URL_IN_A_STRING, {"pkg-u"}),
+        (_COMMENT_MARKER_IN_A_STRING, {"pkg-u"}),
+        (_TEMPLATE_LITERAL_BANNER, set()),
+        (_REGEX_WITH_A_COMMENT_MARKER, {"pkg-r"}),
         (_STRING_THAT_LOOKS_LIKE_AN_IMPORT, set()),
     ],
     ids=[
@@ -1151,7 +1180,9 @@ def test_the_runtime_probe_only_imports_declared_dependencies(monkeypatch):
         "two-on-one-line",
         "commented-out",
         "template-literal",
-        "url-in-a-string",
+        "comment-marker-in-a-string",
+        "template-literal-banner",
+        "regex-literal-with-a-comment-marker",
         "string-that-looks-like-an-import",
     ],
 )

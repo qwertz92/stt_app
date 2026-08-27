@@ -30,6 +30,16 @@ RECORD_BUTTON_START_TEXT = "Record"
 logger = logging.getLogger(__name__)
 
 RECORD_BUTTON_STOP_TEXT = "Stop"
+# The pin button swaps between these two; "Floating" is the wider one.
+PIN_BUTTON_PINNED_TEXT = "Pinned"
+PIN_BUTTON_FLOATING_TEXT = "Floating"
+# Copy swaps to "Copied" after a successful copy.
+COPY_BUTTON_TEXT = "Copy"
+COPY_BUTTON_COPIED_TEXT = "Copied"
+CLEAR_BUTTON_TEXT = "Clear"
+RECORD_BUTTON_CAPTIONS = (RECORD_BUTTON_START_TEXT, RECORD_BUTTON_STOP_TEXT)
+PIN_BUTTON_CAPTIONS = (PIN_BUTTON_PINNED_TEXT, PIN_BUTTON_FLOATING_TEXT)
+COPY_BUTTON_CAPTIONS = (COPY_BUTTON_TEXT, COPY_BUTTON_COPIED_TEXT)
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
 # the left and 26 px on the right for the chevron, plus a 1 px border per side
@@ -389,8 +399,14 @@ class OverlayUI(QtWidgets.QWidget):
         # therefore on the overlay, whose horizontal margins are symmetric.
         self._balance_header_flanks(
             _HEADER_SPACING,
-            (self._record_button, self._always_on_top_button),
-            (self._clear_button, self._copy_button),
+            (
+                (self._record_button, RECORD_BUTTON_CAPTIONS),
+                (self._always_on_top_button, PIN_BUTTON_CAPTIONS),
+            ),
+            (
+                (self._clear_button, (CLEAR_BUTTON_TEXT,)),
+                (self._copy_button, COPY_BUTTON_CAPTIONS),
+            ),
         )
         header.addWidget(self._record_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
@@ -454,8 +470,8 @@ class OverlayUI(QtWidgets.QWidget):
     @staticmethod
     def _balance_header_flanks(
         spacing: int,
-        left: tuple[QtWidgets.QAbstractButton, ...],
-        right: tuple[QtWidgets.QAbstractButton, ...],
+        left: tuple[tuple[QtWidgets.QAbstractButton, tuple[str, ...]], ...],
+        right: tuple[tuple[QtWidgets.QAbstractButton, tuple[str, ...]], ...],
     ) -> None:
         """Give the header's two button groups identical total widths.
 
@@ -467,47 +483,63 @@ class OverlayUI(QtWidgets.QWidget):
         unbalanced header: 78 + 6 + 74 = 158 px on the left against
         64 + 6 + 64 = 134 px on the right, so "Idle", "Listening",
         "Processing", "Done" and "Error" all rendered 12 px right of the
-        overlay's centre line — 7 px until the 78 px Record button replaced
+        overlay's centre line -- 7 px until the 78 px Record button replaced
         the 68 px History button as the first item.
 
         Widening the narrower group's buttons removes the difference where it
         arises. A fixed spacer between the label and Clear would centre the
         text just as exactly, but it leaves visibly unequal gaps on either
         side of the text, and it is a compensating constant that has to be
-        re-derived by hand whenever a button width changes. Deriving the
-        widths here keeps the header balanced on its own.
+        re-derived by hand whenever a button width changes.
+
+        Each button comes with every caption it can ever show, because the
+        fallback below has to size an unpinned button for its *widest* one,
+        not for whatever it happens to display at construction time -- the
+        pin button is still empty here, and Copy still says "Copy" rather
+        than "Copied".
         """
 
-        def pinned_width(button: QtWidgets.QAbstractButton) -> int:
-            """The width this button is pinned to, or its natural width.
-
-            ``setFixedWidth`` sets minimum == maximum, so for a header button
-            ``minimumWidth()`` *is* the deliberate constant -- and the right
-            source, because a pinned width is often deliberately below the
-            style's ``sizeHint``. For a button that is *not* pinned it is the
-            style minimum instead, which is near zero: that group would
-            measure far too narrow and the balancing below would then pin the
-            button under its own caption and clip it. The flanks still come
-            out equal in that case, so neither the centring nor the no-jump
-            assertion can see it -- hence the fallback and the log rather
-            than a silent wrong number. Raising instead would trade a clipped
-            caption for an overlay that does not open at all.
-            """
+        def pinned_width(
+            button: QtWidgets.QAbstractButton, captions: tuple[str, ...]
+        ) -> int:
+            # ``minimumWidth`` is the width ``setFixedWidth`` pinned, which is
+            # the deliberate constant -- and the right source, because a
+            # pinned width is often deliberately below the style's natural
+            # width, so ``sizeHint()`` would discard it.
             if button.minimumWidth() == button.maximumWidth():
                 return button.minimumWidth()
+            # Not pinned: ``minimumWidth`` is the style minimum instead, near
+            # zero, so this group would measure far too narrow and the deficit
+            # spread over its members would pin this button under its own
+            # caption. The flanks still come out equal in that case, so
+            # neither the centring nor the no-jump assertion can see it --
+            # hence the fallback and the log rather than a silent wrong
+            # number. Raising instead would trade a clipped caption for an
+            # overlay that does not open at all.
+            original = button.text()
+            widest = button.sizeHint().width()
+            try:
+                for caption in captions:
+                    button.setText(caption)
+                    widest = max(widest, button.sizeHint().width())
+            finally:
+                button.setText(original)
             logger.warning(
-                "Header button %r is not fixed-width (%d..%d); "
-                "sizing it from its sizeHint so the caption is not clipped.",
-                button.text(),
+                "Header button %r is not fixed-width (%d..%d); sizing it from "
+                "the widest of %s so the caption is not clipped.",
+                original or captions[0] if captions else original,
                 button.minimumWidth(),
                 button.maximumWidth(),
+                ", ".join(captions) or "its current caption",
             )
-            return max(button.minimumWidth(), button.sizeHint().width())
+            return max(button.minimumWidth(), widest)
 
-        def group_width(buttons: tuple[QtWidgets.QAbstractButton, ...]) -> int:
-            return sum(pinned_width(button) for button in buttons) + spacing * (
-                len(buttons) - 1
-            )
+        def group_width(
+            buttons: tuple[tuple[QtWidgets.QAbstractButton, tuple[str, ...]], ...],
+        ) -> int:
+            return sum(
+                pinned_width(button, captions) for button, captions in buttons
+            ) + spacing * (len(buttons) - 1)
 
         target = max(group_width(left), group_width(right))
         for group in (left, right):
@@ -515,9 +547,9 @@ class OverlayUI(QtWidgets.QWidget):
             if missing <= 0:
                 continue
             share, remainder = divmod(missing, len(group))
-            for index, button in enumerate(group):
+            for index, (button, captions) in enumerate(group):
                 extra = share + (1 if index < remainder else 0)
-                button.setFixedWidth(pinned_width(button) + extra)
+                button.setFixedWidth(pinned_width(button, captions) + extra)
 
     @property
     def always_on_top(self) -> bool:
@@ -534,7 +566,9 @@ class OverlayUI(QtWidgets.QWidget):
     def _sync_always_on_top_button(self) -> None:
         checked = bool(self._always_on_top)
         self._always_on_top_button.setChecked(checked)
-        self._always_on_top_button.setText("Pinned" if checked else "Floating")
+        self._always_on_top_button.setText(
+            PIN_BUTTON_PINNED_TEXT if checked else PIN_BUTTON_FLOATING_TEXT
+        )
         self._always_on_top_button.setToolTip(
             "Keep the overlay above other windows."
             if checked
