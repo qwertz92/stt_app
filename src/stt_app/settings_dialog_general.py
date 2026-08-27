@@ -47,6 +47,7 @@ from .settings_dialog_helpers import (
     _WheelPassthroughComboBox,
     local_model_label,
     local_model_precision_label,
+    local_model_short_label,
     model_choices_for_engine,
 )
 from .settings_store import AppSettings, apply_engine_model_selection
@@ -988,10 +989,16 @@ class _GeneralTabMixin:
                     # Name the model rather than a runtime: Parakeet and
                     # Canary are batch-only too and do not run on the
                     # ONNX/WebGPU path this used to claim.
+                    # The name the user recognises, not the raw settings
+                    # value ('parakeet-tdt-0.6b-v3' matches nothing on screen)
+                    # and not the full combo entry, whose size and runtime
+                    # parenthetical reads badly mid-sentence -- and which for
+                    # the Cohere/Granite models would put "ONNX/WebGPU" back
+                    # into the very tooltip that stopped claiming a runtime.
                     item.setToolTip(
                         f"Streaming is not supported by the local model "
-                        f"'{model_name}'. Use batch mode, or a faster-whisper "
-                        "or Nemotron local model."
+                        f"'{local_model_short_label(model_name)}'. Use batch "
+                        "mode, or a faster-whisper or Nemotron local model."
                     )
                 else:
                     item.setToolTip(

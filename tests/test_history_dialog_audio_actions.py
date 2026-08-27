@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -340,6 +342,41 @@ def test_the_retranscribe_note_never_moves_the_widgets_below_it(tmp_path):
 
     assert heights["retired+canary"] > 0
     assert len(set(heights.values())) == 1, heights
+
+
+def test_the_retranscribe_note_is_not_clipped_at_the_dialog_minimum_width():
+    """The reservation is a line count; the note's real height is a wrap.
+
+    The dialog is resizable down to `_MINIMUM_SIZE` and has a size grip, so
+    the reserved three lines are only enough at the width they were measured
+    at. Narrower, the worst-case note needs more, and what falls off the
+    bottom is the *last* sentence -- the Canary warning, whose absence costs a
+    translated transcript rather than a cosmetic clip. The note therefore
+    carries `heightForWidth`, which this pins at the narrowest size the user
+    can actually drag the dialog to.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="granite-speech-4.1-2b-nar"),
+        audio_path=Path(__file__),
+        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    dialog.show()
+    app.processEvents()
+    note = dialog._language_note
+    assert "Canary" in note.text(), note.text()
+
+    try:
+        for width in (dialog.width(), 600, dialog.minimumWidth()):
+            dialog.resize(width, dialog.height())
+            app.processEvents()
+            assert note.heightForWidth(note.width()) <= note.height(), (
+                f"at dialog width {width} the note needs "
+                f"{note.heightForWidth(note.width())} px but has {note.height()}"
+            )
+    finally:
+        dialog.close()
 
 
 def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):

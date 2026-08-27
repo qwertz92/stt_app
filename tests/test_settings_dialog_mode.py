@@ -15,10 +15,11 @@ from stt_app.benchmark_history import (
     BenchmarkHistoryStore,
     BenchmarkOptions,
 )
-from stt_app.config import CANARY_MODEL_SIZE
+from stt_app.config import CANARY_MODEL_SIZE, LOCAL_BATCH_ONLY_MODELS
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
+from stt_app.settings_dialog_helpers import local_model_short_label
 from stt_app.settings_store import AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from stt_app.update_checker import UpdateCheckResult
@@ -481,17 +482,18 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     _ = app
 
 
-@pytest.mark.parametrize(
-    "model_size",
-    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "canary-1b-v2"],
-)
+# Over the constant, not a hand-picked subset: naming three of the five left
+# both Granite models untested, and a model added to `LOCAL_BATCH_ONLY_MODELS`
+# later would inherit no coverage at all.
+@pytest.mark.parametrize("model_size", LOCAL_BATCH_ONLY_MODELS)
 def test_the_disabled_streaming_tooltip_names_the_model(model_size):
     """The tooltip must not claim a runtime the model does not use.
 
     Parakeet and Canary are batch-only through the pure-Python onnx-asr
     runtime, but the tooltip said "the selected ONNX/WebGPU local model" for
     them, and the alternative branch would have told a local user to use
-    "local".
+    "local". It also quoted the raw settings value while the combo displays a
+    label, so the name in the tooltip did not match the one on screen.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
@@ -505,7 +507,10 @@ def test_the_disabled_streaming_tooltip_names_the_model(model_size):
     assert _combo_item_enabled(dialog.mode_combo, "streaming") is False
     index = dialog.mode_combo.findData("streaming")
     tooltip = dialog.mode_combo.model().item(index).toolTip()
-    assert model_size in tooltip
+    short = local_model_short_label(model_size)
+    assert short in tooltip
+    # The recognisable name, not the raw id and not the full combo entry.
+    assert "(~" not in tooltip and "[Q4]" not in tooltip and "[INT8]" not in tooltip
     assert "ONNX/WebGPU" not in tooltip
     _ = app
 

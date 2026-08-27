@@ -131,10 +131,21 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._language_note.setMinimumHeight(
             self.fontMetrics().lineSpacing() * 3 + 6
         )
-        self._language_note.setSizePolicy(
+        # `heightForWidth` explicitly, not by accident: the dialog is
+        # resizable down to `_MINIMUM_SIZE`, and at 560 px the worst-case note
+        # needs 60 px against the 54 px reserved above, so without it the last
+        # sentence is cut off with no scrollbar and no ellipsis -- and the last
+        # sentence is the Canary warning, whose absence costs a translated
+        # transcript. A word-wrapping QLabel happens to restore this flag
+        # inside `setText`, which is why it works today; passing a policy
+        # object with the flag already set stops that from being load-bearing
+        # Qt-internal behaviour.
+        note_policy = QtWidgets.QSizePolicy(
             QtWidgets.QSizePolicy.Preferred,
             QtWidgets.QSizePolicy.Minimum,
         )
+        note_policy.setHeightForWidth(True)
+        self._language_note.setSizePolicy(note_policy)
         self._language_note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         language_box = QtWidgets.QWidget()
         language_layout = QtWidgets.QVBoxLayout(language_box)

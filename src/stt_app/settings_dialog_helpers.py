@@ -221,6 +221,19 @@ def local_model_label(model_name: str) -> str:
     return f"{label} [{precision}]"
 
 
+def local_model_short_label(model_name: str) -> str:
+    """The model's name without the size/runtime/precision parenthetical.
+
+    `local_model_label` builds the whole combo entry -- "Cohere Transcribe
+    03-2026 (~2.13 GB, ONNX/WebGPU) [Q4]" -- which is right in a list and
+    wrong inside a sentence. Prose that has to name the selected model wants
+    the part the user recognises, not the raw settings id (which does not
+    match anything on screen) and not the full entry.
+    """
+    label = LOCAL_MODEL_LABELS.get(model_name, model_name)
+    return label.split(" (", 1)[0].strip() or label
+
+
 def model_choices_for_engine(engine: str) -> tuple[tuple[str, str], ...]:
     """``(value, label)`` pairs of the models ``engine`` can transcribe with."""
     normalized = str(engine or "").strip().lower()
