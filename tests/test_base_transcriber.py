@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import ast
 import logging
+from pathlib import Path
 
 import pytest
 
+import stt_app.transcriber
 from stt_app.transcriber.base import (
     ITranscriber,
     TranscriptionCanceled,
@@ -76,6 +79,63 @@ def test_a_raising_cancel_check_is_logged_once_not_once_per_poll(caplog):
     tracebacks = [record for record in caplog.records if record.exc_info]
     assert len(tracebacks) == 1
     assert "MinimalTranscriber" in tracebacks[0].getMessage()
+
+
+def _transcriber_classes_assigning_the_cancel_check(path: Path) -> list[str]:
+    """`self._cancel_check = ...` inside an ITranscriber subclass, by AST.
+
+    Class-aware on purpose: a plain text scan flags `_CancelWatchdog`, a
+    helper that legitimately owns a field of that name and is not a
+    transcriber at all.
+    """
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    offenders: list[str] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef):
+            continue
+        bases = {
+            base.id if isinstance(base, ast.Name) else getattr(base, "attr", "")
+            for base in node.bases
+        }
+        if "ITranscriber" not in bases:
+            continue
+        offenders.extend(
+            f"{path.name}:{child.lineno}: {node.name} assigns "
+            "self._cancel_check directly"
+            for child in ast.walk(node)
+            if isinstance(child, ast.Assign)
+            for target in child.targets
+            if isinstance(target, ast.Attribute)
+            and target.attr == "_cancel_check"
+            and isinstance(target.value, ast.Name)
+            and target.value.id == "self"
+        )
+    return offenders
+
+
+def test_no_transcriber_assigns_the_cancel_check_behind_the_base_setter():
+    """A source scan, because the instance test cannot see a *future* subclass.
+
+    `set_cancel_check` is overridden in exactly one place today, so the
+    instance loop below asserts a property two of its three subjects get for
+    free. What it cannot catch is the next runtime reintroducing
+    `self._cancel_check = cancel_check`, which is the mistake that was
+    actually made: it skips the latch reset, and because a runtime is cached
+    for the app's lifetime that turns "logged once per installed check" into
+    once per process.
+    """
+    package = Path(stt_app.transcriber.__file__).parent
+    offenders: list[str] = []
+    for path in sorted(package.glob("*.py")):
+        if path.name == "base.py":
+            # The base class is where the attribute legitimately lives.
+            continue
+        offenders.extend(_transcriber_classes_assigning_the_cancel_check(path))
+
+    assert not offenders, (
+        "assign the cancel check through `super().set_cancel_check(...)` so "
+        "the once-per-check failure log is re-armed: " + "; ".join(offenders)
+    )
 
 
 def test_every_transcriber_re_arms_the_log_through_the_base_setter():

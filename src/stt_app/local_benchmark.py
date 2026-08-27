@@ -20,7 +20,6 @@ from .config import (
     nemotron_provider_order,
 )
 from .csv_safety import spreadsheet_safe_mapping
-from .transcriber.base import TranscriptionCanceled
 
 
 class BenchmarkCancelled(RuntimeError):
@@ -343,6 +342,15 @@ def _run_onnx_case(
             device=device,
             model_dir=model_dir,
         )
+    # `_raise_if_canceled` only polls between measurable steps, so before this
+    # the load itself was uninterruptible: an uncached model downloads from the
+    # transcriber's own load path and waits on the machine-wide slot, and the
+    # inference below is one blocking call. In the app a cancel kills the whole
+    # worker process, but `run_benchmark_cases` is also called in-process by
+    # the CLI, where nothing else could stop it.
+    set_cancel = getattr(transcriber, "set_cancel_check", None)
+    if callable(set_cancel) and cancel_check is not None:
+        set_cancel(cancel_check)
     try:
         transcriber.preload_model()
         load_seconds = time.perf_counter() - model_start
@@ -406,6 +414,8 @@ def _run_onnx_case(
                 )
             )
     finally:
+        if callable(set_cancel) and cancel_check is not None:
+            set_cancel(None)
         transcriber.close()
 
     return BenchmarkCase(
@@ -472,6 +482,13 @@ def run_benchmark_cases(
     case_callback: Callable[[BenchmarkCase], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[BenchmarkCase]:
+    # Function-local on purpose: `stt_app.transcriber.__init__` imports all
+    # seven remote providers and, through `factory`, numpy. At module scope
+    # that reached the download worker and the inventory-scan worker too --
+    # `main.py` imports `benchmark_process` before it dispatches -- and those
+    # exist precisely to stay cheap. Measured: +0.23 s and +269 modules.
+    from .transcriber.base import TranscriptionCanceled
+
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []
     webgpu_device_targets = normalize_webgpu_benchmark_devices(webgpu_devices)

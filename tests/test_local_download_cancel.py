@@ -10,12 +10,15 @@ error dialog for the thing they just asked to stop.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from stt_app.config import (
     CANARY_MODEL_SIZE,
     LOCAL_WEBGPU_MODEL_SIZES,
     NEMOTRON_MODEL_SIZE,
+    PARAKEET_MODEL_SIZE,
 )
 from stt_app.model_download_coordinator import ModelDownloadCanceled
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
@@ -136,3 +139,60 @@ def test_a_canceled_download_ends_a_benchmark_instead_of_failing_a_case(
         )
 
     assert recorded == []
+
+
+def test_the_benchmark_installs_its_cancel_check_on_the_transcriber(monkeypatch):
+    """`_raise_if_canceled` only polls *between* measurable steps.
+
+    The model load is one of those steps, and for an uncached model it
+    downloads through the machine-wide slot -- an unbounded wait, with the
+    transcriber's own cancel check as the only interrupt. Without installing
+    it, a benchmark could not be stopped during the load at all, which is
+    where a first run spends most of its time. The app kills the whole worker
+    process instead, but `run_benchmark_cases` is also called in-process by
+    the CLI, where nothing else can stop it.
+    """
+    from stt_app import local_benchmark
+    from stt_app.transcriber import local_onnx_asr as onnx_asr_module
+
+    installed: list[object] = []
+
+    class RecordingTranscriber:
+        runtime_device = "cpu"
+        runtime_details_text = ""
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def set_cancel_check(self, cancel_check):
+            installed.append(cancel_check)
+
+        def preload_model(self):
+            assert installed and installed[-1] is not None, (
+                "the load runs before the cancel check is installed"
+            )
+
+        def transcribe_batch(self, _audio):
+            return "hello"
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(
+        onnx_asr_module, "LocalOnnxAsrTranscriber", RecordingTranscriber
+    )
+    check = object.__new__(type("Check", (), {"__call__": lambda self: False}))
+
+    case = local_benchmark._run_onnx_case(
+        audio_path=Path("samples/benchmark_sample.wav"),
+        model_name=PARAKEET_MODEL_SIZE,
+        runs=1,
+        language=None,
+        warmup=False,
+        cancel_check=check,
+    )
+
+    assert case.runs
+    # Installed for the run, then cleared: the benchmark builds a fresh
+    # transcriber per case, but a leaked check would outlive its own run.
+    assert len(installed) == 2 and installed[-1] is None

@@ -451,6 +451,21 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
         self._emit_progress(f"Transcribing with {self.runtime_status_text()}...")
         with self._inference_lock:
             self._raise_if_canceled()
+            if self._model is not model:
+                # `close()` takes both locks, but this method takes them
+                # *sequentially* -- it releases `_model_lock` above before
+                # acquiring this one. A close landing in that gap gets both
+                # uncontended and unwraps the sessions this run is about to
+                # use, so the watchdog below would set `terminate` on a
+                # `RunOptions` nobody passes and the run would finish in full
+                # with no log line: the cancel silently off. Nothing reaches
+                # that today (the runtime lease serialises every close path),
+                # and this is what keeps that from being a dependency on the
+                # callers.
+                raise TranscriptionCanceled(
+                    "The local runtime was closed while this transcription "
+                    "was starting."
+                )
             handle = _RunAbortHandle()
             self._abort_handle = handle
             watchdog = _CancelWatchdog(handle, self._cancel_check)
