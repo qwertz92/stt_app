@@ -387,52 +387,72 @@ def test_the_retranscribe_note_is_not_clipped_at_the_dialog_minimum_width():
 
 
 def test_the_retranscribe_note_does_not_move_the_layout_at_any_width():
-    """The reservation has to hold at every width the user can drag to.
+    """Changing the model must not move anything below the note.
 
     A line count only covers the width it was measured at. At 560 px the
     worst-case note needs 60 px against the 54 px three lines reserve, so
-    changing the model there used to move everything below the note. The
-    reservation is therefore re-measured from the longest note this dialog
+    changing the model there used to move everything below it. The
+    reservation is therefore re-measured from the longest note *this* dialog
     can compose, at the live width.
+
+    Per dialog, not across dialogs: the note names the entry's own model, and
+    `local_model_short_label` returns an unrecognised id verbatim, so a
+    History import can make one entry's worst case legitimately taller than
+    another's. What must never change is the height *within* one dialog as
+    the user works the model picker.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialogs = []
     try:
-        for entry_model, current_model in (
-            ("large-v3-turbo", "small"),
-            ("granite-speech-4.1-2b-nar", "canary-1b-v2"),
+        for entry_model in (
+            "large-v3-turbo",
+            "granite-speech-4.1-2b-nar",
+            # An id no label covers, which is what a History import can carry.
+            # Measured against a worst case built only from `LOCAL_MODEL_LABELS`:
+            # 60 px reserved for a note that took 75 at the dialog's own
+            # minimum width.
+            "granite-speech-4.1-2b-plus-experimental-int8-preview-build-2026",
         ):
             dialog = RetranscribeDialog(
                 entry=_entry(engine="local", model=entry_model),
                 audio_path=Path(__file__),
-                base_settings=AppSettings(engine="local", model_size=current_model),
+                base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
                 transcribe=lambda *args, **kwargs: (True, ""),
             )
             dialog.show()
             app.processEvents()
             dialogs.append(dialog)
 
-        # The last width is below the dialog's own minimum on purpose: the
+        # The last width is below each dialog's own minimum on purpose: the
         # reservation has to be right for whatever width the widget is given,
         # and only a width narrower than the one it was shown at exercises the
         # resize-time re-measurement rather than the show-time one.
         for dialog in dialogs:
             dialog.setMinimumWidth(320)
-        for width in (dialogs[0].width(), 600, 560, 320):
-            heights = []
-            for dialog in dialogs:
+        for dialog in dialogs:
+            entry_model = dialog._entry_model
+            note = dialog._language_note
+            for width in (dialog.width(), 600, 560, 320):
                 dialog.resize(width, dialog.height())
                 app.processEvents()
-                note = dialog._language_note
-                heights.append(note.height())
-                assert note.heightForWidth(note.width()) <= note.height(), (
-                    f"clipped at width {width}"
+                heights = []
+                # Every model the user can pick, which is what changes the
+                # note's second name and whether it appears at all.
+                for index in range(dialog._model_combo.count()):
+                    dialog._model_combo.setCurrentIndex(index)
+                    app.processEvents()
+                    heights.append(note.height())
+                    assert note.heightForWidth(note.width()) <= note.height(), (
+                        f"{entry_model} at width {width}, model "
+                        f"{dialog.selected_model()}: the note needs "
+                        f"{note.heightForWidth(note.width())} px but has "
+                        f"{note.height()}"
+                    )
+                assert len(set(heights)) == 1, (
+                    f"{entry_model} at dialog width {width}: picking a "
+                    f"different model changed the note height across "
+                    f"{sorted(set(heights))}, so everything below it moved"
                 )
-            assert len(set(heights)) == 1, (
-                f"at dialog width {width} an empty note reserves "
-                f"{heights[0]} px but the worst case takes {heights[1]} px, "
-                "so changing the model moves everything below it"
-            )
     finally:
         for dialog in dialogs:
             dialog.close()

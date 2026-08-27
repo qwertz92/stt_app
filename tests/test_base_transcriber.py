@@ -98,9 +98,14 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
     That filter looked precise and was porous in four ways, each of which a
     new runtime could hit: a base imported under an alias, a subclass of a
     subclass, an annotated assignment, and `setattr(self, "_cancel_check",
-    ...)`. Flagging every assignment and naming the two legitimate owners is
+    ...)`. Flagging every assignment and naming the one legitimate owner is
     both simpler and strictly more conservative. A plain text scan is still
     not enough -- it cannot tell which class the `self` belongs to.
+
+    Two shapes remain invisible and are accepted: `self.__dict__[...]` and
+    `vars(self)[...]`. Neither is idiomatic here, and matching a subscript
+    assignment on an arbitrary expression would start flagging unrelated
+    dictionaries.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders: list[str] = []
@@ -134,7 +139,14 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
                 continue
             targets: list[ast.expr] = []
             if isinstance(child, ast.Assign):
-                targets = list(child.targets)
+                for target in child.targets:
+                    # `self._cancel_check, self._other = a, b` -- a subclass
+                    # setting two fields on one line walked straight past a
+                    # scan that only looked at the target itself.
+                    if isinstance(target, ast.Tuple | ast.List):
+                        targets.extend(target.elts)
+                    else:
+                        targets.append(target)
             elif isinstance(child, ast.AnnAssign):
                 targets = [child.target]
             hit = any(_is_self_cancel_check(target) for target in targets)
@@ -408,3 +420,25 @@ def test_the_cancel_check_scan_sees_each_shape_it_used_to_miss(
 
     named = [offender.split(": ", 1)[1].split(" assigns")[0] for offender in offenders]
     assert named == expected, f"{label}: {offenders}"
+
+
+_TUPLE_UNPACKING = """
+from .base import ITranscriber
+
+
+class Unpacked(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        self._cancel_check, self._armed = cancel_check, True
+"""
+
+
+def test_the_cancel_check_scan_sees_a_tuple_unpacking_assignment(tmp_path):
+    """A subclass setting two fields on one line is the plausible miss."""
+    path = tmp_path / "runtime.py"
+    path.write_text(_TUPLE_UNPACKING, encoding="utf-8")
+
+    offenders = _classes_assigning_the_cancel_check(path)
+
+    assert [o.split(": ", 1)[1].split(" assigns")[0] for o in offenders] == [
+        "Unpacked"
+    ], offenders

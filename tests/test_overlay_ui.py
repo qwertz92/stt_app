@@ -1363,3 +1363,48 @@ def test_balancing_never_pins_a_header_button_under_its_own_caption(caplog):
     # The warning has to name something: `button.text()` is empty here, which
     # is the very case that made the old message useless.
     assert "A rather long caption" in caplog.text
+
+
+def test_every_runtime_caption_is_in_the_tuple_that_sizes_its_button():
+    """The balancing sizes an unpinned button from these tuples.
+
+    A caption a button can actually show but the tuple omits would be sized
+    for the shorter one and clipped -- and the flanks would still come out
+    equal, so neither the centring nor the no-jump assertion could see it.
+    Nothing outside `overlay_ui.py` touches these buttons, so this drives
+    every runtime path that sets one.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    try:
+        observed: dict[str, set[str]] = {
+            "record": set(),
+            "pin": set(),
+            "copy": set(),
+            "clear": {overlay._clear_button.text()},
+        }
+        for state in ("Idle", "Listening", "Processing", "Done", "Error"):
+            overlay._sync_record_button(state)
+            observed["record"].add(overlay._record_button.text())
+        for pinned in (False, True, False):
+            overlay._always_on_top = pinned
+            overlay._sync_always_on_top_button()
+            observed["pin"].add(overlay._always_on_top_button.text())
+        for copied in (False, True, False):
+            overlay._set_copy_button_feedback(copied)
+            observed["copy"].add(overlay._copy_button.text())
+
+        declared = {
+            "record": set(overlay_ui_module.RECORD_BUTTON_CAPTIONS),
+            "pin": set(overlay_ui_module.PIN_BUTTON_CAPTIONS),
+            "copy": set(overlay_ui_module.COPY_BUTTON_CAPTIONS),
+            "clear": {overlay_ui_module.CLEAR_BUTTON_TEXT},
+        }
+        for name, captions in observed.items():
+            assert captions <= declared[name], (
+                f"the {name} button shows {sorted(captions - declared[name])}, "
+                "which the tuple that sizes it does not list"
+            )
+            assert captions, f"no caption was observed for the {name} button"
+    finally:
+        overlay.close()

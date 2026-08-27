@@ -465,18 +465,28 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 # that today (the runtime lease serialises every close path),
                 # and this is what keeps that from being a dependency on the
                 # callers.
-                # A `TranscriptionError`, not a cancel: `close()` also runs
-                # for a settings save and for a resume-driven reset, and the
-                # controller renders a cancel as a bare "canceled" with no
-                # text and no Retry. An error names the cause and keeps the
-                # recording retryable.
+                # A `TranscriptionError`, not a cancel. Every `close()`
+                # path is serialised against this one today, so the branch is
+                # defensive -- the resume-driven reset in particular cannot
+                # reach this class at all, because it filters on
+                # `LOCAL_WEBGPU_MODEL_SIZES`, which holds neither Parakeet nor
+                # Canary. What decides the type is what each one does to the
+                # recording: the controller's cancel path calls
+                # `_drop_request_audio`, discarding the WAV and writing no
+                # overlay state, while the error path promotes the audio for
+                # Retry and shows the reason. Nobody asked to stop here, so
+                # losing the recording would be wrong.
                 raise TranscriptionError(
                     "The local runtime was closed while this transcription "
                     "was starting. Try again."
                 )
             handle = _RunAbortHandle()
             self._abort_handle = handle
-            watchdog = _CancelWatchdog(handle, self._cancel_check)
+            # The base method, like every other call site: `_poll` gives
+            # up permanently on the first raise, so the raw attribute
+            # would switch the mid-run cancel off for this transcription
+            # with no log line.
+            watchdog = _CancelWatchdog(handle, self._is_cancel_requested)
             watchdog.start()
             try:
                 text = model.recognize(  # type: ignore[attr-defined]

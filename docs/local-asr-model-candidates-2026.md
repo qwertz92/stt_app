@@ -9,9 +9,14 @@ Parakeet notes and adds IBM Granite plus adjacent 2026 candidates.
 ## Decision
 
 On a machine with a working GPU, Cohere Transcribe and IBM Granite Speech are
-recommended over the Whisper models for quality and speed. The zero-setup `small`
-Whisper model stays the default only because it needs no GPU or Node.js. NVIDIA
-Parakeet is not implemented (its official path is the heavyweight NeMo runtime).
+recommended over the Whisper models for quality and speed. A zero-setup CPU
+model stays the default because it needs no GPU or Node.js.
+
+> **Superseded 2026-08-27.** Two claims in the paragraph above were overtaken by
+> later work. NVIDIA Parakeet *is* implemented, through the pure-Python
+> `onnx-asr` runtime rather than NeMo (`config.py`, `LOCAL_ONNX_ASR_MODEL_SIZES`),
+> and it -- not `small` -- is now the zero-setup default: RTF 0.042 against
+> 0.152 on the same 24.3 s recording and the same CPU.
 
 Initial status after the 2026-04-18 implementation pass, superseded by the
 updates below:

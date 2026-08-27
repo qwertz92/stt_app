@@ -265,7 +265,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._always_on_top_button.setFixedHeight(24)
         self._always_on_top_button.clicked.connect(self._on_always_on_top_clicked)
 
-        self._copy_button = QtWidgets.QPushButton("Copy")
+        self._copy_button = QtWidgets.QPushButton(COPY_BUTTON_TEXT)
         self._copy_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._copy_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._copy_button.setFixedWidth(_TEXT_ACTION_BUTTON_WIDTH)
@@ -280,7 +280,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._edit_button.setEnabled(False)
         self._edit_button.clicked.connect(self.edit_requested.emit)
 
-        self._clear_button = QtWidgets.QPushButton("Clear")
+        self._clear_button = QtWidgets.QPushButton(CLEAR_BUTTON_TEXT)
         self._clear_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._clear_button.setFixedWidth(_TEXT_ACTION_BUTTON_WIDTH)
@@ -1652,7 +1652,9 @@ class OverlayUI(QtWidgets.QWidget):
 
     def _set_copy_button_feedback(self, copied: bool) -> None:
         self._copy_button.setProperty("copied", copied)
-        self._copy_button.setText("Copied" if copied else "Copy")
+        self._copy_button.setText(
+            COPY_BUTTON_COPIED_TEXT if copied else COPY_BUTTON_TEXT
+        )
         self._copy_button.style().unpolish(self._copy_button)
         self._copy_button.style().polish(self._copy_button)
         self._copy_button.update()

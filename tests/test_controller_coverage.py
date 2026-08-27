@@ -949,12 +949,16 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     with controller._transcriber_runtime_state_lock:
         assert controller._pending_transcriber_cache_reset is True
     # ...and the point of condemning it: the next save preloads again instead
-    # of treating the canceled model as ready. The worker has returned, so the
-    # executor future this helper leaves running is finished by the time a
-    # later save asks -- otherwise the "already being prepared" branch answers
-    # first and this would assert nothing about the cancel.
+    # of treating the canceled model as ready. Two things have to be arranged
+    # for that assertion to be about the *cancel*: the executor future this
+    # helper leaves running must be finished, or the "already being prepared"
+    # branch answers first; and the cache key must match this snapshot, or the
+    # final `cached_key != identity` comparison answers True on its own and
+    # the condemned-runtime branch is never reached.
     with controller._preload_result_lock:
         controller._preload_future = None
+    with controller._transcriber_cache_lock:
+        controller._transcriber_cache_key = key
     assert controller._local_model_preload_needed(settings) is True
     assert released == [True]
     # Installed for the load, then cleared: the runtime is shared and cached
@@ -3527,5 +3531,105 @@ def test_a_raising_cancel_hook_clear_still_releases_the_runtime(monkeypatch, cap
     assert any(
         "cancel hook" in record.getMessage() for record in caplog.records
     ), "the failed clear was swallowed without a log line"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_microphone_open_does_not_strand_the_runtime_lock(monkeypatch):
+    """The capture is built after the lease block and before it is stored.
+
+    Nothing owns the lease in that window, and `_build_audio_capture` can
+    raise -- `float(vad_energy_threshold)` on a corrupt stored value, or the
+    `AudioCapture` constructor. A leak there strands
+    `_transcriber_runtime_lock` for the process lifetime: every later preload
+    and audio import blocks forever, every dictation quietly builds its own
+    isolated runtime, and `_transcription_runtime_active()` stays True so no
+    deferred cache reset ever runs.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise ValueError("could not read vad_energy_threshold")
+
+    monkeypatch.setattr(controller, "_build_audio_capture", _explode)
+
+    controller.start_recording()
+    app.processEvents()
+
+    assert overlay.states[-1][0] == "Error"
+    assert controller._transcription_runtime_active() is False, (
+        "the runtime is still marked in use after a failed start"
+    )
+    # The decisive one: a later shared acquisition must not block.
+    acquired = controller._transcriber_runtime_lock.acquire(timeout=2.0)
+    try:
+        assert acquired is True, "the runtime lock was stranded"
+    finally:
+        if acquired:
+            controller._transcriber_runtime_lock.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_in_the_worker_still_resolves_the_job(monkeypatch):
+    """The terminal signal is emitted after the `try`, not inside it.
+
+    Anything escaping that block leaves the overlay in Processing with no
+    error and no Retry, and the job never resolves -- for the rest of the
+    session. A cancel check or progress callback raising a `BaseException`
+    is the reachable supplier.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+
+    class HostileTranscriber:
+        runtime_device = "cpu"
+
+        def set_cancel_check(self, _cancel_check):
+            return None
+
+        def set_progress_callback(self, _callback):
+            return None
+
+        def transcribe_batch(self, _audio):
+            raise BaseException("a callback that raises outside Exception")
+
+        def close(self):
+            return None
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: HostileTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    failures: list[tuple[int, str]] = []
+    controller.transcription_failed.connect(
+        lambda token, message: failures.append((token, message))
+    )
+
+    token = controller._active_request_token or 1
+    controller._transcribe_worker(token, b"RIFF", settings)
+    app.processEvents()
+
+    assert failures, "the job never resolved; the overlay would stay in Processing"
+    assert "BaseException" in failures[-1][1]
     controller.shutdown()
     _ = app

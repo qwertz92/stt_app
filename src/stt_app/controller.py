@@ -1221,7 +1221,23 @@ class DictationController(QtCore.QObject):
             self._overlay.set_state("Error", f"Failed to start streaming: {exc}")
             return
 
-        capture = self._build_audio_capture(chunk_callback=self._on_stream_audio_chunk)
+        try:
+            # Inside its own guard: nothing owns the lease between the block
+            # above and `_active_stream_runtime_lease` below, and this call can
+            # raise -- `float(vad_energy_threshold)` on a corrupt stored value,
+            # or the `AudioCapture` constructor. Leaking the lease strands
+            # `_transcriber_runtime_lock` for the process lifetime: every later
+            # preload and audio import blocks forever, every dictation builds
+            # its own isolated runtime, and `_transcription_runtime_active()`
+            # stays True so no deferred cache reset ever runs.
+            capture = self._build_audio_capture(
+                chunk_callback=self._on_stream_audio_chunk
+            )
+        except Exception as exc:
+            runtime_lease.release()
+            self._logger.exception("Failed to open the microphone for streaming")
+            self._overlay.set_state("Error", f"Failed to start recording: {exc}")
+            return
 
         # Publish the session before starting PortAudio. A stream is allowed to
         # deliver its first callback from inside ``start()``; publishing these
@@ -3300,6 +3316,24 @@ class DictationController(QtCore.QObject):
                 f"Transcriber initialization failed: {exc}"
                 if initialization_failed
                 else f"Unexpected transcription error: {exc}"
+            )
+        except BaseException as exc:
+            # Last resort, and deliberately not re-raised. The terminal signal
+            # below sits after the `finally`, so anything escaping this block
+            # leaves the overlay in Processing with no error and no Retry --
+            # for the rest of the session, since the job never resolves. A
+            # `BaseException` here can only come from a callback that raises
+            # one (CPython delivers KeyboardInterrupt to the main thread only,
+            # and a SystemExit on a worker thread just ends the thread), so
+            # reporting it is strictly better than letting it vanish into the
+            # Future.
+            outcome = "unexpected_error"
+            self._logger.exception(
+                "Transcription worker raised %s", type(exc).__name__
+            )
+            terminal_kind = "failed"
+            terminal_payload = (
+                f"Unexpected transcription error: {type(exc).__name__}: {exc}"
             )
         finally:
             transcribe_elapsed_ms = (

@@ -57,7 +57,7 @@ That's it! The overlay shows the current state:
 
 ## 4. First-time model download
 
-On the first dictation, the app downloads the `small` Whisper model (~486 MB). This happens once and may take a minute depending on your connection. The overlay shows "Loading model..." during download.
+On the first dictation, the app downloads the default model, `parakeet-tdt-0.6b-v3` (~670 MB). This happens once and may take a couple of minutes depending on your connection. The overlay shows "Loading model..." during download.
 
 After the first download, the model is cached locally and loads in seconds.
 
@@ -71,7 +71,7 @@ Common settings to adjust:
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| **Model size** | Larger = better quality, slower | `small` |
+| **Model size** | Which local model transcribes. `parakeet-tdt-0.6b-v3` is the fastest and needs no GPU; the Whisper sizes trade speed for quality and are the ones that support streaming | `parakeet-tdt-0.6b-v3` |
 | **Engine** | `Local` (on device) or remote: `AssemblyAI`, `OpenAI`, `Groq`, `Deepgram`, `ElevenLabs`, `Azure LLM Speech`, `Fun-ASR` | `Local` |
 | **Mode** | `Batch` (transcribe after stop) or `Streaming` (live, experimental) | `Batch` |
 | **Hotkey** | Click the field, press your desired key combo | Ctrl+Alt+Space |

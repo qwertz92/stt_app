@@ -37,7 +37,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 |-------|---------|------|-----------|----------|
 | `tiny` | CTranslate2 | ~78 MB | Multilingual | Quick testing, fallback |
 | `base` | CTranslate2 | ~148 MB | Multilingual | Light usage |
-| `small` | CTranslate2 | ~486 MB | Multilingual | **Default — good balance for German + English** |
+| `small` | CTranslate2 | ~486 MB | Multilingual | Good balance for German + English, and the smallest model that supports streaming |
 | `medium` | CTranslate2 | ~1.53 GB | Multilingual | Better quality, slower |
 | `large-v3` | CTranslate2 | ~3.09 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
 | `large-v3-turbo` | CTranslate2 | ~1.62 GB | Multilingual | Fast + high quality — pruned version of large-v3 |
@@ -272,7 +272,7 @@ runtime wheel.
 
 ## First-time model download
 
-On first use, the app downloads the selected model automatically from HuggingFace Hub. The `small` model (~486 MB) takes about a minute. After that, it loads from cache in seconds.
+On first use, the app downloads the selected model automatically from HuggingFace Hub. The default `parakeet-tdt-0.6b-v3` (~670 MB) takes a couple of minutes; `small` (~486 MB) takes about a minute. After that, it loads from cache in seconds.
 
 The model is stored in the HuggingFace cache (`%USERPROFILE%\.cache\huggingface\hub\` on Windows) and persists across restarts, reboots, and updates.
 

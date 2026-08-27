@@ -162,12 +162,25 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._language_note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         # The longest note this dialog can ever show, so the reservation can
         # be re-measured whenever the width changes. Composed from the same
-        # sentences `_update_substitution_note` builds, with the longest model
-        # name of all, so it cannot drift from the real worst case.
+        # sentences `_update_substitution_note` builds.
+        #
+        # The name is the longer of the widest *known* label and this entry's
+        # own: `local_model_short_label` returns an unrecognised id verbatim,
+        # and `_entry_model` comes from a history entry -- arbitrary text
+        # after a History import, or a retired id whose label was deleted (the
+        # longest raw local id, `nemotron-3.5-asr-streaming-0.6b-int4`, is
+        # already 6 characters longer than the longest label). Measured with a
+        # 63-character id, a labels-only worst case reserved 60 px for a note
+        # that took 75 at the dialog's own minimum width, so changing the
+        # model moved everything below it by 15 px.
+        widest_name = max(
+            (_LONGEST_MODEL_NAME, local_model_short_label(self._entry_model)),
+            key=len,
+        )
         self._worst_case_note = " ".join(
             (
-                f"This entry was recorded with '{_LONGEST_MODEL_NAME}', which "
-                f"this version no longer offers, so {_LONGEST_MODEL_NAME} was "
+                f"This entry was recorded with '{widest_name}', which "
+                f"this version no longer offers, so {widest_name} was "
                 f"chosen instead.",
                 "This entry's language (auto) is unavailable here, so de was "
                 "chosen.",
@@ -338,12 +351,16 @@ class RetranscribeDialog(QtWidgets.QDialog):
         note = getattr(self, "_language_note", None)
         if note is None:
             return
-        # No `layout().activate()` here: measured on this dialog, the label's
-        # `width()` is already current in both `showEvent` and `resizeEvent`,
-        # and forcing the layout changed the read width in none of the five
-        # observed calls. The one stale read happens during construction,
-        # before the first layout, and `width() <= 0` is not what guards it --
-        # the show that follows re-measures at the real width.
+        # No `layout().activate()` here. Measured across six sequences
+        # (resize before show, show then resize to 320, `showMaximized`, a
+        # raised minimum width, hide/resize/reshow, a font change) it changed
+        # the read width in none of them, so it bought nothing.
+        #
+        # Two reads are stale and both are corrected by the `showEvent` that
+        # must follow: the construction-time one, which returns the QWidget
+        # default of 640 rather than anything `width() <= 0` would catch, and
+        # a resize while the dialog is hidden -- Qt does not lay out hidden
+        # widgets, so `activate()` would not have fixed that one either.
         width = note.width()
         if width <= 0:
             return
