@@ -1,10 +1,15 @@
+import ast
 import io
 import math
 import struct
+import subprocess
+import sys
+import textwrap
 import threading
 import time
 import types
 import wave
+from pathlib import Path
 
 import pytest
 
@@ -1104,4 +1109,106 @@ def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
     assert len(merged.split()) <= 12, (
         f"the transcript grew to {len(merged.split())} words over "
         f"{len(decoded) - spoken_decodes} hallucinated windows: {merged!r}"
+    )
+
+
+def test_importing_one_transcriber_does_not_pull_in_every_provider_sdk():
+    """`stt_app.transcriber` resolves its names lazily (PEP 562).
+
+    Importing any submodule runs the package first. While the package imported
+    every provider eagerly, the two worker subprocesses -- which only ever scan
+    a directory or download a file -- each paid for the AssemblyAI, Deepgram,
+    OpenAI, Groq, ElevenLabs, Azure and Fun-ASR modules at every launch.
+    """
+    probe = textwrap.dedent(
+        r"""
+        import sys
+        import stt_app.transcriber.local_faster_whisper  # noqa: F401
+        loaded = sorted(
+            name
+            for name in sys.modules
+            if name.startswith("stt_app.transcriber.")
+        )
+        print("\n".join(loaded))
+        """
+    )
+    result = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+    )
+    loaded = set(result.stdout.split())
+    providers = {
+        "stt_app.transcriber.assemblyai_provider",
+        "stt_app.transcriber.azure_provider",
+        "stt_app.transcriber.deepgram_provider",
+        "stt_app.transcriber.elevenlabs_provider",
+        "stt_app.transcriber.factory",
+        "stt_app.transcriber.funasr_provider",
+        "stt_app.transcriber.groq_provider",
+        "stt_app.transcriber.openai_provider",
+    }
+    assert loaded & providers == set(), (
+        "importing one local transcriber dragged in "
+        f"{sorted(loaded & providers)}"
+    )
+    assert "stt_app.transcriber.local_faster_whisper" in loaded
+
+
+# The package's public surface, spelled out so a name cannot be dropped by
+# editing the lazy map alone -- `__all__` is derived from that map, so a
+# deletion there would silently shrink the API without failing anything.
+_TRANSCRIBER_PACKAGE_EXPORTS = {
+    "AssemblyAITranscriber",
+    "AzureLlmSpeechTranscriber",
+    "DeepgramTranscriber",
+    "ElevenLabsTranscriber",
+    "FunAsrTranscriber",
+    "GroqTranscriber",
+    "ITranscriber",
+    "LocalFasterWhisperTranscriber",
+    "OpenAITranscriber",
+    "TranscriptionError",
+    "create_transcriber",
+    "find_cached_models",
+}
+
+
+def test_every_exported_transcriber_name_still_resolves():
+    """The lazy map must stay in step with what the package promises."""
+    import stt_app.transcriber as package
+
+    assert set(package.__all__) == _TRANSCRIBER_PACKAGE_EXPORTS
+    for name in package.__all__:
+        assert getattr(package, name) is not None, name
+    missing = "ThisNameDoesNotExist"
+    with pytest.raises(AttributeError):
+        getattr(package, missing)
+
+
+def test_the_typed_imports_and_the_lazy_map_name_the_same_modules():
+    """A name typed for static checkers but absent from the map is an
+    ``AttributeError`` at runtime that no type checker can see, and the
+    reverse hides the name from every editor and linter."""
+    import stt_app.transcriber as package
+
+    source = Path(package.__file__).read_text(encoding="utf-8")
+    typed: dict[str, str] = {}
+    for node in ast.walk(ast.parse(source)):
+        if not isinstance(node, ast.If):
+            continue
+        if not (isinstance(node.test, ast.Name) and node.test.id == "TYPE_CHECKING"):
+            continue
+        for statement in ast.walk(node):
+            if isinstance(statement, ast.ImportFrom):
+                module = "." * statement.level + (statement.module or "")
+                for alias in statement.names:
+                    typed[alias.asname or alias.name] = module
+
+    assert typed == package._LAZY_ATTRIBUTES, (
+        "the TYPE_CHECKING imports and the lazy map disagree: "
+        f"typed-only={sorted(set(typed) - set(package._LAZY_ATTRIBUTES))}, "
+        f"lazy-only={sorted(set(package._LAZY_ATTRIBUTES) - set(typed))}"
     )
