@@ -16,6 +16,12 @@ from stt_app import model_download_coordinator as coordinator_module
 from stt_app.model_download_coordinator import ACQUIRE_DOWNLOAD
 
 
+@pytest.fixture(autouse=True)
+def _use_the_real_prefetch(real_model_prefetch):
+    """This file exists to assert the pre-fetch happens, so it must run."""
+    return real_model_prefetch
+
+
 @dataclass
 class _RecordingCoordinator:
     acquired: list[tuple[str, str, bool]] = field(default_factory=list)

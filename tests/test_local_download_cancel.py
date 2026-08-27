@@ -28,6 +28,12 @@ from stt_app.transcriber.local_onnx_asr import LocalOnnxAsrTranscriber
 from stt_app.transcriber.local_webgpu_asr import LocalOnnxWebGpuTranscriber
 
 
+@pytest.fixture(autouse=True)
+def _use_the_real_prefetch(real_model_prefetch):
+    """This file drives the pre-fetch, which the suite stubs out."""
+    return real_model_prefetch
+
+
 def _raise_canceled(*_args, **_kwargs):
     raise ModelDownloadCanceled("Model download canceled.")
 

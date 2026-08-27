@@ -478,7 +478,11 @@ def find_cached_models(model_dir: str = "") -> list[str]:
     try:
         from .local_webgpu_asr import find_cached_webgpu_models
 
-        found.update(find_cached_webgpu_models(model_dir or _default_hf_cache_dir()))
+        # `model_dir` unchanged rather than defaulted. Behaviour-neutral --
+        # the ONNX scan adds the default cache itself now, exactly like the
+        # Whisper loop above -- but defaulting a root before handing it to a
+        # function that defaults the same root reads as if it mattered.
+        found.update(find_cached_webgpu_models(model_dir))
     except Exception:
         pass
 

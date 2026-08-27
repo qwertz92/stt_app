@@ -23,6 +23,7 @@ from stt_app.config import (
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
     MODEL_REPO_MAP,
+    PARAKEET_MODEL_SIZE,
 )
 from stt_app.transcriber import local_webgpu_asr
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
@@ -1206,3 +1207,38 @@ def test_the_runtime_probe_covers_everything_the_runner_imports(monkeypatch):
 
     assert needed
     assert needed <= _probe_imports(monkeypatch)
+
+
+def test_a_model_in_the_default_cache_is_found_with_a_model_dir_set(
+    tmp_path, monkeypatch
+):
+    """The ONNX side searched one root while delete spanned two.
+
+    `scripts/download_model.py` writes into the default cache. Setting a Model
+    Dir afterwards made the Local tab report the model as missing and the
+    preload fetch it again -- and Delete, which always looked in both roots,
+    would then remove the copy the scan had never listed. It matters most for
+    the default model, which is one of these.
+    """
+    default_cache = tmp_path / "default-cache"
+    model_dir = tmp_path / "model-dir"
+    model_dir.mkdir()
+    snapshot = _write_required_snapshot(default_cache, PARAKEET_MODEL_SIZE)
+    monkeypatch.setattr(
+        local_webgpu_asr, "_default_hf_cache_dir", lambda: str(default_cache)
+    )
+
+    assert local_webgpu_asr.find_cached_webgpu_models(str(model_dir)) == [
+        PARAKEET_MODEL_SIZE
+    ]
+    assert (
+        local_webgpu_asr.resolve_cached_webgpu_model_path(
+            PARAKEET_MODEL_SIZE, str(model_dir)
+        )
+        == snapshot
+    )
+    # ...while the download destination stays the configured Model Dir, so a
+    # progress bar still measures the directory a download writes into.
+    assert local_webgpu_asr.webgpu_download_destination(
+        PARAKEET_MODEL_SIZE, str(model_dir)
+    ) == model_dir / "parakeet-tdt-0.6b-v3-onnx"

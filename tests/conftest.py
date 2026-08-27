@@ -462,3 +462,83 @@ def _skip_pixel_exact_tests_on_the_offscreen_platform(request):
             "(metrics shift 1-4 px and widget defaults differ); run it on a "
             "real platform plugin."
         )
+
+
+# Captured at import, before any test can stub it.
+from stt_app.transcriber.local_faster_whisper import (  # noqa: E402
+    LocalFasterWhisperTranscriber as _LocalFasterWhisperTranscriber,
+)
+
+_REAL_COORDINATED_DOWNLOAD = (
+    _LocalFasterWhisperTranscriber._coordinated_download_if_missing
+)
+
+
+@pytest.fixture(autouse=True)
+def _isolate_the_hugging_face_cache(tmp_path_factory, monkeypatch):
+    """Point the default model cache at an empty directory for every test.
+
+    `find_cached_models` and the ONNX inventory search the default Hugging
+    Face cache as well as a configured Model Dir, so on a developer machine
+    they see whatever models are really downloaded there. A test that writes
+    one model into `tmp_path` and asserts the inventory equals `[that model]`
+    then passes or fails depending on the machine -- and the same tests are
+    what a release build runs on a clean CI image, where the cache is empty.
+
+    `_default_hf_cache_dir` reads these variables at call time, so setting
+    them is enough.
+
+    The rest of this fixture is what keeps an empty cache from being worse
+    than a shared one. An empty cache is not inert: `_ensure_model`
+    pre-fetches through the download slot whenever the destination holds no
+    valid snapshot, so pointing the cache at an empty directory turned an
+    offline unit test into a real `snapshot_download` against huggingface.co
+    -- measured at 42 s for one test, and it would have written 486 MB if the
+    request had succeeded. That is also what a clean CI runner was doing
+    before this fixture existed, silently, on every run.
+
+    So the pre-fetch itself is disabled by default. Deliberately that method
+    and not the `_has_valid_model_snapshot` predicate underneath it: the
+    predicate is also what `find_cached_models` detects with, so stubbing it
+    made every Whisper model look installed. `test_download_coordination_
+    wiring.py` restores the real method, which is the file that exists to
+    assert the pre-fetch happens.
+
+    The two network-disabling variables are belt and braces: the ModelScope
+    fallback is plain urllib and does not read `HF_HUB_OFFLINE`.
+    """
+    cache_root = tmp_path_factory.mktemp("hf-cache-isolation")
+    monkeypatch.setenv("HF_HOME", str(cache_root))
+    monkeypatch.setenv("HF_HUB_CACHE", str(cache_root / "hub"))
+    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
+    monkeypatch.setenv("STT_APP_DISABLE_MODELSCOPE", "1")
+
+    from stt_app.transcriber import local_faster_whisper
+
+    monkeypatch.setattr(
+        local_faster_whisper.LocalFasterWhisperTranscriber,
+        "_coordinated_download_if_missing",
+        lambda self: None,
+    )
+
+
+@pytest.fixture
+def real_model_prefetch(monkeypatch):
+    """Undo the suite-wide pre-fetch stub, for files that test the pre-fetch.
+
+    `_isolate_the_hugging_face_cache` disables
+    `_coordinated_download_if_missing` because an empty cache otherwise turns
+    every faster-whisper unit test into a real `snapshot_download`. The two
+    files that exist to assert that call happens -- the coordination wiring
+    and the download-cancel suite -- request this and get the real method back.
+
+    Autouse fixtures are set up before explicitly requested ones at the same
+    scope, so the stub is always in place by the time this restores it.
+    """
+    from stt_app.transcriber import local_faster_whisper
+
+    monkeypatch.setattr(
+        local_faster_whisper.LocalFasterWhisperTranscriber,
+        "_coordinated_download_if_missing",
+        _REAL_COORDINATED_DOWNLOAD,
+    )

@@ -125,12 +125,12 @@ def test_transcribe_batch_aborts_between_segments_on_cancel():
         language_mode="auto",
         model_factory=lambda *args, **kwargs: model,
     )
-    checks = {"count": 0}
-
+    # Keyed on progress, not on a call count: the checks before decoding
+    # starts are not a fixed number (the load path polls it too, and how often
+    # depends on whether the model has to be fetched), so counting them made
+    # this cancel land wherever that count happened to be.
     def cancel_check():
-        checks["count"] += 1
-        # False for the pre-decode check, True once the first segment is in.
-        return checks["count"] >= 2
+        return bool(model.yielded)
 
     transcriber.set_cancel_check(cancel_check)
 

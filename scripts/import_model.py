@@ -64,6 +64,21 @@ for _short, _repo in IMPORTABLE_MODEL_REPO_MAP.items():
     _FOLDER_HINTS[_short.lower()] = _short
 
 
+def _print_importable_models() -> None:
+    """One message for both "unknown" and "could not detect".
+
+    Both are the same user situation -- this script cannot import that folder
+    -- and the runtime split is the part people miss.
+    """
+    print(
+        "This script imports CTranslate2/faster-whisper models only. "
+        "Use scripts/download_model.py for ONNX/WebGPU models, including the "
+        "default model.",
+        file=sys.stderr,
+    )
+    print(f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr)
+
+
 def detect_model_name(source_dir: Path) -> str | None:
     """Try to detect the model short name from the source directory name."""
     folder_name = source_dir.name.lower().strip()
@@ -365,6 +380,53 @@ def main() -> None:
         print(f"ERROR: Source path is not a directory: {source_dir}", file=sys.stderr)
         sys.exit(1)
 
+    # The unsupported-model check runs before the file validation, not after.
+    # `validate_model_files` looks for the CTranslate2 layout, so a folder for
+    # any other runtime -- the default model included -- used to be reported
+    # as "MISSING FILES: model.bin, tokenizer.json, vocabulary.txt" with the
+    # advice to download them from HuggingFace. Those files do not exist in
+    # that repository, and the accurate message twenty lines below was
+    # unreachable because the validation had already exited.
+    requested_model = args.model or detect_model_name(source_dir)
+    if requested_model is not None and requested_model not in IMPORTABLE_MODEL_REPO_MAP:
+        print(f"ERROR: Unknown model '{requested_model}'.", file=sys.stderr)
+        print(
+            "This script imports CTranslate2/faster-whisper models only. "
+            "Use scripts/download_model.py for ONNX/WebGPU models, including "
+            "the default model.",
+            file=sys.stderr,
+        )
+        print(f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr)
+        sys.exit(1)
+
+    # --- Determine model name, before the file validation ---
+    # `validate_model_files` looks for the CTranslate2 layout, so a folder for
+    # any other runtime -- the default model included -- used to be reported
+    # as "MISSING FILES: model.bin, tokenizer.json, vocabulary.txt" with the
+    # advice to download them from the model's HuggingFace page. Those files
+    # do not exist in that repository, and the accurate message was
+    # unreachable because the validation had already exited.
+    model_name: str | None = args.model
+    detected = model_name is None
+    if model_name is None:
+        model_name = detect_model_name(source_dir)
+    if model_name is None:
+        print(
+            "ERROR: Could not auto-detect the model name from the folder name.",
+            file=sys.stderr,
+        )
+        print(
+            "Please specify the model explicitly with --model <name>.",
+            file=sys.stderr,
+        )
+        _print_importable_models()
+        sys.exit(1)
+    if model_name not in IMPORTABLE_MODEL_REPO_MAP:
+        print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
+        _print_importable_models()
+        sys.exit(1)
+    print(f"{'Detected model' if detected else 'Model'}: {model_name}")
+
     is_valid, found_files, missing_files = validate_model_files(source_dir)
 
     print(f"Source: {source_dir}")
@@ -383,39 +445,6 @@ def main() -> None:
         )
         if not is_valid:
             sys.exit(1)
-
-    # --- Determine model name ---
-    model_name: str | None = args.model
-    if model_name is None:
-        model_name = detect_model_name(source_dir)
-        if model_name is None:
-            print(
-                "\nERROR: Could not auto-detect the model name from the folder name.",
-                file=sys.stderr,
-            )
-            print(
-                "Please specify the model explicitly with --model <name>.",
-                file=sys.stderr,
-            )
-            print(
-                f"Available models: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}",
-                file=sys.stderr,
-            )
-            sys.exit(1)
-        print(f"Detected model: {model_name}")
-    else:
-        if model_name not in IMPORTABLE_MODEL_REPO_MAP:
-            print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
-            print(
-                "This script imports CTranslate2/faster-whisper models only. "
-                "Use scripts/download_model.py for ONNX/WebGPU models.",
-                file=sys.stderr,
-            )
-            print(
-                f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr
-            )
-            sys.exit(1)
-        print(f"Model: {model_name}")
 
     repo_id = IMPORTABLE_MODEL_REPO_MAP[model_name]
     print(f"Repository: {repo_id}")

@@ -275,10 +275,20 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     if repo_id is None:
         return []
 
+    # Both roots, the way the faster-whisper side has always searched --
+    # a configured Model Dir *and* the default cache. Only one root meant a
+    # model fetched by `scripts/download_model.py` (which writes to the
+    # default cache) was invisible to the inventory and to the loader as soon
+    # as a Model Dir was set, so the Local tab reported it as missing and the
+    # preload downloaded it again. Delete already spanned both, so the app
+    # would then remove the copy the scan had never listed.
+    #
+    # Not used by `webgpu_download_destination`, which stays the single root
+    # a download writes into.
+    search_dirs: list[str] = []
     if model_dir and model_dir.strip():
-        search_dirs = [model_dir.strip()]
-    else:
-        search_dirs = [_default_hf_cache_dir()]
+        search_dirs.append(model_dir.strip())
+    search_dirs.append(_default_hf_cache_dir())
 
     folder_name = f"models--{repo_id.replace('/', '--')}"
     repo_basename = repo_id.rsplit("/", 1)[-1]

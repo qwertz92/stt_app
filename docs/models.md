@@ -445,7 +445,14 @@ git clone https://huggingface.co/distil-whisper/distil-large-v3.5-ct2
 git clone https://huggingface.co/onnx-community/cohere-transcribe-03-2026-ONNX
 git clone https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX
 git clone https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX
+git clone https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
+git clone https://huggingface.co/istupakov/canary-1b-v2-onnx
 ```
+
+The last two are the onnx-asr models, and `parakeet-tdt-0.6b-v3` is the app's
+default. They matter most here: together with `distil-large-v3.5` they are the
+three models with no ModelScope mirror, so on a network that blocks Hugging
+Face a clone from a machine that can reach it is the only route.
 
 </details>
 

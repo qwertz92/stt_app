@@ -12,6 +12,18 @@ from stt_app.transcriber import local_faster_whisper, local_webgpu_asr
 from stt_app.transcriber import modelscope_mirror as ms
 
 
+@pytest.fixture(autouse=True)
+def _allow_the_mirror(monkeypatch):
+    """This file tests the fallback, so the kill switch must be off.
+
+    The suite-wide cache isolation in `conftest.py` sets
+    `STT_APP_DISABLE_MODELSCOPE` because the mirror is plain urllib and does
+    not read `HF_HUB_OFFLINE`; here the requests are faked, so the fallback is
+    exactly what is under test.
+    """
+    monkeypatch.delenv("STT_APP_DISABLE_MODELSCOPE", raising=False)
+
+
 class _FakeResponse:
     def __init__(self, chunks, *, status=200, headers=None):
         self._chunks = iter(chunks)

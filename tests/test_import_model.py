@@ -216,3 +216,67 @@ def test_import_copy_failure_leaves_no_published_snapshot_or_ref(
     model_root = cache / "models--Systran--faster-whisper-small"
     assert not list((model_root / "snapshots").iterdir())
     assert not (model_root / "refs" / "main").exists()
+
+
+@pytest.mark.parametrize(
+    ("folder", "explicit_model"),
+    [
+        ("parakeet-tdt-0.6b-v3", "parakeet-tdt-0.6b-v3"),
+        ("parakeet-tdt-0.6b-v3", None),
+    ],
+    ids=["named explicitly", "auto-detected"],
+)
+def test_a_model_this_script_cannot_import_says_so_before_listing_files(
+    tmp_path, monkeypatch, capsys, folder, explicit_model
+):
+    """The file validation used to run first and give impossible advice.
+
+    `validate_model_files` looks for the CTranslate2 layout, so any other
+    runtime's folder -- the app's default model included -- was reported as
+    "MISSING FILES: model.bin, tokenizer.json, vocabulary.txt" with the advice
+    to download them from the model's HuggingFace page. Those files do not
+    exist in that repository, and the accurate message was unreachable.
+    """
+    module = _load_import_module()
+    source = tmp_path / folder
+    source.mkdir()
+    (source / "config.json").write_text("{}", encoding="utf-8")
+    (source / "encoder-model.int8.onnx").write_bytes(b"x")
+
+    argv = ["import_model.py", str(source), "--validate-only"]
+    if explicit_model is not None:
+        argv += ["--model", explicit_model]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    output = capsys.readouterr()
+    combined = output.out + output.err
+    assert "download_model.py" in combined
+    assert "MISSING FILES" not in combined, (
+        "the CTranslate2 file list was printed for a model this script cannot "
+        "import at all"
+    )
+    assert "HuggingFace page" not in combined
+
+
+def test_a_whisper_folder_still_reaches_the_file_validation(
+    tmp_path, monkeypatch, capsys
+):
+    """The reordering must not skip the check the script exists for."""
+    module = _load_import_module()
+    source = tmp_path / "faster-whisper-small"
+    source.mkdir()
+    (source / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        sys, "argv", ["import_model.py", str(source), "--validate-only"]
+    )
+
+    with pytest.raises(SystemExit):
+        module.main()
+
+    combined = "".join(capsys.readouterr())
+    assert "Detected model: small" in combined
+    assert "MISSING FILES" in combined

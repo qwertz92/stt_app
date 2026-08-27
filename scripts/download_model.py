@@ -27,10 +27,16 @@ onnx-asr runtime. Nemotron 3.5 uses the INT4 ONNX Runtime GenAI streaming
 export.
 
 If Hugging Face is unreachable (e.g. a corporate proxy such as Zscaler that
-blocks the whole "Generative AI and ML Applications" category), the download
-automatically falls back to the ModelScope mirror (modelscope.cn), which hosts
-the same repositories and serves the weights from its own CDN. Set the
-environment variable STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
+blocks the whole "Generative AI and ML Applications" category), most models
+fall back automatically to the ModelScope mirror (modelscope.cn), which serves
+the same weights from its own CDN. Set the environment variable
+STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
+
+Three models are not mirrored there and have Hugging Face as their only
+source: the default parakeet-tdt-0.6b-v3, canary-1b-v2, and distil-large-v3.5
+(see MODELS_WITHOUT_MODELSCOPE_MIRROR in config.py). On a network that blocks
+Hugging Face, use `git clone` from a machine that can reach it -- the repository
+list is in docs/models.md -- and point --output-dir at the result.
 """
 
 from __future__ import annotations
@@ -165,7 +171,16 @@ def download_model(name: str, output_dir: str | None = None) -> str:
         )
         raise SystemExit(130) from None
     except Exception as exc:
-        if "SSL certificate verification failed" in str(exc):
+        # Two different messages describe the same failure, because a model
+        # without a ModelScope mirror takes another branch of
+        # `format_model_download_error`. Matching only the mirrored wording
+        # meant the default model got a bare "Download failed" and exit 1
+        # where `--model small` got the CA-bundle guidance and exit 2.
+        message = str(exc)
+        if (
+            "SSL certificate verification failed" in message
+            or "looked like a certificate error" in message
+        ):
             _print_ssl_help(name)
             sys.exit(2)
         print(f"ERROR: Download failed: {exc}", file=sys.stderr)
