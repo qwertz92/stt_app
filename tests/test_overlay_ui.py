@@ -1110,3 +1110,176 @@ def test_the_no_action_error_state_shows_neither_retry_nor_insert():
         assert not overlay._retry_button.isHidden()
     finally:
         overlay.close()
+
+
+def _painted_text_span(label: QtWidgets.QLabel) -> tuple[int, int]:
+    """Bounding x-range of the label's rendered glyphs, in label coordinates."""
+    image = QtGui.QImage(label.size(), QtGui.QImage.Format_ARGB32)
+    image.fill(QtCore.Qt.transparent)
+    label.render(image)
+    xs = [
+        x
+        for y in range(image.height())
+        for x in range(image.width())
+        if image.pixelColor(x, y).alpha() > 24
+    ]
+    assert xs, f"the state label painted nothing for {label.text()!r}"
+    return min(xs), max(xs)
+
+
+def _painted_status_centre(overlay: OverlayUI) -> float:
+    """Centre x of the painted status text, in overlay coordinates."""
+    label = overlay._state_label
+    left, right = _painted_text_span(label)
+    origin = label.mapTo(overlay, QtCore.QPoint(0, 0)).x()
+    # Pixel indices [left, right] cover the continuous span [left, right + 1).
+    return origin + (left + right + 1) / 2.0
+
+
+def _overlay_centre(overlay: OverlayUI) -> float:
+    container = overlay._container
+    origin = container.mapTo(overlay, QtCore.QPoint(0, 0)).x()
+    return origin + container.width() / 2.0
+
+
+def _state_label_box(overlay: OverlayUI) -> tuple[int, int, int, int]:
+    label = overlay._state_label
+    origin = label.mapTo(overlay, QtCore.QPoint(0, 0))
+    return (origin.x(), origin.y(), label.width(), label.height())
+
+
+@pytest.mark.pixel_exact
+def test_the_status_text_is_centred_on_the_overlay_in_every_state():
+    """The status word sits on the overlay's centre line, and never moves.
+
+    The header is [Record][Pinned] <state label> [Clear][Copy] and the label
+    is its only stretching item, so Qt hands it the span the four fixed-width
+    buttons leave over and ``AlignCenter`` centres the text in *that span*.
+    While the two button groups differed -- 78 + 6 + 74 = 158 px on the left
+    against 64 + 6 + 64 = 134 px on the right -- that span's midpoint was
+    12 px right of the header's, so every status word rendered 12 px off
+    centre (7 px before the 78 px Record button replaced the 68 px History
+    button as the first item).
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_language_options(("auto", "de", "en"), "de")
+    overlay.show()
+    app.processEvents()
+    record = overlay._record_button
+    hover = QtGui.QEnterEvent(
+        QtCore.QPointF(record.rect().center()),
+        QtCore.QPointF(record.rect().center()),
+        QtCore.QPointF(record.mapToGlobal(record.rect().center())),
+    )
+
+    cases = [
+        ("Idle", lambda: overlay.set_state("Idle", OVERLAY_INITIAL_DETAIL)),
+        ("Listening", lambda: overlay.set_state("Listening", "Speak now.")),
+        ("Processing", lambda: overlay.set_state("Processing", "Transcribing...")),
+        ("Done, short", lambda: overlay.set_state("Done", "short result")),
+        ("Done, long", lambda: overlay.set_state("Done", "transcribed word " * 60)),
+        ("Error, retry", lambda: overlay.set_state("Error", "Transcription failed.")),
+        (
+            "Error, insert",
+            lambda: overlay.set_state(
+                "Error",
+                "Insertion failed.",
+                error_action=OVERLAY_ERROR_ACTION_INSERT,
+                copy_text="the transcript",
+            ),
+        ),
+        (
+            "Error, no action",
+            lambda: overlay.set_state(
+                "Error",
+                "Nothing to retry.",
+                error_action=OVERLAY_ERROR_ACTION_NONE,
+            ),
+        ),
+        ("Copy shows feedback", lambda: overlay._set_copy_button_feedback(True)),
+        ("Copy feedback cleared", overlay._reset_copy_button_feedback),
+        ("Record hovered", lambda: QtWidgets.QApplication.sendEvent(record, hover)),
+        ("Record pressed", lambda: record.setDown(True)),
+        ("Record released", lambda: record.setDown(False)),
+        (
+            "Queue shown",
+            lambda: overlay.set_transcription_queue(
+                [(index, f"recording-{index}.wav") for index in range(3)]
+            ),
+        ),
+        ("Queue cleared", lambda: overlay.set_transcription_queue([])),
+        (
+            "Language fixed to Auto",
+            lambda: overlay.set_language_options(("auto",), "auto"),
+        ),
+        ("Floating", lambda: overlay.set_always_on_top(False)),
+        ("Pinned", lambda: overlay.set_always_on_top(True)),
+    ]
+
+    boxes: dict[str, tuple[int, int, int, int]] = {}
+    try:
+        for name, apply_case in cases:
+            apply_case()
+            app.processEvents()
+            boxes[name] = _state_label_box(overlay)
+            painted_centre = _painted_status_centre(overlay)
+            overlay_centre = _overlay_centre(overlay)
+            box = boxes[name]
+            label_centre = box[0] + box[2] / 2.0
+
+            # AlignCenter is assumed elsewhere; assert it instead.
+            assert abs(painted_centre - label_centre) <= 1.0, (
+                f"{name}: AlignCenter should paint the text centre on the "
+                f"label's own centre {label_centre}, measured {painted_centre}"
+            )
+            assert abs(painted_centre - overlay_centre) <= 1.0, (
+                f"{name}: the status text centre is {painted_centre}, which is "
+                f"{painted_centre - overlay_centre:+.1f} px off the overlay's "
+                f"centre line at {overlay_centre}"
+            )
+
+        # Nothing may jump: the label keeps one rectangle across every state,
+        # button swap, hover, press, queue change and pin mode above.
+        assert len(set(boxes.values())) == 1, (
+            "the status label moved between states: "
+            + ", ".join(f"{name}={box}" for name, box in boxes.items())
+        )
+    finally:
+        overlay.close()
+
+
+def test_the_header_button_groups_stay_equally_wide():
+    """Equal flanks are the mechanism that centres the status label.
+
+    The label is centred in the span the buttons leave over, so the two groups
+    must have identical total widths; any difference moves the status text by
+    half of it. ``_balance_header_flanks`` widens the narrower group at
+    construction time, and this pins the result so a later width or caption
+    change cannot quietly reintroduce the offset.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    header = overlay._header_widget
+    header.layout().activate()
+    spacing = header.layout().spacing()
+
+    left = (
+        overlay._record_button.width()
+        + spacing
+        + overlay._always_on_top_button.width()
+    )
+    right = overlay._clear_button.width() + spacing + overlay._copy_button.width()
+    assert left == right, (
+        f"header button groups differ: {left} px left, {right} px right, so "
+        f"the status text sits {(left - right) / 2:+.1f} px off centre"
+    )
+
+    label = overlay._state_label
+    label_left = label.mapTo(header, QtCore.QPoint(0, 0)).x()
+    label_right = label_left + label.width()
+    assert label_left + label_right == header.width(), (
+        f"the label span [{label_left}, {label_right}] is not symmetric "
+        f"within the {header.width()} px header"
+    )
+    overlay.close()

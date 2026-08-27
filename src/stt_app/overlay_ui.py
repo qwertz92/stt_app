@@ -33,6 +33,19 @@ RECORD_BUTTON_STOP_TEXT = "Stop"
 # and 2 px of rounding headroom.
 _LANGUAGE_BUTTON_CHROME_PX = 38
 
+# Header geometry. The header row is [Record][Pinned] <state label>
+# [Clear][Copy], and the label is its only stretching item: Qt hands the label
+# exactly the span the four fixed-width buttons leave over, so the centre of
+# the status text is the centre of that span, not of the header. The two spans
+# are made equal in `OverlayUI._balance_header_flanks`; these are the widths
+# each button needs for its own captions before that balancing runs.
+_HEADER_SPACING = 6
+_RECORD_BUTTON_WIDTH = 78
+_PIN_BUTTON_WIDTH = 74
+# Copy swaps its caption to "Copied" and must not reflow, so both text-action
+# buttons are sized for the wider of the two captions.
+_TEXT_ACTION_BUTTON_WIDTH = 64
+
 
 class _OverlayLanguageButton(QtWidgets.QPushButton):
     _ARROW_AREA_WIDTH = 22
@@ -220,7 +233,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._record_button.setObjectName("overlayRecordButton")
         self._record_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._record_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._record_button.setFixedWidth(78)
+        self._record_button.setFixedWidth(_RECORD_BUTTON_WIDTH)
         self._record_button.setFixedHeight(24)
         self._record_button.clicked.connect(self.record_toggle_requested.emit)
 
@@ -235,14 +248,14 @@ class OverlayUI(QtWidgets.QWidget):
         self._always_on_top_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._always_on_top_button.setFocusPolicy(QtCore.Qt.NoFocus)
         self._always_on_top_button.setCheckable(True)
-        self._always_on_top_button.setFixedWidth(74)
+        self._always_on_top_button.setFixedWidth(_PIN_BUTTON_WIDTH)
         self._always_on_top_button.setFixedHeight(24)
         self._always_on_top_button.clicked.connect(self._on_always_on_top_clicked)
 
         self._copy_button = QtWidgets.QPushButton("Copy")
         self._copy_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._copy_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._copy_button.setFixedWidth(64)
+        self._copy_button.setFixedWidth(_TEXT_ACTION_BUTTON_WIDTH)
         self._copy_button.setFixedHeight(24)
         self._copy_button.clicked.connect(self.copy_detail_text)
 
@@ -257,7 +270,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._clear_button = QtWidgets.QPushButton("Clear")
         self._clear_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._clear_button.setFixedWidth(64)
+        self._clear_button.setFixedWidth(_TEXT_ACTION_BUTTON_WIDTH)
         self._clear_button.setFixedHeight(24)
         self._clear_button.clicked.connect(self.clear_detail_text)
 
@@ -367,7 +380,15 @@ class OverlayUI(QtWidgets.QWidget):
         self._header_widget = QtWidgets.QWidget()
         header = QtWidgets.QHBoxLayout(self._header_widget)
         header.setContentsMargins(0, 0, 0, 0)
-        header.setSpacing(6)
+        header.setSpacing(_HEADER_SPACING)
+        # Equalise the two button groups before they are laid out, so the
+        # stretching state label between them is centred on the header — and
+        # therefore on the overlay, whose horizontal margins are symmetric.
+        self._balance_header_flanks(
+            _HEADER_SPACING,
+            (self._record_button, self._always_on_top_button),
+            (self._clear_button, self._copy_button),
+        )
         header.addWidget(self._record_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
@@ -426,6 +447,51 @@ class OverlayUI(QtWidgets.QWidget):
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
         self._sync_always_on_top_button()
+
+    @staticmethod
+    def _balance_header_flanks(
+        spacing: int,
+        left: tuple[QtWidgets.QAbstractButton, ...],
+        right: tuple[QtWidgets.QAbstractButton, ...],
+    ) -> None:
+        """Give the header's two button groups identical total widths.
+
+        The state label is the header's only stretching item, so Qt gives it
+        the span the fixed-width buttons leave over and ``AlignCenter`` puts
+        the text in the middle of *that span*. The span's midpoint is the
+        header's midpoint only while both groups are equally wide; otherwise
+        the status text sits half the difference off centre. Measured on the
+        unbalanced header: 78 + 6 + 74 = 158 px on the left against
+        64 + 6 + 64 = 134 px on the right, so "Idle", "Listening",
+        "Processing", "Done" and "Error" all rendered 12 px right of the
+        overlay's centre line — 7 px until the 78 px Record button replaced
+        the 68 px History button as the first item.
+
+        Widening the narrower group's buttons removes the difference where it
+        arises. A fixed spacer between the label and Clear would centre the
+        text just as exactly, but it leaves visibly unequal gaps on either
+        side of the text, and it is a compensating constant that has to be
+        re-derived by hand whenever a button width changes. Deriving the
+        widths here keeps the header balanced on its own.
+        """
+
+        def group_width(buttons: tuple[QtWidgets.QAbstractButton, ...]) -> int:
+            # ``minimumWidth`` is the width ``setFixedWidth`` pinned, which is
+            # the constraint the layout will honour; ``width()`` is only the
+            # widget's current geometry.
+            return sum(button.minimumWidth() for button in buttons) + spacing * (
+                len(buttons) - 1
+            )
+
+        target = max(group_width(left), group_width(right))
+        for group in (left, right):
+            missing = target - group_width(group)
+            if missing <= 0:
+                continue
+            share, remainder = divmod(missing, len(group))
+            for index, button in enumerate(group):
+                extra = share + (1 if index < remainder else 0)
+                button.setFixedWidth(button.minimumWidth() + extra)
 
     @property
     def always_on_top(self) -> bool:
