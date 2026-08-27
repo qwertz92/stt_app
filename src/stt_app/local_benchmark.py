@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import logging
 import math
 import statistics
 import time
@@ -24,6 +25,9 @@ from .csv_safety import spreadsheet_safe_mapping
 
 class BenchmarkCancelled(RuntimeError):
     """Raised when a benchmark run is canceled between measurable steps."""
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _raise_if_canceled(cancel_check: Callable[[], bool] | None) -> None:
@@ -348,10 +352,13 @@ def _run_onnx_case(
     # inference below is one blocking call. In the app a cancel kills the whole
     # worker process, but `run_benchmark_cases` is also called in-process by
     # the CLI, where nothing else could stop it.
+    #
+    # Installed inside the `try`, so a setter that raises still reaches the
+    # `close()` below instead of leaking a constructed runtime.
     set_cancel = getattr(transcriber, "set_cancel_check", None)
-    if callable(set_cancel) and cancel_check is not None:
-        set_cancel(cancel_check)
     try:
+        if callable(set_cancel) and cancel_check is not None:
+            set_cancel(cancel_check)
         transcriber.preload_model()
         load_seconds = time.perf_counter() - model_start
         _raise_if_canceled(cancel_check)
@@ -415,7 +422,14 @@ def _run_onnx_case(
             )
     finally:
         if callable(set_cancel) and cancel_check is not None:
-            set_cancel(None)
+            try:
+                set_cancel(None)
+            except Exception:
+                # Never let the cleanup call swallow `close()`: the runtime is
+                # the expensive thing here, and an unclosed one keeps a model
+                # -- or, for the Node runtime, a child process -- alive for
+                # the rest of the benchmark.
+                _LOGGER.exception("Failed to clear the benchmark cancel hook")
         transcriber.close()
 
     return BenchmarkCase(

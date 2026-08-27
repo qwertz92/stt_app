@@ -724,3 +724,52 @@ def test_the_case_hands_its_cancel_check_to_the_benchmark_run(tmp_path):
         assert check() is True, "the cancel check is not wired to the Ctrl+C flag"
     finally:
         module._cancel_requested.clear()
+
+
+def test_a_failing_cancel_hook_still_closes_the_constructed_runtime(
+    monkeypatch, tmp_path
+):
+    """The install used to sit outside the `try` that owns `close()`.
+
+    The runtime is already constructed at that point -- for a local model that
+    is a multi-gigabyte object and, for the Node runtime, a child process -- so
+    a setter that raised leaked both for the life of the benchmark.
+    """
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"")
+    closed: list[bool] = []
+
+    class FakeTranscriber:
+        runtime_device = "cpu"
+        runtime_details_text = ""
+
+        def __init__(self, **_kwargs):
+            pass
+
+        def set_cancel_check(self, _cancel_check):
+            raise RuntimeError("a subclass setter that raises")
+
+        def preload_model(self):
+            raise AssertionError("the load must not start after a failed install")
+
+        def close(self):
+            closed.append(True)
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_onnx_asr.LocalOnnxAsrTranscriber",
+        FakeTranscriber,
+    )
+
+    with pytest.raises(RuntimeError, match="setter that raises"):
+        local_benchmark._run_onnx_case(
+            audio_path=audio_path,
+            model_name="parakeet-tdt-0.6b-v3",
+            runs=1,
+            language=None,
+            warmup=False,
+            device="cpu",
+            vad_filter=False,
+            cancel_check=lambda: False,
+        )
+
+    assert closed == [True], "the constructed runtime was leaked"
