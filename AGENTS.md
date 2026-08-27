@@ -384,6 +384,56 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (`insert_again_requested` → `controller.repaste_last_transcript`) instead.
   Before this, the Error state after a failed paste offered a Retry that could
   only answer "No failed transcription to retry".
+- **The header's two button groups are kept equally wide, and that is what
+  centres the status text**: the header is
+  `[Record][Pinned] <state label> [Clear][Copy]`, and the label is its only
+  stretching item, so Qt gives it exactly the span the four fixed-width
+  buttons leave over and `AlignCenter` centres the text in *that span*. That
+  span's midpoint is the header's midpoint only while the two groups are
+  equally wide, and they were not: 78 + 6 + 74 = 158 px on the left against
+  64 + 6 + 64 = 134 px on the right put every status word 12 px right of the
+  overlay's centre line in every state — 7 px until the 78 px Record button
+  replaced the 68 px History button as the first item, so it was never
+  centred and got worse. `_balance_header_flanks` runs once in `__init__`,
+  before the header layout is filled, and widens the narrower group's buttons
+  until the totals match (Clear and Copy are 76 px each). Measured after:
+  0.0 px offset in every state, in both pin modes, with and without the
+  queue, and the overlay is still 470 px wide because the header's sizeHint
+  stays below the controls row, which is the row `_target_window_width`
+  actually takes.
+  Three properties are load-bearing:
+  - **It measures the width `setFixedWidth` pinned, not `sizeHint()`.** A
+    pinned width is often deliberately below the style's natural width, so
+    `sizeHint()` would discard the constant. For a button that is *not*
+    pinned, `minimumWidth()` is the style minimum instead — near zero — so
+    its group measures too narrow and the deficit is spread evenly over its
+    members, pinning that button under its own caption. It takes a group of
+    two to see that (with one per group the wrong number cancels out), the
+    flanks still come out equal, and asserting the precondition afterwards
+    cannot catch it either because the balancing itself calls
+    `setFixedWidth`. Hence the `sizeHint()` fallback plus a warning rather
+    than a silent wrong number, and a test that drives exactly that shape;
+    raising instead would trade a clipped caption for an overlay that does
+    not open. Any later `setFixedWidth` on Record, Pinned, Clear or Copy
+    still reinstates the offset — nothing does today (the runtime syncs
+    change only caption, icon, tooltip, enabled state and stylesheet
+    properties), and the regression test drives all of them.
+  - **Do not replace this with a spacer.** An 18 px spacer between the label
+    and Clear yields the identical label span, but the visible clear space
+    around the text then reads 28 px left against 52 px right, and the
+    constant has to be re-derived by hand on every button-width change.
+    Moving Pinned to the controls row is worse still: it puts the text 28 px
+    off centre the other way *and* widens the overlay by ~80 px, because the
+    controls row is what sets the window width.
+  - **Equal flanks centre the text only because the container's horizontal
+    margins are symmetric** (1 px frame + 14 px layout margin per side).
+    `test_the_status_text_is_centred_on_the_overlay_in_every_state`
+    therefore measures the *painted* glyph pixels against the container's
+    centre instead of asserting the button arithmetic, and separately pins
+    the label's rectangle as identical across every state, error action,
+    hover, press, copy-feedback swap, queue change and pin mode — so a
+    symmetric reflow that keeps the text centred while moving it still
+    fails.
 - **Overlay `set_state(copy_text=...)`**: when the detail area shows more than
   the transcript — an insertion error followed by the transcript preview — the
   Copy action must still yield exactly the transcript. A failed insertion shows

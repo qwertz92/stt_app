@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 import sys
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -26,6 +27,8 @@ from .config import (
 )
 
 RECORD_BUTTON_START_TEXT = "Record"
+logger = logging.getLogger(__name__)
+
 RECORD_BUTTON_STOP_TEXT = "Stop"
 
 # Language button chrome around its caption: the stylesheet reserves 8 px on
@@ -475,11 +478,34 @@ class OverlayUI(QtWidgets.QWidget):
         widths here keeps the header balanced on its own.
         """
 
+        def pinned_width(button: QtWidgets.QAbstractButton) -> int:
+            """The width this button is pinned to, or its natural width.
+
+            ``setFixedWidth`` sets minimum == maximum, so for a header button
+            ``minimumWidth()`` *is* the deliberate constant -- and the right
+            source, because a pinned width is often deliberately below the
+            style's ``sizeHint``. For a button that is *not* pinned it is the
+            style minimum instead, which is near zero: that group would
+            measure far too narrow and the balancing below would then pin the
+            button under its own caption and clip it. The flanks still come
+            out equal in that case, so neither the centring nor the no-jump
+            assertion can see it -- hence the fallback and the log rather
+            than a silent wrong number. Raising instead would trade a clipped
+            caption for an overlay that does not open at all.
+            """
+            if button.minimumWidth() == button.maximumWidth():
+                return button.minimumWidth()
+            logger.warning(
+                "Header button %r is not fixed-width (%d..%d); "
+                "sizing it from its sizeHint so the caption is not clipped.",
+                button.text(),
+                button.minimumWidth(),
+                button.maximumWidth(),
+            )
+            return max(button.minimumWidth(), button.sizeHint().width())
+
         def group_width(buttons: tuple[QtWidgets.QAbstractButton, ...]) -> int:
-            # ``minimumWidth`` is the width ``setFixedWidth`` pinned, which is
-            # the constraint the layout will honour; ``width()`` is only the
-            # widget's current geometry.
-            return sum(button.minimumWidth() for button in buttons) + spacing * (
+            return sum(pinned_width(button) for button in buttons) + spacing * (
                 len(buttons) - 1
             )
 
@@ -491,7 +517,7 @@ class OverlayUI(QtWidgets.QWidget):
             share, remainder = divmod(missing, len(group))
             for index, button in enumerate(group):
                 extra = share + (1 if index < remainder else 0)
-                button.setFixedWidth(button.minimumWidth() + extra)
+                button.setFixedWidth(pinned_width(button) + extra)
 
     @property
     def always_on_top(self) -> bool:

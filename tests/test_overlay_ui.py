@@ -1,3 +1,5 @@
+import logging
+
 import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
@@ -1283,3 +1285,44 @@ def test_the_header_button_groups_stay_equally_wide():
         f"within the {header.width()} px header"
     )
     overlay.close()
+
+
+def test_balancing_never_pins_a_header_button_under_its_own_caption(caplog):
+    """The one failure the centring assertions structurally cannot see.
+
+    `_balance_header_flanks` sizes each group from `minimumWidth()`, which is
+    the width `setFixedWidth` pinned. A button that is *not* pinned reports
+    the style minimum instead -- near zero -- so its group measures too narrow
+    and the deficit it is widened by is spread evenly over its members: the
+    unpinned one then lands far below the width its caption needs. The flanks
+    still come out equal, so the centring and no-jump assertions both still
+    pass while the caption is clipped.
+
+    It takes a group of two to see it, which is the real header's shape: with
+    one button per group the same wrong number appears in the group width and
+    in the deficit and cancels out. Asserting the precondition afterwards
+    cannot catch it either -- the balancing itself calls `setFixedWidth`, so
+    by then every button reports as pinned.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    wide_left = QtWidgets.QPushButton("Left")
+    wide_left.setFixedWidth(200)
+    pinned = QtWidgets.QPushButton("Pinned")
+    pinned.setFixedWidth(64)
+    unpinned = QtWidgets.QPushButton("A rather long caption")
+    natural = unpinned.sizeHint().width()
+    assert unpinned.minimumWidth() < natural, "the stand-in is already pinned"
+
+    with caplog.at_level(logging.WARNING, logger=overlay_ui_module.__name__):
+        OverlayUI._balance_header_flanks(6, (wide_left,), (pinned, unpinned))
+
+    assert unpinned.minimumWidth() >= natural, (
+        f"the caption needs {natural} px but the button was pinned to "
+        f"{unpinned.minimumWidth()} px"
+    )
+    # The flanks are still equal -- which is exactly why nothing else catches
+    # a clipped caption here.
+    assert wide_left.minimumWidth() == (
+        pinned.minimumWidth() + 6 + unpinned.minimumWidth()
+    )
+    assert "not fixed-width" in caplog.text
