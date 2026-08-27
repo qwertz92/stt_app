@@ -3,6 +3,150 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-27 (third and fourth adversarial rounds, and the default model)
+
+Two more review rounds over the previous rounds' commits. The pattern from
+round two held again: every round found defects in the round before it, and
+several of them were in code written to fix a defect.
+
+### Cancel was installed everywhere except where it mattered most
+
+- **The preload never installed a cancel check at all.** Overlay Cancel could
+  stop a transcription but not a preload, and a preload's *own* download --
+  the one a transcriber starts from its load path while waiting on the
+  machine-wide slot -- had nothing to poll. Fixed by installing a
+  generation-scoped check on the shared transcriber before `preload_model()`.
+- **A canceled preload was recorded as a successful one.**
+  `_record_model_preload_result(key, generation, None)` is the *success*
+  sentinel, so the cancel branch marked the half-loaded runtime as preloaded
+  and the cached key still matched the settings snapshot. Nothing would ever
+  retry it. The branch now condemns the runtime
+  (`_pending_transcriber_cache_reset`), which `_local_model_preload_needed`
+  reads before the cache-key comparison.
+- **`self._cancel_check` was passed raw into the download coordinator.** The
+  base class has `_is_cancel_requested`, which never raises, logs once and
+  latches; the raw attribute does none of that, and the coordinator re-raises
+  whatever escapes a check -- so a user check that raised would have failed
+  the download instead of the cancel. All four local engines now pass the
+  base method.
+- **`close()` between the two locks raises `TranscriptionError`, not a
+  cancel.** `transcribe_batch` takes `_model_lock` and `_inference_lock`
+  sequentially, so a `close()` in the gap unwraps the sessions the run is
+  about to use. It is not a user cancel: a settings save and a resume-driven
+  reset take that path too, and the controller renders a cancel as a bare
+  "canceled" with no text and no Retry -- which would present a runtime the
+  user did not stop as one they did, and drop the recording.
+
+### Two of my own fixes were verified wrong, and one report was wrong
+
+- **A precondition assertion that could not fail.** I asserted the four header
+  buttons are fixed-width *after* `_balance_header_flanks` ran -- which is the
+  function that calls `setFixedWidth`. The mutation check returned VACUOUS.
+  Replaced by a `sizeHint()` fallback plus a test that drives the real header
+  shape: two buttons per group, one of them unpinned.
+- **An invalid mutation, reported as a pass.** To check the retranscribe
+  note's `heightForWidth`, I mutated by *adding* `setFixedHeight` rather than
+  by reverting the flag, and reported "detected". Challenged, the honest
+  mutation came back VACUOUS: `QLabel.setText()` internally restores
+  `sizePolicy().setHeightForWidth(wordWrap)`, so the explicit call changes
+  nothing. Measured sequence on this label:
+  `setWordWrap=False setSizePolicy=False setAlignment=False setText=True`.
+  The reviewer's stated mechanism was wrong and their conclusion was right.
+- **A pixel test that measured the rectangle instead of the text.**
+  `QWidget.render()` defaults include `DrawWindowBackground`, so every pixel
+  in the label came back opaque: 1792/1792. Centred and left-aligned both
+  reported the span `(0, 111)`. Rendering with `DrawChildren` only, plus an
+  assertion that not every pixel is opaque, makes the test detect a
+  left-aligned label.
+- **A dead `layout().activate()`.** The note reservation called it before
+  reading `note.width()`, with a comment asserting that `resizeEvent` fires
+  before the layout runs. Instrumented: across five observed calls at dialog
+  widths 640/640/600/560/320 the width was identical before and after the
+  call. Removed, and the comment replaced with what was measured.
+
+### The status text was never centred, and the flanks are why
+
+The header is `[Record][Pinned] <label> [Clear][Copy]` and the label is the
+only stretching item, so Qt gives it the span the four fixed-width buttons
+leave over -- whose midpoint is the header's midpoint only while the two
+groups are equally wide. They were 158 px against 134 px, putting every status
+word 12.0 px right of centre in every state. It had been 7 px until the 78 px
+Record button replaced the 68 px History button as the first item, so it was
+never centred and got worse. Balancing the flanks at construction measures
+0.0 px offset in every state, both pin modes, with and without the queue, and
+the overlay is still 470 px wide because the controls row, not the header,
+sets the width.
+
+### Round four: what the tests were not testing
+
+- **Three "identity" tests compared a tuple instead of observing an
+  outcome.** Converting them to drive `on_settings_changed` and assert on the
+  closed runtime and the preload immediately surfaced a real distinction the
+  tuple comparison hid: a *remote* runtime change must close the cached
+  transcriber and must **not** preload, because there is no model to load.
+- **The cancel-check source scan was porous in four ways.** It only looked at
+  classes whose bases literally name `ITranscriber`, so a base imported under
+  an alias, a subclass of a subclass, an annotated assignment and
+  `setattr(self, "_cancel_check", ...)` all walked past it. Replaced by the
+  conservative inverse: flag every `self._cancel_check` assignment in the
+  package, with a named allow-list for the one helper that legitimately owns a
+  field of that name. Each of the four shapes is now a test case.
+- **`_local_model_preload_needed`'s condemned-runtime branch was unpinned.** A
+  mutation replacing its `return True` with `pass` passed the whole suite,
+  because the outcome assertion I had just added was satisfied by a different
+  branch. Pinned directly.
+
+### Two performance findings, one of which was not what it looked like
+
+- **`import stt_app.local_benchmark` pulled numpy and 352 modules** because of
+  a module-level `TranscriptionCanceled` import; moving it into the function
+  took it to 176 and 0.081 s. A round-four reviewer then showed the win does
+  not reach the worker subprocesses, which import
+  `transcriber.local_faster_whisper` themselves. The real driver was the
+  transcriber package's eager provider imports.
+- **`stt_app/transcriber/__init__.py` now resolves its names lazily**
+  (PEP 562). Importing any submodule runs the package first, so the download
+  and inventory-scan workers were each paying for the AssemblyAI, Azure,
+  Deepgram, ElevenLabs, Fun-ASR, Groq and OpenAI modules at every launch.
+  Measured on the download worker: 0.232 s / 330 modules down to 0.114 s /
+  234. What remains is `stt_app.vad` importing numpy at 61 ms, which is a real
+  dependency of a module that is actually used.
+- **The benchmark CLI could not be interrupted in its non-default mode.**
+  `--isolated-case` (the default) terminates the child process, which is why
+  the `cancel_check` parameter of `run_benchmark_cases` had no production
+  caller at all. `--no-isolated-case` ran the case on the main thread, where
+  Python cannot run a signal handler while the process sits inside
+  `InferenceSession.run` -- so Ctrl+C was invisible until the call returned,
+  4.46 s for one Canary run times `--runs`. The case now runs on a worker
+  thread with the main thread in `join()`, and the flag Ctrl+C sets is handed
+  to the model as `cancel_check`.
+
+### The default model is now Parakeet
+
+`DEFAULT_MODEL_SIZE` was faster-whisper `small`. The note in `AGENTS.md` said
+to keep it "until real target-hardware benchmarks justify switching"; those
+benchmarks exist now and say the opposite. On a Ryzen 5 7600X,
+`parakeet-tdt-0.6b-v3` measures RTF 0.046 EN / 0.043 DE against 0.151 for
+`small` -- about 3.3x faster on the same CPU -- for 670 MB against 484 MB,
+over 25 European languages with its own language detection, and it keeps every
+property that made `small` the zero-setup choice: pure Python, CPU only, no
+GPU, no Node.js.
+
+What it gives up is streaming, because onnx-asr is batch-only. `DEFAULT_MODE`
+is `batch`, so the out-of-the-box combination is consistent, and switching to
+streaming mode already tells the user to pick a streaming model.
+`DEFAULT_FASTER_WHISPER_MODEL_SIZE` (`small`) was added for the default
+*within* that runtime, which `LocalFasterWhisperTranscriber` and the benchmark
+CLI use -- without it, faster-whisper's own default argument would have become
+an onnx-asr model id. Changing the constant does not touch an existing
+install: `SettingsStore.load` falls back to the default only when the key is
+absent, which is now a test rather than an assumption.
+
+The change broke 26 tests, all of which had been relying on the default being
+a streaming-capable, language-selectable Whisper model without saying so.
+Naming a model explicitly in those tests is the fix and also documents what
+each of them actually needs.
+
 ## 2026-08-27 (second adversarial round: the fixes reviewed, and their own defects)
 
 The rule from the previous round -- a fix is a change and inherits the same
