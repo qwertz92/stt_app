@@ -5,6 +5,7 @@ import importlib.util
 import sys
 import threading
 import time
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -773,3 +774,66 @@ def test_a_failing_cancel_hook_still_closes_the_constructed_runtime(
         )
 
     assert closed == [True], "the constructed runtime was leaked"
+
+
+def test_a_long_faster_whisper_run_can_be_canceled_between_segments(
+    monkeypatch, tmp_path
+):
+    """The run loop polls between runs, which is no help inside one recording.
+
+    `segments` is a generator, so decoding happens as it is consumed -- the
+    same place the app's own faster-whisper cancel checks.
+    """
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"")
+    consumed: list[int] = []
+    stop_after = 2
+
+    class FakeSegment:
+        def __init__(self, index):
+            self.text = f"segment {index}"
+
+    class FakeInfo:
+        duration = 10.0
+        language = "de"
+        language_probability = 0.99
+
+    class FakeWhisperModel:
+        model = None
+
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def transcribe(self, *_args, **_kwargs):
+            def _segments():
+                for index in range(100):
+                    consumed.append(index)
+                    yield FakeSegment(index)
+
+            return _segments(), FakeInfo()
+
+    monkeypatch.setitem(
+        sys.modules,
+        "faster_whisper",
+        types.SimpleNamespace(WhisperModel=FakeWhisperModel),
+    )
+
+    with pytest.raises(local_benchmark.BenchmarkCancelled):
+        local_benchmark._run_case(
+            audio_path=audio_path,
+            model_name="small",
+            device="cpu",
+            compute_type="int8",
+            runs=1,
+            beam_size=1,
+            language="de",
+            vad_filter=False,
+            warmup=False,
+            threads=0,
+            cancel_check=lambda: len(consumed) > stop_after,
+        )
+
+    assert len(consumed) <= stop_after + 2, (
+        f"the whole recording was decoded before the cancel: {len(consumed)} "
+        "segments"
+    )

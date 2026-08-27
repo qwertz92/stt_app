@@ -237,6 +237,11 @@ def _run_case(
         )
         pieces: list[str] = []
         for segment in segments:
+            # `segments` is a generator: decoding happens as it is consumed,
+            # so this is the same granularity the app's own faster-whisper
+            # cancel has. Without it a single long recording is uninterruptible
+            # even though the run loop above polls between runs.
+            _raise_if_canceled(cancel_check)
             text = getattr(segment, "text", "")
             if text:
                 stripped = str(text).strip()
