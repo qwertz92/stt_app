@@ -1776,10 +1776,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   cannot run a signal handler while the process sits inside
   `InferenceSession.run` -- Ctrl+C was invisible until the call returned
   (4.46 s for one Canary run, times `--runs`). `_run_case_threaded` runs the
-  case on a worker thread and keeps the main thread in `join()`, and the flag
-  Ctrl+C sets is handed to the model as `cancel_check`, which ONNX Runtime
-  honours mid-run. The case-level `except Exception` must keep re-raising
-  `BenchmarkCancelled` first, or a cancel is recorded as a failed case.
+  case on a worker thread and keeps the main thread in a *poll* loop, and the
+  flag Ctrl+C sets is handed to the model as `cancel_check`, which ONNX
+  Runtime honours mid-run. The case-level `except Exception` must keep
+  re-raising `BenchmarkCancelled` first, or a cancel is recorded as a failed
+  case.
+  Every wait in this script polls at `_CASE_POLL_INTERVAL_S`; none of them is
+  a single long `join`, and that holds for the child process as much as for
+  the thread. Measured: `Process.join(6.0)` delivered an interrupt raised at
+  0.5 s only after 6.01 s, the poll after 0.62 s. `_join_case_worker` is the
+  one helper both use.
+  **The parent reads the child's queue while it is still running**
+  (`_collect_worker_payload`), never after waiting for it to exit. A
+  `multiprocessing.Queue.put` returns immediately and a feeder thread writes
+  the pickled payload into an OS pipe, so the child blocks at exit until the
+  parent drains it -- waiting for the exit first is a deadlock as soon as the
+  payload outgrows the pipe buffer. Measured with the real classes: 8 KB
+  completed, 16 KB hung forever, and the wait had no budget, so the CLI hung
+  with no output. The payload is `asdict(case)`, i.e. every run's full
+  transcript, so a few minutes of audio or a short clip at `--runs 3` reaches
+  it; the repository's own 24 s sample is why it went unnoticed. The shipped
+  app is not affected and must stay that way: `benchmark_process.py` uses
+  `subprocess` with a dedicated stdout reader thread that drains the pipe
+  concurrently, and `src/` uses no `multiprocessing` at all.
 - **Normal transcription stays threaded, not isolated**: batch/stream
   transcription runs in the shared `max_workers=1` executor with models
   preloaded (remote stream finalizes excepted — see the concurrent-mode

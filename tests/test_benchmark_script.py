@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import queue
 import subprocess
 import sys
 import threading
@@ -890,7 +891,7 @@ def test_a_second_ctrl_c_is_not_swallowed_by_the_wind_down_wait():
     worker.start()
     threading.Thread.join = _recording_join
     try:
-        module._join_case_thread(worker, 0.5)
+        module._join_case_worker(worker, 0.5)
     finally:
         threading.Thread.join = real_join
         stop.set()
@@ -1046,3 +1047,106 @@ def test_an_interrupt_right_after_start_still_cancels_the_worker():
         "the interrupt escaped without setting the cancel flag, so the worker "
         "was left running"
     )
+
+
+class _PipeBoundChild:
+    """A child that cannot exit until its payload has been read.
+
+    This is the coupling that makes the real deadlock, modelled exactly: a
+    `multiprocessing.Queue.put` hands the pickled payload to a feeder thread
+    that writes it into an OS pipe, and the child blocks at exit until the
+    pipe is drained. Measured with the real classes on this machine, a
+    payload of 8 KB still completed and 16 KB never did.
+    """
+
+    def __init__(self, payload: dict[str, object]) -> None:
+        self._payload: dict[str, object] | None = payload
+        self.terminated = False
+
+    # -- the process half ------------------------------------------------
+    def is_alive(self) -> bool:
+        return self._payload is not None and not self.terminated
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def join(self, timeout=None) -> None:
+        return None
+
+    # -- the queue half --------------------------------------------------
+    def get(self, timeout=None):
+        if self._payload is None:
+            raise queue.Empty
+        payload, self._payload = self._payload, None
+        return payload
+
+
+def test_a_large_case_payload_is_read_before_the_child_is_waited_for():
+    """Reading the queue only after the child exits deadlocks forever.
+
+    The payload carries every run's full transcript, so a few minutes of audio
+    -- or a shorter clip with `--runs 3` -- outgrows the OS pipe buffer, the
+    child blocks at exit until the parent drains it, and the parent will not
+    drain it until the child exits. The wait had no budget, so the CLI hung
+    with no output and no way out but Ctrl+C.
+    """
+    module = _load_benchmark_module()
+    expected = {"ok": True, "case": {"transcript": "x" * 64_000}}
+    child = _PipeBoundChild(expected)
+
+    result: dict[str, object] = {}
+
+    def collect() -> None:
+        result["payload"] = module._collect_worker_payload(child, child)
+
+    reader = threading.Thread(target=collect, daemon=True)
+    reader.start()
+    reader.join(timeout=10.0)
+
+    assert not reader.is_alive(), (
+        "the payload was never read: the parent is waiting for a child that "
+        "cannot exit until the parent reads"
+    )
+    assert result["payload"] == expected
+
+
+def test_a_child_that_exits_without_a_payload_reports_no_result():
+    """A crashed worker must fall through to the exit-code error, not hang."""
+    module = _load_benchmark_module()
+    dead = SimpleNamespace(
+        is_alive=lambda: False,
+        terminate=lambda: None,
+        join=lambda timeout=None: None,
+    )
+    empty_queue = SimpleNamespace(get=_raise_empty)
+
+    assert module._collect_worker_payload(dead, empty_queue) is None
+
+
+def _raise_empty(timeout=None):
+    raise queue.Empty
+
+
+def test_an_interrupt_while_collecting_terminates_and_reaps_the_child():
+    """Ctrl+C must stop the child, not leave it holding a model."""
+    module = _load_benchmark_module()
+    calls: list[str] = []
+
+    def _interrupting_get(timeout=None):
+        raise KeyboardInterrupt
+
+    child = SimpleNamespace(
+        is_alive=lambda: True,
+        terminate=lambda: calls.append("terminate"),
+        join=lambda timeout=None: calls.append(f"join:{timeout}"),
+    )
+
+    with pytest.raises(KeyboardInterrupt):
+        module._collect_worker_payload(child, SimpleNamespace(get=_interrupting_get))
+
+    assert calls[0] == "terminate", f"the child was not stopped first: {calls}"
+    assert len(calls) >= 2, f"the child was never reaped: {calls}"
+    assert all(
+        call.startswith("join:") and float(call.split(":")[1]) <= 0.2
+        for call in calls[1:]
+    ), f"the wind-down was a single long join, which defers a second Ctrl+C: {calls}"

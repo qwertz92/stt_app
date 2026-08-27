@@ -5,6 +5,7 @@ import json
 import math
 import multiprocessing as mp
 import os
+import queue
 import sys
 import threading
 import time
@@ -348,18 +349,25 @@ _CASE_CANCEL_JOIN_TIMEOUT_S = 10.0
 # died at 8.0 s. It is the *timeout*, not the join, that makes the interrupt
 # arrive -- it returns to bytecode, where the pending signal fires.
 _CASE_POLL_INTERVAL_S = 0.15
+# How long to wait for a child that has been told to stop, or that has already
+# delivered its result. Terminating is immediate; this only reaps the exit.
+_TERMINATED_CHILD_JOIN_TIMEOUT_S = 2.0
 
 
 def _cancel_check() -> bool:
     return _cancel_requested.is_set()
 
 
-def _join_case_thread(worker: threading.Thread, budget_seconds: float) -> None:
-    """Wait for the case thread, staying interruptible throughout.
+def _join_case_worker(
+    worker: threading.Thread | mp.process.BaseProcess, budget_seconds: float
+) -> None:
+    """Wait for the case thread or child process, interruptible throughout.
 
     A single `join(budget)` would swallow every further Ctrl+C for the whole
     budget -- the exact deferred-signal defect this module moved the case off
-    the main thread to avoid.
+    the main thread to avoid. It applies to a child process just as much as to
+    a thread: measured here, `Process.join(6.0)` delivered an interrupt raised
+    at 0.5 s only after 6.01 s, against 0.62 s for the poll below.
     """
     deadline = time.monotonic() + budget_seconds
     while worker.is_alive() and time.monotonic() < deadline:
@@ -399,7 +407,7 @@ def _run_case_threaded(params: dict[str, Any]) -> BenchmarkCase:
             worker.join(timeout=_CASE_POLL_INTERVAL_S)
     except KeyboardInterrupt:
         _cancel_requested.set()
-        _join_case_thread(worker, _CASE_CANCEL_JOIN_TIMEOUT_S)
+        _join_case_worker(worker, _CASE_CANCEL_JOIN_TIMEOUT_S)
         if worker.is_alive():
             # The thread is a daemon, so the interpreter will not unwind it:
             # `run_benchmark_cases`' `finally: transcriber.close()` never runs,
@@ -481,6 +489,39 @@ def _run_case_worker(params: dict[str, Any], output_queue) -> None:
         output_queue.put({"ok": False, "error": str(exc)})
 
 
+def _collect_worker_payload(process: Any, output_queue: Any) -> dict[str, Any] | None:
+    """Read the case worker's result while it is still running.
+
+    Never wait for the exit and read afterwards. A `multiprocessing.Queue.put`
+    returns at once and a feeder thread writes the pickled payload into an OS
+    pipe; the child then blocks at exit until that pipe is drained. Waiting for
+    the exit first therefore deadlocks as soon as the payload outgrows the pipe
+    buffer -- and the payload carries every run's full transcript, so a few
+    minutes of audio reaches it. Measured on this machine with the real
+    classes: an 8 KB payload completed, 16 KB hung forever, and the loop that
+    waited had no budget to hang up on.
+
+    On `KeyboardInterrupt` the child is terminated and reaped, and the
+    interrupt is re-raised.
+    """
+    try:
+        while True:
+            try:
+                return output_queue.get(timeout=_CASE_POLL_INTERVAL_S)
+            except queue.Empty:
+                if not process.is_alive():
+                    # The child can put and exit between that timeout and this
+                    # check; one more bounded look closes the race.
+                    try:
+                        return output_queue.get(timeout=_CASE_POLL_INTERVAL_S)
+                    except queue.Empty:
+                        return None
+    except KeyboardInterrupt:
+        process.terminate()
+        _join_case_worker(process, _TERMINATED_CHILD_JOIN_TIMEOUT_S)
+        raise
+
+
 def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
     context = mp.get_context("spawn")
     output_queue = context.Queue()
@@ -491,17 +532,14 @@ def _run_case_isolated(params: dict[str, Any]) -> BenchmarkCase:
     )
     process.start()
 
-    try:
-        while process.is_alive():
-            process.join(timeout=0.15)
-    except KeyboardInterrupt:
-        process.terminate()
-        process.join(timeout=2.0)
-        raise
+    payload = _collect_worker_payload(process, output_queue)
 
-    payload: dict[str, Any] | None = None
-    if not output_queue.empty():
-        payload = output_queue.get_nowait()
+    # It has delivered its result and should be on its way out; reap it so a
+    # long run does not accumulate children, and stop it if it is not.
+    _join_case_worker(process, _TERMINATED_CHILD_JOIN_TIMEOUT_S)
+    if process.is_alive():
+        process.terminate()
+        _join_case_worker(process, _TERMINATED_CHILD_JOIN_TIMEOUT_S)
 
     if payload and payload.get("ok"):
         raw_case = payload.get("case", {})
