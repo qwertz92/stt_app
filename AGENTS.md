@@ -1446,6 +1446,35 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   The pre-run check must sit **before the model load**, not only before the
   run: a job cancelled while it waited in the queue would otherwise still pull
   a multi-gigabyte model into memory to throw the result away.
+  Three properties of the shared machinery hold this together:
+  - **The cancel check lives on `ITranscriber`, not per engine.**
+    `transcriber/base.py` owns `set_cancel_check`, `_is_cancel_requested`
+    (which logs a raising check once and then latches) and `_raise_if_canceled`.
+    A subclass that overrides the setter must call `super()`: assigning
+    `self._cancel_check` directly skips the latch reset, and because a runtime
+    is cached for the whole app lifetime that turns "once per installed check"
+    into once per process, so the second broken check that session is silent.
+    faster-whisper had exactly that override.
+  - **`close()` unwraps under `_model_lock` *and* `_inference_lock`.** Removing
+    the wrappers while a `recognize()` is in flight switches that run back to
+    the session's own `run`, so the watchdog keeps setting `terminate` on a
+    `RunOptions` nobody passes any more and the transcription finishes in full
+    with no log line — the cancel turned off, silently. No caller reaches that
+    today (every close path waits for the runtime lease first), and the two
+    locks are acquired in the order `transcribe_batch` takes them, which it
+    holds sequentially rather than nested, so nesting them here cannot
+    deadlock against it.
+  - **A canceled *download* is a cancel too.** A transcriber that finds its
+    model missing downloads it from its own load path, and pressing Cancel
+    makes the shared slot raise `ModelDownloadCanceled`. Every local engine
+    wraps that path in `base.canceled_download_is_a_cancel()`, which remaps it
+    to `TranscriptionCanceled`; without it the user got an error dialog for the
+    thing they had just asked to stop. Two consumers had to follow:
+    `_preload_model_worker` reports it as a cancel instead of "could not be
+    loaded" (the failure branch also *persists* that result, so the next
+    dictation re-raised it rather than retrying), and `run_benchmark_cases`
+    raises `BenchmarkCancelled` instead of recording a case with an `error`,
+    which would have written a permanent error row into benchmark history.
 - **The preload says which half of its work is running**: a preload downloads
   and then loads, and only the first half has measurable progress (the bar is
   directory growth). Reporting both as a download printed a frozen
@@ -1454,7 +1483,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   multi-gigabyte fetch was running. `_preload_phase` holds
   `(generation, phase)`; it is generation-scoped so a retired worker cannot
   describe what the current preload is doing, and `_preload_phase_word` feeds
-  both the recording-start notice and the streaming-mode refusal.
+  both the recording-start notice and the streaming-mode refusal. There is a
+  third phase, `queued`: a preload waiting behind another one is doing neither,
+  and borrowing "loading" for it named the wrong wait. The phase must be
+  cleared on **both** paths that end a preload — `_on_model_preload_done` and
+  the branch of `on_settings_changed` that cancels it outright when the new
+  engine is remote — or `_current_preload_phase()` keeps answering for a
+  preload that ended, breaking its own "empty when none is running" contract.
+- **A preload must not hide a failed hotkey registration**: `show_idle_status`
+  returns early while `_preload_owns_overlay()`, because a running preload
+  rewrites the status line every 600 ms and replacing it with "Idle" only
+  produces two content swaps and two window resizes. That gate belongs
+  **below** the four hotkey-error branches, not above them: `reload_settings`
+  calls `show_idle_status` specifically to reprint a hotkey the save may have
+  changed, and gating first swallowed the one message the user has to see.
 - **A language change never reloads a runtime**: `language_mode` is
   deliberately absent from both the transcriber cache key and the preload key.
   Every engine takes the language as a per-request/per-session parameter
@@ -1482,15 +1524,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_local_model_preload_needed` starts a preload only when the shared cache
   does not already hold that exact runtime (a previously *failed* preload is
   still retried on every save, which is when the user expects a fix to be
-  picked up). Two consequences to keep intact:
-  - **The identity must list every constructor argument.** The unconditional
-    reset hid three omissions — `custom_vocabulary`, `silence_gate_enabled`
-    and `silence_gate_threshold` were absent, which was harmless only because
-    the cache was thrown away anyway. A parametrized test asserts a reload for
-    each field and a *no* reload for unrelated ones, and both halves guard
-    against a no-op parameter (a value equal to the default would make the
-    test pass without testing anything, which happened once with
+  picked up). Three consequences to keep intact:
+  - **The identity must list every constructor argument, and only those.** The
+    unconditional reset hid three omissions — `custom_vocabulary`,
+    `silence_gate_enabled` and `silence_gate_threshold` were absent, which was
+    harmless only because the cache was thrown away anyway. A parametrized test
+    asserts a reload for each field and a *no* reload for unrelated ones, and
+    both halves guard against a no-op parameter (a value equal to the default
+    would make the test pass without testing anything, which happened once with
     `keep_onnx_model_loaded`).
+  - **The identity is built per engine, and for `local` per runtime.**
+    `local` is four runtimes with four different constructor signatures, so
+    one flat list of every local field is wrong in the other direction: it made
+    Parakeet reload its 670 MB model when the user typed a custom-vocabulary
+    term that onnx-asr never receives, and a Nemotron reload for
+    `keep_onnx_model_loaded`, which only the Node runtime reads. The branches
+    in `_transcriber_identity` mirror `_create_local_transcriber` exactly and
+    must be kept in step; `_LOCAL_RUNTIME_FIELDS` in `tests/test_controller.py`
+    pins, per runtime, which settings its identity reads and which it ignores.
+    The remote half looks up `_ENGINE_MODEL_FIELDS[engine]` and
+    `_ENGINE_KEY_FLAGS[engine]` strictly rather than with `.get(..., "")`,
+    backed by a test that both maps cover every remote engine — a missing entry
+    now fails the suite instead of silently reading no key at all.
   - **API keys are not in `AppSettings`.** `has_*_key` flips only when a key is
     added or removed, so replacing a key with a different value leaves the
     settings snapshot byte-identical and the identity cannot see it. The

@@ -3,6 +3,63 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-27 (second adversarial round: the fixes reviewed, and their own defects)
+
+The rule from the previous round -- a fix is a change and inherits the same
+burden -- paid for itself: two agents reviewing only the *previous round's
+commits* found ten further defects, one of them HIGH.
+
+- **The cancel fix stopped short of the preload.** Every local engine now maps
+  a canceled model download onto `TranscriptionCanceled`, but
+  `_preload_model_worker` still caught it in its generic branch: it told the
+  user the model "could not be loaded" *and persisted that failure for the
+  key*, so the next dictation re-raised a stored error for something the user
+  had chosen to stop. `run_benchmark_cases` had the same shape one level down,
+  where the consequence is a permanent `error` row in benchmark history. Both
+  now treat it as the cancel it is.
+- **A per-engine cache key that was still too coarse.** Scoping
+  `_TranscriberIdentity` per engine fixed the "every save reloads the model"
+  defect, but `local` is four runtimes with four constructor signatures. The
+  flat local branch made Parakeet reload its 670 MB model when the user typed
+  a custom-vocabulary term onnx-asr never receives. Splitting it per runtime
+  needed a test that pins *both* directions per field, or the split would be
+  the next silent over-scope.
+- **A `.get(engine, "")` that could only fail silently.** Reading the API-key
+  flag through a defaulted lookup meant a future engine missing from
+  `_ENGINE_KEY_FLAGS` would read *no key at all* and quietly share one identity
+  with itself. Strict indexing plus a test that both engine maps cover every
+  remote engine turns that into a suite failure at the moment the map is
+  incomplete.
+- **A guard clause in the wrong order.** `show_idle_status` returns early while
+  a preload owns the overlay, which is right -- but it sat above the four
+  hotkey-registration error branches, so a running preload swallowed the one
+  message a user must see. Order matters in a chain of early returns; place a
+  cosmetic gate below the error ones.
+- **A subclass override that skipped the base setter.** faster-whisper assigned
+  `self._cancel_check` directly instead of calling `super().set_cancel_check`,
+  so it never re-armed the once-per-check failure log. Because the runtime is
+  cached for the app's lifetime, "once per installed check" silently became
+  once per process.
+- **A lock the class did not depend on -- yet.** `close()` unwrapped the cancel
+  hooks under `_model_lock` only. No caller can reach it mid-run today, but a
+  class whose correctness rests on its callers' scheduling is one refactor from
+  a silent regression, and the failure mode here is the cancel quietly doing
+  nothing. Both locks now, in the order `transcribe_batch` acquires them.
+- **A reserved height measured against the wrong worst case.** The retranscribe
+  language note reserved two dialog lines; the note can carry a retired-model
+  substitution *and* the Canary warning at once, which measures 45 px against
+  38 px reserved, so the buttons below moved by 7 px. Measured rather than
+  estimated, then pinned by a layout test.
+- **A vacuous test scanner.** The check that the Node runner's imports match
+  `package.json` matched only `from "..."`. A side-effect import, a multi-line
+  named import, a re-export and a dynamic `import()` all read as "no
+  dependency", so the check passed by finding nothing. All five forms now, with
+  the scanner itself under test.
+- **Nine of the round's ten fixes were mutation-checked** (revert the fix,
+  confirm the paired test fails, restore). The tenth -- strict engine-map
+  indexing -- has no mutation because its guard is the map-completeness test
+  rather than a behavioural assertion; recorded here rather than left implied.
+
 ## 2026-08-26 (adversarial round on the cancel, preload-phase and retirement work)
 
 A review round over the three preceding commits found nine defects worth
