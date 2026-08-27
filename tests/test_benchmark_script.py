@@ -649,7 +649,15 @@ def test_ctrl_c_during_a_case_sets_the_flag_the_model_polls():
 
     def _join_that_interrupts(self, timeout=None):
         real_join(self, timeout)
-        if entered.is_set() and not module._cancel_requested.is_set():
+        # Scoped to the case thread by name: this patch is on the class, so
+        # without the check any other thread joined while it is installed --
+        # a pytest or Qt internal -- would take a KeyboardInterrupt meant for
+        # the benchmark.
+        if (
+            self.name == "benchmark-case"
+            and entered.is_set()
+            and not module._cancel_requested.is_set()
+        ):
             raise KeyboardInterrupt
 
     threading.Thread.join = _join_that_interrupts
