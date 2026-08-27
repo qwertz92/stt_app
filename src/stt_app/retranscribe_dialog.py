@@ -118,10 +118,18 @@ class RetranscribeDialog(QtWidgets.QDialog):
         self._language_note.setStyleSheet("color: #b71c1c; font-size: 11px;")
         # Reserved height so showing or hiding the note never moves the widgets
         # below it, but a *minimum* rather than a fixed one: the dialog is
-        # deliberately resizable, and at its narrowest the two-line reservation
-        # clipped the Canary warning.
+        # deliberately resizable, and at its narrowest a too-small reservation
+        # would clip the warning instead of growing.
+        #
+        # Three lines, not two: the note can carry a retired-model
+        # substitution *and* the Canary language warning at once, which
+        # measured 45 px at the default width against the 38 px that two lines
+        # of the dialog font reserve -- so the buttons below moved by 7 px when
+        # the model changed. (The multiplier is in the dialog's font while the
+        # label renders at 11 px, which is why two dialog lines were already
+        # worth about two and a half label lines.)
         self._language_note.setMinimumHeight(
-            self.fontMetrics().lineSpacing() * 2 + 6
+            self.fontMetrics().lineSpacing() * 3 + 6
         )
         self._language_note.setSizePolicy(
             QtWidgets.QSizePolicy.Preferred,

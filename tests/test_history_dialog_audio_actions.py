@@ -301,6 +301,47 @@ def test_retranscribe_dialog_says_nothing_when_the_entrys_model_is_available(
     assert dialog._language_note.text() == ""
 
 
+def test_the_retranscribe_note_never_moves_the_widgets_below_it(tmp_path):
+    """The note's reserved area must cover its longest possible text.
+
+    It can carry a retired-model substitution *and* the Canary language
+    warning at once. Two reserved lines measured 38 px against the 45 px that
+    combination needs, so changing the model moved the buttons below by 7 px.
+    Layout shift is a hard defect in this project, so the reservation is
+    pinned here rather than left to whatever the current wording happens to
+    need.
+    """
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+
+    heights = {}
+    for label, entry_model, current_model in (
+        ("empty", "large-v3-turbo", "small"),
+        ("retired", "granite-speech-4.1-2b-nar", "small"),
+        ("canary", "canary-1b-v2", "canary-1b-v2"),
+        ("retired+canary", "granite-speech-4.1-2b-nar", "canary-1b-v2"),
+    ):
+        dialog = RetranscribeDialog(
+            entry=_entry(engine="local", model=entry_model),
+            audio_path=audio,
+            base_settings=AppSettings(engine="local", model_size=current_model),
+            transcribe=lambda *args, **kwargs: (True, ""),
+        )
+        dialog.show()
+        QtWidgets.QApplication.processEvents()
+        note = dialog._language_note
+        heights[label] = note.height()
+        # Nothing may be cut off either: a reservation that hides half the
+        # warning is not better than one that moves the layout.
+        if note.text():
+            assert note.heightForWidth(note.width()) <= note.height(), label
+        dialog.close()
+
+    assert heights["retired+canary"] > 0
+    assert len(set(heights.values())) == 1, heights
+
+
 def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):
     QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(

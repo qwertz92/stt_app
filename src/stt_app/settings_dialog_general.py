@@ -985,9 +985,13 @@ class _GeneralTabMixin:
             else:
                 item.setEnabled(False)
                 if engine == "local" and model_name in LOCAL_BATCH_ONLY_MODELS:
+                    # Name the model rather than a runtime: Parakeet and
+                    # Canary are batch-only too and do not run on the
+                    # ONNX/WebGPU path this used to claim.
                     item.setToolTip(
-                        "Streaming is not supported by the selected ONNX/WebGPU "
-                        "local model. Use batch mode."
+                        f"Streaming is not supported by the local model "
+                        f"'{model_name}'. Use batch mode, or a faster-whisper "
+                        "or Nemotron local model."
                     )
                 else:
                     item.setToolTip(

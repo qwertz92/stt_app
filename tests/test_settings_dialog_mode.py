@@ -481,6 +481,35 @@ def test_local_webgpu_model_is_batch_only_and_warns_about_cpu_fallback():
     _ = app
 
 
+@pytest.mark.parametrize(
+    "model_size",
+    ["cohere-transcribe-03-2026", "parakeet-tdt-0.6b-v3", "canary-1b-v2"],
+)
+def test_the_disabled_streaming_tooltip_names_the_model(model_size):
+    """The tooltip must not claim a runtime the model does not use.
+
+    Parakeet and Canary are batch-only through the pure-Python onnx-asr
+    runtime, but the tooltip said "the selected ONNX/WebGPU local model" for
+    them, and the alternative branch would have told a local user to use
+    "local".
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(
+            AppSettings(engine="local", mode="batch", model_size=model_size)
+        ),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+
+    assert _combo_item_enabled(dialog.mode_combo, "streaming") is False
+    index = dialog.mode_combo.findData("streaming")
+    tooltip = dialog.mode_combo.model().item(index).toolTip()
+    assert model_size in tooltip
+    assert "ONNX/WebGPU" not in tooltip
+    _ = app
+
+
 def test_local_model_labels_show_onnx_precision_tags():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
