@@ -1022,9 +1022,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   **`DEFAULT_MODEL_SIZE` is `parakeet-tdt-0.6b-v3`, not a Whisper model**
   (changed 2026-08-27). The earlier note here said to keep faster-whisper
   "until real target-hardware benchmarks justify switching"; those benchmarks
-  now exist and say the opposite. Parakeet measured RTF 0.046 EN / 0.043 DE on
-  a Ryzen 5 7600X against `small`'s 0.151 -- roughly 3.3x faster on the same
-  CPU, for 670 MB against 484 MB, with 25 European languages and its own
+  now exist and say the opposite. On one 24.3 s German recording on a Ryzen 5
+  7600X, both at `device=cpu`, Parakeet measured RTF 0.042 against `small`'s
+  0.152 -- 3.6x faster -- for 670 MB against 486 MB, with the 25 European
+  languages its model card lists and its own
   language detection. It keeps everything that made `small` the default: pure
   Python, CPU only, no GPU, no Node.js. The one capability it drops is
   streaming (`onnx-asr` is batch-only), and `DEFAULT_MODE` is `batch`, so the
@@ -1081,8 +1082,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and deletion reuse the shared `_OnnxModelLayout` entries in
   `local_webgpu_asr`, whose allow-patterns fetch only the int8 tier (both repos
   also ship fp32 graphs worth 2.4 GB and 3.3 GB).
-  Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **RTF 0.046 EN /
-  0.043 DE**, Canary 1029 MB at RTF 0.134 / 0.135. The 2026-08-25 benchmark put
+  Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **RTF 0.042** on a
+  24.3 s German recording (no English run was retained; earlier text here said
+  0.046 EN / 0.043 DE and neither figure is in the benchmark history),
+  Canary 1029 MB at RTF 0.134 / 0.135. The 2026-08-25 benchmark put
   Granite Speech 4.1 2B at 0.100 on WebGPU, so Parakeet on plain CPU is about
   **2.3x** faster than the best local GPU model — a GPU path is not needed to
   make it the quickest local option. (An earlier "six times" here compared
@@ -1751,8 +1754,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the public surface (so a name cannot be dropped by editing the map alone)
   and the agreement between the `TYPE_CHECKING` imports and that map -- a name
   typed for static checkers but missing from the map is an `AttributeError`
-  no type checker can see. Do not add an eager import back: the `if
-  TYPE_CHECKING` block is what keeps editors and linters working.
+  no type checker can see. **Do not delete the `if TYPE_CHECKING` block.** It
+  keeps editors and linters working, and it is also the packaged app's only
+  static link to `factory` and the providers: PyInstaller's modulegraph scans
+  `IMPORT_NAME` opcodes without following control flow, so it walks into that
+  block and finds them, while `_LAZY_ATTRIBUTES` is strings it cannot read.
+  Verified on PyInstaller 6.22: a graph rooted at
+  `from stt_app.transcriber import create_transcriber` contains `factory`, all
+  seven providers and all four local runtimes. The typed/lazy agreement test
+  is what keeps the block from being deleted or renamed.
+  Note that the package no longer binds its submodules as attributes until
+  something resolves a lazy name, so `stt_app.transcriber.base` raises
+  `AttributeError` in a fresh interpreter. `unittest.mock` and pytest both fall
+  back to `import_module`, so every existing patch target still works; do not
+  write new code that reaches a submodule through `getattr` on the package.
 - **The benchmark CLI cancels by thread, the app cancels by killing the
   process**: `scripts/benchmark_local.py --isolated-case` (the default) and
   the Settings benchmark both terminate the child process, which is why

@@ -36,6 +36,9 @@ def _raise_failure(*_args, **_kwargs):
     raise OSError("the mirror is unreachable")
 
 
+# Each builder installs `download` as the coordinated-download call and
+# returns `(transcriber, loader)`; the loader is the method that reaches
+# that download when the model is missing.
 def _faster_whisper(monkeypatch, download):
     monkeypatch.setattr(
         "stt_app.model_download_coordinator.run_coordinated_download", download
@@ -45,7 +48,7 @@ def _faster_whisper(monkeypatch, download):
         lambda *_a, **_k: None,
     )
     transcriber = LocalFasterWhisperTranscriber(model_size="small")
-    return transcriber._coordinated_download_if_missing
+    return transcriber, transcriber._coordinated_download_if_missing
 
 
 def _onnx_asr(monkeypatch, download):
@@ -57,7 +60,7 @@ def _onnx_asr(monkeypatch, download):
         lambda *_a, **_k: None,
     )
     transcriber = LocalOnnxAsrTranscriber(model_size=CANARY_MODEL_SIZE)
-    return transcriber._resolve_model_path
+    return transcriber, transcriber._resolve_model_path
 
 
 def _nemotron(monkeypatch, download):
@@ -69,7 +72,7 @@ def _nemotron(monkeypatch, download):
         lambda *_a, **_k: None,
     )
     transcriber = LocalNemotronTranscriber(model_size=NEMOTRON_MODEL_SIZE)
-    return transcriber._ensure_snapshot
+    return transcriber, transcriber._ensure_snapshot
 
 
 def _webgpu(monkeypatch, download):
@@ -81,7 +84,7 @@ def _webgpu(monkeypatch, download):
         lambda *_a, **_k: None,
     )
     transcriber = LocalOnnxWebGpuTranscriber(model_size=LOCAL_WEBGPU_MODEL_SIZES[0])
-    return transcriber._ensure_snapshot
+    return transcriber, transcriber._ensure_snapshot
 
 
 _ENGINES = [
@@ -94,7 +97,7 @@ _ENGINES = [
 
 @pytest.mark.parametrize("make_loader", _ENGINES)
 def test_a_canceled_download_is_reported_as_a_cancel(monkeypatch, make_loader):
-    load = make_loader(monkeypatch, _raise_canceled)
+    _transcriber, load = make_loader(monkeypatch, _raise_canceled)
 
     with pytest.raises(TranscriptionCanceled):
         load()
@@ -104,7 +107,7 @@ def test_a_canceled_download_is_reported_as_a_cancel(monkeypatch, make_loader):
 def test_a_real_download_failure_is_still_an_error(monkeypatch, make_loader):
     """The other half: a broken mirror must not be silently swallowed as a
     cancel, which would leave the user with no transcript and no reason."""
-    load = make_loader(monkeypatch, _raise_failure)
+    _transcriber, load = make_loader(monkeypatch, _raise_failure)
 
     with pytest.raises((TranscriptionError, OSError)) as excinfo:
         load()
@@ -196,3 +199,37 @@ def test_the_benchmark_installs_its_cancel_check_on_the_transcriber(monkeypatch)
     # Installed for the run, then cleared: the benchmark builds a fresh
     # transcriber per case, but a leaked check would outlive its own run.
     assert len(installed) == 2 and installed[-1] is None
+
+
+@pytest.mark.parametrize("make_loader", _ENGINES)
+def test_the_download_gets_the_base_check_not_the_raw_attribute(
+    monkeypatch, make_loader
+):
+    """`_cancel_check` is the user's callable; `_is_cancel_requested` is not.
+
+    The base method never raises, logs a broken check once and then latches.
+    The coordinator re-raises whatever escapes the check it is given, so
+    handing it the raw attribute meant a user check that raised failed the
+    *download* instead of stopping it -- and did so on every poll, with no
+    log line naming the check as the cause.
+    """
+    seen: dict[str, object] = {}
+
+    def _capture(*_args, **kwargs):
+        seen.update(kwargs)
+        raise ModelDownloadCanceled("Model download canceled.")
+
+    transcriber, load = make_loader(monkeypatch, _capture)
+    transcriber.set_cancel_check(lambda: (_ for _ in ()).throw(ValueError("boom")))
+
+    with pytest.raises(TranscriptionCanceled):
+        load()
+
+    check = seen.get("cancel_check")
+    assert check is not None, "the download was started without a cancel check"
+    assert check == transcriber._is_cancel_requested, (
+        "the download was handed the raw `_cancel_check` attribute"
+    )
+    # The point of the base method: a check that raises is absorbed, not
+    # propagated into the download.
+    assert check() is False

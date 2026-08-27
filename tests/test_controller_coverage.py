@@ -3481,3 +3481,51 @@ def test_an_empty_streaming_result_keeps_the_previous_transcript():
     finally:
         controller.shutdown()
     _ = app
+
+
+def test_a_raising_cancel_hook_clear_still_releases_the_runtime(monkeypatch, caplog):
+    """The clear runs in the preload's `finally`, right before `release()`.
+
+    Unguarded, a setter that raises there skips the release and strands
+    `_transcriber_runtime_lock` for the process lifetime: every later preload
+    and audio import blocks forever, and every dictation quietly builds its
+    own isolated multi-gigabyte runtime instead.
+    """
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    released: list[bool] = []
+    calls: list[object] = []
+
+    class HostileTranscriber:
+        def set_cancel_check(self, cancel_check):
+            calls.append(cancel_check)
+            if cancel_check is None:
+                raise RuntimeError("a setter that raises on the clear")
+
+        def preload_model(self):
+            return None
+
+    class Lease:
+        transcriber = HostileTranscriber()
+
+        def release(self):
+            released.append(True)
+
+    monkeypatch.setattr(
+        controller, "_download_model_for_preload", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        controller, "_acquire_transcriber_runtime", lambda *_a, **_k: Lease()
+    )
+
+    with caplog.at_level(logging.ERROR):
+        controller._preload_model_worker(settings, generation, key)
+
+    assert calls[-1] is None, "the clear was never attempted"
+    assert released == [True], "the runtime lease was stranded"
+    assert any(
+        "cancel hook" in record.getMessage() for record in caplog.records
+    ), "the failed clear was swallowed without a log line"
+    controller.shutdown()
+    _ = app

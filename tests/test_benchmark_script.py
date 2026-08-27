@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import subprocess
 import sys
 import threading
 import time
@@ -836,4 +837,212 @@ def test_a_long_faster_whisper_run_can_be_canceled_between_segments(
     assert len(consumed) <= stop_after + 2, (
         f"the whole recording was decoded before the cancel: {len(consumed)} "
         "segments"
+    )
+
+
+def test_the_download_script_default_follows_the_app_default():
+    """A hardcoded model here would silently fetch the wrong one offline.
+
+    `scripts/download_model.py` is the documented way to pre-fetch for an
+    air-gapped install, so its default has to be the model that install will
+    actually try to use. Driven through `--help` rather than the parser
+    object, because that is the text the offline instructions point at.
+    """
+    from stt_app.config import DEFAULT_MODEL_SIZE, MODEL_REPO_MAP
+
+    root = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [sys.executable, str(root / "scripts" / "download_model.py"), "--help"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=True,
+        cwd=root,
+    )
+
+    assert f"default: {DEFAULT_MODEL_SIZE}" in result.stdout, result.stdout
+    assert DEFAULT_MODEL_SIZE in MODEL_REPO_MAP, (
+        f"the default model {DEFAULT_MODEL_SIZE!r} is not one the script can "
+        "download"
+    )
+
+
+def test_a_second_ctrl_c_is_not_swallowed_by_the_wind_down_wait():
+    """One long `join(budget)` would discard every further interrupt.
+
+    On Windows CPython's lock acquire ignores the interrupt flag, so a signal
+    is only delivered once the call returns: measured, `join(6.0)` held a
+    Ctrl+C sent at 0.5 s until 6.0 s. That is the same deferred-signal defect
+    the case was moved off the main thread to avoid, and it was reintroduced
+    in the cancel handler.
+    """
+    module = _load_benchmark_module()
+    joins: list[float | None] = []
+    real_join = threading.Thread.join
+
+    def _recording_join(self, timeout=None):
+        if self.name == "wind-down":
+            joins.append(timeout)
+        return real_join(self, timeout)
+
+    stop = threading.Event()
+    worker = threading.Thread(target=stop.wait, name="wind-down", daemon=True)
+    worker.start()
+    threading.Thread.join = _recording_join
+    try:
+        module._join_case_thread(worker, 0.5)
+    finally:
+        threading.Thread.join = real_join
+        stop.set()
+        real_join(worker, 5.0)
+
+    assert len(joins) >= 2, f"the wait was not a poll loop: {joins}"
+    assert all(
+        timeout is not None and timeout <= 0.2 for timeout in joins
+    ), f"a single long join swallows further interrupts: {joins}"
+
+
+def test_a_case_that_finished_as_the_interrupt_arrived_is_kept():
+    """It is a measured result; discarding it contradicts what main() prints.
+
+    The ordering is forced rather than raced: the patched join releases the
+    case, waits for the worker to store its result, and only then raises.
+    """
+    module = _load_benchmark_module()
+    module._cancel_requested.clear()
+    finished = local_benchmark.BenchmarkCase(
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=0.5,
+        runs=[],
+    )
+    release = threading.Event()
+
+    def _fake_run_case(**_kwargs):
+        release.wait(5.0)
+        return finished
+
+    module._run_case = _fake_run_case
+    real_join = threading.Thread.join
+    interrupted = {"done": False}
+
+    def _join_that_interrupts(self, timeout=None):
+        if self.name == "benchmark-case" and not interrupted["done"]:
+            interrupted["done"] = True
+            release.set()
+            real_join(self, 5.0)
+            raise KeyboardInterrupt
+        return real_join(self, timeout)
+
+    threading.Thread.join = _join_that_interrupts
+    try:
+        case = module._run_case_threaded({"model_name": "small"})
+    finally:
+        threading.Thread.join = real_join
+        release.set()
+        cancel_state = module._cancel_requested.is_set()
+        module._cancel_requested.clear()
+
+    assert interrupted["done"] is True
+    assert case is finished, "a measured case was thrown away with the interrupt"
+    # ...and the run still stops: the flag stays set, so the next case is
+    # canceled at its first poll.
+    assert cancel_state is True
+
+
+def test_the_isolated_worker_reports_a_cancel_as_an_interrupt():
+    """`BenchmarkCancelled` subclasses `RuntimeError`.
+
+    The generic branch would record the user's own cancel as a failed
+    benchmark case, which is written to the persistent history.
+    """
+    module = _load_benchmark_module()
+
+    def _cancel(**_kwargs):
+        raise local_benchmark.BenchmarkCancelled("Benchmark canceled.")
+
+    module._run_case = _cancel
+
+    class Queue:
+        def __init__(self):
+            self.items = []
+
+        def put(self, item):
+            self.items.append(item)
+
+    queue = Queue()
+    module._run_case_worker({"model_name": "small"}, queue)
+
+    assert queue.items == [{"ok": False, "error": "Interrupted by user."}]
+
+
+def test_a_new_run_does_not_inherit_a_previous_cancel(monkeypatch):
+    """`main()` in one interpreter twice: the flag must not survive."""
+    module = _load_benchmark_module()
+    module._cancel_requested.set()
+    monkeypatch.setattr(sys, "argv", ["benchmark_local.py", "--list-models"])
+
+    module.main()
+
+    assert module._cancel_requested.is_set() is False
+
+
+def test_the_cli_model_fallback_follows_the_faster_whisper_default():
+    """`--models` unset must measure the app's own faster-whisper default."""
+    from stt_app.config import DEFAULT_FASTER_WHISPER_MODEL_SIZE
+
+    module = _load_benchmark_module()
+    source = Path(module.__file__).read_text(encoding="utf-8")
+
+    assert "fallback=[DEFAULT_FASTER_WHISPER_MODEL_SIZE]" in source
+    assert '_parse_csv(args.models, fallback=["small"])' not in source
+    assert module._parse_csv(None, fallback=[DEFAULT_FASTER_WHISPER_MODEL_SIZE]) == [
+        DEFAULT_FASTER_WHISPER_MODEL_SIZE
+    ]
+
+
+def test_an_interrupt_right_after_start_still_cancels_the_worker():
+    """The window between `start()` and the poll loop is a few bytecodes wide.
+
+    With `start()` outside the `try`, an interrupt landing there escapes
+    without ever setting the cancel flag -- so the worker keeps loading a
+    model that nothing will stop, and the flag stays clear for the rest of
+    the process.
+    """
+    module = _load_benchmark_module()
+    module._cancel_requested.clear()
+    observed: list[bool] = []
+    running = threading.Event()
+
+    def _fake_run_case(**_kwargs):
+        running.set()
+        for _ in range(200):
+            if module._cancel_check():
+                observed.append(True)
+                raise local_benchmark.BenchmarkCancelled("Benchmark canceled.")
+            time.sleep(0.01)
+        raise AssertionError("the cancel flag never reached the case")
+
+    module._run_case = _fake_run_case
+    real_start = threading.Thread.start
+
+    def _start_then_interrupt(self):
+        real_start(self)
+        if self.name == "benchmark-case":
+            running.wait(5.0)
+            raise KeyboardInterrupt
+
+    threading.Thread.start = _start_then_interrupt
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            module._run_case_threaded({"model_name": "small"})
+    finally:
+        threading.Thread.start = real_start
+        module._cancel_requested.clear()
+
+    assert observed == [True], (
+        "the interrupt escaped without setting the cancel flag, so the worker "
+        "was left running"
     )

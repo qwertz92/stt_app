@@ -93,8 +93,10 @@ CANARY_MODEL_SIZE = "canary-1b-v2"
 
 # What a fresh install transcribes with. Parakeet, not faster-whisper `small`:
 # it is the fastest local model by a wide margin (measured on a Ryzen 5 7600X,
-# CPU only: RTF 0.046 EN / 0.043 DE), needs neither a GPU nor Node.js, detects
-# its language itself across 25 European locales, and is a 670 MB download
+# CPU only: RTF 0.042 against 0.152 for `small` on the same 24.3 s recording
+# and the same device, from this machine's own benchmark history), needs
+# neither a GPU nor Node.js, detects its language itself across the 25
+# European locales its model card lists, and is a 670 MB download
 # against `small`'s 484 MB. Someone trying the app without opening Settings
 # gets fast, accurate dictation out of the box instead of the slowest sensible
 # Whisper size.

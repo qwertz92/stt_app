@@ -20,6 +20,7 @@ from stt_app.benchmark_environment import (
     collect_benchmark_environment,
 )
 from stt_app.config import (
+    DEFAULT_FASTER_WHISPER_MODEL_SIZE,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
     LOCAL_WEBGPU_MODEL_SIZES,
@@ -340,10 +341,29 @@ _cancel_requested = threading.Event()
 # ONNX Runtime honours `terminate` within milliseconds; faster-whisper checks
 # between segments, so a long segment can take a little longer.
 _CASE_CANCEL_JOIN_TIMEOUT_S = 10.0
+# Every wait is a poll at this interval, never one long `join`. On Windows
+# CPython's lock acquire ignores the interrupt flag, so a signal is not
+# delivered until the call returns: measured here, `join(6.0)` swallowed a
+# Ctrl+C sent at 0.5 s until 6.0 s, and an untimed `join()` until the thread
+# died at 8.0 s. It is the *timeout*, not the join, that makes the interrupt
+# arrive -- it returns to bytecode, where the pending signal fires.
+_CASE_POLL_INTERVAL_S = 0.15
 
 
 def _cancel_check() -> bool:
     return _cancel_requested.is_set()
+
+
+def _join_case_thread(worker: threading.Thread, budget_seconds: float) -> None:
+    """Wait for the case thread, staying interruptible throughout.
+
+    A single `join(budget)` would swallow every further Ctrl+C for the whole
+    budget -- the exact deferred-signal defect this module moved the case off
+    the main thread to avoid.
+    """
+    deadline = time.monotonic() + budget_seconds
+    while worker.is_alive() and time.monotonic() < deadline:
+        worker.join(timeout=_CASE_POLL_INTERVAL_S)
 
 
 def _run_case_threaded(params: dict[str, Any]) -> BenchmarkCase:
@@ -353,9 +373,10 @@ def _run_case_threaded(params: dict[str, Any]) -> BenchmarkCase:
     (`InferenceSession.run`, `WhisperModel.transcribe`). Python runs a signal
     handler only when the main thread executes bytecode, so with the case on
     the main thread Ctrl+C is not seen until that call returns -- measured at
-    4.5 s for one Canary run, multiplied by `--runs`. On a worker thread the
-    main thread stays in `join()`, where the interrupt arrives at once, and the
-    flag it sets reaches the model through `cancel_check`.
+    4.46 s for one Canary run, multiplied by `--runs`. Off the main thread the
+    poll loop below returns to bytecode every `_CASE_POLL_INTERVAL_S`, which is
+    where the interrupt is raised, and the flag it sets reaches the model
+    through `cancel_check`.
 
     `--isolated-case` (the default) gets the same promptness by terminating the
     child process instead; this is the path for `--no-isolated-case`.
@@ -369,13 +390,33 @@ def _run_case_threaded(params: dict[str, Any]) -> BenchmarkCase:
             result["error"] = exc
 
     worker = threading.Thread(target=work, name="benchmark-case", daemon=True)
-    worker.start()
     try:
+        # Inside the `try`: an interrupt landing between `start()` and the loop
+        # would otherwise escape without ever setting the cancel flag, leaving
+        # the worker loading a model nothing will stop.
+        worker.start()
         while worker.is_alive():
-            worker.join(timeout=0.15)
+            worker.join(timeout=_CASE_POLL_INTERVAL_S)
     except KeyboardInterrupt:
         _cancel_requested.set()
-        worker.join(timeout=_CASE_CANCEL_JOIN_TIMEOUT_S)
+        _join_case_thread(worker, _CASE_CANCEL_JOIN_TIMEOUT_S)
+        if worker.is_alive():
+            # The thread is a daemon, so the interpreter will not unwind it:
+            # `run_benchmark_cases`' `finally: transcriber.close()` never runs,
+            # and for the Cohere/Granite runtime that `close()` is the only
+            # thing that kills its `node.exe` child.
+            print("")
+            print(
+                f"The case did not stop within {_CASE_CANCEL_JOIN_TIMEOUT_S:.0f} s. "
+                "A model process may still be running; check for a stray "
+                "node.exe if you were benchmarking Cohere or Granite."
+            )
+        case = result.get("case")
+        if case is not None:
+            # It finished in the instant the interrupt arrived. Keep it -- the
+            # cancel flag stays set, so the next case stops at its first poll
+            # and the run still ends here.
+            return case
         raise
     error = result.get("error")
     if error is not None:
@@ -432,7 +473,9 @@ def _run_case_worker(params: dict[str, Any], output_queue) -> None:
     try:
         case = _run_case(**params)
         output_queue.put({"ok": True, "case": asdict(case)})
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, BenchmarkCancelled):
+        # `BenchmarkCancelled` subclasses `RuntimeError`, so the generic branch
+        # below would record the user's own cancel as a failed benchmark case.
         output_queue.put({"ok": False, "error": "Interrupted by user."})
     except Exception as exc:
         output_queue.put({"ok": False, "error": str(exc)})
@@ -582,6 +625,10 @@ def _write_csv(
 
 def main() -> int:
     mp.freeze_support()
+    # A second `main()` in one interpreter (a test, an embedding caller) would
+    # otherwise start with the flag a previous Ctrl+C left set and cancel every
+    # case at its first poll.
+    _cancel_requested.clear()
     parser = _build_parser()
     args = parser.parse_args()
 
@@ -602,7 +649,9 @@ def main() -> int:
         parser.error("--runs must be >= 1")
         return 2
 
-    model_names = _parse_csv(args.models, fallback=["small"])
+    model_names = _parse_csv(
+        args.models, fallback=[DEFAULT_FASTER_WHISPER_MODEL_SIZE]
+    )
     compute_types = _parse_csv(args.compute_types, fallback=["int8"])
     try:
         webgpu_devices = normalize_webgpu_benchmark_devices(args.webgpu_devices)

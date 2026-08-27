@@ -97,8 +97,9 @@ also support streaming.
 | Quick testing / low resources | `tiny` | CTranslate2 | ~78 MB |
 
 The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
-measured a real-time factor of ~0.045 on a Ryzen 5 7600X — faster on the CPU
-than the GPU models are on the GPU. It transcribes 25 European languages and
+measured a real-time factor of 0.042 on a Ryzen 5 7600X, against 0.152 for
+`small` on the same recording and the same CPU. It transcribes 25 European
+languages (the list is in the model card) and
 detects the language itself. The one thing it cannot do is live streaming
 (batch only), so switch to `small` or `nemotron-3.5-asr-streaming-0.6b-int4`
 for that. For maximum accuracy with a GPU and Node.js, prefer

@@ -501,11 +501,13 @@ def run_benchmark_cases(
     case_callback: Callable[[BenchmarkCase], None] | None = None,
     cancel_check: Callable[[], bool] | None = None,
 ) -> list[BenchmarkCase]:
-    # Function-local on purpose: `stt_app.transcriber.__init__` imports all
-    # seven remote providers and, through `factory`, numpy. At module scope
-    # that reached the download worker and the inventory-scan worker too --
-    # `main.py` imports `benchmark_process` before it dispatches -- and those
-    # exist precisely to stay cheap. Measured: +0.23 s and +269 modules.
+    # Function-local. It was originally written this way because
+    # `stt_app.transcriber.__init__` imported all seven remote providers, and
+    # at module scope that reached the download and inventory-scan workers,
+    # which exist precisely to stay cheap. The package resolves its names
+    # lazily now, so the saving is much smaller -- `base` pulls only stdlib
+    # plus `config` -- and this stays function-local only to keep the module
+    # importable without touching the transcriber package at all.
     from .transcriber.base import TranscriptionCanceled
 
     path = Path(audio_path)
