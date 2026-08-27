@@ -875,9 +875,15 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     """A cancel from the download slot must not be recorded as a failure.
 
     The transcriber's own load path downloads through the single machine-wide
-    slot, and an explicit cancel (or shutdown) raises there. Reported as
-    "could not be loaded", it was also *persisted* for that preload key, so
-    the next dictation re-raised the stored failure instead of retrying.
+    slot, and the cancel check installed for the preload raises there.
+    Reported as "could not be loaded", it was also *persisted* for that
+    preload key, so the next dictation re-raised the stored failure instead of
+    retrying.
+
+    The raise has to come out of `preload_model()`, which is where the load
+    path actually runs; an earlier version of this test threw from
+    `_acquire_transcriber_runtime` instead and so never covered the branch
+    that holds a lease.
     """
     from stt_app.transcriber.base import TranscriptionCanceled
 
@@ -888,22 +894,27 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     controller.model_preload_done.connect(
         lambda gen, ok, message: done.append((gen, ok, message))
     )
+    released: list[bool] = []
+    installed: list[object] = []
 
-    class CanceledLease:
-        transcriber = None
+    class CanceledTranscriber:
+        def set_cancel_check(self, cancel_check):
+            installed.append(cancel_check)
+
+        def preload_model(self):
+            raise TranscriptionCanceled("Model download canceled.")
+
+    class Lease:
+        transcriber = CanceledTranscriber()
 
         def release(self):
-            return None
+            released.append(True)
 
     monkeypatch.setattr(
         controller, "_download_model_for_preload", lambda *_a, **_k: None
     )
     monkeypatch.setattr(
-        controller,
-        "_acquire_transcriber_runtime",
-        lambda *_a, **_k: (_ for _ in ()).throw(
-            TranscriptionCanceled("Model download canceled.")
-        ),
+        controller, "_acquire_transcriber_runtime", lambda *_a, **_k: Lease()
     )
 
     controller._preload_model_worker(settings, generation, key)
@@ -914,6 +925,66 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     # Nothing persisted, so the next save retries instead of re-raising.
     with controller._preload_result_lock:
         assert controller._preload_results[key][1] is None
+    # `None` is the success sentinel, and the cached key already matches this
+    # snapshot, so without condemning the runtime a half-loaded model would be
+    # reported as preloaded and never retried.
+    with controller._transcriber_runtime_state_lock:
+        assert controller._pending_transcriber_cache_reset is True
+    assert released == [True]
+    # Installed for the load, then cleared: the runtime is shared and cached
+    # for the app's lifetime, so a leaked check would cancel the next job.
+    assert len(installed) == 2 and installed[-1] is None
+    controller.shutdown()
+    _ = app
+
+
+def test_the_preload_download_can_be_canceled_from_the_overlay(monkeypatch):
+    """Cancel must reach the transcriber's *own* download, not just ours.
+
+    The overlay's Cancel kills the preload's download subprocess, but a model
+    that looks cached (or whose preload download failed and was swallowed as a
+    warning) is fetched from the transcriber's load path instead, which waits
+    on the machine-wide slot. Without a cancel check that wait is interruptible
+    only by process shutdown, so Cancel did nothing at all.
+    """
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    seen: list[bool] = []
+
+    class ProbingTranscriber:
+        def __init__(self):
+            self._cancel_check = None
+
+        def set_cancel_check(self, cancel_check):
+            self._cancel_check = cancel_check
+
+        def preload_model(self):
+            # Stands in for `run_coordinated_download(cancel_check=...)`.
+            assert self._cancel_check is not None, "no cancel check was installed"
+            seen.append(self._cancel_check())
+            controller._cancel_preload_generation(generation)
+            seen.append(self._cancel_check())
+
+    transcriber = ProbingTranscriber()
+
+    class Lease:
+        def release(self):
+            return None
+
+    lease = Lease()
+    lease.transcriber = transcriber
+    monkeypatch.setattr(
+        controller, "_download_model_for_preload", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        controller, "_acquire_transcriber_runtime", lambda *_a, **_k: lease
+    )
+
+    controller._preload_model_worker(settings, generation, key)
+
+    assert seen == [False, True]
+    assert transcriber._cancel_check is None
     controller.shutdown()
     _ = app
 

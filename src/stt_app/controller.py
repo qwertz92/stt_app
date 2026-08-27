@@ -66,6 +66,7 @@ from .config import (
     VAD_MIN_SPEECH_MS,
     VALID_START_BEEP_TONES,
     language_modes_for_selection,
+    nemotron_provider_order,
     supports_streaming,
 )
 from .hotkey import HotkeyManager, HotkeyRegistrationError, parse_hotkey
@@ -788,9 +789,11 @@ class DictationController(QtCore.QObject):
             # resizes before the next tick repaints the same progress.
             #
             # Below the hotkey branches on purpose: a failed registration is
-            # the one thing a preload must not hide. `reload_settings` calls
-            # this specifically to reprint a hotkey the save may have changed,
-            # and gating that above the error branches swallowed it.
+            # the one thing a preload must not hide. `on_settings_changed`
+            # calls this specifically to reprint a hotkey the save may have
+            # changed, and gating that above the error branches swallowed it.
+            # `_on_preload_progress_poll` carries the notice for the rest of
+            # the preload, because it repaints this line every 600 ms.
             return
 
         # Show what is actually registered. The stored preference is kept even
@@ -3035,6 +3038,20 @@ class DictationController(QtCore.QObject):
                 )
                 return
             transcriber = runtime_lease.transcriber
+            # A transcriber that finds its model missing downloads it from its
+            # own load path, and that download waits for the machine-wide slot
+            # with *this* check as its only interrupt. Without it Cancel could
+            # not reach the wait at all: the overlay's Cancel kills only the
+            # preload's own download subprocess, so a load-path download --
+            # which is the only one when the model looks cached, or when the
+            # preload download failed and was swallowed as a warning above --
+            # blocked until the other holder released the slot. Cleared in the
+            # `finally` for the same reason a batch job clears it: the runtime
+            # is shared and cached for the app's lifetime.
+            self._set_transcriber_cancel_check(
+                transcriber,
+                lambda: self._preload_generation_was_canceled(generation),
+            )
             # Any local runtime that can preload should: skipping one makes the
             # first dictation pay the full cold load while the overlay has
             # already announced "Model loaded", and a broken install goes
@@ -3044,10 +3061,19 @@ class DictationController(QtCore.QObject):
                 preload()
         except TranscriptionCanceled:
             # The transcriber's own download reached the cancelled download
-            # slot (an explicit cancel, or shutdown). That is not a broken
-            # model: the branch below would both show "could not be loaded"
-            # and *persist* that failure for this key, so the next dictation
-            # would re-raise it instead of retrying.
+            # slot (the check installed above, or shutdown). That is not a
+            # broken model: the branch below would both show "could not be
+            # loaded" and *persist* that failure for this key, so the next
+            # dictation would re-raise it instead of retrying.
+            #
+            # Condemn the runtime the way the failure branch does. `None` is
+            # the *success* sentinel for `_local_model_preload_needed`, and
+            # the cached key already matches this settings snapshot, so
+            # without this a half-loaded runtime would be reported as
+            # preloaded and never retried.
+            if runtime_lease is not None:
+                with self._transcriber_runtime_state_lock:
+                    self._pending_transcriber_cache_reset = True
             self._record_model_preload_result(key, generation, None)
             self.model_preload_done.emit(generation, False, "Model preload canceled.")
             return
@@ -3078,6 +3104,9 @@ class DictationController(QtCore.QObject):
             return
         finally:
             if runtime_lease is not None:
+                # Before the release, so the next owner of the shared runtime
+                # never inherits this preload's generation check.
+                self._set_transcriber_cancel_check(runtime_lease.transcriber, None)
                 runtime_lease.release()
 
         if self._preload_generation_was_canceled(generation):
@@ -3546,7 +3575,15 @@ class DictationController(QtCore.QObject):
         engine = settings.engine
         vocabulary = (
             getattr(settings, "custom_vocabulary", "")
+            # An unrecognised engine falls back to the local path in
+            # `create_transcriber`, which *does* pass the vocabulary on, so it
+            # has to read it here too. `SettingsStore.load()` coerces an
+            # unknown engine to `local`, so this is a latent inconsistency
+            # rather than a reachable one -- but the fallback below is written
+            # to survive an unknown engine, and this was the one field where
+            # it did not.
             if engine in _ENGINES_USING_CUSTOM_VOCABULARY
+            or engine not in _ENGINE_MODEL_FIELDS
             else ""
         )
         if engine == DEFAULT_ENGINE or engine not in _ENGINE_MODEL_FIELDS:
@@ -3574,7 +3611,19 @@ class DictationController(QtCore.QObject):
                 return _TranscriberIdentity(
                     **common,
                     vad_enabled=settings.vad_enabled,
-                    local_onnx_device=getattr(settings, "local_onnx_device", ""),
+                    # The *resolved* provider order, not the raw policy: the
+                    # factory passes `nemotron_provider_order(...)`, and ORT
+                    # GenAI has no WebGPU provider, so `gpu`, `dml` and
+                    # `webgpu` all map onto `("dml",)`. Keeping the raw string
+                    # made switching the picker between two of them close the
+                    # loaded 793 MB model and preload the identical runtime --
+                    # exactly the needless reload this identity exists to
+                    # prevent.
+                    local_onnx_device=",".join(
+                        nemotron_provider_order(
+                            getattr(settings, "local_onnx_device", "")
+                        )
+                    ),
                 )
             if model_size in LOCAL_WEBGPU_MODEL_SIZES:
                 return _TranscriberIdentity(

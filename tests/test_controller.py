@@ -2199,11 +2199,32 @@ _LOCAL_RUNTIME_FIELDS = [
     ("parakeet-tdt-0.6b-v3", {"keep_onnx_model_loaded": False}, False),
     ("nemotron-3.5-asr-streaming-0.6b-int4", {"vad_enabled": True}, True),
     ("nemotron-3.5-asr-streaming-0.6b-int4", {"local_onnx_device": "cpu"}, True),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"offline_mode": True}, True),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"model_dir": "D:/models"}, True),
     ("nemotron-3.5-asr-streaming-0.6b-int4", {"custom_vocabulary": "K8s"}, False),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"keep_onnx_model_loaded": False}, False),
+    (
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+        {"streaming_full_final_transcript": True},
+        False,
+    ),
+    (
+        "nemotron-3.5-asr-streaming-0.6b-int4",
+        {"silence_gate_threshold": 0.02},
+        False,
+    ),
+    ("nemotron-3.5-asr-streaming-0.6b-int4", {"silence_gate_enabled": False}, False),
     ("cohere-transcribe-03-2026", {"local_onnx_device": "cpu"}, True),
     ("cohere-transcribe-03-2026", {"keep_onnx_model_loaded": False}, True),
+    ("cohere-transcribe-03-2026", {"offline_mode": True}, True),
+    ("cohere-transcribe-03-2026", {"model_dir": "D:/models"}, True),
     ("cohere-transcribe-03-2026", {"custom_vocabulary": "Kubernetes"}, False),
     ("cohere-transcribe-03-2026", {"vad_enabled": True}, False),
+    ("cohere-transcribe-03-2026", {"streaming_full_final_transcript": True}, False),
+    ("cohere-transcribe-03-2026", {"silence_gate_threshold": 0.02}, False),
+    ("cohere-transcribe-03-2026", {"silence_gate_enabled": False}, False),
+    ("parakeet-tdt-0.6b-v3", {"streaming_full_final_transcript": True}, False),
+    ("parakeet-tdt-0.6b-v3", {"silence_gate_enabled": False}, False),
 ]
 
 
@@ -2224,6 +2245,49 @@ def test_a_local_identity_reads_only_what_its_own_runtime_takes(
     saved = replace(settings, **change)
     # Guard against a parameter that repeats the current value, which would
     # make the "no reload" half pass without testing anything.
+    assert saved != settings
+
+    controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
+        settings
+    )
+    changed = controller._transcriber_identity(saved) != (
+        controller._transcriber_identity(settings)
+    )
+
+    assert changed is reloads
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "reloads"),
+    [
+        # ORT GenAI has no WebGPU provider, so all three GPU flavours resolve
+        # to the same `("dml",)` and build a byte-identical runtime. The
+        # General tab's own note tells the user that verbatim, so switching
+        # between them is a realistic thing to do -- and it closed the loaded
+        # 793 MB model and preloaded the identical one again.
+        ("gpu", "dml", False),
+        ("gpu", "webgpu", False),
+        ("dml", "webgpu", False),
+        # These really are different provider orders.
+        ("auto", "cpu", True),
+        ("gpu", "cpu", True),
+    ],
+    ids=lambda value: value if isinstance(value, str) else str(value),
+)
+def test_nemotron_reloads_only_when_the_resolved_provider_order_changes(
+    first, second, reloads
+):
+    """The identity must hold what the constructor receives, not the picker
+    value: the factory passes `nemotron_provider_order(...)`, which collapses
+    every GPU policy onto DirectML."""
+    settings = replace(
+        _RUNTIME_BASE_SETTINGS,
+        model_size="nemotron-3.5-asr-streaming-0.6b-int4",
+        local_onnx_device=first,
+    )
+    saved = replace(settings, local_onnx_device=second)
     assert saved != settings
 
     controller, app, _preloads, _closed, _cached = _controller_with_loaded_model(
