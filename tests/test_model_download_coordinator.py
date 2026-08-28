@@ -385,3 +385,69 @@ def test_a_cancelled_cross_process_wait_clears_the_waiting_flag(
 
     assert coordinator.waiting_for_other_process() is False
     assert coordinator.active() is None
+
+
+def test_a_raise_while_publishing_the_held_lock_still_releases_it(monkeypatch, tmp_path):
+    """An OS lock that is held but not stored is stranded machine-wide.
+
+    `acquire()` one frame up gives the in-process slot back on any exception,
+    but it cannot see the `CrossProcessLock` object, and
+    `_release_cache_lock` looks it up through `self._cache_lock`. So a raise
+    between holding the lock and storing it leaves a real kernel lock held with
+    no reference: `_release_cache_lock` finds `None` and does nothing, and
+    because the lock is keyed on the cache directory and shared across
+    processes, every other writer -- the benchmark worker,
+    `scripts/download_model.py`, a second Windows user on one Model Dir --
+    blocks until this process exits.
+
+    `_acquire_cache_lock` touches `self._condition` exactly twice: once to set
+    the waiting flag and once to publish. Raising on the second entry
+    reproduces the window without depending on what is inside it.
+    """
+    from stt_app import model_download_coordinator as coordinator_module
+
+    monkeypatch.setattr(
+        coordinator_module, "_download_lock_dir", lambda: tmp_path / "locks"
+    )
+    calls: list[str] = []
+
+    class _RecordingLock:
+        def __init__(self, resource, *, lock_dir):
+            self.resource = resource
+
+        def acquire(self, *, cancel_check=None, poll_seconds=0.1):
+            calls.append("acquire")
+            return True
+
+        def release(self):
+            calls.append("release")
+
+    monkeypatch.setattr(coordinator_module, "CrossProcessLock", _RecordingLock)
+    coordinator = coordinator_module.ModelDownloadCoordinator()
+
+    real_condition = coordinator._condition
+
+    class _FailsOnPublish:
+        def __init__(self):
+            self.entries = 0
+
+        def __enter__(self):
+            self.entries += 1
+            if self.entries >= 2:
+                raise KeyboardInterrupt("interrupted while publishing the lock")
+            return real_condition.__enter__()
+
+        def __exit__(self, *exc_info):
+            return real_condition.__exit__(*exc_info)
+
+    coordinator._condition = _FailsOnPublish()
+
+    with pytest.raises(KeyboardInterrupt):
+        coordinator._acquire_cache_lock(r"C:\models", None)
+
+    coordinator._condition = real_condition
+    assert calls == ["acquire", "release"], (
+        "the cross-process lock was held with nothing holding a reference to "
+        "it, so no other process can download until this one exits"
+    )
+    assert coordinator._cache_lock is None

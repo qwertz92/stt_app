@@ -267,9 +267,21 @@ class ModelDownloadCoordinator:
             if _SHUTDOWN.is_set():
                 raise ModelDownloadCanceled("The application is shutting down.")
             raise ModelDownloadCanceled("Model download canceled.")
-        with self._condition:
-            self._cache_lock = lock
-            self._waiting_for_other_process = False
+        # Publishing the held lock is the one step that must not be skipped.
+        # `acquire()` one frame up gives the in-process slot back on any
+        # exception, but it cannot see this `lock`, so a raise between holding
+        # it and storing it strands an *OS* lock: `_release_cache_lock` reads
+        # `self._cache_lock` and would find None, and the lock is machine-wide,
+        # so every other process wanting this cache directory blocks until this
+        # one exits. `release()` is idempotent and swallows OSError, so the
+        # defensive call is free.
+        try:
+            with self._condition:
+                self._cache_lock = lock
+                self._waiting_for_other_process = False
+        except BaseException:
+            lock.release()
+            raise
 
     def _release_cache_lock(self) -> None:
         lock, self._cache_lock = self._cache_lock, None
