@@ -412,6 +412,11 @@ def test_the_retranscribe_note_does_not_move_the_layout_at_any_width():
             # 60 px reserved for a note that took 75 at the dialog's own
             # minimum width.
             "granite-speech-4.1-2b-plus-experimental-int8-preview-build-2026",
+            # Shorter than the longest label (30 chars) but far wider drawn.
+            # A character-count worst case picks the label and under-reserves
+            # by ~15 px, which is the whole magnitude this test exists to
+            # catch -- the length axis alone cannot see it.
+            "W" * 29,
         ):
             dialog = RetranscribeDialog(
                 entry=_entry(engine="local", model=entry_model),

@@ -102,10 +102,17 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
     both simpler and strictly more conservative. A plain text scan is still
     not enough -- it cannot tell which class the `self` belongs to.
 
-    Two shapes remain invisible and are accepted: `self.__dict__[...]` and
-    `vars(self)[...]`. Neither is idiomatic here, and matching a subscript
-    assignment on an arbitrary expression would start flagging unrelated
-    dictionaries.
+    Covered: plain assignment, annotated assignment, tuple/list unpacking at
+    any nesting depth, `setattr(self, ...)`, and the `__setattr__` forms --
+    `object.__setattr__(self, ...)` and `super().__setattr__(...)` -- which are
+    the idiomatic way to set a field on a frozen dataclass or a class with a
+    custom `__setattr__`, and so the likeliest of the exotic shapes to appear
+    for real.
+
+    Still invisible and accepted: `self.__dict__[...]`, `vars(self)[...]`, a
+    `for`/`with` target, an aliased `self`, and a computed attribute name.
+    None is idiomatic here, and matching a subscript assignment on an
+    arbitrary expression would start flagging unrelated dictionaries.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders: list[str] = []
@@ -118,17 +125,46 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
             and target.value.id == "self"
         )
 
+    def _names_the_field(node: ast.expr) -> bool:
+        return isinstance(node, ast.Constant) and node.value == "_cancel_check"
+
     def _is_setattr_call(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Name)
-            and node.func.id == "setattr"
-            and len(node.args) >= 2
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == "self"
-            and isinstance(node.args[1], ast.Constant)
-            and node.args[1].value == "_cancel_check"
-        )
+        """`setattr(self, ...)`, `object.__setattr__(self, ...)`, `super().__setattr__(...)`.
+
+        The `__setattr__` pair is the idiomatic way past a frozen dataclass or
+        a custom `__setattr__`, and a scan that required `node.func` to be a
+        bare `ast.Name` saw neither of them.
+        """
+        if not isinstance(node, ast.Call):
+            return False
+        if isinstance(node.func, ast.Name) and node.func.id == "setattr":
+            return (
+                len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "self"
+                and _names_the_field(node.args[1])
+            )
+        if isinstance(node.func, ast.Attribute) and node.func.attr == "__setattr__":
+            # `object.__setattr__(self, "_cancel_check", ...)` passes self
+            # explicitly; `super().__setattr__("_cancel_check", ...)` does not.
+            if (
+                len(node.args) >= 2
+                and isinstance(node.args[0], ast.Name)
+                and node.args[0].id == "self"
+                and _names_the_field(node.args[1])
+            ):
+                return True
+            return bool(node.args) and _names_the_field(node.args[0])
+        return False
+
+    def _flatten(target: ast.expr) -> list[ast.expr]:
+        """Unpacking nests: `(self._cancel_check, x), y = ...` is two levels."""
+        if isinstance(target, ast.Tuple | ast.List):
+            flat: list[ast.expr] = []
+            for element in target.elts:
+                flat.extend(_flatten(element))
+            return flat
+        return [target]
 
     def _visit(node: ast.AST, class_name: str | None) -> None:
         for child in ast.iter_child_nodes(node):
@@ -142,11 +178,9 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
                 for target in child.targets:
                     # `self._cancel_check, self._other = a, b` -- a subclass
                     # setting two fields on one line walked straight past a
-                    # scan that only looked at the target itself.
-                    if isinstance(target, ast.Tuple | ast.List):
-                        targets.extend(target.elts)
-                    else:
-                        targets.append(target)
+                    # scan that only looked at the target itself. Recursive,
+                    # because unpacking nests.
+                    targets.extend(_flatten(target))
             elif isinstance(child, ast.AnnAssign):
                 targets = [child.target]
             hit = any(_is_self_cancel_check(target) for target in targets)
@@ -395,6 +429,36 @@ class _CancelWatchdog:
 """
 
 
+_NESTED_UNPACKING = """
+from .base import ITranscriber
+
+
+class NestedUnpacking(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        (self._cancel_check, self._other), self._third = (cancel_check, 1), 2
+"""
+
+
+_OBJECT_SETATTR = """
+from .base import ITranscriber
+
+
+class Frozenish(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        object.__setattr__(self, "_cancel_check", cancel_check)
+"""
+
+
+_SUPER_SETATTR = """
+from .base import ITranscriber
+
+
+class CustomSetattr(ITranscriber):
+    def set_cancel_check(self, cancel_check):
+        super().__setattr__("_cancel_check", cancel_check)
+"""
+
+
 @pytest.mark.parametrize(
     ("label", "source", "expected"),
     [
@@ -402,6 +466,14 @@ class _CancelWatchdog:
         ("a subclass of a subclass", _INDIRECT_SUBCLASS, ["Leaf"]),
         ("an annotated assignment", _ANNOTATED_ASSIGNMENT, ["Annotated"]),
         ("setattr instead of an assignment", _SETATTR, ["ViaSetattr"]),
+        # Unpacking nests, so flattening one level was not enough.
+        ("nested tuple unpacking", _NESTED_UNPACKING, ["NestedUnpacking"]),
+        # The idiomatic way past a frozen dataclass or a custom __setattr__,
+        # and the likeliest of the exotic shapes to turn up for real. Both
+        # have an `ast.Attribute` func, which the old scan required to be an
+        # `ast.Name`.
+        ("object.__setattr__", _OBJECT_SETATTR, ["Frozenish"]),
+        ("super().__setattr__", _SUPER_SETATTR, ["CustomSetattr"]),
         # The nearest enclosing class owns it, so the report names `Inner`.
         ("a nested class", _NESTED_CLASS, ["Inner"]),
         ("the correct override", _THROUGH_THE_BASE_SETTER, []),

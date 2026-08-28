@@ -482,11 +482,18 @@ class LocalOnnxAsrTranscriber(ITranscriber, ProgressReporter):
                 )
             handle = _RunAbortHandle()
             self._abort_handle = handle
-            # The base method, like every other call site: `_poll` gives
-            # up permanently on the first raise, so the raw attribute
-            # would switch the mid-run cancel off for this transcription
-            # with no log line.
-            watchdog = _CancelWatchdog(handle, self._is_cancel_requested)
+            # The base method, like every other call site, but only when a
+            # check is actually installed. Two things depend on that:
+            # `_poll` gives up permanently on its first raise, so passing the
+            # raw `_cancel_check` attribute would switch the mid-run cancel
+            # off for this transcription; and `self._is_cancel_requested` is
+            # never None, so passing it unconditionally made `start()`'s skip
+            # unreachable and spawned a poll thread for every batch run even
+            # when nothing can ever cancel it.
+            watchdog = _CancelWatchdog(
+                handle,
+                self._is_cancel_requested if self._cancel_check is not None else None,
+            )
             watchdog.start()
             try:
                 text = model.recognize(  # type: ignore[attr-defined]

@@ -949,16 +949,18 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     with controller._transcriber_runtime_state_lock:
         assert controller._pending_transcriber_cache_reset is True
     # ...and the point of condemning it: the next save preloads again instead
-    # of treating the canceled model as ready. Two things have to be arranged
-    # for that assertion to be about the *cancel*: the executor future this
-    # helper leaves running must be finished, or the "already being prepared"
-    # branch answers first; and the cache key must match this snapshot, or the
-    # final `cached_key != identity` comparison answers True on its own and
-    # the condemned-runtime branch is never reached.
+    # of treating the canceled model as ready. One thing has to be arranged for
+    # that: the executor future this helper leaves running must be finished, or
+    # the "already being prepared" branch answers False first.
+    #
+    # Pinning `_transcriber_cache_key` was tried here and removed as dead. The
+    # claim was that the final `cached_key != identity` comparison would
+    # otherwise answer on its own, but that comparison is the *last* branch of
+    # `_local_model_preload_needed`; both the failed-result branch and the
+    # condemned-runtime branch above it return True first, so the comparison is
+    # never reached either way.
     with controller._preload_result_lock:
         controller._preload_future = None
-    with controller._transcriber_cache_lock:
-        controller._transcriber_cache_key = key
     assert controller._local_model_preload_needed(settings) is True
     assert released == [True]
     # Installed for the load, then cleared: the runtime is shared and cached

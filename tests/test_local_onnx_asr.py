@@ -569,3 +569,87 @@ def test_the_watchdog_without_a_cancel_check_starts_no_thread():
     assert watchdog._thread is None
     watchdog.stop()
     assert handle.aborted is False
+
+
+def test_a_batch_run_without_a_cancel_check_starts_no_watchdog_thread():
+    """`self._is_cancel_requested` is never None, so passing it unconditionally
+    made `_CancelWatchdog.start()`'s skip unreachable and spawned a polling
+    thread for every Parakeet and Canary transcription -- including the ones
+    nothing can ever cancel, because the controller installed no check.
+    """
+    import threading
+
+    transcriber, _fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
+    assert transcriber._cancel_check is None
+
+    seen: list[str] = []
+    real_start = threading.Thread.start
+
+    def _record(self):
+        if self.name == "stt_app_onnx_asr_cancel":
+            seen.append(self.name)
+        return real_start(self)
+
+    threading.Thread.start = _record
+    try:
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+    finally:
+        threading.Thread.start = real_start
+
+    assert seen == [], f"a cancel watchdog thread was started for nothing: {seen}"
+
+
+class _ExitPathModel:
+    """Records whether the run ended by abort or by running to completion."""
+
+    def __init__(self, transcriber):
+        self._transcriber = transcriber
+        self.aborted_midrun = False
+
+    def recognize(self, _waveform, **_kwargs):
+        for _ in range(200):
+            handle = self._transcriber._abort_handle
+            if handle is not None and handle.aborted:
+                self.aborted_midrun = True
+                raise RuntimeError("Exiting due to terminate flag")
+            time.sleep(0.01)
+        return "finished"
+
+
+def test_a_batch_run_survives_a_raising_cancel_check_and_can_still_be_canceled():
+    """The call site must hand the watchdog the *base* method.
+
+    `_poll` returns permanently on its first raise, so the raw `_cancel_check`
+    attribute switched the mid-run cancel off for the rest of that
+    transcription. Driven through `transcribe_batch`, because building the
+    watchdog by hand cannot see this wiring -- and asserting on the *exit
+    path*, because `TranscriptionCanceled` is raised by the post-run check
+    either way and so cannot tell an aborted run from one that ran to the end.
+    """
+    transcriber = LocalOnnxAsrTranscriber(PARAKEET_MODEL_SIZE)
+    model = _ExitPathModel(transcriber)
+    transcriber._model = model
+
+    calls = {"n": 0}
+    canceled = threading.Event()
+
+    # Raises on every call until the cancel arrives, not just the first: the
+    # pre-run check runs before the watchdog exists and would otherwise
+    # swallow a single raise, leaving the watchdog to poll a healthy check.
+    def _raises_until_canceled():
+        calls["n"] += 1
+        if not canceled.is_set():
+            raise RuntimeError("the check blew up")
+        return True
+
+    transcriber.set_cancel_check(_raises_until_canceled)
+    threading.Timer(0.2, canceled.set).start()
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+
+    assert model.aborted_midrun is True, (
+        "the watchdog gave up after the check's first raise, so the run was "
+        "never aborted and only the post-run check noticed the cancel -- a "
+        "real ONNX run would have kept a core busy to the end"
+    )

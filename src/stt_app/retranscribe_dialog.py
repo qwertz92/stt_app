@@ -173,9 +173,16 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # 63-character id, a labels-only worst case reserved 60 px for a note
         # that took 75 at the dialog's own minimum width, so changing the
         # model moved everything below it by 15 px.
+        #
+        # Compared in pixels, not characters: this reserves a `heightForWidth`,
+        # which depends on how wide the text draws, and the two axes disagree.
+        # A 29-character run of `W` is *shorter* than the 30-character longest
+        # label yet draws far wider, so `key=len` picked the narrower string
+        # and left the same 15 px overflow it was added to remove.
+        metrics = self._language_note.fontMetrics()
         widest_name = max(
             (_LONGEST_MODEL_NAME, local_model_short_label(self._entry_model)),
-            key=len,
+            key=metrics.horizontalAdvance,
         )
         self._worst_case_note = " ".join(
             (
