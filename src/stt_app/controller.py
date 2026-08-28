@@ -1119,6 +1119,7 @@ class DictationController(QtCore.QObject):
             self._active_batch_settings = None
             self._overlay.set_state("Error", str(exc))
             self._logger.exception("Audio capture failed to start")
+            self._repair_audio_system_if_needed(exc)
             return
         self._log_recording_start_timing("batch", beep_ms, capture_started_at, capture)
 
@@ -1446,6 +1447,7 @@ class DictationController(QtCore.QObject):
             self._reset_streaming_state()
             self._overlay.set_state("Error", str(exc))
             self._logger.exception("Audio capture failed to start")
+            self._repair_audio_system_if_needed(exc)
             return
 
         self._log_recording_start_timing(
@@ -1756,6 +1758,23 @@ class DictationController(QtCore.QObject):
         # yank the device from under an active or just-starting capture (the
         # old Qt-thread pre-check raced exactly that window).
         stream.request_restart()
+
+    def _repair_audio_system_if_needed(self, exc: AudioCaptureError) -> None:
+        """Re-enumerate when the failure was PortAudio not answering.
+
+        That state is usually self-inflicted: a refresh whose ``sd._terminate``
+        succeeded and whose ``sd._initialize`` failed leaves PortAudio down for
+        the process lifetime, and every later recording fails identically.
+        Re-enumerating initializes it again, so one failed recording becomes a
+        hiccup instead of an app that stays deaf until it is restarted.
+        """
+        if not getattr(exc, "audio_system_unavailable", False):
+            return
+        self._logger.warning(
+            "audio_system_unavailable_repair_requested mode=%s",
+            self._active_session_mode,
+        )
+        self.request_audio_device_refresh()
 
     def request_audio_device_refresh(self) -> None:
         """Re-enumerate audio devices and restart the warm stream when idle.

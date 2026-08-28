@@ -12,6 +12,7 @@ import sounddevice as sd
 
 from .audio_devices import (
     SYSTEM_DEFAULT_INPUT_DEVICE,
+    AudioSystemUnavailableError,
     InputDeviceNotFoundError,
     NoInputDeviceError,
     input_stream_extra_settings,
@@ -25,7 +26,22 @@ from .vad import EnergyVad
 
 
 class AudioCaptureError(RuntimeError):
-    pass
+    """Recording could not be started.
+
+    ``audio_system_unavailable`` marks the one cause the app can repair by
+    itself -- PortAudio not answering -- so the controller can trigger a
+    re-enumeration instead of leaving every following recording to fail the
+    same way.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        audio_system_unavailable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.audio_system_unavailable = audio_system_unavailable
 
 
 def _close_input_stream(
@@ -138,7 +154,11 @@ class WarmMicrophoneStream:
                     stream = None
                     raise
                 register_live_stream(stream)
-        except (InputDeviceNotFoundError, NoInputDeviceError) as exc:
+        except (
+            AudioSystemUnavailableError,
+            InputDeviceNotFoundError,
+            NoInputDeviceError,
+        ) as exc:
             if self._logger is not None:
                 self._logger.warning("Warm microphone stream not started: %s", exc)
         except Exception:
@@ -426,12 +446,19 @@ class AudioCapture:
                     raise
                 register_live_stream(stream)
             self._stream = stream
-        except (InputDeviceNotFoundError, NoInputDeviceError) as exc:
+        except (
+            AudioSystemUnavailableError,
+            InputDeviceNotFoundError,
+            NoInputDeviceError,
+        ) as exc:
             with self._lock:
                 if generation == self._capture_generation:
                     self._accepting_audio = False
                     self._active_callback = None
-            raise AudioCaptureError(str(exc)) from exc
+            raise AudioCaptureError(
+                str(exc),
+                audio_system_unavailable=isinstance(exc, AudioSystemUnavailableError),
+            ) from exc
         except Exception as exc:
             with self._lock:
                 if generation == self._capture_generation:

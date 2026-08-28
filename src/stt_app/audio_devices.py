@@ -50,6 +50,29 @@ class NoInputDeviceError(RuntimeError):
         )
 
 
+class AudioSystemUnavailableError(RuntimeError):
+    """PortAudio did not answer, so nothing can be said about the devices.
+
+    Distinct from ``NoInputDeviceError``, which claims Windows itself has no
+    recording device and sends the user to the Sound settings. The most likely
+    cause is this app's own re-enumeration: ``try_refresh_input_devices``
+    terminates PortAudio and returns False when the following initialize
+    fails, and from then on every query raises "PortAudio not initialized".
+    Measured on a machine with five working microphones, the old code reported
+    that as a missing driver the app could not work around -- the opposite of
+    the truth, and a dead end for the user. A fresh re-enumeration repairs it,
+    which is what the message offers and what the controller triggers.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(
+            "The Windows audio system did not respond, so the microphone "
+            "list is unavailable. This usually clears by itself: try again, "
+            "or press Refresh next to the microphone in Settings -> Audio & "
+            "Recording."
+        )
+
+
 class InputDeviceNotFoundError(RuntimeError):
     """The persisted microphone selection matches no connected device."""
 
@@ -106,19 +129,21 @@ def _input_host_api_index() -> int | None:
     return 0 if host_apis else None
 
 
-def list_input_devices() -> list[InputDeviceInfo]:
-    """Connected input devices of the preferred host API, first-name-wins.
+def query_input_devices() -> tuple[list[InputDeviceInfo], bool]:
+    """``(devices, answered)`` -- whether PortAudio answered at all.
 
-    Reads PortAudio's current (possibly stale) device list; pair with
-    ``try_refresh_input_devices`` to pick up hot-plugged hardware.
+    The two are genuinely different states and must not be merged: an empty
+    list because Windows has no microphone needs the Sound settings, while an
+    empty list because PortAudio raised needs a re-enumeration. Callers that
+    only render a list can keep using ``list_input_devices``.
     """
     host_api_index = _input_host_api_index()
     if host_api_index is None:
-        return []
+        return [], False
     try:
         devices = sd.query_devices()
     except Exception:
-        return []
+        return [], False
     seen: set[str] = set()
     result: list[InputDeviceInfo] = []
     for index, device in enumerate(devices):
@@ -134,7 +159,16 @@ def list_input_devices() -> list[InputDeviceInfo]:
             continue
         seen.add(name)
         result.append(InputDeviceInfo(name=name, index=index))
-    return result
+    return result, True
+
+
+def list_input_devices() -> list[InputDeviceInfo]:
+    """Connected input devices of the preferred host API, first-name-wins.
+
+    Reads PortAudio's current (possibly stale) device list; pair with
+    ``try_refresh_input_devices`` to pick up hot-plugged hardware.
+    """
+    return query_input_devices()[0]
 
 
 def input_stream_extra_settings(device_index: int | None):
@@ -177,7 +211,9 @@ def resolve_input_device(device_name: str) -> int | None:
     happen freshly at each stream open, never be cached.
     """
     name = str(device_name or "").strip()
-    available = list_input_devices()
+    available, answered = query_input_devices()
+    if not answered:
+        raise AudioSystemUnavailableError()
     if not available:
         # Without this the default path fails deep inside PortAudio with
         # "Error querying device -1", which says nothing about the real cause.

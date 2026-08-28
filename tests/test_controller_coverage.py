@@ -4984,3 +4984,74 @@ def test_a_resume_teardown_evicts_the_runtime_even_when_its_close_dies():
             controller._transcriber_runtime_lock.release()
     controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize("mode", ["batch", "streaming"])
+@pytest.mark.parametrize(
+    ("label", "repairable", "expected_refreshes"),
+    [
+        ("PortAudio is not answering", True, 1),
+        ("the microphone is in use by another program", False, 0),
+    ],
+)
+def test_a_capture_failure_re_enumerates_only_when_that_can_repair_it(
+    monkeypatch, mode, label, repairable, expected_refreshes
+):
+    """A silent PortAudio is a state this app can undo; a busy mic is not.
+
+    `try_refresh_input_devices` terminates PortAudio and returns False when
+    the following initialize fails, leaving it down for the process lifetime
+    -- after which *every* recording fails the same way and the microphone
+    picker is empty. Re-enumerating initializes it again, so the repair turns
+    a permanently deaf app into one failed recording. Requesting it for an
+    unrelated failure would be the opposite mistake: tearing PortAudio down
+    and back up because another program holds the microphone.
+
+    Both capture-failure arms are driven, because the two are separate code
+    and a guard added to one of them has already been missed before.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        model_size="small",
+        mode=mode,
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+
+    class _RefusingCapture(FakeCapture):
+        def start(self):
+            raise AudioCaptureError(
+                label, audio_system_unavailable=repairable
+            )
+
+    monkeypatch.setattr(
+        controller, "_build_audio_capture", lambda **_kwargs: _RefusingCapture()
+    )
+    refreshes: list[int] = []
+    monkeypatch.setattr(
+        controller,
+        "request_audio_device_refresh",
+        lambda: refreshes.append(1),
+    )
+
+    controller.toggle_recording()
+    app.processEvents()
+
+    assert overlay.states and overlay.states[-1][0] == "Error"
+    assert overlay.states[-1][1] == label, (
+        "the wording the user sees must be the one the capture raised"
+    )
+    assert len(refreshes) == expected_refreshes, (
+        f"{mode}: {len(refreshes)} re-enumerations for {label!r}"
+    )
+    controller.shutdown()
+    _ = app

@@ -4,6 +4,7 @@ import pytest
 
 from stt_app import audio_devices
 from stt_app.audio_devices import (
+    AudioSystemUnavailableError,
     InputDeviceInfo,
     InputDeviceNotFoundError,
     list_input_devices,
@@ -130,7 +131,9 @@ def test_resolve_without_any_input_device_names_the_real_cause(monkeypatch):
     The default path used to fail deep inside PortAudio with "Error querying
     device -1", which told the user nothing.
     """
-    monkeypatch.setattr(audio_devices, "list_input_devices", list)
+    monkeypatch.setattr(
+        audio_devices, "query_input_devices", lambda: ([], True)
+    )
 
     with pytest.raises(audio_devices.NoInputDeviceError) as excinfo:
         resolve_input_device("")
@@ -200,3 +203,66 @@ def test_unregister_unknown_stream_is_a_noop():
     unregister_live_stream(object())
 
     assert live_stream_count() == 0
+
+
+@pytest.mark.parametrize("silent_call", ["query_hostapis", "query_devices"])
+def test_a_silent_portaudio_is_not_reported_as_a_missing_driver(
+    monkeypatch, silent_call
+):
+    """An empty list has two causes and they need opposite advice.
+
+    `try_refresh_input_devices` terminates PortAudio and returns False when
+    the following initialize fails, and from then on every query raises
+    "PortAudio not initialized". Measured on this machine, with five working
+    microphones connected, the old code answered that with "Windows reports no
+    microphone at all ... the microphone is disabled or its driver is missing,
+    which the app cannot work around" -- the opposite of the truth, and it
+    sends the user to a Sound settings page that looks perfectly healthy.
+
+    Both queries are driven separately because they are separate arms: a fake
+    whose `query_hostapis` already raises never reaches `query_devices`, so it
+    cannot tell whether that second arm reports the failure at all.
+    """
+    fake = _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[{"name": "Headset", "hostapi": 0, "max_input_channels": 1}],
+    )
+
+    def _silent(*_args, **_kwargs):
+        raise RuntimeError("PortAudio not initialized [PaErrorCode -10000]")
+
+    monkeypatch.setattr(fake, silent_call, _silent)
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert audio_devices.query_input_devices() == ([], False), (
+        f"a raising {silent_call} was reported as a device list"
+    )
+
+    with pytest.raises(AudioSystemUnavailableError) as excinfo:
+        resolve_input_device("")
+
+    message = str(excinfo.value)
+    assert "did not respond" in message
+    assert "Refresh" in message
+    for blaming in ("no microphone at all", "driver is missing", "cannot work around"):
+        assert blaming not in message, (
+            f"the unavailable-audio message still blames the hardware: {blaming!r}"
+        )
+
+
+def test_a_query_that_answers_with_nothing_still_blames_windows(monkeypatch):
+    """The other half: PortAudio answered, and the answer was 'none'.
+
+    Without this the new arm could swallow the real no-device case and send
+    everyone to the Refresh button instead of to Windows Sound settings.
+    """
+    fake = _FakeSd(
+        hostapis=({"name": "Windows WASAPI"},),
+        devices=[{"name": "Speakers", "hostapi": 0, "max_input_channels": 0}],
+    )
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert audio_devices.query_input_devices() == ([], True)
+
+    with pytest.raises(audio_devices.NoInputDeviceError):
+        resolve_input_device("")

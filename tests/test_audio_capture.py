@@ -6,6 +6,7 @@ from io import BytesIO
 import numpy as np
 import pytest
 
+from stt_app import audio_devices
 from stt_app.audio_capture import (
     AudioCapture,
     AudioCaptureError,
@@ -463,3 +464,43 @@ def test_warm_open_passes_extra_settings_for_explicit_device(monkeypatch):
     assert FakeInputStream.instances[0].kwargs["device"] == 7
     assert FakeInputStream.instances[0].kwargs["extra_settings"] is sentinel
     warm.close()
+
+
+@pytest.mark.parametrize(
+    ("label", "raised", "repairable"),
+    [
+        (
+            "PortAudio is not answering",
+            audio_devices.AudioSystemUnavailableError,
+            True,
+        ),
+        (
+            "Windows has no recording device",
+            audio_devices.NoInputDeviceError,
+            False,
+        ),
+    ],
+)
+def test_start_marks_only_the_repairable_failure_as_repairable(
+    monkeypatch, label, raised, repairable
+):
+    """The flag is what lets the controller re-enumerate instead of giving up.
+
+    Both failures reach the user as an `AudioCaptureError` carrying the same
+    text they were raised with, but only one of them describes a state this
+    app put PortAudio into and can undo.
+    """
+
+    def _resolver():
+        raise raised()
+
+    capture = AudioCapture(device_resolver=_resolver)
+
+    with pytest.raises(AudioCaptureError) as excinfo:
+        capture.start()
+
+    assert excinfo.value.audio_system_unavailable is repairable, label
+    assert str(excinfo.value) == str(raised()), (
+        "the original wording must survive the wrapping"
+    )
+    assert not capture.is_recording
