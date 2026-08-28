@@ -1402,3 +1402,11 @@ PASTE_MODIFIER_POLL_INTERVAL_S = 0.01
 # eventual paste still reads the transcript.
 PASTE_TARGET_RESPONSIVE_TIMEOUT_S = 2.0
 PASTE_TARGET_RESPONSIVE_PROBE_MS = 200
+# The probe blocks for PASTE_TARGET_RESPONSIVE_PROBE_MS only while the target
+# is merely busy. `SMTO_ABORTIFHUNG` makes it return *immediately* for a target
+# Windows already considers hung -- which is the case this wait exists for --
+# so without a sleep the loop is unthrottled. Measured on the Qt main thread:
+# 953,446 probes in 1.994 s at 100% of one core, i.e. every paste into a hung
+# target froze the whole app for the full budget. At 10 ms that is 200 probes,
+# and the busy case pays at most one extra sleep per 200 ms probe.
+PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S = 0.01

@@ -2,12 +2,14 @@ import ctypes
 
 import pytest
 
+import stt_app.text_inserter as text_inserter
 from stt_app.text_inserter import (
     INPUT,
     ClipboardContentionError,
     TextInserter,
     TextInsertionError,
     TextMayHaveBeenPastedError,
+    Win32ClipboardBackend,
     _format_sendinput_failure,
 )
 
@@ -542,3 +544,276 @@ def test_a_backend_whose_sequence_getter_raises_is_also_absorbed():
 
     assert inserter._clipboard_sequence_number() is None
     assert inserter.insert_text("hello") is True
+
+
+class _FakeSendInput:
+    """A stand-in for `user32.SendInput` that also carries the ctypes attributes.
+
+    `_send_input_batch` declares `argtypes`/`restype` on the function object
+    before calling it, which a plain bound method or lambda cannot hold.
+    """
+
+    def __init__(self, deliver):
+        self._deliver = deliver
+        self.batches = []
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, count, _inputs, _size):
+        self.batches.append(int(count))
+        return self._deliver(int(count))
+
+
+def _fake_user32(send_input):
+    class _User32:
+        def __init__(self, *_args, **_kwargs):
+            self.SendInput = send_input
+
+    return _User32
+
+
+class _ProbeCountingBackend(Win32ClipboardBackend):
+    """A real backend with only the two Win32 calls under test replaced."""
+
+    def __init__(self, *, is_window=True, answers=False):
+        super().__init__()
+        self._is_window_result = is_window
+        self._answers = answers
+        self.probes = 0
+
+    def _is_window(self, hwnd):
+        return self._is_window_result
+
+    def _send_message_timeout(self, hwnd, message, timeout_ms):
+        self.probes += 1
+        return self._answers
+
+
+def test_the_readiness_wait_sleeps_between_probes_instead_of_spinning():
+    """`SMTO_ABORTIFHUNG` returns instantly for exactly the target this waits on.
+
+    The probe timeout throttles the loop only while the target is merely busy.
+    Windows returns at once once it considers the thread hung -- which is the
+    case the wait exists for -- so the loop had no bound at all. Measured
+    against a handle that names no window, on the Qt main thread: 953,446
+    probes in 1.994 s at 100% of one core, and a streaming dictation pastes
+    every 0.35 s.
+    """
+    backend = _ProbeCountingBackend()
+
+    ready = backend.wait_for_paste_target_ready(
+        1234, timeout_s=0.2, poll_interval_s=0.05
+    )
+
+    assert ready is False, "an unresponsive target must still be reported"
+    assert backend.probes <= 10, (
+        f"the loop is still spinning: {backend.probes} probes in 0.2 s at a "
+        "50 ms poll interval"
+    )
+
+
+def test_a_responsive_target_still_answers_on_the_first_probe():
+    """The sleep must not cost anything in the case that happens every time."""
+    backend = _ProbeCountingBackend(answers=True)
+
+    assert backend.wait_for_paste_target_ready(1234) is True
+    assert backend.probes == 1
+
+
+def test_a_handle_that_names_no_window_is_not_waited_on():
+    """The probe target is the caret child control, which can be stale.
+
+    `_target_insert_window` hands over `GUITHREADINFO.hwndCaret`, and only the
+    *top-level* window is validated before the paste. An application that
+    recreated that control -- a closed editor tab -- left a handle that can
+    never answer, and the wait then spent its whole budget deciding that an
+    application which is running fine is unresponsive.
+    """
+    backend = _ProbeCountingBackend(is_window=False)
+
+    assert backend.wait_for_paste_target_ready(1234) is True
+    assert backend.probes == 0, "a dead handle was probed anyway"
+
+
+def test_a_partially_delivered_ctrl_v_is_reported_as_maybe_pasted(monkeypatch):
+    """`[Ctrl-down, V-down, V-up, Ctrl-up]`: two delivered events are a paste.
+
+    Applications paste on the key-down, so a `SendInput` that placed two of the
+    four events has already had its effect. It was reported as a plain
+    `TextInsertionError`, the class that means "safe to retry" -- so streaming
+    live insertion offered the same words up to three more times and the
+    overlay offered Insert for a fourth.
+    """
+    send_input = _FakeSendInput(lambda count: 2 if count == 4 else count)
+    monkeypatch.setattr(
+        text_inserter.ctypes, "WinDLL", _fake_user32(send_input)
+    )
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        text_inserter._send_ctrl_v_input()
+
+    assert send_input.batches == [4, 2], (
+        f"the key-up cleanup batch was not sent: {send_input.batches}"
+    )
+
+
+def test_nothing_delivered_at_all_stays_retryable(monkeypatch):
+    """The other side of the same cut: no event landed, so nothing was pasted."""
+
+    send_input = _FakeSendInput(lambda _count: 0)
+    monkeypatch.setattr(
+        text_inserter.ctypes, "WinDLL", _fake_user32(send_input)
+    )
+
+    with pytest.raises(TextInsertionError) as raised:
+        text_inserter._send_ctrl_v_input()
+
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError)
+
+
+def test_auto_mode_does_not_paste_again_after_a_partial_sendinput(monkeypatch):
+    """`auto` is the default, so this was the shipped path.
+
+    `send_paste_with_mode` caught every `SendInput` failure and fell through to
+    WM_PASTE. After a partial send that is a second paste of the same
+    transcript inside one call, with the insert then returning success.
+    """
+    backend = Win32ClipboardBackend()
+    wm_paste_calls = []
+
+    def _partial_ctrl_v():
+        raise TextMayHaveBeenPastedError("SendInput partially failed (sent 2/4).")
+
+    monkeypatch.setattr(backend, "send_ctrl_v", _partial_ctrl_v)
+    monkeypatch.setattr(
+        backend,
+        "_send_wm_paste",
+        lambda target_hwnd=None: wm_paste_calls.append(target_hwnd) or True,
+    )
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        backend.send_paste_with_mode("auto", target_hwnd=4321)
+
+    assert wm_paste_calls == [], (
+        "the transcript was pasted a second time through WM_PASTE"
+    )
+
+
+def test_auto_mode_still_falls_back_when_nothing_was_delivered(monkeypatch):
+    """The fallback is the reason `auto` exists and must survive the fix."""
+    backend = Win32ClipboardBackend()
+    wm_paste_calls = []
+
+    def _refused_ctrl_v():
+        raise TextInsertionError("SendInput failed (sent 0 events).")
+
+    monkeypatch.setattr(backend, "send_ctrl_v", _refused_ctrl_v)
+    monkeypatch.setattr(
+        backend,
+        "_send_wm_paste",
+        lambda target_hwnd=None: wm_paste_calls.append(target_hwnd) or True,
+    )
+
+    assert backend.send_paste_with_mode("auto", target_hwnd=4321) == "wm_paste"
+    assert wm_paste_calls == [4321]
+
+
+class _UnwritableClipboardBackend(GatedPasteBackend):
+    """The clipboard cannot be opened, so this app never changed it."""
+
+    def set_clipboard_text(self, text):
+        self.calls.append(f"set:{text}")
+        raise TextInsertionError("Failed to open clipboard.")
+
+
+def test_a_clipboard_this_app_never_set_is_never_restored_over():
+    """`restore_clipboard_state` empties the clipboard and returns text only.
+
+    So running it after a *failed* set destroyed whatever was on the clipboard
+    -- an image, a file selection copied in Explorer -- although the app had
+    not touched it and had pasted nothing. The documented "Unicode text only"
+    limitation is the price of a restore that was actually needed; this one
+    was gratuitous.
+    """
+    backend = _UnwritableClipboardBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextInsertionError) as raised:
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert "restore" not in backend.calls, (
+        f"a clipboard this app never set was restored over: {backend.calls}"
+    )
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError), (
+        "nothing was pasted, so this must stay retryable"
+    )
+
+
+def test_a_restore_that_fails_after_the_paste_is_never_retryable():
+    """The second of the two after-paste paths, and it was unpinned.
+
+    The text is in the document and only the clipboard cleanup failed. Reported
+    as a plain `TextInsertionError` the streaming retry pastes it again, and the
+    overlay offers Insert for a third copy.
+    """
+    backend = GatedPasteBackend()
+    backend.raise_on_restore = True
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextMayHaveBeenPastedError) as raised:
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert "clipboard restore failed" in str(raised.value)
+
+
+def test_one_delivered_event_is_a_held_ctrl_and_stays_retryable(monkeypatch):
+    """The boundary the count is chosen at.
+
+    One delivered event is Ctrl-down on its own: no V reached the target, so
+    nothing was pasted and the words must still be offered again. Two is the
+    key-down applications paste on.
+    """
+    send_input = _FakeSendInput(lambda count: 1 if count == 4 else count)
+    monkeypatch.setattr(
+        text_inserter.ctypes, "WinDLL", _fake_user32(send_input)
+    )
+
+    with pytest.raises(TextInsertionError) as raised:
+        text_inserter._send_ctrl_v_input()
+
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError), (
+        "a Ctrl-down that never became a paste was reported as maybe-pasted"
+    )
+
+
+class _MaybePastedBackend(GatedPasteBackend):
+    """The paste keystroke went out and then the send reported a partial."""
+
+    def send_paste_with_mode(self, mode, target_hwnd=None):
+        self.last_requested_mode = mode
+        self.calls.append(f"paste:{target_hwnd}")
+        raise TextMayHaveBeenPastedError("SendInput partially failed (sent 2/4).")
+
+
+def test_a_paste_that_may_have_landed_leaves_the_transcript_on_the_clipboard():
+    """Restoring would make the target's late read take the old content.
+
+    Same trade the unresponsive-target branch makes: once the keystroke is out
+    and the target has not demonstrably consumed it, putting the previous
+    clipboard back is what turns a late paste into the wrong text.
+    """
+    backend = _MaybePastedBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert "restore" not in backend.calls, (
+        f"the previous clipboard was restored under a live paste: {backend.calls}"
+    )

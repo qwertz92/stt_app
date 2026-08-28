@@ -11,6 +11,7 @@ from .config import (
     CLIPBOARD_SETTLE_S,
     PASTE_MODIFIER_POLL_INTERVAL_S,
     PASTE_MODIFIER_RELEASE_TIMEOUT_S,
+    PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S,
     PASTE_TARGET_RESPONSIVE_PROBE_MS,
     PASTE_TARGET_RESPONSIVE_TIMEOUT_S,
     SENDINPUT_RESTORE_DELAY_S,
@@ -151,6 +152,7 @@ class Win32ClipboardBackend:
         target_hwnd: int | None = None,
         timeout_s: float = PASTE_TARGET_RESPONSIVE_TIMEOUT_S,
         probe_timeout_ms: int = PASTE_TARGET_RESPONSIVE_PROBE_MS,
+        poll_interval_s: float = PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S,
     ) -> bool:
         """Wait until the paste target's thread answers WM_NULL again.
 
@@ -158,9 +160,19 @@ class Win32ClipboardBackend:
         previous clipboard on a fixed delay would make its late clipboard read
         paste the old content instead of the transcript. Returns False when
         the target stays unresponsive past the budget.
+
+        This runs on the Qt main thread, so both bounds below matter: the
+        sleep, because `SMTO_ABORTIFHUNG` returns instantly for a hung target
+        and the probe throttles nothing then, and the window check, because a
+        handle that names no window can never answer.
         """
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
-        if hwnd == 0:
+        if hwnd == 0 or not self._is_window(hwnd):
+            # The probe target is the caret *child* control, and an application
+            # may have recreated it (a closed editor tab) while the top-level
+            # window that actually received the injected Ctrl+V is alive. There
+            # is nothing to wait for, and spending the whole budget on it would
+            # report an unresponsive target for an application that is not.
             return True
         deadline = time.monotonic() + max(0.0, timeout_s)
         while True:
@@ -168,6 +180,15 @@ class Win32ClipboardBackend:
                 return True
             if time.monotonic() >= deadline:
                 return False
+            time.sleep(max(0.001, poll_interval_s))
+
+    def _is_window(self, hwnd: int) -> bool:
+        is_window = getattr(self._user32, "IsWindow", None)
+        if is_window is None:
+            return True
+        is_window.argtypes = (ctypes.wintypes.HWND,)
+        is_window.restype = ctypes.wintypes.BOOL
+        return bool(is_window(hwnd))
 
     def send_paste(self, target_hwnd: int | None = None) -> str:
         return self.send_paste_with_mode("auto", target_hwnd=target_hwnd)
@@ -187,6 +208,12 @@ class Win32ClipboardBackend:
         try:
             self.send_ctrl_v()
             return "send_input"
+        except TextMayHaveBeenPastedError:
+            # A partial `SendInput` already delivered Ctrl-down and V-down, so
+            # the target pasted on the key-down. Falling through to WM_PASTE
+            # would paste the transcript a second time inside this one call --
+            # and `auto` is the default mode, so that was the shipped path.
+            raise
         except Exception as exc:
             send_input_error = exc
 
@@ -321,8 +348,14 @@ class TextInserter:
             # program has the clipboard open), and the streaming retry then
             # pasted the same words a second time.
             paste_sent = False
+            # Whether the clipboard is ours to put back. `restore_clipboard_state`
+            # empties the clipboard and returns only `CF_UNICODETEXT`, so running
+            # it after a *failed* set destroyed an image or a file selection this
+            # app had never touched.
+            clipboard_was_set = False
             try:
                 self._backend.set_clipboard_text(text)
+                clipboard_was_set = True
                 clipboard_marker = self._clipboard_sequence_number()
                 self._sleep_fn(self._clipboard_settle_s)
 
@@ -367,7 +400,14 @@ class TextInserter:
                     )
             except Exception as exc:
                 paste_error = exc
-                if isinstance(exc, ClipboardContentionError):
+                if isinstance(
+                    exc, (ClipboardContentionError, TextMayHaveBeenPastedError)
+                ):
+                    # Contention: leave the user's clipboard alone. A paste that
+                    # may already be in flight: restoring now would make its late
+                    # read take the previous content instead of the transcript,
+                    # which is the same trade the unresponsive-target branch
+                    # above makes.
                     restore_previous_state = False
                 elif clipboard_marker is not None:
                     try:
@@ -381,7 +421,7 @@ class TextInserter:
                         restore_previous_state = False
                         paste_error = contention
             finally:
-                if restore_previous_state:
+                if restore_previous_state and clipboard_was_set:
                     try:
                         self._backend.restore_clipboard_state(previous_state)
                     except Exception as exc:
@@ -595,7 +635,15 @@ def _send_input_batch(
     events: list[INPUT],
     *,
     cleanup_events: list[INPUT] | None = None,
+    committed_after: int | None = None,
 ) -> None:
+    """Send one input batch, retrying only while nothing at all was delivered.
+
+    `committed_after` is how many delivered events mean the batch has already
+    had its effect on the target. Past that count the failure is reported as
+    `TextMayHaveBeenPastedError`, because a caller that retries it -- or falls
+    back to another paste mechanism -- duplicates what already landed.
+    """
     if not events:
         return
 
@@ -641,6 +689,8 @@ def _send_input_batch(
         time.sleep(SENDINPUT_RETRY_SLEEP_S)
 
     detail = _format_sendinput_failure(last_sent, expected, last_error)
+    if committed_after is not None and last_sent >= committed_after:
+        raise TextMayHaveBeenPastedError(detail)
     raise TextInsertionError(detail)
 
 
@@ -660,6 +710,10 @@ def _send_ctrl_v_input() -> None:
             _keyboard_input(VK_V, keyup=True),
             _keyboard_input(VK_CONTROL, keyup=True),
         ],
+        # The batch is `[Ctrl-down, V-down, V-up, Ctrl-up]` and applications
+        # paste on the key-down, so two delivered events are already a paste.
+        # One is Ctrl-down alone, which is not, and stays retryable.
+        committed_after=2,
     )
 
 
@@ -681,5 +735,5 @@ def _format_sendinput_failure(sent: int, expected: int, error_code: int) -> str:
         )
     return (
         f"SendInput partially failed (sent {sent}/{expected}). "
-        "Try again with the target window focused."
+        "The text may already have been pasted; check the target window."
     )
