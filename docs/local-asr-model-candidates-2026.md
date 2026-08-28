@@ -15,8 +15,8 @@ model stays the default because it needs no GPU or Node.js.
 > **Superseded 2026-08-27.** Two claims in the paragraph above were overtaken by
 > later work. NVIDIA Parakeet *is* implemented, through the pure-Python
 > `onnx-asr` runtime rather than NeMo (`config.py`, `LOCAL_ONNX_ASR_MODEL_SIZES`),
-> and it -- not `small` -- is now the zero-setup default: RTF 0.042 against
-> 0.152 on the same 24.3 s recording and the same CPU.
+> and it -- not `small` -- is now the zero-setup default: mean RTF 0.043
+> against 0.154 on the same 24.3 s recording and the same CPU.
 
 Initial status after the 2026-04-18 implementation pass, superseded by the
 updates below:
@@ -572,7 +572,7 @@ recommended over the Whisper models on a machine with a working GPU. A
 zero-setup CPU model remains the default for machines without a GPU or Node.js.
 
 > **Superseded 2026-08-27.** That default is now `parakeet-tdt-0.6b-v3`
-> (onnx-asr, CPU, int8), not `small`: RTF 0.042 against 0.152 on the same
+> (onnx-asr, CPU, int8), not `small`: mean RTF 0.043 against 0.154 on the same
 > Ryzen 5 7600X, with the same "no GPU, no Node.js" property. It is batch-only,
 > which matches the `batch` default mode.
 

@@ -997,12 +997,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   base 4.1 2B ran at mean RTF 0.099 on WebGPU while NAR managed 0.447 and Plus
   4.149 -- both CPU-only, NAR with merged and dropped German words (63.2%
   word-sequence agreement with `large-v3`, 43 words against 52), Plus looping
-  one clause to the token limit (1.4% agreement, 378 words), which is also what
+  one clause to the token limit (2.8% agreement, 378 words), which is also what
   makes its RTF so bad: it is autoregressive and kept generating. **Every RTF
   in this file is the mean of that case's runs**, which is the convention the
   benchmark report uses; quoting a single run instead is how the same
-  measurement came to be published here as 0.098, as 0.100 and as 0.099 in
-  three places. The graph-level cause is
+  measurement came to be published as three different values -- 0.098, 0.100
+  and 0.099 -- across four places in this repository. The graph-level cause is
   recorded in `docs/granite-speech-4.1-onnx-variants.md`: their encoders carry
   16 `Einsum` nodes each (`b m h c d, c r d -> b m h c r`, a 5-D contraction the
   WebGPU EP has no shader for), plus the 5-D attention `MatMul`s DirectML
@@ -1028,8 +1028,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (changed 2026-08-27). The earlier note here said to keep faster-whisper
   "until real target-hardware benchmarks justify switching"; those benchmarks
   now exist and say the opposite. On one 24.3 s German recording on a Ryzen 5
-  7600X, both at `device=cpu`, Parakeet measured RTF 0.042 against `small`'s
-  0.152 -- 3.6x faster -- for 670 MB against 486 MB, with the 25 European
+  7600X, both at `device=cpu`, Parakeet measured mean RTF 0.043 against
+  `small`'s 0.154 -- 3.6x faster -- for 670 MB against 486 MB, with the 25 European
   languages its model card lists and its own
   language detection. It keeps everything that made `small` the default: pure
   Python, CPU only, no GPU, no Node.js. The one capability it drops is
@@ -1101,11 +1101,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   survived one round longer than the number it came from.
   **Parakeet is not the fastest case in that run, and the qualifier is load-
   bearing**: `tiny` measured 0.033, 1.29x quicker. What separates them is the
-  report's agreement column -- Parakeet matches `large-v3`'s word sequence at
-  98.1%, the highest of any model in the run, while `tiny` manages 82.7%, the
-  worst of the working models. So Parakeet is the fastest local model that is
-  also accurate, and every user-facing claim must carry that qualifier rather
-  than say "fastest" flat.
+  report's agreement column, and only in one direction. `tiny` is the weakest
+  of the models that transcribed the recording -- 82.7%, and 10th or 11th of
+  12 whichever transcript is taken as the reference. Parakeet is in the
+  leading cluster, and **that cluster cannot be ordered by this measure**:
+  Parakeet's own rank moves between 1st and 8th depending on the reference,
+  because the differences are one or two tokens out of 52 and `large-v3` is
+  the one that is wrong on the deciding token. So the supportable claim is
+  "the fastest of the models that transcribed the recording" -- never
+  "fastest" flat, and never "the most accurate". Saying it matched
+  `large-v3` best *was* the second version of this defect: an unsourced
+  superlative was replaced by a sourced number that does not mean what the
+  sentence around it claimed.
   Against the GPU models it needs no qualifier: the quickest GPU case in that
   run is `cohere-transcribe-03-2026` at 0.083 on WebGPU, so Parakeet on plain
   CPU is **1.9x** faster than the best local GPU result and no GPU path is
@@ -1118,8 +1125,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   own the same `onnxruntime/` package directory (620 of 625 files), so the
   DirectML wheel silently overwrites the CPU build and downgrades the reported
   version. `onnxruntime-genai` then dies with "The requested API version [26]
-  is not available" and a DLL init failure, i.e. it would trade a 1.9x Parakeet
-  speedup for the whole Nemotron engine. `onnxruntime-webgpu==1.27.0` is the one
+  is not available" and a DLL init failure, i.e. it would trade a Parakeet
+  speedup measured at roughly 1.9x -- from a manual DirectML run recorded in
+  `docs/learning-log.md`, not from any benchmark case, so treat it as
+  indicative only -- for the whole Nemotron engine. `onnxruntime-webgpu==1.27.0` is the one
   GPU distribution that coexists, but it measured *slower* than CPU here. If a
   GPU path is ever wanted it must be an isolated subprocess environment, like
   the Node runner already is.
@@ -1888,6 +1897,69 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `subprocess`-plus-reader-thread pattern in `benchmark_process.py`; `src/` uses
   no `multiprocessing` at all, and that is what keeps the same deadlock out of
   the app.
+- **A best-effort cleanup on an error path must not be able to raise, and must
+  not come before the release it precedes**: `_teardown_pending_stream_connect`
+  reaches provider code and starts a thread, so a plain `RuntimeError` from
+  `Thread.start` was enough to skip `runtime_lease.release()` once the teardown
+  was placed in front of it -- stranding `_transcriber_runtime_lock` for the
+  process lifetime and escaping the Qt slot, which left the overlay on
+  "Listening" instead of showing the capture failure. The helper is now
+  exception-tight and both arms release in a `finally`. General rule: adding a
+  call to an error arm can make a failure *newly* reachable, so re-derive the
+  arm's guarantees rather than assuming the fix only adds.
+- **Copying an exception arm copies its preconditions too**: the preload's
+  `except BaseException` was copied from the `except Exception` above it
+  without the `_preload_generation_was_canceled` check that arm begins with,
+  so a cancel was written to `_preload_results` as "could not be loaded" and
+  `toggle_recording` re-raised it on the next dictation instead of retrying.
+- **`MODEL_ESTIMATED_SIZE_MB` is decimal megabytes**, it says so, and
+  `model_download_progress` converts it with `* 1_000_000`. Anything rendering
+  a size from it divides by 1000. Dividing by 1024 and writing "GB" names
+  neither unit, and the test that should have caught it divided by 1024 as
+  well -- a test that shares the code's misunderstanding is not a check.
+- **A reservation is measured, not predicted**: `retranscribe_dialog` reserves
+  a `heightForWidth`, so the candidate is chosen by measuring every candidate
+  through the polished label. Neither shortcut works. `key=len` is character
+  count, not drawn width; `key=horizontalAdvance` is drawn width, and wrapped
+  height is not monotonic in it (measured: a 159 px name wraps to 45 px while a
+  157 px one wraps to 60). Measuring at construction time is wrong regardless --
+  the label is unpolished there and reports 9 pt rather than the stylesheet's
+  11 px.
+- **Nothing that only reads may call `appdata_root`**: it creates the data
+  folder and renames a legacy `tts_app` install onto the current name, so a
+  path *lookup* migrated a user's settings, history and recordings. Use
+  `existing_appdata_root` / `existing_settings_path`, which return `None`
+  rather than a path that does not exist yet. `SettingsStore` is the one
+  legitimate caller -- it is about to write there.
+- **Every string a script can print is ASCII**, enforced for all of `scripts/`
+  by `tests/test_script_output_is_ascii.py`. Redirected output on Windows is
+  cp1252: a character outside it raises `UnicodeEncodeError` on stdout (this
+  crashed `--validate-only` on a *valid* model) and is escaped to a literal
+  `\uXXXX` on stderr (this wrapped the SSL-proxy guidance in two walls of
+  `\u2550`). A character *inside* cp1252, such as an em dash, still renders as
+  U+FFFD wherever the log is opened as UTF-8. Comments and docstrings are
+  exempt -- except a module docstring in a script that passes `__doc__` to
+  `argparse`, which `--help` prints; the test computes that per file.
+- **The benchmark report's agreement column cannot rank the leading cluster,
+  and must never be quoted as if it could.** It is a `difflib` ratio of word
+  tokens against `large-v3`, and re-running it with each working transcript as
+  the reference moves Parakeet between 1st and 8th -- the differences are one
+  or two tokens out of 52, and on the deciding token the reference itself is
+  wrong (`transkriptiere` is not a German word). What survives every choice of
+  reference, and is all it may be used for: Plus last of 12, NAR 11th-12th
+  (neither transcribed the recording), `tiny` 10th-11th. Quote it with
+  `autojunk=False` and the argument order the report states: `difflib` discards
+  popular elements of its *second* sequence past 200 items, which is why one
+  transcript scored 1.4% one way round and 2.8% the other.
+- **The supportable claim for the default is "the fastest local model that
+  transcribed the recording", never "fastest" and never "most accurate".**
+  `tiny` is genuinely quicker (0.033 against 0.043). Both earlier versions of
+  this claim were reached by finding a number that supported the conclusion
+  instead of asking what would refute it.
+- **A retraction is a claim and needs the same search.** Two figures were
+  withdrawn as having "no source" after checking only `benchmark_history.json`;
+  both were in `docs/learning-log.md`, from a manual session on a different
+  clip. "Not comparable" and "unsourced" are different sentences.
 - **Normal transcription stays threaded, not isolated**: batch/stream
   transcription runs in the shared `max_workers=1` executor with models
   preloaded (remote stream finalizes excepted — see the concurrent-mode

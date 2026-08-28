@@ -11,7 +11,7 @@ The current canonical evaluation is:
 
 This note is about the **NeMo/PyTorch path only**. The model itself ships: since
 the onnx-asr engine was added, `parakeet-tdt-0.6b-v3` is a selectable local
-model and the fastest one in the app. See
+model and the fastest accurate one in the app. See
 [Models & Offline Setup](models.md#available-models).
 
 - **Status:** The NeMo runtime is not implemented, by design.

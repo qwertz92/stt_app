@@ -13,9 +13,10 @@ The app has four local runtime families:
 - **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
 - **onnx-asr models** (Parakeet TDT, Canary) — pure Python, CPU only, no Node.js
-  and no GPU. Parakeet is the fastest local model in this app that is also
-  accurate: RTF 0.043 on a Ryzen 5 7600X, second only to Whisper `tiny`
-  (0.033), which is the least accurate model in the same run. Batch mode only.
+  and no GPU. Parakeet is the fastest local model in this app that
+  transcribed the benchmark recording correctly: RTF 0.043 on a Ryzen 5 7600X,
+  second only to Whisper `tiny` (0.033), which is the weakest of the models
+  that did. Batch mode only.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
@@ -24,7 +25,7 @@ Granite Speech 4.1 2B (the base autoregressive model) runs as a q4
 Transformers.js ONNX package on the same WebGPU pipeline path as Granite 4.0, and
 currently tops the [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
 for accuracy. The Plus and NAR variants were **retired on 2026-08-26**: their
-exports cannot use any GPU here, they measured 4.6x and 42x slower than the base
+exports cannot use any GPU here, they measured 4.5x and 42x slower than the base
 4.1 2B on WebGPU, and their transcripts were unusable. See
 [Granite Speech 4.1 ONNX variants](granite-speech-4.1-onnx-variants.md) for the
 measurements and what upstream would have to change. Granite 4.0 q4 remains as a smaller GPU
@@ -56,8 +57,8 @@ Accuracy and speed no longer point at the same model. For **accuracy** with a GP
 and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v3`
 needs neither: it measured RTF 0.043 on a Ryzen 5 7600X CPU, which beats every
 GPU model in the same run on its GPU. Whisper `tiny` is quicker still (0.033)
-and is the only local model that is, but it was also the least accurate one
-measured, which is why the default is Parakeet. The Whisper models remain a
+and is the only local model that is, but it is also the weakest of the models
+that transcribed the recording, which is why the default is Parakeet. The Whisper models remain a
 solid, zero-setup CPU baseline with the broadest language coverage. The surest way
 to choose is to run the [benchmark](advanced-setup.md#benchmarking) on your own
 hardware.
@@ -67,7 +68,7 @@ hardware.
 | Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` (GPU) |
 | High accuracy, fastest on GPU | `cohere-transcribe-03-2026` (GPU) |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` |
-| Zero setup: fastest local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (default, CPU) |
+| Zero setup: fastest accurate local transcription, no GPU and no Node.js | `parakeet-tdt-0.6b-v3` (default, CPU) |
 | Whisper on CPU, German + English, supports streaming | `small` |
 | Better Whisper quality on CPU | `large-v3-turbo` |
 | English only, maximum speed | `distil-large-v3.5` |
@@ -137,8 +138,12 @@ Granite 4.1 2B uses the q4 package
 which has the exact same component layout as Granite 4.0
 (`audio_encoder` / `embed_tokens` / `decoder_model_merged`). On 2026-06-17 it was
 verified on an Intel Arc A750 to load on **WebGPU** (no `Einsum` shader failure)
-and transcribe German, English, and French correctly at roughly 0.13–0.19
-real-time factor — materially faster than the raw CPU path.
+and transcribe German, English, and French correctly, at roughly 0.13–0.19
+real-time factor in that first check — materially faster than the raw CPU
+path. That figure is superseded: the 2026-08-25 benchmark measured the same
+model at mean RTF 0.099 on WebGPU. Do not compare the 0.13–0.19 against the
+0.098 quoted for Granite 4.0 above; they come from different sittings, and in
+the one run that measured both the two are within 0.001 of each other.
 
 Community GGUF builds
 ([2B Q4_K](https://huggingface.co/cstr/granite-speech-4.1-2b-GGUF), and others)

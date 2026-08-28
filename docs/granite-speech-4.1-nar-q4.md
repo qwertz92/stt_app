@@ -31,7 +31,8 @@ Related: [granite-speech-4.1-onnx-variants.md](granite-speech-4.1-onnx-variants.
    vocab offset). NAR now transcribes correctly (English verbatim-correct,
    German good).
 2. **INT8 is the preferred NAR precision.** On a Ryzen 5 7600X it is the
-   **fastest** (RTF ~0.53) and top quality.
+   **fastest** (RTF 0.53-0.60, the range measured below -- not the fast end
+   alone) and top quality.
 3. **q4 (= INT4) brings no end-to-end benefit on current hardware.** It is
    **slower on CPU** than INT8, only **~9–16 % smaller** (not "half"), and **GPU
    does not help**: the q4 **editor** does run on DirectML (2–3× faster there at

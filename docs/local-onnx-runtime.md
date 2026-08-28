@@ -126,7 +126,8 @@ Observed on the target Windows/Intel Arc A750 machine:
 
 - WebGPU works for Cohere, Granite 4.0, and Granite 4.1 2B. The Granite 4.1 2B
   q4 pipeline package was verified on WebGPU on 2026-06-17 (correct German,
-  English, and French transcription; ~0.13–0.19 real-time factor).
+  English, and French transcription; ~0.13–0.19 real-time factor in that
+  first check, superseded by the 2026-08-25 benchmark's mean RTF 0.099).
 - The retired raw Granite 4.1 **Plus/NAR** INT8 graphs loaded on WebGPU but
   failed at their first inference while ONNX Runtime Web compiled the `Einsum`
   compute pipeline. (`Einsum`, short for *Einstein summation*, is a general

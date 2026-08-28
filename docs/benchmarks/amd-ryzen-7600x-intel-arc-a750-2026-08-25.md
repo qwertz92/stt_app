@@ -3,7 +3,9 @@
 Date: 2026-08-25 (the stored timestamp is 2026-08-25 22:34 UTC)
 
 This is the run that made `parakeet-tdt-0.6b-v3` the default model and the
-one every Parakeet and Nemotron figure in this repository cites. The values
+one every Parakeet figure in this repository cites. Nemotron was measured here
+too, but its published figures come from the 2026-07-10 run on a 28.1-second
+clip; both are quoted in `AGENTS.md`, each named with its own run. The values
 come from `benchmark_history.json`; they are not estimates. It is the first
 run to measure Parakeet and the first to compare all three ONNX device targets
 in one sitting. Canary was selected for it but produced no measurement -- see
@@ -48,13 +50,37 @@ Lower times and RTF are better. Load is measured separately. Average and RTF
 cover all measured runs of that case.
 
 **Agreement** is how much of each transcript's word sequence matches
-`large-v3`'s, the strongest model in the run, as a `difflib` ratio over
-lowercased word tokens. It is **not** a word error rate: there is no human
-reference transcript, it is one 24.3-second German recording, and `large-v3`
-is a stand-in for the truth rather than the truth. It is still the only
-accuracy signal this run produced, and it is enough to separate a model that
-transcribed the audio from one that did not -- which the speed columns alone
-cannot do.
+`large-v3`'s, computed exactly as:
+
+```python
+tokens = re.findall(r"\w+", transcript.lower())
+difflib.SequenceMatcher(None, reference_tokens, candidate_tokens,
+                        autojunk=False).ratio()
+```
+
+Every detail there is load-bearing and was got wrong once. `autojunk=False`
+matters because `difflib` silently discards popular elements of the *second*
+sequence once it exceeds 200 items, which halved the score of the one
+transcript long enough to trigger it (Plus, 378 tokens: 1.4% with the
+heuristic on, 2.8% with it off). Argument order matters for the same reason.
+Both runs of every case produced byte-identical transcripts, so run 1, run 2
+and any average give the same number.
+
+**What this measure can and cannot do.** It is not a word error rate: there is
+no human reference, it is one 24.3-second German recording, and `large-v3` is
+a stand-in for the truth rather than the truth -- on the single token that
+separates the leaders it is the one that is wrong, writing `transkriptiere`,
+which is not a German word, where Parakeet, `large-v3-turbo` and Cohere all
+write the correct `transkribiere`.
+
+So it **cannot order the leading cluster**. Re-run against each of the 13
+working transcripts as the reference in turn, Parakeet's rank moves between
+1st and 8th, `large-v3-turbo`'s between 1st and 6th, Cohere's between 1st and
+8th; those differences are one or two tokens out of 52. What it *does* support,
+and what it is here for, is robust under every choice of reference: Plus ranks
+last of 12 every time and NAR 11th or 12th -- neither transcribed the
+recording -- and `tiny` ranks 10th or 11th every time, clearly the weakest of
+the models that did.
 
 | Model | Device | Load | Runs | Average | RTF | Agreement |
 | ----- | ------ | ---: | ---- | ------: | --: | --------: |
@@ -70,7 +96,7 @@ cannot do.
 | `granite-4.0-1b-speech` | `cpu` | 2.26s | 10.00s, 9.86s | 9.93s | 0.409 | 92.2% |
 | `granite-speech-4.1-2b` | `webgpu` | 4.47s | 2.42s, 2.39s | 2.41s | 0.099 | 97.1% |
 | `granite-speech-4.1-2b` | `cpu` | 2.33s | 11.23s, 11.13s | 11.18s | 0.460 | 97.1% |
-| `granite-speech-4.1-2b-plus` | `cpu` | 7.77s | 101.11s, 100.55s | 100.83s | 4.149 | 1.4% |
+| `granite-speech-4.1-2b-plus` | `cpu` | 7.77s | 101.11s, 100.55s | 100.83s | 4.149 | 2.8% |
 | `granite-speech-4.1-2b-nar` | `cpu` | 4.52s | 11.19s, 10.53s | 10.86s | 0.447 | 63.2% |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | `cpu` | 1.78s | 5.11s, 5.01s | 5.06s | 0.208 | 90.4% |
 | `parakeet-tdt-0.6b-v3` | `cpu` | 1.92s | 1.04s, 1.03s | 1.03s | 0.043 | 98.1% |
@@ -79,16 +105,20 @@ cannot do.
 
 - **`parakeet-tdt-0.6b-v3` is not the fastest case in this run, and the
   distinction is the whole argument for it.** `tiny` is quicker -- 0.033
-  against 0.043, 1.29x -- and it is the *only* model that is. But `tiny`
-  agrees with `large-v3` on 82.7% of its words while Parakeet agrees on 98.1%,
-  the highest of any model measured, above `large-v3-turbo`'s 97.1%. So
-  Parakeet is the fastest model here that also transcribes the recording
-  correctly, and that is what made it the default a fresh install uses.
+  against 0.043, 1.29x -- and it is the *only* model that is. It is also the
+  weakest of the models that transcribed the recording, robustly so: 82.7%
+  against `large-v3`, and 10th or 11th of 12 whichever transcript is taken as
+  the reference. Parakeet sits in the leading cluster, which this measure
+  cannot rank internally. So the claim the default rests on is "fastest of the
+  models that transcribed the recording", not "most accurate" -- and that is
+  what made it the default a fresh install uses.
 - Against `small`, the previous default, on the same recording and the same
-  device: 0.043 against 0.154, i.e. **3.6x faster**, and more accurate by the
-  same agreement measure (98.1% against 91.3%). The per-run values are
-  0.0428/0.0423 and 0.1520/0.1553; where this repository quotes 0.042 and
-  0.152 it is naming the faster run of each, and the ratio is 3.6x either way.
+  device: 0.043 against 0.154, i.e. **3.6x faster**. It is also ahead on
+  agreement, 98.1% against 91.3%, and that particular comparison does survive
+  every choice of reference -- unlike the differences inside the leading
+  cluster. The per-run values are 0.0428/0.0423 and 0.1520/0.1553; where this
+  repository quotes 0.042 and 0.152 it is naming the faster run of each rather
+  than the mean this file publishes, and the ratio is 3.6x either way.
 - It is also faster than every GPU case measured. The quickest of those is
   `cohere-transcribe-03-2026` at 0.083 on WebGPU, so Parakeet on plain CPU is
   **1.9x** faster than the best local GPU result and no GPU path is needed for
@@ -98,7 +128,7 @@ cannot do.
 - Granite Speech 4.1 Plus and NAR were retired on the strength of these
   numbers, and the agreement column says why as plainly as the RTF does: both
   fall back to CPU, NAR at 0.43-0.46 with 63.2% agreement and 43 words against
-  the reference's 52, and Plus at 4.14-4.15 with 1.4% agreement and 378 words
+  the reference's 52, and Plus at 4.14-4.16 with 2.8% agreement and 378 words
   -- it looped one clause until it hit the token limit, which is also why its
   RTF is so bad.
 - DirectML is not usable for the Cohere/Granite runtime on this machine;

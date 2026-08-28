@@ -3,6 +3,139 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-28 (seventh and eighth adversarial rounds: the fixes were the bugs)
+
+Two more rounds of three reviewers each, over the previous round's commits.
+Every round so far has found defects in the round before it; these two found
+them almost exclusively *in the fixes*, including two cases where a fix made
+something reachable that had not been reachable before, and one where a
+correction was itself wrong in the same way as the thing it corrected.
+
+### A guard that created the failure it was written to prevent
+
+Round 6 added a teardown call to the streaming capture-failure arm, because
+the arm released the runtime lease but left the provider handshake running.
+Correct diagnosis, wrong placement: the new call went *in front of*
+`runtime_lease.release()`, and it is not exception-tight. It reaches provider
+code and starts a thread, and `Thread.start` raises `RuntimeError` when the
+process cannot create one -- so a plain `Exception` now stranded
+`_transcriber_runtime_lock` for the process lifetime, which the old ordering
+made impossible. The escaping exception also left the overlay on "Listening",
+i.e. it destroyed the error report the arm exists to produce.
+
+Before the fix that arm could not strand the lock. After it, it could. The
+reviewer measured it: `LOCK ACQUIRABLE: False`.
+
+The same round's `except BaseException` on the preload was copied from the
+`except Exception` above it without the cancel check that arm *starts* with,
+so pressing Cancel persisted "could not be loaded" for that model and the next
+dictation re-raised it instead of retrying -- the exact failure the
+`TranscriptionCanceled` arm three lines up documents and avoids.
+
+### Deriving a value from the wrong table
+
+The picker labels were changed from hand-written sizes to derived ones,
+correctly, and then divided by 1024 and labelled "GB". `MODEL_ESTIMATED_SIZE_MB`
+says in its own comment that it is decimal megabytes, and
+`model_download_progress` converts it with `* 1_000_000` -- so the fix took six
+labels that were already correct (`~2.13 GB`, `~1.84 GB`, `~1.03 GB`) and made
+them wrong, most visibly `large-v3` advertising "~3.0 GB" for the 3091 MB its
+own progress bar counts to. The test could not see it because the test divided
+by 1024 too: it agreed with the code and the pair was self-consistent.
+
+Its tolerance was 5%, which would also have accepted the 3.8% drift on `tiny`
+that motivated it. It is now 5 MB, and it requires every sized model to state
+a size rather than passing on a count threshold.
+
+### A diagnostic that moved the user's data folder
+
+Round 6 stopped `smoke_test.py` rewriting the settings file. Round 7 found the
+same failure one level up: `settings_path()` goes through `appdata_root()`,
+which creates the folder and, when only the legacy `tts_app` one exists,
+renames the user's entire data directory onto the current name. So *asking
+where the settings live* migrated settings, history and recordings. Measured
+with a scratch `APPDATA`; the round-6 verification missed it because it
+compared directory contents in states where the directory already existed.
+
+`app_paths` now has read-only resolvers, and the script reports a settings file
+that will not parse instead of silently loading defaults from the repaired copy
+and calling the default model "the configured local model".
+
+### One glyph at a time is the wrong shape
+
+`import_model.py --validate-only` printed U+2713 on success. `sys.stdout`
+becomes cp1252 the moment output is redirected on Windows, so a *complete,
+valid* model crashed the script with `UnicodeEncodeError` and exit 1 -- while
+19 passing tests said it was fine, because `capsys` swaps in a UTF-8 buffer and
+the encoder never runs.
+
+Fixing those two glyphs left three em dashes in the same file, which encode in
+cp1252 (0x97) and therefore only *look* wrong -- U+FFFD in any UTF-8 editor,
+which is where a captured log gets opened. And a sweep then found
+`download_model.py` drawing its SSL-error box with 63 U+2550 characters:
+stderr's error handler is `backslashreplace` rather than strict, so that one
+never crashed either, it just wrapped the corporate-proxy guidance -- the text
+a Zscaler user pastes into a ticket -- in two walls of literal `\u2550`.
+
+Three files, three symptoms, one cause. The assertion is now on the cause: no
+non-ASCII in any string literal any script evaluates. Writing that test
+immediately found a fourth thing, that two scripts hand `__doc__` to argparse,
+so their module docstrings *are* printed and could not be exempt.
+
+### The correction that repeated the mistake
+
+Round 7 corrected "Parakeet is the fastest local model by a wide margin" --
+`tiny` measured 0.033 against 0.043 -- and, to justify the default anyway,
+computed a word-sequence agreement against `large-v3` from the transcripts the
+benchmark already stores. Parakeet came out at 98.1%, the highest in the run,
+and that went into the report, `AGENTS.md`, the README and `docs/models.md` as
+"the highest of any model measured".
+
+Round 8 took the same data apart. Re-run with each of the 13 working
+transcripts as the reference in turn, Parakeet's rank moves between 1st and
+8th; it is 1st under `large-v3` and `medium`, 3rd under `large-v3-turbo` and
+Cohere, 5th under Granite 4.1. The whole gap is **one token out of 52** -- and
+on that token the reference is the one that is wrong, writing `transkriptiere`,
+which is not a German word, where Parakeet, turbo and Cohere all write
+`transkribiere`. Parakeet's lead came from also reproducing the reference's
+doubled "richtig".
+
+So an unsourced superlative had been replaced with a sourced number that did
+not mean what the sentence around it claimed. What the measure *does* support
+is robust under every reference and is what it is now used for: Plus is last of
+12 every time and NAR 11th or 12th -- neither transcribed the recording -- and
+`tiny` is 10th or 11th every time.
+
+The published value for Plus was also not reproducible from the published
+method: `difflib` discards popular elements of its *second* sequence once it
+exceeds 200 items, so the 378-token transcript scored 1.4% in one argument
+order and 2.8% in the other. The report now gives the exact call, including
+`autojunk=False`.
+
+And the retraction in `granite-speech-4.1-onnx-variants.md` was wrong in the
+same way: it withdrew Plus's 0.81 and NAR's 0.49 as having "no source" after
+checking only `benchmark_history.json`. Both are in this log, from a manual
+session on a 16.9 s English / 13.4 s German clip pair. They are not
+unsourced -- they are not comparable, which is a different sentence.
+
+### What these two rounds say about the process
+
+- **A fix inherits the burden of the thing it fixed, and then some.** Round 7
+  fixed round 6; round 8 fixed round 7. Two fixes made a failure *newly*
+  reachable, which no amount of testing the original bug would have caught.
+- **Mutation-test the assertion, and check the test is not short-circuited.**
+  Three tests written this round passed under their own mutation. The preload
+  one passed because the worker's *pre-acquire* cancel check returned before
+  the code under test ran -- the same shape as the round-6 watchdog test, which
+  the log already records. The note-height pair each passed under the other's
+  mutation, which is why both are kept.
+- **A retraction is a claim.** "This figure has no source" needs the same
+  search a positive claim needs, and it did not get one.
+- **Check a superlative against the thing that would overturn it.** Both
+  versions of the Parakeet claim were reached by finding a number that
+  supported the conclusion, not by asking what would refute it. Re-running the
+  same measure under a different reference took one command.
+
 ## 2026-08-28 (sixth adversarial round: a deadlock, an inert fixture, and a destructive smoke test)
 
 Three reviewers again, over the fifth round's commits, plus my own pass over
@@ -3832,7 +3965,12 @@ plus the download lock finally made real.
   overstated it -- the transcript is degraded, not unrelated to the audio.
   Plus's 4.138 is a consequence of the loop, not an independent speed number:
   its earlier 0.81 on a 16.9 s English clip is what a normally terminating run
-  costs.)
+  costs. **Corrected 2026-08-28:** that 0.81 is from the manual session
+  recorded earlier in this log, on a different recording, so it is not
+  comparable with the 24.3 s figures beside it -- and the numbers in this
+  paragraph are best-of-two, while the report and `AGENTS.md` now publish
+  means, 0.099/0.447/4.149/0.043. The entry is left as written because this
+  file is the historical record.)
   - The graph-level cause was confirmed rather than assumed, by reading the
     exports: the two smcleod encoders contain **16 `Einsum` nodes each**, all
     `b m h c d, c r d -> b m h c r`; the `onnx-community` export of the base

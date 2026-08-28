@@ -67,7 +67,7 @@ Right-click the **system tray icon** → **Settings**.
 
 | Setting | What it does | Default |
 |---------|-------------|---------|
-| Model size | Which local model transcribes. Parakeet is the fastest and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
+| Model size | Which local model transcribes. Parakeet is the fastest of the accurate ones and needs no GPU; the Whisper sizes trade speed for quality. Streaming mode needs a Whisper size or Nemotron; Parakeet, Canary, Cohere and Granite are batch-only | `parakeet-tdt-0.6b-v3` |
 | Engine | Local (on device) or remote: AssemblyAI, OpenAI, Groq, Deepgram, ElevenLabs, Azure LLM Speech, Fun-ASR | Local |
 | Mode | Batch (after stop) or Streaming (live, experimental) | Batch |
 | Hotkey | Click and press your preferred key combination | Ctrl+Alt+Space |
@@ -80,8 +80,9 @@ There are four local families. **GPU-accelerated ONNX models** (Cohere, IBM
 Granite) are the most accurate — they run on the GPU via WebGPU, need Node.js,
 and are batch-only. **onnx-asr models** (Parakeet, Canary) are pure Python, CPU
 only, and need neither a GPU nor Node.js; Parakeet is the fastest local
-model here that is also accurate (only Whisper `tiny` is quicker, and it is
-the least accurate model measured). **Nemotron 3.5** is the only local true-streaming
+model here that transcribed the benchmark recording correctly (only Whisper
+`tiny` is quicker, and it is the weakest of the models that did).
+**Nemotron 3.5** is the only local true-streaming
 model. **Whisper models** (CTranslate2) need no extra setup, run on the CPU, and
 also support streaming.
 
@@ -98,7 +99,7 @@ also support streaming.
 | Quick testing / low resources | `tiny` | CTranslate2 | ~78 MB |
 
 The default is `parakeet-tdt-0.6b-v3`: it needs no GPU and no Node.js, and it
-measured a real-time factor of 0.042 on a Ryzen 5 7600X, against 0.152 for
+measured a mean real-time factor of 0.043 on a Ryzen 5 7600X, against 0.154 for
 `small` on the same recording and the same CPU. It transcribes 25 European
 languages (the list is in the model card) and
 detects the language itself. The one thing it cannot do is live streaming
