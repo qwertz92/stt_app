@@ -55,9 +55,36 @@ class Win32WindowFocusHelper:
         if not hwnd:
             return self._remembered_foreign_window()
         if self._is_own_non_target_window(hwnd):
-            return self._remembered_foreign_window() or hwnd
+            # No `or hwnd`. Handing our own window back made it the dictation
+            # target whenever nothing foreign had been remembered yet, which
+            # on a fresh session is every path that has not started a
+            # recording -- the first dictation started from the tray menu, for
+            # one, since the notification-icon contract has us call
+            # `SetForegroundWindow` on the hidden host window before the menu
+            # opens. Worse than losing that paste: `restore_target_window`
+            # then calls `ShowWindow(SW_SHOW)` on the helper window, which
+            # makes it visible and therefore a *valid* target, and it is
+            # cached as the last foreign window for the rest of the session.
+            # `None` means "no remembered target", which the insert path
+            # reports rather than pasting into nothing.
+            return self._remembered_foreign_window()
         self._last_foreign_window = hwnd
         return hwnd
+
+    def note_foreground_window(self) -> None:
+        """Remember the current foreground window while it is still someone's.
+
+        Called before we deliberately take the foreground ourselves -- opening
+        the tray menu does exactly that -- so the window the user was working
+        in is available afterwards. Best-effort: an own or missing window is
+        simply not recorded.
+        """
+        try:
+            hwnd = int(self._user32.GetForegroundWindow() or 0)
+            if hwnd and not self._is_own_non_target_window(hwnd):
+                self._last_foreign_window = hwnd
+        except Exception:
+            return
 
     def _is_own_non_target_window(self, hwnd: int) -> bool:
         process_id = ctypes.wintypes.DWORD()

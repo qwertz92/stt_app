@@ -78,6 +78,16 @@ def test_own_normal_window_stays_a_valid_target():
 
 
 def test_remembered_window_is_dropped_once_it_is_gone():
+    """A destroyed target must not be handed back -- and neither must ours.
+
+    This used to answer with the tray menu itself, because the fallback was
+    `self._remembered_foreign_window() or hwnd`. Our own popup can never take
+    dictated text, and `restore_target_window` would call
+    `ShowWindow(SW_SHOW)` on it, so it becomes visible, passes the
+    own-non-target predicate from then on, and is cached as the last foreign
+    window for the rest of the session. `None` says what is true: there is no
+    remembered target.
+    """
     helper, fake = _helper()
     editor = 1001
     tray_menu = 2002
@@ -91,7 +101,46 @@ def test_remembered_window_is_dropped_once_it_is_gone():
     fake.valid_windows = {tray_menu}
     fake.foreground = tray_menu
 
-    assert helper.get_foreground_window() == tray_menu
+    assert helper.get_foreground_window() is None
+    assert helper._last_foreign_window is None, "the dead handle was kept"
+
+
+def test_the_foreground_can_be_noted_before_one_of_our_windows_takes_it():
+    """The tray menu's activation signal fires while the user's window is up.
+
+    Opening the notification-icon menu requires `SetForegroundWindow` on our
+    hidden host window, so by the time a menu action runs the foreground is
+    ours and nothing foreign has been remembered on a fresh session. Noting it
+    first is what makes the first dictation started from the tray land in the
+    window the user was working in.
+    """
+    helper, fake = _helper()
+    editor = 1001
+    tray_host = 4004
+    fake.valid_windows = {editor, tray_host}
+    fake.own_windows = {tray_host}
+    fake.hidden_windows = {tray_host}
+
+    fake.foreground = editor
+    helper.note_foreground_window()
+    fake.foreground = tray_host
+
+    assert helper.get_foreground_window() == editor
+
+
+def test_noting_our_own_window_records_nothing():
+    """Otherwise the hint would poison the cache it exists to fill."""
+    helper, fake = _helper()
+    tray_host = 4004
+    fake.valid_windows = {tray_host}
+    fake.own_windows = {tray_host}
+    fake.hidden_windows = {tray_host}
+    fake.foreground = tray_host
+
+    helper.note_foreground_window()
+
+    assert helper._last_foreign_window is None
+    assert helper.get_foreground_window() is None
 
 
 def test_hidden_tray_helper_window_is_never_the_target():

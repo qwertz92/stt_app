@@ -405,6 +405,12 @@ def _create_tray_icon(
     check_updates_action.triggered.connect(check_for_updates_from_tray)
 
     def on_tray_activated(reason: QtWidgets.QSystemTrayIcon.ActivationReason) -> None:
+        # First, because for a context-menu click this runs while the
+        # user's own window is still in front: the native menu is about to
+        # take the foreground for our hidden host window, as the
+        # notification-icon contract requires, and after that there is no
+        # way to find out what was there.
+        controller.note_foreground_window()
         if reason == QtWidgets.QSystemTrayIcon.DoubleClick:
             open_settings_dialog()
             return

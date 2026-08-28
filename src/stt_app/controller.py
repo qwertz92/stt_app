@@ -5028,6 +5028,22 @@ class DictationController(QtCore.QObject):
 
     _UNSET_TARGET = object()
 
+    def note_foreground_window(self) -> None:
+        """Record the current foreground before one of our own windows takes it.
+
+        The tray menu calls `SetForegroundWindow` on its hidden host window as
+        the notification-icon contract requires, so by the time a menu action
+        runs the foreground is ours. Wired to the tray's `activated` signal,
+        which fires first.
+        """
+        note = getattr(self._window_focus_helper, "note_foreground_window", None)
+        if note is None:
+            return
+        try:
+            note()
+        except Exception:
+            self._logger.debug("Could not note the foreground window", exc_info=True)
+
     def _insert_text_at_target(
         self,
         text: str,

@@ -80,7 +80,11 @@ class FakeController:
         self.repaste_calls = 0
         self.credentials_invalidated = 0
         self.credentials_providers: list[str] = []
+        self.note_foreground_calls = 0
         self.settings = AppSettings()
+
+    def note_foreground_window(self):
+        self.note_foreground_calls += 1
 
     def toggle_recording(self):
         self.toggle_calls += 1
@@ -970,3 +974,33 @@ def test_load_app_icon_uses_bundled_asset():
     assert icon.isNull() is False
     assert icon.availableSizes()
     _ = app
+
+
+def test_every_tray_activation_notes_the_foreground_first():
+    """The tray menu takes the foreground for our own hidden host window.
+
+    `activated` is emitted before `TrackPopupMenu` runs, which is the last
+    moment the user's own window is still in front -- and on a fresh session
+    it is the only chance, because nothing has remembered a foreign window
+    yet. Without it the first dictation started from the tray menu aimed at
+    our 0x0 helper window, and the transcript went nowhere while the overlay
+    reported success.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = FakeController()
+    tray = _create_tray_icon(
+        app=app,
+        controller=controller,
+        overlay=FakeOverlay(),
+        settings_store=FakeSettingsStore(),
+        secret_store=FakeSecretStore(),
+        app_logger=FakeAppLogger(),
+        last_recording_store=FakeLastRecordingStore(),
+        open_history_dialog=lambda: None,
+    )
+
+    tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
+
+    assert controller.note_foreground_calls == 1, (
+        "the foreground was not recorded before the menu takes it"
+    )
