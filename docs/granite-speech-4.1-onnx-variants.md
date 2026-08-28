@@ -9,20 +9,34 @@
 >
 > What decided it, from a benchmark run on the user's own machine (2026-08-25,
 > a real 24.3 s German dictation -- not the synthetic sample -- across all three
-> device targets, best of two runs, read back from `benchmark_history.json`):
+> device targets, read back from `benchmark_history.json`; the full run is
+> [committed](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md)).
 >
-> | model | best device | RTF | transcript |
-> | --- | --- | --- | --- |
-> | `granite-speech-4.1-2b` (pipeline q4) | WebGPU | **0.098** | correct German |
-> | `granite-speech-4.1-2b-nar` (raw INT8) | CPU only | 0.434 | degraded German: words merged and dropped ("istt, egal, ob ich local oder remoteripiiere und zum will") |
-> | `granite-speech-4.1-2b-plus` (raw INT8) | CPU only | **4.138** | degenerate loop: one clause repeated to the token limit |
-> | `parakeet-tdt-0.6b-v3` (onnx-asr INT8) | CPU | 0.042 | correct German |
+> **RTF is the mean of that case's two runs**, the same convention the report
+> and `AGENTS.md` use. Quoting the faster run instead is how one measurement
+> came to be published as three different numbers. "Agreement" is that report's
+> word-sequence match against `large-v3`, not a word error rate.
 >
-> Plus's 4.138 is a *consequence* of that loop rather than an independent speed
+> | model | best device | RTF | agreement | transcript |
+> | --- | --- | --- | --- | --- |
+> | `granite-speech-4.1-2b` (pipeline q4) | WebGPU | **0.099** | 97.1% | correct German |
+> | `granite-speech-4.1-2b-nar` (raw INT8) | CPU only | 0.447 | 63.2% | degraded German: words merged and dropped ("istt, egal, ob ich local oder remoteripiiere und zum will") |
+> | `granite-speech-4.1-2b-plus` (raw INT8) | CPU only | **4.149** | 1.4% | degenerate loop: one clause repeated to the token limit |
+> | `parakeet-tdt-0.6b-v3` (onnx-asr INT8) | CPU | 0.043 | 98.1% | correct German |
+>
+> Plus's 4.149 is a *consequence* of that loop rather than an independent speed
 > measurement: it is autoregressive, so it kept generating until the 1024-token
-> cap. Its earlier 0.81 on a 16.9 s English clip (2026-06-24) is the honest
-> figure for a run that terminates normally -- still three times slower than the
-> base model. NAR's 0.434 matches its earlier 0.49 and needs no explanation.
+> cap, which the 1.4% agreement and its 378 words against the reference's 52
+> show directly. An earlier version of this note gave 0.81 on a 16.9 s English
+> clip dated 2026-06-24 as "the honest figure for a run that terminates
+> normally", and said NAR's result "matches its earlier 0.49". **Neither figure
+> has a source**: the six runs retained in `benchmark_history.json` are
+> 2026-05-05 (x2), 05-30, 06-09, 07-10 and 08-25, with audio of 2.0, 4.5, 28.6,
+> 28.1 and 24.3 seconds -- no 2026-06-24 run and no 16.9 s clip. The 16.9 s
+> LibriSpeech fixture belongs to the separate manual session in
+> [granite-speech-4.1-nar-q4.md](granite-speech-4.1-nar-q4.md), which measured
+> NAR INT8 at 0.53-0.60 on CPU and did not cover Plus at all. Both numbers are
+> withdrawn rather than reattributed.
 >
 > Both raw variants failed on WebGPU **and** on DirectML. The graph-level reason
 > was confirmed by inspecting the exports directly: the two smcleod encoders

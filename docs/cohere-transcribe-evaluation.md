@@ -14,8 +14,9 @@ The current canonical evaluation is:
 - The default model stays a CPU model that needs no GPU or Node.js.
   (Superseded 2026-08-27: that default is now `parakeet-tdt-0.6b-v3`,
   not `small` -- same zero-setup properties, measurably faster.)
-- On the tested Ryzen 7600X + Arc A750 it runs at RTF 0.071 on WebGPU (0.137 on
-  CPU) — faster than `small` or `large-v3-turbo`. See
+- On the tested Ryzen 7600X + Arc A750 it measured RTF 0.071 on WebGPU (0.137
+  on CPU) in the 2026-04-22 benchmark, and 0.083 / 0.132 in the 2026-08-25 one
+  — faster than `small` or `large-v3-turbo` in both. See
   [Local Benchmark Results](benchmarks/README.md).
 
 ## Why this is not a drop-in local model

@@ -3,10 +3,12 @@
 Date: 2026-08-25 (the stored timestamp is 2026-08-25 22:34 UTC)
 
 This is the run that made `parakeet-tdt-0.6b-v3` the default model and the
-one every Parakeet, Canary and Nemotron figure in this repository cites. The
-values come from `benchmark_history.json`; they are not estimates. It is also
-the first run to measure the onnx-asr models and the first to compare all
-three ONNX device targets in one sitting.
+one every Parakeet and Nemotron figure in this repository cites. The values
+come from `benchmark_history.json`; they are not estimates. It is the first
+run to measure Parakeet and the first to compare all three ONNX device targets
+in one sitting. Canary was selected for it but produced no measurement -- see
+the error table at the end -- so no Canary figure can cite this run, or any
+other retained here.
 
 The 24.30-second German speech recording is not committed because it
 contains private audio, and neither are the decoded transcripts.
@@ -24,6 +26,7 @@ contains private audio, and neither are the decoded transcripts.
 | faster-whisper / CTranslate2 | 1.2.1 / 4.8.1 |
 | Transformers.js / ONNX Runtime Node | 4.1.0 / 1.24.3 |
 | ONNX Runtime / ORT GenAI | 1.28.0 / 0.15.2 |
+| Node.js | v24.18.0 |
 | Nemotron providers | CPU only |
 
 ## Settings
@@ -44,38 +47,60 @@ contains private audio, and neither are the decoded transcripts.
 Lower times and RTF are better. Load is measured separately. Average and RTF
 cover all measured runs of that case.
 
-| Model | Device | Load | Runs | Average | RTF |
-| ----- | ------ | ---: | ---- | ------: | --: |
-| `tiny` | `cpu` | 0.62s | 0.80s, 0.81s | 0.80s | 0.033 |
-| `base` | `cpu` | 0.33s | 1.66s, 1.74s | 1.70s | 0.070 |
-| `small` | `cpu` | 0.96s | 3.69s, 3.77s | 3.73s | 0.154 |
-| `medium` | `cpu` | 2.50s | 10.09s, 9.68s | 9.89s | 0.407 |
-| `large-v3` | `cpu` | 4.45s | 15.28s, 15.01s | 15.15s | 0.623 |
-| `large-v3-turbo` | `cpu` | 2.18s | 9.18s, 9.08s | 9.13s | 0.376 |
-| `cohere-transcribe-03-2026` | `webgpu` | 3.74s | 2.05s, 1.97s | 2.01s | 0.083 |
-| `cohere-transcribe-03-2026` | `cpu` | 2.91s | 3.22s, 3.22s | 3.22s | 0.132 |
-| `granite-4.0-1b-speech` | `webgpu` | 4.43s | 2.42s, 2.36s | 2.39s | 0.098 |
-| `granite-4.0-1b-speech` | `cpu` | 2.26s | 10.00s, 9.86s | 9.93s | 0.409 |
-| `granite-speech-4.1-2b` | `webgpu` | 4.47s | 2.42s, 2.39s | 2.41s | 0.099 |
-| `granite-speech-4.1-2b` | `cpu` | 2.33s | 11.23s, 11.13s | 11.18s | 0.460 |
-| `granite-speech-4.1-2b-plus` | `cpu` | 7.77s | 101.11s, 100.55s | 100.83s | 4.149 |
-| `granite-speech-4.1-2b-nar` | `cpu` | 4.52s | 11.19s, 10.53s | 10.86s | 0.447 |
-| `nemotron-3.5-asr-streaming-0.6b-int4` | `cpu` | 1.78s | 5.11s, 5.01s | 5.06s | 0.208 |
-| `parakeet-tdt-0.6b-v3` | `cpu` | 1.92s | 1.04s, 1.03s | 1.03s | 0.043 |
+**Agreement** is how much of each transcript's word sequence matches
+`large-v3`'s, the strongest model in the run, as a `difflib` ratio over
+lowercased word tokens. It is **not** a word error rate: there is no human
+reference transcript, it is one 24.3-second German recording, and `large-v3`
+is a stand-in for the truth rather than the truth. It is still the only
+accuracy signal this run produced, and it is enough to separate a model that
+transcribed the audio from one that did not -- which the speed columns alone
+cannot do.
+
+| Model | Device | Load | Runs | Average | RTF | Agreement |
+| ----- | ------ | ---: | ---- | ------: | --: | --------: |
+| `tiny` | `cpu` | 0.62s | 0.80s, 0.81s | 0.80s | 0.033 | 82.7% |
+| `base` | `cpu` | 0.33s | 1.66s, 1.74s | 1.70s | 0.070 | 89.1% |
+| `small` | `cpu` | 0.96s | 3.69s, 3.77s | 3.73s | 0.154 | 91.3% |
+| `medium` | `cpu` | 2.50s | 10.09s, 9.68s | 9.89s | 0.407 | 95.1% |
+| `large-v3` | `cpu` | 4.45s | 15.28s, 15.01s | 15.15s | 0.623 | 100% (reference) |
+| `large-v3-turbo` | `cpu` | 2.18s | 9.18s, 9.08s | 9.13s | 0.376 | 97.1% |
+| `cohere-transcribe-03-2026` | `webgpu` | 3.74s | 2.05s, 1.97s | 2.01s | 0.083 | 97.1% |
+| `cohere-transcribe-03-2026` | `cpu` | 2.91s | 3.22s, 3.22s | 3.22s | 0.132 | 97.1% |
+| `granite-4.0-1b-speech` | `webgpu` | 4.43s | 2.42s, 2.36s | 2.39s | 0.098 | 92.2% |
+| `granite-4.0-1b-speech` | `cpu` | 2.26s | 10.00s, 9.86s | 9.93s | 0.409 | 92.2% |
+| `granite-speech-4.1-2b` | `webgpu` | 4.47s | 2.42s, 2.39s | 2.41s | 0.099 | 97.1% |
+| `granite-speech-4.1-2b` | `cpu` | 2.33s | 11.23s, 11.13s | 11.18s | 0.460 | 97.1% |
+| `granite-speech-4.1-2b-plus` | `cpu` | 7.77s | 101.11s, 100.55s | 100.83s | 4.149 | 1.4% |
+| `granite-speech-4.1-2b-nar` | `cpu` | 4.52s | 11.19s, 10.53s | 10.86s | 0.447 | 63.2% |
+| `nemotron-3.5-asr-streaming-0.6b-int4` | `cpu` | 1.78s | 5.11s, 5.01s | 5.06s | 0.208 | 90.4% |
+| `parakeet-tdt-0.6b-v3` | `cpu` | 1.92s | 1.04s, 1.03s | 1.03s | 0.043 | 98.1% |
 
 ## What this run settled
 
-- `parakeet-tdt-0.6b-v3` is the fastest local model here by a wide margin:
-  mean RTF 0.043 on plain CPU against 0.154 for `small` on the same recording
-  and the same device, which is what made it the default a fresh install uses.
-  The per-run values are 0.0428/0.0423 and 0.1520/0.1553; this repository's
-  0.042 and 0.152 quote the faster run of each, and the ratio is 3.6x either
-  way.
-- It is also faster than the quickest GPU model measured (Granite Speech 4.1
-  2B at 0.099 on WebGPU), so no GPU path is needed to get the best local
-  latency.
+- **`parakeet-tdt-0.6b-v3` is not the fastest case in this run, and the
+  distinction is the whole argument for it.** `tiny` is quicker -- 0.033
+  against 0.043, 1.29x -- and it is the *only* model that is. But `tiny`
+  agrees with `large-v3` on 82.7% of its words while Parakeet agrees on 98.1%,
+  the highest of any model measured, above `large-v3-turbo`'s 97.1%. So
+  Parakeet is the fastest model here that also transcribes the recording
+  correctly, and that is what made it the default a fresh install uses.
+- Against `small`, the previous default, on the same recording and the same
+  device: 0.043 against 0.154, i.e. **3.6x faster**, and more accurate by the
+  same agreement measure (98.1% against 91.3%). The per-run values are
+  0.0428/0.0423 and 0.1520/0.1553; where this repository quotes 0.042 and
+  0.152 it is naming the faster run of each, and the ratio is 3.6x either way.
+- It is also faster than every GPU case measured. The quickest of those is
+  `cohere-transcribe-03-2026` at 0.083 on WebGPU, so Parakeet on plain CPU is
+  **1.9x** faster than the best local GPU result and no GPU path is needed for
+  the best local latency. (Granite Speech 4.1 2B at 0.099 is the *slowest* of
+  the three GPU cases, not the quickest; an earlier version of this file and
+  of `AGENTS.md` compared against it and reported 2.3x.)
 - Granite Speech 4.1 Plus and NAR were retired on the strength of these
-  numbers: both fall back to CPU, NAR at 0.43-0.46 and Plus at 4.14.
+  numbers, and the agreement column says why as plainly as the RTF does: both
+  fall back to CPU, NAR at 0.43-0.46 with 63.2% agreement and 43 words against
+  the reference's 52, and Plus at 4.14-4.15 with 1.4% agreement and 378 words
+  -- it looped one clause until it hit the token limit, which is also why its
+  RTF is so bad.
 - DirectML is not usable for the Cohere/Granite runtime on this machine;
   every `dml` case failed and the results above show only what ran.
 
@@ -93,4 +118,5 @@ cover all measured runs of that case.
 | `canary-1b-v2` | `auto` | Canary cannot detect the language. Choose the language spoken in the sample before benchmarking it; with the wrong on... |
 
 `canary-1b-v2` has no measurement in any run retained on this machine, so no
-Canary RTF should be quoted anywhere until one exists.
+Canary RTF -- and no ratio derived from one -- should be quoted anywhere until
+one exists.

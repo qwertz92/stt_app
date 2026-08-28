@@ -993,11 +993,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `onnxruntime-node` graph runtime that served them was removed with them, so
   there is exactly one ONNX inference path here and `onnxruntime-node` is no
   longer a top-level npm dependency (Transformers.js keeps its own nested pin).
-  They were removed on measurement, not preference: on the user's machine the
-  base 4.1 2B ran at RTF 0.098 on WebGPU while NAR managed 0.434 and Plus 4.138
-  -- both CPU-only, NAR with merged and dropped German words, Plus looping one
-  clause to the token limit (which is also what makes its 4.138 so bad: it is
-  autoregressive and kept generating). The graph-level cause is
+  They were removed on measurement, not preference: in the 2026-08-25 run the
+  base 4.1 2B ran at mean RTF 0.099 on WebGPU while NAR managed 0.447 and Plus
+  4.149 -- both CPU-only, NAR with merged and dropped German words (63.2%
+  word-sequence agreement with `large-v3`, 43 words against 52), Plus looping
+  one clause to the token limit (1.4% agreement, 378 words), which is also what
+  makes its RTF so bad: it is autoregressive and kept generating. **Every RTF
+  in this file is the mean of that case's runs**, which is the convention the
+  benchmark report uses; quoting a single run instead is how the same
+  measurement came to be published here as 0.098, as 0.100 and as 0.099 in
+  three places. The graph-level cause is
   recorded in `docs/granite-speech-4.1-onnx-variants.md`: their encoders carry
   16 `Einsum` nodes each (`b m h c d, c r d -> b m h c r`, a 5-D contraction the
   WebGPU EP has no shader for), plus the 5-D attention `MatMul`s DirectML
@@ -1085,19 +1090,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and deletion reuse the shared `_OnnxModelLayout` entries in
   `local_webgpu_asr`, whose allow-patterns fetch only the int8 tier (both repos
   also ship fp32 graphs worth 2.4 GB and 3.3 GB).
-  Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **RTF 0.042** on a
-  24.3 s German recording (no English run was retained; earlier text here said
-  0.046 EN / 0.043 DE and neither figure is in the benchmark history),
+  Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **mean RTF 0.043**
+  on a 24.3 s German recording (no English run was retained; earlier text here
+  said 0.046 EN / 0.043 DE and neither figure is in the benchmark history),
   and Canary at 1029 MB. **Canary has no RTF in the benchmark history**: its
   only case there errored ("Canary cannot detect the language"), so the
   "0.134 / 0.135" this entry used to give came from the same retracted note as
-  the Parakeet figures above and must not be requoted without a real run.
-  The 2026-08-25 benchmark put
-  Granite Speech 4.1 2B at 0.100 on WebGPU, so Parakeet on plain CPU is about
-  **2.3x** faster than the best local GPU model — a GPU path is not needed to
-  make it the quickest local option. (An earlier "six times" here compared
-  against a stale Granite figure; the ratio moved when the base 2B was measured
-  on the q4 pipeline path.)
+  the Parakeet figures above and must not be requoted without a real run --
+  nor may any ratio derived from it, which is how "~3x slower than Parakeet"
+  survived one round longer than the number it came from.
+  **Parakeet is not the fastest case in that run, and the qualifier is load-
+  bearing**: `tiny` measured 0.033, 1.29x quicker. What separates them is the
+  report's agreement column -- Parakeet matches `large-v3`'s word sequence at
+  98.1%, the highest of any model in the run, while `tiny` manages 82.7%, the
+  worst of the working models. So Parakeet is the fastest local model that is
+  also accurate, and every user-facing claim must carry that qualifier rather
+  than say "fastest" flat.
+  Against the GPU models it needs no qualifier: the quickest GPU case in that
+  run is `cohere-transcribe-03-2026` at 0.083 on WebGPU, so Parakeet on plain
+  CPU is **1.9x** faster than the best local GPU result and no GPU path is
+  needed for the best local latency. (Granite Speech 4.1 2B at 0.099 is the
+  *slowest* of the three GPU cases; comparing against it gave the 2.3x this
+  entry used to state. An earlier "six times" compared against a stale Granite
+  figure.)
   **Never add `onnxruntime-directml`.** It installs happily beside
   `onnxruntime` — `pip check` reports nothing wrong — but both distributions
   own the same `onnxruntime/` package directory (620 of 625 files), so the

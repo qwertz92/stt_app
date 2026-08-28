@@ -79,8 +79,9 @@ Right-click the **system tray icon** → **Settings**.
 There are four local families. **GPU-accelerated ONNX models** (Cohere, IBM
 Granite) are the most accurate — they run on the GPU via WebGPU, need Node.js,
 and are batch-only. **onnx-asr models** (Parakeet, Canary) are pure Python, CPU
-only, and need neither a GPU nor Node.js; Parakeet is by a wide margin the
-fastest local model here. **Nemotron 3.5** is the only local true-streaming
+only, and need neither a GPU nor Node.js; Parakeet is the fastest local
+model here that is also accurate (only Whisper `tiny` is quicker, and it is
+the least accurate model measured). **Nemotron 3.5** is the only local true-streaming
 model. **Whisper models** (CTranslate2) need no extra setup, run on the CPU, and
 also support streaming.
 
@@ -88,7 +89,7 @@ also support streaming.
 |----------|-------------------|---------|------|
 | Best accuracy (tops the Open ASR Leaderboard) | `granite-speech-4.1-2b` | ONNX/WebGPU q4 | ~1.84 GB |
 | High accuracy on a GPU | `cohere-transcribe-03-2026` | ONNX/WebGPU q4 | ~2.13 GB |
-| Zero-setup default: fastest local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` (default) | onnx-asr int8 | ~670 MB |
+| Zero-setup default: fastest accurate local transcription, no GPU or Node.js | `parakeet-tdt-0.6b-v3` (default) | onnx-asr int8 | ~670 MB |
 | Higher German accuracy than Parakeet, still CPU | `canary-1b-v2` | onnx-asr int8 | ~1.03 GB |
 | Lowest-latency live streaming | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI int4 | ~793 MB |
 | Whisper on CPU, multilingual, supports streaming | `small` | CTranslate2 | ~486 MB |

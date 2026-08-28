@@ -13,8 +13,9 @@ The app has four local runtime families:
 - **NVIDIA Nemotron 3.5** (int4, ONNX Runtime GenAI) — the local true cache-aware
   streaming model; also supports batch.
 - **onnx-asr models** (Parakeet TDT, Canary) — pure Python, CPU only, no Node.js
-  and no GPU. Parakeet is the fastest local model in this app by a wide margin
-  (RTF 0.042 on a Ryzen 5 7600X). Batch mode only.
+  and no GPU. Parakeet is the fastest local model in this app that is also
+  accurate: RTF 0.043 on a Ryzen 5 7600X, second only to Whisper `tiny`
+  (0.033), which is the least accurate model in the same run. Batch mode only.
 - **[faster-whisper](https://github.com/SYSTRAN/faster-whisper)** (CTranslate2) —
   CPU-based, no extra setup, the broad-compatibility baseline; also supports the
   experimental rolling-window streaming mode.
@@ -46,15 +47,17 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 | `granite-4.0-1b-speech` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | Smaller GPU fallback (q4), batch mode only |
 | `granite-speech-4.1-2b` | ONNX/WebGPU | ~1.84 GB q4 | Auto + `de/en/fr/es/pt/ja` | **Top accuracy** — Open ASR Leaderboard #1 (q4, WebGPU), batch mode only |
 | `nemotron-3.5-asr-streaming-0.6b-int4` | ORT GenAI INT4 | ~793 MB | Auto + 28 transcription-ready/broad-coverage languages | True cache-aware local streaming at fixed 560 ms chunks |
-| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest local model** — RTF 0.042 on CPU, no GPU or Node.js needed, batch mode only |
-| `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet, ~3x slower, batch mode only |
+| `parakeet-tdt-0.6b-v3` | onnx-asr INT8 (CPU) | ~670 MB | Auto (multilingual, no selection needed) | **Fastest accurate local model** — RTF 0.043 on CPU, no GPU or Node.js needed, batch mode only |
+| `canary-1b-v2` | onnx-asr INT8 (CPU) | ~1.03 GB | 25 explicit languages; **no Auto** | Higher published German accuracy than Parakeet; slower, though no run on this machine has measured it, batch mode only |
 
 ### Which model should I use?
 
 Accuracy and speed no longer point at the same model. For **accuracy** with a GPU
 and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v3`
-is the fastest option here and needs neither: it measured RTF 0.042 on a Ryzen 5
-7600X CPU, which beats the GPU models on their GPU. The Whisper models remain a
+needs neither: it measured RTF 0.043 on a Ryzen 5 7600X CPU, which beats every
+GPU model in the same run on its GPU. Whisper `tiny` is quicker still (0.033)
+and is the only local model that is, but it was also the least accurate one
+measured, which is why the default is Parakeet. The Whisper models remain a
 solid, zero-setup CPU baseline with the broadest language coverage. The surest way
 to choose is to run the [benchmark](advanced-setup.md#benchmarking) on your own
 hardware.
@@ -73,10 +76,12 @@ hardware.
 
 > **Real-time factor (RTF)** measures speed: processing time ÷ audio length.
 > RTF 0.1 means a 10-second clip transcribes in ~1 second — lower is faster, and
-> anything below 1.0 is faster than real time. On the tested Ryzen 7600X + Arc
-> A750, `granite-4.0-1b-speech` runs at RTF 0.059 on WebGPU vs 0.381 on CPU, and
-> `cohere-transcribe-03-2026` at 0.071 on WebGPU — both faster than `small`
-> (0.151) or `large-v3-turbo` (0.355). See
+> anything below 1.0 is faster than real time. In the most recent run on the
+> tested Ryzen 7600X + Arc A750
+> ([2026-08-25](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md)),
+> `granite-4.0-1b-speech` measured RTF 0.098 on WebGPU against 0.409 on CPU and
+> `cohere-transcribe-03-2026` 0.083 on WebGPU — both faster than `small` (0.154)
+> or `large-v3-turbo` (0.376). See
 > [Local Benchmark Results](benchmarks/README.md).
 
 ### Accuracy reference (Word Error Rate)
@@ -575,7 +580,7 @@ no extra ONNX Runtime — they reuse the one the app already ships.
 
 Both are **CPU only and batch only**. That is not a limitation in practice:
 measured on a Ryzen 5 7600X, Parakeet transcribes a 24.3-second recording in
-about 1.04 s (RTF 0.042), which is faster than any GPU model in this app.
+about 1.03 s (RTF 0.043), which is faster than any GPU model in this app.
 
 The ONNX Device setting does not apply to them and is disabled while one is
 selected. A DirectML build of ONNX Runtime would be roughly twice as fast again,
