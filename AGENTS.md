@@ -1841,6 +1841,58 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   app is not affected and must stay that way: `benchmark_process.py` uses
   `subprocess` with a dedicated stdout reader thread that drains the pipe
   concurrently, and `src/` uses no `multiprocessing` at all.
+- **`_TranscriberRuntimeLease.release()` always hands the runtime back, and
+  swallows both a failed close and a failed deferred cache reset.** The close
+  and the hand-back used to be two bare statements, and
+  `_close_cached_transcriber` swallows `Exception` but not
+  `BaseException`, while `_released` is set before either runs -- so a close
+  that died stranded `_transcriber_runtime_lock` for the process lifetime and
+  a retry was a no-op. It is also the single root of three symptoms, because
+  `_transcribe_worker`, `_finalize_stream_worker` and `_preload_model_worker`
+  all call `release()` from a `finally` that sits *outside* their own
+  `except BaseException` arm and emit their terminal signal afterwards: the
+  escaping exception swallowed that signal too, leaving the overlay in
+  Processing with no error and no Retry, or `_streaming_recording` stuck True
+  so every later hotkey press was refused. Hence log-and-drop rather than
+  re-raise: handing back is the contract, closing is best-effort on top of it.
+  **Both statements need the guard, and guarding only the close was the first,
+  insufficient fix.** The hand-back applies the deferred cache reset, which
+  closes the *cached* transcriber through that same helper, so the identical
+  `BaseException` still reached the worker through the other door. Nothing is
+  stranded by swallowing it: the admission lock and the use count are handed
+  back inside `_release_transcriber_runtime`'s own `finally` before anything
+  can escape, and a reset that failed leaves `_pending_transcriber_cache_reset`
+  set so the next release retries it. What is *not* claimed is that `release()`
+  cannot raise at all -- a logging handler that throws still escapes, and
+  chasing that would be defence without a failure mode behind it.
+- **Clear a resource's owner flag *before* the call that disposes of it.**
+  `_acquire_transcriber_runtime`'s shutdown branch closed the runtime and then
+  set `orphan = None`; a close raising `BaseException` therefore left `orphan`
+  set, the outer arm closed the same runtime again, and that second raise
+  replaced the first -- so the caller got the close's error instead of the
+  `TranscriptionCanceled` the branch exists to deliver.
+- **Every arm that abandons a stream start must tear the handshake down, not
+  just release the lease.** `_begin_stream_connect` has already spawned it, so
+  releasing alone lets `start_stream` publish a session nobody owns; every
+  provider then refuses the next one with "Streaming session already active"
+  and a remote socket stays open and billed until restart. All three arms of
+  `_start_streaming_recording` do this now, teardown before release and unable
+  to raise past it.
+- **A swallowed streaming partial callback is logged once per session.**
+  That callback is what puts live text on screen and into the document, so
+  a bare `pass` made a dead live-insertion path indistinguishable from a
+  user who had simply stopped talking. It must stay swallowed -- one lost
+  delivery costs nothing, the next partial carries the whole merged text
+  again -- and it must stay latched behind `partial_callback_failed`, the
+  same shape as `noise_floor_warned`, because it runs about every 350 ms.
+- **`tests/conftest.py` blocks the real `create_transcriber`.** The isolated
+  arm of `_acquire_transcriber_runtime` -- taken whenever the shared lock is
+  already held -- calls the module-level function, so the 27 patch sites that
+  replace `_get_or_create_transcriber` do not cover it, and a test slipping
+  onto that arm builds a real provider client or a real local runtime that
+  downloads its model. The fixture raises a named `AssertionError`; the 64
+  tests that patch `stt_app.controller.create_transcriber` themselves are
+  unaffected, because `monkeypatch` applies theirs afterwards.
 - **`_start_streaming_recording` has two capture-failure arms, and a test that
   fails `_build_audio_capture` reaches only the first.** That call returns
   before `capture.start()` exists, so the `AudioCaptureError` arm below it is
@@ -1900,6 +1952,34 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   throwaway copy. Its model step also skips every non-`local` engine: the
   transcriber is built without a secret store there and dies with "API key is
   missing", and no remote provider implements `preload_model` at all.
+  **And it must not move the folder the settings live in.** Loading a model
+  reaches `appdata_root()` -- measured chain: `preload_model` ->
+  `_coordinated_download_if_missing` -> `run_coordinated_download` ->
+  `acquire` -> `_acquire_cache_lock` -> `_download_lock_dir` -- which is a
+  *setup* call that renames a legacy `tts_app` install onto the current name.
+  So the commit that stopped the script touching `settings.json` reintroduced
+  the same side effect one level out, through a call chain no grep of the
+  script reveals, and made it *more* likely by adding a fresh-install branch
+  that reaches the model step where the old code returned early.
+  `_legacy_data_folder_would_be_moved()` now declines the step and says why.
+  Creating a data folder that does not exist yet is left alone: it holds
+  nothing of the user's, and refusing to create it would strand a legacy
+  install forever -- an empty `stt_app` beside `tts_app` is exactly the state
+  in which `appdata_root()` stops migrating.
+- **A diagnostic must read the file it proved it can read, not the one it
+  was handed.** The settings reader falls through to the `.bak` when the
+  primary raises `OSError`, and then copied *the primary* into the sandbox --
+  reading again the file that had just refused, so every `OSError` the backup
+  exists to survive came back as a crash and `--strict` 1 for an install the
+  app starts fine on. Tracking `usable_path` removes the failure mode instead
+  of guarding it: the file that parsed cannot fail to be copied for that
+  reason.
+- **When the settings are unusable, check the defaults -- do not check
+  nothing.** `SettingsStore.load` quarantines a file that will not parse and
+  writes defaults, so the app runs on the default model. Reporting the
+  problem and skipping the model check made `--check-model` verify nothing on
+  exactly the broken install it exists for, while the script's own message
+  already said "the app will discard it".
 - **The suite's Hugging Face isolation lives in `pytest_configure`, not a
   fixture**: `huggingface_hub` computes `HF_HUB_CACHE` and `HF_HUB_OFFLINE` at
   **import**, and a test module imports it at module scope, which pytest does
@@ -1942,22 +2022,43 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   through the polished label. `key=len` is character count, not drawn width
   (`W` x29 draws 319 px against 159 px for the 30-character longest label);
   `key=horizontalAdvance` is drawn width, and what is reserved is a wrapped
-  height, which a width ordering does not order. **No under-reservation from
-  the advance key could be reproduced at any dialog width from 200 to 1100**
-  with today's names, so that half is a guard against the next name, not a
-  live defect; what settles it is that measuring all 15 candidates costs
-  1.26 ms on a cache miss and 1.5 us on a hit. Measuring at construction time
-  is wrong regardless -- the label is unpolished there and reports 9 pt rather
-  than the stylesheet's 11 px.
-- **`QLabel.heightForWidth(w)` is not a pure function of `w`**, and two
-  earlier versions of the entry above were written from measurements that
-  assumed it is. Measured on the retranscribe note: the identical call
-  returned 60 px with the label 556 px wide and 90 px with it 476 px wide. A
-  stand-in `QLabel` carrying the same stylesheet wraps differently again, and
-  invented a name inversion that does not occur in the real dialog at any
-  width. So: resize the real widget to the width under test, then measure it
-  -- a sweep that varies only the argument is measuring the cache, and it
-  will produce confident, reproducible, wrong numbers.
+  height, which a width ordering does not order. **This is live, not
+  hypothetical**: for a `granite-speech-4.1-2b-nar` entry the advance key
+  under-reserves by 15 px at label widths 594-606, i.e. dialog widths 678-690,
+  well inside the shipped 560 px minimum. The band is narrow -- the candidates
+  differ at 134 of 841 reachable widths there, 100-102 for other entries --
+  which is why three hand-picked width lists missed it and one review round
+  concluded it could not happen. Measuring at construction time is wrong
+  regardless: `setStyleSheet` alone does not apply the font, so the label
+  reports 9 pt and a 16 px line height until it is polished, 11 px and 15 px
+  after. (That does not flip the advance key's *winner* for today's names,
+  only the ordering below it.)
+- **`QLabel.heightForWidth` is floored by `minimumHeight()`, and the
+  reservation *is* that minimum.** `QLabelPrivate::sizeForWidth` ends in
+  `.expandedTo(minimumSize())`, so reading through a label that already
+  carries a reservation returns the reservation. Measured on a bare label,
+  one identical call: 15 px at `minimumHeight() == 0`, 400 px at 400, 15 px
+  again at 0. Two consequences, and both bit:
+  - `_reserve_note_height` was a one-way ratchet. `max(...)` over readings
+    that cannot fall below the installed floor can only grow, so narrowing
+    the dialog and widening it again kept the taller note -- 6 px for `small`,
+    30 px for a 63-char imported id, taken off the transcript view -- while
+    `resizeEvent` documented the reservation as correct at every size. It now
+    clears the floor before measuring.
+  - **Every wrong claim this pair of entries has carried came from measuring
+    that way.** "The identical call returned 60 px at label width 556 and
+    90 px at 476" was the dialog's own reservation at those two widths, not
+    impurity; a later sweep reporting all 15 candidates agreeing at every
+    reachable width was one installed floor read 841 times; and the
+    corresponding test asserted `needed <= reserved` against a `needed` that
+    was `reserved`, which is why an advance-key shortcut survived mutation.
+  `heightForWidth(w)` itself *is* pure in `w`, verified with the argument held
+  fixed while the label's width varied. The two clamps around it are not:
+  `minimumWidth()` raises the argument (`heightForWidth(200)` returns 120 at
+  minimum width 0 and 60 at 600), `minimumHeight()` raises the result. The
+  rule that survived all four versions of this entry: measure through the
+  real, polished widget, at the width in question, with the previous
+  reservation removed.
 - **Nothing that only reads may call `appdata_root`**: it creates the data
   folder and renames a legacy `tts_app` install onto the current name, so a
   path *lookup* migrated a user's settings, history and recordings. Use
@@ -2125,7 +2226,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Tests
 
-- Preferred on Windows: `.venv\Scripts\pytest.exe -q`
+- Preferred on Windows: `.venv\Scripts\pytest.exe` -- **without `-q`**.
+  `pyproject.toml` already sets `addopts = "-q"`, so passing it again is
+  `-qq`, and `-qq` suppresses the final `N passed in Xs` line entirely. That
+  is what every run in this repository did until 2026-08-28: a green run
+  printed dots and `[100%]` and no count, so a run that collected three tests
+  was indistinguishable from one that collected the whole suite, and "the
+  suite is green" rested on an exit code alone. Measured on one module: 59
+  dots and nothing with the extra `-q`, `59 passed in 0.26s` without it. The
+  full suite on 2026-08-28 was `1831 passed, 1 skipped in 102.08s`.
 - Alternate when the environment supports it: `uv run python -m pytest` or `python -m pytest`
 - Note: the project uses a uv-managed Windows `.venv`; `pytest.exe` may be available even when `python -m pytest` or `python -m pip` is not.
 - Always bound a run with a hard wall-clock limit (`timeout <secs> ...`), and

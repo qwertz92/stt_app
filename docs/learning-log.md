@@ -113,6 +113,210 @@ of `_acquire_transcriber_runtime` had the same gap: the isolated branch has a
 test for a raising lease constructor, the branch that actually holds the lock
 did not.
 
+### The same two statements, four frames apart
+
+A reviewer of the round-9 controller work found that the guard I had just
+added to `_acquire_transcriber_runtime` was missing one frame further out, in
+`_TranscriberRuntimeLease.release()` -- close, then hand back, no `finally`.
+Measured: `lock_reacquired_after_release = False`, and because `_released` is
+set before either statement, the retry is a no-op.
+
+That one omission was the root of three separate symptoms, which is what makes
+it worth recording. All three workers -- `_transcribe_worker`,
+`_finalize_stream_worker`, `_preload_model_worker` -- call `release()` from a
+`finally` that sits *outside* their own `except BaseException` arm and emit
+their terminal signal *after* it. So a close that raised did not merely fail to
+close: it took the transcript with it. Measured on `_transcribe_worker`:
+`ready = []`, `failed = []`, exception escaped, overlay stuck in Processing
+with no error and no Retry. On `_finalize_stream_worker`: nothing emitted, so
+`_streaming_recording` stays True and every later hotkey press is refused.
+
+The fix is one `try/except BaseException/finally` in `release()`, and it makes
+that method a true cleanup primitive: it always hands back and never raises.
+
+Three smaller ones from the same review, each a placement rather than a
+mechanism:
+
+- the shutdown branch of `_acquire_transcriber_runtime` cleared its `orphan`
+  marker *after* the close, so a close that raised let the outer arm close the
+  same runtime a second time and the second raise replaced the first;
+- the `BaseException` arm added to `_start_streaming_recording` released the
+  lease but did not tear the handshake down, which its two sibling arms do
+  precisely because `start_stream` otherwise publishes a session nobody owns;
+- the justification I wrote beside the preload fix was wrong. It named the
+  Cohere/Granite child-kill as the case that reaches the `except Exception`
+  arm. Checked: that raises `TranscriptionCanceled`, handled by the arm above,
+  and it lives in `transcribe_batch` -- that runtime's `preload_model` is
+  `_ensure_process()` with no cancel check at all. The fix is right; the
+  sentence next to it was not, which is the third time this session that a
+  correct change shipped with unreproducible reasoning attached.
+
+### The instrument was the reservation itself
+
+Four versions of one comment, three of them wrong, and every wrong version
+came from the same unexamined assumption: that reading
+`note.heightForWidth(w)` tells you how tall the text wraps.
+
+`QLabelPrivate::sizeForWidth` ends in `.expandedTo(minimumSize())`. The result
+is floored by the label's own minimum height -- which is exactly what the
+reservation installs. Measured on a bare label, one identical call: 15 px at
+`minimumHeight() == 0`, 400 px at 400, 15 px again back at 0.
+
+So every measurement taken through that label was reading the reservation
+back:
+
+- "the identical call returned 60 px at label width 556 and 90 px at 476" was
+  the dialog's own reservation at those two widths, published as proof that
+  `heightForWidth` is impure;
+- the sweep that replaced it, reporting all 15 candidates producing the same
+  height at all 841 reachable widths, was one installed floor read 841 times.
+  With the floor genuinely cleared the candidates differ at 134 of those
+  widths and the advance-key shortcut under-reserves by 15 px at dialog widths
+  678-690 -- inside the shipped minimum, on a shipped model name;
+- the test asserting `needed <= reserved` was comparing `reserved` with
+  itself, which is why an advance-key mutant survived it.
+
+And the code had the same defect as the measurements. `max(...)` over readings
+that cannot fall below the installed floor can only grow, so
+`_reserve_note_height` was a one-way ratchet: narrowing the dialog and widening
+it again kept the taller note (6 px for `small`, 30 px for a 63-char imported
+id), taken off the transcript view, while `resizeEvent`'s docstring promised
+the reservation was correct at every size.
+
+My second correction of this entry was itself refuted the same way. I cleared
+the floor -- and then ran the resize loop that collects the reachable widths,
+which fires `resizeEvent`, which puts the floor straight back, before taking a
+single reading. Clearing a confound and then re-establishing it before
+measuring looks exactly like clearing it.
+
+What generalises: when a measurement and the code under test share a
+mechanism, agreement between them is not evidence. Three separate wrong
+conclusions here were each internally consistent, reproducible, and confirmed
+by a passing test.
+
+### Varying two things and calling the result impurity
+
+For three rounds the retranscribe reservation carried a claim that
+`QLabel.heightForWidth(w)` is not a pure function of `w`, "measured" as 60 px
+at label width 556 and 90 px at 476. A reviewer could not reproduce it in
+4440 comparisons and named the real mechanism instead. Re-measured here with
+the argument held fixed while only the label's width moved:
+`heightForWidth(500)` returns 60 at every reachable width from 476 to 1316.
+Pure.
+
+The original measurement had changed the argument *and* the width together
+and attributed the difference to the width. What does move the answer without
+the argument changing is `minimumWidth()`, which Qt clamps the argument up to
+-- `heightForWidth(200)` returns 120 at `minimumWidth() == 0` and 60 at 600 --
+and the dialog reserves a minimum *height*, so it never applies here.
+
+Two neighbouring claims in the same comment were checked at the same time and
+both were partly wrong. "No under-reservation at any width" is true only
+because the dialog's own 560 px minimum keeps the label at 476 or wider; below
+that, at 415-419, both candidate keys under-reserve by 15 px. And "the
+unpolished label reports 9 pt, which flips the choice between two shipped
+labels" is right in its first half -- `setStyleSheet` alone leaves the label
+at 9 pt and a 16 px line height until it is polished -- and wrong in its
+second: the winner is the same either way, only the ordering below it differs.
+
+The practical rule survived all three versions and is the only part worth
+keeping: measure through the real, polished widget. What did not survive is
+any of the mechanisms offered for *why* -- including the one this section
+offers. See the section above: the real mechanism is `minimumHeight`, and
+this correction was refuted the same day it was written.
+
+### The fix moved the defect one level out, and made it likelier
+
+`smoke_test.py` was rewritten so that asking where the settings live could not
+migrate a legacy `tts_app` install. The same commit added a fresh-install
+branch that reaches the model check, and loading a model calls
+`preload_model` -> `_coordinated_download_if_missing` ->
+`run_coordinated_download` -> `acquire` -> `_acquire_cache_lock` ->
+`_download_lock_dir` -> `appdata_root()`. Which migrates. So the commit that
+closed the side effect reopened it through a call chain that contains none of
+the words a reader would grep for, and the new branch made it reachable in
+cases where the old code had returned early.
+
+Nothing in the script's own text is wrong about this; the help even says the
+check "initializes the app data directory the same way starting the app
+would". "Initializes" is the word doing the hiding: it names creation, and the
+call also renames.
+
+Two smaller ones from the same review, both in code written to be careful:
+the settings reader falls through to the `.bak` when the primary raises
+`OSError`, then copied *the primary* -- reading again the file that had just
+refused, so the one failure the backup exists for became a crash; and the
+"settings are unusable" branch skipped the model check although
+`SettingsStore.load` quarantines that file and runs on defaults, which the
+script's own message says.
+
+### Three numbers that no build ever printed
+
+The entry above about deriving a size from the wrong table gave the regression
+as `2.13 -> 2.08`, `1.84 -> 1.80`, `1.03 -> 1.00`. The buggy formatter was
+`f"~{megabytes / 1024:.1f} GB"` -- one decimal -- so it printed `~2.1`, `~1.8`
+and `~1.0`. The three "after" values were computed from the description of the
+bug rather than read off the code, in an entry whose subject is exactly that.
+The source comment beside the fixed code had the opposite half wrong: it still
+said six labels and named `large-v3`, which the log had already corrected to
+four. Recomputing both formatters over the real table settles it in one
+command, and the two texts now say the same thing.
+
+### The second door
+
+The `release()` fix above was checked by mutation, documented, and wrong by
+half. Reviewing my own change afterwards -- reading every one of the 14 lease
+release sites rather than the one I had edited -- showed that the guarded
+statement was only the first of two. `release()` hands back through
+`_release_transcriber_runtime`, which applies the deferred cache reset, which
+closes the *cached* transcriber through the same `_close_cached_transcriber`
+that swallows `Exception` but not `BaseException`. So the exact failure the
+new `try` was added to survive still escaped, to the same worker, with the
+same symptom.
+
+Two things made it easy to miss. The mutation test proved the guard I wrote
+was load-bearing, which is a different claim from "the method now holds", and
+I had written the stronger claim into `AGENTS.md` as "never raises" without
+reading what the call inside the `finally` does. The invariant is now stated
+as what is actually guaranteed -- always hands back, swallows a failed close
+and a failed deferred reset -- and explicitly not as "cannot raise", because a
+logging handler that throws still escapes and no failure mode stands behind
+chasing that.
+
+The generalisable part: after fixing a call, read the callee. A guard placed
+around statement A is worth nothing if statement B, one frame down, reaches
+the same failure.
+
+### Every run in this repo was hiding its test count
+
+`pyproject.toml` sets `addopts = "-q"` and `AGENTS.md` told every agent to
+pass `-q` as well. That is `-qq`, which suppresses pytest's final
+`N passed in Xs` line entirely, so a green run printed dots, `[100%]`, and no
+count at all. Measured on one module: 59 dots and nothing with the extra
+`-q`, `59 passed in 0.26s` without it.
+
+Nothing was broken by it, which is the point -- a run that collected three
+tests looked exactly like one that collected the whole suite, and every
+"the suite is green" this session rested on an exit code. The documented
+command now omits the redundant flag, and the first run under it recorded
+`1831 passed, 1 skipped in 102.08s`.
+
+### Two of my own mutations were the thing that was wrong
+
+Both survivors in the first mutation run were harness errors, not surviving
+defects. One test used a `close()` that succeeded, so the ordering it existed
+to pin could not matter. The other revert was split across two edits again --
+the same mistake as the hung run earlier the same day -- leaving `transcriber`
+bound to `None` so the mutation was a no-op.
+
+Re-run properly, the second one *still* survives, and that is the honest
+result: the teardown's own `except BaseException` catches the
+`UnboundLocalError` from evaluating its argument, so pre-binding `transcriber`
+changes no observable behaviour. It is kept because without it every such
+failure logs a "Failed to tear down the stream connect" traceback that is
+really our own unbound local. The comment and the test docstring now say that
+rather than implying the line is load-bearing.
+
 ### What these say about the process
 
 - **Check the instrument before publishing the measurement.** Three rounds
@@ -161,10 +365,20 @@ correctly, and then divided by 1024 and labelled "GB". `MODEL_ESTIMATED_SIZE_MB`
 says in its own comment that it is decimal megabytes, and
 `model_download_progress` converts it with `* 1_000_000` -- so the fix took the
 four labels that were already correct two-decimal decimal GB and made every one
-of them wrong: `cohere-transcribe-03-2026` 2.13 -> 2.08, `granite-4.0-1b-speech`
-and `granite-speech-4.1-2b` 1.84 -> 1.80, `canary-1b-v2` 1.03 -> 1.00. The test
-could not see it because the test divided by 1024 too: it agreed with the code
-and the pair was self-consistent.
+of them wrong. The formatter it introduced was `f"~{megabytes / 1024:.1f} GB"`,
+i.e. binary *and* one decimal, so the four went
+`cohere-transcribe-03-2026` `~2.13 GB` -> `~2.1 GB`, `granite-4.0-1b-speech`
+and `granite-speech-4.1-2b` `~1.84 GB` -> `~1.8 GB`, `canary-1b-v2`
+`~1.03 GB` -> `~1.0 GB`. The test could not see it because the test divided by
+1024 too: it agreed with the code and the pair was self-consistent.
+
+(A later version of this entry gave those results as 2.08, 1.80 and 1.00.
+Those are what a *two*-decimal binary divisor would print, and no build ever
+had one -- the numbers were derived from the arithmetic rather than read off
+the code, in an entry whose whole subject is deriving a value from the wrong
+table. Recomputed from `MODEL_ESTIMATED_SIZE_MB` through both formatters, and
+the current `f"~{megabytes / 1000:.2f} GB"` restores all four to their
+original strings exactly.)
 
 (The first version of this entry said "six labels" and offered `large-v3` at
 "~3.0 GB" as the most visible case. Both are wrong, and checking cost one
