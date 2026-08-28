@@ -50,12 +50,10 @@ _CANARY_LANGUAGE_WARNING = (
     "Canary cannot detect the language. Pick the one actually spoken - with "
     "the wrong one it translates instead of transcribing."
 )
-# The widest name the substitution sentence can carry, so the reserved height
-# below is measured against the real worst case rather than today's wording.
-_LONGEST_MODEL_NAME = max(
-    (local_model_short_label(name) for name in LOCAL_MODEL_LABELS),
-    key=len,
-    default="",
+# Every name the substitution sentence can carry. Not "the longest" -- there
+# is no such thing here, see `_reserve_note_height`.
+_SUBSTITUTABLE_MODEL_NAMES = tuple(
+    dict.fromkeys(local_model_short_label(name) for name in LOCAL_MODEL_LABELS)
 )
 
 _DEFAULT_SIZE = QtCore.QSize(640, 620)
@@ -143,6 +141,8 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # label renders at 11 px, which is why two dialog lines were already
         # worth about two and a half label lines.)
         self._minimum_note_height = self.fontMetrics().lineSpacing() * 3 + 6
+        # Width the current reservation was measured at; -1 until measured.
+        self._reserved_note_width = -1
         self._language_note.setMinimumHeight(self._minimum_note_height)
         # `heightForWidth` explicitly, not by accident: the dialog is
         # resizable down to `_MINIMUM_SIZE`, and at 560 px the worst-case note
@@ -174,24 +174,38 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # that took 75 at the dialog's own minimum width, so changing the
         # model moved everything below it by 15 px.
         #
-        # Compared in pixels, not characters: this reserves a `heightForWidth`,
-        # which depends on how wide the text draws, and the two axes disagree.
-        # A 29-character run of `W` is *shorter* than the 30-character longest
-        # label yet draws far wider, so `key=len` picked the narrower string
-        # and left the same 15 px overflow it was added to remove.
-        metrics = self._language_note.fontMetrics()
-        widest_name = max(
-            (_LONGEST_MODEL_NAME, local_model_short_label(self._entry_model)),
-            key=metrics.horizontalAdvance,
-        )
-        self._worst_case_note = " ".join(
-            (
-                f"This entry was recorded with '{widest_name}', which "
-                f"this version no longer offers, so {widest_name} was "
-                f"chosen instead.",
-                "This entry's language (auto) is unavailable here, so de was "
-                "chosen.",
-                _CANARY_LANGUAGE_WARNING,
+        # Every candidate is kept and all of them are measured later, because
+        # neither shortcut works:
+        #
+        # * `key=len` picks by character count, and a 29-character run of `W`
+        #   draws far wider than the 30-character longest label.
+        # * `key=horizontalAdvance` picks by drawn width, and what is reserved
+        #   is a *wrapped* height, which is not monotonic in width. Measured
+        #   through this very label at 11 px, 'IBM Granite Speech 4.1 2B Plus'
+        #   (159 px) wraps to 45 px while the narrower 'NVIDIA Nemotron 3.5
+        #   ASR 0.6B' (157 px) wraps to 60 -- so picking the wider name
+        #   under-reserves by 15 px, the same overflow the pixel comparison
+        #   was introduced to remove.
+        # * Measuring here at all is wrong regardless: the label is neither
+        #   polished nor parented yet, so `fontMetrics()` reports the 9 pt
+        #   default rather than the stylesheet's 11 px it renders in. That
+        #   alone flips the choice between two shipped labels.
+        self._worst_case_notes = tuple(
+            " ".join(
+                (
+                    f"This entry was recorded with '{name}', which "
+                    f"this version no longer offers, so {name} was "
+                    f"chosen instead.",
+                    "This entry's language (auto) is unavailable here, so de "
+                    "was chosen.",
+                    _CANARY_LANGUAGE_WARNING,
+                )
+            )
+            for name in dict.fromkeys(
+                (
+                    *_SUBSTITUTABLE_MODEL_NAMES,
+                    local_model_short_label(self._entry_model),
+                )
             )
         )
         language_box = QtWidgets.QWidget()
@@ -375,12 +389,21 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # the note renders at the stylesheet's 11 px and wraps under the
         # label's own margins, so anything measured beside it disagrees with
         # what is actually laid out.
+        if self._reserved_note_width == width:
+            return
         original = note.text()
         try:
-            note.setText(self._worst_case_note)
-            needed = note.heightForWidth(width)
+            # Every candidate, because wrapped height does not follow width.
+            # `heightForWidth` is a text layout, so the result is cached
+            # against the width that produced it -- a drag emits a burst of
+            # resize events and only the ones that change the width matter.
+            needed = 0
+            for candidate in self._worst_case_notes:
+                note.setText(candidate)
+                needed = max(needed, note.heightForWidth(width))
         finally:
             note.setText(original)
+        self._reserved_note_width = width
         reserved = max(self._minimum_note_height, needed)
         # Only on a change: `setMinimumHeight` can trigger another resize, and
         # this runs from `resizeEvent`.

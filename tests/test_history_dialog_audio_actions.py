@@ -9,6 +9,7 @@ from stt_app import history_dialog as history_dialog_module
 from stt_app.history_dialog import HistoryDialog
 from stt_app.retranscribe_dialog import RetranscribeDialog
 from stt_app.settings_dialog_helpers import (
+    LOCAL_MODEL_LABELS,
     local_model_short_label,
     model_choices_for_engine,
 )
@@ -461,6 +462,78 @@ def test_the_retranscribe_note_does_not_move_the_layout_at_any_width():
     finally:
         for dialog in dialogs:
             dialog.close()
+
+
+def test_the_reserved_note_height_covers_every_substitutable_model_name():
+    """The reservation must cover the worst case, not a guess at which it is.
+
+    Two shortcuts were tried and both under-reserved, because the quantity
+    being reserved is a *wrapped* height:
+
+    * `key=len` -- character count is not drawn width. A 29-character run of
+      `W` draws wider than the 30-character longest label.
+    * `key=horizontalAdvance` -- drawn width is not wrapped height, and the
+      relation is not even monotonic. Measured through this label at its
+      rendered 11 px, `IBM Granite Speech 4.1 2B Plus` (159 px) wraps to
+      45 px while the *narrower* `NVIDIA Nemotron 3.5 ASR 0.6B` (157 px)
+      wraps to 60, because the extra token crosses a line boundary. Picking
+      the wider name reserved 45 for a note that needs 60.
+
+    Measuring every candidate through the polished label is the only key that
+    cannot be wrong. This asserts that directly: whatever the dialog reserved,
+    no candidate may exceed it.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="granite-speech-4.1-2b-nar"),
+        audio_path=Path(__file__),
+        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    try:
+        dialog.show()
+        app.processEvents()
+        note = dialog._language_note
+        assert dialog._worst_case_notes, "no candidates were built"
+
+        dialog.setMinimumWidth(320)
+        for width in (dialog.width(), 640, 600, 560, 320):
+            dialog.resize(width, dialog.height())
+            app.processEvents()
+            reserved = note.minimumHeight()
+            original = note.text()
+            try:
+                for candidate in dialog._worst_case_notes:
+                    note.setText(candidate)
+                    needed = note.heightForWidth(note.width())
+                    assert needed <= reserved, (
+                        f"at dialog width {width} the note reserves {reserved} px "
+                        f"but this substitution needs {needed} px: {candidate!r}"
+                    )
+            finally:
+                note.setText(original)
+    finally:
+        dialog.close()
+
+
+def test_the_note_candidates_include_every_offered_model_and_the_entrys_own():
+    """A name missing from the set is a name the reservation never measured."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    imported_id = "some-model-a-history-import-carried"
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model=imported_id),
+        audio_path=Path(__file__),
+        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    try:
+        app.processEvents()
+        joined = " ".join(dialog._worst_case_notes)
+        for name in LOCAL_MODEL_LABELS:
+            assert local_model_short_label(name) in joined, name
+        assert local_model_short_label(imported_id) in joined
+    finally:
+        dialog.close()
 
 
 def test_retranscribe_dialog_reports_a_deleted_audio_file(tmp_path):
