@@ -1947,7 +1947,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   or two tokens out of 52, and on the deciding token the reference itself is
   wrong (`transkriptiere` is not a German word). What survives every choice of
   reference, and is all it may be used for: Plus last of 12, NAR 11th-12th
-  (neither transcribed the recording), `tiny` 10th-11th. Quote it with
+  (neither transcribed the recording), `tiny` 10th-11th. Between any two
+  models that both worked it supports nothing -- even Parakeet against
+  `small`, 98.1% to 91.3%, reverses under five of the thirteen references,
+  because models that agree with each other are not thereby correct. Quote it
+  with
   `autojunk=False` and the argument order the report states: `difflib` discards
   popular elements of its *second* sequence past 200 items, which is why one
   transcript scored 1.4% one way round and 2.8% the other.

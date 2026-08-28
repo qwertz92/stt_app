@@ -58,7 +58,11 @@ and Node.js, start with the GPU/ONNX models. For **speed**, `parakeet-tdt-0.6b-v
 needs neither: it measured RTF 0.043 on a Ryzen 5 7600X CPU, which beats every
 GPU model in the same run on its GPU. Whisper `tiny` is quicker still (0.033)
 and is the only local model that is, but it is also the weakest of the models
-that transcribed the recording, which is why the default is Parakeet. The Whisper models remain a
+that transcribed the recording, which is why the default is Parakeet. Between
+models that both worked, that benchmark cannot tell you which is more
+accurate -- see the
+[report](benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md) -- so pick on
+speed, size and language coverage. The Whisper models remain a
 solid, zero-setup CPU baseline with the broadest language coverage. The surest way
 to choose is to run the [benchmark](advanced-setup.md#benchmarking) on your own
 hardware.

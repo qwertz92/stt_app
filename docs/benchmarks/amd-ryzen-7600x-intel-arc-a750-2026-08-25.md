@@ -82,6 +82,12 @@ last of 12 every time and NAR 11th or 12th -- neither transcribed the
 recording -- and `tiny` ranks 10th or 11th every time, clearly the weakest of
 the models that did.
 
+Between any two models that both worked, it supports nothing. Even Parakeet
+against `small` -- 98.1% to 91.3% here -- reverses under five of the thirteen
+references. Treat the column as a three-way sort into "transcribed it",
+"weakest of those" and "did not transcribe it", and read the speed columns
+for everything else.
+
 | Model | Device | Load | Runs | Average | RTF | Agreement |
 | ----- | ------ | ---: | ---- | ------: | --: | --------: |
 | `tiny` | `cpu` | 0.62s | 0.80s, 0.81s | 0.80s | 0.033 | 82.7% |
@@ -113,12 +119,14 @@ the models that did.
   models that transcribed the recording", not "most accurate" -- and that is
   what made it the default a fresh install uses.
 - Against `small`, the previous default, on the same recording and the same
-  device: 0.043 against 0.154, i.e. **3.6x faster**. It is also ahead on
-  agreement, 98.1% against 91.3%, and that particular comparison does survive
-  every choice of reference -- unlike the differences inside the leading
-  cluster. The per-run values are 0.0428/0.0423 and 0.1520/0.1553; where this
-  repository quotes 0.042 and 0.152 it is naming the faster run of each rather
-  than the mean this file publishes, and the ratio is 3.6x either way.
+  device: 0.043 against 0.154, i.e. **3.6x faster**. That is the whole claim.
+  Parakeet is ahead of `small` on agreement here too, 98.1% against 91.3%, but
+  **do not quote that either**: it flips under five of the thirteen possible
+  references (`tiny`, `base`, `small` itself, Nemotron and Plus), which is
+  circular in the obvious way -- models that agree with each other are not
+  thereby correct. The per-run RTFs are 0.0428/0.0423 and 0.1520/0.1553, so
+  the ratio is 3.6x on the means this file publishes and on the faster runs
+  alike.
 - It is also faster than every GPU case measured. The quickest of those is
   `cohere-transcribe-03-2026` at 0.083 on WebGPU, so Parakeet on plain CPU is
   **1.9x** faster than the best local GPU result and no GPU path is needed for

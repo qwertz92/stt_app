@@ -118,6 +118,13 @@ checking only `benchmark_history.json`. Both are in this log, from a manual
 session on a 16.9 s English / 13.4 s German clip pair. They are not
 unsourced -- they are not comparable, which is a different sentence.
 
+A third pass was still needed after that. The rewritten report said the
+Parakeet-versus-`small` comparison "does survive every choice of reference" --
+repeated from the reviewer's summary without being checked. It does not: it
+reverses under five of the thirteen, including `small` itself. Between two
+models that both worked, this measure supports nothing, and the fourth version
+of the paragraph says so.
+
 ### What these two rounds say about the process
 
 - **A fix inherits the burden of the thing it fixed, and then some.** Round 7
