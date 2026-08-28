@@ -447,13 +447,20 @@ class TextInserter:
         getter = getattr(self._backend, "get_clipboard_sequence_number", None)
         if not callable(getter):
             return None
+        # `int()` inside the guard, not after it. Every caller treats this as
+        # "returns a number or None, never raises", and
+        # `_clipboard_changed_after_set` is called from inside the paste
+        # block's own `except` arm -- where the only handler is
+        # `except ClipboardContentionError`, so anything else escapes the
+        # classification entirely and leaves a Qt slot with a raw exception
+        # after the paste keystroke has already gone out.
         try:
             sequence = getter()
+            if sequence is None:
+                return None
+            return int(sequence)
         except Exception:
             return None
-        if sequence is None:
-            return None
-        return int(sequence)
 
     def _clipboard_text(self):
         getter = getattr(self._backend, "get_clipboard_text", None)

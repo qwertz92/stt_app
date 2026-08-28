@@ -503,3 +503,42 @@ def test_a_failure_after_the_paste_keystroke_is_never_retryable():
         f"{type(excinfo.value).__name__} is retryable, so the streaming "
         "retry will paste the same words a second time"
     )
+
+
+def test_a_backend_returning_a_nonnumeric_sequence_does_not_escape_unclassified():
+    """`_clipboard_sequence_number` must honour its "never raises" contract.
+
+    `int()` used to sit *outside* its own `try`, so a backend handing back
+    anything non-numeric raised straight through. That matters because
+    `_clipboard_changed_after_set` is also called from inside the paste
+    block's `except` arm, whose only handler is `except
+    ClipboardContentionError` -- so the exception would escape the whole
+    classification, past a paste keystroke that has already gone out, and out
+    of a Qt slot. Every caller treats the value as "a number or None".
+    """
+    backend = SequencedPasteBackend()
+    backend.get_clipboard_sequence_number = lambda: "not a number"
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert inserter._clipboard_sequence_number() is None
+
+    # And the whole paste still completes rather than raising: with no usable
+    # marker the check falls back to comparing the clipboard text.
+    assert inserter.insert_text("hello") is True
+    assert "paste:None" in backend.calls
+
+
+def test_a_backend_whose_sequence_getter_raises_is_also_absorbed():
+    backend = SequencedPasteBackend()
+
+    def _boom():
+        raise OSError("the clipboard is locked by another program")
+
+    backend.get_clipboard_sequence_number = _boom
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _seconds: None)
+
+    assert inserter._clipboard_sequence_number() is None
+    assert inserter.insert_text("hello") is True
