@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import math
+import re
 import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -496,6 +497,26 @@ def _worksheet_xml(rows: list[list[Any]]) -> str:
     )
 
 
+# XML 1.0 permits #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and
+# #x10000-#x10FFFF, and nothing else -- not even escaped.
+# `saxutils.escape` only rewrites `&`, `<` and `>`, so one stray control
+# byte anywhere in a benchmark row produced a worksheet that will not
+# parse, inside a `.xlsx` that was written without error and that Excel
+# then refuses to open. Verified with `ElementTree`: NUL, BEL, vertical
+# tab and a lone surrogate each fail, while tab and an emoji are fine.
+# The plausible carriers are the fields nobody types -- `runtime_details`
+# built from a runtime's own error text, the environment strings read off
+# the system, and a transcript returned by a remote provider.
+_XML_ILLEGAL_CHARACTERS = re.compile(
+    "[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
+)
+
+
+def _xml_safe_text(value: str) -> str:
+    """Replace what XML cannot carry, rather than writing a broken file."""
+    return _XML_ILLEGAL_CHARACTERS.sub("\ufffd", value)
+
+
 def _cell_xml(reference: str, value: Any) -> str:
     if isinstance(value, bool):
         text = "TRUE" if value else "FALSE"
@@ -509,7 +530,7 @@ def _cell_xml(reference: str, value: Any) -> str:
         text = _display_value(value)
     return (
         f'<c r="{reference}" t="inlineStr"><is><t>'
-        f"{escape(text)}"
+        f"{escape(_xml_safe_text(text))}"
         "</t></is></c>"
     )
 

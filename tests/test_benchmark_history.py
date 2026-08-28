@@ -3,7 +3,10 @@ from __future__ import annotations
 import csv
 import json
 import math
+import xml.etree.ElementTree as ET
 import zipfile
+
+import pytest
 
 from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import (
@@ -223,3 +226,56 @@ def test_benchmark_csv_export_neutralizes_spreadsheet_formulas(tmp_path):
     rows = list(csv.DictReader(csv_path.read_text(encoding="utf-8").splitlines()))
     assert rows[0]["audio_path"].startswith("'=HYPERLINK")
     assert rows[0]["error"].startswith("'+cmd")
+
+
+@pytest.mark.parametrize(
+    ("label", "cell_text", "expected"),
+    [
+        ("a NUL byte", "before\x00after", "before\ufffdafter"),
+        ("a BEL", "before\x07after", "before\ufffdafter"),
+        ("a vertical tab", "before\x0bafter", "before\ufffdafter"),
+        ("a lone surrogate", "before\ud800after", "before\ufffdafter"),
+        ("a tab", "before\tafter", "before\tafter"),
+        ("an emoji", "before \U0001f600 after", "before \U0001f600 after"),
+        ("an umlaut", "Gr\u00fc\u00dfe", "Gr\u00fc\u00dfe"),
+        ("markup", "a <b> & c", "a <b> & c"),
+    ],
+)
+def test_the_spreadsheet_export_stays_openable_whatever_a_cell_holds(
+    tmp_path, label, cell_text, expected
+):
+    """A worksheet that will not parse is an `.xlsx` Excel refuses to open.
+
+    XML 1.0 permits #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and
+    #x10000-#x10FFFF and nothing else -- not even escaped -- while
+    `saxutils.escape` only rewrites `&`, `<` and `>`. One stray control byte
+    anywhere in a benchmark row therefore produced a file that was written
+    without error and could not be opened. The plausible route is the text
+    nobody typed: `runtime_details` built from a runtime's own error output,
+    the environment strings read off the system, and a transcript returned by
+    a remote provider.
+
+    Only the forbidden characters may be touched. A German transcript, an
+    emoji and a literal angle bracket are ordinary content here, and dropping
+    them to make the file parse would trade one silent corruption for
+    another -- so this compares the round-tripped cell text exactly rather
+    than only asserting that the file parses.
+    """
+    entry = _entry()
+    entry.cases[0].runs[0].transcript = cell_text
+    export_path = tmp_path / "benchmark.xlsx"
+
+    export_benchmark_entry(export_path, entry)
+
+    with zipfile.ZipFile(export_path) as archive:
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+
+    # Parsing is half the assertion: it raises on anything XML cannot carry.
+    root = ET.fromstring(sheet)
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    cells = [node.text or "" for node in root.iter(f"{namespace}t")]
+
+    assert expected in cells, (
+        f"{label}: the cell round-tripped as something other than "
+        f"{expected!r}; sheet holds {cells!r}"
+    )
