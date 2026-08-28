@@ -3,6 +3,150 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-28 (sixth adversarial round: a deadlock, an inert fixture, and a destructive smoke test)
+
+Three reviewers again, over the fifth round's commits, plus my own pass over
+the two commits no reviewer had been given. The pattern held for the sixth
+time, and this round was the largest yet: three HIGH defects in the previous
+round's fixes, two HIGH defects in code I had written and mutation-checked,
+and roughly thirty documentation claims that were wrong or unsourced.
+
+### The one I found myself: the CLI hung forever above 8 KB
+
+`scripts/benchmark_local.py --isolated-case` -- the default -- waited for the
+child process to exit and only then drained its result queue. A
+`multiprocessing.Queue.put` returns immediately and a feeder thread writes the
+pickled payload into an OS pipe, so the child blocks at exit until the parent
+reads it. Waiting for the exit first is therefore a deadlock as soon as the
+payload outgrows the pipe buffer. Measured with the real classes: 8 KB
+completed, 16 KB hung forever. The payload is `asdict(case)`, i.e. every run's
+full transcript, so a few minutes of audio or a short clip at `--runs 3`
+reaches it -- the repository's own 24 s sample is why nobody hit it. And the
+wait had no budget at all, so the CLI just stopped with no output.
+
+The shipped app was never affected and the contrast is worth keeping:
+`benchmark_process.py` uses `subprocess` with a dedicated stdout reader thread
+that drains the pipe concurrently, and `src/` uses no `multiprocessing`.
+
+The same function's cancel branch still had the single long `join(2.0)` that
+the rest of the file had just removed. Measured: `Process.join(6.0)` held an
+interrupt raised at 0.5 s until 6.01 s, the poll loop delivered it at 0.62 s --
+the identical deferred-signal defect as the thread case, so `_join_case_thread`
+became `_join_case_worker` and serves both.
+
+### The smoke test could carry away the user's configuration
+
+`smoke_test.py --check-model` called `SettingsStore().load()` on the real
+settings path. That is not a read: it creates the file and a `.bak` when none
+exists, rewrites it whenever the stored payload differs from the normalized
+one, and renames both the file and its backup to `*.corrupt.<timestamp>` when
+the JSON will not parse. A diagnostic script quarantining a user's settings is
+the worst outcome in this session. It now loads a throwaway copy, verified to
+leave the directory byte-identical in all four states.
+
+The same step also ran for remote engines, where the transcriber is built
+without a secret store and dies with "API key is missing" -- so `--strict`
+returned 1 on a perfectly healthy install -- and where no provider implements
+`preload_model` at all.
+
+### The suite's cache isolation was inert
+
+The fifth round added a fixture setting `HF_HOME`, `HF_HUB_CACHE` and
+`HF_HUB_OFFLINE` to stop the suite downloading models. It did nothing.
+`huggingface_hub` computes those constants **at import**, and a test module
+imports it at module scope, which pytest does during collection -- before any
+fixture runs. Measured after collection: the constants still pointed at the
+developer's real `~/.cache/huggingface/hub` with offline False. The only thing
+actually preventing downloads was the other half of the fixture, the
+`_coordinated_download_if_missing` stub.
+
+It moved to `pytest_configure`, which runs before test modules are imported,
+and the isolation is now verified live after collection. That also replaced one
+temp directory per test with one per session: `tmp_path_factory` rescans its
+base directory on every call, so the per-test version cost ~1750 extra
+directories and seconds of pure scanning.
+
+### Rekeying a test dropped the coverage it was rekeyed away from
+
+The fifth round rekeyed the faster-whisper between-segments cancel test from a
+call count to decoding progress, for a good reason. But the call count had been
+the only thing pinning the check *above* the model load, and the new key cannot
+see it: deleting that check passed the entire suite. A job cancelled while it
+waited in the single-worker queue would pull a multi-gigabyte model into memory
+to throw the result away, holding the shared runtime lease while doing it. A
+dedicated test now asserts the model is never constructed.
+
+The lesson generalises: when a test's key changes, ask what the *old* key was
+covering that the new one cannot.
+
+### Three workers could never resolve
+
+The fifth round added an `except BaseException` arm to `_transcribe_worker`
+because the terminal signal sits after the `finally`. Three sibling workers had
+the identical shape and were left alone. Measured consequences:
+
+- `_finalize_stream_worker`: no terminal signal, `_streaming_recording` stays
+  True, and every later hotkey press is refused with "Streaming transcript is
+  still finalizing" until Cancel or a restart.
+- `_preload_model_worker`: no `model_preload_done`, so `_preload_phase` keeps
+  describing a preload that ended.
+- `_start_batch_recording` built its capture outside any `try`: Qt prints the
+  traceback and continues, so the overlay sat on "Listening" forever with no
+  error text and every retry reproduced it.
+
+And the headline fix itself was incomplete twice over. Its guard released the
+runtime lease but left the handshake running, so `start_stream` published a
+session nobody owned and the *next* dictation failed with "Streaming session
+already active". Meanwhile `_acquire_transcriber_runtime` -- one frame deeper --
+still cleaned up under `except Exception`, so the exact stranded-lock failure
+the commit message described was fully reachable through it.
+
+Worth recording plainly: the trigger that commit named,
+`float(vad_energy_threshold)` on a corrupt stored value, **cannot happen**.
+`AppSettings.from_dict` already coerces and clamps it. The guards are defensive
+depth and the comments now say so.
+
+### Sizes drift when they are written twice
+
+The picker labels hand-wrote a download size next to each model name,
+duplicating `MODEL_ESTIMATED_SIZE_MB`. That table gets corrected whenever a real
+download disagrees with it; the label did not follow. `distil-large-v3.5` read
+"~756 MB" against a measured 1516 and `large-v3-turbo` "~809 MB" against 1622 --
+the two models a user picks between by size, both understating themselves by
+half, and AGENTS.md already recorded the 756 MB figure as a *fixed* defect.
+Almost every other entry was a few percent out from dividing by 1000. The label
+is now derived, and a test rejects any stated size more than 5% from the table.
+
+### The measurement that justified the default was not in the repository
+
+Every published Parakeet, Canary and Nemotron figure cited a benchmark run that
+existed only in `benchmark_history.json` on one machine. It is now committed as
+`docs/benchmarks/amd-ryzen-7600x-intel-arc-a750-2026-08-25.md`, without the
+private German recording or any transcript.
+
+Checking it against the history retired two more numbers. Nemotron's
+long-published "0.229 RTF and 0.81 s cold load on the repository sample"
+matches no run: the two real runs are 0.21 with a 1.78 s load and 0.24 with a
+1.90 s load, and that sample is 2.1 s of synthetic sine tones no run used.
+Canary's "RTF 0.134 / 0.135" has no source at all -- its only benchmark case
+errored with "Canary cannot detect the language".
+
+### What this round says about the process
+
+Six rounds, and every one has found defects in the round before it. Three
+specific habits earned their keep here:
+
+- **Mutation-check the assertion, not just the fix.** Three tests I wrote this
+  round passed under the mutation they were written for. One took three
+  attempts: the pre-run cancel check consumed the single raise before the
+  watchdog ever polled, and `TranscriptionCanceled` was raised by the post-run
+  check either way, so only asserting on the *exit path* discriminated.
+- **A fix inherits the burden of the thing it fixed.** Five of this round's
+  findings were in fixes made one round earlier, three of them mine.
+- **Restart dead agents.** Two of the three round-6 reviewers died on a session
+  limit having produced nothing. Both were relaunched; between them they
+  produced five of this round's HIGH findings.
+
 ## 2026-08-28 (fifth adversarial round: a stranded lock, and a suite that downloaded models)
 
 Three reviewers over the previous round's commits. The pattern held for the

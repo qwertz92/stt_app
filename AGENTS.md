@@ -1806,6 +1806,73 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   app is not affected and must stay that way: `benchmark_process.py` uses
   `subprocess` with a dedicated stdout reader thread that drains the pipe
   concurrently, and `src/` uses no `multiprocessing` at all.
+- **Every worker that emits its terminal signal after the `finally` needs a
+  last-resort `except BaseException`**: `_transcribe_worker`,
+  `_finalize_stream_worker` and `_preload_model_worker` all have that shape,
+  and anything escaping the `try` skips the emit entirely. Measured
+  consequences, one per worker: the overlay stays in Processing with no error
+  and no Retry for the rest of the session; `_streaming_recording` stays True
+  so every later hotkey press is refused with "Streaming transcript is still
+  finalizing"; and `_preload_phase` goes on describing a preload that ended,
+  breaking its "empty when none is running" contract. The arms deliberately do
+  not re-raise -- a `BaseException` here can only come from a callback, since
+  CPython delivers KeyboardInterrupt to the main thread only and a SystemExit
+  on a worker thread just ends it, so reporting beats vanishing.
+  **`_acquire_transcriber_runtime`'s two cleanup arms are `BaseException` for
+  the opposite reason**: they only undo their own bookkeeping and re-raise, so
+  the broader catch can hide nothing, while missing one strands
+  `_transcriber_runtime_lock` for the process lifetime. The worker `finally`
+  cannot cover that -- the lease is still `None` when the acquire raises.
+- **A failed capture in `_start_streaming_recording` must tear down the
+  handshake, not just release the lease**: `_begin_stream_connect` has already
+  spawned it, so `start_stream` completes and publishes a session nobody owns.
+  Every streaming provider refuses a second session, so the next dictation
+  fails with "Streaming session already active" and a remote provider's socket
+  stays open and billed until then. Use `_teardown_pending_stream_connect`, the
+  same call the `AudioCaptureError` arm below it makes. Note that no statement
+  in `_build_audio_capture` is currently known to raise -- `AppSettings`
+  already coerces and clamps `vad_energy_threshold`, and the `EnergyVad` and
+  `AudioCapture` constructors are attribute assignment -- so both guards are
+  depth, kept because the blast radius is out of proportion to the cost.
+- **A picker label never hand-writes a model's size**: `LOCAL_MODEL_LABELS` is
+  built from a name-and-notes table plus `MODEL_ESTIMATED_SIZE_MB`, which is
+  the table corrected whenever a real download disagrees with it. Written
+  twice, the two drifted: `distil-large-v3.5` read "~756 MB" against a measured
+  1516 and `large-v3-turbo` "~809 MB" against 1622 -- the two models a user
+  picks between by size, both understating themselves by half, while AGENTS.md
+  already recorded the 756 MB figure as a *fixed* defect. Nearly every other
+  entry was a few percent out from dividing by 1000. A test rejects any label
+  stating a size more than 5% from the table.
+- **The delete confirmation names every folder it will remove**: the inventory
+  searches the Model Dir *and* the default Hugging Face cache, so one row can
+  mean a copy in either, and the shared cache holds models other tools put
+  there. "This removes downloaded files from disk" did not say which disk.
+- **`scripts/smoke_test.py` must never touch the real settings file**:
+  `SettingsStore.load` is not a read -- it creates the file and a `.bak` when
+  none exists, rewrites it whenever the stored payload differs from the
+  normalized one, and renames both the file and its backup to
+  `*.corrupt.<timestamp>` when the JSON will not parse. A diagnostic that
+  quarantines a user's configuration is worse than no diagnostic, so it loads a
+  throwaway copy. Its model step also skips every non-`local` engine: the
+  transcriber is built without a secret store there and dies with "API key is
+  missing", and no remote provider implements `preload_model` at all.
+- **The suite's Hugging Face isolation lives in `pytest_configure`, not a
+  fixture**: `huggingface_hub` computes `HF_HUB_CACHE` and `HF_HUB_OFFLINE` at
+  **import**, and a test module imports it at module scope, which pytest does
+  during collection -- before any fixture runs. Set from a fixture they did
+  nothing at all: measured after collection, the constants still pointed at the
+  developer's real `~/.cache/huggingface/hub` with offline False, and
+  `download_model_snapshot` passes no `cache_dir` when Model Dir is empty, so
+  those frozen constants decide where a download lands. One session directory,
+  not one per test: `tmp_path_factory` rescans its base directory on every
+  call. The per-test `_coordinated_download_if_missing` stub is the half that
+  does belong in a fixture, and `real_model_prefetch` restores it for the two
+  files that assert the pre-fetch happens.
+- **The benchmark CLI's `--isolated-case` payload is read while the child
+  runs**: see the CLI entry above. The shipped app must stay on the
+  `subprocess`-plus-reader-thread pattern in `benchmark_process.py`; `src/` uses
+  no `multiprocessing` at all, and that is what keeps the same deadlock out of
+  the app.
 - **Normal transcription stays threaded, not isolated**: batch/stream
   transcription runs in the shared `max_workers=1` executor with models
   preloaded (remote stream finalizes excepted — see the concurrent-mode
