@@ -351,3 +351,64 @@ def test_validate_only_still_reports_the_files_when_the_name_is_unresolved(
     assert "MISSING FILES" in combined, (
         f"the file diagnostic the flag exists for was not printed: {combined}"
     )
+
+
+def test_an_empty_folder_under_a_known_name_is_still_told_what_is_missing(
+    tmp_path, monkeypatch, capsys
+):
+    """An incomplete download is the case the advice exists for.
+
+    The advice is withheld only for a folder holding another runtime's model,
+    which is recognised by *nothing of the CTranslate2 layout being present
+    and the name not resolving*. Gating on `found_files` alone collapses those
+    two conditions into one and silences the empty-but-named folder as well,
+    so `--model small` on an empty directory printed a bare `FAILED` and no
+    diagnostics at all.
+    """
+    module = _load_import_module()
+    source = tmp_path / "whatever"
+    source.mkdir()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["import_model.py", str(source), "--model", "small", "--validate-only"],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    combined = "".join(capsys.readouterr())
+    assert "MISSING FILES" in combined, (
+        f"an incomplete download of a known model got no advice: {combined}"
+    )
+    assert "model.bin" in combined
+
+
+def test_an_empty_model_argument_does_not_print_a_nameless_model_line(
+    tmp_path, monkeypatch, capsys
+):
+    """`--model ""` is reachable, and it used to print `Model:` with nothing.
+
+    The line is guarded on truthiness rather than `is not None` for exactly
+    this: `None` means "detect it", but an empty string is a name the user
+    typed, and reporting it as the model contradicts the "Unknown model ''"
+    error printed two lines later.
+    """
+    module = _load_import_module()
+    source = tmp_path / "whatever"
+    source.mkdir()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["import_model.py", str(source), "--model", "", "--validate-only"],
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    combined = "".join(capsys.readouterr())
+    lines = [line.strip() for line in combined.splitlines()]
+    assert "Model:" not in lines, f"an empty model line was printed: {combined}"
+    assert any("Unknown model" in line for line in lines), combined
