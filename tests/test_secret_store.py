@@ -195,3 +195,113 @@ def test_insecure_store_preserves_parallel_provider_updates(tmp_path, monkeypatc
     assert payload == {
         f"provider-{index}": f"secret-{index}" for index in range(8)
     }
+
+
+def _damaged_store(tmp_path, monkeypatch, damage):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    store = KeyringSecretStore(
+        keyring_backend=FailingKeyringBackend(),
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+    store.set_api_key("openai", "sk-openai")
+    store.set_api_key("groq", "gsk-groq")
+    store.set_api_key("deepgram", "dg-deepgram")
+
+    damage(store._insecure_path)
+    return store
+
+
+_DAMAGE_KINDS = [
+    ("truncated json", lambda p: p.write_text('{"openai": "sk-open', "utf-8")),
+    ("a json array", lambda p: p.write_text("[]", encoding="utf-8")),
+    ("bytes that are not utf-8", lambda p: p.write_bytes(b'{"openai": "\xff"}')),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "damage"),
+    _DAMAGE_KINDS,
+    ids=[label for label, _damage in _DAMAGE_KINDS],
+)
+def test_a_damaged_insecure_store_refuses_the_save_instead_of_emptying_it(
+    tmp_path, monkeypatch, label, damage
+):
+    """An unreadable file holds keys nobody can see, not zero keys.
+
+    The read returned the same empty mapping for a missing file and for one
+    that will not parse, and the save built the new payload out of that
+    mapping -- so storing one key rewrote the file with only that key in it
+    and every other provider's key was gone, with nothing reported. Refusing
+    the save keeps the file exactly as it is, which is what the user needs in
+    order to repair it.
+    """
+    store = _damaged_store(tmp_path, monkeypatch, damage)
+    before = store._insecure_path.read_bytes()
+
+    with pytest.raises(RuntimeError, match="cannot be read"):
+        store.set_api_key("elevenlabs", "el-value")
+
+    assert store._insecure_path.read_bytes() == before, (
+        f"{label}: the refused save still rewrote the file"
+    )
+
+
+def test_an_explicit_delete_reports_a_damaged_insecure_store(tmp_path, monkeypatch):
+    """Deleting a key must not answer 'done' while the plaintext may remain.
+
+    With the file unreadable the provider is simply absent from the empty
+    mapping, so the removal was skipped and reported as a success -- while a
+    plaintext copy of the very key the user asked to remove may still be
+    sitting in that file.
+    """
+    store = _damaged_store(
+        tmp_path,
+        monkeypatch,
+        lambda p: p.write_text('{"openai": "sk-open', encoding="utf-8"),
+    )
+
+    with pytest.raises(RuntimeError, match=r"insecure fallback:.*cannot be read"):
+        store.delete_api_key("openai")
+
+
+def test_a_keyring_write_still_succeeds_over_a_damaged_insecure_store(
+    tmp_path, monkeypatch
+):
+    """The stale-copy cleanup is deliberately the tolerant one.
+
+    It runs after every successful keyring write, including for users who
+    never enabled the fallback at all, so raising there would make one
+    leftover file block every future key save. Nothing is lost by skipping
+    it: the key is in the keyring, and the explicit delete above is the path
+    that has to be honest about the leftover copy.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = FakeKeyringBackend()
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store._insecure_path.parent.mkdir(parents=True, exist_ok=True)
+    store._insecure_path.write_text('{"openai": "sk-open', encoding="utf-8")
+
+    store.set_api_key("openai", "sk-test")
+
+    assert backend.get_password("stt-app-test", "openai") == "sk-test"
+
+
+def test_a_missing_insecure_store_is_not_treated_as_damaged(tmp_path, monkeypatch):
+    """The whole point of the distinction: a first run still stores its key."""
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    store = KeyringSecretStore(
+        keyring_backend=FailingKeyringBackend(),
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    store.set_api_key("azure", "az-value")
+
+    assert store.get_api_key("azure") == "az-value"
