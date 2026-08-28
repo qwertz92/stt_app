@@ -151,6 +151,52 @@ mechanism:
   sentence next to it was not, which is the third time this session that a
   correct change shipped with unreproducible reasoning attached.
 
+### Escaping is not validating
+
+The XLSX export runs every cell through `saxutils.escape`, which is the right
+call and looks like the whole job. It rewrites `&`, `<` and `>`. XML 1.0 also
+forbids most control characters outright -- they cannot be escaped, they
+simply may not appear -- so a single NUL, BEL or vertical tab produced a
+worksheet that will not parse, packed into a `.xlsx` that was written with no
+error at all and that Excel refuses to open.
+
+Nothing a user types reaches those cells. What does is `runtime_details` built
+from a runtime's own error output, the environment strings read off the
+system, and transcripts returned by remote providers, which is why it had not
+been seen.
+
+The fix had to be narrow in both directions. Replacing only the forbidden code
+points keeps a German transcript and an emoji intact; stripping non-ASCII
+"to be safe" would have traded a file that cannot be opened for one that is
+quietly wrong, which is worse. The test therefore compares the round-tripped
+cell text against an exact expectation rather than asserting that the file
+parses -- and the mutation that strips everything above ASCII is caught by the
+umlaut case, not by the control-character ones.
+
+### A backup nothing ever reads
+
+Every persisted store here writes a `.bak` beside itself, and
+`load_json_with_backup` prefers the primary and falls back to it. Five of them
+then opened their load with `if not path.exists(): return <empty>` -- so the
+fallback covered a primary that would not *parse* and not a primary that was
+*gone*, which is the more likely of the two.
+
+The consequence is not that the data is invisible; it is that the data is
+destroyed. Measured on the transcript history: five entries, delete the
+primary, load returns 0, and the next dictation saves that empty list over the
+backup, leaving 1. `settings_store` does it inside the load itself -- a
+missing primary writes defaults and refreshes the `.bak` in the same call.
+
+Nothing was wrong with the backup mechanism, the atomic writes, or the
+recovery path; each was correct and tested. The defect was one guard placed
+in front of all of it, and it read as an obvious fast path.
+
+Worth noticing about how it was found: not by reviewing a diff. It came from
+reading a module nobody had changed, asking what the `.bak` is actually for,
+and then testing that instead of testing the code that was in front of me.
+Nine rounds of review over recent changes had not touched it, because it was
+not a recent change.
+
 ### The instrument was the reservation itself
 
 Four versions of one comment, three of them wrong, and every wrong version

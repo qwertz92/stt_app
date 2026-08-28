@@ -593,6 +593,40 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   not transactional, any provider changed before a later failure still emits
   `settings_changed` to invalidate cached clients. Persist the settings file
   before trimming history; a failed settings write must never delete history.
+- **The spreadsheet export neutralizes what XML cannot carry.** XML 1.0
+  permits #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and #x10000-#x10FFFF and
+  nothing else -- not even escaped -- while `saxutils.escape` only rewrites
+  `&`, `<` and `>`. So one control byte anywhere in a benchmark row produced a
+  worksheet that will not parse, inside a `.xlsx` written without error that
+  Excel then refuses to open. Verified with `ElementTree`: NUL, BEL, vertical
+  tab and a lone surrogate each fail; tab, newline and an emoji are fine. The
+  route is the text nobody types -- `runtime_details` built from a runtime's
+  own error output, the environment strings read off the system, and a
+  transcript returned by a remote provider. `_xml_safe_text` replaces exactly
+  those characters with U+FFFD and nothing else: stripping non-ASCII instead
+  would trade an unopenable file for a silently mangled German transcript, and
+  the test compares the round-tripped cell text rather than only asserting
+  that the file parses. `_cell_xml` is the single place user text enters XML;
+  every other part of the workbook is static.
+- **A store's existence check covers the backup too, not just the primary.**
+  `atomic_write_json(keep_backup=True)` writes a `.bak` beside every store and
+  `load_json_with_backup` reads it when the primary will not parse -- but five
+  stores opened their load with a bare `if not path.exists(): return <empty>`,
+  which the backup never got past. So a *deleted* primary read as "nothing
+  saved yet", and the next write put that emptiness over the backup as well.
+  Measured on the transcript history: five entries, delete
+  `transcript_history.json`, load returns 0, one more dictation leaves the
+  backup holding 1. `settings_store` was worse -- a missing primary writes
+  defaults *and* `save` refreshes the `.bak` in the same call, so every setting
+  was reset and the last copy destroyed together. The primary goes missing for
+  ordinary reasons (an antivirus quarantine, a sync client, a user tidying
+  `%APPDATA%`), which is precisely what the backup is for. The guard had to
+  *widen*, not disappear: with neither file present there is nothing to
+  recover and the store must still return its empty default without
+  quarantining anything. Every store that recovers from the backup also
+  republishes the primary, so a second loss cannot take the data.
+  `tests/test_store_backup_recovery.py` holds all three properties for all
+  five stores.
 - **Persistent JSON read-modify-write operations are path-serialized**:
   `persistence.lock_for_path` is the single in-process lock registry. Stores for
   history, benchmarks, settings, provider diagnostics, local inventory, last
