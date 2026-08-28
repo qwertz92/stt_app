@@ -2149,6 +2149,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
 ## Known limitations
 
+- **A signal landing between "the resource is held" and "the flag says so"
+  can strand it, and this is accepted rather than fixed.** Several places set
+  a bookkeeping flag on the statement after the acquiring call returns --
+  `incremented = True` in both branches of `_acquire_transcriber_runtime`,
+  `acquired = True` in `_download_local_model_in_subprocess`, and the
+  `try:` that follows `coordinator.acquire(...)` in
+  `_download_model_for_preload` and `run_coordinated_download`. An exception
+  delivered *between* those two statements leaves the resource held with the
+  cleanup arm believing it was not. CPython only delivers signals to the main
+  thread between bytecodes, and a windowed run has no SIGINT source at all, so
+  the window is a `KeyboardInterrupt` in a console-launched process. It is
+  recorded rather than closed because every plausible fix restructures locking
+  on paths where restructuring has itself introduced defects three rounds
+  running, and the same window reappears one statement further in whatever the
+  new shape is. The one case that *was* closed is the cross-process download
+  lock, because there the loser is every other process on the machine, not
+  just this one.
+- **`_teardown_pending_stream_connect` swallows a `KeyboardInterrupt`.** Its
+  guard is `except BaseException` by design -- it is best-effort cleanup on an
+  error path that still has a lease to release and an overlay to update -- so
+  a Ctrl+C landing inside `thread.join()` or the provider call is logged and
+  dropped. Only reachable in a console-launched process.
+
 - **Cancel reaches a download only while it is *waiting* for the slot, not
   while it is transferring.** `run_coordinated_download` passes `cancel_check`
   into `acquire()`, so with the slot free -- the ordinary single-user case --
