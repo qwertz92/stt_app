@@ -23,6 +23,7 @@ from .config import (
     FUNASR_MODELS,
     GROQ_MODELS,
     LOCAL_ONNX_MODEL_PRECISION,
+    MODEL_ESTIMATED_SIZE_MB,
     OPENAI_MODELS,
     VALID_MODEL_SIZES,
 )
@@ -169,41 +170,68 @@ _START_BEEP_TONE_LABELS: dict[str, str] = {
 }
 
 
+def _approximate_size_text(model_name: str) -> str:
+    """The download size, taken from the one table that measures it.
+
+    Never hand-written next to the name. `MODEL_ESTIMATED_SIZE_MB` is
+    corrected whenever a real download disagrees with it, and a second copy in
+    the picker label does not follow: `distil-large-v3.5` read "~756 MB"
+    against a measured 1516, and `large-v3-turbo` "~809 MB" against 1622, so
+    the two models the label was meant to help choose between both understated
+    themselves by half. Every other entry had drifted by a few percent as
+    well, mostly from dividing by 1000.
+    """
+    megabytes = MODEL_ESTIMATED_SIZE_MB.get(model_name)
+    if not megabytes:
+        return ""
+    if megabytes < 1024:
+        return f"~{megabytes} MB"
+    return f"~{megabytes / 1024:.1f} GB"
+
+
 # Single source of truth for how a local model is named in any picker: the
-# Settings General/Import tabs and the overlay's retranscribe dialog.
-LOCAL_MODEL_LABELS: dict[str, str] = {
-    "tiny": "tiny (~75 MB)",
-    "base": "base (~141 MB)",
-    "small": "small (~486 MB)",
-    "medium": "medium (~1.4 GB)",
-    "large-v3": "large-v3 (~3 GB, multilingual)",
-    "large-v3-turbo": "large-v3-turbo (~809 MB, multilingual, fast)",
-    "distil-large-v3.5": "distil-large-v3.5 (~756 MB, English only, improved)",
-    "cohere-transcribe-03-2026": (
-        "Cohere Transcribe 03-2026 (~2.13 GB, ONNX/WebGPU)"
+# Settings General/Import tabs and the overlay's retranscribe dialog. Each
+# entry is the display name plus the notes that are not the size; the size is
+# derived above.
+_LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
+    "tiny": ("tiny", ""),
+    "base": ("base", ""),
+    "small": ("small", ""),
+    "medium": ("medium", ""),
+    "large-v3": ("large-v3", "multilingual"),
+    "large-v3-turbo": ("large-v3-turbo", "multilingual, fast"),
+    "distil-large-v3.5": ("distil-large-v3.5", "English only, improved"),
+    "cohere-transcribe-03-2026": ("Cohere Transcribe 03-2026", "ONNX/WebGPU"),
+    "granite-4.0-1b-speech": ("IBM Granite 4.0 1B Speech", "ONNX/WebGPU"),
+    "granite-speech-4.1-2b": ("IBM Granite Speech 4.1 2B", "ONNX/WebGPU"),
+    "nemotron-3.5-asr-streaming-0.6b-int4": (
+        "NVIDIA Nemotron 3.5 ASR 0.6B",
+        "true 560 ms streaming",
     ),
-    "granite-4.0-1b-speech": (
-        "IBM Granite 4.0 1B Speech (~1.84 GB, ONNX/WebGPU)"
-    ),
-    "granite-speech-4.1-2b": (
-        "IBM Granite Speech 4.1 2B (~1.84 GB, ONNX/WebGPU)"
-    ),
-    # Retired on 2026-08-26 (see docs/granite-speech-4.1-onnx-variants.md).
-    # They are not in VALID_MODEL_SIZES, so they appear in no picker; these
-    # entries exist only so a history row recorded with one still reads as a
-    # model name instead of a raw identifier.
+    "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, fastest"),
+    "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
+}
+
+# Retired on 2026-08-26 (see docs/granite-speech-4.1-onnx-variants.md). They
+# are not in VALID_MODEL_SIZES, so they appear in no picker; these entries
+# exist only so a history row recorded with one still reads as a model name
+# instead of a raw identifier.
+_RETIRED_MODEL_LABELS: dict[str, str] = {
     "granite-speech-4.1-2b-plus": "IBM Granite Speech 4.1 2B Plus (removed)",
     "granite-speech-4.1-2b-nar": "IBM Granite Speech 4.1 2B NAR (removed)",
-    "nemotron-3.5-asr-streaming-0.6b-int4": (
-        "NVIDIA Nemotron 3.5 ASR 0.6B (~793 MB, true 560 ms streaming)"
-    ),
-    "parakeet-tdt-0.6b-v3": (
-        "NVIDIA Parakeet TDT 0.6B v3 (~670 MB, CPU, fastest)"
-    ),
-    "canary-1b-v2": (
-        "NVIDIA Canary 1B v2 (~1.03 GB, CPU, pick a language)"
-    ),
 }
+
+
+def _build_local_model_labels() -> dict[str, str]:
+    labels: dict[str, str] = {}
+    for name, (display, note) in _LOCAL_MODEL_NAMES_AND_NOTES.items():
+        details = ", ".join(part for part in (_approximate_size_text(name), note) if part)
+        labels[name] = f"{display} ({details})" if details else display
+    labels.update(_RETIRED_MODEL_LABELS)
+    return labels
+
+
+LOCAL_MODEL_LABELS: dict[str, str] = _build_local_model_labels()
 
 
 def local_model_precision_label(model_name: str) -> str:
@@ -225,7 +253,7 @@ def local_model_short_label(model_name: str) -> str:
     """The model's name without the size/runtime/precision parenthetical.
 
     `local_model_label` builds the whole combo entry -- "Cohere Transcribe
-    03-2026 (~2.13 GB, ONNX/WebGPU) [Q4]" -- which is right in a list and
+    03-2026 (~2.1 GB, ONNX/WebGPU) [Q4]" -- which is right in a list and
     wrong inside a sentence. Prose that has to name the selected model wants
     the part the user recognises, not the raw settings id (which does not
     match anything on screen) and not the full entry.

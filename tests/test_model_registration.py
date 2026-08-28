@@ -10,6 +10,8 @@ in front of the user.
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from stt_app import config
@@ -64,3 +66,35 @@ def test_every_label_entry_is_either_selectable_or_marked_removed():
 def test_no_selectable_model_is_labelled_as_removed(model_name: str):
     """The other direction: a retired label must never reach a live picker."""
     assert "removed" not in LOCAL_MODEL_LABELS[model_name].lower()
+
+
+def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
+    """A hand-written size next to the name drifts away from the measured one.
+
+    `MODEL_ESTIMATED_SIZE_MB` is corrected whenever a real download disagrees
+    with it -- that is what drives the download percentage -- and a second
+    copy inside the picker label did not follow. `distil-large-v3.5` read
+    "~756 MB" against a measured 1516 and `large-v3-turbo` "~809 MB" against
+    1622, so the two models a user picks between by size both understated
+    themselves by half, and almost every other entry was a few percent out
+    from dividing by 1000.
+    """
+    written = re.compile(r"~\s*([\d.]+)\s*(MB|GB)")
+    checked = 0
+    for model_name, label in LOCAL_MODEL_LABELS.items():
+        match = written.search(label)
+        if match is None:
+            continue
+        stated_mb = float(match.group(1)) * (1024 if match.group(2) == "GB" else 1)
+        expected_mb = config.MODEL_ESTIMATED_SIZE_MB.get(model_name)
+        assert expected_mb, (
+            f"{model_name} states a size in its label but has no entry in "
+            "MODEL_ESTIMATED_SIZE_MB"
+        )
+        assert abs(stated_mb - expected_mb) <= expected_mb * 0.05, (
+            f"{model_name}: the label says {match.group(0)} "
+            f"({stated_mb:.0f} MB) but the size table says {expected_mb} MB"
+        )
+        checked += 1
+
+    assert checked >= 10, f"only {checked} labels stated a size; the scan found too few"

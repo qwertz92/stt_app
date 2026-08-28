@@ -97,7 +97,7 @@ CANARY_MODEL_SIZE = "canary-1b-v2"
 # and the same device, from this machine's own benchmark history), needs
 # neither a GPU nor Node.js, detects its language itself across the 25
 # European locales its model card lists, and is a 670 MB download
-# against `small`'s 484 MB. Someone trying the app without opening Settings
+# against `small`'s 486 MB. Someone trying the app without opening Settings
 # gets fast, accurate dictation out of the box instead of the slowest sensible
 # Whisper size.
 #
@@ -250,8 +250,8 @@ FASTER_WHISPER_MODEL_SIZES = (
     "small",
     "medium",
     "large-v3",
-    "large-v3-turbo",  # Multilingual, ~809 MB, pruned large-v3 (4 decoder layers)
-    "distil-large-v3.5",  # English-only, ~756 MB, improved v3 (98k h training data)
+    "large-v3-turbo",  # Multilingual, ~1.6 GB, pruned large-v3 (4 decoder layers)
+    "distil-large-v3.5",  # English-only, ~1.5 GB, improved v3 (98k h training data)
 )
 
 LOCAL_WEBGPU_MODEL_SIZES = (
