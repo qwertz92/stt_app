@@ -34,6 +34,39 @@ def appdata_root() -> Path:
     return path
 
 
+def existing_appdata_root() -> Path | None:
+    """The data folder as it is on disk right now, creating and moving nothing.
+
+    `appdata_root` is a *setup* call, not a lookup: it creates the folder, and
+    when only the legacy one exists it renames the user's entire data
+    directory onto the current name. Both are right for the app, which is
+    about to write there anyway, and wrong for anything that only wants to
+    read -- a diagnostic script asked for the settings path and thereby moved
+    a legacy install's settings, history and recordings, which is precisely
+    the class of side effect it was written to avoid.
+
+    Returns `None` when neither folder exists, because "there is nothing to
+    read" is a different answer from "here is where it would go".
+    """
+    root = _appdata_base_root()
+    path = root / APP_NAME
+    if path.is_dir():
+        return path
+    legacy_path = root / LEGACY_APP_NAME
+    if legacy_path.is_dir():
+        return legacy_path
+    return None
+
+
+def existing_settings_path() -> Path | None:
+    """The saved settings file, or `None` if this install has never written one."""
+    root = existing_appdata_root()
+    if root is None:
+        return None
+    path = root / "settings.json"
+    return path if path.is_file() else None
+
+
 def settings_path() -> Path:
     return appdata_root() / "settings.json"
 

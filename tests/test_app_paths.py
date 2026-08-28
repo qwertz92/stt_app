@@ -121,3 +121,51 @@ def test_appdata_root_migrates_legacy_folder(monkeypatch, tmp_path):
     assert result == tmp_path / "stt_app"
     assert (result / "settings.json").is_file()
     assert legacy.exists() is False
+
+
+def test_the_read_only_resolvers_create_nothing_and_move_nothing(monkeypatch, tmp_path):
+    """A lookup must not migrate the user's data folder.
+
+    `appdata_root` creates the folder and renames a legacy install onto the
+    current name, which is right for the app and wrong for anything that only
+    reads. A diagnostic script asked for `settings_path()` and thereby moved a
+    legacy install's settings, history and recordings -- the exact side effect
+    it had just been rewritten to avoid, one level up at the directory.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    legacy = tmp_path / "tts_app"
+    legacy.mkdir(parents=True)
+    (legacy / "settings.json").write_text("{}", encoding="utf-8")
+    (legacy / "transcript_history.json").write_text("[]", encoding="utf-8")
+    before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+
+    from stt_app.app_paths import existing_appdata_root, existing_settings_path
+
+    assert existing_appdata_root() == legacy
+    assert existing_settings_path() == legacy / "settings.json"
+
+    after = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
+    assert after == before, "the read-only resolvers changed the data folder"
+    assert (tmp_path / "stt_app").exists() is False
+
+
+def test_the_read_only_resolvers_report_absence_instead_of_creating(monkeypatch, tmp_path):
+    """`None` is the honest answer, and it is not the same as a path.
+
+    Returning "here is where it would go" is what made the caller create it.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    from stt_app.app_paths import existing_appdata_root, existing_settings_path
+
+    assert existing_appdata_root() is None
+    assert existing_settings_path() is None
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_existing_settings_path_is_none_when_the_folder_holds_no_settings(monkeypatch, tmp_path):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    (tmp_path / "stt_app").mkdir(parents=True)
+    from stt_app.app_paths import existing_appdata_root, existing_settings_path
+
+    assert existing_appdata_root() == tmp_path / "stt_app"
+    assert existing_settings_path() is None

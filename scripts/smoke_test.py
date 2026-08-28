@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import shutil
 import sys
 import tempfile
@@ -17,26 +18,50 @@ if TYPE_CHECKING:  # pragma: no cover - import-time typing only
     from stt_app.settings_store import AppSettings
 
 
-def _read_settings_without_touching_them() -> AppSettings:
+def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | None]:
     """Load the saved settings from a throwaway copy.
 
-    `SettingsStore.load` is not read-only: it writes a fresh file when none
-    exists, rewrites the file whenever the stored payload differs from the
-    normalized one, and quarantines both the file and its backup when the
-    JSON is corrupt. That is right for the app and wrong for a diagnostic --
-    running this script must never rewrite, and must never carry away, the
-    user's configuration. Reading a copy keeps every one of those writes off
-    the real file while still exercising the real configuration.
+    Returns `(settings, problem)`. `settings` is `None` only when there is
+    nothing to read; `problem` describes a configuration this install cannot
+    use, and both can be set at once when a file exists but does not parse.
+
+    Two writes have to be kept off the real install, and the second is easy
+    to miss because it happens one level above the file:
+
+    - `SettingsStore.load` is not read-only. It writes a fresh file when none
+      exists, rewrites the file whenever the stored payload differs from the
+      normalized one, and renames both the file and its `.bak` to
+      `*.corrupt.<timestamp>` when the JSON will not parse. Reading a copy
+      keeps all three off the real file.
+    - `app_paths.settings_path` is not a lookup. It goes through
+      `appdata_root`, which creates the data folder and, when only the legacy
+      one exists, renames the user's entire data directory onto the current
+      name. `existing_settings_path` answers the same question and touches
+      nothing.
+
+    Reporting the corrupt case matters as much as not causing it. Loading a
+    copy makes a broken settings file *invisible*: the copy is repaired, the
+    defaults come back, and the script would print a clean bill of health --
+    and then describe the default model as "the configured local model" and
+    offer to download it. The old code was equally silent but at least
+    quarantined the real file, so the user found out.
     """
-    from stt_app.app_paths import settings_path
+    from stt_app.app_paths import existing_settings_path
     from stt_app.settings_store import SettingsStore
 
-    real_path = settings_path()
+    real_path = existing_settings_path()
+    if real_path is None:
+        return None, None
+
+    try:
+        json.loads(real_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return None, f"the saved settings file cannot be read ({exc})"
+
     with tempfile.TemporaryDirectory() as temp_dir:
         copy_path = Path(temp_dir) / "settings.json"
-        if real_path.exists():
-            shutil.copy2(real_path, copy_path)
-        return SettingsStore(copy_path).load()
+        shutil.copy2(real_path, copy_path)
+        return SettingsStore(copy_path).load(), None
 
 
 def main() -> int:
@@ -92,17 +117,27 @@ def main() -> int:
         # the smoke test could pass while the runtime this install actually
         # transcribes with was never exercised -- and on a clean machine it
         # pulled 486 MB of a model the default configuration does not use.
-        from stt_app.config import DEFAULT_ENGINE
+        # `DEFAULT_ENGINE` happens to be "local" today, but the branch below
+        # asks "is this the engine with a model to load", which is a different
+        # question. Reading the default would silently invert this branch
+        # the day the default becomes a provider.
+        local_engine = "local"
 
+        problem: str | None = None
         try:
-            settings = _read_settings_without_touching_them()
+            settings, problem = _read_settings_without_touching_them()
         except Exception as exc:
             settings = None
-            optional_failures.append(f"Could not read the saved settings: {exc}")
+            problem = f"the saved settings could not be read ({exc})"
+        if problem:
+            optional_failures.append(f"Could not read the saved settings: {problem}")
 
         if settings is None:
-            pass
-        elif settings.engine != DEFAULT_ENGINE:
+            # Print a step line here too. Without one this branch is the only
+            # path through the check that produces no `[4/5]` output at all,
+            # so a reader of the log sees the step vanish rather than fail.
+            print("[4/5] Skipping model load: no readable saved settings")
+        elif settings.engine != local_engine:
             # Only the local engine has a model to load. Every remote provider
             # builds from an API key this script does not read, and none of
             # them implements `preload_model` at all, so running the step
