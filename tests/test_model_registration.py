@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import pathlib
 import re
+from decimal import Decimal
 
 import pytest
 
@@ -69,6 +70,30 @@ def test_no_selectable_model_is_labelled_as_removed(model_name: str):
     assert "removed" not in LOCAL_MODEL_LABELS[model_name].lower()
 
 
+_WRITTEN_SIZE = re.compile(r"~\s*([\d.]+)\s*(MB|GB)")
+
+
+def _label_size(label: str):
+    """The size a picker label states, and the slack its format allows.
+
+    Shared with `test_the_label_tolerance_survives_binary_floating_point` so
+    the arithmetic that test pins is the arithmetic the table check runs, not
+    a second copy of it.
+
+    `Decimal`, not `float`: `float("4.03") * 1000` is 4030.0000000000005, so a
+    correctly derived label for a 4025 MB model is 5.000000000000455 out and
+    fails a 5 MB bound. No entry is in range today -- the largest is 3091 --
+    which is why the first model that reached it would have been the one to
+    find this.
+    """
+    match = _WRITTEN_SIZE.search(label)
+    if match is None:
+        return None, None, None
+    is_gb = match.group(2) == "GB"
+    stated_mb = Decimal(match.group(1)) * (1000 if is_gb else 1)
+    return stated_mb, Decimal(5) if is_gb else Decimal(0), match.group(0)
+
+
 def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
     """A hand-written size next to the name drifts away from the measured one.
 
@@ -101,21 +126,18 @@ def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
     GB label (`distil-large-v3.5`) is 4 MB out, so both bounds are real
     constraints rather than decoration.
     """
-    written = re.compile(r"~\s*([\d.]+)\s*(MB|GB)")
     checked = set()
     for model_name, label in LOCAL_MODEL_LABELS.items():
-        match = written.search(label)
-        if match is None:
+        stated_mb, tolerance_mb, written_size = _label_size(label)
+        if stated_mb is None:
             continue
-        stated_mb = float(match.group(1)) * (1000 if match.group(2) == "GB" else 1)
         expected_mb = config.MODEL_ESTIMATED_SIZE_MB.get(model_name)
         assert expected_mb, (
             f"{model_name} states a size in its label but has no entry in "
             "MODEL_ESTIMATED_SIZE_MB"
         )
-        tolerance_mb = 5.0 if match.group(2) == "GB" else 0.0
         assert abs(stated_mb - expected_mb) <= tolerance_mb, (
-            f"{model_name}: the label says {match.group(0)} "
+            f"{model_name}: the label says {written_size} "
             f"({stated_mb:.0f} MB) but the size table says {expected_mb} MB"
         )
         checked.add(model_name)
@@ -204,3 +226,22 @@ def test_the_delete_confirmation_says_nothing_when_there_is_nothing_to_say():
     from stt_app.settings_dialog_local import _describe_doomed_folders
 
     assert _describe_doomed_folders([]) == ""
+
+
+def test_the_label_tolerance_survives_binary_floating_point():
+    """A correct label must not fail the bound because of the parse.
+
+    `float("4.03") * 1000` is 4030.0000000000005 -- 5.000000000000455 away
+    from 4025, which a 5 MB bound rejects. The label is right; the arithmetic
+    was wrong. Nothing in the table reaches that size today, so this pins the
+    comparison itself rather than any current row, through the same helper the
+    table check uses.
+    """
+    for megabytes in (4025, 4065, 2128, 3091, 1029):
+        label = f"model (~{megabytes / 1000:.2f} GB, ONNX)"
+        stated_mb, tolerance_mb, written_size = _label_size(label)
+        assert stated_mb is not None, label
+        assert abs(stated_mb - megabytes) <= tolerance_mb, (
+            f"{written_size} is a correct two-decimal label for "
+            f"{megabytes} MB but was rejected: stated {stated_mb}"
+        )
