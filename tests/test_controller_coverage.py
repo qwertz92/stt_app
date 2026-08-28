@@ -3538,9 +3538,10 @@ def test_a_raising_cancel_hook_clear_still_releases_the_runtime(monkeypatch, cap
 def test_a_failed_microphone_open_does_not_strand_the_runtime_lock(monkeypatch):
     """The capture is built after the lease block and before it is stored.
 
-    Nothing owns the lease in that window, and `_build_audio_capture` can
-    raise -- `float(vad_energy_threshold)` on a corrupt stored value, or the
-    `AudioCapture` constructor. A leak there strands
+    Nothing owns the lease in that window. No statement in
+    `_build_audio_capture` is known to raise today -- the stored threshold is
+    already coerced and clamped by `AppSettings.from_dict` -- so this guards
+    depth rather than a live trigger, and it is worth it because a leak strands
     `_transcriber_runtime_lock` for the process lifetime: every later preload
     and audio import blocks forever, every dictation quietly builds its own
     isolated runtime, and `_transcription_runtime_active()` stays True so no
@@ -3631,5 +3632,223 @@ def test_a_base_exception_in_the_worker_still_resolves_the_job(monkeypatch):
 
     assert failures, "the job never resolved; the overlay would stay in Processing"
     assert "BaseException" in failures[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_microphone_open_does_not_orphan_the_provider_session(monkeypatch):
+    """Releasing the lease is not the whole cleanup.
+
+    `_begin_stream_connect` has already spawned the handshake, so `start_stream`
+    completes and publishes a session nobody owns. Every streaming provider
+    refuses a second session, so the *next* dictation fails with "Streaming
+    session already active" and its audio is only preserved for Retry -- and a
+    remote provider's socket stays open in the meantime.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise ValueError("could not open the microphone")
+
+    monkeypatch.setattr(controller, "_build_audio_capture", _explode)
+
+    controller.start_recording()
+    app.processEvents()
+
+    assert overlay.states[-1][0] == "Error"
+    assert transcriber.started is False or transcriber.aborted is True, (
+        "the handshake published a session that nothing owns: started="
+        f"{transcriber.started} aborted={transcriber.aborted}"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_while_acquiring_the_runtime_does_not_strand_the_lock(
+    monkeypatch,
+):
+    """`_acquire_transcriber_runtime` cleans up under `except Exception`.
+
+    Its two arms only undo their own bookkeeping and re-raise, so the narrower
+    catch bought nothing and cost everything: a `BaseException` from
+    `create_transcriber` skipped `release()` and left
+    `_transcriber_runtime_lock` held for the process lifetime. The worker's own
+    `finally` cannot help -- the lease is still `None` when the acquire raises.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("runtime construction died")
+
+    monkeypatch.setattr(controller, "_get_or_create_transcriber", _explode)
+
+    with pytest.raises(BaseException, match="runtime construction died"):
+        controller._acquire_transcriber_runtime(settings)
+
+    assert controller._transcription_runtime_active() is False, (
+        "the runtime is still marked in use after a failed acquisition"
+    )
+    acquired = controller._transcriber_runtime_lock.acquire(timeout=2.0)
+    try:
+        assert acquired is True, "the runtime lock was stranded"
+    finally:
+        if acquired:
+            controller._transcriber_runtime_lock.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_in_the_stream_finalizer_still_resolves_the_session(
+    monkeypatch,
+):
+    """The terminal signal sits after the `finally` here too.
+
+    Without a last-resort arm the session never resolves: `_streaming_recording`
+    stays True and every later hotkey press is refused with "Streaming
+    transcript is still finalizing" until Cancel or a restart. `stop_stream()`
+    drains a provider socket and runs its callbacks, which is the supplier.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(stop_raises=BaseException("socket died"))
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    terminal: list[tuple[str, object]] = []
+    controller.transcription_failed.connect(
+        lambda token, text: terminal.append(("failed", text))
+    )
+    controller.transcription_ready.connect(
+        lambda token, text: terminal.append(("ready", text))
+    )
+    controller.transcription_canceled.connect(
+        lambda token: terminal.append(("canceled", None))
+    )
+
+    controller.start_recording()
+    app.processEvents()
+    controller.stop_recording()
+    for _ in range(60):
+        app.processEvents()
+        if terminal:
+            break
+        time.sleep(0.05)
+
+    assert terminal, (
+        "the streaming session never resolved: no terminal signal was emitted, "
+        "so every later hotkey press is refused"
+    )
+    assert terminal[0][0] == "failed"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_microphone_open_in_batch_mode_shows_an_error(monkeypatch):
+    """The batch path built its capture outside any `try`.
+
+    PySide6 prints the traceback and continues, so the app survived showing
+    "Listening" -- "Starting dictation. Please wait..." -- forever, with no
+    error text at all and every retry reproducing it.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise ValueError("could not read vad_energy_threshold")
+
+    monkeypatch.setattr(controller, "_build_audio_capture", _explode)
+
+    controller.start_recording()
+    app.processEvents()
+
+    assert overlay.states[-1][0] == "Error", (
+        f"the overlay is stuck on {overlay.states[-1][0]!r} with no error text"
+    )
+    assert controller._audio_capture is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_in_the_preload_still_reports_the_preload_as_done(
+    monkeypatch,
+):
+    """`model_preload_done` is emitted after the `except` arms, not in `finally`.
+
+    Without a last-resort arm the preload never resolves, so `_preload_phase`
+    keeps answering for a preload that ended -- breaking its documented "empty
+    when none is running" contract -- and the recording-start notice names a
+    phase forever.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+
+    class _DyingTranscriber(FakeStreamingTranscriber):
+        def preload_model(self):
+            raise BaseException("preload died")
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _DyingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda generation, ok, message: done.append((generation, ok, message))
+    )
+
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    controller._preload_model_worker(settings, generation, key)
+    app.processEvents()
+
+    assert done, "the preload never resolved: model_preload_done was not emitted"
+    assert done[0][1] is False
+    app.processEvents()
+    assert controller._current_preload_phase() == "", (
+        "a preload that ended still reports a phase: "
+        f"{controller._current_preload_phase()!r}"
+    )
     controller.shutdown()
     _ = app

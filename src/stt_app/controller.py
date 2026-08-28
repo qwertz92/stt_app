@@ -1013,7 +1013,18 @@ class DictationController(QtCore.QObject):
         waiting_for_model: bool = False,
         preload_phase_word: str = "loading",
     ) -> None:
-        capture = self._build_audio_capture()
+        try:
+            capture = self._build_audio_capture()
+        except Exception as exc:
+            # The caller has already shown "Listening". Without this the
+            # exception escapes the Qt slot, PySide6 prints a traceback and
+            # continues, and the overlay stays on "Starting dictation. Please
+            # wait..." forever with no error and no way to tell what happened
+            # -- every retry reproducing it. The streaming path guards the
+            # same call for the same reason.
+            self._logger.exception("Failed to open the microphone")
+            self._overlay.set_state("Error", f"Failed to start recording: {exc}")
+            return
         self._active_batch_settings = settings_snapshot
         self._active_session_mode = "batch"
         self._streaming_recording = False
@@ -1223,9 +1234,13 @@ class DictationController(QtCore.QObject):
 
         try:
             # Inside its own guard: nothing owns the lease between the block
-            # above and `_active_stream_runtime_lease` below, and this call can
-            # raise -- `float(vad_energy_threshold)` on a corrupt stored value,
-            # or the `AudioCapture` constructor. Leaking the lease strands
+            # above and `_active_stream_runtime_lease` below. No current
+            # statement in `_build_audio_capture` is known to raise --
+            # `AppSettings.from_dict` already coerces and clamps
+            # `vad_energy_threshold`, and the `EnergyVad` and `AudioCapture`
+            # constructors are attribute assignment -- so this is depth, not a
+            # fix for a live trigger. It is kept because the blast radius is
+            # out of all proportion to the cost: leaking the lease strands
             # `_transcriber_runtime_lock` for the process lifetime: every later
             # preload and audio import blocks forever, every dictation builds
             # its own isolated runtime, and `_transcription_runtime_active()`
@@ -1234,6 +1249,13 @@ class DictationController(QtCore.QObject):
                 chunk_callback=self._on_stream_audio_chunk
             )
         except Exception as exc:
+            # The handshake is already running (`_begin_stream_connect` above),
+            # so releasing the lease is not enough: `start_stream` completes
+            # and publishes a session nobody owns, and the next dictation is
+            # refused with "Streaming session already active" while a remote
+            # provider's socket stays open and billed. Same teardown as the
+            # `AudioCaptureError` arm below, for the same reason.
+            self._teardown_pending_stream_connect(transcriber)
             runtime_lease.release()
             self._logger.exception("Failed to open the microphone for streaming")
             self._overlay.set_state("Error", f"Failed to start recording: {exc}")
@@ -2078,7 +2100,12 @@ class DictationController(QtCore.QObject):
                 if reset_pending:
                     self._reset_transcriber_cache_locked()
                 transcriber = self._get_or_create_transcriber(settings)
-            except Exception:
+            except BaseException:
+                # BaseException, not Exception: this arm only undoes its own
+                # bookkeeping and re-raises, so nothing is swallowed, and
+                # missing one strands `_transcriber_runtime_lock` for the
+                # process lifetime -- every later preload and import blocks
+                # forever and `_transcription_runtime_active()` stays True.
                 self._decrement_transcriber_runtime_count()
                 self._transcriber_runtime_lock.release()
                 raise
@@ -2102,7 +2129,9 @@ class DictationController(QtCore.QObject):
             if self._shutdown_started:
                 self._close_cached_transcriber(transcriber)
                 raise TranscriptionCanceled("Application shutdown is in progress.")
-        except Exception:
+        except BaseException:
+            # See the shared-lock arm above: cleanup-and-re-raise, so the
+            # broader catch cannot hide anything.
             self._decrement_transcriber_runtime_count()
             raise
         return _TranscriberRuntimeLease(
@@ -3118,6 +3147,24 @@ class DictationController(QtCore.QObject):
             self._record_model_preload_result(key, generation, failure)
             self.model_preload_done.emit(generation, False, failure)
             return
+        except BaseException as exc:
+            # Without this the signal below is never emitted: the preload never
+            # resolves, `_preload_phase` keeps answering for a preload that
+            # ended -- breaking its documented "empty when none is running"
+            # contract -- and the recording-start notice goes on naming a
+            # phase forever.
+            self._logger.exception("Model preload raised a BaseException")
+            if runtime_lease is not None:
+                with self._transcriber_runtime_state_lock:
+                    self._pending_transcriber_cache_reset = True
+            failure = (
+                f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
+                "No fallback model was used. Open Settings to retry or select "
+                f"another model. See {DOC_MODELS_PATH}"
+            )
+            self._record_model_preload_result(key, generation, failure)
+            self.model_preload_done.emit(generation, False, failure)
+            return
         finally:
             if runtime_lease is not None:
                 # Before the release, so the next owner of the shared runtime
@@ -3464,6 +3511,16 @@ class DictationController(QtCore.QObject):
             terminal_payload = str(exc)
         except Exception as exc:
             self._logger.exception("Unexpected streaming finalization failure")
+            terminal_payload = f"Unexpected streaming error: {exc}"
+        except BaseException as exc:
+            # Same last resort as `_transcribe_worker`, and worse here if it is
+            # missing: the terminal signal sits after the `finally`, so an
+            # escaping exception leaves `_streaming_recording` True and every
+            # later hotkey press is refused with "Streaming transcript is still
+            # finalizing" until Cancel or a restart. `stop_stream()` drains a
+            # provider socket and runs its callbacks, so a callback raising a
+            # BaseException reaches here.
+            self._logger.exception("Streaming finalization raised a BaseException")
             terminal_payload = f"Unexpected streaming error: {exc}"
         finally:
             if runtime_lease is not None:
