@@ -1919,12 +1919,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   well -- a test that shares the code's misunderstanding is not a check.
 - **A reservation is measured, not predicted**: `retranscribe_dialog` reserves
   a `heightForWidth`, so the candidate is chosen by measuring every candidate
-  through the polished label. Neither shortcut works. `key=len` is character
-  count, not drawn width; `key=horizontalAdvance` is drawn width, and wrapped
-  height is not monotonic in it (measured: a 159 px name wraps to 45 px while a
-  157 px one wraps to 60). Measuring at construction time is wrong regardless --
-  the label is unpolished there and reports 9 pt rather than the stylesheet's
-  11 px.
+  through the polished label. `key=len` is character count, not drawn width
+  (`W` x29 draws 319 px against 159 px for the 30-character longest label);
+  `key=horizontalAdvance` is drawn width, and what is reserved is a wrapped
+  height, which a width ordering does not order. **No under-reservation from
+  the advance key could be reproduced at any dialog width from 200 to 1100**
+  with today's names, so that half is a guard against the next name, not a
+  live defect; what settles it is that measuring all 15 candidates costs
+  1.26 ms on a cache miss and 1.5 us on a hit. Measuring at construction time
+  is wrong regardless -- the label is unpolished there and reports 9 pt rather
+  than the stylesheet's 11 px.
+- **`QLabel.heightForWidth(w)` is not a pure function of `w`**, and two
+  earlier versions of the entry above were written from measurements that
+  assumed it is. Measured on the retranscribe note: the identical call
+  returned 60 px with the label 556 px wide and 90 px with it 476 px wide. A
+  stand-in `QLabel` carrying the same stylesheet wraps differently again, and
+  invented a name inversion that does not occur in the real dialog at any
+  width. So: resize the real widget to the width under test, then measure it
+  -- a sweep that varies only the argument is measuring the cache, and it
+  will produce confident, reproducible, wrong numbers.
 - **Nothing that only reads may call `appdata_root`**: it creates the data
   folder and renames a legacy `tts_app` install onto the current name, so a
   path *lookup* migrated a user's settings, history and recordings. Use

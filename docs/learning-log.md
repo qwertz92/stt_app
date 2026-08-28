@@ -37,15 +37,28 @@ dictation re-raised it instead of retrying -- the exact failure the
 The picker labels were changed from hand-written sizes to derived ones,
 correctly, and then divided by 1024 and labelled "GB". `MODEL_ESTIMATED_SIZE_MB`
 says in its own comment that it is decimal megabytes, and
-`model_download_progress` converts it with `* 1_000_000` -- so the fix took six
-labels that were already correct (`~2.13 GB`, `~1.84 GB`, `~1.03 GB`) and made
-them wrong, most visibly `large-v3` advertising "~3.0 GB" for the 3091 MB its
-own progress bar counts to. The test could not see it because the test divided
-by 1024 too: it agreed with the code and the pair was self-consistent.
+`model_download_progress` converts it with `* 1_000_000` -- so the fix took the
+four labels that were already correct two-decimal decimal GB and made every one
+of them wrong: `cohere-transcribe-03-2026` 2.13 -> 2.08, `granite-4.0-1b-speech`
+and `granite-speech-4.1-2b` 1.84 -> 1.80, `canary-1b-v2` 1.03 -> 1.00. The test
+could not see it because the test divided by 1024 too: it agreed with the code
+and the pair was self-consistent.
+
+(The first version of this entry said "six labels" and offered `large-v3` at
+"~3.0 GB" as the most visible case. Both are wrong, and checking cost one
+command -- `git show 3901440^` lists the pre-derivation labels. `large-v3` read
+`~3 GB` before the derivation, so it was never one of the correct entries the
+divisor regressed; it was under-stated already and the divisor merely
+under-stated it differently.)
 
 Its tolerance was 5%, which would also have accepted the 3.8% drift on `tiny`
-that motivated it. It is now 5 MB, and it requires every sized model to state
-a size rather than passing on a count threshold.
+that motivated it. Replacing it with `max(5 MB, 0.5%)` was still wrong in both
+directions: it *also* accepts `tiny` at 75 against 78, and for every GB model it
+is looser than the 5 MB it was meant to express, reaching 15.5 MB on
+`large-v3`. The bound now follows the format the label uses -- exact below
+1000 MB, where the label restates the table's integer, and 5 MB above it, which
+is all two decimals of GB can move. Measured against the current table: every
+MB label is exact and the worst GB label is 4 MB out, so both halves bind.
 
 ### A diagnostic that moved the user's data folder
 
