@@ -255,6 +255,11 @@ def test_a_model_this_script_cannot_import_says_so_before_listing_files(
     output = capsys.readouterr()
     combined = output.out + output.err
     assert "download_model.py" in combined
+    assert "Unknown model 'parakeet-tdt-0.6b-v3'" in combined, (
+        "the folder name must resolve to the model it names, so the message "
+        "says the model is out of scope instead of asking for a --model that "
+        f"is then rejected: {combined}"
+    )
     assert "MISSING FILES" not in combined, (
         "the CTranslate2 file list was printed for a model this script cannot "
         "import at all"
@@ -280,3 +285,64 @@ def test_a_whisper_folder_still_reaches_the_file_validation(
     combined = "".join(capsys.readouterr())
     assert "Detected model: small" in combined
     assert "MISSING FILES" in combined
+
+
+def test_a_faster_whisper_folder_under_an_odd_name_is_not_sent_to_the_other_script(
+    tmp_path, monkeypatch, capsys
+):
+    """It only needs `--model`; telling it to go use `download_model.py` is wrong.
+
+    That advice belongs to a folder holding a model this script cannot import.
+    A complete CTranslate2 model whose folder is merely named something
+    unrecognised is importable -- with `--model small` -- and the ONNX
+    sentence contradicts the line printed directly above it.
+    """
+    module = _load_import_module()
+    source = tmp_path / "my-model-folder"
+    source.mkdir()
+    for name in ("config.json", "tokenizer.json", "vocabulary.txt"):
+        (source / name).write_text("{}", encoding="utf-8")
+    (source / "model.bin").write_bytes(b"x" * 64)
+
+    monkeypatch.setattr(sys, "argv", ["import_model.py", str(source), "--validate-only"])
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    combined = "".join(capsys.readouterr())
+    assert "Could not auto-detect" in combined
+    assert "--model" in combined
+    # Not the whole script name: the git-lfs advice for a pointer-sized
+    # `model.bin` legitimately names it. The wrong-runtime sentence is the
+    # one that must not appear.
+    assert "imports CTranslate2/faster-whisper models only" not in combined, (
+        f"a CTranslate2 folder was told it holds the wrong runtime: {combined}"
+    )
+
+
+def test_validate_only_still_reports_the_files_when_the_name_is_unresolved(
+    tmp_path, monkeypatch, capsys
+):
+    """`--validate-only` exists to report the file state; it must still do so.
+
+    Moving the name decision ahead of the validation made an unresolved name
+    exit before `Source:`, `Found files:` and the missing list were printed,
+    so the flag's whole output disappeared for the folders most likely to need
+    it.
+    """
+    module = _load_import_module()
+    source = tmp_path / "my-model-folder-incomplete"
+    source.mkdir()
+    (source / "config.json").write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(sys, "argv", ["import_model.py", str(source), "--validate-only"])
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    combined = "".join(capsys.readouterr())
+    assert "Source:" in combined
+    assert "Found files: config.json" in combined
+    assert "MISSING FILES" in combined, (
+        f"the file diagnostic the flag exists for was not printed: {combined}"
+    )

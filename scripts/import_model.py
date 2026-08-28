@@ -63,12 +63,22 @@ for _short, _repo in IMPORTABLE_MODEL_REPO_MAP.items():
     _FOLDER_HINTS[_repo_name.lower()] = _short
     _FOLDER_HINTS[_short.lower()] = _short
 
+# Folders named after a model this script cannot import are recognised too, so
+# they get the "wrong runtime" message instead of "could not auto-detect the
+# model name" followed by advice to pass a `--model` that is then rejected.
+for _other in MODEL_REPO_MAP:
+    if _other in IMPORTABLE_MODEL_REPO_MAP:
+        continue
+    _FOLDER_HINTS.setdefault(_other.lower(), _other)
+    _FOLDER_HINTS.setdefault(MODEL_REPO_MAP[_other].split("/")[-1].lower(), _other)
 
-def _print_importable_models() -> None:
-    """One message for both "unknown" and "could not detect".
 
-    Both are the same user situation -- this script cannot import that folder
-    -- and the runtime split is the part people miss.
+def _print_wrong_runtime_hint() -> None:
+    """Say why this folder is out of scope, not merely unrecognised.
+
+    Only for a model that is genuinely not a CTranslate2 one. A valid
+    faster-whisper folder under an unrecognised name needs `--model`, and
+    sending that user to `download_model.py` is the wrong instruction.
     """
     print(
         "This script imports CTranslate2/faster-whisper models only. "
@@ -76,6 +86,9 @@ def _print_importable_models() -> None:
         "default model.",
         file=sys.stderr,
     )
+
+
+def _print_importable_models() -> None:
     print(f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr)
 
 
@@ -380,36 +393,33 @@ def main() -> None:
         print(f"ERROR: Source path is not a directory: {source_dir}", file=sys.stderr)
         sys.exit(1)
 
-    # The unsupported-model check runs before the file validation, not after.
-    # `validate_model_files` looks for the CTranslate2 layout, so a folder for
-    # any other runtime -- the default model included -- used to be reported
-    # as "MISSING FILES: model.bin, tokenizer.json, vocabulary.txt" with the
-    # advice to download them from HuggingFace. Those files do not exist in
-    # that repository, and the accurate message twenty lines below was
-    # unreachable because the validation had already exited.
-    requested_model = args.model or detect_model_name(source_dir)
-    if requested_model is not None and requested_model not in IMPORTABLE_MODEL_REPO_MAP:
-        print(f"ERROR: Unknown model '{requested_model}'.", file=sys.stderr)
-        print(
-            "This script imports CTranslate2/faster-whisper models only. "
-            "Use scripts/download_model.py for ONNX/WebGPU models, including "
-            "the default model.",
-            file=sys.stderr,
-        )
-        print(f"Available: {', '.join(IMPORTABLE_MODEL_REPO_MAP)}", file=sys.stderr)
-        sys.exit(1)
+    # The file diagnostic runs first so `--validate-only` always reports what
+    # it found, and the name gate runs before the *missing-file* advice.
+    # `validate_model_files` looks for the CTranslate2 layout, so a folder
+    # holding any other runtime's model -- the default model included -- used
+    # to be reported as "MISSING FILES: model.bin, tokenizer.json,
+    # vocabulary.txt" with advice to download those files from a repository
+    # that does not contain them.
+    is_valid, found_files, missing_files = validate_model_files(source_dir)
 
-    # --- Determine model name, before the file validation ---
-    # `validate_model_files` looks for the CTranslate2 layout, so a folder for
-    # any other runtime -- the default model included -- used to be reported
-    # as "MISSING FILES: model.bin, tokenizer.json, vocabulary.txt" with the
-    # advice to download them from the model's HuggingFace page. Those files
-    # do not exist in that repository, and the accurate message was
-    # unreachable because the validation had already exited.
+    print(f"Source: {source_dir}")
+    print(f"Found files: {', '.join(found_files) if found_files else '(none)'}")
+    # stderr is unbuffered and stdout is block-buffered when redirected, so
+    # without this the errors below land above the lines they refer to in a
+    # captured log.
+    sys.stdout.flush()
+
     model_name: str | None = args.model
     detected = model_name is None
     if model_name is None:
         model_name = detect_model_name(source_dir)
+
+    if model_name is not None and model_name not in IMPORTABLE_MODEL_REPO_MAP:
+        print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
+        _print_wrong_runtime_hint()
+        _print_importable_models()
+        sys.exit(1)
+
     if model_name is None:
         print(
             "ERROR: Could not auto-detect the model name from the folder name.",
@@ -419,18 +429,22 @@ def main() -> None:
             "Please specify the model explicitly with --model <name>.",
             file=sys.stderr,
         )
+        if found_files:
+            # It does look like a CTranslate2 model, so the file-level
+            # diagnostic `--validate-only` exists for is still meaningful even
+            # though the name could not be resolved.
+            if missing_files:
+                print(f"MISSING FILES: {', '.join(missing_files)}", file=sys.stderr)
+        else:
+            # Nothing of the CTranslate2 layout is here at all, so the likely
+            # explanation is a model for another runtime rather than a folder
+            # that merely has an unrecognised name.
+            _print_wrong_runtime_hint()
         _print_importable_models()
         sys.exit(1)
-    if model_name not in IMPORTABLE_MODEL_REPO_MAP:
-        print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
-        _print_importable_models()
-        sys.exit(1)
+
     print(f"{'Detected model' if detected else 'Model'}: {model_name}")
 
-    is_valid, found_files, missing_files = validate_model_files(source_dir)
-
-    print(f"Source: {source_dir}")
-    print(f"Found files: {', '.join(found_files)}")
 
     if missing_files:
         print(f"\nMISSING FILES: {', '.join(missing_files)}", file=sys.stderr)
