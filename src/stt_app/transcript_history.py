@@ -222,6 +222,14 @@ class TranscriptHistoryStore:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except OSError as exc:
             raise ValueError(f"Failed to read import file: {exc}") from exc
+        except UnicodeDecodeError as exc:
+            # Caught before `json.JSONDecodeError` would be: both are
+            # `ValueError`s and the caller shows the message verbatim, so
+            # without this the user reads a codec offset instead of what to do.
+            raise ValueError(
+                "Selected file is not UTF-8 text. Re-export it, or save it as "
+                "UTF-8, and try again."
+            ) from exc
         except json.JSONDecodeError as exc:
             raise ValueError("Selected file is not valid JSON.") from exc
         return self._entries_from_payload(payload)

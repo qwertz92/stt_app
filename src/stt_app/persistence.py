@@ -139,7 +139,14 @@ def load_json_with_backup(
             continue
         try:
             payload = json.loads(candidate.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+        except (OSError, ValueError):
+            # `ValueError` covers both members on purpose. `json.JSONDecodeError`
+            # alone let `UnicodeDecodeError` -- also a `ValueError` -- escape,
+            # and `read_text` raises that for any file not written as UTF-8: a
+            # `settings.json` re-saved by hand in the Windows ANSI code page
+            # then propagated out of `SettingsStore.load`, which `main` calls
+            # unprotected, so the app could not start at all -- with a perfectly
+            # good backup sitting next to it.
             continue
         if isinstance(payload, expected_type):
             return payload, source

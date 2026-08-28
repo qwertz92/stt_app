@@ -78,7 +78,10 @@ def scan_cached_models_command(
 def load_scan_cached_models_payload(output_path: Path) -> list[str] | None:
     try:
         payload = json.loads(output_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
+    except (OSError, ValueError):
+        # `ValueError` so a file that is not UTF-8 answers "no payload" like
+        # any other unreadable one; `UnicodeDecodeError` would otherwise
+        # propagate into the settings dialog's scan.
         return None
     values = payload.get("cached_models", [])
     if not isinstance(values, list):

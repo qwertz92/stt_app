@@ -471,3 +471,35 @@ def test_export_and_import_roundtrip(tmp_path):
 
     assert count == 2
     assert [item.text for item in imported] == ["one", "two"]
+
+
+def test_importing_a_file_that_is_not_utf8_says_so_in_words(tmp_path):
+    """The caller shows this message verbatim, so it has to be readable.
+
+    `UnicodeDecodeError` is a `ValueError`, so it already reached the dialog
+    -- but as `'utf-8' codec can't decode byte 0xdf in position 20: invalid
+    continuation byte`, which names neither the file nor what to do about it.
+    A history export re-saved in Notepad's ANSI encoding is the ordinary way
+    to get one.
+    """
+    store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    export = tmp_path / "history_export.json"
+    export.write_bytes(
+        # `ensure_ascii=False` is the point: the default escapes the
+        # umlauts back to ASCII, and those bytes decode as UTF-8 fine.
+        json.dumps([{"text": "Grüße"}], ensure_ascii=False).encode(
+            "cp1252"
+        )
+    )
+
+    try:
+        store.import_from_file(export)
+    except ValueError as exc:
+        message = str(exc)
+    else:
+        raise AssertionError("a file that is not UTF-8 was imported anyway")
+
+    assert "UTF-8" in message, f"the message does not name the problem: {message}"
+    assert "codec" not in message, (
+        f"the raw decoder error reached the user: {message}"
+    )

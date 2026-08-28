@@ -206,3 +206,28 @@ def test_a_genuinely_fresh_install_still_reads_as_empty(name, tmp_path):
         f"{name}: a fresh install quarantined files that were never there: "
         f"{quarantined}"
     )
+
+
+@pytest.mark.parametrize("name", sorted(_STORES))
+def test_a_primary_in_the_wrong_encoding_is_recovered_from_the_backup(name, tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`, not a `json.JSONDecodeError`.
+
+    `load_json_with_backup` caught only the latter, so a file that is not
+    UTF-8 escaped the loader instead of falling through to the backup. For
+    settings that is fatal rather than merely lossy: `main` calls
+    `SettingsStore.load()` unprotected, so a `settings.json` re-saved by hand
+    in the Windows ANSI code page stopped the app from starting at all, with a
+    good backup lying beside it. Measured before the fix: `UnicodeDecodeError:
+    'utf-8' codec can't decode byte 0xdf in position 20`.
+    """
+    build = _STORES[name]
+    store, path, read = build(tmp_path)
+    _ = store
+    saved = read()
+    assert backup_path(path).is_file(), f"{name}: no backup was written beside it"
+
+    path.write_bytes('{"engine": "gru\u00df"}'.encode("cp1252"))
+
+    assert read() == saved, (
+        f"{name}: a primary that is not UTF-8 was not recovered from the backup"
+    )

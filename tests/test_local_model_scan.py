@@ -63,3 +63,17 @@ def test_scan_cached_models_command_uses_frozen_worker_arg(monkeypatch, tmp_path
         "--output",
         str(output_path),
     ]
+
+
+def test_a_scan_payload_that_is_not_utf8_reads_as_no_payload(tmp_path):
+    """`UnicodeDecodeError` is a `ValueError`, not a `json.JSONDecodeError`.
+
+    The reader caught only the latter, so a corrupt payload file propagated
+    the decoder error into the settings dialog's inventory scan instead of
+    answering "nothing to read", which is what every other unreadable file
+    answers here.
+    """
+    output_path = tmp_path / "scan.json"
+    output_path.write_bytes(b'{"cached_models": ["gr\xfc\xdfe"]}')
+
+    assert local_model_scan.load_scan_cached_models_payload(output_path) is None
