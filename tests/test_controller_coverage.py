@@ -4391,6 +4391,11 @@ def test_a_failed_capture_start_releases_the_lease_even_if_the_teardown_raises(
         overlay=overlay,
     )
 
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+
     class _RefusingCapture(FakeCapture):
         def start(self):
             raise AudioCaptureError("the microphone is in use by another program")
@@ -4449,6 +4454,11 @@ def test_a_failed_streaming_capture_releases_the_lease_even_if_the_teardown_rais
     controller, app = _make_controller(
         settings_store=FakeSettingsStore(settings),
         overlay=overlay,
+    )
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
     )
 
     def _explode_capture(*_args, **_kwargs):

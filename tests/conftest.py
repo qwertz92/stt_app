@@ -605,6 +605,17 @@ def real_model_prefetch(monkeypatch):
     )
 
 
+class RealTranscriberRefused(BaseException):
+    """Deliberately not an `Exception`, and that is the whole point.
+
+    Every controller error path catches `Exception`, so an `AssertionError`
+    raised here is caught by the very arm under test: the test then passes
+    without executing one line of what it names. Two tests for the streaming
+    capture-failure arms did exactly that, and three mutations of those arms
+    survived a full run because of it.
+    """
+
+
 @pytest.fixture(autouse=True)
 def _forbid_building_a_real_transcriber(monkeypatch):
     """No test may construct a real provider or local runtime by accident.
@@ -624,12 +635,14 @@ def _forbid_building_a_real_transcriber(monkeypatch):
     fixture's, so opting in needs no change.
 
     It raises rather than returning a stub: a stub would let the test pass
-    while exercising something other than what it names.
+    while exercising something other than what it names. For the same reason
+    it raises a `BaseException`, not an `AssertionError` -- see
+    `RealTranscriberRefused`.
     """
     from stt_app import controller as controller_module
 
     def _refuse(*_args, **_kwargs):
-        raise AssertionError(
+        raise RealTranscriberRefused(
             "A test reached the real `create_transcriber`. This is the "
             "isolated arm of `_acquire_transcriber_runtime`, which does not "
             "go through `_get_or_create_transcriber` -- patch "
