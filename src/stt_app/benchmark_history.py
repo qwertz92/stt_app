@@ -15,6 +15,7 @@ from .csv_safety import spreadsheet_safe_cell
 from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
     atomic_write_json,
+    backup_path,
     load_json_with_backup,
     lock_for_path,
     parse_json_bool,
@@ -242,7 +243,9 @@ class BenchmarkHistoryStore:
 
     @classmethod
     def _load_from_path(cls, path: Path) -> list[BenchmarkHistoryEntry]:
-        if not path.exists():
+        # Both: a deleted primary leaves the `.bak` as the only copy of
+        # every recorded run, and the next saved run would overwrite it.
+        if not path.exists() and not backup_path(path).exists():
             return []
         payload, source = load_json_with_backup(path, expected_type=list)
         if payload is None:

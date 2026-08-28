@@ -87,6 +87,7 @@ from .config import (
 from .hotkey import parse_hotkey
 from .persistence import (
     atomic_write_json,
+    backup_path,
     load_json_with_backup,
     lock_for_path,
     parse_json_bool,
@@ -621,7 +622,12 @@ class SettingsStore:
 
     def load(self) -> AppSettings:
         with self._lock:
-            if not self._path.exists():
+            # Both, and this is the worst of the five stores that had
+            # this guard: on a missing primary it writes defaults *and*
+            # `save` refreshes the `.bak`, so an externally deleted
+            # `settings.json` silently reset every setting and destroyed the
+            # one remaining copy in the same call.
+            if not self._path.exists() and not backup_path(self._path).exists():
                 settings = AppSettings()
                 self.save(settings)
                 return settings

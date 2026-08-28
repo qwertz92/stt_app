@@ -10,6 +10,7 @@ from .app_paths import debug_audio_path, last_recording_state_path
 from .persistence import (
     atomic_write_bytes,
     atomic_write_json,
+    backup_path,
     load_json_with_backup,
     lock_for_path,
     quarantine_corrupt_file,
@@ -99,9 +100,15 @@ class LastRecordingStore:
 
     def load(self) -> LastRecordingState | None:
         with self._lock:
-            if not self._state_path.exists():
+            # Both: the backup carries the recovery state that makes
+            # Retry work after a crash, which is when the primary is most
+            # likely to be missing.
+            if (
+                not self._state_path.exists()
+                and not backup_path(self._state_path).exists()
+            ):
                 return self._orphaned_audio_state()
-            payload, _source = load_json_with_backup(
+            payload, source = load_json_with_backup(
                 self._state_path,
                 expected_type=dict,
             )
@@ -111,6 +118,11 @@ class LastRecordingStore:
             state = LastRecordingState.from_dict(payload)
             if not state.audio_path:
                 state.audio_path = str(self._audio_path)
+            if source == "backup":
+                # Republish, like every other store that recovers. Without it
+                # the data lives only in the `.bak` until something happens to
+                # write state again, so a second loss takes it for good.
+                self._save_state(state)
             return state
 
     def save_recording(

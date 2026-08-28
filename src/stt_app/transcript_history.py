@@ -12,6 +12,7 @@ from typing import Any
 from .app_paths import transcript_history_path
 from .persistence import (
     atomic_write_json,
+    backup_path,
     load_json_with_backup,
     lock_for_path,
     quarantine_corrupt_file,
@@ -256,7 +257,13 @@ class TranscriptHistoryStore:
 
     @classmethod
     def _load_from_path(cls, path: Path) -> list[TranscriptHistoryEntry]:
-        if not path.exists():
+        # Both, not just the primary. An external deletion of
+        # `transcript_history.json` -- a sync tool, an antivirus quarantine, a
+        # user tidying `%APPDATA%` -- left the `.bak` holding every transcript
+        # the user had, and this returned `[]` without ever looking at it. The
+        # next dictation then saved that empty list over the backup too:
+        # measured, five entries became one.
+        if not path.exists() and not backup_path(path).exists():
             return []
         payload, source = load_json_with_backup(path, expected_type=list)
         if payload is None:

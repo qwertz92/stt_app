@@ -62,7 +62,7 @@ class ProviderConnectionTestStore:
 
     def load_all(self) -> dict[str, ProviderConnectionTestResult]:
         with self._lock:
-            payload, _source = load_json_with_backup(
+            payload, source = load_json_with_backup(
                 self._path,
                 expected_type=dict,
             )
@@ -89,6 +89,11 @@ class ProviderConnectionTestStore:
                 result = ProviderConnectionTestResult.from_dict(raw_result)
                 if result.checked_at:
                     results[normalized_provider] = result
+            if source == "backup":
+                # Republish, like every other store that recovers: until
+                # something writes again the data lives only in the `.bak`, so
+                # a second loss takes it for good.
+                self._save(results)
             return results
 
     def save_result(

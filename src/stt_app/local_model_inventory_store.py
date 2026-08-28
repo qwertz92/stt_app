@@ -9,6 +9,7 @@ from .app_paths import local_model_inventory_path
 from .config import VALID_MODEL_SIZES
 from .persistence import (
     atomic_write_json,
+    backup_path,
     load_json_with_backup,
     lock_for_path,
     quarantine_corrupt_file,
@@ -127,7 +128,9 @@ class LocalModelInventoryStore:
             self._save_state(state)
 
     def _load_state(self) -> LocalModelInventoryState | None:
-        if not self._path.exists():
+        # Both, for consistency with the other stores. This one is only
+        # a cache, so the cost of losing it is a rescan rather than data.
+        if not self._path.exists() and not backup_path(self._path).exists():
             return None
 
         payload, source = load_json_with_backup(self._path, expected_type=dict)
