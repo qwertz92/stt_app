@@ -305,9 +305,20 @@ class TestFindCachedModels:
         assert "base" in result
 
     def test_returns_empty_when_no_models(self, tmp_path):
-        with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
-            return_value=str(tmp_path),
+        # Both halves: `find_cached_models` hands the ONNX scan `model_dir`
+        # unchanged, and `local_webgpu_asr._model_cache_dirs` then appends its
+        # *own* `_default_hf_cache_dir()`. Patching only the faster-whisper one
+        # left this test relying on the suite's HF_HOME isolation to keep the
+        # real cache out of the result.
+        with (
+            patch(
+                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
         ):
             result = find_cached_models()
         assert result == []
@@ -367,9 +378,15 @@ class TestFindCachedModels:
 
         monkeypatch.setattr(Path, "iterdir", guarded_iterdir)
 
-        with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
-            return_value=str(tmp_path),
+        with (
+            patch(
+                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
+            patch(
+                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                return_value=str(tmp_path),
+            ),
         ):
             result = find_cached_models()
 

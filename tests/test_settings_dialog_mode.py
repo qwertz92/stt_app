@@ -4040,3 +4040,66 @@ def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(tmp_pa
 
     dialog.deleteLater()
     _ = app
+
+
+def test_the_delete_prompt_names_every_folder_it_will_remove(monkeypatch, tmp_path):
+    """"Removes downloaded files from disk" did not say which disk.
+
+    The inventory searches the Model Dir *and* the default Hugging Face cache,
+    so a model listed once can live in either, and the shared default cache
+    also holds models other tools put there. A user deleting what they believe
+    is their Model Dir copy could take the shared one with it, with nothing on
+    screen to say so.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    model_dir = tmp_path / "models"
+    in_model_dir = model_dir / "models--Systran--faster-whisper-small"
+    in_model_dir.mkdir(parents=True)
+    shared = tmp_path / "shared-cache"
+    in_shared = shared / "models--Systran--faster-whisper-small"
+    in_shared.mkdir(parents=True)
+
+    shown: list[str] = []
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda _model_dir="": ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.delete_cached_model",
+        lambda _model_name, _model_dir="": 1,
+    )
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+        lambda: str(shared),
+    )
+
+    def _capture(parent, title, text, *args, **kwargs):
+        shown.append(text)
+        return QtWidgets.QMessageBox.No
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", _capture)
+
+    store = _FakeSettingsStore(AppSettings())
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog.model_dir_edit.setText(str(model_dir))
+    dialog.tabs.setCurrentIndex(dialog._local_tab_index)
+    _wait_for_local_models(dialog, "small", cached=True)
+    _select_local_model_names(dialog, "small")
+
+    dialog._delete_selected_cached_model()
+
+    assert shown, "no confirmation was shown"
+    prompt = shown[0]
+    assert str(in_model_dir) in prompt, (
+        f"the Model Dir copy is not named in the prompt: {prompt}"
+    )
+    assert str(in_shared) in prompt, (
+        "the shared default-cache copy is deleted too but is not named in the "
+        f"prompt: {prompt}"
+    )
+    _ = app

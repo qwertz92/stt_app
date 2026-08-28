@@ -125,10 +125,11 @@ def test_transcribe_batch_aborts_between_segments_on_cancel():
         language_mode="auto",
         model_factory=lambda *args, **kwargs: model,
     )
-    # Keyed on progress, not on a call count: the checks before decoding
-    # starts are not a fixed number (the load path polls it too, and how often
-    # depends on whether the model has to be fetched), so counting them made
-    # this cancel land wherever that count happened to be.
+    # Keyed on decoding progress, not on a call count, so the cancel lands
+    # between segments wherever the earlier checks happen to fall. Note this
+    # test therefore says nothing about the check *before* the model load --
+    # `test_a_cancel_before_the_run_does_not_load_the_model` covers that, and
+    # keying this one on progress is exactly what stopped it covering both.
     def cancel_check():
         return bool(model.yielded)
 
@@ -139,6 +140,36 @@ def test_transcribe_batch_aborts_between_segments_on_cancel():
 
     # Stopped early: it did not consume all three segments.
     assert model.yielded == ["one"]
+
+
+def test_a_cancel_before_the_run_does_not_load_the_model():
+    """The check has to sit above `_ensure_model`, not only above the decode.
+
+    A job cancelled while it waited in the single-worker queue would otherwise
+    still pull a multi-gigabyte model into memory to throw the result away --
+    and, worse, hold the shared runtime lease while doing it. Keying the
+    between-segments test on decoding progress left this uncovered: deleting
+    the pre-load check passes every other test in the suite.
+    """
+    loaded: list[str] = []
+
+    def _factory(*_args, **_kwargs):
+        loaded.append("model")
+        return FakeModel()
+
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        language_mode="auto",
+        model_factory=_factory,
+    )
+    transcriber.set_cancel_check(lambda: True)
+
+    with pytest.raises(TranscriptionCanceled):
+        transcriber.transcribe_batch(_build_wav_bytes())
+
+    assert loaded == [], (
+        "the model was loaded for a job that had already been cancelled"
+    )
 
 
 def test_transcribe_batch_completes_when_cancel_check_stays_false():

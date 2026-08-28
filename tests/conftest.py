@@ -6,9 +6,12 @@ classes to avoid duplicating ~150 lines of boilerplate.
 
 from __future__ import annotations
 
+import atexit
 import hashlib
 import logging
 import os
+import shutil
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -430,7 +433,37 @@ def _keep_download_locks_out_of_the_real_appdata(
     )
 
 
+def _isolate_the_hugging_face_environment() -> None:
+    """Point Hugging Face at a throwaway cache, before anything reads it.
+
+    This has to run in `pytest_configure`, not in a fixture. `huggingface_hub`
+    computes `constants.HF_HUB_CACHE` and `constants.HF_HUB_OFFLINE` **at
+    import**, and `test_modelscope_mirror.py` imports it at module scope --
+    which pytest does during collection, before any fixture has run. Setting
+    these from a function-scoped fixture therefore changed nothing at all:
+    measured after collection, `constants.HF_HUB_CACHE` was still the
+    developer's real `~/.cache/huggingface/hub` and `HF_HUB_OFFLINE` was False.
+
+    That mattered because `download_model_snapshot` passes no `cache_dir` when
+    `model_dir` is empty, so those frozen constants decide where a download
+    lands. Any path that escapes the `_coordinated_download_if_missing` stub
+    was writing into the real cache over the network.
+
+    One directory for the whole session, not one per test: `tmp_path_factory`
+    scans its base directory on every `mktemp`, so a per-test directory cost
+    the suite ~1750 extra directories and several seconds of pure scanning for
+    isolation that nothing needs to be per-test.
+    """
+    cache_root = Path(tempfile.mkdtemp(prefix="stt-hf-cache-"))
+    os.environ["HF_HOME"] = str(cache_root)
+    os.environ["HF_HUB_CACHE"] = str(cache_root / "hub")
+    os.environ["HF_HUB_OFFLINE"] = "1"
+    os.environ["STT_APP_DISABLE_MODELSCOPE"] = "1"
+    atexit.register(shutil.rmtree, cache_root, True)
+
+
 def pytest_configure(config):
+    _isolate_the_hugging_face_environment()
     config.addinivalue_line(
         "markers",
         "pixel_exact: asserts exact widget geometry; skipped on the offscreen "
@@ -504,15 +537,11 @@ def _isolate_the_hugging_face_cache(tmp_path_factory, monkeypatch):
     wiring.py` restores the real method, which is the file that exists to
     assert the pre-fetch happens.
 
-    The two network-disabling variables are belt and braces: the ModelScope
-    fallback is plain urllib and does not read `HF_HUB_OFFLINE`.
+    The environment half of the isolation lives in
+    `_isolate_the_hugging_face_environment`, which runs in `pytest_configure`
+    because `huggingface_hub` freezes those constants at import -- see its
+    docstring. This fixture is the half that has to be per-test.
     """
-    cache_root = tmp_path_factory.mktemp("hf-cache-isolation")
-    monkeypatch.setenv("HF_HOME", str(cache_root))
-    monkeypatch.setenv("HF_HUB_CACHE", str(cache_root / "hub"))
-    monkeypatch.setenv("HF_HUB_OFFLINE", "1")
-    monkeypatch.setenv("STT_APP_DISABLE_MODELSCOPE", "1")
-
     from stt_app.transcriber import local_faster_whisper
 
     monkeypatch.setattr(

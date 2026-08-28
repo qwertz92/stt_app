@@ -1446,12 +1446,36 @@ class _LocalModelsMixin:
             self.delete_selected_model_button.setEnabled(False)
             return
 
+        # Name the folders. The inventory searches the Model Dir *and* the
+        # default Hugging Face cache, so a model listed once here can live in
+        # either -- and the shared default cache holds models other tools put
+        # there. "This removes downloaded files from disk" did not say which.
+        from .transcriber.local_faster_whisper import cached_model_paths
+
+        model_dir = self.model_dir_edit.text().strip()
+        doomed: list[str] = []
+        for model_name in names:
+            try:
+                doomed.extend(
+                    str(path) for path in cached_model_paths(model_name, model_dir)
+                )
+            except Exception:  # pragma: no cover - listing must never block
+                _logger.exception(
+                    "Failed to list the cache folders for %s", model_name
+                )
+        folders = ""
+        if doomed:
+            unique = sorted(dict.fromkeys(doomed))
+            folders = "\n\nThese folders will be deleted:\n" + "\n".join(
+                f"    {path}" for path in unique
+            )
+
         answer = QtWidgets.QMessageBox.question(
             self,
             "Delete local model",
             (
                 f"Delete local cache for: {', '.join(names)}?\n\n"
-                "This removes downloaded files from disk."
+                "This removes downloaded files from disk." + folders
             ),
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
             QtWidgets.QMessageBox.No,
