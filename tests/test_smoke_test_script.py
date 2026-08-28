@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -237,4 +238,206 @@ def test_every_step_line_is_flushed_as_it_is_printed(smoke_test, monkeypatch, tm
     assert steps, body
     assert len(flushes) >= len(steps), (
         f"{len(steps)} step lines but only {len(flushes)} flushes: {steps}"
+    )
+
+
+def test_a_stale_backup_beside_a_healthy_primary_is_not_reported(
+    smoke_test, monkeypatch, tmp_path
+):
+    """The loop stops at the first file that parses, and that matters.
+
+    `atomic_write_json(keep_backup=True)` means every real install carries a
+    `.bak`, so without the short-circuit a stale or half-written one turns a
+    healthy install into "Settings problem: the saved backup cannot be read"
+    and `--strict` 1. Nothing pinned it: dropping the `break` left the whole
+    module green.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / "stt_app"
+    folder.mkdir()
+    (folder / "settings.json").write_text(
+        json.dumps({"engine": "openai"}), encoding="utf-8"
+    )
+    (folder / "settings.json.bak").write_text("{half writ", encoding="utf-8")
+
+    settings, problem = smoke_test._read_settings_without_touching_them()
+
+    assert settings is not None and settings.engine == "openai"
+    assert problem is None, problem
+
+
+def test_a_primary_that_refuses_to_be_read_is_never_copied_either(
+    smoke_test, monkeypatch, tmp_path
+):
+    """The backup rescue died on the one failure it exists for.
+
+    The loop reaches the backup precisely when reading the primary raised
+    `OSError`, and the copy that followed read that same primary again -- so
+    every `OSError` the backup was there to survive came back as
+    `reading the saved settings raised PermissionError(...)`, the model check
+    was skipped, and `--strict` returned 1 for an install the app starts fine
+    on.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / "stt_app"
+    folder.mkdir()
+    primary = folder / "settings.json"
+    primary.write_text(json.dumps({"engine": "groq"}), encoding="utf-8")
+    (folder / "settings.json.bak").write_text(
+        json.dumps({"engine": "openai"}), encoding="utf-8"
+    )
+
+    real_read_text = Path.read_text
+
+    def refuse(self, *args, **kwargs):
+        if self == primary:
+            raise PermissionError(13, "Permission denied")
+        return real_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", refuse)
+
+    copied: list[Path] = []
+    real_copy2 = shutil.copy2
+
+    def record(src, dst, *args, **kwargs):
+        copied.append(Path(src))
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(shutil, "copy2", record)
+
+    settings, problem = smoke_test._read_settings_without_touching_them()
+
+    assert settings is not None and settings.engine == "openai", (settings, problem)
+    assert problem and "cannot be read" in problem
+    assert primary not in copied, f"the unreadable primary was copied anyway: {copied}"
+
+
+def test_the_model_check_never_migrates_a_legacy_data_folder(
+    smoke_test, monkeypatch, tmp_path, capsys
+):
+    """Loading a model reaches `appdata_root()`, which is a *setup* call.
+
+    Measured chain: `preload_model` -> `_coordinated_download_if_missing` ->
+    `run_coordinated_download` -> `acquire` -> `_acquire_cache_lock` ->
+    `_download_lock_dir` -> `app_paths.appdata_root()`, which renames the
+    legacy folder onto the current name. So a diagnostic asked to check a
+    model moved the user's settings, history and recordings -- the same class
+    of side effect `_read_settings_without_touching_them` exists to avoid, one
+    level further out, through a call chain no grep of the script reveals.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    legacy = tmp_path / "tts_app"
+    legacy.mkdir()
+    (legacy / "transcript_history.json").write_text("[]", encoding="utf-8")
+    (legacy / "recordings").mkdir()
+    before = _tree(tmp_path)
+
+    built: list[object] = []
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "--check-model", "--strict"])
+    monkeypatch.setattr(
+        "stt_app.transcriber.factory.create_transcriber",
+        lambda settings, **kwargs: built.append(settings),
+    )
+
+    code = smoke_test.main()
+
+    out = capsys.readouterr().out
+    assert built == [], "the model check ran and would have moved the folder"
+    assert "legacy" in out and "tts_app" in out, out
+    assert _tree(tmp_path) == before, "the diagnostic moved the user's data"
+    assert code == 0
+
+
+def test_unusable_settings_still_check_the_model_the_app_would_run_on(
+    smoke_test, monkeypatch, tmp_path, capsys
+):
+    """A quarantined settings file is not a reason to check nothing.
+
+    `SettingsStore.load` renames a file that will not parse and writes
+    defaults, so the app runs -- on the default model. Reporting the problem
+    and then skipping the check left `--check-model` verifying nothing on
+    exactly the broken install it exists for, and the script's own message
+    already said "the app will discard it".
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / "stt_app"
+    folder.mkdir()
+    (folder / "settings.json").write_text("{not json", encoding="utf-8")
+
+    loaded: list[str] = []
+
+    class _Transcriber:
+        def preload_model(self):
+            loaded.append("yes")
+
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "--check-model"])
+    monkeypatch.setattr(
+        "stt_app.transcriber.factory.create_transcriber",
+        lambda settings, **kwargs: _Transcriber(),
+    )
+
+    code = smoke_test.main()
+
+    out = capsys.readouterr().out
+    assert loaded == ["yes"], out
+    assert "run on defaults" in out, out
+    assert "Settings problem" in out, out
+    assert code == 0
+
+
+@pytest.mark.parametrize(
+    ("label", "settings_payload", "legacy_only"),
+    [
+        ("local engine", {"engine": "local", "model_size": "tiny"}, False),
+        ("remote engine", {"engine": "groq"}, False),
+        ("legacy folder", {"engine": "local", "model_size": "tiny"}, True),
+    ],
+)
+def test_every_step_four_branch_prints_a_flushed_step_line(
+    smoke_test, monkeypatch, tmp_path, label, settings_payload, legacy_only
+):
+    """`[4/5]` has three outcomes and only one was ever exercised.
+
+    The flush test runs with no arguments, so it never reaches step 4 at all;
+    a mutant that printed one of these branches with a bare `print` survived
+    the whole module. Step 4 is the step that can wait indefinitely on the
+    machine-wide download lock, which is the reason the flush exists.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / ("tts_app" if legacy_only else "stt_app")
+    folder.mkdir()
+    (folder / "settings.json").write_text(
+        json.dumps(settings_payload), encoding="utf-8"
+    )
+
+    printed: list[str] = []
+    flushes: list[int] = []
+
+    class _Stream:
+        def write(self, text):
+            printed.append(text)
+            return len(text)
+
+        def flush(self):
+            flushes.append(len(printed))
+
+    class _Transcriber:
+        def preload_model(self):
+            return None
+
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "--check-model"])
+    monkeypatch.setattr(
+        "stt_app.transcriber.factory.create_transcriber",
+        lambda settings, **kwargs: _Transcriber(),
+    )
+    monkeypatch.setattr(sys, "stdout", _Stream())
+
+    smoke_test.main()
+
+    body = "".join(printed)
+    step_four = [line for line in body.splitlines() if line.startswith("[4/5]")]
+    assert step_four, f"{label}: no [4/5] line at all in {body!r}"
+    steps = [line for line in body.splitlines() if line.startswith("[")]
+    assert len(flushes) >= len(steps), (
+        f"{label}: {len(steps)} step lines but only {len(flushes)} flushes"
     )

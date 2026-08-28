@@ -63,7 +63,7 @@ def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | No
 
     backup_path = real_path.with_suffix(real_path.suffix + ".bak")
     problems = []
-    usable = False
+    usable_path: Path | None = None
     for path, label in ((real_path, "settings file"), (backup_path, "backup")):
         if not path.is_file():
             continue
@@ -78,25 +78,54 @@ def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | No
                 "object, so the app will discard it"
             )
             continue
-        usable = True
+        usable_path = path
         break
 
-    if not usable:
+    if usable_path is None:
         return None, "; ".join(problems) or "the saved settings file is unreadable"
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
         copy_path = temp_dir_path / "settings.json"
-        shutil.copy2(real_path, copy_path)
-        if backup_path.is_file():
-            # The store's own recovery path reads this, and it is what made
-            # the primary file's failure survivable in the first place.
+        # Whichever file parsed above, copied under the primary's name. Not
+        # `real_path`: the loop reaches the backup precisely when the primary
+        # raised `OSError`, and copying a file that just refused to be read
+        # raises it again -- turning the one case the backup exists to rescue
+        # into "reading the saved settings raised PermissionError(...)" and
+        # `--strict` 1, for an install the app starts fine on. The file that
+        # parsed cannot fail for that reason, and using it reproduces what the
+        # app ends up running on, since the store's own recovery reads the
+        # `.bak` and rewrites the primary from it.
+        shutil.copy2(usable_path, copy_path)
+        if usable_path == real_path and backup_path.is_file():
+            # The store's recovery path reads this: our JSON check is looser
+            # than `SettingsStore`, so a primary that parsed here can still be
+            # rejected there.
             shutil.copy2(backup_path, temp_dir_path / "settings.json.bak")
         settings = SettingsStore(copy_path).load()
 
     # A problem that the backup rescued is still worth naming: the app is
-    # running on recovered settings and the primary file is damaged.
+    # running on recovered settings and the primary file is damaged. It is
+    # returned *alongside* the settings, so the model check the user asked for
+    # still runs -- that is the half that used to be missing. `--strict` then
+    # exits 1, which is what a flag named strict is for; without it the run
+    # reports the damage as a WARN and returns 0.
     return settings, "; ".join(problems) or None
+
+
+def _legacy_data_folder_would_be_moved() -> bool:
+    """Is this install still in the pre-rename data folder?
+
+    `appdata_root()` renames it onto the current name the first time
+    anything asks for it, so this answers "would asking cause that move".
+    Everything the model check touches -- the download coordinator's lock
+    directory most of all -- goes through that call.
+    """
+    from stt_app.app_paths import existing_appdata_root
+    from stt_app.config import LEGACY_APP_NAME
+
+    root = existing_appdata_root()
+    return root is not None and root.name == LEGACY_APP_NAME
 
 
 def main() -> int:
@@ -175,7 +204,11 @@ def main() -> int:
         # not a coincidence to be avoided -- writing "local" beside it was a
         # second copy of one constant, and on the hypothetical day the default
         # moves it is the copy that would be wrong.
-        from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE
+        from stt_app.config import (
+            DEFAULT_ENGINE,
+            DEFAULT_MODEL_SIZE,
+            LEGACY_APP_NAME,
+        )
 
         problem: str | None = None
         try:
@@ -186,31 +219,56 @@ def main() -> int:
         if problem:
             optional_failures.append(f"Settings problem: {problem}")
 
-        if settings is None and not problem:
-            # A fresh install: no settings file at all. The app would run on
-            # defaults here, so checking the default model is checking what
-            # this machine would actually use. Skipping it silently returned 0
-            # from the one check the user invoked.
+        if settings is None:
+            # Two ways to get here, and the app does the same thing in both:
+            # it runs on defaults. No settings file at all is a fresh install;
+            # an unusable one is quarantined by `SettingsStore.load`, which
+            # then writes defaults. So the default model is what this machine
+            # would load either way, and skipping the check silently returned
+            # 0 from the one check the user invoked. Reporting the unusable
+            # file and *then* declining to check anything was the same gap in
+            # a second place -- that message already says "the app will
+            # discard it", which names exactly why the defaults are the right
+            # thing to check.
             from stt_app.settings_store import AppSettings
 
             settings = AppSettings()
-            print(
-                f"No saved settings yet; checking the default model "
-                f"({DEFAULT_MODEL_SIZE}), which is what this machine would use."
-            )
+            if problem:
+                print(
+                    f"The saved settings cannot be used, so the app would "
+                    f"discard them and run on defaults; checking the default "
+                    f"model ({DEFAULT_MODEL_SIZE})."
+                )
+            else:
+                print(
+                    f"No saved settings yet; checking the default model "
+                    f"({DEFAULT_MODEL_SIZE}), which is what this machine would use."
+                )
 
-        if settings is None:
-            # Print a step line here too. Without one this branch is the only
-            # path through the check that produces no `[4/5]` output at all,
-            # so a reader of the log sees the step vanish rather than fail.
-            step("[4/5] Skipping model load: the saved settings are unusable")
+        if _legacy_data_folder_would_be_moved():
+            # Loading a model reaches the download coordinator, whose lock
+            # directory is `appdata_root()` -- and that is a *setup* call: with
+            # only the legacy folder present it renames the user's entire data
+            # directory onto the current name. A diagnostic that migrates
+            # settings, history and recordings is exactly the side effect
+            # `_read_settings_without_touching_them` exists to avoid, one
+            # level further out, and the model check reintroduced it through a
+            # call chain no grep of this script reveals.
+            step(
+                "[4/5] Skipping model load: this install's data is still in "
+                f"the legacy '{LEGACY_APP_NAME}' folder"
+            )
+            print(
+                "Loading a model would move it. Start the app once to migrate "
+                "it, then re-run this check."
+            )
         elif settings.engine != DEFAULT_ENGINE:
             # Only the local engine has a model to load. Every remote provider
             # builds from an API key this script does not read, and none of
             # them implements `preload_model` at all, so running the step
             # against one reports a failure that says nothing about the
             # install.
-            print(
+            step(
                 f"[4/5] Skipping model load: the configured engine is "
                 f"'{settings.engine}', which transcribes remotely"
             )
