@@ -200,11 +200,64 @@ class _TranscriberRuntimeLease:
             if self._released:
                 return
             self._released = True
-        if self._close_on_release:
-            self._controller._close_cached_transcriber(self.transcriber)
-        self._controller._release_transcriber_runtime(
-            owns_shared_lock=self._owns_shared_lock
-        )
+        # The hand-back is in a `finally`, and that is the whole point of this
+        # method. `_close_cached_transcriber` swallows `Exception` but not
+        # `BaseException`, and `_released` is already True above, so a close
+        # that dies used to skip `_release_transcriber_runtime` permanently:
+        # `_transcriber_runtime_lock` stranded for the process lifetime, every
+        # later preload and audio import blocked forever, every dictation
+        # silently building its own isolated runtime, and no deferred cache
+        # reset ever running. Worse, every caller reaches this from a
+        # `finally` that sits *outside* its own `except BaseException` arm --
+        # `_transcribe_worker`, `_finalize_stream_worker` and
+        # `_preload_model_worker` all emit their terminal signal after it --
+        # so the escaping exception also swallowed the signal, leaving the
+        # overlay in Processing with no error and no Retry, or
+        # `_streaming_recording` stuck True so every later hotkey press was
+        # refused. One `finally` here fixes all four call sites.
+        try:
+            if self._close_on_release:
+                self._controller._close_cached_transcriber(self.transcriber)
+        except BaseException:
+            # Logged and dropped, not re-raised. Handing the runtime back is
+            # this method's contract; closing is best-effort cleanup on top of
+            # it, and every caller reaches `release()` from a `finally` that
+            # sits *outside* its own `except BaseException` arm --
+            # `_transcribe_worker`, `_finalize_stream_worker` and
+            # `_preload_model_worker` all emit their terminal signal after it.
+            # So a close that raised did not merely fail to close: it swallowed
+            # the terminal signal, leaving the overlay in Processing with no
+            # error and no Retry for the rest of the session, or
+            # `_streaming_recording` stuck True so every later hotkey press was
+            # refused with "Streaming transcript is still finalizing".
+            # `_close_cached_transcriber` already swallows `Exception`, so this
+            # only widens an existing decision to `BaseException`.
+            self._controller._logger.exception(
+                "Failed to close a released transcriber runtime"
+            )
+        finally:
+            # Guarded for the same reason the close above is, and it is not
+            # theoretical: `_release_transcriber_runtime` applies the deferred
+            # cache reset, which closes the *cached* transcriber through the
+            # same `_close_cached_transcriber` that swallows `Exception` but
+            # not `BaseException`. So the exact failure this method was
+            # rewritten to survive -- a `close()` raising a `BaseException` --
+            # still reached the caller by the other door, and the caller is a
+            # worker that emits its terminal signal after this call.
+            #
+            # Nothing is stranded by swallowing it. Both the admission lock
+            # and the use count are handed back inside that method's own
+            # `finally`, before anything can escape, and a reset that failed
+            # leaves `_pending_transcriber_cache_reset` set, so the next
+            # release retries it.
+            try:
+                self._controller._release_transcriber_runtime(
+                    owns_shared_lock=self._owns_shared_lock
+                )
+            except BaseException:
+                self._controller._logger.exception(
+                    "Failed to complete a transcriber runtime release"
+                )
 
 
 # Which provider's API key each engine reads, and therefore whose presence is
@@ -1205,6 +1258,21 @@ class DictationController(QtCore.QObject):
     def _start_streaming_recording(self) -> None:
         settings_snapshot = replace(self._settings)
         runtime_lease: _TranscriberRuntimeLease | None = None
+        # Bound before the `try` because the `BaseException` arm below tears
+        # the handshake down, and that arm is also reachable from
+        # `_acquire_transcriber_runtime` -- i.e. before `transcriber` would
+        # otherwise exist.
+        #
+        # Not load-bearing, and measured as such: the teardown sits inside its
+        # own `try`/`except BaseException`, and the argument is evaluated
+        # there too, so an `UnboundLocalError` is caught and the observable
+        # behaviour is identical (a mutation removing both this line and the
+        # `is not None` guard leaves the test green). What it buys is an
+        # honest log -- without it every such failure records a full
+        # "Failed to tear down the stream connect" traceback that is really
+        # our own unbound local, which would send the next reader after the
+        # wrong thing entirely.
+        transcriber = None
         try:
             # Cleared before the handshake starts, not after. The connect
             # thread sets this flag when `start_stream` fails, and it wins
@@ -1240,8 +1308,26 @@ class DictationController(QtCore.QObject):
             # exactly the outcome the guards below were added to make
             # unreachable. Bookkeeping only, then re-raise: a `BaseException`
             # on the Qt thread must not be turned into an overlay message.
-            if runtime_lease is not None:
-                runtime_lease.release()
+            #
+            # The teardown is here for the same reason the two arms below the
+            # capture guard have it: `_begin_stream_connect` has already
+            # spawned the handshake, so releasing the lease alone lets
+            # `start_stream` finish and publish a session nobody owns -- every
+            # later dictation then fails with "Streaming session already
+            # active" while a remote provider's socket stays open and billed.
+            # It runs before the release and cannot raise past it, which is
+            # the ordering the sibling arms had to be corrected to.
+            try:
+                if transcriber is not None:
+                    self._teardown_pending_stream_connect(transcriber)
+            except BaseException:
+                self._logger.exception(
+                    "Failed to tear down the stream connect after a "
+                    "BaseException starting the stream"
+                )
+            finally:
+                if runtime_lease is not None:
+                    runtime_lease.release()
             raise
 
         try:
@@ -2192,8 +2278,14 @@ class DictationController(QtCore.QObject):
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
             orphan = transcriber
             if self._shutdown_started:
-                self._close_cached_transcriber(transcriber)
+                # Cleared *before* the close, not after. `_close_cached_transcriber`
+                # swallows `Exception` but not `BaseException`, so with the clear
+                # below it the except arm saw `orphan` still set and closed the
+                # same runtime a second time -- and that second raise replaced the
+                # original, so the caller got the close's exception instead of the
+                # `TranscriptionCanceled` this branch exists to deliver.
                 orphan = None
+                self._close_cached_transcriber(transcriber)
                 raise TranscriptionCanceled("Application shutdown is in progress.")
             lease = _TranscriberRuntimeLease(
                 self,
@@ -3207,11 +3299,17 @@ class DictationController(QtCore.QObject):
             # half-loaded runtime in the cache and recorded `None`, which is
             # the *success* sentinel `_local_model_preload_needed` reads. The
             # next dictation then transcribed with a partially initialized
-            # runtime and never retried the load. Reachable whenever a
-            # cancelled load does not raise `TranscriptionCanceled`: the
-            # Cohere/Granite Node path kills its child, which surfaces as
-            # `TranscriptionError` (a `RuntimeError`). The two arms on either
-            # side of this one both condemn unconditionally; this one did not.
+            # runtime and never retried the load. The two arms on either side
+            # of this one both condemn unconditionally; this one did not.
+            #
+            # Reachable whenever a load fails for an ordinary reason while a
+            # cancel is pending -- a corrupt snapshot, a missing Node runtime,
+            # a process that will not spawn. (An earlier version of this
+            # comment named the Cohere/Granite child-kill as the case. That is
+            # wrong twice over: the kill raises `TranscriptionCanceled`, which
+            # the arm above already handles, and it lives in `transcribe_batch`
+            # -- `local_webgpu_asr.preload_model` is `_ensure_process()` with
+            # no cancel check at all.)
             if runtime_lease is not None:
                 with self._transcriber_runtime_state_lock:
                     self._pending_transcriber_cache_reset = True

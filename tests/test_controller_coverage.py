@@ -33,7 +33,7 @@ from stt_app.audio_capture import AudioCaptureError
 from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE, FALLBACK_HOTKEY
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
-from stt_app.transcriber.base import TranscriptionError
+from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
 # ---------------------------------------------------------------------------
@@ -904,8 +904,6 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     `_acquire_transcriber_runtime` instead and so never covered the branch
     that holds a lease.
     """
-    from stt_app.transcriber.base import TranscriptionCanceled
-
     controller, app, _overlay, settings = _preloading_controller(monkeypatch)
     generation = controller._preload_generation
     key = controller._model_preload_key(settings)
@@ -976,11 +974,16 @@ def test_a_cancel_that_surfaces_as_a_plain_error_still_condemns_the_runtime(
 ):
     """Not every cancelled load raises `TranscriptionCanceled`.
 
-    The Cohere/Granite Node runtime cancels by killing its child process, and
-    that surfaces as `TranscriptionError`, which is a `RuntimeError`. So the
-    cancel lands in the `except Exception` arm -- whose cancel branch returned
-    from *above* the condemnation, while the `TranscriptionCanceled` arm above
-    it and the `BaseException` arm below it both condemn unconditionally.
+    A load that fails for an ordinary reason while a cancel is pending -- a
+    corrupt snapshot, a missing Node runtime, a process that will not spawn --
+    lands in the `except Exception` arm, whose cancel branch returned from
+    *above* the condemnation, while the `TranscriptionCanceled` arm above it
+    and the `BaseException` arm below it both condemn unconditionally.
+
+    (This docstring first named the Cohere/Granite child-kill as the case.
+    Checked: that raises `TranscriptionCanceled`, which the arm above already
+    handles, and it lives in `transcribe_batch` -- that runtime's
+    `preload_model` is `_ensure_process()` with no cancel check at all.)
 
     The consequence is the one the `TranscriptionCanceled` arm's own comment
     describes: `None` is the *success* sentinel for
@@ -1449,6 +1452,54 @@ def test_transcribe_worker_emits_not_implemented_error():
 
     assert overlay.states[-1][0] == "Error"
     assert "not implemented" in overlay.states[-1][1].lower()
+    controller.shutdown()
+    _ = app
+
+
+def test_transcribe_worker_still_reports_when_the_lease_close_dies(monkeypatch):
+    """The terminal signal sits after the `finally` that releases the lease.
+
+    So a lease whose close raised took the whole result with it: no
+    `transcription_ready`, no `transcription_failed`, and the overlay left in
+    Processing with no error and no Retry for the rest of the session. The
+    guard is in `release()` rather than in each of the three workers that have
+    this shape, and this is the integration check that it holds.
+    """
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._executor = ImmediateExecutor()
+    ready: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: ready.append((token, text))
+    )
+
+    class Runtime:
+        def transcribe_batch(self, wav):
+            return "the dictated words"
+
+        def close(self):
+            raise BaseException("close died")
+
+    def _lease(*_args, **_kwargs):
+        controller._increment_transcriber_runtime_count()
+        return controller_module._TranscriberRuntimeLease(
+            controller,
+            Runtime(),
+            owns_shared_lock=False,
+            close_on_release=True,
+        )
+
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", _lease)
+
+    settings_snapshot = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
+    controller._active_request_token = 1
+    controller._transcribe_worker(1, b"audio", settings_snapshot)
+
+    assert ready == [(1, "the dictated words")], (
+        "the transcript was produced and then lost with the close error; the "
+        f"overlay is still on {overlay.states[-1:]}"
+    )
+    assert controller._transcription_runtime_active() is False
     controller.shutdown()
     _ = app
 
@@ -4008,6 +4059,266 @@ def test_a_base_exception_starting_the_stream_does_not_strand_the_runtime_lock(
     )
     controller._transcriber_runtime_lock.release()
     assert controller._transcription_runtime_active() is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_starting_the_stream_tears_down_the_handshake(monkeypatch):
+    """Releasing the lease is not enough; the handshake is already running.
+
+    `_begin_stream_connect` has spawned it by the time anything below can
+    fail, so `start_stream` completes and publishes a session nobody owns.
+    Every streaming provider refuses a second session, so the next dictation
+    fails with "Streaming session already active" until the app restarts, and
+    a remote provider's socket stays open and billed until then. The two arms
+    below the capture guard have done this teardown for that reason; the
+    `BaseException` arm was added without it.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        model_size="small",
+        mode="streaming",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda *_a, **_k: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    torn_down: list[object] = []
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("the handshake died")
+
+    monkeypatch.setattr(controller, "_begin_stream_connect", _explode)
+    monkeypatch.setattr(
+        controller,
+        "_teardown_pending_stream_connect",
+        lambda transcriber: torn_down.append(transcriber),
+    )
+
+    with pytest.raises(BaseException, match="the handshake died"):
+        controller._start_streaming_recording()
+
+    assert len(torn_down) == 1, (
+        "the handshake was left published on the shared transcriber, so every "
+        "later dictation is refused with 'Streaming session already active'"
+    )
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    controller._transcriber_runtime_lock.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_before_the_transcriber_exists_reports_the_real_failure(
+    monkeypatch,
+):
+    """The teardown arm is reachable before `transcriber` is bound.
+
+    `_acquire_transcriber_runtime` is inside the same `try`, so a
+    `BaseException` from it reaches the arm that tears the handshake down,
+    before `transcriber` would otherwise exist.
+
+    What this pins is the behaviour: the real failure reaches the caller and
+    the shared lock comes back. It does **not** pin the pre-binding of
+    `transcriber` -- measured, removing that line and its `is not None` guard
+    together leaves this test green, because the teardown's own
+    `except BaseException` catches the `UnboundLocalError` from evaluating the
+    argument. The binding is kept for the log, not for the control flow.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        model_size="small",
+        mode="streaming",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("acquisition died")
+
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", _explode)
+
+    with pytest.raises(BaseException, match="acquisition died"):
+        controller._start_streaming_recording()
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    controller._transcriber_runtime_lock.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_lease_whose_close_dies_still_hands_the_runtime_back(monkeypatch):
+    """The close and the hand-back were two statements with no `finally`.
+
+    `_close_cached_transcriber` swallows `Exception` but not `BaseException`,
+    and `release()` marks itself released before either runs, so a close that
+    died skipped `_release_transcriber_runtime` permanently and a retry was a
+    no-op. That strands `_transcriber_runtime_lock` for the process lifetime:
+    every later preload and audio import blocks forever, every dictation
+    silently builds its own isolated runtime, and no deferred cache reset runs.
+
+    It is the same hazard as the guard in `_acquire_transcriber_runtime`, one
+    frame further out, and it is the shared root of three symptoms: every
+    worker calls `release()` from a `finally` that sits *outside* its own
+    `except BaseException` arm, so the escaping exception also swallowed the
+    terminal signal.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    class StubbornRuntime:
+        def close(self):
+            raise BaseException("close died")
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    controller._increment_transcriber_runtime_count()
+    lease = controller_module._TranscriberRuntimeLease(
+        controller,
+        StubbornRuntime(),
+        owns_shared_lock=True,
+        close_on_release=True,
+    )
+
+    # It must not raise either: every caller reaches `release()` from a
+    # `finally` that sits outside its own `except BaseException` arm and emits
+    # its terminal signal afterwards, so a raising release swallowed that
+    # signal -- the overlay stuck in Processing with no error and no Retry.
+    lease.release()
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True, (
+        "the shared runtime lock was stranded for the process lifetime"
+    )
+    controller._transcriber_runtime_lock.release()
+    assert controller._transcription_runtime_active() is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_deferred_reset_that_dies_still_lets_the_worker_report(monkeypatch):
+    """Guarding only the lease's own close left the same failure a second door.
+
+    `release()` hands back through `_release_transcriber_runtime`, and that
+    applies the deferred cache reset -- which closes the *cached* transcriber
+    through the same `_close_cached_transcriber` that swallows `Exception` but
+    not `BaseException`. So the exact failure the `try` above it was added to
+    survive still escaped, and the caller is a worker that emits its terminal
+    signal after this call: overlay stuck in Processing with no error and no
+    Retry, or `_streaming_recording` stuck True.
+
+    The lease's own runtime is deliberately fine here and
+    `close_on_release=False`, so only the deferred reset can be the cause.
+
+    Two things must survive the swallow: the admission lock, handed back
+    inside that method's own `finally` before anything can escape, and the
+    pending flag, which a failed reset leaves set so the next release retries.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    class StubbornRuntime:
+        def close(self):
+            raise BaseException("close died")
+
+    controller._transcriber_cache = StubbornRuntime()
+    with controller._transcriber_runtime_state_lock:
+        controller._pending_transcriber_cache_reset = True
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    controller._increment_transcriber_runtime_count()
+    lease = controller_module._TranscriberRuntimeLease(
+        controller,
+        object(),
+        owns_shared_lock=True,
+        close_on_release=False,
+    )
+
+    lease.release()
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True, (
+        "the shared runtime lock was stranded for the process lifetime"
+    )
+    controller._transcriber_runtime_lock.release()
+    assert controller._transcription_runtime_active() is False
+    with controller._transcriber_runtime_state_lock:
+        assert controller._pending_transcriber_cache_reset is True, (
+            "a reset that failed must stay pending so the next release retries"
+        )
+
+    # The stubborn runtime is still cached, and shutdown would close it again.
+    controller._transcriber_cache = None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_shutdown_during_construction_closes_the_runtime_exactly_once(monkeypatch):
+    """Clearing `orphan` after the close let the except arm close it again.
+
+    `_close_cached_transcriber` swallows `Exception` but not `BaseException`,
+    so a close that died left `orphan` still set, the outer arm closed the same
+    runtime a second time, and that second raise replaced the first -- the
+    caller got the close's exception instead of the `TranscriptionCanceled`
+    this branch exists to deliver.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    closes: list[str] = []
+
+    class Runtime:
+        def close(self):
+            # It has to *raise*: `_close_cached_transcriber` swallows
+            # `Exception`, so with a close that succeeds the ordering of the
+            # two statements cannot matter and the test proves nothing. A
+            # first version of this test used a quiet close and passed under
+            # its own mutation.
+            closes.append("close")
+            raise BaseException("close died")
+
+    def _create(*_args, **_kwargs):
+        # Shutdown observed *during* construction: the only way into that
+        # branch, and the real sequence when the user quits mid-load.
+        controller._shutdown_started = True
+        return Runtime()
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", _create)
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    try:
+        # The close's own exception is what escapes -- it is a `BaseException`
+        # and more urgent than the shutdown notice. What must not happen is a
+        # *second* close of the same runtime.
+        with pytest.raises(BaseException, match="close died"):
+            controller._acquire_transcriber_runtime(settings)
+    finally:
+        controller._transcriber_runtime_lock.release()
+
+    assert closes == ["close"], f"the runtime was closed {len(closes)} times"
+    controller._shutdown_started = False
     controller.shutdown()
     _ = app
 
