@@ -728,6 +728,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     no download can ever start again. A filesystem that cannot lock (some
     network shares) logs a warning and degrades to process-local serialization
     rather than making downloads impossible.
+  - **Holding the OS lock and storing it are two steps, and the gap between
+    them must not be able to raise.** `acquire()` gives the in-process slot
+    back on any exception, but it cannot see the `CrossProcessLock` object, and
+    `_release_cache_lock` finds it through `self._cache_lock` -- so a raise
+    after `lock.acquire()` returned True and before the assignment strands a
+    real kernel lock with no reference to it. Because the lock is keyed on the
+    cache directory and is machine-wide, that blocks the benchmark worker,
+    `scripts/download_model.py` and any second user of that Model Dir until
+    this process exits, not just this process. The publication therefore
+    releases the lock and re-raises. `CrossProcessLock.release()` is idempotent
+    and swallows `OSError`, so the defensive call costs nothing.
   - The app's own download subprocess needs no lock of its own: the parent
     holds the slot for the whole life of `_run_download_worker`.
     `scripts/download_model.py` does take it, so running the script while the
@@ -1830,6 +1841,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   app is not affected and must stay that way: `benchmark_process.py` uses
   `subprocess` with a dedicated stdout reader thread that drains the pipe
   concurrently, and `src/` uses no `multiprocessing` at all.
+- **`_start_streaming_recording` has two capture-failure arms, and a test that
+  fails `_build_audio_capture` reaches only the first.** That call returns
+  before `capture.start()` exists, so the `AudioCaptureError` arm below it is
+  never entered; reverting its guard left the whole suite green. A test for
+  that arm needs a capture object that builds and then refuses to `start()`,
+  which is what a microphone held by another application does. Same shape for
+  `_acquire_transcriber_runtime`: the isolated branch and the shared branch
+  need separate tests, and only the shared one holds
+  `_transcriber_runtime_lock`.
 - **Every worker that emits its terminal signal after the `finally` needs a
   last-resort `except BaseException`**: `_transcribe_worker`,
   `_finalize_stream_worker` and `_preload_model_worker` all have that shape,

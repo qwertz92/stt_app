@@ -3,6 +3,128 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-28 (ninth round: the measuring instruments were wrong)
+
+Two of this round's findings were not about the code at all. They were about
+the tools used to check the code, and both had been quietly producing wrong
+answers for several rounds.
+
+### The bytecode cache made mutation testing report random survivors
+
+A batch of four mutations, run one after another, reported exactly one
+"SURVIVED" -- and a different one on every run. The mutations were fine. The
+harness was not: `spec_from_file_location` and ordinary imports use
+`__pycache__`, and a `.pyc` counts as current when the source's mtime **in
+whole seconds** and its size both match. Two mutations of one file that happen
+to produce the same byte count, written inside the same second, make the second
+run execute the *first* one's bytecode.
+
+Measured: the four mutations produced exactly two colliding pairs, 10018 and
+10015 bytes. So the run was not flaky in the usual sense -- it was
+deterministic given the second boundary, which is why re-running "fixed" it and
+moved the bogus result somewhere else.
+
+Every mutation check in this project now runs with `PYTHONDONTWRITEBYTECODE=1`
+and deletes the target's `.pyc` first. The direction of the error matters: a
+false SURVIVED wastes an investigation, but a false DETECTED -- stale bytecode
+from the *previous* mutation breaking the test -- would have signed off a test
+that checks nothing. Both were possible.
+
+The harness also has to survive being killed. A two-minute command timeout
+killed it mid-case and left a mutated `controller.py` in the working tree with
+nothing saying so; it was caught by `git status` before it could be committed.
+It now writes a sentinel naming the file it is about to mutate and refuses to
+start while one exists -- which promptly earned its keep on the next kill.
+
+Two smaller harness rules came out of the same afternoon. A revert has to be
+**one atomic replacement**: splitting the "lease built outside the guard" revert
+into two cases produced an `_acquire_transcriber_runtime` that fell through
+still holding the shared lock, so the run hung rather than reporting anything.
+And scratch filenames need a namespace -- the review subagents share this
+session's scratch directory, and one of them wrote its own `mutate.py` over the
+harness between two runs.
+
+### `QLabel.heightForWidth(w)` is not a function of `w`
+
+The retranscribe note's reservation was justified by a measured pixel pair:
+`IBM Granite Speech 4.1 2B Plus` (159 px) wrapping to 45 px while the narrower
+`NVIDIA Nemotron 3.5 ASR 0.6B` (157 px) wrapped to 60. A reviewer could not
+reproduce it. Neither could I -- three times, in three different ways, each
+disagreeing with the last:
+
+- A bare `QLabel` carrying the same stylesheet: reproduced the 45/60 split, but
+  for different names than the real dialog does.
+- The real dialog's label, sweeping the *argument* to `heightForWidth`: found a
+  15 px shortfall at one width.
+- The real dialog's label, **resized to each width before measuring**: found no
+  shortfall at any width from 200 to 1100.
+
+The third is the correct one, and the difference is the point:
+`heightForWidth(476)` returned 60 px with the label 556 px wide and 90 px with
+it 476 px wide. The same call, the same argument, two answers. A sweep that
+varies only the argument is reading a cache.
+
+So the comment, its test docstring and the `AGENTS.md` entry had all been
+carrying a number produced by an instrument that does not measure what it looks
+like it measures. They now say what reproduces, including the part that is
+uncomfortable: **no under-reservation from the `horizontalAdvance` shortcut can
+be produced at any reachable width with today's names.** The reason to measure
+every candidate is not that the shortcut has been caught failing -- it is that
+measuring all fifteen costs 1.26 ms on a cache miss and cannot be wrong.
+
+A related correction in the same commit: the delete-prompt comment blamed
+dialog *width* ("a long absolute path does not wrap at a space, so the dialog
+grows to the longest path"). Measured, the width is constant at 502 px whether
+8 folders are listed or 80. The height is what grows -- about 16 px per folder,
+931 px at the realistic worst case of 52, crossing a 1080p usable height at 60.
+The bound was right; the stated reason was not.
+
+### What actually was a code defect
+
+- A cancel that surfaces as a plain exception (the Cohere/Granite Node runtime
+  kills its child, which raises `TranscriptionError`) returned from the preload
+  arm *above* the runtime condemnation, so a half-loaded runtime stayed cached
+  and was recorded with the success sentinel. The next dictation used it and
+  never retried the load. The two arms on either side both condemn.
+- The isolated branch of `_acquire_transcriber_runtime` created a transcriber
+  and, if the lease constructor raised, dropped it -- a Node child process or
+  ONNX session with nothing left able to close it.
+- `_start_streaming_recording`'s outer guard still caught only `Exception`,
+  one frame above two guards that had been widened to `BaseException` for
+  exactly that reason.
+- `model_download_coordinator._acquire_cache_lock` holds the machine-wide OS
+  lock before storing it. A raise in between strands a real kernel lock with no
+  reference, and unlike the in-process slot that blocks *other processes* --
+  the benchmark worker, `scripts/download_model.py`, a second user of the same
+  Model Dir -- until this process exits.
+- The label-size tolerance introduced last round, `max(5 MB, 0.5%)`, accepted
+  the very drift its docstring cited as its reason (`tiny` at 75 against 78)
+  and was looser than 5 MB for every GB model, reaching 15.5 MB on `large-v3`.
+
+Two of the previous round's fixes also turned out to be untested, found by
+re-running its mutations through the corrected harness.
+`_start_streaming_recording`
+has **two** capture-failure arms and they were widened together, but the test
+fails `_build_audio_capture`, which returns before `capture.start()` is ever
+reached -- so reverting the second arm's guard left the whole suite green.
+Reaching it needs a capture that builds and then refuses to start, which is
+what a microphone held by another application actually does. The shared branch
+of `_acquire_transcriber_runtime` had the same gap: the isolated branch has a
+test for a raising lease constructor, the branch that actually holds the lock
+did not.
+
+### What these say about the process
+
+- **Check the instrument before publishing the measurement.** Three rounds
+  quoted numbers from a `heightForWidth` sweep that was reading a cache.
+- **A reviewer who contradicts you may still be wrong.** The round-8 reviewer's
+  three central numbers for the note reservation disagreed with my first
+  re-measurement; it took a third method to find that the reviewer's
+  conclusion was right and both of our first measurements were not.
+- **Prefer "I could not reproduce a failure" to inventing a justification.**
+  The honest version of the reservation comment is weaker than the one it
+  replaced, and it is the one that will still be true next year.
+
 ## 2026-08-28 (seventh and eighth adversarial rounds: the fixes were the bugs)
 
 Two more rounds of three reviewers each, over the previous round's commits.
