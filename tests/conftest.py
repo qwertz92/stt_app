@@ -508,7 +508,7 @@ _REAL_COORDINATED_DOWNLOAD = (
 
 
 @pytest.fixture(autouse=True)
-def _isolate_the_hugging_face_cache(tmp_path_factory, monkeypatch):
+def _isolate_the_hugging_face_cache(monkeypatch):
     """Point the default model cache at an empty directory for every test.
 
     `find_cached_models` and the ONNX inventory search the default Hugging

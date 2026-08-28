@@ -110,9 +110,20 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
     for real.
 
     Still invisible and accepted: `self.__dict__[...]`, `vars(self)[...]`, a
-    `for`/`with` target, an aliased `self`, and a computed attribute name.
-    None is idiomatic here, and matching a subscript assignment on an
-    arbitrary expression would start flagging unrelated dictionaries.
+    `for`/`with` target, an aliased `self`, a computed attribute name, and an
+    assignment made through a *helper* rather than through `self`
+    (`def _install(t, cb): t._cancel_check = cb`). None is idiomatic here;
+    matching a subscript assignment on an arbitrary expression would start
+    flagging unrelated dictionaries, and matching `<anything>._cancel_check`
+    would flag every legitimate caller, including
+    `controller._set_transcriber_cancel_check` one layer up.
+
+    Deliberately **not** narrowed: an assignment inside `__init__` is reported
+    too. It is usually a harmless `self._cancel_check = None` re-initialiser,
+    but the shape that must be caught -- `def __init__(self, cancel_check):
+    self._cancel_check = cancel_check` -- is indistinguishable from it without
+    tracking where the value came from. A rare false positive on a first-party
+    lint is the cheaper error, so the message below names the way out.
     """
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     offenders: list[str] = []
@@ -189,7 +200,11 @@ def _classes_assigning_the_cancel_check(path: Path) -> list[str]:
                 offenders.append(
                     f"{path.name}:{child.lineno}: "
                     f"{class_name or '<module>'} assigns self._cancel_check "
-                    "directly"
+                    "directly -- route it through "
+                    "`super().set_cancel_check(...)` so the latch is reset, "
+                    "or add the class to _CANCEL_CHECK_FIELD_OWNERS if it "
+                    "genuinely owns the field (an __init__ initialiser is "
+                    "reported here too; see the scan's docstring)"
                 )
             _visit(child, class_name)
 
