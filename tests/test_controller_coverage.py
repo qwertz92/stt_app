@@ -29,6 +29,7 @@ from conftest import (
 )
 
 from stt_app import controller as controller_module
+from stt_app.audio_capture import AudioCaptureError
 from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE, FALLBACK_HOTKEY
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
@@ -4007,6 +4008,109 @@ def test_a_base_exception_starting_the_stream_does_not_strand_the_runtime_lock(
     )
     controller._transcriber_runtime_lock.release()
     assert controller._transcription_runtime_active() is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_lease_that_cannot_be_constructed_frees_the_shared_lock(monkeypatch):
+    """The shared arm's half of the widened guard, which had no test either.
+
+    Before the guard was widened, `close_on_release` and the
+    `_TranscriberRuntimeLease` construction sat *below* the `try`, so a raise
+    in either released nothing: `_transcriber_runtime_lock` stayed held for the
+    process lifetime, every later preload and audio import blocked forever, and
+    `_transcription_runtime_active()` stayed True so no deferred cache reset
+    could run. The isolated arm has its own test; this is the shared one, which
+    is the arm that actually holds the lock.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    class Runtime:
+        pass
+
+    monkeypatch.setattr(
+        controller, "_get_or_create_transcriber", lambda *_a, **_k: Runtime()
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("lease construction died")
+
+    monkeypatch.setattr("stt_app.controller._TranscriberRuntimeLease", _explode)
+
+    # No lock held here, so the acquisition takes the shared arm.
+    with pytest.raises(BaseException, match="lease construction died"):
+        controller._acquire_transcriber_runtime(settings)
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True, (
+        "the shared runtime lock was never given back"
+    )
+    controller._transcriber_runtime_lock.release()
+    assert controller._transcription_runtime_active() is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_capture_start_releases_the_lease_even_if_the_teardown_raises(
+    monkeypatch,
+):
+    """The *second* capture-failure arm, which the sibling test never reaches.
+
+    Both arms were widened together, but the existing test fails
+    `_build_audio_capture`, which returns before `capture.start()` is ever
+    called -- so reverting this arm's guard left the whole suite green.
+    Reaching it needs the capture to be built successfully and then fail on
+    `start()` with `AudioCaptureError`, which is what a microphone grabbed by
+    another application actually does.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        model_size="small",
+        mode="streaming",
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    class _RefusingCapture(FakeCapture):
+        def start(self):
+            raise AudioCaptureError("the microphone is in use by another program")
+
+    monkeypatch.setattr(
+        controller, "_build_audio_capture", lambda **_kwargs: _RefusingCapture()
+    )
+
+    def _explode_teardown(*_args, **_kwargs):
+        raise RuntimeError("could not start the abort thread")
+
+    monkeypatch.setattr(
+        controller, "_teardown_pending_stream_connect", _explode_teardown
+    )
+
+    controller.toggle_recording()
+    app.processEvents()
+
+    assert overlay.states and overlay.states[-1][0] == "Error", (
+        "the capture failure was never reported: the exception escaped the Qt "
+        f"slot and left the overlay where it was: {overlay.states[-1:]}"
+    )
+    assert controller._transcription_runtime_active() is False, (
+        "the runtime stayed marked in use after the capture failed"
+    )
+    acquired = controller._transcriber_runtime_lock.acquire(timeout=2.0)
+    try:
+        assert acquired is True, "the runtime lock was stranded"
+    finally:
+        if acquired:
+            controller._transcriber_runtime_lock.release()
     controller.shutdown()
     _ = app
 
