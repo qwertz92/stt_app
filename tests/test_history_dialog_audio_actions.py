@@ -479,25 +479,31 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
       be produced at any dialog width from 200 to 1100, so it is guarded
       against rather than caught in the act.
 
-    Measuring every candidate through the polished label is the only key that
-    cannot be wrong, and it is not merely insurance: for a
-    `granite-speech-4.1-2b-nar` entry the advance key under-reserves by 15 px
-    at label widths 594-606, i.e. dialog widths 678-690, which the shipped
-    minimum of 560 puts well inside reach. This asserts that directly:
-    whatever the dialog reserved, no candidate may exceed it.
+    Measuring every candidate through the polished label is the only key
+    that cannot be wrong, and it is not merely insurance: the advance key
+    picks a candidate up to 15 px shorter than the tallest, leaving the
+    reservation 6 px short once the 54 px floor has absorbed the rest, for 8
+    of the 18 entry names measured. This asserts that directly: whatever the
+    dialog reserved, no candidate may exceed it.
 
-    **The floor has to come off before measuring**, and that is what makes
-    this assertion mean anything. `heightForWidth` is clamped by
-    `minimumHeight`, which is exactly what the reservation installs, so
-    reading through the label as it stands returns the reservation and
-    `needed <= reserved` holds no matter what the code does. Three earlier
-    claims in this file were produced that way, including "no under-reservation
-    at any dialog width from 200 to 1100" and "`heightForWidth` is not a pure
-    function of its argument" -- the latter is the clamp, seen at two widths
-    where the dialog happened to have installed 60 and 90.
+    **The floor comes off before measuring so that this test measures the way
+    production does -- not because it changes this assertion's verdict.**
+    `heightForWidth(w)` returns `max(wrap(w), minimumHeight())` and `reserved`
+    is that same `minimumHeight()`, so `needed <= reserved` reduces to
+    `wrap <= reserved` either way, and even the number reported on failure is
+    identical. An earlier version of this docstring claimed the assertion
+    "holds no matter what the code does" without the clearing; that is wrong,
+    and it is the clamp being idempotent against exactly this comparison.
 
-    The width list is a sweep, not five points: the band where the candidates
-    diverge is narrow (dialog 678-690 here) and no hand-picked list found it.
+    Where the clamp really did invalidate measurements is anything that
+    compares candidates with *each other*, and the production `max()` that
+    accumulates over readings: with the floor installed all 15 candidates
+    report the same value at every width, which is one installed floor read
+    841 times.
+
+    The width list is a sweep, not five points: across 560 to 1400 the
+    candidates disagree at only 98 to 134 widths depending on the entry, and
+    no hand-picked list found the band.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(
@@ -876,3 +882,125 @@ def test_retranscribe_dialog_keeps_a_failure_visible(tmp_path):
     assert "boom" in dialog._status_label.text()
     assert dialog.produced_transcript is False
     assert not dialog._copy_button.isEnabled()
+
+
+def _reserving_dialog(entry_model="granite-speech-4.1-2b-nar"):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model=entry_model),
+        audio_path=Path(__file__),
+        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    dialog.show()
+    app.processEvents()
+    return dialog, app
+
+
+def test_a_measurement_puts_the_notes_real_text_back():
+    """The measurement types 15 candidate strings into the live label.
+
+    Without the restore the note keeps whichever candidate was measured last
+    -- which is the one pairing the retired model with *itself*, so the dialog
+    said "'IBM Granite Speech 4.1 2B NAR' ... so IBM Granite Speech 4.1 2B NAR
+    was chosen instead" instead of naming the model that will actually run. A
+    false statement about the run, produced by resizing the window.
+    """
+    dialog, app = _reserving_dialog()
+    try:
+        # Recomputed rather than read: showing the dialog already ran one
+        # measurement, so reading the label first would compare the corrupted
+        # text against itself and pass under the very mutation this pins.
+        dialog._update_substitution_note()
+        expected = dialog._language_note.text()
+        assert expected, "the entry produces no substitution note to check"
+
+        dialog.resize(dialog.width() + 37, dialog.height())
+        app.processEvents()
+
+        assert dialog._language_note.text() == expected, (
+            "the note kept a measurement candidate instead of its own text: "
+            f"{dialog._language_note.text()!r}"
+        )
+    finally:
+        dialog.deleteLater()
+
+
+@pytest.mark.parametrize(
+    ("label", "raise_after_candidates", "cache_may_advance"),
+    [
+        ("during the candidate loop", False, False),
+        ("in the restore that follows it", True, True),
+    ],
+)
+def test_a_measurement_that_dies_leaves_a_reservation_installed(
+    monkeypatch, label, raise_after_candidates, cache_may_advance
+):
+    """A raise must never leave the note with no reservation at all.
+
+    The two raise points used to be handled by two different constructs, and
+    only the first worked: an `except` arm reinstalled the previous floor, but
+    it does not cover the `finally` below it, so a raise from the text restore
+    skipped both statements that install a floor and left it at 0. Changing
+    the model then moved everything under the note -- 54 to 15 to 30 px of
+    note height -- until some later resize happened to re-measure.
+
+    The width cache is the other half. It may only advance for a measurement
+    that actually completed: recorded while the floor is still 0, the next
+    call at the same width short-circuits and keeps the 0.
+    """
+    dialog, app = _reserving_dialog()
+    try:
+        dialog.resize(900, dialog.height())
+        app.processEvents()
+        note = dialog._language_note
+        floor_before = note.minimumHeight()
+        assert floor_before > 0, "nothing was reserved to begin with"
+
+        original_set_text = note.setText
+        calls: list[str] = []
+        limit = len(dialog._worst_case_notes) if raise_after_candidates else 3
+
+        def _explode(value):
+            calls.append(value)
+            original_set_text(value)
+            if len(calls) > limit:
+                raise RuntimeError(f"the measurement died {label}")
+
+        monkeypatch.setattr(note, "setText", _explode)
+        # Cleared rather than resized: a resize runs the measurement from
+        # inside `resizeEvent`, where the raise never reaches this frame.
+        dialog._reserved_note_width = -1
+
+        with pytest.raises(RuntimeError):
+            dialog._reserve_note_height()
+
+        assert note.minimumHeight() == floor_before, (
+            f"{label}: the note was left with no reservation at all"
+        )
+        advanced = dialog._reserved_note_width != -1
+        assert advanced is cache_may_advance, (
+            f"{label}: the width cache is {dialog._reserved_note_width} for a "
+            f"measurement that {'completed' if cache_may_advance else 'did not'}"
+        )
+    finally:
+        dialog.deleteLater()
+
+
+def test_the_reservation_never_drops_below_the_three_line_floor():
+    """The floor is the backstop for the notes that are never measured.
+
+    A remote entry's model id is not among the candidates, so at a width where
+    every measured candidate fits in one line the reservation must still be
+    the three-line minimum rather than that one line.
+    """
+    dialog, app = _reserving_dialog("small")
+    try:
+        dialog.resize(1400, dialog.height())
+        app.processEvents()
+
+        assert dialog._language_note.minimumHeight() == dialog._minimum_note_height, (
+            "a wide dialog reserved less than the constant floor"
+        )
+    finally:
+        dialog.deleteLater()
