@@ -83,3 +83,106 @@ def test_cancelling_our_own_download_still_cleans_up(monkeypatch):
 
     assert excinfo.value.code == 130
     assert cleaned == [("small", "D:/models")]
+
+
+def _certificate_failure() -> Exception:
+    """A real chained certificate error, as huggingface_hub delivers it."""
+    import ssl
+
+    cert = ssl.SSLCertVerificationError(
+        "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: "
+        "unable to get local issuer certificate"
+    )
+    try:
+        raise cert
+    except Exception as exc:  # build a real chain on purpose
+        return exc
+
+
+@pytest.mark.parametrize(
+    ("label", "message_template"),
+    [
+        (
+            "mirrored ONNX model, Hugging Face refused",
+            "Model download for 'onnx-community/x' failed: {cause}. "
+            "See docs/models.md.",
+        ),
+        (
+            "both sources failed",
+            "Model download for 'onnx-community/x' failed on Hugging Face "
+            "({cause}) and on the ModelScope mirror (connection timed out).",
+        ),
+    ],
+)
+def test_a_certificate_failure_reaches_the_help_box_whatever_the_wording(
+    monkeypatch, capsys, label, message_template
+):
+    """The guard must read the exception, not two hand-picked wordings.
+
+    `format_model_download_error` has a mirrored and an unmirrored branch and
+    the ONNX download path adds two more message shapes. Matching wordings
+    meant one and the same corporate proxy produced the CA-bundle guidance and
+    exit 2 for `--model small` and a bare "Download failed" with exit 1 for a
+    mirrored ONNX model, which is the asymmetry the box exists to remove.
+    """
+    module = _load_download_model()
+    cause = _certificate_failure()
+    wrapped = RuntimeError(message_template.format(cause=cause))
+    wrapped.__cause__ = cause
+
+    assert "SSL certificate verification failed" not in str(wrapped), label
+    assert "looked like a certificate error" not in str(wrapped), label
+
+    def _explode(*_args, **_kwargs):
+        raise wrapped
+
+    monkeypatch.setattr(module, "run_coordinated_download", _explode)
+
+    with pytest.raises(SystemExit) as excinfo:
+        module.download_model("small", None)
+
+    assert excinfo.value.code == 2, (
+        f"{label}: a certificate failure exited {excinfo.value.code} instead "
+        "of 2, so the user never saw the CA-bundle guidance"
+    )
+    assert "SSL CERTIFICATE ERROR" in capsys.readouterr().err
+
+
+def test_the_help_box_does_not_claim_a_mirror_was_tried_when_there_is_none(capsys):
+    """Telling the user "both sources were unreachable" was a falsehood.
+
+    For a model in `MODELS_WITHOUT_MODELSCOPE_MIRROR` the mirror is never
+    contacted -- the exception text that triggered the box says so itself --
+    so the note contradicted the failure it was explaining.
+    """
+    module = _load_download_model()
+
+    module._print_ssl_help("parakeet-tdt-0.6b-v3")
+    unmirrored = capsys.readouterr().err
+    assert "no ModelScope mirror" in unmirrored
+    assert "both sources were unreachable" not in unmirrored
+
+    module._print_ssl_help("small")
+    mirrored = capsys.readouterr().err
+    assert "both sources were unreachable" in mirrored
+
+
+def test_the_manual_download_step_does_not_send_onnx_models_to_the_wrong_guide(
+    capsys,
+):
+    """`docs/models.md` says manual browser import is CTranslate2 only.
+
+    Pointing an ONNX model's manual-download step at it offered a workaround
+    that the referenced instructions refuse, and the default model is now the
+    one most likely to reach this box.
+    """
+    module = _load_download_model()
+
+    module._print_ssl_help("parakeet-tdt-0.6b-v3")
+    onnx = capsys.readouterr().err.split("4. MANUAL BROWSER DOWNLOAD:")[1]
+    assert "Model Dir" in onnx
+    assert "for how to arrange the files" not in onnx
+
+    module._print_ssl_help("small")
+    whisper = capsys.readouterr().err.split("4. MANUAL BROWSER DOWNLOAD:")[1]
+    assert "for how to arrange the files" in whisper

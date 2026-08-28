@@ -41,8 +41,9 @@ Status update on 2026-06-08:
   Runtime GenAI export.
 - It provides true cache-aware streaming at the export's fixed 560 ms chunk,
   supports Auto plus the transcription-ready and broad-coverage languages in
-  the official ORT GenAI mapping, and measured 0.229 CPU RTF with a 0.81 second
-  cold load on the Ryzen 5 7600X test machine.
+  the official ORT GenAI mapping, and measured RTF 0.21 on CPU with a 1.78 s
+  cold load on the Ryzen 5 7600X test machine (2026-08-25, a 24.3 s recording;
+  an earlier run on a 28.1 s one gave 0.24 and 1.90 s).
 - The app attempts DirectML before CPU, but Microsoft's current DirectML GenAI
   package depends on an unpublished `onnxruntime-directml>=1.26.0`. The normal
   dependency lock therefore ships the reproducibly installable CPU runtime.
@@ -50,12 +51,13 @@ Status update on 2026-06-08:
   560 ms multilingual INT4 ONNX graph is currently published in a directly
   compatible form, so the app does not expose fake latency choices.
 
-Status update on 2026-06-17:
+Status update on 2026-06-17 (figures from the 2026-04-22 benchmark report):
 
 - The on-device benchmark has been run on a Ryzen 7600X + Arc A750. The GPU/ONNX
   models are materially faster than the CPU Whisper models there:
   `granite-4.0-1b-speech` at RTF 0.059 on WebGPU (vs 0.381 on CPU) and
-  `cohere-transcribe-03-2026` at 0.071, both faster than `small` (0.151). See
+  `cohere-transcribe-03-2026` at 0.071, both faster than `small` (0.151). The
+  later 2026-07-11 report measures the same two at 0.088 and 0.091. See
   [Local Benchmark Results](benchmarks/README.md).
 - Cohere, Granite 4.0, and Granite 4.1 2B are selectable local GPU models, now
   recommended over the Whisper models on a machine with a working GPU. The
@@ -570,7 +572,7 @@ recommended over the Whisper models on a machine with a working GPU. A
 zero-setup CPU model remains the default for machines without a GPU or Node.js.
 
 > **Superseded 2026-08-27.** That default is now `parakeet-tdt-0.6b-v3`
-> (onnx-asr, CPU, int8), not `small`: RTF 0.046 against 0.151 on the same
+> (onnx-asr, CPU, int8), not `small`: RTF 0.042 against 0.152 on the same
 > Ryzen 5 7600X, with the same "no GPU, no Node.js" property. It is batch-only,
 > which matches the `batch` default mode.
 

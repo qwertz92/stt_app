@@ -317,7 +317,7 @@ For the current Windows Intel GPU test machine:
 5. Keep `large-v3-turbo` as the practical fallback until enough real dictation
    samples prove that an ONNX model is better.
 6. Treat Nemotron as the first true-streaming local candidate; its measured CPU
-   RTF on the Ryzen 5 7600X test machine is 0.229, but Intel GPU validation must
+   RTF on the Ryzen 5 7600X test machine is 0.21, but Intel GPU validation must
    wait for a reproducibly installable DirectML package.
 
 ## Sources

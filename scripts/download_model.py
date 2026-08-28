@@ -35,8 +35,11 @@ STT_APP_DISABLE_MODELSCOPE=1 to turn that fallback off.
 Three models are not mirrored there and have Hugging Face as their only
 source: the default parakeet-tdt-0.6b-v3, canary-1b-v2, and distil-large-v3.5
 (see MODELS_WITHOUT_MODELSCOPE_MIRROR in config.py). On a network that blocks
-Hugging Face, use `git clone` from a machine that can reach it -- the repository
-list is in docs/models.md -- and point --output-dir at the result.
+Hugging Face, clone from a machine that can reach it (`git lfs install` first,
+or the clone yields 130-byte pointer files; the repository list is in
+docs/models.md), copy the folder over, and set "Model Dir" in the app to the
+folder that contains it. --output-dir is an argument of this script and does
+not apply to a clone you already have.
 """
 
 from __future__ import annotations
@@ -53,14 +56,17 @@ from stt_app.config import (
     DEFAULT_MODEL_SIZE,
     DOC_MODELS_PATH,
     DOC_SSL_PROXY_PATH,
+    FASTER_WHISPER_MODEL_SIZES,
     LOCAL_NEMOTRON_MODEL_SIZES,
     LOCAL_ONNX_MODEL_PRECISION,
     LOCAL_ONNX_MODEL_SIZES,
     MODEL_REPO_MAP,
+    MODELS_WITHOUT_MODELSCOPE_MIRROR,
 )
 from stt_app.model_download_coordinator import (
     run_coordinated_download,
 )
+from stt_app.ssl_utils import is_ssl_error
 from stt_app.transcriber.local_faster_whisper import (
     cleanup_incomplete_model_download,
     download_model_snapshot,
@@ -81,11 +87,17 @@ def _print_ssl_help(model_name: str) -> None:
         "Your network intercepts HTTPS connections, which breaks the\n"
         "SSL certificate chain that Python / huggingface_hub expects.\n"
         "\n"
-        "NOTE: The download already tries the ModelScope mirror\n"
-        "(modelscope.cn) automatically when Hugging Face fails. If you see\n"
-        "this message, both sources were unreachable. The workarounds below\n"
-        "target Hugging Face directly; ModelScope needs no extra setup.\n"
-        "\n"
+        + (
+            "NOTE: This model has no ModelScope mirror, so Hugging Face\n"
+            "was the only source tried. Every workaround below targets it.\n"
+            if model_name in MODELS_WITHOUT_MODELSCOPE_MIRROR
+            else "NOTE: The download already tries the ModelScope mirror\n"
+            "(modelscope.cn) automatically when Hugging Face fails. If you\n"
+            "see this message, both sources were unreachable. The\n"
+            "workarounds below target Hugging Face directly; ModelScope\n"
+            "needs no extra setup.\n"
+        )
+        +         "\n"
         "Workarounds (pick one):\n"
         "\n"
         "  1. SET YOUR CORPORATE CA BUNDLE (best fix):\n"
@@ -108,8 +120,13 @@ def _print_ssl_help(model_name: str) -> None:
         "\n"
         "  4. MANUAL BROWSER DOWNLOAD:\n"
         f"     Download files from https://huggingface.co/{repo_id}/tree/main\n"
-        f"     See {DOC_MODELS_PATH} for how to arrange the files.\n"
-        "\n"
+        + (
+            f"     Put them in a folder named {repo_id.split(chr(47))[-1]!r} and\n"
+            "     set 'Model Dir' in the app to that folder's parent.\n"
+            if model_name not in FASTER_WHISPER_MODEL_SIZES
+            else f"     See {DOC_MODELS_PATH} for how to arrange the files.\n"
+        )
+        + "\n"
         f"SSL troubleshooting: {DOC_SSL_PROXY_PATH}\n"
         f"Offline model guide: {DOC_MODELS_PATH}\n"
         "═══════════════════════════════════════════════════════════════",
@@ -171,14 +188,19 @@ def download_model(name: str, output_dir: str | None = None) -> str:
         )
         raise SystemExit(130) from None
     except Exception as exc:
-        # Two different messages describe the same failure, because a model
-        # without a ModelScope mirror takes another branch of
-        # `format_model_download_error`. Matching only the mirrored wording
-        # meant the default model got a bare "Download failed" and exit 1
-        # where `--model small` got the CA-bundle guidance and exit 2.
+        # Ask the exception chain, not the wording. Several messages describe
+        # the same failure -- `format_model_download_error` has a mirrored and
+        # an unmirrored branch, and the ONNX path adds two more shapes -- so
+        # matching wordings meant a mirrored ONNX model got a bare "Download
+        # failed" and exit 1 where `--model small` got the CA-bundle guidance
+        # and exit 2, for one and the same corporate proxy. Every raise on the
+        # way here uses `from`, so `is_ssl_error` reaches the original
+        # `SSLCertVerificationError`. The two wordings stay as a fallback:
+        # they are our own prose and carry no raw SSL marker.
         message = str(exc)
         if (
-            "SSL certificate verification failed" in message
+            is_ssl_error(exc)
+            or "SSL certificate verification failed" in message
             or "looked like a certificate error" in message
         ):
             _print_ssl_help(name)

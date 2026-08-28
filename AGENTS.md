@@ -1048,8 +1048,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   tries DirectML first when a compatible DirectML runtime is present. As of
   2026-06-08, Microsoft's DirectML GenAI package depends on an unpublished
   `onnxruntime-directml>=1.26.0`, so reproducible installs fall back to CPU.
-  A Ryzen 5 7600X benchmark measured 0.229 RTF and 0.81 s cold load on the
-  repository sample. Nemotron stays preloaded and cached like faster-whisper so
+  Two Ryzen 5 7600X CPU runs measured it: RTF 0.21 with a 1.78 s cold load on
+  a 24.3 s recording (2026-08-25) and RTF 0.24 with a 1.90 s load on a 28.1 s
+  one (2026-07-10). The "0.229 RTF, 0.81 s cold load on the repository sample"
+  this entry carried until 2026-08-28 matches neither run, and that sample is
+  2.1 s of synthetic sine tones that no benchmark run used. Nemotron stays preloaded and cached like faster-whisper so
   pressing the recording hotkey does not block on model loading. Its internal
   runtime VAD follows the app's VAD setting. The language UI exposes only the
   transcription-ready and broad-coverage official prompt IDs.
@@ -1085,7 +1088,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Measured on a Ryzen 5 7600X, CPU only: Parakeet 670 MB at **RTF 0.042** on a
   24.3 s German recording (no English run was retained; earlier text here said
   0.046 EN / 0.043 DE and neither figure is in the benchmark history),
-  Canary 1029 MB at RTF 0.134 / 0.135. The 2026-08-25 benchmark put
+  and Canary at 1029 MB. **Canary has no RTF in the benchmark history**: its
+  only case there errored ("Canary cannot detect the language"), so the
+  "0.134 / 0.135" this entry used to give came from the same retracted note as
+  the Parakeet figures above and must not be requoted without a real run.
+  The 2026-08-25 benchmark put
   Granite Speech 4.1 2B at 0.100 on WebGPU, so Parakeet on plain CPU is about
   **2.3x** faster than the best local GPU model — a GPU path is not needed to
   make it the quickest local option. (An earlier "six times" here compared

@@ -10,6 +10,7 @@ in front of the user.
 
 from __future__ import annotations
 
+import pathlib
 import re
 
 import pytest
@@ -98,3 +99,25 @@ def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
         checked += 1
 
     assert checked >= 10, f"only {checked} labels stated a size; the scan found too few"
+
+
+def test_the_offline_clone_list_covers_every_model_repository():
+    """`docs/models.md`'s clone list is the only route on a blocked network.
+
+    A model missing from it is unreachable for anyone whose proxy blocks
+    Hugging Face and whose model has no ModelScope mirror. Nemotron -- the only
+    local true-streaming model -- was absent while the surrounding prose
+    presented the list as complete.
+    """
+    doc = (
+        pathlib.Path(__file__).resolve().parents[1] / "docs" / "models.md"
+    ).read_text(encoding="utf-8")
+    listed = set(re.findall(r"git clone https://huggingface\.co/(\S+)", doc))
+
+    missing = {
+        name: repo for name, repo in config.MODEL_REPO_MAP.items() if repo not in listed
+    }
+    assert not missing, (
+        "docs/models.md's clone list omits these repositories, so the offline "
+        f"route cannot reach them: {missing}"
+    )

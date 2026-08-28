@@ -37,7 +37,7 @@ language handling, see [Local ONNX Runtime Guide](local-onnx-runtime.md).
 |-------|---------|------|-----------|----------|
 | `tiny` | CTranslate2 | ~78 MB | Multilingual | Quick testing, fallback |
 | `base` | CTranslate2 | ~148 MB | Multilingual | Light usage |
-| `small` | CTranslate2 | ~486 MB | Multilingual | Good balance for German + English, and the smallest model that supports streaming |
+| `small` | CTranslate2 | ~486 MB | Multilingual | Good balance for German + English |
 | `medium` | CTranslate2 | ~1.53 GB | Multilingual | Better quality, slower |
 | `large-v3` | CTranslate2 | ~3.09 GB | Multilingual | Best Whisper quality (NVIDIA GPU recommended) |
 | `large-v3-turbo` | CTranslate2 | ~1.62 GB | Multilingual | Fast + high quality — pruned version of large-v3 |
@@ -158,10 +158,10 @@ The installable app dependency currently provides CPU execution. The runtime
 tries DirectML first and falls back to CPU, but as of June 8, 2026 Microsoft's
 `onnxruntime-genai-directml` package depends on an
 `onnxruntime-directml>=1.26.0` wheel that is not yet published on PyPI. On the
-test Ryzen 5 7600X, the repository benchmark sample measured:
+test Ryzen 5 7600X, two runs measured:
 
-- cold model load: 0.81 seconds,
-- transcription RTF: 0.229 on CPU,
+- cold model load: 1.78 s (2026-08-25) and 1.90 s (2026-07-10),
+- transcription RTF on CPU: 0.21 on a 24.3 s recording, 0.24 on a 28.1 s one,
 - automatic language mode and the DML-to-CPU fallback both loaded correctly.
 
 That CPU result is comfortably faster than real time on the test desktop, but
@@ -310,7 +310,8 @@ for you. See
 
 If a Hugging Face download fails for any reason, the app and the download script
 **automatically retry against the [ModelScope](https://modelscope.cn) mirror**
-(Alibaba's model hub). ModelScope mirrors the same repository IDs
+(Alibaba's model hub) -- for every model except the three listed below, which
+are not mirrored there and have Hugging Face as their only source. ModelScope mirrors the same repository IDs
 (`onnx-community/…`, `Systran/…`, etc.) and serves the large LFS weights from its
 own CDN instead of redirecting back to Hugging Face, so it usually works even
 when a corporate proxy blocks Hugging Face wholesale under a "Generative AI and
@@ -447,9 +448,11 @@ git clone https://huggingface.co/onnx-community/granite-4.0-1b-speech-ONNX
 git clone https://huggingface.co/onnx-community/granite-speech-4.1-2b-ONNX
 git clone https://huggingface.co/istupakov/parakeet-tdt-0.6b-v3-onnx
 git clone https://huggingface.co/istupakov/canary-1b-v2-onnx
+git clone https://huggingface.co/onnx-community/nemotron-3.5-asr-streaming-0.6b-onnx-int4
 ```
 
-The last two are the onnx-asr models, and `parakeet-tdt-0.6b-v3` is the app's
+The two `istupakov` repositories are the onnx-asr models, and
+`parakeet-tdt-0.6b-v3` is the app's
 default. They matter most here: together with `distil-large-v3.5` they are the
 three models with no ModelScope mirror, so on a network that blocks Hugging
 Face a clone from a machine that can reach it is the only route.
@@ -571,8 +574,8 @@ the Cohere/Granite models they need **no Node.js**, and unlike Nemotron they nee
 no extra ONNX Runtime — they reuse the one the app already ships.
 
 Both are **CPU only and batch only**. That is not a limitation in practice:
-measured on a Ryzen 5 7600X, Parakeet transcribes a 17-second clip in 0.78 s
-(RTF 0.042), which is faster than any GPU model in this app.
+measured on a Ryzen 5 7600X, Parakeet transcribes a 24.3-second recording in
+about 1.04 s (RTF 0.042), which is faster than any GPU model in this app.
 
 The ONNX Device setting does not apply to them and is disabled while one is
 selected. A DirectML build of ONNX Runtime would be roughly twice as fast again,
