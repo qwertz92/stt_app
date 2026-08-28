@@ -255,10 +255,15 @@ def test_a_model_this_script_cannot_import_says_so_before_listing_files(
     output = capsys.readouterr()
     combined = output.out + output.err
     assert "download_model.py" in combined
-    assert "Unknown model 'parakeet-tdt-0.6b-v3'" in combined, (
+    assert "'parakeet-tdt-0.6b-v3' is not a CTranslate2/faster-whisper model" in combined, (
         "the folder name must resolve to the model it names, so the message "
         "says the model is out of scope instead of asking for a --model that "
         f"is then rejected: {combined}"
+    )
+    assert "Unknown model" not in combined, (
+        "a model the app itself offers is not 'unknown' -- that wording "
+        "contradicted the very next line, which explained it was out of "
+        f"scope for this script: {combined}"
     )
     assert "MISSING FILES" not in combined, (
         "the CTranslate2 file list was printed for a model this script cannot "

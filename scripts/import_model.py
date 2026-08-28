@@ -56,6 +56,8 @@ _LFS_POINTER_HEADER = "version https://git-lfs.github.com/spec/v1"
 _MODEL_BIN_MIN_BYTES = 10_000_000  # 10 MB
 
 # Build reverse map: common folder name patterns → short model name
+_NON_IMPORTABLE_MODEL_NAMES = frozenset(MODEL_REPO_MAP) - frozenset(IMPORTABLE_MODEL_REPO_MAP)
+
 _FOLDER_HINTS: dict[str, str] = {}
 for _short, _repo in IMPORTABLE_MODEL_REPO_MAP.items():
     # "Systran/faster-whisper-small" → "faster-whisper-small"
@@ -71,6 +73,52 @@ for _other in MODEL_REPO_MAP:
         continue
     _FOLDER_HINTS.setdefault(_other.lower(), _other)
     _FOLDER_HINTS.setdefault(MODEL_REPO_MAP[_other].split("/")[-1].lower(), _other)
+
+
+def _warn(*lines: str) -> None:
+    """Write to stderr with stdout flushed first.
+
+    Redirecting output merges the two streams, and stdout is block-buffered
+    once it is a pipe or a file while stderr is not. Every stdout line written
+    before an error therefore lands *after* it in the captured log: a partial
+    model reported "MISSING FILES: ..." above the `Detected model: small` line
+    that says which model was missing them.
+    """
+    sys.stdout.flush()
+    for line in lines:
+        print(line, file=sys.stderr)
+    sys.stderr.flush()
+
+
+def _print_missing_file_advice(missing_files: list[str]) -> None:
+    """One wording for one condition.
+
+    The unresolved-name branch printed a bare `MISSING FILES:` list without
+    the two follow-up lines, so the same problem read differently depending on
+    whether the folder name happened to be recognisable.
+    """
+    _warn(
+        f"\nMISSING FILES: {', '.join(missing_files)}",
+        "\nEach model requires: config.json, model.bin, tokenizer.json, "
+        "and vocabulary.txt (or vocabulary.json).",
+        "Download the missing files from the model's HuggingFace page.",
+    )
+
+
+def _print_validation_verdict(is_valid: bool) -> None:
+    """ASCII only, on purpose.
+
+    This printed U+2713 and U+2717. `sys.stdout` uses cp1252 on Windows as
+    soon as it is redirected, neither glyph exists in cp1252, and `print`
+    raises `UnicodeEncodeError` -- so `--validate-only` crashed with a
+    traceback and exit 1 on a *complete, valid* model whenever its output was
+    captured to a file, which is the situation the flushing above exists for.
+    `capsys` swaps in a UTF-8 buffer, so no test could see it.
+    """
+    if is_valid:
+        print("\nOK: all required files are present. Ready for import.")
+    else:
+        print("\nFAILED: required files are missing. See the errors above.")
 
 
 def _print_wrong_runtime_hint() -> None:
@@ -402,40 +450,62 @@ def main() -> None:
     # that does not contain them.
     is_valid, found_files, missing_files = validate_model_files(source_dir)
 
-    print(f"Source: {source_dir}")
-    print(f"Found files: {', '.join(found_files) if found_files else '(none)'}")
-    # stderr is unbuffered and stdout is block-buffered when redirected, so
-    # without this the errors below land above the lines they refer to in a
-    # captured log.
-    sys.stdout.flush()
-
+    # Resolving the name only reads the folder name, so it is done before
+    # anything is printed and the report reads top-down: which folder, which
+    # model, what is wrong with it, verdict.
     model_name: str | None = args.model
     detected = model_name is None
     if model_name is None:
         model_name = detect_model_name(source_dir)
 
+    print(f"Source: {source_dir}")
+    print(f"Found files: {', '.join(found_files) if found_files else '(none)'}")
+    if model_name is not None:
+        print(f"{'Detected model' if detected else 'Model'}: {model_name}")
+
+    # This gate comes before the file advice on purpose. `validate_model_files`
+    # looks for the CTranslate2 layout, so a folder holding any other runtime's
+    # model -- the default model included -- is "missing" model.bin,
+    # tokenizer.json and vocabulary.txt, and telling that user to download them
+    # from a repository that does not contain them is worse than saying
+    # nothing.
     if model_name is not None and model_name not in IMPORTABLE_MODEL_REPO_MAP:
-        print(f"ERROR: Unknown model '{model_name}'.", file=sys.stderr)
-        _print_wrong_runtime_hint()
+        if model_name in _NON_IMPORTABLE_MODEL_NAMES:
+            # A real model, wrong script. Saying "Unknown model" about a name
+            # the app itself offers is misleading, and it contradicted the
+            # very next line, which explained the model was out of scope.
+            _warn(f"ERROR: '{model_name}' is not a CTranslate2/faster-whisper model.")
+            _print_wrong_runtime_hint()
+        else:
+            # A typo or an invented name. `_print_wrong_runtime_hint`'s own
+            # docstring rules it out here, and pointing this user at
+            # download_model.py is the wrong instruction -- they need the list.
+            _warn(f"ERROR: Unknown model '{model_name}'.")
         _print_importable_models()
         sys.exit(1)
 
+    # Anything still here either resolved to an importable model or has an
+    # unrecognised folder name. `found_files` separates those two: an empty
+    # list means nothing of the CTranslate2 layout is present, which is the
+    # other-runtime case above rather than an incomplete download, so it gets
+    # the runtime hint below instead of a list of files to fetch.
+    if missing_files and found_files:
+        _print_missing_file_advice(missing_files)
+
+    # The verdict is what `--validate-only` was asked for, and it is produced
+    # before the name gate, which exits. A folder holding a complete, valid
+    # model under a name this script cannot map used to print `Source:` and
+    # `Found files:` and then exit 1 with only "Could not auto-detect the
+    # model name", never answering the question it was asked.
+    if args.validate_only:
+        _print_validation_verdict(is_valid)
+
     if model_name is None:
-        print(
+        _warn(
             "ERROR: Could not auto-detect the model name from the folder name.",
-            file=sys.stderr,
-        )
-        print(
             "Please specify the model explicitly with --model <name>.",
-            file=sys.stderr,
         )
-        if found_files:
-            # It does look like a CTranslate2 model, so the file-level
-            # diagnostic `--validate-only` exists for is still meaningful even
-            # though the name could not be resolved.
-            if missing_files:
-                print(f"MISSING FILES: {', '.join(missing_files)}", file=sys.stderr)
-        else:
+        if not found_files:
             # Nothing of the CTranslate2 layout is here at all, so the likely
             # explanation is a model for another runtime rather than a folder
             # that merely has an unrecognised name.
@@ -443,31 +513,13 @@ def main() -> None:
         _print_importable_models()
         sys.exit(1)
 
-    print(f"{'Detected model' if detected else 'Model'}: {model_name}")
-
-
-    if missing_files:
-        print(f"\nMISSING FILES: {', '.join(missing_files)}", file=sys.stderr)
-        print(
-            "\nEach model requires: config.json, model.bin, tokenizer.json, "
-            "and vocabulary.txt (or vocabulary.json).",
-            file=sys.stderr,
-        )
-        print(
-            "Download the missing files from the model's HuggingFace page.",
-            file=sys.stderr,
-        )
-        if not is_valid:
-            sys.exit(1)
+    if not is_valid:
+        sys.exit(1)
 
     repo_id = IMPORTABLE_MODEL_REPO_MAP[model_name]
     print(f"Repository: {repo_id}")
 
     if args.validate_only:
-        if is_valid:
-            print("\n✓ All required files are present. Ready for import.")
-        else:
-            print("\n✗ Missing required files. See errors above.")
         return
 
     # --- Import ---
