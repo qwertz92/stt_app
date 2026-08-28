@@ -1,0 +1,117 @@
+"""Every string a script can print must be ASCII.
+
+Fixing this one glyph at a time is the wrong shape, and doing it that way is
+how it kept coming back:
+
+* `import_model.py` printed U+2713/U+2717 on the `--validate-only` verdict.
+  `sys.stdout` becomes cp1252 the moment output is redirected on Windows, and
+  neither glyph exists there, so a *complete, valid* model crashed the script
+  with `UnicodeEncodeError` and exit 1.
+* Fixing those two left three em dashes in the same file. An em dash *is* in
+  cp1252 (0x97), so nothing crashed -- it just wrote a byte that renders as
+  U+FFFD in a UTF-8 editor, which is where a captured log gets opened.
+* `download_model.py` drew its SSL-error box with 63 U+2550 characters. That
+  one writes to stderr, whose error handler is `backslashreplace` rather than
+  strict, so it did not crash either: it printed two 63-character walls of
+  literal `\\u2550` escapes around the corporate-proxy guidance -- the text a
+  user behind Zscaler pastes into a ticket.
+
+Three files, three different symptoms, one cause. So the assertion is on the
+cause: no non-ASCII in any string literal a script evaluates.
+
+Docstrings are exempt because they are not printed -- *except* a module
+docstring in a script that hands `__doc__` to `argparse`, where `--help`
+prints it verbatim. Two of them do, which is why the exemption is computed
+per file rather than assumed: assuming it hid an em dash in
+`import_model.py`'s own `--help` output. Comments are invisible to `ast` and
+are exempt for free; they are the right place for a real em dash.
+"""
+
+from __future__ import annotations
+
+import ast
+from pathlib import Path
+
+import pytest
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+SCRIPTS = sorted((PROJECT_ROOT / "scripts").glob("*.py"))
+
+
+_DOCSTRING_OWNERS = (
+    ast.Module,
+    ast.ClassDef,
+    ast.FunctionDef,
+    ast.AsyncFunctionDef,
+)
+
+
+def _hands_docstring_to_argparse(tree: ast.Module) -> bool:
+    """`ArgumentParser(description=__doc__)` puts the docstring on `--help`."""
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if name != "ArgumentParser":
+            continue
+        for keyword in node.keywords:
+            if keyword.arg not in {"description", "epilog"}:
+                continue
+            if isinstance(keyword.value, ast.Name) and keyword.value.id == "__doc__":
+                return True
+    return False
+
+
+def _docstring_ids(tree: ast.Module) -> set[int]:
+    """Docstrings this file can never print.
+
+    The module docstring is only in that set when nothing forwards it to
+    `argparse`; a nested docstring has no route to stdout either way.
+    """
+    printable_module_doc = _hands_docstring_to_argparse(tree)
+    exempt = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, _DOCSTRING_OWNERS) or not node.body:
+            continue
+        first = node.body[0]
+        if not isinstance(first, ast.Expr) or not isinstance(first.value, ast.Constant):
+            continue
+        if not isinstance(first.value.value, str):
+            continue
+        if printable_module_doc and isinstance(node, ast.Module):
+            continue
+        exempt.add(id(first.value))
+    return exempt
+
+
+def test_the_scan_actually_found_the_scripts():
+    """A glob that matches nothing would make every test below vacuous."""
+    assert len(SCRIPTS) >= 10, [path.name for path in SCRIPTS]
+
+
+@pytest.mark.parametrize("path", SCRIPTS, ids=lambda path: path.name)
+def test_no_script_prints_a_character_a_captured_log_cannot_show(path: Path):
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    docstrings = _docstring_ids(tree)
+
+    offenders = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        if id(node) in docstrings:
+            continue
+        bad = sorted({character for character in node.value if ord(character) > 127})
+        if not bad:
+            continue
+        codepoints = ", ".join(f"U+{ord(character):04X}" for character in bad)
+        try:
+            "".join(bad).encode("cp1252")
+        except UnicodeEncodeError:
+            effect = "raises UnicodeEncodeError on a redirected stdout"
+        else:
+            effect = "renders as U+FFFD when the log is read as UTF-8"
+        offenders.append(f"  line {node.lineno}: {codepoints} -- {effect}")
+
+    assert not offenders, (
+        f"{path.name} has non-ASCII in a string it can print:\n" + "\n".join(offenders)
+    )

@@ -80,9 +80,9 @@ def _print_ssl_help(model_name: str) -> None:
     repo_id = MODELS.get(model_name, f"Systran/faster-whisper-{model_name}")
     print(
         "\n"
-        "═══════════════════════════════════════════════════════════════\n"
-        "  SSL CERTIFICATE ERROR — likely a corporate proxy (Zscaler)\n"
-        "═══════════════════════════════════════════════════════════════\n"
+        "===============================================================\n"
+        "  SSL CERTIFICATE ERROR -- likely a corporate proxy (Zscaler)\n"
+        "===============================================================\n"
         "\n"
         "Your network intercepts HTTPS connections, which breaks the\n"
         "SSL certificate chain that Python / huggingface_hub expects.\n"
@@ -129,7 +129,7 @@ def _print_ssl_help(model_name: str) -> None:
         + "\n"
         f"SSL troubleshooting: {DOC_SSL_PROXY_PATH}\n"
         f"Offline model guide: {DOC_MODELS_PATH}\n"
-        "═══════════════════════════════════════════════════════════════",
+        "===============================================================",
         file=sys.stderr,
     )
 

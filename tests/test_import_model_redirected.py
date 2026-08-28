@@ -14,6 +14,10 @@ defects here **by construction**:
 
 Both are exactly the "capture the output and send it to me" situation the
 script exists for, so they are tested the way a user would hit them.
+
+The wider rule those two crashes are instances of -- no non-ASCII in anything
+any script prints -- is asserted for every script in
+`test_script_output_is_ascii.py`.
 """
 
 from __future__ import annotations

@@ -20,7 +20,7 @@ Usage examples:
     python scripts/import_model.py C:\\Downloads\\faster-whisper-small --validate-only
 
 After importing, the model is ready to use. Select the model size in Settings
-and it will load from the local cache — no internet required.
+and it will load from the local cache -- no internet required.
 """
 
 from __future__ import annotations
@@ -217,7 +217,7 @@ def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
                 "  Or download the model using the download script instead:\n"
                 "    python scripts/download_model.py --model <name>"
             )
-            missing.append("model.bin (Git LFS pointer — not real weights)")
+            missing.append("model.bin (Git LFS pointer -- not real weights)")
             # Remove model.bin from found since it's not usable
             found = [f for f in found if f != "model.bin"]
         elif model_bin.stat().st_size < _MODEL_BIN_MIN_BYTES:
@@ -230,7 +230,7 @@ def validate_model_files(source_dir: Path) -> tuple[bool, list[str], list[str]]:
                 f"  Or download the model using the download script instead:\n"
                 f"    python scripts/download_model.py --model <name>"
             )
-            missing.append("model.bin (too small — likely incomplete download)")
+            missing.append("model.bin (too small -- likely incomplete download)")
             found = [f for f in found if f != "model.bin"]
 
     # Print warnings immediately so the user sees them
@@ -535,7 +535,7 @@ def main() -> None:
     )
 
     print(f"\n{'=' * 60}")
-    print("  SUCCESS — Model imported!")
+    print("  SUCCESS -- Model imported!")
     print(f"{'=' * 60}")
     print(f"  Model:    {model_name}")
     print(f"  Location: {snapshot_dir}")

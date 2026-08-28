@@ -124,7 +124,7 @@ def main() -> int:
         duration = float(sys.argv[1])
 
     print(__doc__)
-    print(f"Recording for {duration:.0f} seconds — start clicking now.\n")
+    print(f"Recording for {duration:.0f} seconds -- start clicking now.\n")
 
     started = time.perf_counter()
     timeline: list[str] = []
@@ -159,7 +159,7 @@ def main() -> int:
             last_menus = menus
         time.sleep(POLL_SECONDS)
 
-    report = "\n".join(timeline) or "Nothing changed — was the flyout opened?"
+    report = "\n".join(timeline) or "Nothing changed -- was the flyout opened?"
     print(report)
     output = Path(tempfile.gettempdir()) / "tray_flyout_diagnosis.txt"
     output.write_text(report + "\n", encoding="utf-8")
