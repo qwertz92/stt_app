@@ -1,5 +1,6 @@
 import ast
 import io
+import logging
 import math
 import struct
 import subprocess
@@ -380,6 +381,57 @@ def test_local_transcriber_streaming_reports_runtime_error_immediately():
 
     with pytest.raises(TranscriptionError, match="Local streaming failed"):
         transcriber.stop_stream()
+
+
+def test_a_failing_partial_callback_is_logged_once_and_keeps_the_stream_alive(caplog):
+    """A dead live-insertion path must be visible, and must not flood.
+
+    This callback is what puts live text on screen and into the document, so
+    swallowing its failure silently makes a broken delivery path
+    indistinguishable from a user who simply stopped talking. It runs roughly
+    every 350 ms, though, so logging per call would bury the rest of the log
+    -- hence once per session, the same shape as `noise_floor_warned`.
+
+    The transcription itself must survive: the next partial carries the whole
+    merged text again, so one lost delivery costs nothing.
+    """
+    transcriber = LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=0.0,
+        stream_partial_min_audio_s=0.0,
+        model_factory=lambda *args, **kwargs: FakeModel(),
+    )
+    errors = []
+
+    def explode(_text):
+        raise RuntimeError("the overlay is gone")
+
+    transcriber.start_stream(on_partial=explode, on_error=errors.append)
+    logger_name = "stt_app.transcriber.local_faster_whisper"
+    with caplog.at_level(logging.ERROR, logger=logger_name):
+        for _ in range(4):
+            with transcriber._stream_lock:
+                transcriber._stream_pcm_buffer.extend(_build_pcm16_chunk())
+                transcriber._stream_last_partial_at = 0.0
+                transcriber._stream_last_partial_size = 0
+            transcriber._maybe_emit_partial()
+
+    session = transcriber._stream_session
+    assert session is not None
+    assert session.result.merged_text, "the failing callback stopped the decode"
+    assert errors == [], f"a failed delivery was escalated to the user: {errors}"
+
+    tracebacks = [
+        record
+        for record in caplog.records
+        if record.exc_info and record.name == logger_name
+    ]
+    assert len(tracebacks) == 1, (
+        f"expected exactly one logged traceback, got {len(tracebacks)}"
+    )
+    assert "live text is not being delivered" in tracebacks[0].getMessage()
+
+    assert transcriber.stop_stream()
 
 
 def test_stream_partial_uses_configured_window(monkeypatch):

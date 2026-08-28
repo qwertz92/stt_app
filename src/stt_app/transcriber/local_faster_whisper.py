@@ -86,6 +86,9 @@ class _StreamResult:
     segment_floor: str = ""
     loud_since: float | None = None
     noise_floor_warned: bool = False
+    # Once per session, like `noise_floor_warned`: the partial callback runs
+    # every ~350 ms, so an unbounded log would flood.
+    partial_callback_failed: bool = False
 
 
 @dataclass(frozen=True)
@@ -1055,7 +1058,18 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             try:
                 callback(session.result.merged_text)
             except Exception:
-                pass
+                # Swallowed on purpose -- one failed delivery must not end the
+                # dictation, and the next partial carries the merged text
+                # again. But not silently: this callback is what puts live
+                # text on screen and into the document, so failing it
+                # without a log makes a dead live-insertion path
+                # indistinguishable from a user who simply stopped talking.
+                if not session.result.partial_callback_failed:
+                    session.result.partial_callback_failed = True
+                    logger.exception(
+                        "Streaming partial callback failed; live text is not "
+                        "being delivered. Logged once per session."
+                    )
 
         session.result.last_partial_at = time.monotonic()
         session.result.last_partial_size = len(session.pcm_buffer)
