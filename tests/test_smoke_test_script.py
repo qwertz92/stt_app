@@ -71,12 +71,16 @@ def test_reading_the_settings_leaves_a_legacy_install_exactly_where_it_was(
 def test_reading_the_settings_creates_nothing_on_a_fresh_machine(
     smoke_test, monkeypatch, tmp_path
 ):
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+    # Its own directory, because the autouse sandbox puts a home directory in
+    # `tmp_path` and this asserts on an empty tree.
+    appdata = tmp_path / "appdata-root"
+    appdata.mkdir()
+    monkeypatch.setenv("APPDATA", str(appdata))
 
     settings, problem = smoke_test._read_settings_without_touching_them()
 
     assert (settings, problem) == (None, None)
-    assert list(tmp_path.iterdir()) == []
+    assert list(appdata.iterdir()) == []
 
 
 def test_a_corrupt_settings_file_is_reported_and_left_alone(smoke_test, monkeypatch, tmp_path):
@@ -117,3 +121,120 @@ def test_valid_settings_that_need_normalizing_are_not_rewritten(
     assert problem is None
     assert settings is not None and settings.engine == "local"
     assert _tree(tmp_path) == before
+
+
+@pytest.mark.parametrize(
+    ("payload", "expect_problem"),
+    [
+        ('{"engine": "local", "model_size": "tiny"}', False),
+        # `SettingsStore` requires a top-level object, so these parse as JSON
+        # and are still discarded by the app. The first version of the check
+        # asked only "is this JSON", which let all three back onto the
+        # silent-defaults path it was written to close.
+        ("[]", True),
+        ("null", True),
+        ("5", True),
+        ('"a string"', True),
+        ("{not json", True),
+    ],
+)
+def test_only_a_json_object_counts_as_readable_settings(
+    smoke_test, monkeypatch, tmp_path, payload, expect_problem
+):
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / "stt_app"
+    folder.mkdir()
+    (folder / "settings.json").write_text(payload, encoding="utf-8")
+
+    settings, problem = smoke_test._read_settings_without_touching_them()
+
+    assert (problem is not None) == expect_problem, (settings, problem)
+    assert (settings is None) == expect_problem
+
+
+def test_a_damaged_primary_is_recovered_from_the_backup_and_still_reported(
+    smoke_test, monkeypatch, tmp_path
+):
+    """`SettingsStore.load` falls back to `.bak`, so this install works.
+
+    Reading only the primary declared a working install broken, returned 1
+    under `--strict`, and skipped the model check the user asked for -- while
+    the app itself starts fine on the recovered settings. The damage is still
+    worth naming, so the problem is reported *and* the settings come back.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    folder = tmp_path / "stt_app"
+    folder.mkdir()
+    (folder / "settings.json").write_text("{not json", encoding="utf-8")
+    (folder / "settings.json.bak").write_text(
+        json.dumps({"engine": "openai", "model_size": "tiny"}), encoding="utf-8"
+    )
+    before = _tree(tmp_path)
+
+    settings, problem = smoke_test._read_settings_without_touching_them()
+
+    assert settings is not None and settings.engine == "openai", (settings, problem)
+    assert problem and "cannot be read" in problem
+    assert _tree(tmp_path) == before
+
+
+def test_a_fresh_install_still_checks_the_model_it_would_use(
+    smoke_test, monkeypatch, tmp_path, capsys
+):
+    """No settings file is not a reason to check nothing and return 0.
+
+    The app runs on defaults there, so the default model is what this machine
+    would load. Skipping it made `--check-model --strict` a no-op on exactly
+    the clean install the check exists for.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    loaded: list[str] = []
+
+    class _Transcriber:
+        def preload_model(self):
+            loaded.append("yes")
+
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "--check-model", "--strict"])
+    monkeypatch.setattr(
+        "stt_app.transcriber.factory.create_transcriber",
+        lambda settings, **kwargs: _Transcriber(),
+    )
+
+    code = smoke_test.main()
+
+    out = capsys.readouterr().out
+    assert loaded == ["yes"], out
+    assert "No saved settings yet" in out
+    assert code == 0
+
+
+def test_every_step_line_is_flushed_as_it_is_printed(smoke_test, monkeypatch, tmp_path):
+    """A run killed mid-step produced a zero-byte log.
+
+    Redirected stdout is block-buffered on Windows, and the model check can
+    wait indefinitely on the machine-wide download lock -- which is exactly
+    the situation a user runs a diagnostic in. Without a flush per step the
+    log did not even say which step it died in.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    flushes: list[int] = []
+    printed: list[str] = []
+
+    class _Stream:
+        def write(self, text):
+            printed.append(text)
+            return len(text)
+
+        def flush(self):
+            flushes.append(len(printed))
+
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py"])
+    monkeypatch.setattr(sys, "stdout", _Stream())
+    smoke_test.main()
+
+    body = "".join(printed)
+    steps = [line for line in body.splitlines() if line.startswith("[")]
+    assert steps, body
+    assert len(flushes) >= len(steps), (
+        f"{len(steps)} step lines but only {len(flushes)} flushes: {steps}"
+    )

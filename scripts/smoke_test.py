@@ -45,6 +45,14 @@ def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | No
     and then describe the default model as "the configured local model" and
     offer to download it. The old code was equally silent but at least
     quarantined the real file, so the user found out.
+
+    The check has to match what `SettingsStore` accepts, not merely "is this
+    JSON". It requires a top-level **object**, so `[]`, `null` and `5` all
+    parse here and are rejected there -- which reinstated the silent-defaults
+    path for exactly those payloads. And it falls back to `settings.json.bak`,
+    so a primary file that will not parse is not a broken install; reporting
+    one was a false alarm that also skipped the check the user asked for. Both
+    files are therefore copied, and the verdict is whichever the store reaches.
     """
     from stt_app.app_paths import existing_settings_path
     from stt_app.settings_store import SettingsStore
@@ -53,15 +61,42 @@ def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | No
     if real_path is None:
         return None, None
 
-    try:
-        json.loads(real_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        return None, f"the saved settings file cannot be read ({exc})"
+    backup_path = real_path.with_suffix(real_path.suffix + ".bak")
+    problems = []
+    usable = False
+    for path, label in ((real_path, "settings file"), (backup_path, "backup")):
+        if not path.is_file():
+            continue
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            problems.append(f"the saved {label} cannot be read ({exc})")
+            continue
+        if not isinstance(payload, dict):
+            problems.append(
+                f"the saved {label} is a JSON {type(payload).__name__}, not an "
+                "object, so the app will discard it"
+            )
+            continue
+        usable = True
+        break
+
+    if not usable:
+        return None, "; ".join(problems) or "the saved settings file is unreadable"
 
     with tempfile.TemporaryDirectory() as temp_dir:
-        copy_path = Path(temp_dir) / "settings.json"
+        temp_dir_path = Path(temp_dir)
+        copy_path = temp_dir_path / "settings.json"
         shutil.copy2(real_path, copy_path)
-        return SettingsStore(copy_path).load(), None
+        if backup_path.is_file():
+            # The store's own recovery path reads this, and it is what made
+            # the primary file's failure survivable in the first place.
+            shutil.copy2(backup_path, temp_dir_path / "settings.json.bak")
+        settings = SettingsStore(copy_path).load()
+
+    # A problem that the backup rescued is still worth naming: the app is
+    # running on recovered settings and the primary file is damaged.
+    return settings, "; ".join(problems) or None
 
 
 def main() -> int:
@@ -74,7 +109,12 @@ def main() -> int:
     parser.add_argument(
         "--check-model",
         action="store_true",
-        help="Load the configured local model (may download it; skipped for remote engines).",
+        help=(
+            "Load the configured local model (may download it; skipped for "
+            "remote engines). Unlike the other checks this one runs the real "
+            "load path, so it initializes the app data directory the same way "
+            "starting the app would."
+        ),
     )
     parser.add_argument(
         "--strict",
@@ -83,14 +123,27 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    print("[1/5] Import core modules")
+    def step(message: str) -> None:
+        """Print a step and flush it.
+
+        Redirected stdout is block-buffered on Windows, so nothing reaches the
+        log until the buffer fills or the process exits. The model check can
+        wait indefinitely on the machine-wide download lock (another process
+        downloading a model is exactly when a user runs a diagnostic), and a
+        run killed during that wait produced a zero-byte log -- no indication
+        of which step it died in.
+        """
+        print(message)
+        sys.stdout.flush()
+
+    step("[1/5] Import core modules")
     from stt_app.config import DEFAULT_HOTKEY
     from stt_app.hotkey import parse_hotkey
     from stt_app.secret_store import KeyringSecretStore
     from stt_app.settings_store import SettingsStore
     from stt_app.text_inserter import TextInserter
 
-    print("[2/5] Basic initialization")
+    step("[2/5] Basic initialization")
     with tempfile.TemporaryDirectory() as temp_dir:
         settings = SettingsStore(Path(temp_dir) / "settings.json").load()
         _ = settings.hotkey
@@ -101,7 +154,7 @@ def main() -> int:
     optional_failures: list[str] = []
 
     if args.check_mic:
-        print("[3/5] Checking microphone devices")
+        step("[3/5] Checking microphone devices")
         try:
             import sounddevice as sd
 
@@ -117,27 +170,41 @@ def main() -> int:
         # the smoke test could pass while the runtime this install actually
         # transcribes with was never exercised -- and on a clean machine it
         # pulled 486 MB of a model the default configuration does not use.
-        # `DEFAULT_ENGINE` happens to be "local" today, but the branch below
-        # asks "is this the engine with a model to load", which is a different
-        # question. Reading the default would silently invert this branch
-        # the day the default becomes a provider.
-        local_engine = "local"
+        # `DEFAULT_ENGINE` is the engine with a model to load, and it is also
+        # what `factory.create_transcriber` branches on, so reading it here is
+        # not a coincidence to be avoided -- writing "local" beside it was a
+        # second copy of one constant, and on the hypothetical day the default
+        # moves it is the copy that would be wrong.
+        from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE
 
         problem: str | None = None
         try:
             settings, problem = _read_settings_without_touching_them()
         except Exception as exc:
             settings = None
-            problem = f"the saved settings could not be read ({exc})"
+            problem = f"reading the saved settings raised {exc!r}"
         if problem:
-            optional_failures.append(f"Could not read the saved settings: {problem}")
+            optional_failures.append(f"Settings problem: {problem}")
+
+        if settings is None and not problem:
+            # A fresh install: no settings file at all. The app would run on
+            # defaults here, so checking the default model is checking what
+            # this machine would actually use. Skipping it silently returned 0
+            # from the one check the user invoked.
+            from stt_app.settings_store import AppSettings
+
+            settings = AppSettings()
+            print(
+                f"No saved settings yet; checking the default model "
+                f"({DEFAULT_MODEL_SIZE}), which is what this machine would use."
+            )
 
         if settings is None:
             # Print a step line here too. Without one this branch is the only
             # path through the check that produces no `[4/5]` output at all,
             # so a reader of the log sees the step vanish rather than fail.
-            print("[4/5] Skipping model load: no readable saved settings")
-        elif settings.engine != local_engine:
+            step("[4/5] Skipping model load: the saved settings are unusable")
+        elif settings.engine != DEFAULT_ENGINE:
             # Only the local engine has a model to load. Every remote provider
             # builds from an API key this script does not read, and none of
             # them implements `preload_model` at all, so running the step
@@ -150,7 +217,7 @@ def main() -> int:
         else:
             from stt_app.transcriber.factory import create_transcriber
 
-            print(f"[4/5] Checking local model load ({settings.model_size})")
+            step(f"[4/5] Checking local model load ({settings.model_size})")
             try:
                 transcriber = create_transcriber(settings)
                 transcriber.preload_model()
@@ -158,7 +225,7 @@ def main() -> int:
             except Exception as exc:
                 optional_failures.append(f"Model load failed: {exc}")
 
-    print("[5/5] Smoke test complete")
+    step("[5/5] Smoke test complete")
 
     if optional_failures:
         for failure in optional_failures:

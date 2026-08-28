@@ -460,7 +460,7 @@ def main() -> None:
 
     print(f"Source: {source_dir}")
     print(f"Found files: {', '.join(found_files) if found_files else '(none)'}")
-    if model_name is not None:
+    if model_name:
         print(f"{'Detected model' if detected else 'Model'}: {model_name}")
 
     # This gate comes before the file advice on purpose. `validate_model_files`
@@ -485,18 +485,31 @@ def main() -> None:
         sys.exit(1)
 
     # Anything still here either resolved to an importable model or has an
-    # unrecognised folder name. `found_files` separates those two: an empty
-    # list means nothing of the CTranslate2 layout is present, which is the
-    # other-runtime case above rather than an incomplete download, so it gets
-    # the runtime hint below instead of a list of files to fetch.
-    if missing_files and found_files:
+    # unrecognised folder name.
+    #
+    # The advice is withheld in exactly one shape: nothing of the CTranslate2
+    # layout is present *and* the name did not resolve. That is the
+    # other-runtime case, and listing files to download for a model this
+    # script cannot import at all is the impossible advice the gate above
+    # exists to prevent. An empty folder whose *name* resolves is an
+    # incomplete download and must still be told what is missing -- gating on
+    # `found_files` alone silenced it completely, so `--model small` on an
+    # empty directory printed no diagnostics at all.
+    if missing_files and (found_files or model_name is not None):
         _print_missing_file_advice(missing_files)
 
     # The verdict is what `--validate-only` was asked for, and it is produced
-    # before the name gate, which exits. A folder holding a complete, valid
-    # model under a name this script cannot map used to print `Source:` and
-    # `Found files:` and then exit 1 with only "Could not auto-detect the
+    # before the *unresolved-name* gate below. A folder holding a complete,
+    # valid model under a name this script cannot map used to print `Source:`
+    # and `Found files:` and then exit 1 with only "Could not auto-detect the
     # model name", never answering the question it was asked.
+    #
+    # It is deliberately *after* the wrong-runtime gate above: for a folder
+    # holding another runtime's model, "are these CTranslate2 files complete"
+    # is not a question worth answering, and the gate's own message is. So a
+    # complete model under a non-importable name still gets no verdict, by
+    # design. The exit code stays 1 in both cases -- the files may be fine,
+    # but the import the user asked for cannot proceed.
     if args.validate_only:
         _print_validation_verdict(is_valid)
 

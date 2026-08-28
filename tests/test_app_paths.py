@@ -154,12 +154,14 @@ def test_the_read_only_resolvers_report_absence_instead_of_creating(monkeypatch,
 
     Returning "here is where it would go" is what made the caller create it.
     """
-    monkeypatch.setenv("APPDATA", str(tmp_path))
+    appdata = tmp_path / "appdata-root"
+    appdata.mkdir()
+    monkeypatch.setenv("APPDATA", str(appdata))
     from stt_app.app_paths import existing_appdata_root, existing_settings_path
 
     assert existing_appdata_root() is None
     assert existing_settings_path() is None
-    assert list(tmp_path.iterdir()) == []
+    assert list(appdata.iterdir()) == [], "a lookup created something"
 
 
 def test_existing_settings_path_is_none_when_the_folder_holds_no_settings(monkeypatch, tmp_path):
@@ -169,3 +171,27 @@ def test_existing_settings_path_is_none_when_the_folder_holds_no_settings(monkey
 
     assert existing_appdata_root() == tmp_path / "stt_app"
     assert existing_settings_path() is None
+
+
+def test_deleting_APPDATA_cannot_reach_the_real_home_directory(monkeypatch, tmp_path):
+    """The autouse sandbox must cover the fallback, not only the variable.
+
+    `_appdata_base_root` falls back to `Path.home() / "AppData" / "Roaming"`,
+    which on Windows *is* `%APPDATA%`. So `monkeypatch.delenv("APPDATA")` --
+    which one test in this very file does -- escaped the sandbox and called
+    the real `appdata_root()`, and that is not a lookup: it creates the folder
+    and renames a legacy `tts_app` install onto the current name. Reproduced
+    before the fixture was widened: a home directory's `settings.json`,
+    `transcript_history.json` and recordings were moved by running the suite.
+    """
+    monkeypatch.delenv("APPDATA", raising=False)
+    from stt_app.app_paths import _appdata_base_root, appdata_root
+
+    base = _appdata_base_root()
+    resolved = appdata_root()
+
+    for path in (base, resolved):
+        assert tmp_path in path.parents or path == tmp_path, (
+            f"{path} is outside the per-test sandbox {tmp_path}; deleting "
+            "APPDATA reached the real home directory"
+        )

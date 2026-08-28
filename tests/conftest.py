@@ -25,7 +25,32 @@ from stt_app.text_inserter import TextInsertionError
 
 @pytest.fixture(autouse=True)
 def _isolate_appdata(monkeypatch, tmp_path):
+    r"""Point the app's data directory -- and the fallback behind it -- at tmp.
+
+    Setting `APPDATA` alone is not isolation. `app_paths._appdata_base_root`
+    falls back to `Path.home() / "AppData" / "Roaming"` when the variable is
+    missing, and on Windows that *is* `%APPDATA%`, so a test that does
+    `monkeypatch.delenv("APPDATA")` escapes the sandbox entirely and reaches
+    the developer's real data folder. `appdata_root` is not a lookup: it
+    creates the directory and renames a legacy `tts_app` install onto the
+    current name. Reproduced before this fixture was widened -- one test,
+    `test_appdata_root_falls_back_to_home_when_APPDATA_unset`, moved a home
+    directory's `settings.json`, `transcript_history.json` and recordings.
+
+    It does not fire on a machine that already has `%APPDATA%\stt_app`, which
+    is why it went unnoticed here; on a machine with only the legacy folder,
+    running the test suite moves the user's data.
+
+    `Path.home()` reads `USERPROFILE` on Windows and `HOME` elsewhere, so both
+    are set. Nothing else in `src/` depends on the real home: the two
+    `expanduser("~")` calls resolve the default Hugging Face cache, which
+    `pytest_configure` already redirects with `HF_HOME`/`HF_HUB_CACHE`.
+    """
+    home = tmp_path / "home"
+    home.mkdir(exist_ok=True)
     monkeypatch.setenv("APPDATA", str(tmp_path / "appdata"))
+    monkeypatch.setenv("USERPROFILE", str(home))
+    monkeypatch.setenv("HOME", str(home))
 
 
 @pytest.fixture(autouse=True)
