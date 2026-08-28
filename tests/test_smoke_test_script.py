@@ -441,3 +441,76 @@ def test_every_step_four_branch_prints_a_flushed_step_line(
     assert len(flushes) >= len(steps), (
         f"{label}: {len(steps)} step lines but only {len(flushes)} flushes"
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "write_settings"),
+    [
+        ("no settings at all", lambda folder: None),
+        (
+            "settings that will not parse",
+            lambda folder: (folder / "settings.json").write_text(
+                "{not json", encoding="utf-8"
+            ),
+        ),
+    ],
+)
+def test_a_legacy_install_is_not_told_which_model_is_being_checked(
+    smoke_test, monkeypatch, tmp_path, capsys, label, write_settings
+):
+    """Nothing is checked there, so naming the model contradicts the next line.
+
+    The announcement of which model would be used was moved out of the branch
+    that performs the check and into an unconditional block ahead of the legacy
+    guard, so the output read "checking the default model
+    (parakeet-tdt-0.6b-v3)." immediately followed by "[4/5] Skipping model
+    load". Both halves are still needed -- the announcement when the check
+    runs, the decline when the data would be moved -- so the fix is the order,
+    not the removal of either.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    legacy = tmp_path / "tts_app"
+    legacy.mkdir()
+    write_settings(legacy)
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "--check-model"])
+    monkeypatch.setattr(
+        "stt_app.transcriber.factory.create_transcriber",
+        lambda settings, **kwargs: pytest.fail("the model check ran"),
+    )
+
+    smoke_test.main()
+
+    out = capsys.readouterr().out
+    assert "Skipping model load" in out, f"{label}: the guard did not fire\n{out}"
+    assert "checking the default model" not in out, (
+        f"{label}: the output announces a check it then declines\n{out}"
+    )
+
+
+def test_a_current_install_is_still_told_which_model_is_being_checked(
+    smoke_test, monkeypatch, tmp_path, capsys
+):
+    """The other half: with nothing in the way the announcement must stay.
+
+    Without it `--check-model` on a fresh install downloads a model without
+    ever saying which one.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    (tmp_path / "stt_app").mkdir()
+    checked: list[object] = []
+
+    class _Transcriber:
+        def preload_model(self):
+            return None
+
+    monkeypatch.setattr(sys, "argv", ["smoke_test.py", "--check-model"])
+    monkeypatch.setattr(
+        "stt_app.transcriber.factory.create_transcriber",
+        lambda settings, **kwargs: checked.append(settings) or _Transcriber(),
+    )
+
+    smoke_test.main()
+
+    out = capsys.readouterr().out
+    assert checked, f"the model check never ran\n{out}"
+    assert "checking the default model" in out, out

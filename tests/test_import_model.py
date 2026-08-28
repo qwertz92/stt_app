@@ -412,3 +412,147 @@ def test_an_empty_model_argument_does_not_print_a_nameless_model_line(
     lines = [line.strip() for line in combined.splitlines()]
     assert "Model:" not in lines, f"an empty model line was printed: {combined}"
     assert any("Unknown model" in line for line in lines), combined
+
+
+@pytest.mark.parametrize(
+    ("label", "make_source", "expected"),
+    [
+        (
+            "a complete model",
+            lambda source: [
+                (source / "config.json").write_text("{}", encoding="utf-8"),
+                (source / "tokenizer.json").write_text("{}", encoding="utf-8"),
+                (source / "vocabulary.txt").write_text("a\n", encoding="utf-8"),
+                # Above `_MODEL_BIN_MIN_BYTES` (10 MB): a smaller file is
+                # rejected as an incomplete download, which is a different
+                # verdict than the one under test.
+                (source / "model.bin").write_bytes(b"x" * 10_000_001),
+            ],
+            "OK: all required files are present",
+        ),
+        (
+            "an incomplete one",
+            lambda source: [(source / "config.json").write_text("{}", encoding="utf-8")],
+            "FAILED: required files are missing",
+        ),
+    ],
+)
+def test_validate_only_prints_the_verdict_it_was_asked_for(
+    tmp_path, monkeypatch, capsys, label, make_source, expected
+):
+    """The one answer the flag exists to produce, and nothing pinned it.
+
+    Deleting the verdict left the whole module green: the surrounding tests
+    assert on `Source:`, `Found files:` and `MISSING FILES`, all of which are
+    printed with or without `--validate-only`. This is also the line whose own
+    docstring records a previous defect in it -- it printed U+2713 and U+2717
+    until redirected output on Windows made `print` raise.
+    """
+    module = _load_import_module()
+    source = tmp_path / "small"
+    source.mkdir()
+    make_source(source)
+
+    monkeypatch.setattr(
+        sys, "argv", ["import_model.py", str(source), "--validate-only"]
+    )
+    if expected.startswith("OK"):
+        module.main()
+    else:
+        with pytest.raises(SystemExit) as excinfo:
+            module.main()
+        assert excinfo.value.code == 1
+
+    combined = "".join(capsys.readouterr())
+    assert expected in combined, f"{label}: no verdict was printed\n{combined}"
+
+
+def test_a_folder_holding_another_runtimes_model_is_not_told_what_to_download(
+    tmp_path, monkeypatch, capsys
+):
+    """The withheld half of the advice gate, which had no test.
+
+    Nothing of the CTranslate2 layout is present *and* the name did not
+    resolve, so this is another runtime's model. Listing `config.json`,
+    `model.bin`, `tokenizer.json` and `vocabulary.txt` for it is advice about
+    files the repository does not contain, for a model this script cannot
+    import at all -- which is exactly what the gate's own comment says it
+    exists to prevent. Only the "must print" direction was covered, so
+    removing the second half of the condition left the module green.
+    """
+    module = _load_import_module()
+    source = tmp_path / "some-other-runtime-export"
+    source.mkdir()
+    (source / "model.onnx").write_bytes(b"onnx")
+
+    monkeypatch.setattr(
+        sys, "argv", ["import_model.py", str(source), "--validate-only"]
+    )
+    with pytest.raises(SystemExit) as excinfo:
+        module.main()
+
+    assert excinfo.value.code == 1
+    combined = "".join(capsys.readouterr())
+    assert "MISSING FILES" not in combined, (
+        "the script listed files to download for a model it cannot import:\n"
+        f"{combined}"
+    )
+    assert "Could not auto-detect" in combined, combined
+
+
+def test_an_explicit_model_name_is_not_reported_as_detected(
+    tmp_path, monkeypatch, capsys
+):
+    """`Detected model:` claims the script worked the name out of the folder.
+
+    With `--model small` the user supplied it, and saying otherwise hides
+    where the name came from when the folder is named something else entirely.
+    """
+    module = _load_import_module()
+    source = tmp_path / "an-unrelated-folder-name"
+    source.mkdir()
+
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["import_model.py", str(source), "--model", "small", "--validate-only"],
+    )
+    with pytest.raises(SystemExit):
+        module.main()
+
+    combined = "".join(capsys.readouterr())
+    assert "Detected model:" not in combined, (
+        f"a name the user typed was reported as detected:\n{combined}"
+    )
+    assert "Model: small" in combined, combined
+
+
+def test_an_unresolved_name_with_no_ctranslate2_files_gets_the_runtime_hint(
+    tmp_path, monkeypatch, capsys
+):
+    """Nothing of the layout is present, so "wrong runtime" beats "odd name".
+
+    The hint disappeared under a mutation of its guard with every test still
+    passing; the sibling case (some CTranslate2 files present, so the folder
+    name really is just unrecognised) is what must *not* get it.
+    """
+    module = _load_import_module()
+    source = tmp_path / "some-other-runtime-export"
+    source.mkdir()
+    (source / "model.onnx").write_bytes(b"onnx")
+
+    monkeypatch.setattr(sys, "argv", ["import_model.py", str(source)])
+    with pytest.raises(SystemExit):
+        module.main()
+    hinted = "".join(capsys.readouterr())
+
+    named = tmp_path / "another-odd-name"
+    named.mkdir()
+    (named / "config.json").write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(sys, "argv", ["import_model.py", str(named)])
+    with pytest.raises(SystemExit):
+        module.main()
+    plain = "".join(capsys.readouterr())
+
+    assert "CTranslate2/faster-whisper models only" in hinted, hinted
+    assert "CTranslate2/faster-whisper models only" not in plain, plain

@@ -97,11 +97,13 @@ def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | No
         # app ends up running on, since the store's own recovery reads the
         # `.bak` and rewrites the primary from it.
         shutil.copy2(usable_path, copy_path)
-        if usable_path == real_path and backup_path.is_file():
-            # The store's recovery path reads this: our JSON check is looser
-            # than `SettingsStore`, so a primary that parsed here can still be
-            # rejected there.
-            shutil.copy2(backup_path, temp_dir_path / "settings.json.bak")
+        # No `.bak` is copied alongside. The store would only reach one if it
+        # rejected the file that parsed here, and it cannot: both do
+        # `json.loads(read_text("utf-8"))` and require a top-level object, and
+        # this reader is the stricter of the two (it also demands `is_file()`
+        # and catches every `ValueError`). A copy was made for a while under a
+        # comment claiming the opposite; instrumenting `load_json_with_backup`
+        # across eight payload shapes showed the source was always `primary`.
         settings = SettingsStore(copy_path).load()
 
     # A problem that the backup rescued is still worth naming: the app is
@@ -142,7 +144,8 @@ def main() -> int:
             "Load the configured local model (may download it; skipped for "
             "remote engines). Unlike the other checks this one runs the real "
             "load path, so it initializes the app data directory the same way "
-            "starting the app would."
+            "starting the app would -- which is why it is declined outright "
+            "while this install's data is still in the legacy folder."
         ),
     )
     parser.add_argument(
@@ -219,6 +222,12 @@ def main() -> int:
         if problem:
             optional_failures.append(f"Settings problem: {problem}")
 
+        # Read before the announcement below, not after: the legacy guard
+        # declines the check outright, and printing "checking the default
+        # model (X)" in front of "Skipping model load" is a straight
+        # self-contradiction. It reads the same answer the guard reads.
+        legacy_data_move_pending = _legacy_data_folder_would_be_moved()
+
         if settings is None:
             # Two ways to get here, and the app does the same thing in both:
             # it runs on defaults. No settings file at all is a fresh install;
@@ -233,19 +242,21 @@ def main() -> int:
             from stt_app.settings_store import AppSettings
 
             settings = AppSettings()
-            if problem:
-                print(
-                    f"The saved settings cannot be used, so the app would "
-                    f"discard them and run on defaults; checking the default "
-                    f"model ({DEFAULT_MODEL_SIZE})."
-                )
-            else:
-                print(
-                    f"No saved settings yet; checking the default model "
-                    f"({DEFAULT_MODEL_SIZE}), which is what this machine would use."
-                )
+            if not legacy_data_move_pending:
+                if problem:
+                    print(
+                        f"The saved settings cannot be used, so the app would "
+                        f"discard them and run on defaults; checking the default "
+                        f"model ({DEFAULT_MODEL_SIZE})."
+                    )
+                else:
+                    print(
+                        f"No saved settings yet; checking the default model "
+                        f"({DEFAULT_MODEL_SIZE}), which is what this machine "
+                        f"would use."
+                    )
 
-        if _legacy_data_folder_would_be_moved():
+        if legacy_data_move_pending:
             # Loading a model reaches the download coordinator, whose lock
             # directory is `appdata_root()` -- and that is a *setup* call: with
             # only the legacy folder present it renames the user's entire data
