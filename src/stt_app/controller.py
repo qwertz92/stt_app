@@ -1231,6 +1231,18 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to start streaming transcriber")
             self._overlay.set_state("Error", f"Failed to start streaming: {exc}")
             return
+        except BaseException:
+            # The same shape the two arms below the capture guard already use,
+            # one frame up. This is the outermost frame that holds the lease,
+            # and `_begin_stream_connect` starts a thread -- so a
+            # `BaseException` escaping here strands
+            # `_transcriber_runtime_lock` for the process lifetime, which is
+            # exactly the outcome the guards below were added to make
+            # unreachable. Bookkeeping only, then re-raise: a `BaseException`
+            # on the Qt thread must not be turned into an overlay message.
+            if runtime_lease is not None:
+                runtime_lease.release()
+            raise
 
         try:
             # Inside its own guard: nothing owns the lease between the block
@@ -2167,27 +2179,44 @@ class DictationController(QtCore.QObject):
         if self._shutdown_started:
             raise TranscriptionCanceled("Application shutdown is in progress.")
         incremented = False
+        # An isolated runtime nobody else can reach: unlike the shared arm
+        # above, whose transcriber stays in the cache and is still valid for
+        # the next caller, this one is owned by the lease that is about to be
+        # built. If that construction raises, nothing else holds a reference,
+        # so a Node child process or an ONNX session would stay alive with no
+        # way to close it. Cleared as soon as an owner exists.
+        orphan = None
         try:
             self._increment_transcriber_runtime_count()
             incremented = True
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
+            orphan = transcriber
             if self._shutdown_started:
                 self._close_cached_transcriber(transcriber)
+                orphan = None
                 raise TranscriptionCanceled("Application shutdown is in progress.")
-            return _TranscriberRuntimeLease(
+            lease = _TranscriberRuntimeLease(
                 self,
                 transcriber,
                 owns_shared_lock=False,
                 close_on_release=True,
             )
+            orphan = None
+            return lease
         except BaseException:
             # See the shared-lock arm above: cleanup-and-re-raise, so the
             # broader catch cannot hide anything. No lock to give back here --
             # this arm never took one -- but the runtime count still gates
             # `_transcription_runtime_active()`, which blocks every deferred
-            # cache reset while it reads True.
-            if incremented:
-                self._decrement_transcriber_runtime_count()
+            # cache reset while it reads True. The close is in its own `try`
+            # so that a runtime which fails to close cannot also skip the
+            # decrement and strand that gate.
+            try:
+                if orphan is not None:
+                    self._close_cached_transcriber(orphan)
+            finally:
+                if incremented:
+                    self._decrement_transcriber_runtime_count()
             raise
 
     def _increment_transcriber_runtime_count(self) -> None:
@@ -3172,6 +3201,20 @@ class DictationController(QtCore.QObject):
             self.model_preload_done.emit(generation, False, "Model preload canceled.")
             return
         except Exception as exc:
+            # Condemn first, then decide what to report. The cancel branch
+            # below returns, and it used to return from *above* this block --
+            # so a cancel that surfaced as a plain exception left the
+            # half-loaded runtime in the cache and recorded `None`, which is
+            # the *success* sentinel `_local_model_preload_needed` reads. The
+            # next dictation then transcribed with a partially initialized
+            # runtime and never retried the load. Reachable whenever a
+            # cancelled load does not raise `TranscriptionCanceled`: the
+            # Cohere/Granite Node path kills its child, which surfaces as
+            # `TranscriptionError` (a `RuntimeError`). The two arms on either
+            # side of this one both condemn unconditionally; this one did not.
+            if runtime_lease is not None:
+                with self._transcriber_runtime_state_lock:
+                    self._pending_transcriber_cache_reset = True
             if self._preload_generation_was_canceled(generation):
                 self._record_model_preload_result(key, generation, None)
                 self.model_preload_done.emit(
@@ -3183,11 +3226,6 @@ class DictationController(QtCore.QObject):
             self._logger.warning(
                 "Model preload failed for %s: %s", settings.model_size, exc
             )
-            # Ensure the failed/partially initialized runtime is closed before
-            # another waiter can acquire the shared cache admission lock.
-            if runtime_lease is not None:
-                with self._transcriber_runtime_state_lock:
-                    self._pending_transcriber_cache_reset = True
             failure = (
                 f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
                 "No fallback model was used. Open Settings to retry or select "

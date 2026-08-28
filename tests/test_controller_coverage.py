@@ -970,6 +970,77 @@ def test_a_download_canceled_during_a_preload_is_not_a_broken_model(monkeypatch)
     _ = app
 
 
+def test_a_cancel_that_surfaces_as_a_plain_error_still_condemns_the_runtime(
+    monkeypatch,
+):
+    """Not every cancelled load raises `TranscriptionCanceled`.
+
+    The Cohere/Granite Node runtime cancels by killing its child process, and
+    that surfaces as `TranscriptionError`, which is a `RuntimeError`. So the
+    cancel lands in the `except Exception` arm -- whose cancel branch returned
+    from *above* the condemnation, while the `TranscriptionCanceled` arm above
+    it and the `BaseException` arm below it both condemn unconditionally.
+
+    The consequence is the one the `TranscriptionCanceled` arm's own comment
+    describes: `None` is the *success* sentinel for
+    `_local_model_preload_needed`, and the cached key already matches this
+    settings snapshot, so a half-loaded runtime was reported as preloaded,
+    left in the cache, and used by the next dictation.
+    """
+    controller, app, _overlay, settings = _preloading_controller(monkeypatch)
+    generation = controller._preload_generation
+    key = controller._model_preload_key(settings)
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda gen, ok, message: done.append((gen, ok, message))
+    )
+    released: list[bool] = []
+
+    class KilledTranscriber:
+        def set_cancel_check(self, cancel_check):
+            pass
+
+        def preload_model(self):
+            # The cancel arrives *during* the load, which is the real
+            # sequence. Marking the generation beforehand makes the worker's
+            # own pre-acquire check return first, so this never runs and the
+            # arm under test is never reached.
+            controller._cancel_preload_generation(generation)
+            raise RuntimeError("the model runner exited")
+
+    class Lease:
+        transcriber = KilledTranscriber()
+
+        def release(self):
+            released.append(True)
+
+    monkeypatch.setattr(
+        controller, "_download_model_for_preload", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        controller, "_acquire_transcriber_runtime", lambda *_a, **_k: Lease()
+    )
+
+    controller._preload_model_worker(settings, generation, key)
+
+    assert done and done[-1][1] is False
+    assert "canceled" in done[-1][2].lower(), done
+    assert "could not be loaded" not in done[-1][2]
+    with controller._preload_result_lock:
+        assert controller._preload_results[key][1] is None
+    with controller._transcriber_runtime_state_lock:
+        assert controller._pending_transcriber_cache_reset is True, (
+            "the half-loaded runtime stayed in the cache and was reported as "
+            "preloaded, so the next dictation transcribed with it"
+        )
+    with controller._preload_result_lock:
+        controller._preload_future = None
+    assert controller._local_model_preload_needed(settings) is True
+    assert released == [True]
+    controller.shutdown()
+    _ = app
+
+
 def test_the_preload_download_can_be_canceled_from_the_overlay(monkeypatch):
     """Cancel must reach the transcriber's *own* download, not just ours.
 
@@ -1434,6 +1505,45 @@ def test_transcribe_worker_empty_batch_text_is_a_failure():
 # ---------------------------------------------------------------------------
 # _finalize_stream_worker error branches
 # ---------------------------------------------------------------------------
+
+
+def test_a_canceled_finalize_reports_a_cancel_even_if_the_abort_dies(monkeypatch):
+    """What the abort does cannot change the fact that this was a cancel.
+
+    `terminal_kind = "canceled"` used to be assigned *below* the abort, whose
+    own `except Exception` does not cover a `BaseException` -- and
+    `abort_stream()` drains a provider socket and runs its callbacks, so one
+    escaping from a callback left `terminal_kind` at its `"failed"`
+    initialiser. The user who had just pressed Cancel then got a tray
+    notification reading "Recording ... failed: Unexpected streaming error".
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    canceled: list[int] = []
+    failed: list[tuple[int, str]] = []
+    controller.transcription_canceled.connect(canceled.append)
+    controller.transcription_failed.connect(
+        lambda token, message: failed.append((token, message))
+    )
+
+    class DyingTranscriber:
+        def abort_stream(self):
+            raise BaseException("the provider callback died")
+
+    job = controller._register_transcription_job(7, settings, "streaming")
+    job.aborting = True
+
+    controller._finalize_stream_worker(7, DyingTranscriber(), job)
+
+    assert canceled == [7], (failed, canceled)
+    assert failed == [], "a cancel was reported to the user as a failure"
+    controller.shutdown()
+    _ = app
 
 
 def test_finalize_stream_worker_no_transcriber_emits_error():
@@ -3757,6 +3867,146 @@ def test_a_base_exception_from_the_isolated_runtime_does_not_leak_the_use_count(
     assert controller._transcription_runtime_active() is False, (
         "the isolated arm left the runtime marked in use"
     )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_lease_that_cannot_be_constructed_closes_the_isolated_runtime(monkeypatch):
+    """The guard was widened to span the lease constructor; nothing drove it.
+
+    `create_transcriber` raising was already covered -- the pre-widening code
+    decremented on that path too, so the existing test passes against it. What
+    the widening actually added is coverage for a raise *between* the
+    successful construction and the lease, and that arm has a second job the
+    shared arm does not: the runtime it just built is isolated, so no cache
+    holds it. A Node child process or an ONNX session would stay alive with
+    nothing able to close it.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    closed: list[str] = []
+
+    class Runtime:
+        def close(self):
+            closed.append("closed")
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda *_a, **_k: Runtime()
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("lease construction died")
+
+    monkeypatch.setattr("stt_app.controller._TranscriberRuntimeLease", _explode)
+
+    # Hold the shared lock so the acquisition is forced down the isolated arm.
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    try:
+        with pytest.raises(BaseException, match="lease construction died"):
+            controller._acquire_transcriber_runtime(settings)
+    finally:
+        controller._transcriber_runtime_lock.release()
+
+    assert closed == ["closed"], (
+        "the isolated runtime was orphaned: no lease and no cache reference, "
+        "so nothing can ever close it"
+    )
+    assert controller._transcription_runtime_active() is False, (
+        "the isolated arm left the runtime marked in use"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_runtime_that_refuses_to_close_still_gives_back_the_use_count(monkeypatch):
+    """The close must not be able to skip the decrement.
+
+    `_close_cached_transcriber` swallows `Exception`, so only a `BaseException`
+    out of `close()` reaches this -- and while the count stays raised
+    `_transcription_runtime_active()` reads True, which blocks every deferred
+    transcriber-cache reset for the process lifetime.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    class StubbornRuntime:
+        def close(self):
+            raise BaseException("close died")
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda *_a, **_k: StubbornRuntime()
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("lease construction died")
+
+    monkeypatch.setattr("stt_app.controller._TranscriberRuntimeLease", _explode)
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    try:
+        with pytest.raises(BaseException):
+            controller._acquire_transcriber_runtime(settings)
+    finally:
+        controller._transcriber_runtime_lock.release()
+
+    assert controller._transcription_runtime_active() is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_base_exception_starting_the_stream_does_not_strand_the_runtime_lock(
+    monkeypatch,
+):
+    """The outermost frame that holds the lease caught only `Exception`.
+
+    Two guards below this one were widened to `BaseException` precisely to
+    stop the lease being stranded; this block acquires the very lease they
+    protect and `_begin_stream_connect` starts a thread, so `Thread.start`
+    raising `RuntimeError`... is an `Exception`. What is not: anything a
+    provider callback can raise on the way out. While
+    `_transcriber_runtime_lock` is held, every later preload and audio import
+    blocks forever and every dictation builds its own isolated runtime.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        model_size="small",
+        mode="streaming",
+    )
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda *_a, **_k: FakeStreamingTranscriber(),
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("the handshake died")
+
+    monkeypatch.setattr(controller, "_begin_stream_connect", _explode)
+
+    with pytest.raises(BaseException, match="the handshake died"):
+        controller._start_streaming_recording()
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True, (
+        "the shared runtime lock was stranded for the process lifetime"
+    )
+    controller._transcriber_runtime_lock.release()
+    assert controller._transcription_runtime_active() is False
     controller.shutdown()
     _ = app
 
