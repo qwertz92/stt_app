@@ -36,6 +36,17 @@ from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
+
+class _NotAnException(BaseException):
+    """A `BaseException` that is not an `Exception`, like `KeyboardInterrupt`.
+
+    The whole family of defects in this area is "the guard is one class too
+    narrow", so these tests need a class the narrow guard misses. Using
+    `KeyboardInterrupt` itself invites pytest and the terminal to treat the
+    run as interrupted.
+    """
+
+
 # ---------------------------------------------------------------------------
 # Shutdown tests
 # ---------------------------------------------------------------------------
@@ -3651,13 +3662,22 @@ def test_an_empty_streaming_result_keeps_the_previous_transcript():
     _ = app
 
 
-def test_a_raising_cancel_hook_clear_still_releases_the_runtime(monkeypatch, caplog):
+@pytest.mark.parametrize("failure", [RuntimeError, _NotAnException])
+def test_a_raising_cancel_hook_clear_still_releases_the_runtime(
+    monkeypatch, caplog, failure
+):
     """The clear runs in the preload's `finally`, right before `release()`.
 
     Unguarded, a setter that raises there skips the release and strands
     `_transcriber_runtime_lock` for the process lifetime: every later preload
     and audio import blocks forever, and every dictation quietly builds its
     own isolated multi-gigabyte runtime instead.
+
+    Both classes, because the guard was `except Exception` and the release was
+    a sibling statement rather than a `finally`: a `BaseException` from the
+    setter walked straight past both. The preload's own body already has an
+    `except BaseException` arm for exactly this reason; the `finally` below it
+    re-opened the hole.
     """
     controller, app, _overlay, settings = _preloading_controller(monkeypatch)
     generation = controller._preload_generation
@@ -3669,7 +3689,7 @@ def test_a_raising_cancel_hook_clear_still_releases_the_runtime(monkeypatch, cap
         def set_cancel_check(self, cancel_check):
             calls.append(cancel_check)
             if cancel_check is None:
-                raise RuntimeError("a setter that raises on the clear")
+                raise failure("a setter that raises on the clear")
 
         def preload_model(self):
             return None
@@ -4691,5 +4711,276 @@ def test_a_base_exception_in_the_preload_still_reports_the_preload_as_done(
         "a preload that ended still reports a phase: "
         f"{controller._current_preload_phase()!r}"
     )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_runtime_that_cannot_be_closed_is_still_evicted_from_the_cache():
+    """A close that raises must not leave the dead runtime in the cache.
+
+    `_close_cached_transcriber` swallows `Exception` but not `BaseException`,
+    and the two statements that clear the cache sat *after* it -- so the same
+    dead object was handed to every later acquisition and closed again on
+    every reset. Not a one-off failure: the app was permanently unable to
+    transcribe, one traceback per attempt.
+
+    This is also the only eviction a *replaced* API key gets. `has_*_key` does
+    not change when a key is swapped for a different value, so the identity is
+    byte-identical and the reset is the whole invalidation -- a runtime holding
+    a revoked credential went on serving requests.
+    """
+    controller, app = _make_controller()
+    closes: list[str] = []
+
+    class Runtime:
+        def close(self):
+            closes.append("close")
+            raise _NotAnException("close died")
+
+    controller._transcriber_cache = Runtime()
+    controller._transcriber_cache_key = ("local", "small")
+
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    try:
+        with pytest.raises(_NotAnException):
+            controller._reset_transcriber_cache_locked()
+    finally:
+        controller._transcriber_runtime_lock.release()
+
+    assert closes == ["close"], "the close was never attempted"
+    assert controller._transcriber_cache is None, (
+        "the runtime that could not be closed is still cached, so every later "
+        "acquisition gets the same dead object"
+    )
+    assert controller._transcriber_cache_key is None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failing_use_count_decrement_still_frees_the_admission_lock(monkeypatch):
+    """The shared arm handed the two resources back as bare statements.
+
+    The decrement came first and is the riskier of the two, so a raise from it
+    stranded `_transcriber_runtime_lock` for the process lifetime -- the exact
+    outcome the comment above that arm says it exists to make impossible. The
+    isolated arm below it already used `try/finally` and says why.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    controller, app = _make_controller(settings_store=FakeSettingsStore(settings))
+
+    def _no_transcriber(_settings):
+        raise RuntimeError("the runtime could not be built")
+
+    def _explode_decrement():
+        raise _NotAnException("the decrement died")
+
+    monkeypatch.setattr(controller, "_get_or_create_transcriber", _no_transcriber)
+    monkeypatch.setattr(
+        controller, "_decrement_transcriber_runtime_count", _explode_decrement
+    )
+
+    with pytest.raises(_NotAnException):
+        controller._acquire_transcriber_runtime(settings, allow_isolated=False)
+
+    acquired = controller._transcriber_runtime_lock.acquire(timeout=2.0)
+    try:
+        assert acquired is True, (
+            "the admission lock was stranded, so every later preload and audio "
+            "import blocks forever"
+        )
+    finally:
+        if acquired:
+            controller._transcriber_runtime_lock.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failing_lock_release_still_gives_the_use_count_back(monkeypatch):
+    """The other half of the same pair, in `_release_transcriber_runtime`.
+
+    The count gates `_transcription_runtime_active()`, which blocks every
+    deferred cache reset while it reads True -- so losing the decrement means
+    a changed model or a replaced API key never takes effect again.
+    """
+    controller, app = _make_controller()
+
+    class _HostileLock:
+        def release(self):
+            raise _NotAnException("release died")
+
+    controller._increment_transcriber_runtime_count()
+    assert controller._transcription_runtime_active() is True
+    monkeypatch.setattr(controller, "_transcriber_runtime_lock", _HostileLock())
+
+    with pytest.raises(_NotAnException):
+        controller._release_transcriber_runtime(owns_shared_lock=True)
+
+    assert controller._transcription_runtime_active() is False, (
+        "the use count was never given back"
+    )
+    controller._shutdown_started = True
+    _ = app
+
+
+def test_a_failing_teardown_step_still_shuts_the_executors_down(monkeypatch):
+    """`shutdown()` is wired to `aboutToQuit`, so this is the last chance.
+
+    Every other teardown step in it carries its own guard; the last four
+    statements did not, so a failure in the first skipped all three executor
+    shutdowns and left the transcription, stream-finalize and preload workers
+    running past application exit.
+    """
+    controller, app = _make_controller()
+    shut: list[str] = []
+
+    class _RecordingExecutor:
+        def __init__(self, name):
+            self._name = name
+
+        def shutdown(self, wait=True, cancel_futures=False):
+            shut.append(self._name)
+
+    controller._executor = _RecordingExecutor("transcription")
+    controller._stream_finalize_executor = _RecordingExecutor("stream")
+    controller._preload_executor = _RecordingExecutor("preload")
+
+    def _explode():
+        raise _NotAnException("the streaming reset died")
+
+    monkeypatch.setattr(controller, "_reset_streaming_state", _explode)
+
+    controller.shutdown()
+
+    assert shut == ["transcription", "stream", "preload"], (
+        f"the executors were left running past shutdown: {shut}"
+    )
+    _ = app
+
+
+def test_a_failing_cache_reset_after_resume_still_restarts_the_microphone(
+    monkeypatch,
+):
+    """The three resume steps are independent and ran as one sequence.
+
+    A failing cache reset therefore also cost the warm-microphone restart, and
+    audio devices commonly change identity across suspend -- so the next
+    recording attached to a stream opened against a device that no longer
+    exists.
+    """
+    controller, app = _make_controller()
+    ran: list[str] = []
+
+    monkeypatch.setattr(
+        controller, "refresh_hotkey_registration", lambda: ran.append("hotkeys")
+    )
+
+    def _explode():
+        raise _NotAnException("the resume cache reset died")
+
+    monkeypatch.setattr(
+        controller, "_reset_resume_sensitive_transcriber_cache", _explode
+    )
+    monkeypatch.setattr(
+        controller,
+        "_restart_warm_microphone_stream_after_resume",
+        lambda: ran.append("warm stream"),
+    )
+
+    controller.handle_system_resume()
+
+    assert ran == ["hotkeys", "warm stream"], (
+        f"a failing step took the others with it: {ran}"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_worker_whose_diagnostics_die_still_releases_and_reports(monkeypatch):
+    """Forty lines of diagnostics ran between the result and `release()`.
+
+    Three `getattr` property reads off the transcriber, a `len`, a log call and
+    the two hook clears, with `runtime_lease.release()` as the last statement.
+    A raise from any of them stranded the admission lock for the process
+    lifetime *and* skipped the terminal signal below the `finally`, leaving the
+    overlay in Processing with no error and no Retry -- from an ordinary
+    `Exception`, not only an interrupt.
+    """
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    controller._executor = ImmediateExecutor()
+    ready: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: ready.append((token, text))
+    )
+
+    class Runtime:
+        def transcribe_batch(self, wav):
+            return "the dictated words"
+
+        @property
+        def runtime_device(self):
+            raise RuntimeError("the device property exploded")
+
+    def _lease(*_args, **_kwargs):
+        controller._increment_transcriber_runtime_count()
+        return controller_module._TranscriberRuntimeLease(
+            controller,
+            Runtime(),
+            owns_shared_lock=False,
+            close_on_release=False,
+        )
+
+    monkeypatch.setattr(controller, "_acquire_transcriber_runtime", _lease)
+
+    settings_snapshot = AppSettings(engine="local", hotkey=FALLBACK_HOTKEY)
+    controller._active_request_token = 1
+    controller._transcribe_worker(1, b"audio", settings_snapshot)
+
+    assert ready == [(1, "the dictated words")], (
+        "the transcript was produced and then lost in the bookkeeping; the "
+        f"overlay is still on {overlay.states[-1:]}"
+    )
+    assert controller._transcription_runtime_active() is False, (
+        "the runtime stayed marked in use, so no deferred cache reset can run"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_resume_teardown_evicts_the_runtime_even_when_its_close_dies():
+    """The resume path is a second copy of the same eviction, and it drifted.
+
+    It exists precisely because a GPU runtime may be unusable after a suspend,
+    which is also when its `close()` is most likely to fail -- and with the
+    close in front of the two clears, that left the dead runtime in the cache
+    and the next dictation was handed it straight back.
+    """
+    controller, app = _make_controller()
+    closes: list[str] = []
+
+    class Runtime:
+        model_size = "cohere-transcribe-03-2026"
+        runtime_device = "webgpu"
+
+        def close(self):
+            closes.append("close")
+            raise _NotAnException("close died after resume")
+
+    controller._transcriber_cache = Runtime()
+    controller._transcriber_cache_key = None
+
+    with pytest.raises(_NotAnException):
+        controller._reset_resume_sensitive_transcriber_cache()
+
+    assert closes == ["close"], "the teardown branch was never reached"
+    assert controller._transcriber_cache is None, (
+        "the runtime that could not be closed is still cached after resume"
+    )
+    acquired = controller._transcriber_runtime_lock.acquire(timeout=2.0)
+    try:
+        assert acquired is True, "the admission lock was stranded"
+    finally:
+        if acquired:
+            controller._transcriber_runtime_lock.release()
     controller.shutdown()
     _ = app

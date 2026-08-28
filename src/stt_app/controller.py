@@ -247,9 +247,12 @@ class _TranscriberRuntimeLease:
             #
             # Nothing is stranded by swallowing it. Both the admission lock
             # and the use count are handed back inside that method's own
-            # `finally`, before anything can escape, and a reset that failed
-            # leaves `_pending_transcriber_cache_reset` set, so the next
-            # release retries it.
+            # nested `finally`s, so neither can be skipped by the other
+            # failing; the one remaining way the lock is not handed back is
+            # `Lock.release()` itself raising, which happens only for a lock
+            # that was not held. A reset that failed leaves
+            # `_pending_transcriber_cache_reset` set, so the next release
+            # retries it.
             try:
                 self._controller._release_transcriber_runtime(
                     owns_shared_lock=self._owns_shared_lock
@@ -642,11 +645,31 @@ class DictationController(QtCore.QObject):
         self._request_audio_by_token.clear()
         self._jobs.clear()
         self._deferred_background_results.clear()
-        self._reset_streaming_state()
-        self._reset_transcriber_cache()
-        self._executor.shutdown(wait=False, cancel_futures=True)
-        self._stream_finalize_executor.shutdown(wait=False, cancel_futures=True)
-        self._preload_executor.shutdown(wait=False, cancel_futures=True)
+        # Every other teardown step above carries its own guard; these did
+        # not, so a failure in the first of them skipped all three executor
+        # shutdowns and left the transcription, stream-finalize and preload
+        # workers running past `aboutToQuit`. `BaseException`, because the
+        # process is quitting either way and there is nothing left to hand the
+        # interrupt to.
+        try:
+            self._reset_streaming_state()
+        except BaseException:
+            self._logger.exception("Failed to reset streaming state at shutdown")
+        try:
+            self._reset_transcriber_cache()
+        except BaseException:
+            self._logger.exception("Failed to reset the runtime cache at shutdown")
+        for name, executor in (
+            ("transcription", self._executor),
+            ("stream finalize", self._stream_finalize_executor),
+            ("preload", self._preload_executor),
+        ):
+            try:
+                executor.shutdown(wait=False, cancel_futures=True)
+            except BaseException:
+                self._logger.exception(
+                    "Failed to shut down the %s executor", name
+                )
 
     def _invalidate_transcriber_runtime(self) -> None:
         """Drop the cached runtime, or hand the drop to whoever is using it."""
@@ -2198,9 +2221,18 @@ class DictationController(QtCore.QObject):
         """Close the cache while the caller owns the runtime admission lock."""
         with self._transcriber_cache_lock:
             cached = self._transcriber_cache
-            self._close_cached_transcriber(cached)
+            # Detached before it is closed. `_close_cached_transcriber`
+            # swallows `Exception` but not `BaseException`, and with the close
+            # in front a runtime that could not be closed stayed *in the
+            # cache*: every later acquisition handed back the same dead object
+            # and tried to close it again, so one failure made the app
+            # permanently unable to transcribe instead of failing once. This
+            # is also the only eviction a replaced API key gets -- the cache
+            # key is unchanged there -- so a runtime holding a revoked
+            # credential went on serving requests.
             self._transcriber_cache = None
             self._transcriber_cache_key = None
+            self._close_cached_transcriber(cached)
         with self._transcriber_runtime_state_lock:
             self._pending_transcriber_cache_reset = False
 
@@ -2257,9 +2289,15 @@ class DictationController(QtCore.QObject):
                 # missing one strands `_transcriber_runtime_lock` for the
                 # process lifetime -- every later preload and import blocks
                 # forever and `_transcription_runtime_active()` stays True.
-                if incremented:
-                    self._decrement_transcriber_runtime_count()
-                self._transcriber_runtime_lock.release()
+                # `finally`, like the isolated arm below: the decrement is
+                # the riskier of the two and it came first, so a raise from it
+                # stranded the admission lock for the process lifetime -- the
+                # outcome this arm exists to make impossible.
+                try:
+                    if incremented:
+                        self._decrement_transcriber_runtime_count()
+                finally:
+                    self._transcriber_runtime_lock.release()
                 raise
 
         if self._shutdown_started:
@@ -2334,9 +2372,14 @@ class DictationController(QtCore.QObject):
                 if reset_pending or self._shutdown_started:
                     self._reset_transcriber_cache_locked()
         finally:
-            if owns_shared_lock:
-                self._transcriber_runtime_lock.release()
-            self._decrement_transcriber_runtime_count()
+            try:
+                if owns_shared_lock:
+                    self._transcriber_runtime_lock.release()
+            finally:
+                # Nested, so a failing lock release cannot also skip the
+                # decrement: the count gates `_transcription_runtime_active()`,
+                # which blocks every deferred cache reset while it reads True.
+                self._decrement_transcriber_runtime_count()
         if owns_shared_lock:
             # A reset requester can set the pending flag after the pre-release
             # check but before the admission lock is dropped. Recheck through
@@ -2381,19 +2424,39 @@ class DictationController(QtCore.QObject):
                     cached_model or cache_model,
                     cached_device or "unknown",
                 )
-                self._close_cached_transcriber(cached)
+                # Detached first, for the reason in
+                # `_reset_transcriber_cache_locked`: a close that raises must
+                # not leave the dead runtime in the cache.
                 self._transcriber_cache = None
                 self._transcriber_cache_key = None
+                self._close_cached_transcriber(cached)
         finally:
             self._transcriber_runtime_lock.release()
 
     def handle_system_resume(self) -> None:
-        """Refresh Windows integrations and drop GPU runtimes after resume."""
-        self.refresh_hotkey_registration()
-        self._reset_resume_sensitive_transcriber_cache()
+        """Refresh Windows integrations and drop GPU runtimes after resume.
+
+        The three steps are independent, so each is reported on its own: with
+        them in one unguarded sequence a failing cache reset also cost the
+        warm-microphone restart, and the next recording then attached to a
+        stream opened against a device that no longer exists.
+        """
+        try:
+            self.refresh_hotkey_registration()
+        except BaseException:
+            self._logger.exception("Failed to refresh hotkeys after resume")
+        try:
+            self._reset_resume_sensitive_transcriber_cache()
+        except BaseException:
+            self._logger.exception("Failed to reset the runtime cache after resume")
         # Audio devices commonly change identity across suspend; reopen the
         # warm stream so the next recording does not attach to a dead one.
-        self._restart_warm_microphone_stream_after_resume()
+        try:
+            self._restart_warm_microphone_stream_after_resume()
+        except BaseException:
+            self._logger.exception(
+                "Failed to restart the warm microphone after resume"
+            )
 
     def _close_cached_transcriber(self, transcriber) -> None:
         if transcriber is None or not hasattr(transcriber, "close"):
@@ -3378,11 +3441,12 @@ class DictationController(QtCore.QObject):
                     self._set_transcriber_cancel_check(
                         runtime_lease.transcriber, None
                     )
-                except Exception:
+                except BaseException:
                     self._logger.exception(
                         "Failed to clear the preload transcriber cancel hook"
                     )
-                runtime_lease.release()
+                finally:
+                    runtime_lease.release()
 
         if self._preload_generation_was_canceled(generation):
             self._record_model_preload_result(key, generation, None)
@@ -3583,52 +3647,67 @@ class DictationController(QtCore.QObject):
                 f"Unexpected transcription error: {type(exc).__name__}: {exc}"
             )
         finally:
-            transcribe_elapsed_ms = (
-                round((time.perf_counter() - transcribe_started_at) * 1000)
-                if transcribe_started_at is not None
-                else 0
-            )
-            total_elapsed_ms = round((time.perf_counter() - worker_started_at) * 1000)
-            runtime_device = str(getattr(transcriber, "runtime_device", "") or "")
-            gpu_available = getattr(transcriber, "gpu_available", "")
-            runtime_details = str(
-                getattr(transcriber, "runtime_details_text", "") or ""
-            )
-            result_chars = (
-                len(terminal_payload) if terminal_kind == "ready" else 0
-            )
-            self._logger.info(
-                "transcription_timing engine=%s model=%s init_ms=%d "
-                "transcribe_ms=%d total_ms=%d audio_bytes=%d chars=%d "
-                "outcome=%s runtime_device=%s gpu_available=%s "
-                "runtime_details=%s",
-                settings.engine,
-                self._selected_model_name(settings),
-                init_elapsed_ms,
-                transcribe_elapsed_ms,
-                total_elapsed_ms,
-                len(wav_bytes),
-                result_chars,
-                outcome,
-                runtime_device or "n/a",
-                gpu_available if gpu_available != "" else "n/a",
-                runtime_details or "n/a",
-            )
-            if transcriber is not None:
-                # Clear the cancel hook and progress callback so they cannot
-                # leak into a cached transcriber's next request.  The closure
-                # captures ``request_token``; leaving it installed would let a
-                # later run surface stale progress or cancel state.
-                try:
-                    self._set_transcriber_cancel_check(transcriber, None)
-                except Exception:
-                    self._logger.exception("Failed to clear transcriber cancel hook")
-                try:
-                    self._set_transcriber_progress_callback(transcriber, None)
-                except Exception:
-                    self._logger.exception("Failed to clear transcriber progress hook")
-            if runtime_lease is not None:
-                runtime_lease.release()
+            # The release used to be the last statement of this block,
+            # with roughly forty lines of diagnostics in front of it:
+            # three `getattr` property reads off a transcriber, a `len`,
+            # a log call and the two hook clears. A raise from any of
+            # them skipped `release()` -- the admission lock stranded for
+            # the process lifetime, `_transcription_runtime_active()`
+            # True forever -- and skipped the terminal signal below,
+            # leaving the overlay in Processing with no error and no
+            # Retry. The hooks are still cleared *before* the release,
+            # because a close during release must not race a live cancel
+            # hook; only the guarantee is new.
+            try:
+                transcribe_elapsed_ms = (
+                    round((time.perf_counter() - transcribe_started_at) * 1000)
+                    if transcribe_started_at is not None
+                    else 0
+                )
+                total_elapsed_ms = round((time.perf_counter() - worker_started_at) * 1000)
+                runtime_device = str(getattr(transcriber, "runtime_device", "") or "")
+                gpu_available = getattr(transcriber, "gpu_available", "")
+                runtime_details = str(
+                    getattr(transcriber, "runtime_details_text", "") or ""
+                )
+                result_chars = (
+                    len(terminal_payload) if terminal_kind == "ready" else 0
+                )
+                self._logger.info(
+                    "transcription_timing engine=%s model=%s init_ms=%d "
+                    "transcribe_ms=%d total_ms=%d audio_bytes=%d chars=%d "
+                    "outcome=%s runtime_device=%s gpu_available=%s "
+                    "runtime_details=%s",
+                    settings.engine,
+                    self._selected_model_name(settings),
+                    init_elapsed_ms,
+                    transcribe_elapsed_ms,
+                    total_elapsed_ms,
+                    len(wav_bytes),
+                    result_chars,
+                    outcome,
+                    runtime_device or "n/a",
+                    gpu_available if gpu_available != "" else "n/a",
+                    runtime_details or "n/a",
+                )
+                if transcriber is not None:
+                    # Clear the cancel hook and progress callback so they cannot
+                    # leak into a cached transcriber's next request.  The closure
+                    # captures ``request_token``; leaving it installed would let a
+                    # later run surface stale progress or cancel state.
+                    try:
+                        self._set_transcriber_cancel_check(transcriber, None)
+                    except BaseException:
+                        self._logger.exception("Failed to clear transcriber cancel hook")
+                    try:
+                        self._set_transcriber_progress_callback(transcriber, None)
+                    except BaseException:
+                        self._logger.exception("Failed to clear transcriber progress hook")
+            except BaseException:
+                self._logger.exception("Transcription bookkeeping failed")
+            finally:
+                if runtime_lease is not None:
+                    runtime_lease.release()
 
         # Cleanup, optional close, and runtime lease release must all complete
         # before the Qt thread is allowed to clear this job's active state.
@@ -5355,22 +5434,25 @@ class DictationController(QtCore.QObject):
                 )
             return str(transcriber.transcribe_batch(audio_source) or "")
         finally:
-            if transcriber is not None:
-                try:
+            try:
+                if transcriber is not None:
                     self._set_transcriber_progress_callback(transcriber, None)
-                except Exception:
-                    self._logger.exception(
-                        "Failed to clear imported-transcription progress hook"
-                    )
-            if runtime_lease is not None:
-                try:
-                    runtime_lease.release()
-                except Exception:
-                    # Runtime cleanup must not discard a transcript that the
-                    # provider already returned successfully.
-                    self._logger.exception(
-                        "Failed to release imported-transcription runtime"
-                    )
+            except BaseException:
+                self._logger.exception(
+                    "Failed to clear imported-transcription progress hook"
+                )
+            finally:
+                if runtime_lease is not None:
+                    try:
+                        runtime_lease.release()
+                    except BaseException:
+                        # Runtime cleanup must not discard a transcript that the
+                        # provider already returned successfully, and must never
+                        # skip the release: `_transcriber_runtime_lock` would be
+                        # stranded for the process lifetime.
+                        self._logger.exception(
+                            "Failed to release imported-transcription runtime"
+                        )
 
     @staticmethod
     def _set_transcriber_progress_callback(
