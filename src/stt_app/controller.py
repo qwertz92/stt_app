@@ -1255,8 +1255,24 @@ class DictationController(QtCore.QObject):
             # refused with "Streaming session already active" while a remote
             # provider's socket stays open and billed. Same teardown as the
             # `AudioCaptureError` arm below, for the same reason.
-            self._teardown_pending_stream_connect(transcriber)
-            runtime_lease.release()
+            # `release()` used to be the first statement here, so nothing
+            # could come between the failure and it. Putting the teardown in
+            # front made two things reachable: the teardown reaches provider
+            # code (`abort_stream`) and starts a thread, and `Thread.start`
+            # raises `RuntimeError` when the process cannot create one. That
+            # stranded `_transcriber_runtime_lock` for the process lifetime
+            # *and* escaped this Qt slot, so the overlay sat on "Listening"
+            # with no error -- the exact state this arm exists to replace.
+            # The helper is exception-tight too; this is the second layer,
+            # kept because the blast radius is out of proportion to the cost.
+            try:
+                self._teardown_pending_stream_connect(transcriber)
+            except BaseException:
+                self._logger.exception(
+                    "Failed to tear down the stream connect after a capture failure"
+                )
+            finally:
+                runtime_lease.release()
             self._logger.exception("Failed to open the microphone for streaming")
             self._overlay.set_state("Error", f"Failed to start recording: {exc}")
             return
@@ -1295,9 +1311,17 @@ class DictationController(QtCore.QObject):
             # orphaned -- every later dictation fails with "Streaming session
             # already active" until the app is restarted. So one microphone
             # failure used to disable streaming for good.
-            self._teardown_pending_stream_connect(transcriber)
-            if runtime_lease is not None:
-                runtime_lease.release()
+            # See the arm above: report the capture failure whatever the
+            # best-effort teardown does, and never leave the lease behind.
+            try:
+                self._teardown_pending_stream_connect(transcriber)
+            except BaseException:
+                self._logger.exception(
+                    "Failed to tear down the stream connect after a capture failure"
+                )
+            finally:
+                if runtime_lease is not None:
+                    runtime_lease.release()
             self._reset_streaming_state()
             self._overlay.set_state("Error", str(exc))
             self._logger.exception("Audio capture failed to start")
@@ -1376,12 +1400,22 @@ class DictationController(QtCore.QObject):
             except Exception:
                 self._logger.exception("Failed to abort a pending stream connect")
 
-        if thread is None or not thread.is_alive():
-            _abort()
-            return
-        threading.Thread(
-            target=_abort, name="stt-stream-connect-abort", daemon=True
-        ).start()
+        # Best-effort cleanup by definition: it exists to abandon a handshake
+        # nobody wants any more. Every caller is an error path that still has
+        # a lease to release and an overlay to update, so raising here would
+        # replace one failure with a worse one. `Thread.start` raises
+        # `RuntimeError` when the process cannot create another thread, and
+        # `_abort` runs provider code inline whenever the connect thread has
+        # already finished -- which is the common case.
+        try:
+            if thread is None or not thread.is_alive():
+                _abort()
+                return
+            threading.Thread(
+                target=_abort, name="stt-stream-connect-abort", daemon=True
+            ).start()
+        except BaseException:
+            self._logger.exception("Failed to tear down a pending stream connect")
 
     @staticmethod
     def _audio_capture_runtime_context(capture: AudioCapture) -> tuple[bool, int]:
@@ -2093,53 +2127,68 @@ class DictationController(QtCore.QObject):
             if self._shutdown_started:
                 self._transcriber_runtime_lock.release()
                 raise TranscriptionCanceled("Application shutdown is in progress.")
-            self._increment_transcriber_runtime_count()
+            # The guard spans every statement between taking the lock and
+            # handing it to a lease, not just the load. The increment used to
+            # sit above the `try` and the lease construction below it, so a
+            # raise in either -- `_increment_transcriber_runtime_count` takes
+            # its own lock, and the lease is a constructor -- stranded exactly
+            # what the guard exists to protect.
+            incremented = False
             try:
+                self._increment_transcriber_runtime_count()
+                incremented = True
                 with self._transcriber_runtime_state_lock:
                     reset_pending = self._pending_transcriber_cache_reset
                 if reset_pending:
                     self._reset_transcriber_cache_locked()
                 transcriber = self._get_or_create_transcriber(settings)
+                close_on_release = (
+                    settings.engine == DEFAULT_ENGINE
+                    and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
+                    and not bool(getattr(settings, "keep_onnx_model_loaded", False))
+                )
+                return _TranscriberRuntimeLease(
+                    self,
+                    transcriber,
+                    owns_shared_lock=True,
+                    close_on_release=close_on_release,
+                )
             except BaseException:
                 # BaseException, not Exception: this arm only undoes its own
                 # bookkeeping and re-raises, so nothing is swallowed, and
                 # missing one strands `_transcriber_runtime_lock` for the
                 # process lifetime -- every later preload and import blocks
                 # forever and `_transcription_runtime_active()` stays True.
-                self._decrement_transcriber_runtime_count()
+                if incremented:
+                    self._decrement_transcriber_runtime_count()
                 self._transcriber_runtime_lock.release()
                 raise
-            close_on_release = (
-                settings.engine == DEFAULT_ENGINE
-                and settings.model_size in LOCAL_WEBGPU_MODEL_SIZES
-                and not bool(getattr(settings, "keep_onnx_model_loaded", False))
-            )
-            return _TranscriberRuntimeLease(
-                self,
-                transcriber,
-                owns_shared_lock=True,
-                close_on_release=close_on_release,
-            )
 
         if self._shutdown_started:
             raise TranscriptionCanceled("Application shutdown is in progress.")
-        self._increment_transcriber_runtime_count()
+        incremented = False
         try:
+            self._increment_transcriber_runtime_count()
+            incremented = True
             transcriber = create_transcriber(settings, secret_store=self._secret_store)
             if self._shutdown_started:
                 self._close_cached_transcriber(transcriber)
                 raise TranscriptionCanceled("Application shutdown is in progress.")
+            return _TranscriberRuntimeLease(
+                self,
+                transcriber,
+                owns_shared_lock=False,
+                close_on_release=True,
+            )
         except BaseException:
             # See the shared-lock arm above: cleanup-and-re-raise, so the
-            # broader catch cannot hide anything.
-            self._decrement_transcriber_runtime_count()
+            # broader catch cannot hide anything. No lock to give back here --
+            # this arm never took one -- but the runtime count still gates
+            # `_transcription_runtime_active()`, which blocks every deferred
+            # cache reset while it reads True.
+            if incremented:
+                self._decrement_transcriber_runtime_count()
             raise
-        return _TranscriberRuntimeLease(
-            self,
-            transcriber,
-            owns_shared_lock=False,
-            close_on_release=True,
-        )
 
     def _increment_transcriber_runtime_count(self) -> None:
         with self._transcriber_runtime_state_lock:
@@ -3157,6 +3206,21 @@ class DictationController(QtCore.QObject):
             if runtime_lease is not None:
                 with self._transcriber_runtime_state_lock:
                     self._pending_transcriber_cache_reset = True
+            # Copied from the arm above, and the cancel check has to come with
+            # it. `_record_model_preload_result(key, generation, failure)`
+            # *persists* that string, and `toggle_recording` reads it before
+            # every dictation -- so a user who pressed Cancel got a hard
+            # "could not be loaded" error on their next recording instead of a
+            # retry, which is exactly what the `TranscriptionCanceled` arm
+            # above documents and avoids.
+            if self._preload_generation_was_canceled(generation):
+                self._record_model_preload_result(key, generation, None)
+                self.model_preload_done.emit(
+                    generation,
+                    False,
+                    "Model preload canceled.",
+                )
+                return
             failure = (
                 f"Selected model '{settings.model_size}' could not be loaded: {exc}. "
                 "No fallback model was used. Open Settings to retry or select "
@@ -3480,6 +3544,16 @@ class DictationController(QtCore.QObject):
         try:
             canceled_before_start = job is not None and job.aborting
             if canceled_before_start:
+                # Decided before the cleanup, not after it. These two lines
+                # used to sit below the abort, whose `except Exception` does
+                # not cover a `BaseException`; one escaping from a provider
+                # callback then left `terminal_kind` at its "failed"
+                # initialiser, so the user who pressed Cancel was told
+                # "Recording ... failed: Unexpected streaming error" in a tray
+                # notification. What the abort does or fails to do cannot
+                # change the fact that this was a cancel.
+                terminal_kind = "canceled"
+                terminal_payload = ""
                 self._logger.info(
                     "stream_finalize_skipped_before_start token=%s engine=%s model=%s",
                     request_token,
@@ -3496,8 +3570,6 @@ class DictationController(QtCore.QObject):
                         self._logger.exception(
                             "Failed to abort canceled streaming finalization"
                         )
-                terminal_kind = "canceled"
-                terminal_payload = ""
             else:
                 if transcriber is None:
                     raise TranscriptionError("Streaming session was not initialized.")

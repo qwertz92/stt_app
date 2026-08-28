@@ -3721,6 +3721,170 @@ def test_a_base_exception_while_acquiring_the_runtime_does_not_strand_the_lock(
     _ = app
 
 
+def test_a_base_exception_from_the_isolated_runtime_does_not_leak_the_use_count(
+    monkeypatch,
+):
+    """The other arm of `_acquire_transcriber_runtime`, which had no test.
+
+    The existing test patches `_get_or_create_transcriber`, which only the
+    *shared-lock* arm calls. The isolated arm is the one that actually reaches
+    `create_transcriber`, and its guard was never exercised. It holds no lock,
+    but the runtime count it increments gates
+    `_transcription_runtime_active()`, and while that reads True no deferred
+    transcriber-cache reset can ever run.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode(*_args, **_kwargs):
+        raise BaseException("isolated runtime construction died")
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", _explode)
+
+    # Hold the shared lock so the acquisition is forced down the isolated arm.
+    assert controller._transcriber_runtime_lock.acquire(timeout=2.0) is True
+    try:
+        with pytest.raises(BaseException, match="isolated runtime construction died"):
+            controller._acquire_transcriber_runtime(settings)
+    finally:
+        controller._transcriber_runtime_lock.release()
+
+    assert controller._transcription_runtime_active() is False, (
+        "the isolated arm left the runtime marked in use"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_streaming_capture_releases_the_lease_even_if_the_teardown_raises(
+    monkeypatch,
+):
+    """The teardown was put *in front of* `release()`, which made this reachable.
+
+    Before that change `runtime_lease.release()` was the first statement in
+    the arm, so nothing could come between the failure and the release. The
+    teardown reaches provider code (`abort_stream`) and starts a thread, and
+    `Thread.start` raises `RuntimeError` when the process cannot create one --
+    so a plain `Exception` was enough to strand `_transcriber_runtime_lock`
+    for the process lifetime: every later preload and audio import blocks
+    forever, and every dictation silently builds its own isolated runtime.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        engine="local",
+        model_size="small",
+        mode="streaming",
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    def _explode_capture(*_args, **_kwargs):
+        raise RuntimeError("microphone is gone")
+
+    def _explode_teardown(*_args, **_kwargs):
+        raise RuntimeError("could not start the abort thread")
+
+    monkeypatch.setattr(controller, "_build_audio_capture", _explode_capture)
+    monkeypatch.setattr(
+        controller, "_teardown_pending_stream_connect", _explode_teardown
+    )
+
+    controller.toggle_recording()
+    app.processEvents()
+
+    assert overlay.states and overlay.states[-1][0] == "Error", (
+        "the capture failure was never reported: the exception escaped the Qt "
+        f"slot and left the overlay where it was: {overlay.states[-1:]}"
+    )
+    assert controller._transcription_runtime_active() is False, (
+        "the runtime stayed marked in use after the capture failed"
+    )
+    acquired = controller._transcriber_runtime_lock.acquire(timeout=2.0)
+    try:
+        assert acquired is True, "the runtime lock was stranded"
+    finally:
+        if acquired:
+            controller._transcriber_runtime_lock.release()
+    controller.shutdown()
+    _ = app
+
+
+def test_the_stream_connect_teardown_never_raises_into_its_caller(monkeypatch):
+    """Every caller is an error path with a lease to release."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+
+    class _ExplodingTranscriber:
+        def abort_stream(self):
+            raise BaseException("provider abort exploded")
+
+    # No connect thread, so `_abort` runs inline -- the common case, because
+    # the handshake has usually finished by the time the capture fails.
+    controller._teardown_pending_stream_connect(_ExplodingTranscriber())
+
+    controller.shutdown()
+    _ = app
+
+
+def test_a_canceled_preload_that_dies_with_a_base_exception_is_not_a_broken_model():
+    """A cancel must not be persisted as a load failure.
+
+    `_record_model_preload_result(key, generation, failure)` *stores* that
+    string and `toggle_recording` reads it before every dictation, so the
+    user who pressed Cancel got a hard "could not be loaded" error on their
+    next recording instead of a retry. The `except Exception` arm checks for
+    this; the `except BaseException` arm was copied from it without the check.
+    """
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, engine="local", model_size="small")
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+    )
+    done: list[tuple[int, bool, str]] = []
+    controller.model_preload_done.connect(
+        lambda generation, ok, message: done.append((generation, ok, message))
+    )
+
+    generation = controller._preload_generation
+
+    def _explode(*_args, **_kwargs):
+        # The cancel has to arrive *during* the load, which is the real
+        # sequence: the user presses Cancel while the model is loading and the
+        # load dies. Marking the generation canceled beforehand instead makes
+        # the worker's own pre-acquire check return first, so this function is
+        # never called and the arm under test never runs -- the test then
+        # passes with or without the fix.
+        controller._cancel_preload_generation(generation)
+        raise BaseException("preload died")
+
+    controller._acquire_transcriber_runtime = _explode  # type: ignore[assignment]
+    key = controller._model_preload_key(settings)
+
+    controller._preload_model_worker(settings, generation, key)
+
+    assert done and done[0][1] is False
+    assert "canceled" in done[0][2].lower(), done
+    assert controller._model_preload_failure(settings) is None, (
+        "a cancel was persisted as a broken model, so the next dictation "
+        "re-raises it instead of retrying"
+    )
+    controller.shutdown()
+    _ = app
+
+
 def test_a_base_exception_in_the_stream_finalizer_still_resolves_the_session(
     monkeypatch,
 ):
