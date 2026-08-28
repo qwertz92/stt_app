@@ -87,10 +87,19 @@ def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
     divided by 1024 too, so the pair was self-consistent and wrong: it passed
     while `large-v3` advertised "~3.0 GB" for a 3.09 GB download.
 
-    The tolerance is tight on purpose. Rounding to two decimals can move a
-    stated GB size by at most 5 MB, and below 1000 MB the label is exact, so
-    anything looser stops catching the drift the test exists for -- `tiny`
-    was hand-written at 75 MB against 78, which 5% would have accepted.
+    The tolerance follows the format the label actually uses, because that is
+    the only slack the derivation can introduce. Below 1000 MB the label
+    restates the table's integer, so it must match *exactly*; above it, two
+    decimals of GB can move the stated value by at most 5 MB (0.005 GB).
+    Nothing looser is defensible: `tiny` was once hand-written at 75 MB
+    against a real 78, and 5%, a flat 5 MB and `max(5, 0.5%)` all accept that
+    -- only the exact comparison below rejects it. `max(5, 0.5%)` was also
+    looser than the 5 MB it was meant to express for every GB model, reaching
+    15.5 MB for `large-v3`.
+
+    Measured against the current table: every MB label is exact and the worst
+    GB label (`distil-large-v3.5`) is 4 MB out, so both bounds are real
+    constraints rather than decoration.
     """
     written = re.compile(r"~\s*([\d.]+)\s*(MB|GB)")
     checked = set()
@@ -104,7 +113,7 @@ def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
             f"{model_name} states a size in its label but has no entry in "
             "MODEL_ESTIMATED_SIZE_MB"
         )
-        tolerance_mb = max(5.0, expected_mb * 0.005)
+        tolerance_mb = 5.0 if match.group(2) == "GB" else 0.0
         assert abs(stated_mb - expected_mb) <= tolerance_mb, (
             f"{model_name}: the label says {match.group(0)} "
             f"({stated_mb:.0f} MB) but the size table says {expected_mb} MB"
@@ -114,10 +123,14 @@ def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
     # Not a floor: every model the table sizes must actually carry that size
     # in its label. A count threshold passed while three of the thirteen
     # silently stopped stating one.
+    #
+    # Retired models are not filtered out here. They are already excluded by
+    # having no size entry -- verified: the two labels reading "(removed)"
+    # are absent from `MODEL_ESTIMATED_SIZE_MB` -- so a `"removed" not in
+    # label` filter excluded nothing and only served to *hide* the case worth
+    # catching, a retirement that left the size entry behind.
     sized = {
-        name
-        for name in config.MODEL_ESTIMATED_SIZE_MB
-        if name in LOCAL_MODEL_LABELS and "removed" not in LOCAL_MODEL_LABELS[name]
+        name for name in config.MODEL_ESTIMATED_SIZE_MB if name in LOCAL_MODEL_LABELS
     }
     assert checked == sized, (
         f"labels stating no size for a model the table sizes: {sorted(sized - checked)}"

@@ -50,12 +50,19 @@ def _facade():
     return facade
 
 
-# A `QMessageBox` does not scroll and a long absolute path does not wrap at a
-# space, so the dialog grows to the longest path and to one line per folder.
-# The Local tab uses `ExtendedSelection`, so "every installed model" is one
-# Ctrl+A away: 13 models x up to 4 folders each (two cache layouts x Model Dir
-# and the default cache) is a dialog taller than the screen with no way to
-# reach its buttons.
+# A `QMessageBox` does not scroll, and an absolute path holds no space to wrap
+# at, so the informative text is exactly one unwrappable line per folder. The
+# Local tab uses `ExtendedSelection`, so "every installed model" is one Ctrl+A
+# away: 13 models x up to 4 folders each (two cache layouts x Model Dir and the
+# default cache) is 52 lines.
+#
+# Measured (real `QMessageBox`, this desktop): the *width* is not the problem
+# and never was -- it tracks the longest single line and sits at 502 px whether
+# 8 folders are listed or 80. The height is: ~16 px per folder, 931 px at 52.
+# That still fits a 1392 px desktop and all but fills a 1080p one (usable
+# ~1040 px), and it crosses that at 60 folders. So the cap is here to keep a
+# destructive confirmation readable at a glance, and to hold that as models and
+# cache roots are added -- not because today's worst case is already off-screen.
 _MAX_LISTED_DELETE_FOLDERS = 8
 
 

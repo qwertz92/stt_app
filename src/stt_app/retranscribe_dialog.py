@@ -160,52 +160,71 @@ class RetranscribeDialog(QtWidgets.QDialog):
         note_policy.setHeightForWidth(True)
         self._language_note.setSizePolicy(note_policy)
         self._language_note.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
-        # The longest note this dialog can ever show, so the reservation can
-        # be re-measured whenever the width changes. Composed from the same
-        # sentences `_update_substitution_note` builds.
+        # Every note this dialog can display, so the reservation can be
+        # re-measured whenever the width changes. Composed from the same
+        # sentences `_update_substitution_note` builds -- and with the same
+        # *two* names it uses: the first is always this entry's own model, the
+        # second is whichever model is selected instead. Pairing each name
+        # with itself was wrong in principle (no candidate was a string the
+        # dialog could ever show) even though no under-reservation could be
+        # produced from it; the pairing below costs exactly the same, since
+        # the entry's model is fixed for the life of the dialog.
         #
-        # The name is the longer of the widest *known* label and this entry's
-        # own: `local_model_short_label` returns an unrecognised id verbatim,
-        # and `_entry_model` comes from a history entry -- arbitrary text
-        # after a History import, or a retired id whose label was deleted (the
-        # longest raw local id, `nemotron-3.5-asr-streaming-0.6b-int4`, is
-        # already 6 characters longer than the longest label). Measured with a
-        # 63-character id, a labels-only worst case reserved 60 px for a note
-        # that took 75 at the dialog's own minimum width, so changing the
-        # model moved everything below it by 15 px.
+        # The entry's own name has to be in there: `local_model_short_label`
+        # returns an unrecognised id verbatim, and `_entry_model` comes from a
+        # history entry -- arbitrary text after a History import, or a retired
+        # id whose label was deleted (the longest raw local id,
+        # `nemotron-3.5-asr-streaming-0.6b-int4`, is already 6 characters
+        # longer than the longest label).
         #
-        # Every candidate is kept and all of them are measured later, because
-        # neither shortcut works:
+        # Every candidate is measured later, at the live width, rather than
+        # picked by a key:
         #
-        # * `key=len` picks by character count, and a 29-character run of `W`
-        #   draws far wider than the 30-character longest label.
-        # * `key=horizontalAdvance` picks by drawn width, and what is reserved
-        #   is a *wrapped* height, which is not monotonic in width. Measured
-        #   through this very label at 11 px, 'IBM Granite Speech 4.1 2B Plus'
-        #   (159 px) wraps to 45 px while the narrower 'NVIDIA Nemotron 3.5
-        #   ASR 0.6B' (157 px) wraps to 60 -- so picking the wider name
-        #   under-reserves by 15 px, the same overflow the pixel comparison
-        #   was introduced to remove.
-        # * Measuring here at all is wrong regardless: the label is neither
+        # * `key=len` is character count, not drawn width -- `W` x29 draws
+        #   319 px against 159 px for the 30-character longest label.
+        # * `key=horizontalAdvance` is drawn width, but what is reserved is a
+        #   *wrapped* height, and a key is only sound if it orders the
+        #   quantity being maximised. A width ordering does not: two names one
+        #   pixel apart can fall on opposite sides of a line break.
+        #
+        #   Being straight about the evidence: with the names shipping today
+        #   no under-reservation from that key could be reproduced at any
+        #   dialog width from 200 to 1100, so this is a guard against the next
+        #   name rather than a live defect. What settles it is the cost,
+        #   measured over 340 widths: 1.26 ms mean per cache miss (p50 1.17,
+        #   p95 1.47, max 1.98) and 1.5 us per hit, i.e. 427 ms spread across
+        #   a 340 px drag. Measuring all of them cannot be wrong and is too
+        #   cheap to trade for a proxy that can be.
+        # * Measuring *here* is wrong regardless: the label is neither
         #   polished nor parented yet, so `fontMetrics()` reports the 9 pt
         #   default rather than the stylesheet's 11 px it renders in. That
         #   alone flips the choice between two shipped labels.
+        #
+        # And a measurement is only valid taken through *this* label with the
+        # label actually at the width in question.
+        # `QLabel.heightForWidth(w)` is not a pure function of `w` -- measured,
+        # the identical call returned 60 px with the label 556 px wide and
+        # 90 px with it 476 px wide -- while a bare QLabel carrying the same
+        # stylesheet wraps differently again. Two earlier versions of this
+        # comment quoted concrete pixel pairs obtained those two ways; neither
+        # reproduced.
+        #
+        # Known gap: the offered names are the *local* labels. A remote engine
+        # offers its own model ids, which are not measured here.
+        entry_label = local_model_short_label(self._entry_model)
         self._worst_case_notes = tuple(
             " ".join(
                 (
-                    f"This entry was recorded with '{name}', which "
-                    f"this version no longer offers, so {name} was "
+                    f"This entry was recorded with '{entry_label}', which "
+                    f"this version no longer offers, so {chosen} was "
                     f"chosen instead.",
                     "This entry's language (auto) is unavailable here, so de "
                     "was chosen.",
                     _CANARY_LANGUAGE_WARNING,
                 )
             )
-            for name in dict.fromkeys(
-                (
-                    *_SUBSTITUTABLE_MODEL_NAMES,
-                    local_model_short_label(self._entry_model),
-                )
+            for chosen in dict.fromkeys(
+                (*_SUBSTITUTABLE_MODEL_NAMES, entry_label)
             )
         )
         language_box = QtWidgets.QWidget()

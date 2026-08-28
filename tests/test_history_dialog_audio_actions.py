@@ -472,16 +472,29 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
 
     * `key=len` -- character count is not drawn width. A 29-character run of
       `W` draws wider than the 30-character longest label.
-    * `key=horizontalAdvance` -- drawn width is not wrapped height, and the
-      relation is not even monotonic. Measured through this label at its
-      rendered 11 px, `IBM Granite Speech 4.1 2B Plus` (159 px) wraps to
-      45 px while the *narrower* `NVIDIA Nemotron 3.5 ASR 0.6B` (157 px)
-      wraps to 60, because the extra token crosses a line boundary. Picking
-      the wider name reserved 45 for a note that needs 60.
+    * `key=horizontalAdvance` -- drawn width is not wrapped height, and a key
+      is only sound if it orders the quantity being maximised. It does not:
+      two names one pixel apart can fall on opposite sides of a line break.
+      With the names shipping today no under-reservation from this key could
+      be produced at any dialog width from 200 to 1100, so it is guarded
+      against rather than caught in the act.
 
     Measuring every candidate through the polished label is the only key that
-    cannot be wrong. This asserts that directly: whatever the dialog reserved,
-    no candidate may exceed it.
+    cannot be wrong, and at 1.26 ms per cache miss it is too cheap to trade
+    for a proxy that can be. This asserts that directly: whatever the dialog
+    reserved, no candidate may exceed it.
+
+    Two ways of measuring this give wrong answers, and both were used in
+    earlier versions of this docstring:
+
+    * Querying `note.heightForWidth(w)` while the label is *not* w wide.
+      `QLabel.heightForWidth` is not a pure function of its argument --
+      measured, the identical call returned 60 px with the label 556 px wide
+      and 90 px with it 476 px wide. The loop below resizes the dialog before
+      every measurement for exactly this reason.
+    * Measuring through a stand-in `QLabel` given the same stylesheet. It
+      wraps differently again, and produced a `Plus`-vs-`Nemotron` inversion
+      that does not occur in this dialog at any width.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(
@@ -497,7 +510,12 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
         assert dialog._worst_case_notes, "no candidates were built"
 
         dialog.setMinimumWidth(320)
-        for width in (dialog.width(), 640, 600, 560, 320):
+        # Each iteration resizes first, so `note.width()` is the width the
+        # measurement is taken at. 399 and 320 are below the shipped
+        # `_MINIMUM_SIZE`, reachable only because of the `setMinimumWidth`
+        # above; they are here to widen the sweep, not because any known
+        # shortcut fails there.
+        for width in (dialog.width(), 640, 600, 560, 399, 320):
             dialog.resize(width, dialog.height())
             app.processEvents()
             reserved = note.minimumHeight()
@@ -532,6 +550,62 @@ def test_the_note_candidates_include_every_offered_model_and_the_entrys_own():
         for name in LOCAL_MODEL_LABELS:
             assert local_model_short_label(name) in joined, name
         assert local_model_short_label(imported_id) in joined
+    finally:
+        dialog.close()
+
+
+def test_the_reservation_fits_the_note_the_dialog_actually_builds():
+    """The other coverage test is self-referential; this one is not.
+
+    `test_the_reserved_note_height_covers_every_substitutable_model_name`
+    measures the dialog's own `_worst_case_notes` against the reservation
+    computed from those same candidates, so it cannot see a candidate set
+    that models the wrong string -- and it did: each candidate used one name
+    twice, while `_update_substitution_note` uses the entry's model for the
+    first name and the *selected* model for the second, so no candidate was a
+    sentence the dialog could display.
+
+    This walks the model picker instead and measures whatever the real note
+    builder produces.
+
+    What it catches, mutation-checked: a reservation that measures only some
+    candidates, and one that stops re-measuring when the width changes. What
+    it does not catch today is *which* candidates are used -- every candidate
+    wraps to the same height at every width tried, so narrowing the set to one
+    name leaves both this test and its sibling green. That is a property of
+    the current names, not a guarantee, which is the reason to assert against
+    the real builder rather than against the candidate list.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="granite-speech-4.1-2b-nar"),
+        audio_path=Path(__file__),
+        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    try:
+        dialog.show()
+        app.processEvents()
+        note = dialog._language_note
+        combo = dialog._model_combo
+        assert combo.count() > 1, "no models offered, so nothing is measured"
+
+        dialog.setMinimumWidth(320)
+        for width in (dialog.width(), 640, 560, 399, 320):
+            dialog.resize(width, dialog.height())
+            app.processEvents()
+            reserved = note.minimumHeight()
+            for index in range(combo.count()):
+                combo.setCurrentIndex(index)
+                dialog._update_substitution_note("auto")
+                app.processEvents()
+                needed = note.heightForWidth(note.width())
+                assert needed <= reserved, (
+                    f"at dialog width {width}, selecting "
+                    f"{combo.itemText(index)!r} builds a note needing "
+                    f"{needed} px against {reserved} px reserved: "
+                    f"{note.text()!r}"
+                )
     finally:
         dialog.close()
 
