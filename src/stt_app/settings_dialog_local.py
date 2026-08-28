@@ -50,19 +50,32 @@ def _facade():
     return facade
 
 
-# A `QMessageBox` does not scroll, and an absolute path holds no space to wrap
-# at, so the informative text is exactly one unwrappable line per folder. The
-# Local tab uses `ExtendedSelection`, so "every installed model" is one Ctrl+A
-# away: 13 models x up to 4 folders each (two cache layouts x Model Dir and the
-# default cache) is 52 lines.
+# A `QMessageBox` does not scroll, and the folder list is its *main* text, not
+# its informative text. The Local tab uses `ExtendedSelection`, so "every
+# installed model" is one Ctrl+A away: 13 models x up to 4 folders each (two
+# cache layouts x Model Dir and the default cache) is 52 folders.
 #
-# Measured (real `QMessageBox`, this desktop): the *width* is not the problem
-# and never was -- it tracks the longest single line and sits at 502 px whether
-# 8 folders are listed or 80. The height is: ~16 px per folder, 931 px at 52.
-# That still fits a 1392 px desktop and all but fills a 1080p one (usable
-# ~1040 px), and it crosses that at 60 folders. So the cap is here to keep a
-# destructive confirmation readable at a glance, and to hold that as models and
-# cache roots are added -- not because today's worst case is already off-screen.
+# Measured on a real `QMessageBox` on this desktop, uncapped, for two path
+# shapes -- a short `D:\m\0` and a real one
+# (`C:\Users\thoma\.cache\huggingface\hub\models--onnx-community--...`):
+#
+#     folders     short           real
+#           8     292 x 277 px    500 x 405 px
+#          28     292 x 597       500 x 1045
+#          52     292 x 981       500 x 1813
+#
+# Three things that earlier versions of this comment got wrong, all from
+# measuring only the short shape. The width is *not* constant and does not
+# track the longest line: 292 px for short paths, 500 px for real ones, which
+# is Qt's own soft-wrap limit rather than any property of the text. A real
+# path does wrap, so it costs 32 px per folder here, not 16. And 52 folders is
+# 981 px in the best case, not 931 -- it crosses a 1080p desktop's usable
+# ~1040 px at about 56 short folders and at **28** real ones, which is 7
+# models, not a hypothetical future.
+#
+# With the cap the box stays 165-405 px for every count and both shapes. So it
+# is not only about readability at a glance: today's worst case genuinely runs
+# off a 1080p screen.
 _MAX_LISTED_DELETE_FOLDERS = 8
 
 

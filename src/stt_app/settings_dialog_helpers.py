@@ -186,10 +186,14 @@ def _approximate_size_text(model_name: str) -> str:
     1024 and printing "GB" therefore names neither unit: `medium` is 1531
     decimal MB = 1.53 GB = 1.43 GiB, and 1531/1024 = 1.50 is a third number.
     Deriving the label first got this wrong in the other direction from the
-    defect it fixed -- it took six labels that were already correct two-decimal
-    decimal GB (`~2.13 GB`, `~1.84 GB`, `~1.03 GB`) down to a wrong one-decimal
-    binary value, most visibly `large-v3` at "~3.0 GB" against the 3091 MB its
-    own download bar counts to.
+    defect it fixed -- `megabytes / 1024` with one decimal took the four
+    labels that were already exactly right as two-decimal decimal GB down to a
+    wrong one-decimal binary value: `cohere-transcribe-03-2026` `~2.13 GB` to
+    `~2.1 GB`, both Granite entries `~1.84 GB` to `~1.8 GB`, and
+    `canary-1b-v2` `~1.03 GB` to `~1.0 GB`. (Four, not six, and `large-v3` is
+    not among them -- it read `~3 GB` by hand, so it was already imprecise
+    against the 3091 MB its own download bar counts to, and the divisor only
+    made it imprecise differently.)
     """
     megabytes = MODEL_ESTIMATED_SIZE_MB.get(model_name)
     if not megabytes:
