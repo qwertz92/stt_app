@@ -3,6 +3,134 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-28 (tenth and eleventh rounds: two silent data losses, and a hang)
+
+Two of the four defects in this pair of rounds destroyed user data with no
+error message anywhere. Neither was found by reviewing a diff: both were found
+by reading a file end to end and asking what happens to each branch when the
+input is hostile.
+
+### An unreadable key file was rewritten as an empty one
+
+`KeyringSecretStore`'s insecure fallback (used where the Windows credential
+store is blocked by policy) read its JSON through one `try/except` that
+returned `{}` for *every* failure. A file that could not be read -- a
+permission error, a lock held by a backup tool, a truncated write after a
+power loss -- was therefore indistinguishable from a file that does not exist
+yet. The next `set_api_key` then took that `{}` as the current contents, added
+the one new key, and wrote the result back: every other provider's key gone,
+silently, with the UI reporting success.
+
+The reader now returns `(payload, damaged)`. `_set_insecure_api_key` raises a
+`RuntimeError` naming the path rather than writing over a damaged file, and
+`delete_api_key(provider, strict=True)` does the same; the stale-copy cleanup
+that runs after a successful keyring write stays deliberately tolerant,
+because failing there would undo a save that already succeeded.
+
+### A settings file that is not UTF-8 killed the app at startup
+
+`persistence.read_json_with_recovery` caught `json.JSONDecodeError` when
+reading its backup candidates. `Path.read_text(encoding="utf-8")` does not
+raise that -- it raises `UnicodeDecodeError`. Both are `ValueError`s, and only
+the JSON one was named, so a settings, history or inventory file containing a
+single non-UTF-8 byte propagated out of the store constructor and the app died
+before its first window. The recovery path that exists precisely for a damaged
+file could not run, because the damage was of the wrong kind.
+
+Widened to `except (OSError, ValueError)` with a comment saying why both
+members are meant, in `persistence.py` and in
+`local_model_scan.load_scan_cached_models_payload`.
+`transcript_history.import_from_file` got its own `UnicodeDecodeError` arm
+with a message the user can act on, since there the file is one they chose.
+
+The test fixture for this was itself wrong on the first attempt:
+`json.dumps` defaults to `ensure_ascii=True`, so the "non-UTF-8" payload was
+pure ASCII and the test passed against the unfixed code. `ensure_ascii=False`
+was the difference between a test and a decoration.
+
+### A hung target application froze the app at 100% CPU
+
+`wait_for_paste_target_ready` polls the target window with
+`SendMessageTimeoutW(..., SMTO_ABORTIFHUNG, ...)` before restoring the
+clipboard. `SMTO_ABORTIFHUNG` makes that call return **immediately** for a
+hung target rather than waiting out the timeout -- so the loop had no delay in
+it at all. Measured against a fake that always reports "hung": 953,446 probes
+in one budget window, one core pinned, the Qt thread unavailable for the whole
+time. A `poll_interval_s` (default 10 ms) and an `_is_window` early-out fixed
+it.
+
+The same file had a second defect one layer down. `SendInput` can return a
+short count, and the paste batch is `[Ctrl down, V down, V up, Ctrl up]`:
+applications paste on the **key-down**, so two delivered events already mean
+the text was pasted. A short send was treated as a clean failure, so
+`send_paste_with_mode`'s auto path fell through to `WM_PASTE` and pasted a
+second time, and the clipboard restore ran as if nothing had happened.
+`_send_input_batch` now takes `committed_after` and raises
+`TextMayHaveBeenPastedError` past that point, which the auto path re-raises
+instead of retrying and which suppresses the restore.
+
+### Every runtime hand-back is now unskippable
+
+`_transcribe_worker`'s `finally` cleared diagnostics and cancel hooks *before*
+releasing the runtime lease, because `AGENTS.md` requires exactly that order.
+Anything raising in that bookkeeping therefore skipped the release and
+stranded `_transcriber_runtime_lock` for the process lifetime -- after which
+every dictation loads its own isolated runtime and a preload waits forever.
+The order is kept; the bookkeeping is now wrapped so that its own failure is
+logged and the release still runs from an inner `finally`.
+
+Related, same commit: `_reset_transcriber_cache_locked` detaches the cached
+transcriber before closing it. Closing first meant a `close()` that raises
+left the dead runtime still installed as the cache, and the next dictation
+used it.
+
+### The tray menu handed back our own window as the paste target
+
+`get_foreground_window` ended in `return self._remembered_foreign_window() or
+hwnd`. The `or hwnd` fires exactly when one of our own tool windows is in
+front and nothing foreign has been remembered yet -- which on a fresh session
+is every path before the first recording. Starting the first dictation from
+the tray menu hits it, because the notification-icon contract requires
+`SetForegroundWindow` on the hidden 0x0 host window before `TrackPopupMenu`.
+
+The transcript then went to a window that cannot take text. Worse than the
+lost paste: `restore_target_window` calls `ShowWindow(SW_SHOW)` on the target,
+which makes that helper window *visible*, so it passes the own-non-target
+predicate from then on and is cached as the last foreign window for the rest
+of the session.
+
+Returning `None` is the fix -- the insert path reports "no target" rather than
+pasting into nothing. The tray's `activated` signal, which fires before the
+menu takes the foreground, now calls a new best-effort
+`note_foreground_window()` so the window the user was actually working in is
+remembered first.
+
+### Two findings were reviewed and deliberately not changed
+
+- The post-paste clipboard-contention warning is still raised with
+  `keep_transcript_in_clipboard` enabled. It looks redundant -- nothing is
+  restored in that mode -- but a user copy landing inside the window can still
+  make the target paste the wrong text, and that is worth reporting.
+- `allow_clipboard_fallback` is not honoured on the
+  `TextMayHaveBeenPastedError` re-raise. Currently unreachable: no caller
+  combines the two. Recorded rather than closed, so the next person to add
+  such a caller finds it written down.
+
+### Method notes
+
+Every fix in these two rounds was mutation-checked: the fixed line is reverted
+to its broken form and the test suite must go red. Three survivors were found
+this way and each was closed with an additional test before moving on -- the
+resume-path eviction order, the `single_group` coalescing key, and the two
+gaps in the retranscribe reservation guard. A mutation that survives is not a
+verdict on the code; it is a verdict on the test that was supposed to protect
+it.
+
+One survivor turned out to be an artifact of the harness rather than a gap:
+the `-k` selector chosen for the run did not include the test that does catch
+the mutation. Widening the selector to the whole file settled it. Check the
+selector before believing a survivor.
+
 ## 2026-08-28 (ninth round: the measuring instruments were wrong)
 
 Two of this round's findings were not about the code at all. They were about

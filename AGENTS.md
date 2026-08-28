@@ -209,6 +209,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (delayed rendering is defeated by clipboard history/managers), so the
   fixed delay after the responsiveness gate remains a heuristic; the gates
   above shrink the window to practical irrelevance.
+- **`SMTO_ABORTIFHUNG` is why the readiness probe needs its own sleep**: that
+  flag makes `SendMessageTimeoutW` return *immediately* when the target thread
+  is already hung, instead of waiting out the timeout it was given. So
+  `wait_for_paste_target_ready`'s loop had no delay in it at all against the
+  one case it exists for: measured 953,446 probes inside a single budget
+  window, one core pinned and the Qt thread unavailable for the whole time,
+  from nothing worse than pasting into a frozen application. It polls at
+  `PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S` and returns early for a handle
+  that is no longer a window. Never assume a Win32 timeout throttles a loop.
+- **A short `SendInput` past the key-down may already have pasted**: the batch
+  is `[Ctrl down, V down, V up, Ctrl up]` and applications paste on the
+  key-down, so two delivered events are already a paste. `_send_input_batch`
+  takes `committed_after` and raises `TextMayHaveBeenPastedError` once the
+  count reaches it, rather than reporting a clean failure -- which had
+  `send_paste_with_mode`'s auto path fall through to `WM_PASTE` and paste the
+  transcript a second time, with the clipboard restore running as if nothing
+  had happened. Every arm that sees that exception must also leave the
+  clipboard alone. Known gap, currently unreachable: the re-raise does not
+  honour `allow_clipboard_fallback`, because no caller combines the two.
 - **Deferred queue inserts are coalesced**: `_flush_deferred_background_results`
   groups token-ordered pending results by their captured insertion target and
   pastes each group as one space-joined text. Each separate paste is its own
@@ -370,6 +389,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   because Qt otherwise places icon and caption almost flush. The button keeps
   the same fill as its neighbours — a lighter fill reads as a permanent hover
   state — and is marked as primary by a brighter border only.
+- **`get_foreground_window` never answers with one of our own windows**: it
+  used to end in `self._remembered_foreign_window() or hwnd`, and that `or
+  hwnd` fires exactly when one of our tool windows is in front and nothing
+  foreign has been remembered yet -- on a fresh session, every path before the
+  first recording. The tray menu is one: the notification-icon contract
+  requires `SetForegroundWindow` on the hidden 0x0 host window before
+  `TrackPopupMenu`, so the first dictation started from the menu aimed at that
+  window. Worse than the lost paste, `restore_target_window` calls
+  `ShowWindow(SW_SHOW)` on the target, which makes the helper window visible,
+  so it then passes the own-non-target predicate and is cached as the last
+  foreign window for the rest of the session. `None` is the honest answer and
+  the insert path reports it. `note_foreground_window()` (best-effort, records
+  only a valid foreign window) is the other half: `main.on_tray_activated`
+  calls it first, because `activated` is emitted before the menu takes the
+  foreground.
 - **Our own popups are never a dictation target**: `Win32WindowFocusHelper`
   remembers the last foreground window of another application and returns it
   while one of our *popups* (tray menu, overlay) holds the foreground, so
@@ -632,6 +666,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   history, benchmarks, settings, provider diagnostics, local inventory, last
   recording, and insecure keys reuse it so separate store instances cannot
   overwrite each other's concurrent updates. Keep writes atomic as well.
+- **A stored file that is not UTF-8 must reach the recovery path**:
+  `Path.read_text(encoding="utf-8")` raises `UnicodeDecodeError`, not
+  `json.JSONDecodeError`. Both are `ValueError`s and only the JSON one was
+  named, so a single non-UTF-8 byte in settings, history or the inventory
+  cache escaped the store constructor and the app died before its first
+  window -- with the recovery path that exists for exactly this sitting
+  unused, because the damage was of the wrong kind. `persistence` and
+  `local_model_scan` catch `(OSError, ValueError)` and say why both members
+  are meant; `transcript_history.import_from_file` has its own arm with a
+  user-facing message, since there the file is one the user chose.
+- **An unreadable insecure key file is not an empty one**: the fallback store
+  read its JSON through one `try/except` returning `{}` for every failure, so
+  a permission error, a lock held by a backup tool or a truncated write looked
+  exactly like "no file yet" -- and the next `set_api_key` wrote that `{}`
+  plus one key back, silently deleting every other provider's key while the UI
+  reported success. `_load_insecure_payload` returns `(payload, damaged)`;
+  `_set_insecure_api_key` and `delete_api_key(provider, strict=True)` raise a
+  `RuntimeError` naming the path instead of overwriting. The stale-copy
+  cleanup after a successful keyring write stays tolerant on purpose --
+  failing there would undo a save that already succeeded.
 - **Update checks**: update discovery uses GitHub Releases directly through
   `update_checker.py`; no custom domain or update server is required. The app
   schedules one asynchronous check after startup and shows a tray notification
@@ -1703,6 +1757,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     `settings.engine`, which the identity does see. The loaded engine is read
     from `_TranscriberIdentity.engine` rather than a tuple slot, which is why
     the identity is a `NamedTuple`.
+- **Bookkeeping in a worker's `finally` must not be able to skip the release**:
+  `_transcribe_worker` clears diagnostics and cancel hooks before releasing the
+  runtime lease, which is the required order -- so anything raising in that
+  bookkeeping stranded `_transcriber_runtime_lock` for the process lifetime,
+  after which every dictation pays for its own isolated runtime and a preload
+  waits forever. The order is unchanged; the bookkeeping is wrapped so its own
+  failure is logged and the release still runs from an inner `finally`.
+- **Evict the cached transcriber before closing it**: both
+  `_reset_transcriber_cache_locked` and
+  `_reset_resume_sensitive_transcriber_cache` set `self._transcriber_cache =
+  None` first. Closing first meant a `close()` that raises left the dead
+  runtime installed as the cache, and the next dictation used it.
 - **Do not close an in-use transcriber runtime**: never close/reset the cached
   transcriber while `_transcription_runtime_active()` (an active capture,
   in-progress start, live stream, or in-flight transcription). Closing there can
