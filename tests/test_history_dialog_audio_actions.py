@@ -480,21 +480,24 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
       against rather than caught in the act.
 
     Measuring every candidate through the polished label is the only key that
-    cannot be wrong, and at 1.26 ms per cache miss it is too cheap to trade
-    for a proxy that can be. This asserts that directly: whatever the dialog
-    reserved, no candidate may exceed it.
+    cannot be wrong, and it is not merely insurance: for a
+    `granite-speech-4.1-2b-nar` entry the advance key under-reserves by 15 px
+    at label widths 594-606, i.e. dialog widths 678-690, which the shipped
+    minimum of 560 puts well inside reach. This asserts that directly:
+    whatever the dialog reserved, no candidate may exceed it.
 
-    Two ways of measuring this give wrong answers, and both were used in
-    earlier versions of this docstring:
+    **The floor has to come off before measuring**, and that is what makes
+    this assertion mean anything. `heightForWidth` is clamped by
+    `minimumHeight`, which is exactly what the reservation installs, so
+    reading through the label as it stands returns the reservation and
+    `needed <= reserved` holds no matter what the code does. Three earlier
+    claims in this file were produced that way, including "no under-reservation
+    at any dialog width from 200 to 1100" and "`heightForWidth` is not a pure
+    function of its argument" -- the latter is the clamp, seen at two widths
+    where the dialog happened to have installed 60 and 90.
 
-    * Querying `note.heightForWidth(w)` while the label is *not* w wide.
-      `QLabel.heightForWidth` is not a pure function of its argument --
-      measured, the identical call returned 60 px with the label 556 px wide
-      and 90 px with it 476 px wide. The loop below resizes the dialog before
-      every measurement for exactly this reason.
-    * Measuring through a stand-in `QLabel` given the same stylesheet. It
-      wraps differently again, and produced a `Plus`-vs-`Nemotron` inversion
-      that does not occur in this dialog at any width.
+    The width list is a sweep, not five points: the band where the candidates
+    diverge is narrow (dialog 678-690 here) and no hand-picked list found it.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(
@@ -513,14 +516,15 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
         # Each iteration resizes first, so `note.width()` is the width the
         # measurement is taken at. 399 and 320 are below the shipped
         # `_MINIMUM_SIZE`, reachable only because of the `setMinimumWidth`
-        # above; they are here to widen the sweep, not because any known
-        # shortcut fails there.
-        for width in (dialog.width(), 640, 600, 560, 399, 320):
+        # above; they are here to widen the sweep.
+        widths = [dialog.width(), 399, 320, *range(560, 1101, 7)]
+        for width in widths:
             dialog.resize(width, dialog.height())
             app.processEvents()
             reserved = note.minimumHeight()
             original = note.text()
             try:
+                note.setMinimumHeight(0)
                 for candidate in dialog._worst_case_notes:
                     note.setText(candidate)
                     needed = note.heightForWidth(note.width())
@@ -530,6 +534,88 @@ def test_the_reserved_note_height_covers_every_substitutable_model_name():
                     )
             finally:
                 note.setText(original)
+                note.setMinimumHeight(reserved)
+    finally:
+        dialog.close()
+
+
+def test_widening_the_dialog_gives_the_reserved_note_height_back():
+    """The reservation could only ever grow, so a drag narrowed it forever.
+
+    `heightForWidth` is floored by `minimumHeight` -- measured on a bare
+    label, one identical call returns 15 px at a minimum of 0 and 400 px at a
+    minimum of 400 -- and the reservation *is* that minimum. Measuring through
+    the label as it stood therefore read the previous reservation back, so
+    `max(...)` over the readings never returned anything smaller. Narrowing
+    the dialog and widening it again left the note 6 px taller for `small` and
+    30 px taller for a long imported id, taken off the transcript view above
+    it, while `resizeEvent` documented the reservation as correct at every
+    size.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    long_id = "a-locally-converted-model-nobody-else-has-ever-heard-of-v2-int8"
+    for model in ("small", "granite-speech-4.1-2b-nar", long_id):
+        dialog = RetranscribeDialog(
+            entry=_entry(engine="local", model=model),
+            audio_path=Path(__file__),
+            base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+            transcribe=lambda *args, **kwargs: (True, ""),
+        )
+        try:
+            dialog.show()
+            app.processEvents()
+            note = dialog._language_note
+
+            dialog.resize(1100, dialog.height())
+            app.processEvents()
+            fresh = note.minimumHeight()
+
+            dialog.resize(560, dialog.height())
+            app.processEvents()
+            narrow = note.minimumHeight()
+
+            dialog.resize(1100, dialog.height())
+            app.processEvents()
+            restored = note.minimumHeight()
+
+            assert narrow >= fresh, (
+                f"{model}: narrowing did not need more room ({narrow} vs "
+                f"{fresh}), so this case cannot show the ratchet"
+            )
+            assert restored == fresh, (
+                f"{model}: the note kept {restored} px after widening back, "
+                f"against {fresh} px on a fresh dialog at the same width"
+            )
+        finally:
+            dialog.close()
+
+
+def test_the_note_floor_still_fits_three_lines_of_its_own_font():
+    """The floor is the backstop for the notes the candidates do not model.
+
+    `_worst_case_notes` is built from the *local* model labels, so a remote
+    entry's model id is never measured -- `_reserve_note_height`'s own comment
+    says so. Three label lines at the dialog's minimum width is 45 px, and the
+    floor has to stay above that or an unmeasured note moves the buttons
+    below it. Nothing else pins the multiplier any more: since the reservation
+    is measured per width with the previous floor cleared, dropping it to two
+    lines leaves every other note test green.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="assemblyai", model="universal-3-5-pro"),
+        audio_path=Path(__file__),
+        base_settings=AppSettings(engine="local", model_size="canary-1b-v2"),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    try:
+        dialog.show()
+        app.processEvents()
+        three_lines = dialog._language_note.fontMetrics().lineSpacing() * 3
+        assert dialog._minimum_note_height >= three_lines, (
+            f"the floor is {dialog._minimum_note_height} px against "
+            f"{three_lines} px for three lines of the note's own font"
+        )
     finally:
         dialog.close()
 
@@ -546,10 +632,28 @@ def test_the_note_candidates_include_every_offered_model_and_the_entrys_own():
     )
     try:
         app.processEvents()
-        joined = " ".join(dialog._worst_case_notes)
+        entry_label = local_model_short_label(imported_id)
+        candidates = dialog._worst_case_notes
+        joined = " ".join(candidates)
+
+        # As the *chosen* name, not merely somewhere in the string. The entry
+        # label now leads every candidate, so a substring check against the
+        # joined text is satisfied by that alone -- dropping the entry model
+        # from the chosen set left this test green.
         for name in LOCAL_MODEL_LABELS:
-            assert local_model_short_label(name) in joined, name
-        assert local_model_short_label(imported_id) in joined
+            label = local_model_short_label(name)
+            assert f"so {label} was chosen instead" in joined, name
+        assert f"so {entry_label} was chosen instead" in joined, (
+            "the entry's own name is never offered as the chosen model, so a "
+            "note substituting it is never measured"
+        )
+
+        # And the entry's name in the first position of every candidate. The
+        # set used to pair one name with itself, which is a sentence
+        # `_update_substitution_note` cannot produce: it takes the first name
+        # from the entry and the second from the picker.
+        for candidate in candidates:
+            assert f"recorded with '{entry_label}'" in candidate, candidate
     finally:
         dialog.close()
 
@@ -569,12 +673,12 @@ def test_the_reservation_fits_the_note_the_dialog_actually_builds():
     builder produces.
 
     What it catches, mutation-checked: a reservation that measures only some
-    candidates, and one that stops re-measuring when the width changes. What
-    it does not catch today is *which* candidates are used -- every candidate
-    wraps to the same height at every width tried, so narrowing the set to one
-    name leaves both this test and its sibling green. That is a property of
-    the current names, not a guarantee, which is the reason to assert against
-    the real builder rather than against the candidate list.
+    candidates, and one that stops re-measuring when the width changes.
+    Narrowing the set to a single *tall* name still leaves it green -- that is
+    what its sibling's floor-cleared sweep is for -- but the three widths
+    added at the end (678, 684, 690) are the band where the candidates
+    actually diverge for this entry model, which no hand-picked list had
+    reached.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = RetranscribeDialog(
@@ -591,7 +695,7 @@ def test_the_reservation_fits_the_note_the_dialog_actually_builds():
         assert combo.count() > 1, "no models offered, so nothing is measured"
 
         dialog.setMinimumWidth(320)
-        for width in (dialog.width(), 640, 560, 399, 320):
+        for width in (dialog.width(), 640, 560, 399, 320, 678, 684, 690):
             dialog.resize(width, dialog.height())
             app.processEvents()
             reserved = note.minimumHeight()

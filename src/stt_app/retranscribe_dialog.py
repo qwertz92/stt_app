@@ -135,11 +135,20 @@ class RetranscribeDialog(QtWidgets.QDialog):
         #
         # Three lines, not two: the note can carry a retired-model
         # substitution *and* the Canary language warning at once, which
-        # measured 45 px at the default width against the 38 px that two lines
-        # of the dialog font reserve -- so the buttons below moved by 7 px when
-        # the model changed. (The multiplier is in the dialog's font while the
-        # label renders at 11 px, which is why two dialog lines were already
-        # worth about two and a half label lines.)
+        # measures 45 px at the dialog's minimum width against the 38 px that
+        # two lines of the dialog font reserve -- so the buttons below moved
+        # by 7 px when the model changed. (The multiplier is in the dialog's
+        # font while the label renders at 11 px, which is why two dialog lines
+        # were already worth about two and a half label lines.)
+        #
+        # It is no longer what keeps the *measured* notes from moving anything
+        # -- `_reserve_note_height` covers those at every width. What it still
+        # covers is the case that method's own comment calls out as a gap: the
+        # candidates are the local model labels, so a remote entry's model id
+        # is never measured, and three label lines at the dialog's minimum
+        # width is 45 px. Measured at what it costs: the floor is above the
+        # tallest measured candidate from about 760 px outward, adding 9 px of
+        # slack there and 24 px past 1100.
         self._minimum_note_height = self.fontMetrics().lineSpacing() * 3 + 6
         # Width the current reservation was measured at; -1 until measured.
         self._reserved_note_width = -1
@@ -187,30 +196,61 @@ class RetranscribeDialog(QtWidgets.QDialog):
         #   quantity being maximised. A width ordering does not: two names one
         #   pixel apart can fall on opposite sides of a line break.
         #
-        #   Being straight about the evidence: with the names shipping today
-        #   no under-reservation from that key could be reproduced at any
-        #   dialog width from 200 to 1100, so this is a guard against the next
-        #   name rather than a live defect. What settles it is the cost,
-        #   measured over 340 widths: 1.26 ms mean per cache miss (p50 1.17,
-        #   p95 1.47, max 1.98) and 1.5 us per hit, i.e. 427 ms spread across
-        #   a 340 px drag. Measuring all of them cannot be wrong and is too
-        #   cheap to trade for a proxy that can be.
+        #   This is a live defect, not a guard against the next name: for a
+        #   `granite-speech-4.1-2b-nar` entry the advance key under-reserves
+        #   by 15 px at label widths 594-606, i.e. dialog widths 678-690, well
+        #   inside the shipped 560 px minimum. The band is narrow -- the
+        #   candidates differ at 134 of the 841 reachable widths for that
+        #   entry, 100-102 for the others -- which is why several hand-picked
+        #   width lists missed it and one round of review concluded it could
+        #   not happen. Measuring every candidate cannot be wrong, and at
+        #   roughly 1.3 ms per cache-missing width change it is too cheap to
+        #   trade for a proxy that can be.
         # * Measuring *here* is wrong regardless: the label is neither
-        #   polished nor parented yet, so `fontMetrics()` reports the 9 pt
-        #   default rather than the stylesheet's 11 px it renders in. That
-        #   alone flips the choice between two shipped labels.
+        #   polished nor parented yet, and `setStyleSheet` alone does not
+        #   apply the font -- measured, a label carrying this stylesheet
+        #   reports 9 pt and a 16 px line height until it is polished, 11 px
+        #   and 15 px after. (It does not flip the *winner* for today's names,
+        #   only the ordering below it. An earlier version of this bullet
+        #   claimed the flip; that half did not reproduce.)
         #
-        # And a measurement is only valid taken through *this* label with the
-        # label actually at the width in question.
-        # `QLabel.heightForWidth(w)` is not a pure function of `w` -- measured,
-        # the identical call returned 60 px with the label 556 px wide and
-        # 90 px with it 476 px wide -- while a bare QLabel carrying the same
-        # stylesheet wraps differently again. Two earlier versions of this
-        # comment quoted concrete pixel pairs obtained those two ways; neither
-        # reproduced.
+        # And a measurement is only valid taken through *this* label, at the
+        # width in question, after it has been polished, and **with the
+        # previous reservation removed**. `QLabelPrivate::sizeForWidth` ends
+        # in `.expandedTo(minimumSize())`, so the result never falls below the
+        # label's own minimum height -- which is exactly what
+        # `_reserve_note_height` installs. Reading through the label as it
+        # stands returns the reservation, not the wrapped height, and that one
+        # fact produced every wrong claim this comment has carried: "the
+        # identical call returned 60 px at label width 556 and 90 px at 476"
+        # was the dialog's own reservation at those two widths, and a later
+        # sweep reporting all 15 candidates agreeing at every reachable width
+        # was one installed floor read 841 times.
+        #
+        # `heightForWidth(w)` itself *is* pure in `w`, verified with the
+        # argument held fixed while the label's width varied. The two clamps
+        # around it are not: `minimumWidth()` raises the argument, and
+        # `minimumHeight()` raises the result.
         #
         # Known gap: the offered names are the *local* labels. A remote engine
-        # offers its own model ids, which are not measured here.
+        # offers its own model ids, which are not measured here. Measured
+        # headroom: a one-sentence remote note first overflows the reservation
+        # at a 221-character model id, and the longest any provider offers is
+        # 22, with `_minimum_note_height` as the backstop underneath.
+        #
+        # Deliberately a superset. Sentences 2 and 3 are emitted only when the
+        # *selected* model is Canary, so of these candidates only the Canary
+        # one is a note the dialog can actually display; the rest pair three
+        # sentences with a name that cannot appear beside them, and the entry
+        # model appears in the chosen set although the substitution sentence
+        # is guarded on the entry model *not* being offered. Restricting the
+        # set to the reachable pairs would save 6 px of note height at most
+        # widths and 15 px for a long imported id -- and would couple this
+        # tuple to `_update_substitution_note`'s guards, where being wrong
+        # means *under*-reservation, i.e. the layout jumping. Measured, the
+        # superset has zero deficits across five entry models and every dialog
+        # width from 560 to 1200. Over-reserving a few pixels is the safe
+        # direction, and now a self-correcting one.
         entry_label = local_model_short_label(self._entry_model)
         self._worst_case_notes = tuple(
             " ".join(
@@ -374,8 +414,12 @@ class RetranscribeDialog(QtWidgets.QDialog):
         and at 560 px the worst-case note needs 60 px against the 54 px three
         lines reserve -- so changing the model there moved everything below it.
         Re-measuring the worst case at the live width keeps the reservation
-        correct at every size, at the cost of the note area growing when the
-        user narrows the dialog, which is a resize they asked for.
+        correct at every size -- in both directions, which it did not manage
+        before: the measurement is taken with the previous reservation
+        removed, because `heightForWidth` is floored by `minimumHeight` and
+        the reading would otherwise be the reservation itself. The note area
+        still grows when the user narrows the dialog, which is a resize they
+        asked for, and now shrinks again when they widen it.
         """
         super().resizeEvent(event)
         self._reserve_note_height()
@@ -411,7 +455,25 @@ class RetranscribeDialog(QtWidgets.QDialog):
         if self._reserved_note_width == width:
             return
         original = note.text()
+        previous_floor = note.minimumHeight()
         try:
+            # **The floor has to come off before measuring.**
+            # `QLabelPrivate::sizeForWidth` ends in `.expandedTo(minimumSize())`,
+            # so `heightForWidth` never returns less than the minimum height
+            # already installed -- measured on a bare label with one identical
+            # call: 15 px at `minimumHeight() == 0`, 400 px at 400, 15 px again
+            # back at 0. Measuring through the label while it still carries the
+            # previous reservation therefore reads that reservation back, and
+            # `max(...)` over the readings can only ever grow. Consequences,
+            # both measured: narrowing the dialog and widening it again left
+            # the note 6 px taller for `small` and 30 px taller for a 63-char
+            # imported id, taking that space off the transcript view above
+            # (151 -> 136 px), while `resizeEvent`'s promise to keep the
+            # reservation "correct at every size" held in one direction only.
+            # It also silently defeats any measurement taken this way: a sweep
+            # that reported all 15 candidates agreeing at every reachable
+            # width was reading one installed floor 841 times.
+            note.setMinimumHeight(0)
             # Every candidate, because wrapped height does not follow width.
             # `heightForWidth` is a text layout, so the result is cached
             # against the width that produced it -- a drag emits a burst of
@@ -420,14 +482,18 @@ class RetranscribeDialog(QtWidgets.QDialog):
             for candidate in self._worst_case_notes:
                 note.setText(candidate)
                 needed = max(needed, note.heightForWidth(width))
+        except BaseException:
+            note.setMinimumHeight(previous_floor)
+            raise
         finally:
             note.setText(original)
         self._reserved_note_width = width
         reserved = max(self._minimum_note_height, needed)
-        # Only on a change: `setMinimumHeight` can trigger another resize, and
-        # this runs from `resizeEvent`.
-        if note.minimumHeight() != reserved:
-            note.setMinimumHeight(reserved)
+        # Unconditional: the floor is 0 at this point, so there is nothing to
+        # compare against. The pair of writes is one layout request either way
+        # -- Qt compresses `LayoutRequest` -- and nothing repaints between
+        # them, so no intermediate height is ever shown.
+        note.setMinimumHeight(reserved)
 
     def _update_substitution_note(self, requested: str = "") -> None:
         """Say whenever this run will not repeat the entry exactly.
