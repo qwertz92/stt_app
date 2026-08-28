@@ -178,15 +178,25 @@ def _approximate_size_text(model_name: str) -> str:
     the picker label does not follow: `distil-large-v3.5` read "~756 MB"
     against a measured 1516, and `large-v3-turbo` "~809 MB" against 1622, so
     the two models the label was meant to help choose between both understated
-    themselves by half. Every other entry had drifted by a few percent as
-    well, mostly from dividing by 1000.
+    themselves by half.
+
+    **The table is decimal megabytes** -- it says so, and
+    `model_download_progress` turns each entry into bytes with `* 1_000_000`,
+    so the progress bar a user watches counts in the same unit. Dividing by
+    1024 and printing "GB" therefore names neither unit: `medium` is 1531
+    decimal MB = 1.53 GB = 1.43 GiB, and 1531/1024 = 1.50 is a third number.
+    Deriving the label first got this wrong in the other direction from the
+    defect it fixed -- it took six labels that were already correct two-decimal
+    decimal GB (`~2.13 GB`, `~1.84 GB`, `~1.03 GB`) down to a wrong one-decimal
+    binary value, most visibly `large-v3` at "~3.0 GB" against the 3091 MB its
+    own download bar counts to.
     """
     megabytes = MODEL_ESTIMATED_SIZE_MB.get(model_name)
     if not megabytes:
         return ""
-    if megabytes < 1024:
+    if megabytes < 1000:
         return f"~{megabytes} MB"
-    return f"~{megabytes / 1024:.1f} GB"
+    return f"~{megabytes / 1000:.2f} GB"
 
 
 # Single source of truth for how a local model is named in any picker: the

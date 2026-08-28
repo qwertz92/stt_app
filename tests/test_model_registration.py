@@ -77,28 +77,51 @@ def test_no_picker_label_states_a_size_that_disagrees_with_the_size_table():
     copy inside the picker label did not follow. `distil-large-v3.5` read
     "~756 MB" against a measured 1516 and `large-v3-turbo` "~809 MB" against
     1622, so the two models a user picks between by size both understated
-    themselves by half, and almost every other entry was a few percent out
-    from dividing by 1000.
+    themselves by half.
+
+    **The GB conversion here is decimal, and that is the point of the test.**
+    `MODEL_ESTIMATED_SIZE_MB` states its unit ("decimal megabytes (MB), not
+    MiB") and `model_download_progress` converts it with `* 1_000_000`, so a
+    label is only consistent with the bar the user watches if it divides by
+    1000. Dividing by 1024 here once made the test agree with a label that
+    divided by 1024 too, so the pair was self-consistent and wrong: it passed
+    while `large-v3` advertised "~3.0 GB" for a 3.09 GB download.
+
+    The tolerance is tight on purpose. Rounding to two decimals can move a
+    stated GB size by at most 5 MB, and below 1000 MB the label is exact, so
+    anything looser stops catching the drift the test exists for -- `tiny`
+    was hand-written at 75 MB against 78, which 5% would have accepted.
     """
     written = re.compile(r"~\s*([\d.]+)\s*(MB|GB)")
-    checked = 0
+    checked = set()
     for model_name, label in LOCAL_MODEL_LABELS.items():
         match = written.search(label)
         if match is None:
             continue
-        stated_mb = float(match.group(1)) * (1024 if match.group(2) == "GB" else 1)
+        stated_mb = float(match.group(1)) * (1000 if match.group(2) == "GB" else 1)
         expected_mb = config.MODEL_ESTIMATED_SIZE_MB.get(model_name)
         assert expected_mb, (
             f"{model_name} states a size in its label but has no entry in "
             "MODEL_ESTIMATED_SIZE_MB"
         )
-        assert abs(stated_mb - expected_mb) <= expected_mb * 0.05, (
+        tolerance_mb = max(5.0, expected_mb * 0.005)
+        assert abs(stated_mb - expected_mb) <= tolerance_mb, (
             f"{model_name}: the label says {match.group(0)} "
             f"({stated_mb:.0f} MB) but the size table says {expected_mb} MB"
         )
-        checked += 1
+        checked.add(model_name)
 
-    assert checked >= 10, f"only {checked} labels stated a size; the scan found too few"
+    # Not a floor: every model the table sizes must actually carry that size
+    # in its label. A count threshold passed while three of the thirteen
+    # silently stopped stating one.
+    sized = {
+        name
+        for name in config.MODEL_ESTIMATED_SIZE_MB
+        if name in LOCAL_MODEL_LABELS and "removed" not in LOCAL_MODEL_LABELS[name]
+    }
+    assert checked == sized, (
+        f"labels stating no size for a model the table sizes: {sorted(sized - checked)}"
+    )
 
 
 def test_the_offline_clone_list_covers_every_model_repository():
@@ -121,3 +144,50 @@ def test_the_offline_clone_list_covers_every_model_repository():
         "docs/models.md's clone list omits these repositories, so the offline "
         f"route cannot reach them: {missing}"
     )
+
+
+@pytest.mark.parametrize(
+    ("count", "expects"),
+    [
+        (1, "These folders will be deleted"),
+        (8, "These folders will be deleted"),
+        (9, "9 folders will be deleted"),
+        (52, "52 folders will be deleted"),
+    ],
+)
+def test_the_delete_confirmation_stays_bounded(count: int, expects: str):
+    """A `QMessageBox` does not scroll, and a long path does not wrap.
+
+    The Local tab uses `ExtendedSelection`, so "every installed model" is one
+    Ctrl+A away: 13 models x up to 4 cache folders each is 52 lines sized to
+    the longest absolute path, i.e. a dialog taller than the screen with its
+    Yes/No buttons off the bottom. Below the cap every folder is still named,
+    because saying *which disk* is the whole reason the list exists.
+    """
+    from stt_app.settings_dialog_local import (
+        _MAX_LISTED_DELETE_FOLDERS,
+        _describe_doomed_folders,
+    )
+
+    doomed = [
+        rf"C:\Users\someone\AppData\Local\models\root{index % 3}\models--org--model-{index}"
+        for index in range(count)
+    ]
+    text = _describe_doomed_folders(doomed)
+
+    assert expects in text
+    lines = text.strip().splitlines()
+    # One heading plus the entries. Above the cap the entries are parent
+    # directories, of which there are three here however many models there are.
+    assert len(lines) <= _MAX_LISTED_DELETE_FOLDERS + 2, (
+        f"{count} folders produced {len(lines)} lines:\n{text}"
+    )
+    if count <= _MAX_LISTED_DELETE_FOLDERS:
+        for path in doomed:
+            assert path in text
+
+
+def test_the_delete_confirmation_says_nothing_when_there_is_nothing_to_say():
+    from stt_app.settings_dialog_local import _describe_doomed_folders
+
+    assert _describe_doomed_folders([]) == ""

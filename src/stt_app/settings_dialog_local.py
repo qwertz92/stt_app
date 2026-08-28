@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from pathlib import Path
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -47,6 +48,44 @@ def _facade():
     import stt_app.settings_dialog as facade
 
     return facade
+
+
+# A `QMessageBox` does not scroll and a long absolute path does not wrap at a
+# space, so the dialog grows to the longest path and to one line per folder.
+# The Local tab uses `ExtendedSelection`, so "every installed model" is one
+# Ctrl+A away: 13 models x up to 4 folders each (two cache layouts x Model Dir
+# and the default cache) is a dialog taller than the screen with no way to
+# reach its buttons.
+_MAX_LISTED_DELETE_FOLDERS = 8
+
+
+def _describe_doomed_folders(doomed: list[str]) -> str:
+    """Name the folders a delete will remove, in bounded text.
+
+    Below the cap every folder is named, which is the ordinary case and the
+    reason this text exists at all: the inventory searches the Model Dir *and*
+    the default Hugging Face cache, so a row can mean a copy in either, and the
+    shared cache holds models other tools put there.
+
+    Above it the parent directories are named with a count each, which answers
+    the same question -- *which disk* -- in a constant number of lines.
+    """
+    if not doomed:
+        return ""
+    unique = sorted(dict.fromkeys(doomed))
+    if len(unique) <= _MAX_LISTED_DELETE_FOLDERS:
+        listed = "\n".join(f"    {path}" for path in unique)
+        return f"\n\nThese folders will be deleted:\n{listed}"
+
+    counts: dict[str, int] = {}
+    for path in unique:
+        parent = str(Path(path).parent)
+        counts[parent] = counts.get(parent, 0) + 1
+    listed = "\n".join(
+        f"    {count} folder{'s' if count != 1 else ''} in {parent}"
+        for parent, count in sorted(counts.items())
+    )
+    return f"\n\n{len(unique)} folders will be deleted:\n{listed}"
 
 
 class _LocalModelsMixin:
@@ -1463,12 +1502,7 @@ class _LocalModelsMixin:
                 _logger.exception(
                     "Failed to list the cache folders for %s", model_name
                 )
-        folders = ""
-        if doomed:
-            unique = sorted(dict.fromkeys(doomed))
-            folders = "\n\nThese folders will be deleted:\n" + "\n".join(
-                f"    {path}" for path in unique
-            )
+        folders = _describe_doomed_folders(doomed)
 
         answer = QtWidgets.QMessageBox.question(
             self,
