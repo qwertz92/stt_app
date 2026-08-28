@@ -2628,3 +2628,105 @@ def test_a_remote_engine_never_asks_for_a_local_preload():
     assert controller._local_model_preload_needed(settings) is False
     controller.shutdown()
     _ = app
+
+
+def test_a_failed_live_insert_offers_the_same_words_again():
+    """`apply_partial_append_only` commits the words as it hands them over.
+
+    So a paste that failed loses them for good unless the commit is taken
+    back: the locked prefix can only move forward, and it would never offer
+    that text again. The usual cause is a modifier key still held down, which
+    turns the injected Ctrl+V into Ctrl+Alt+V -- transient, and fatal only
+    because the words are gone. Nothing tested the call site; the unit
+    `rollback_commit` was covered on its own.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+        keep_transcript_in_clipboard=False,
+    )
+    inserter = FakeTextInserter(should_fail=True)
+    focus_helper = FakeWindowFocusHelper()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=inserter,
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus_helper,
+    )
+    controller._streaming_recording = True
+    controller._audio_capture = object()
+    controller._target_window_handle = focus_helper.captured
+    controller._target_focus_signature = focus_helper.capture_target_signature()
+
+    # The locked prefix needs two partials to agree before anything is
+    # inserted, so the failing paste is the one the second partial triggers.
+    controller._on_transcription_partial("hello world this is")
+    controller._on_transcription_partial("world this is working now")
+    assert [call[0] for call in inserter.calls] == ["hello world"], inserter.calls
+
+    inserter.should_fail = False
+    controller._on_transcription_partial("this is working now today")
+
+    assert [call[0] for call in inserter.calls] == [
+        "hello world",
+        "hello world this is",
+    ], (
+        "the words from the failed paste were never offered again, so they "
+        f"exist only in history: {inserter.calls}"
+    )
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("label", "helper_kind"),
+    [
+        ("a helper that records it", "records"),
+        ("a helper that raises", "raises"),
+        ("a helper without the method", "absent"),
+    ],
+)
+def test_note_foreground_window_is_forwarded_and_never_raises(label, helper_kind):
+    """The tray calls this on the way into a menu; it must not be able to fail.
+
+    Its whole job is to catch the last moment the user's own window is still
+    in front. It runs from a Qt slot on a path that has nothing to report to,
+    so a helper that raises must be swallowed rather than take the menu with
+    it -- while a helper that works must actually be called, or the tray fix
+    is decoration.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    focus = FakeWindowFocusHelper()
+    calls: list[int] = []
+    if helper_kind == "records":
+        focus.note_foreground_window = lambda: calls.append(1)
+    elif helper_kind == "raises":
+
+        def _boom():
+            calls.append(1)
+            raise OSError("GetForegroundWindow failed")
+
+        focus.note_foreground_window = _boom
+
+    controller = DictationController(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=focus,
+    )
+    try:
+        controller.note_foreground_window()
+    finally:
+        controller.shutdown()
+
+    expected = 0 if helper_kind == "absent" else 1
+    assert len(calls) == expected, label
+    _ = app

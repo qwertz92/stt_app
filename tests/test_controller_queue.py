@@ -8,6 +8,7 @@ signals directly.
 import logging
 from dataclasses import replace
 
+import pytest
 from conftest import (
     FakeCapture,
     FakeOverlay,
@@ -20,7 +21,7 @@ from conftest import (
 from PySide6 import QtCore, QtGui
 
 from stt_app.config import FALLBACK_HOTKEY
-from stt_app.controller import _TranscriptionJob
+from stt_app.controller import _join_transcripts, _TranscriptionJob
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -1281,5 +1282,81 @@ def test_empty_background_transcript_is_reported(monkeypatch, tmp_path):
     assert len(reported) == 1
     assert "no text" in reported[0].lower()
     assert "Retry" in reported[0]
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("label", "texts", "expected"),
+    [
+        ("no whitespace at either boundary", ["one", "two"], "one two"),
+        ("a trailing space on the left", ["one ", "two"], "one two"),
+        ("a leading space on the right", ["one", " two"], "one two"),
+        ("a newline boundary", ["one\n", "two"], "one\ntwo"),
+        ("an empty result in the middle", ["one", "", "two"], "one two"),
+        ("a single result", ["only"], "only"),
+        ("nothing at all", [], ""),
+    ],
+)
+def test_joining_queued_transcripts_never_doubles_a_boundary(label, texts, expected):
+    """One space between messages, and only where there is not one already.
+
+    This is the only path that joins separate completed queue messages, and
+    every other insert path passes its text through untouched -- so a space
+    added unconditionally here shows up as a double space in the document
+    with nothing else to blame.
+    """
+    assert _join_transcripts(texts) == expected, label
+
+
+def test_current_window_insertion_coalesces_results_aimed_at_different_targets(
+    monkeypatch, tmp_path
+):
+    """With `insert_target=current_window` every result goes to one place.
+
+    Each separate paste is its own clipboard set/paste/restore cycle and thus
+    its own race window against the target application, which is what the
+    coalescing exists to avoid. The grouping key is the *recording's* captured
+    target, so without `single_group` two recordings made in different windows
+    still produced two pastes even though both were about to be aimed at
+    whatever is focused now.
+    """
+    controller, app, _overlay, inserter, focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, insert_target="current_window")
+
+    # Two recordings that both finish while a third is running, so both are
+    # deferred and flushed together -- the only path that coalesces. Each is
+    # made in a *different* window, which is what the per-target grouping keys
+    # on and what `single_group` has to override.
+    token_a = _record_and_stop(controller)
+
+    focus.captured = 111
+    focus.captured_focus = 222
+    focus.captured_caret = 333
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+
+    focus.captured = 555
+    focus.captured_focus = 666
+    focus.captured_caret = 777
+    controller.start_recording()
+    controller._on_transcription_ready("transcript B", request_token=token_b)
+    controller.stop_recording()
+    token_c = controller._active_request_token
+    assert (
+        controller._jobs[token_a].target_signature
+        != controller._jobs[token_b].target_signature
+    ), "the two recordings captured the same window, so nothing is coalesced"
+
+    controller._on_transcription_ready("transcript C", request_token=token_c)
+
+    pastes = [call[0] for call in inserter.calls if "transcript" in call[0]]
+    assert pastes == ["transcript A transcript B", "transcript C"], (
+        f"the deferred results were not coalesced into one paste: {pastes}"
+    )
     controller.shutdown()
     _ = app
