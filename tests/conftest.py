@@ -42,9 +42,13 @@ def _isolate_appdata(monkeypatch, tmp_path):
     running the test suite moves the user's data.
 
     `Path.home()` reads `USERPROFILE` on Windows and `HOME` elsewhere, so both
-    are set. Nothing else in `src/` depends on the real home: the two
-    `expanduser("~")` calls resolve the default Hugging Face cache, which
-    `pytest_configure` already redirects with `HF_HOME`/`HF_HUB_CACHE`.
+    are set. Three other `src/` call sites read it -- twice in
+    `history_ui_actions.py` and once in `settings_dialog_benchmark.py` -- and
+    all three only build a *suggested* path for `QFileDialog.getSaveFileName`,
+    which `_forbid_blocking_modal_dialogs` refuses before it can open, so none
+    of them can reach the real home either. The two `expanduser("~")` calls
+    resolve the default Hugging Face cache, which `pytest_configure` already
+    redirects with `HF_HOME`/`HF_HUB_CACHE`.
     """
     home = tmp_path / "home"
     home.mkdir(exist_ok=True)
@@ -599,3 +603,38 @@ def real_model_prefetch(monkeypatch):
         "_coordinated_download_if_missing",
         _REAL_COORDINATED_DOWNLOAD,
     )
+
+
+@pytest.fixture(autouse=True)
+def _forbid_building_a_real_transcriber(monkeypatch):
+    """No test may construct a real provider or local runtime by accident.
+
+    `_acquire_transcriber_runtime` has two arms. The shared one goes through
+    `_get_or_create_transcriber`, which 27 patch sites in this suite replace.
+    The isolated one -- taken whenever `_transcriber_runtime_lock` is already
+    held -- calls the module-level `create_transcriber` instead, so those
+    patches do not apply to it. That fallback is silent by design, and the
+    consequence in a test is not a clean failure: it builds a real OpenAI
+    client, or a real Parakeet transcriber that tries to download its model.
+    (Observed once in a contended full-suite run, then not reproducible; the
+    mechanism is real whether or not that particular run was.)
+
+    So the module-level name is blocked unless a test replaces it, which 64
+    of them already do. `monkeypatch` applies the test's own patch after this
+    fixture's, so opting in needs no change.
+
+    It raises rather than returning a stub: a stub would let the test pass
+    while exercising something other than what it names.
+    """
+    from stt_app import controller as controller_module
+
+    def _refuse(*_args, **_kwargs):
+        raise AssertionError(
+            "A test reached the real `create_transcriber`. This is the "
+            "isolated arm of `_acquire_transcriber_runtime`, which does not "
+            "go through `_get_or_create_transcriber` -- patch "
+            "`stt_app.controller.create_transcriber` instead, or find out why "
+            "the shared runtime lock was already held."
+        )
+
+    monkeypatch.setattr(controller_module, "create_transcriber", _refuse)

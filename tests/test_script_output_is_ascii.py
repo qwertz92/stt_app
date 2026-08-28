@@ -30,6 +30,9 @@ are exempt for free; they are the right place for a real em dash.
 from __future__ import annotations
 
 import ast
+import re
+import subprocess
+import unicodedata
 from pathlib import Path
 
 import pytest
@@ -114,4 +117,68 @@ def test_no_script_prints_a_character_a_captured_log_cannot_show(path: Path):
 
     assert not offenders, (
         f"{path.name} has non-ASCII in a string it can print:\n" + "\n".join(offenders)
+    )
+
+
+_NON_LATIN_SCRIPTS = re.compile(
+    "["
+    "\u0370-\u03ff"  # Greek
+    "\u0400-\u04ff"  # Cyrillic
+    "\u0590-\u05ff"  # Hebrew
+    "\u0600-\u06ff"  # Arabic
+    "\u3040-\u30ff"  # Kana
+    "\u4e00-\u9fff"  # CJK
+    "\uac00-\ud7af"  # Hangul
+    "]"
+)
+
+
+def test_no_tracked_file_contains_a_word_from_another_writing_system():
+    """`AGENTS.md`: all project content is English. This catches the slips.
+
+    Not a style rule -- it is a real failure mode of dictated, multilingual
+    work. Twice in one session a word from another alphabet reached the
+    repository: a Russian word inside an English code comment, and another in
+    a commit message. Both were invisible in review because the surrounding
+    sentence read fine.
+
+    Deliberately narrow. It does not forbid non-ASCII: German umlauts and
+    accented names are legitimate here, and the em-dash rule above already
+    covers the scripts that print. It forbids only whole other writing
+    systems, which nothing in this project has any reason to contain, so it
+    cannot fire on correct content.
+
+    `stt-dictation-spec.md` is bilingual German/English by exception and is
+    still covered -- German uses the Latin alphabet.
+    """
+    tracked = subprocess.run(
+        ["git", "ls-files"],
+        cwd=PROJECT_ROOT,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.split()
+
+    offenders: list[str] = []
+    scanned = 0
+    for name in tracked:
+        path = PROJECT_ROOT / name
+        try:
+            text = path.read_text(encoding="utf-8")
+        except (UnicodeDecodeError, OSError):
+            continue  # binary, or a path this platform cannot open
+        scanned += 1
+        for number, line in enumerate(text.splitlines(), 1):
+            found = _NON_LATIN_SCRIPTS.search(line)
+            if found is None:
+                continue
+            character = found.group(0)
+            offenders.append(
+                f"{name}:{number}: {character!r} "
+                f"({unicodedata.name(character, 'unnamed')}) in {line.strip()[:70]!r}"
+            )
+
+    assert scanned > 100, f"only {scanned} files scanned; the listing looks wrong"
+    assert not offenders, "non-Latin script in tracked content:\n" + "\n".join(
+        offenders[:20]
     )
