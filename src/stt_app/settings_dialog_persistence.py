@@ -415,6 +415,10 @@ class _PersistenceMixin:
 
         updated = replace(
             self._loaded_settings,
+            # `_loaded_settings` is the snapshot from when the dialog was
+            # opened, so without this an overlay change made while it was open
+            # is written back to its old value by a key save.
+            **self._overlay_owned_settings(),
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             has_openai_key=key_states["openai"],
             has_deepgram_key=key_states["deepgram"],
@@ -440,6 +444,20 @@ class _PersistenceMixin:
         if changed or updated != previous_settings:
             self.settings_changed.emit()
 
+    # Settings the overlay writes to the store itself, with no widget in this
+    # dialog: the Pinned button and the opacity slider. A save rebuilds
+    # `AppSettings` from widget state, so anything not read back here reverts
+    # to the dataclass default -- and `overlay_always_on_top` defaults to True,
+    # so every Settings save re-pinned an overlay the user had deliberately
+    # unpinned. The opacity was already read back by hand in one of the two
+    # save paths and not the other; one list so a third such field cannot be
+    # remembered in one place and forgotten in the other.
+    _OVERLAY_OWNED_FIELDS = ("overlay_opacity_percent", "overlay_always_on_top")
+
+    def _overlay_owned_settings(self) -> dict[str, object]:
+        stored = self._settings_store.load()
+        return {name: getattr(stored, name) for name in self._OVERLAY_OWNED_FIELDS}
+
     def _construct_settings_from_widgets(
         self,
         *,
@@ -463,9 +481,7 @@ class _PersistenceMixin:
 
         Must be called on the GUI thread.
         """
-        latest_overlay_opacity = int(
-            self._settings_store.load().overlay_opacity_percent
-        )
+        overlay_owned = self._overlay_owned_settings()
         selected_concurrent_mode = str(
             self.concurrent_mode_combo.currentData()
             or DEFAULT_CONCURRENT_TRANSCRIPTION_MODE
@@ -532,7 +548,7 @@ class _PersistenceMixin:
             vad_energy_threshold=float(self.vad_threshold_spin.value()),
             save_last_wav=self.save_wav_checkbox.isChecked(),
             save_all_recordings=self.save_all_recordings_checkbox.isChecked(),
-            recordings_dir=self._effective_recordings_dir(),
+            recordings_dir=self._stored_recordings_dir(),
             recordings_max_count=int(self.recordings_max_spin.value()),
             history_max_items=(
                 history_limit
@@ -542,7 +558,7 @@ class _PersistenceMixin:
             display_timezone=str(
                 self.history_timezone_combo.currentData() or DEFAULT_DISPLAY_TIMEZONE
             ),
-            overlay_opacity_percent=latest_overlay_opacity,
+            **overlay_owned,
             keep_transcript_in_clipboard=self.keep_clipboard_checkbox.isChecked(),
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             offline_mode=self.offline_mode_checkbox.isChecked(),

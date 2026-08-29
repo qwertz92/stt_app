@@ -218,6 +218,18 @@ class _ImportTabMixin:
             return text
         return str(recordings_dir())
 
+    def _stored_recordings_dir(self) -> str:
+        """What the *setting* holds: the field text, empty included.
+
+        Not `_effective_recordings_dir`. That expands blank to the resolved
+        default so a folder can be opened or created, which is right for those
+        callers and wrong for persistence: storing the absolute path pins it,
+        so it stops following the data folder the way the field's own
+        placeholder promises -- and the state is one-way, because clearing the
+        field and saving writes the same absolute path straight back.
+        """
+        return self.recordings_dir_edit.text().strip()
+
     @staticmethod
     def _recordings_dir_compare_value(value: str) -> str:
         text = str(value or "").strip()

@@ -1,10 +1,17 @@
 from __future__ import annotations
 
+import ast
+import dataclasses
+from dataclasses import replace
+from pathlib import Path
+
+import pytest
 from PySide6 import QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app.provider_connection_test_store import ProviderConnectionTestStore
 from stt_app.settings_dialog import SettingsDialog
+from stt_app.settings_dialog_persistence import _PersistenceMixin
 from stt_app.settings_store import AppSettings
 
 
@@ -527,4 +534,131 @@ def test_settings_dialog_uses_app_window_icon():
     dialog, app, _secret_store = _make_dialog(AppSettings())
 
     assert dialog.windowIcon().isNull() is False
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("label", "field", "stored", "default"),
+    [
+        ("the Pinned button", "overlay_always_on_top", False, True),
+        ("the opacity slider", "overlay_opacity_percent", 40, 100),
+    ],
+)
+def test_saving_settings_keeps_what_the_overlay_owns(label, field, stored, default):
+    """These two have no widget here; the overlay writes them to the store.
+
+    A save rebuilds `AppSettings` from widget state, so a field not read back
+    reverts to its dataclass default. `overlay_always_on_top` defaults to True,
+    so unpinning the overlay and then saving anything at all in Settings --
+    a hotkey, a tone, the model -- silently re-pinned it, on every save.
+    """
+    settings = replace(AppSettings(), **{field: stored})
+    assert getattr(settings, field) != default, (
+        "the fixture must differ from the default or this proves nothing"
+    )
+    dialog, app, _secret_store = _make_dialog(settings)
+    try:
+        built = dialog._construct_settings_from_widgets()
+
+        assert getattr(built, field) == stored, (
+            f"{label}: a save reverted it to {getattr(built, field)}"
+        )
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("label", "field", "changed"),
+    [
+        ("the Pinned button", "overlay_always_on_top", False),
+        ("the opacity slider", "overlay_opacity_percent", 40),
+    ],
+)
+def test_saving_api_keys_keeps_what_the_overlay_owns(label, field, changed):
+    """The key-save path writes the snapshot taken when the dialog opened.
+
+    So an overlay change made while Settings was open -- which is exactly when
+    someone reaches for the Pinned button, to see the dialog -- was written
+    back to its old value by pressing Save API Keys.
+    """
+    store = _FakeSettingsStore(AppSettings())
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    try:
+        # The overlay writes straight to the store while the dialog is open.
+        store._settings = replace(AppSettings(), **{field: changed})
+        dialog.openai_key_edit.setText("sk-something")
+
+        dialog._save_api_keys_only()
+
+        assert store.saved is not None, "the key save wrote nothing"
+        assert getattr(store.saved, field) == changed, (
+            f"{label}: the key save reverted it to {getattr(store.saved, field)}"
+        )
+    finally:
+        dialog.deleteLater()
+    _ = app
+
+
+def test_every_settings_field_is_either_built_or_deliberately_exempt():
+    """The structural guard: a new field must not be able to slip through.
+
+    `overlay_always_on_top` was missing from a 54-keyword constructor call and
+    nothing noticed, because the only symptom is a default quietly winning.
+    This lists what may be absent and why, so adding a field forces a choice.
+    """
+    source = (
+        Path(settings_dialog_module.__file__).parent
+        / "settings_dialog_persistence.py"
+    ).read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    passed: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "AppSettings":
+            passed.update(kw.arg for kw in node.keywords if kw.arg)
+
+    # Read back from the store instead of from a widget, because the overlay
+    # owns them; `schema_version` is stamped by `AppSettings` itself.
+    exempt = set(_PersistenceMixin._OVERLAY_OWNED_FIELDS) | {"schema_version"}
+    names = {field.name for field in dataclasses.fields(AppSettings)}
+
+    assert names - passed - exempt == set(), (
+        "these settings fields are neither built from a widget nor exempt: "
+        f"{sorted(names - passed - exempt)}"
+    )
+    assert exempt <= names, f"the exemption list names no such field: {exempt - names}"
+
+
+@pytest.mark.parametrize(
+    ("label", "typed", "expected"),
+    [
+        ("left empty", "", ""),
+        ("only whitespace", "   ", ""),
+        ("an explicit folder", "D:/my-recordings", "D:/my-recordings"),
+    ],
+)
+def test_an_empty_recordings_folder_stays_empty_when_saved(label, typed, expected):
+    """Empty means "follow the data folder", and saving must not spell it out.
+
+    The save path built the setting from `_effective_recordings_dir`, which
+    expands blank to the resolved default so a folder can be opened. Stored,
+    that pins an absolute path: it stops tracking the data folder the way the
+    field's own placeholder promises, and the state is one-way -- clearing the
+    field and saving writes the same absolute path back, so the documented
+    default becomes unreachable through the UI.
+    """
+    dialog, app, _secret_store = _make_dialog(AppSettings(recordings_dir="D:/old"))
+    try:
+        dialog.recordings_dir_edit.setText(typed)
+
+        built = dialog._construct_settings_from_widgets()
+
+        assert built.recordings_dir == expected, label
+    finally:
+        dialog.deleteLater()
     _ = app
