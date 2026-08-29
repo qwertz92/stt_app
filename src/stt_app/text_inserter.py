@@ -50,6 +50,18 @@ class TextMayHaveBeenPastedError(TextInsertionError):
     """
 
 
+class ClipboardEmptiedError(TextInsertionError):
+    """`EmptyClipboard` succeeded and writing the new content did not.
+
+    Setting the clipboard is two Win32 calls, and only the *first* of them is
+    destructive. Failing between them leaves the clipboard empty, so it is
+    ours to put back -- unlike a failure to open it at all, where the
+    clipboard still holds whatever it held and restoring would replace an
+    image or a file selection with plain text this app never touched. One
+    flag cannot express both, which is what this class is for.
+    """
+
+
 class ClipboardContentionError(TextInsertionError):
     def __init__(self, message: str) -> None:
         super().__init__(message, allow_clipboard_fallback=False)
@@ -95,7 +107,12 @@ class Win32ClipboardBackend:
     def set_clipboard_text(self, text: str) -> None:
         with self._clipboard_opened():
             win32clipboard.EmptyClipboard()
-            win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+            try:
+                win32clipboard.SetClipboardText(text, win32con.CF_UNICODETEXT)
+            except Exception as exc:
+                raise ClipboardEmptiedError(
+                    f"The clipboard was emptied but could not be written: {exc}"
+                ) from exc
 
     def restore_clipboard_state(self, state: ClipboardState) -> None:
         with self._clipboard_opened():
@@ -354,7 +371,14 @@ class TextInserter:
             # app had never touched.
             clipboard_was_set = False
             try:
-                self._backend.set_clipboard_text(text)
+                try:
+                    self._backend.set_clipboard_text(text)
+                except ClipboardEmptiedError:
+                    # Destructive half done, write half not: the clipboard is
+                    # empty and putting it back is the only way the user gets
+                    # their content again.
+                    clipboard_was_set = True
+                    raise
                 clipboard_was_set = True
                 clipboard_marker = self._clipboard_sequence_number()
                 self._sleep_fn(self._clipboard_settle_s)

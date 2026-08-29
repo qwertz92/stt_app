@@ -1,4 +1,5 @@
 import ctypes
+from types import SimpleNamespace
 
 import pytest
 
@@ -6,6 +7,7 @@ import stt_app.text_inserter as text_inserter
 from stt_app.text_inserter import (
     INPUT,
     ClipboardContentionError,
+    ClipboardEmptiedError,
     TextInserter,
     TextInsertionError,
     TextMayHaveBeenPastedError,
@@ -816,4 +818,124 @@ def test_a_paste_that_may_have_landed_leaves_the_transcript_on_the_clipboard():
 
     assert "restore" not in backend.calls, (
         f"the previous clipboard was restored under a live paste: {backend.calls}"
+    )
+
+
+class _EmptiedThenFailedBackend(LegacyBackend):
+    """`EmptyClipboard` worked, `SetClipboardText` did not."""
+
+    def set_clipboard_text(self, text):
+        self.calls.append(f"set:{text}")
+        self.state = {"has_text": False, "text": None}
+        raise ClipboardEmptiedError(
+            "The clipboard was emptied but could not be written: access denied"
+        )
+
+
+class _CouldNotOpenBackend(LegacyBackend):
+    """`OpenClipboard` failed, so nothing was touched."""
+
+    def set_clipboard_text(self, text):
+        self.calls.append(f"set:{text}")
+        raise TextInsertionError("OpenClipboard failed")
+
+
+@pytest.mark.parametrize(
+    ("label", "backend_class", "expect_restore"),
+    [
+        ("emptied, then the write failed", _EmptiedThenFailedBackend, True),
+        ("the clipboard could not be opened", _CouldNotOpenBackend, False),
+    ],
+)
+def test_a_failed_set_restores_only_what_we_actually_destroyed(
+    label, backend_class, expect_restore
+):
+    """Setting the clipboard is two calls and only the first one destroys.
+
+    Skipping the restore for every failed set was half right. It protects the
+    case where `OpenClipboard` failed and the clipboard still holds an image
+    or a file selection this app never touched -- restoring there would
+    replace them with plain text. But when `EmptyClipboard` succeeded and the
+    write did not, the clipboard is already empty, and skipping the restore is
+    what finally loses the user's content.
+    """
+    backend = backend_class()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextInsertionError):
+        inserter.insert_text("transcript")
+
+    restored = "restore" in backend.calls
+    assert restored is expect_restore, f"{label}: calls were {backend.calls}"
+    if expect_restore:
+        assert backend.state["text"] == "old", (
+            f"{label}: the clipboard was left empty"
+        )
+    assert "paste_ctrl_v" not in backend.calls, (
+        f"{label}: a failed set must not be followed by a paste"
+    )
+
+
+class _FakeWin32Clipboard:
+    """Just enough of `win32clipboard` to drive the two-call set."""
+
+    def __init__(self, *, empty_raises=False, set_raises=False):
+        self._empty_raises = empty_raises
+        self._set_raises = set_raises
+        self.calls = []
+
+    def OpenClipboard(self):
+        self.calls.append("open")
+
+    def CloseClipboard(self):
+        self.calls.append("close")
+
+    def EmptyClipboard(self):
+        self.calls.append("empty")
+        if self._empty_raises:
+            raise OSError("EmptyClipboard failed")
+
+    def SetClipboardText(self, _text, _format):
+        self.calls.append("set")
+        if self._set_raises:
+            raise OSError("SetClipboardText failed")
+
+
+@pytest.mark.parametrize(
+    ("label", "empty_raises", "set_raises", "expected"),
+    [
+        ("the write failed after the empty", False, True, ClipboardEmptiedError),
+        ("the empty itself failed", True, False, OSError),
+        ("both succeeded", False, False, None),
+    ],
+)
+def test_the_backend_reports_an_emptied_clipboard_distinctly(
+    monkeypatch, label, empty_raises, set_raises, expected
+):
+    """Only the real backend can decide which half of the set went through.
+
+    A test that raises `ClipboardEmptiedError` from a fake backend proves the
+    caller handles it, not that anything ever produces it -- the production
+    `set_clipboard_text` could raise a plain `TextInsertionError` and stay
+    green. `EmptyClipboard` failing is the opposite case and must NOT be
+    reported as emptied: nothing was destroyed there.
+    """
+    fake = _FakeWin32Clipboard(empty_raises=empty_raises, set_raises=set_raises)
+    monkeypatch.setattr(text_inserter, "win32clipboard", fake)
+    monkeypatch.setattr(text_inserter, "win32con", SimpleNamespace(CF_UNICODETEXT=13))
+    backend = Win32ClipboardBackend()
+
+    if expected is None:
+        backend.set_clipboard_text("transcript")
+    else:
+        with pytest.raises(expected) as excinfo:
+            backend.set_clipboard_text("transcript")
+        if empty_raises:
+            assert not isinstance(excinfo.value, ClipboardEmptiedError), (
+                "a failed EmptyClipboard destroyed nothing, so reporting it as "
+                "emptied would restore plain text over an untouched clipboard"
+            )
+
+    assert fake.calls[0] == "open" and fake.calls[-1] == "close", (
+        f"{label}: the clipboard was left open: {fake.calls}"
     )
