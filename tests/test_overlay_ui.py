@@ -1595,3 +1595,43 @@ def test_clearing_the_detail_does_not_shrink_a_result_that_arrives_first():
     finally:
         overlay.close()
         overlay.deleteLater()
+
+
+def test_the_copy_button_is_not_repolished_on_every_state_change():
+    """Streaming calls `set_state` about three times a second.
+
+    `set_state` resets the copy feedback, and the private helper had no
+    equality guard, so every partial forced a full stylesheet re-resolution
+    and repaint of a button whose appearance had not changed. The shared
+    `ui_feedback.set_button_feedback_state` opens with exactly this check.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_state("Done", "a transcript")
+    app.processEvents()
+
+    calls = []
+    original = overlay._copy_button.setProperty
+
+    def spy(name, value):
+        calls.append((name, value))
+        return original(name, value)
+
+    overlay._copy_button.setProperty = spy
+    try:
+        for index in range(5):
+            overlay.set_state("Listening", f"partial {index}")
+
+        assert calls == [], f"the button was re-polished {len(calls)} times"
+        assert overlay._copy_button.text() == "Copy"
+
+        overlay._set_copy_button_feedback(True)
+
+        assert calls == [("copied", True)], (
+            "a real change must still repolish the button"
+        )
+        assert overlay._copy_button.text() == "Copied"
+    finally:
+        overlay._copy_button.setProperty = original
+        overlay.close()
+        overlay.deleteLater()

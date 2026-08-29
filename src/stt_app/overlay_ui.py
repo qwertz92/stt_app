@@ -1691,10 +1691,20 @@ class OverlayUI(QtWidgets.QWidget):
             self.opacity_changed.emit(clamped)
 
     def _set_copy_button_feedback(self, copied: bool) -> None:
-        self._copy_button.setProperty("copied", copied)
+        copied = bool(copied)
+        # Before the guard: `setText` is itself guarded by Qt, so it stays
+        # outside and the caption can never be left behind by an early return.
         self._copy_button.setText(
             COPY_BUTTON_COPIED_TEXT if copied else COPY_BUTTON_TEXT
         )
+        if bool(self._copy_button.property("copied")) is copied:
+            # `set_state` resets this, and streaming calls `set_state` about
+            # three times a second, so without the guard every partial forced
+            # a full stylesheet re-resolution and repaint of an unchanged
+            # button. The shared `ui_feedback.set_button_feedback_state` opens
+            # with exactly this check; this private copy omitted it.
+            return
+        self._copy_button.setProperty("copied", copied)
         self._copy_button.style().unpolish(self._copy_button)
         self._copy_button.style().polish(self._copy_button)
         self._copy_button.update()
