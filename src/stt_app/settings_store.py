@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
@@ -162,9 +163,17 @@ DEFAULTS = {
 
 
 def _int_or_none(value: Any) -> int | None:
+    # `OverflowError` is an `ArithmeticError`, not a `ValueError`, so naming
+    # only the usual two let it escape `from_dict` -- and because the file
+    # *parsed*, the store returned it as the primary payload and the crash
+    # happened afterwards, so the backup was never read and the primary was
+    # never quarantined. `main` calls `load()` before any window exists, so a
+    # packaged build became a double-click that does nothing. Both directions
+    # reach it: `int(float("inf"))` from JSON's non-standard `Infinity` or
+    # from `1e400`, and `float(<400-digit integer>)` in the two float fields.
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return None
 
 
@@ -256,7 +265,13 @@ class AppSettings:
                     DEFAULT_SILENCE_GATE_THRESHOLD,
                 )
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            silence_gate_threshold = DEFAULT_SILENCE_GATE_THRESHOLD
+        if not math.isfinite(silence_gate_threshold):
+            # A NaN survives `float()` and then defeats the clamp: every
+            # comparison against it is False, so `max`/`min` return whichever
+            # bound they were handed first and the setting silently becomes a
+            # boundary value rather than the default.
             silence_gate_threshold = DEFAULT_SILENCE_GATE_THRESHOLD
         silence_gate_threshold = min(
             SILENCE_GATE_THRESHOLD_MAX,
@@ -374,7 +389,7 @@ class AppSettings:
             recordings_max_count = int(
                 merged.get("recordings_max_count", DEFAULT_RECORDINGS_MAX_COUNT)
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             recordings_max_count = DEFAULT_RECORDINGS_MAX_COUNT
         recordings_max_count = max(1, min(500, recordings_max_count))
         raw_history_max_items = merged.get(
@@ -420,7 +435,7 @@ class AppSettings:
                     DEFAULT_OVERLAY_OPACITY_PERCENT,
                 )
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             overlay_opacity_percent = DEFAULT_OVERLAY_OPACITY_PERCENT
         overlay_opacity_percent = max(
             OVERLAY_OPACITY_MIN_PERCENT,
@@ -430,7 +445,9 @@ class AppSettings:
             vad_energy_threshold = float(
                 merged.get("vad_energy_threshold", DEFAULT_VAD_ENERGY_THRESHOLD)
             )
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
+            vad_energy_threshold = DEFAULT_VAD_ENERGY_THRESHOLD
+        if not math.isfinite(vad_energy_threshold):
             vad_energy_threshold = DEFAULT_VAD_ENERGY_THRESHOLD
         vad_energy_threshold = max(
             VAD_ENERGY_THRESHOLD_MIN,
@@ -438,7 +455,16 @@ class AppSettings:
         )
 
         return cls(
-            schema_version=CURRENT_SCHEMA_VERSION,
+            # The *higher* of the two, never this build's number flat.
+            # `to_dict` used to stamp `CURRENT_SCHEMA_VERSION` unconditionally,
+            # so running an older revision once -- bisecting, checking out
+            # `main` while a branch has bumped it, verifying a release --
+            # rewrote the shared `%APPDATA%` file with a lower number. The
+            # migrations keyed on `raw_schema_version <` then re-fired on the
+            # next run of the newer build: a deliberately cleared overlay
+            # hotkey came back and a deliberately disabled silence gate turned
+            # itself on. A version only ever rises.
+            schema_version=max(raw_schema_version, CURRENT_SCHEMA_VERSION),
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
             show_overlay_hotkey=show_overlay_hotkey,
@@ -569,7 +595,9 @@ class AppSettings:
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)
-        data["schema_version"] = CURRENT_SCHEMA_VERSION
+        data["schema_version"] = max(
+            int(self.schema_version or 0), CURRENT_SCHEMA_VERSION
+        )
         return data
 
 
@@ -643,14 +671,30 @@ class SettingsStore:
             raw = dict(payload)
 
             settings = AppSettings.from_dict(raw)
-            if source == "backup" or raw != settings.to_dict():
-                self.save(settings)
+            payload = settings.to_dict()
+            # Keys this build does not know are a newer build's, and dropping
+            # them is how a shared settings file loses a setting just because
+            # an older revision was run once. They are carried through
+            # untouched; nothing here interprets them.
+            unknown = {name: raw[name] for name in raw.keys() - payload.keys()}
+            if source == "backup" or raw != payload or unknown:
+                self.save(settings, extra=unknown)
 
             return settings
 
-    def save(self, settings: AppSettings) -> None:
+    def save(
+        self,
+        settings: AppSettings,
+        *,
+        extra: dict[str, object] | None = None,
+    ) -> None:
         with self._lock:
             payload = settings.to_dict()
+            # Only `load` passes this, and only with the keys it just read
+            # from the same file. A known field can never be overwritten:
+            # `extra` is built as `raw.keys() - payload.keys()`.
+            for name, value in (extra or {}).items():
+                payload.setdefault(name, value)
 
             for secret_key in (
                 "openai_api_key",

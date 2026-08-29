@@ -1,6 +1,9 @@
 import dataclasses
 import json
 import logging
+import math
+
+import pytest
 
 from stt_app.config import (
     DEFAULT_ALLOW_INSECURE_KEY_STORAGE,
@@ -25,6 +28,7 @@ from stt_app.config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
     DEFAULT_SAVE_LAST_WAV,
     DEFAULT_SHOW_OVERLAY_HOTKEY,
+    DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
     parse_custom_vocabulary,
@@ -997,3 +1001,112 @@ def test_faster_whisper_still_defaults_to_a_faster_whisper_model():
     ).parameters["model_size"].default
 
     assert default in FASTER_WHISPER_MODEL_SIZES
+
+
+@pytest.mark.parametrize(
+    ("label", "payload"),
+    [
+        ("Infinity in an int field", '{"history_max_items": Infinity}'),
+        ("an overflowing literal", '{"history_max_items": 1e400}'),
+        ("negative Infinity", '{"recordings_max_count": -Infinity}'),
+        ("Infinity in the schema version", '{"schema_version": Infinity}'),
+        ("Infinity in the opacity", '{"overlay_opacity_percent": Infinity}'),
+        ("NaN in an int field", '{"history_max_items": NaN}'),
+        ("NaN in a float field", '{"silence_gate_threshold": NaN}'),
+        ("NaN in the VAD threshold", '{"vad_energy_threshold": NaN}'),
+        (
+            "a 400-digit integer in a float field",
+            '{"silence_gate_threshold": ' + "9" * 400 + "}",
+        ),
+        (
+            "a 400-digit integer in the VAD threshold",
+            '{"vad_energy_threshold": ' + "9" * 400 + "}",
+        ),
+    ],
+)
+def test_a_hostile_number_never_escapes_from_dict(label, payload):
+    """`OverflowError` is an `ArithmeticError`, not a `ValueError`.
+
+    Naming only the usual two let it out of `from_dict` -- and because the
+    file *parsed*, the store had already accepted it as the primary payload,
+    so the crash happened past the point where the backup would be read or the
+    primary quarantined. `main` calls `load()` before any window exists, which
+    makes a packaged build a double-click that does nothing.
+
+    Both directions reach it: `int(float("inf"))` for the four integer fields,
+    and `float(<400-digit integer>)` for the two float ones. NaN is the
+    sibling case -- it survives `float()` and then defeats the clamp, because
+    every comparison against it is False.
+    """
+    settings = AppSettings.from_dict(json.loads(payload))
+
+    assert 0 <= settings.history_max_items <= 5000, label
+    assert 1 <= settings.recordings_max_count <= 500, label
+    assert 0 <= settings.overlay_opacity_percent <= 100, label
+    assert math.isfinite(settings.silence_gate_threshold), label
+    assert math.isfinite(settings.vad_energy_threshold), label
+    assert isinstance(settings.schema_version, int), label
+    # A clamp is not enough for NaN: it must land on the default, not on
+    # whichever bound `max`/`min` happened to return first.
+    if "NaN" in payload and "silence_gate" in payload:
+        assert settings.silence_gate_threshold == DEFAULT_SILENCE_GATE_THRESHOLD
+    if "NaN" in payload and "vad_energy" in payload:
+        assert settings.vad_energy_threshold == DEFAULT_VAD_ENERGY_THRESHOLD
+
+
+def test_an_older_build_neither_lowers_the_schema_nor_drops_newer_keys(tmp_path):
+    """One `%APPDATA%` file is shared by the release and every source checkout.
+
+    `to_dict` stamped `CURRENT_SCHEMA_VERSION` unconditionally, so running an
+    older revision once -- bisecting, verifying a release, checking out `main`
+    while a branch has bumped the schema -- rewrote the file with a *lower*
+    number. The migrations keyed on `raw_schema_version <` then re-fired on the
+    next run of the newer build, and both of them document themselves as
+    one-time: a deliberately cleared overlay hotkey came back, and a
+    deliberately disabled silence gate turned itself on.
+    """
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                "schema_version": CURRENT_SCHEMA_VERSION + 1,
+                "a_setting_this_build_does_not_know": "kept",
+                "show_overlay_hotkey": "",
+                "silence_gate_enabled": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    settings = SettingsStore(path).load()
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+
+    assert on_disk["schema_version"] == CURRENT_SCHEMA_VERSION + 1, (
+        "the recorded schema version went backwards"
+    )
+    assert on_disk["a_setting_this_build_does_not_know"] == "kept"
+    assert settings.show_overlay_hotkey == ""
+    assert settings.silence_gate_enabled is False
+
+    # And the newer build reading it back gets the same answer.
+    reloaded = SettingsStore(path).load()
+    assert reloaded.show_overlay_hotkey == ""
+    assert reloaded.silence_gate_enabled is False
+
+
+def test_an_unknown_key_can_never_overwrite_a_known_field(tmp_path):
+    """`extra` is built as `raw.keys() - payload.keys()`, so it cannot collide.
+
+    Stated as a test because the preservation path writes caller-supplied keys
+    into the payload, and a future caller passing a known field name would
+    silently bypass every clamp and migration in `from_dict`.
+    """
+    path = tmp_path / "settings.json"
+    store = SettingsStore(path)
+    settings = AppSettings(history_max_items=42)
+
+    store.save(settings, extra={"history_max_items": 999, "future_key": "kept"})
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+
+    assert on_disk["history_max_items"] == 42
+    assert on_disk["future_key"] == "kept"
