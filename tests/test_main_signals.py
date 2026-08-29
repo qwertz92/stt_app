@@ -159,6 +159,7 @@ class FakeOverlay:
     def __init__(self):
         self.moved_to = None
         self.compact_calls = 0
+        self.compact_policy_calls = 0
         self.always_on_top_values = []
         self.restore_visibility_calls = 0
 
@@ -170,6 +171,9 @@ class FakeOverlay:
 
     def ensure_compact_size(self):
         self.compact_calls += 1
+
+    def ensure_compact_size_unless_showing_a_result(self):
+        self.compact_policy_calls += 1
 
     def restore_visibility(self):
         self.restore_visibility_calls += 1
@@ -793,6 +797,13 @@ def test_history_presenter_reuses_open_dialog_and_reloads_on_refocus(
 
 
 def test_restore_overlay_after_settings_save_applies_corner_and_compacts():
+    """Saving settings must not shrink the box around a transcript.
+
+    `ensure_compact_size` pins the detail area back to the compact cap, so
+    pressing Save while a finished dictation is on the overlay truncated it
+    and left the overlay compact under a `Done` label. The policy call makes
+    the same distinction Reset Pos has always made.
+    """
     overlay = FakeOverlay()
     store = FakeSettingsStore()
 
@@ -800,7 +811,10 @@ def test_restore_overlay_after_settings_save_applies_corner_and_compacts():
 
     assert overlay.moved_to == "top-right"
     assert overlay.always_on_top_values == [True]
-    assert overlay.compact_calls == 1
+    assert overlay.compact_policy_calls == 1
+    assert overlay.compact_calls == 0, (
+        "the save path compacts unconditionally again"
+    )
 
 
 def test_restore_after_system_resume_refreshes_hotkeys_and_overlay():

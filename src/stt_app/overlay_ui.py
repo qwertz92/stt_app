@@ -25,6 +25,7 @@ from .config import (
     OVERLAY_STATE_COLORS,
     OVERLAY_WIDTH,
 )
+from .ui_feedback import restore_vertical_scrollbar
 
 RECORD_BUTTON_START_TEXT = "Record"
 logger = logging.getLogger(__name__)
@@ -953,10 +954,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._manual_positioned = True
 
     def reset_position(self) -> None:
-        if not self._should_preserve_size_on_reset():
-            self.ensure_compact_size()
-        else:
-            self._update_detail_height()
+        self.ensure_compact_size_unless_showing_a_result()
         if self._initial_corner:
             self.move_to_corner(
                 self._initial_corner,
@@ -1430,6 +1428,22 @@ class OverlayUI(QtWidgets.QWidget):
             self._state_label.text() in {"Done", "Error"}
         )
 
+    def ensure_compact_size_unless_showing_a_result(self) -> None:
+        """Return to the compact box, but never over a transcript or an error.
+
+        `ensure_compact_size` pins the detail area back to the compact cap and
+        sets `_compact_mode`, so applying it to a finished `Done` truncates the
+        transcript the user is reading -- scrolled to the *top*, so the end of
+        the dictation is what disappears -- and leaves the overlay in compact
+        mode under a `Done` label, where every later reveal keeps it small.
+        Reset Pos has always made this distinction; the settings-save and
+        clear-text paths called `ensure_compact_size` outright.
+        """
+        if self._should_preserve_size_on_reset():
+            self._update_detail_height()
+            return
+        self.ensure_compact_size()
+
     def ensure_compact_size(self) -> None:
         self._compact_mode = True
         if self._defer_geometry():
@@ -1487,6 +1501,7 @@ class OverlayUI(QtWidgets.QWidget):
         queue_layout.addWidget(self._queue_scroll)
 
         self._queue_widget.setVisible(False)
+        self._queue_entries: list[tuple[int, str]] = []
 
     def _clear_queue_rows(self) -> None:
         while self._queue_rows_layout.count():
@@ -1529,7 +1544,17 @@ class OverlayUI(QtWidgets.QWidget):
         ``items`` is a list of ``(token, label)`` pairs. An empty list hides
         the queue panel entirely.
         """
-        entries = list(items or [])
+        entries = [(int(token), str(label)) for token, label in (items or [])]
+        if entries == self._queue_entries:
+            # Nothing about the queue changed, and a rebuild is not free: it
+            # deletes every row widget, so the panel scrolls back to the top
+            # and a Cancel press whose release lands after the rebuild hits a
+            # button that no longer exists. The geometry already matches these
+            # rows, because the call that rendered them computed it.
+            return
+        self._queue_entries = entries
+        scroll_bar = self._queue_scroll.verticalScrollBar()
+        previous_scroll = scroll_bar.value() if self._queue_visible else 0
         self._clear_queue_rows()
         if entries:
             count = len(entries)
@@ -1537,13 +1562,28 @@ class OverlayUI(QtWidgets.QWidget):
                 f"Transcribing {count} file" + ("" if count == 1 else "s")
             )
             for token, label in entries:
-                self._queue_rows_layout.addWidget(self._build_queue_row(token, label))
+                row = self._build_queue_row(token, label)
+                self._queue_rows_layout.addWidget(row)
+                # Qt shows a widget added to a visible parent only once the
+                # event loop delivers its ShowToParent event, and a hidden
+                # widget's layout item reports itself empty. So without this
+                # every measurement below saw a rows layout of height 0 --
+                # measured: 0 synchronously against 42 and 64 px afterwards --
+                # and the whole geometry pass ran for an empty queue. Inside
+                # `batched_update` that is worse than a stale number, because
+                # the batch repaints synchronously: the user got a real frame
+                # with the rows area collapsed, then a second resize one turn
+                # later. Only the *first* render escaped it, because
+                # `setVisible(True)` on the panel shows its children with it.
+                row.show()
             self._queue_visible = True
             self._queue_widget.setVisible(True)
         else:
             self._queue_visible = False
             self._queue_widget.setVisible(False)
 
+        if entries and previous_scroll:
+            restore_vertical_scrollbar(self._queue_scroll, previous_scroll)
         self._refresh_queue_layout_geometry()
         self._refresh_size_after_queue_change()
         # Re-assert once the layout settles. Switching between very different
@@ -1678,4 +1718,10 @@ class OverlayUI(QtWidgets.QWidget):
             return
         self.set_state("Idle", self._idle_default_detail, compact=True)
         self.ensure_compact_size()
-        QtCore.QTimer.singleShot(0, self.ensure_compact_size)
+        # Deferred, and therefore no longer about the state it was clearing: a
+        # queued transcription delivering inside that one event-loop turn puts
+        # a transcript on screen, and an unconditional `ensure_compact_size`
+        # then shrinks the box around it. The policy call re-checks.
+        QtCore.QTimer.singleShot(
+            0, self.ensure_compact_size_unless_showing_a_result
+        )

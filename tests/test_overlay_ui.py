@@ -1408,3 +1408,190 @@ def test_every_runtime_caption_is_in_the_tuple_that_sizes_its_button():
             assert captions, f"no caption was observed for the {name} button"
     finally:
         overlay.close()
+
+
+def _queue_rows(overlay):
+    layout = overlay._queue_rows_layout
+    return [layout.itemAt(i).widget() for i in range(layout.count())]
+
+
+def test_queue_rows_are_measured_in_the_pass_that_adds_them():
+    """A queue update must not paint one frame with the rows collapsed.
+
+    Qt shows a widget added to an already-visible parent only once the event
+    loop delivers its ShowToParent event, and a hidden widget's layout item
+    reports itself empty -- so the whole synchronous geometry pass ran against
+    a rows layout of height 0. Measured before the fix: 0 px synchronously
+    against 42 and 64 px one turn later, with the window still at its previous
+    height. Inside `batched_update` that is a guaranteed bad frame rather than
+    a stale number, because the batch repaints synchronously.
+
+    Only the very first render escaped it, because `setVisible(True)` on the
+    panel shows its children with it -- which is why this drives three updates
+    and checks the second and third.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    try:
+        for count in (1, 2, 3):
+            entries = [(i, f"job {i}") for i in range(count)]
+            overlay.set_transcription_queue(entries)
+            synchronous_rows = overlay._queue_rows_layout.sizeHint().height()
+            synchronous_height = overlay.height()
+            app.processEvents()
+
+            assert synchronous_rows > 0, (
+                f"{count} rows measured as {synchronous_rows} px before the "
+                "event loop drained"
+            )
+            assert synchronous_rows == overlay._queue_rows_layout.sizeHint().height()
+            assert synchronous_height == overlay.height(), (
+                f"{count} rows: the window resized again after the event loop "
+                f"({synchronous_height} -> {overlay.height()})"
+            )
+    finally:
+        overlay.close()
+        overlay.deleteLater()
+
+
+def test_an_unchanged_queue_is_not_rebuilt():
+    """Rebuilding identical rows scrolls the panel back to the top.
+
+    It also destroys the Cancel button under the cursor, so a press whose
+    release lands after the rebuild produces no click and the cancel is
+    silently lost. The controller re-renders the queue on several unrelated
+    events, so an unchanged payload is common.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    try:
+        entries = [(i, f"#{i}/40 job {i}") for i in range(40)]
+        overlay.set_transcription_queue(entries)
+        app.processEvents()
+        scroll_bar = overlay._queue_scroll.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        app.processEvents()
+        parked = scroll_bar.value()
+        assert parked > 0, "the queue did not scroll, so this proves nothing"
+        before = _queue_rows(overlay)
+
+        overlay.set_transcription_queue(list(entries))
+        app.processEvents()
+
+        assert _queue_rows(overlay) == before, "identical rows were rebuilt"
+        assert scroll_bar.value() == parked
+    finally:
+        overlay.close()
+        overlay.deleteLater()
+
+
+def test_a_changed_queue_keeps_the_place_the_user_scrolled_to():
+    """A finished job rewrites every rank label, which is a real change.
+
+    Without restoring the position the user is yanked to the top of the list
+    exactly when they were reaching for an older job's Cancel.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    app.processEvents()
+    try:
+        overlay.set_transcription_queue([(i, f"#{i}/40 job {i}") for i in range(40)])
+        app.processEvents()
+        scroll_bar = overlay._queue_scroll.verticalScrollBar()
+        scroll_bar.setValue(scroll_bar.maximum())
+        app.processEvents()
+        parked = scroll_bar.value()
+        assert parked > 0, "the queue did not scroll, so this proves nothing"
+
+        overlay.set_transcription_queue([(i, f"#{i}/39 job {i}") for i in range(1, 40)])
+        app.processEvents()
+
+        assert scroll_bar.value() > 0, (
+            f"the panel jumped back to the top ({scroll_bar.value()} of "
+            f"{scroll_bar.maximum()}); it was parked at {parked}"
+        )
+    finally:
+        overlay.close()
+        overlay.deleteLater()
+
+
+@pytest.mark.parametrize(
+    ("label", "state", "detail", "expect_compact"),
+    [
+        ("a finished transcript", "Done", "word " * 200, False),
+        ("an error with its reason", "Error", "The paste failed. " * 30, False),
+        ("an idle overlay", "Idle", "Ready.", True),
+        ("a finished but empty result", "Done", "   ", True),
+    ],
+)
+def test_the_compact_policy_never_shrinks_around_a_result(
+    label, state, detail, expect_compact
+):
+    """The rule the settings-save and clear-text paths were missing.
+
+    `ensure_compact_size` pins the detail area to the compact cap, so applying
+    it to a `Done` truncates the transcript -- scrolled to the top, so the end
+    of the dictation is what disappears -- and leaves `_compact_mode` True, in
+    which every later reveal keeps the overlay small.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    overlay.set_state(state, detail)
+    app.processEvents()
+    height_before = overlay.height()
+    detail_before = overlay._detail_scroll.height()
+
+    overlay.ensure_compact_size_unless_showing_a_result()
+    app.processEvents()
+
+    try:
+        assert overlay._compact_mode is expect_compact, label
+        if not expect_compact:
+            assert overlay.height() == height_before, (
+                f"{label}: the window shrank from {height_before} to "
+                f"{overlay.height()}"
+            )
+            assert overlay._detail_scroll.height() == detail_before, label
+            assert overlay._detail_scroll.verticalScrollBar().maximum() == 0, (
+                f"{label}: part of the text is now scrolled out of view"
+            )
+    finally:
+        overlay.close()
+        overlay.deleteLater()
+
+
+def test_clearing_the_detail_does_not_shrink_a_result_that_arrives_first():
+    """`clear_detail_text` defers a second compact by one event-loop turn.
+
+    A queued transcription delivering inside that turn puts a transcript on
+    screen, and the unconditional `ensure_compact_size` then shrank the box
+    around it while the state label still read `Done`.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.show()
+    overlay.set_state("Done", "an earlier transcript")
+    app.processEvents()
+
+    overlay.clear_detail_text()
+    # The queued result lands before the deferred compact fires.
+    overlay.set_state("Done", "word " * 200)
+    height_with_result = overlay.height()
+    app.processEvents()
+
+    try:
+        assert overlay._compact_mode is False, (
+            "the deferred compact fired over a transcript that arrived after it"
+        )
+        assert overlay.height() == height_with_result, (
+            f"the window shrank from {height_with_result} to {overlay.height()}"
+        )
+    finally:
+        overlay.close()
+        overlay.deleteLater()

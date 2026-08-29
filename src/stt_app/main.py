@@ -621,7 +621,10 @@ def _restore_overlay_after_settings_save(
     settings = settings_store.load()
     overlay.set_always_on_top(settings.overlay_always_on_top)
     overlay.apply_corner_setting(settings.overlay_corner)
-    overlay.ensure_compact_size()
+    # Not `ensure_compact_size`: saving settings while a transcript is on the
+    # overlay used to truncate it to the compact cap and leave the overlay
+    # compact under a `Done` label.
+    overlay.ensure_compact_size_unless_showing_a_result()
 
 
 def _restore_after_system_resume(
