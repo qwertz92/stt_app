@@ -26,6 +26,29 @@ class WindowFocusHelper(Protocol):
 
 _GWL_EXSTYLE = -20
 _WS_EX_TOOLWINDOW = 0x00000080
+# Windows shell surfaces that can hold the foreground and can never take
+# dictated text. They matter because clicking the tray icon activates the
+# taskbar itself: without this, the foreground sampled at that moment is
+# `Shell_TrayWnd`, it is remembered as the last foreign window, and
+# `restore_target_window` then raises the taskbar and pastes into nothing --
+# after overwriting the editor handle that was correctly remembered before.
+# The own-process tool-window test cannot catch them: it returns early for a
+# foreign PID, and every one of these belongs to explorer.exe. Measured on
+# this Windows 11 desktop, all nine were accepted as valid paste targets.
+_SHELL_SURFACE_CLASSES = frozenset(
+    {
+        "Shell_TrayWnd",  # the taskbar
+        "Shell_SecondaryTrayWnd",  # the taskbar on further monitors
+        "NotifyIconOverflowWindow",  # the classic hidden-icons flyout
+        "TopLevelWindowForOverflowXamlIsland",  # its Windows 11 replacement
+        "Progman",  # the desktop
+        "WorkerW",  # the desktop's wallpaper host
+        "XamlExplorerHostIslandWindow",  # Task View / Alt+Tab
+        "MultitaskingViewFrame",  # Task View, older builds
+        "ForegroundStaging",  # transient, during foreground animations
+    }
+)
+_WINDOW_CLASS_BUFFER_CHARS = 256
 
 
 class Win32WindowFocusHelper:
@@ -54,7 +77,7 @@ class Win32WindowFocusHelper:
         hwnd = int(self._user32.GetForegroundWindow() or 0)
         if not hwnd:
             return self._remembered_foreign_window()
-        if self._is_own_non_target_window(hwnd):
+        if not self._is_possible_target_window(hwnd):
             # No `or hwnd`. Handing our own window back made it the dictation
             # target whenever nothing foreign had been remembered yet, which
             # on a fresh session is every path that has not started a
@@ -81,10 +104,30 @@ class Win32WindowFocusHelper:
         """
         try:
             hwnd = int(self._user32.GetForegroundWindow() or 0)
-            if hwnd and not self._is_own_non_target_window(hwnd):
+            if hwnd and self._is_possible_target_window(hwnd):
                 self._last_foreign_window = hwnd
         except Exception:
             return
+
+    def _is_possible_target_window(self, hwnd: int) -> bool:
+        """Could this window plausibly receive a pasted transcript?"""
+        return not self._is_own_non_target_window(
+            hwnd
+        ) and not self._is_shell_surface(hwnd)
+
+    def _window_class_name(self, hwnd: int) -> str:
+        get_class_name = getattr(self._user32, "GetClassNameW", None)
+        if get_class_name is None:
+            return ""
+        buffer = ctypes.create_unicode_buffer(_WINDOW_CLASS_BUFFER_CHARS)
+        try:
+            get_class_name(hwnd, buffer, _WINDOW_CLASS_BUFFER_CHARS)
+        except Exception:
+            return ""
+        return buffer.value
+
+    def _is_shell_surface(self, hwnd: int) -> bool:
+        return self._window_class_name(hwnd) in _SHELL_SURFACE_CLASSES
 
     def _is_own_non_target_window(self, hwnd: int) -> bool:
         process_id = ctypes.wintypes.DWORD()

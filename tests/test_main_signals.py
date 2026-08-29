@@ -976,7 +976,17 @@ def test_load_app_icon_uses_bundled_asset():
     _ = app
 
 
-def test_every_tray_activation_notes_the_foreground_first():
+@pytest.mark.parametrize(
+    "reason",
+    [
+        QtWidgets.QSystemTrayIcon.Context,
+        QtWidgets.QSystemTrayIcon.Trigger,
+        QtWidgets.QSystemTrayIcon.DoubleClick,
+        QtWidgets.QSystemTrayIcon.MiddleClick,
+    ],
+    ids=["context", "trigger", "double-click", "middle-click"],
+)
+def test_every_tray_activation_notes_the_foreground_first(reason):
     """The tray menu takes the foreground for our own hidden host window.
 
     `activated` is emitted before `TrackPopupMenu` runs, which is the last
@@ -985,6 +995,12 @@ def test_every_tray_activation_notes_the_foreground_first():
     yet. Without it the first dictation started from the tray menu aimed at
     our 0x0 helper window, and the transcript went nowhere while the overlay
     reported success.
+
+    Every reason is driven, not just `Context`: the handler has two early
+    returns below this call, so a version that only tested the context menu
+    stayed green when the call was moved below them -- and `MiddleClick`,
+    which starts a recording outright, is exactly the reason that needs the
+    target most.
     """
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     controller = FakeController()
@@ -999,7 +1015,7 @@ def test_every_tray_activation_notes_the_foreground_first():
         open_history_dialog=lambda: None,
     )
 
-    tray.activated.emit(QtWidgets.QSystemTrayIcon.Context)
+    tray.activated.emit(reason)
 
     assert controller.note_foreground_calls == 1, (
         "the foreground was not recorded before the menu takes it"
