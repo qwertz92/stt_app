@@ -24,6 +24,16 @@ _ALLOWED_REDIRECT_HOSTS = {
 # signature from an arbitrary publisher is not sufficient for automatic install.
 TRUSTED_WINDOWS_PUBLISHER_SUBJECTS: frozenset[str] = frozenset()
 _SHA256_RE = re.compile(r"^([0-9a-fA-F]{64})(?:[ \t]+\*?([^\r\n]+))?[ \t]*$")
+# The installer path reaches PowerShell through the environment, never as a
+# command-line token. Everything after ``-Command`` is joined into the command
+# text and parsed as PowerShell source, so a bare path is re-parsed in argument
+# mode: measured, a directory named ``a$(hostname)`` made PowerShell run
+# ``hostname`` and check ``aHomeBase`` instead. A `$` alone is enough to break
+# it without any malice, and `$` is a legal character in a Windows account
+# name. ``$env:`` expansion in argument mode passes the value as one string and
+# does not re-parse it -- verified with paths containing ``$(...)``, ``$``, a
+# space and a semicolon.
+_INSTALLER_PATH_ENV_VAR = "STT_APP_INSTALLER_PATH"
 
 
 class UpdateDownloadCancelled(RuntimeError):
@@ -151,11 +161,11 @@ def verify_windows_publisher_signature(
     if sys.platform != "win32":
         return False, "Publisher-signature verification is available only on Windows."
     command = (
-        "& { param([string]$InstallerPath) "
-        "$signature = Get-AuthenticodeSignature -LiteralPath $InstallerPath; "
+        "$signature = Get-AuthenticodeSignature -LiteralPath "
+        f"$env:{_INSTALLER_PATH_ENV_VAR}; "
         "Write-Output $signature.Status; "
         "if ($signature.SignerCertificate) { "
-        "Write-Output $signature.SignerCertificate.Subject } }"
+        "Write-Output $signature.SignerCertificate.Subject }"
     )
     try:
         completed = runner(
@@ -165,12 +175,12 @@ def verify_windows_publisher_signature(
                 "-NonInteractive",
                 "-Command",
                 command,
-                str(installer_path),
             ],
             capture_output=True,
             text=True,
             timeout=20,
             check=False,
+            env={**os.environ, _INSTALLER_PATH_ENV_VAR: str(installer_path)},
         )
     except Exception as exc:
         return False, f"Could not verify the Windows publisher signature: {exc}"

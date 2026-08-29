@@ -149,7 +149,9 @@ def test_verify_windows_publisher_signature_accepts_valid_status(monkeypatch):
 
     assert valid is True
     assert detail == "CN=Example Publisher"
-    assert calls[0][0][-1] == "update.exe"
+    assert calls[0][1]["env"][update_installer._INSTALLER_PATH_ENV_VAR] == (
+        "update.exe"
+    )
 
 
 def test_verify_windows_publisher_signature_rejects_unpinned_publisher(monkeypatch):
@@ -178,3 +180,48 @@ def test_verify_windows_publisher_signature_rejects_unsigned(monkeypatch):
 
     assert valid is False
     assert "NotSigned" in detail
+
+
+@pytest.mark.parametrize(
+    "folder",
+    [
+        "a$(hostname)",
+        "a$HOME",
+        "with space",
+        "semi;colon",
+        "plain",
+    ],
+)
+def test_the_installer_path_never_reaches_powershell_as_source(monkeypatch, folder):
+    """Everything after `-Command` is parsed as PowerShell, including argv tail.
+
+    Passing the path as a trailing token had PowerShell re-parse it in argument
+    mode: measured against the real `powershell.exe`, a directory named
+    `a$(hostname)` made it execute `hostname` and then look for the installer
+    under `aHomeBase`. A path merely containing `$` breaks the check with no
+    malice at all, and `$` is legal in a Windows account name. The path must
+    therefore travel in the environment, where argument-mode expansion hands it
+    over as one opaque string.
+    """
+    monkeypatch.setattr(update_installer.sys, "platform", "win32")
+    installer = Path("C:/base") / folder / "stt_app-win-x64-setup.exe"
+    calls = []
+
+    def runner(command, **kwargs):
+        calls.append((command, kwargs))
+        return SimpleNamespace(returncode=0, stdout="NotSigned\n")
+
+    verify_windows_publisher_signature(installer, runner=runner)
+
+    command, kwargs = calls[0]
+    assert kwargs["env"][update_installer._INSTALLER_PATH_ENV_VAR] == str(installer)
+    for token in command:
+        assert str(installer) not in token, (
+            f"the path is still a command token, which PowerShell re-parses: {token!r}"
+        )
+        assert folder not in token, (
+            f"a path component leaked into the command text: {token!r}"
+        )
+    # The environment must be inherited, not replaced: a bare two-entry env
+    # loses SystemRoot and PowerShell refuses to start.
+    assert len(kwargs["env"]) > 1
