@@ -234,7 +234,14 @@ class _HistoryTabMixin:
         )
 
     def _persist_history_limit_now(self, limit: int) -> bool:
-        updated = replace(self._loaded_settings, history_max_items=limit)
+        # Loaded fresh, exactly like `history_dialog._persist_limit`. This is
+        # the third settings-writing path in this dialog and was the only one
+        # that wrote from the dialog-open snapshot, so choosing "import all
+        # and set unlimited" wrote back a stale overlay opacity, pin state and
+        # language -- undoing, by importing history, whatever the user had
+        # changed on the overlay while Settings was open.
+        stored = self._settings_store.load()
+        updated = replace(stored, history_max_items=limit)
         try:
             self._settings_store.save(updated)
         except Exception as exc:

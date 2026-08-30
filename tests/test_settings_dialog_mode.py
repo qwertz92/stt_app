@@ -1,3 +1,4 @@
+import dataclasses
 import json
 import logging
 import os
@@ -1981,6 +1982,118 @@ def test_a_crashed_benchmark_child_keeps_the_cases_it_already_streamed(
     status = dialog.benchmark_status_label.text()
     assert "stopped early" in status, status
     assert "exited with code 1" in status, status
+    _ = app
+
+
+def _dialog_with_store(settings: AppSettings):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(settings)
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    return dialog, store, app
+
+
+def test_a_settings_save_keeps_a_language_the_overlay_picked_meanwhile():
+    """The overlay's Lang button writes `language_mode` straight to the store.
+
+    Settings is non-modal and only reloads while it is hidden, so its language
+    combo still shows the dialog-open snapshot. Saving wrote that snapshot
+    back, reverting a language the user had just chosen on the overlay -- and
+    `controller.reload_settings` then pushed the reverted value back onto the
+    overlay button. The three widget-less fields the overlay owns were already
+    handled; this is the fourth, and the only one with a widget here.
+    """
+    dialog, store, app = _dialog_with_store(AppSettings(language_mode="auto"))
+    # The overlay picks German while the dialog is open.
+    store._settings = dataclasses.replace(store._settings, language_mode="de")
+
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.language_mode == "de", (
+        "the save reverted the overlay's language pick"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_saving_api_keys_keeps_a_language_the_overlay_picked_meanwhile():
+    """Saving keys expresses no intent about the language at all."""
+    dialog, store, app = _dialog_with_store(AppSettings(language_mode="auto"))
+    store._settings = dataclasses.replace(store._settings, language_mode="de")
+
+    dialog._save_api_keys_only()
+
+    assert store.saved is not None
+    assert store.saved.language_mode == "de"
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_language_the_user_really_changed_still_wins():
+    """Deferring must apply only while the combo is untouched."""
+    # A model that offers more than "auto"; the shipped default (Parakeet)
+    # deliberately offers nothing else.
+    dialog, store, app = _dialog_with_store(
+        AppSettings(model_size="small", language_mode="auto")
+    )
+    choices = [
+        dialog.language_combo.itemData(i)
+        for i in range(dialog.language_combo.count())
+    ]
+    picked = [
+        str(choice) for choice in choices if choice and str(choice) != "auto"
+    ]
+    # Two *different* options. Taking the first one and hardcoding "de" for the
+    # store made both equal (the list starts "auto", "de", "en"), so the mutant
+    # that defers unconditionally returned the expected value and survived.
+    explicit, overlay_pick = picked[0], picked[1]
+    assert explicit != overlay_pick
+    dialog.language_combo.setCurrentIndex(dialog.language_combo.findData(explicit))
+    # And the overlay picks something else at the same time.
+    store._settings = dataclasses.replace(
+        store._settings, language_mode=overlay_pick
+    )
+
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.language_mode == explicit, (
+        "an explicit combo change was overridden by the stored value"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_persisting_the_history_limit_keeps_what_the_overlay_wrote(tmp_path):
+    """The third write path in this dialog, and the only one still stale.
+
+    Reached from History > Import > "import all and set unlimited". It wrote
+    `_loaded_settings`, the dialog-open snapshot, so importing history reverted
+    the overlay's opacity, pin state and language. The standalone History
+    dialog's twin loads fresh and always did.
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(language_mode="auto", overlay_opacity_percent=100)
+    )
+    store._settings = dataclasses.replace(
+        store._settings,
+        language_mode="de",
+        overlay_opacity_percent=42,
+        overlay_always_on_top=False,
+    )
+
+    assert dialog._persist_history_limit_now(0) is True
+
+    assert store.saved is not None
+    assert store.saved.history_max_items == 0
+    assert store.saved.language_mode == "de"
+    assert store.saved.overlay_opacity_percent == 42
+    assert store.saved.overlay_always_on_top is False
+    dialog.deleteLater()
     _ = app
 
 

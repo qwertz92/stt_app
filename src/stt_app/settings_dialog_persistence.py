@@ -419,6 +419,11 @@ class _PersistenceMixin:
             # opened, so without this an overlay change made while it was open
             # is written back to its old value by a key save.
             **self._overlay_owned_settings(),
+            # Saving API keys says nothing about the language, so an overlay
+            # pick made while the dialog was open must survive it. This path
+            # reverted one with no dialog edit at all.
+            language_mode=self._stored_language_mode()
+            or self._loaded_settings.language_mode,
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             has_openai_key=key_states["openai"],
             has_deepgram_key=key_states["deepgram"],
@@ -454,9 +459,40 @@ class _PersistenceMixin:
     # remembered in one place and forgotten in the other.
     _OVERLAY_OWNED_FIELDS = ("overlay_opacity_percent", "overlay_always_on_top")
 
+    def _language_mode_for_save(self, override: str | None) -> str:
+        """The combo's value, unless the user never touched it.
+
+        An untouched combo is not a choice, it is the dialog-open snapshot
+        being rendered -- and the overlay's Lang button writes the same field
+        straight to the store. Saving the combo unconditionally therefore
+        reverted a language the user had just picked on the overlay, on any
+        Settings save at all. Deferring only while the combo still equals the
+        snapshot means a combo the user really did change always wins.
+        """
+        if override:
+            return str(override)
+        combo = str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
+        snapshot = str(getattr(self._loaded_settings, "language_mode", "") or "")
+        if snapshot and combo == snapshot:
+            return self._stored_language_mode() or combo
+        return combo
+
     def _overlay_owned_settings(self) -> dict[str, object]:
         stored = self._settings_store.load()
         return {name: getattr(stored, name) for name in self._OVERLAY_OWNED_FIELDS}
+
+    def _stored_language_mode(self) -> str:
+        """The language currently on disk, which the overlay also writes.
+
+        `language_mode` is a fourth field written from outside this dialog --
+        `controller.set_language_mode`, from the overlay's Lang button -- but
+        unlike the three above it *has* a widget here, so it cannot simply
+        join `_OVERLAY_OWNED_FIELDS` (the construction would then pass it
+        twice). The two save paths handle it differently on purpose: the key
+        save expresses no intent about the language at all and must preserve
+        it, while a language combo the user actually changed must win.
+        """
+        return str(getattr(self._settings_store.load(), "language_mode", "") or "")
 
     def _construct_settings_from_widgets(
         self,
@@ -530,11 +566,7 @@ class _PersistenceMixin:
                     self.model_combo.currentData() or self._loaded_settings.model_size
                 )
             ),
-            language_mode=str(
-                language_mode
-                or self.language_combo.currentData()
-                or DEFAULT_LANGUAGE_MODE
-            ),
+            language_mode=self._language_mode_for_save(language_mode),
             custom_vocabulary=self.custom_vocabulary_edit.toPlainText(),
             vad_enabled=self.vad_checkbox.isChecked(),
             input_device_name=str(self.microphone_combo.currentData() or ""),
