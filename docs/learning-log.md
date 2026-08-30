@@ -3,6 +3,146 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-30 (twelfth round: three ways a dictation disappeared)
+
+Every defect below was proved before it was fixed, by running the real code
+and printing what it produced. Two of the three had already been reported as
+"a known gap" in `AGENTS.md`, which is not the same as being harmless.
+
+### A decode as slow as the window replaced the whole transcript
+
+Streaming with faster-whisper decodes the trailing `stream_partial_window_s`
+(8 s) of audio on every partial. When the decode itself takes about as long as
+that window -- a large model on a slow machine, RTF near 1 -- the buffer
+advances further than the window is wide, so two consecutive windows share no
+audio at all. `merge_rolling_window` then finds no seam, falls through to its
+replace branch, and with continuous speech `silent_seconds` never accumulates,
+so no pause has ever pinned `segment_floor` and the replace is unbounded.
+
+Measured with an 8 s window and 9 s between decodes: `'erster teil der
+nachricht'` became `'und dann kam etwas ganz anderes'`. Whatever the length of
+the dictation, only the last window survived. The fast finalizer had the same
+seam and lost everything in one step at the moment the text is handed over.
+
+The decode now reports the byte range it covered (`last_window_start` /
+`last_window_end`), and a window that starts at or after the previous window's
+end is treated as a new segment: the floor is pinned and the text is appended.
+That is provably correct rather than heuristic -- nothing already transcribed
+can be revised by a window that shares none of its audio. The speech in the
+gap was never decoded and is lost either way; a warning says so once per
+session.
+
+Writing the test taught something the fix did not: the first pair of fake
+transcripts shared three trailing words, and the merge's re-anchor search
+found a seam the audio says cannot exist, so the window was silently swallowed
+instead of replacing anything. A different loss, and one that would have made
+the test pass for the wrong reason.
+
+### The stream worker could die without saying anything
+
+Only the decode inside `_maybe_emit_partial` and the finalization were
+guarded. The energy meters, the merge and the buffer append were not, so an
+exception in any of them simply ended the thread. `stop_stream` then joined a
+dead worker, found no error and an empty `final_text`, and reported the whole
+dictation as "No speech detected". A windowed build has no stderr, so
+`threading.excepthook` printed the traceback nowhere at all. Proved by making
+`_stream_slice_is_quiet` raise on the worker thread: the worker died and
+`stop_stream` returned `''` with no exception.
+
+### An empty finalize threw away the live transcript
+
+An explicit abort and a dying stream runtime both rescue the best-known live
+text before the reset wipes it. A finalize that returned nothing did not: the
+overlay said "No speech detected", history got no entry, and the dictation
+survived only as the part already pasted into the document. Both AssemblyAI
+and Deepgram can return an empty string from `stop_stream` after a socket
+problem, which is exactly when the live text is the only copy left.
+
+### Clear queue pasted the queue it was clearing
+
+`clear_transcription_queue` cancelled the rows one at a time, and a single
+row's cancel deliberately flushes the deferred inserts beside it -- otherwise
+the X on one row would strand the finished transcripts on the others. On the
+first iteration those others are exactly what is about to be cancelled.
+Measured with two finished transcripts and one running job: `transcript B.`
+was typed into the focused window, while `transcript A.`, reached before the
+flush, was discarded. Which ones survived depended purely on the loop order.
+Every job is now stopped before anything is delivered.
+
+### Three smaller ones in the same pass
+
+- `Executor.submit` raises once the pool is shut down and when a worker thread
+  cannot be started. Neither submit site handled it, so the exception escaped
+  into the Qt slot, the queue row sat at "Processing" for the rest of the
+  session, and the streaming job's runtime lease -- which only its worker's
+  `finally` releases -- held the shared runtime lock for the process lifetime.
+- `_get_or_create_transcriber` closed the cached runtime while it was still
+  installed as the cache. `create_transcriber` raises for a missing API key or
+  an absent model, and the closed runtime then stayed under its old key, so
+  switching the settings back handed it to the next dictation. AGENTS.md
+  already stated this rule for two other sites; this was the third.
+- A cancelled Local-tab download deleted the partial files a *preload* was
+  parked to resume from, because the preload registers implicit interest and
+  the guard checked explicit interest only. Downloads now register every
+  parked caller.
+
+### The overlay clipped its own buttons above 9 pt
+
+Windows' Accessibility > "Text size" raises the application font's point size
+without changing the DPI, so Qt's device-pixel-ratio does not scale a pixel
+constant with it. Measured: at 11.2 pt the Record button needs 82 px against
+its pinned 78 and Reset Pos 80 against 74; at 13.5 pt nine buttons clip and
+every one of them is 4 px too short; at 18 pt Record needs 108x34 against
+78x24. At the default 9 pt everything already fits.
+
+The sizes are now measured from every caption a button can show. Two details
+mattered: the pass has to run *after* the first `set_state`, because only then
+does the container carry the stylesheet whose padding and border a button's
+`sizeHint` includes -- measuring in the constructor came out 1-2 px short at
+every scale -- and the header flanks have to be balanced from the resulting
+sizes rather than before them.
+
+### Four claims that did not survive being checked
+
+- The Parakeet entry in the model picker said "CPU, fastest". This repository
+  formally retracted that superlative: `tiny` measured 0.033 RTF against
+  Parakeet's 0.043 in the same run.
+- A comment said that clearing the orphaned runtime before closing it restores
+  the `TranscriptionCanceled` the branch exists to deliver. It does not -- a
+  close that raises skips that `raise` either way. What it prevents is the
+  double close and the loss of the first failure.
+- A comment said the history import catches `UnicodeDecodeError` "before
+  `json.JSONDecodeError` would be". It comes from `read_text`, before
+  `json.loads` runs at all, and the two are siblings under `ValueError`, so
+  clause order decides nothing.
+- The smoke test said its loop reaches the backup "precisely when the primary
+  raised `OSError`". It also reaches it when the primary is missing, is not
+  valid UTF-8 or JSON, or is a JSON value that is not an object -- and in the
+  last two cases copying the primary would hand the diagnostic exactly the
+  file the app is about to discard.
+
+The 953,446-probe measurement was recorded with three different provenances in
+four places. Re-measured: a pure-Python stub of the probe runs the loop at
+15.6 M iterations/s, 33x too fast to have produced it, while the real
+`SendMessageTimeoutW` against a non-window handle gives 0.99-1.01 M probes in
+2.000 s -- the same shape as the recorded 478 k/s. The number is real; the
+"fake that always reports hung" sentence around it was not.
+
+### Two tests that could not fail
+
+- `test_a_deleted_primary_does_not_get_the_backup_overwritten` asserted
+  `backup unchanged OR read() == saved`, and the recovery its sibling test
+  already pins makes the second half true every time. Restated as surviving
+  the loss twice.
+- A new assertion that a cleared cache key forces a preload passed with or
+  without the fix, because `_local_model_preload_needed` returns True on its
+  own when no preload result has been recorded yet. The test now records one
+  first.
+
+Both were caught by mutation testing, which also found that a test for the
+partials cleanup was satisfied by the real cleanup returning `(0, 0)` for a
+model with nothing on disk -- it never observed whether the guard held.
+
 ## 2026-08-28 (tenth and eleventh rounds: two silent data losses, and a hang)
 
 Two of the four defects in this pair of rounds destroyed user data with no

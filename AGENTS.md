@@ -601,14 +601,133 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   entries for one dictation. **The teardown itself is never conditional** —
   gating `_teardown_active_stream_runtime` on the same check abandoned a live
   capture, its transcriber and its runtime lease, leaving the microphone
-  recording after the overlay already showed Error. Known gap: if that pending
-  finalize then raises or returns empty, the partial is lost (the pre-existing
-  behaviour); preserving it needs the streaming job's terminal handler to write
-  a stashed partial when it produced no text. Reading `job.mode` instead of `_active_session_mode` in
+  recording after the overlay already showed Error. **A finalize that returns
+  nothing is the third road to the same loss, and it is closed the same way**:
+  `_on_transcription_ready` rescues `_current_streaming_partial_text()` when a
+  streaming result is empty, before `_reset_streaming_state()` wipes it. Both
+  AssemblyAI and Deepgram can return an empty string from `stop_stream()`
+  after a socket problem, which is exactly when the live text is the only copy
+  left; without the rescue the overlay said "No speech detected", history got
+  no entry, and the dictation survived only as the part already pasted into
+  the document. A session that really said nothing has no live text either, so
+  it still reports that. Reading `job.mode` instead of `_active_session_mode` in
   `_on_transcription_ready` was tried and reverted: every writer of
   `_active_session_mode = "batch"` also resets the streaming text state, so
   `committed_text` is already empty by then and the delivery is identical
   either way — it only relabelled history and suppressed the completion beep.
+- **Two rolling windows that share no audio append, they never replace**:
+  the decode takes the trailing `stream_partial_window_s`, so a decode that
+  takes about as long as that window -- a large model on a slow machine, RTF
+  near 1 -- advances the buffer further than the window is wide and the next
+  window is disjoint from the last. `merge_rolling_window` then finds no seam
+  and falls through to its replace branch, and with continuous speech
+  `silent_seconds` never accumulates, so no pause has ever pinned
+  `segment_floor` and the replace is unbounded. Measured with an 8 s window
+  and 9 s between decodes: `'erster teil der nachricht'` became `'und dann kam
+  etwas ganz anderes'`, i.e. only the last window survived however long the
+  dictation had been, and the fast finalizer lost everything in one step.
+  `_transcribe_current_stream_buffer` therefore records the byte range it
+  decoded (`last_window_start` / `last_window_end`) and
+  `_window_shares_no_audio_with_the_last` compares the next window's start
+  against the previous end. Three properties are load-bearing:
+  - **The offsets come from the decode, not from the caller.** The capture
+    thread keeps appending, so a length read *before* the call gives a window
+    start earlier than the real one -- the direction that reports an overlap
+    where there is none.
+  - **Disjoint is proven, not measured.** Nothing already transcribed can be
+    revised by a window that shares none of its audio, so pinning the floor
+    and appending is correct rather than heuristic. It is the pause case
+    reached by the other road; `new_segment` only skips an alignment search
+    that cannot succeed -- and that search does sometimes succeed by
+    coincidence, on words the two windows happen to share, which swallows the
+    window instead of appending it. A test whose two fake transcripts shared
+    three trailing words hit exactly that and passed for the wrong reason.
+  - **The speech in the gap was never decoded and is lost either way.** This
+    only stops that loss from taking the rest of the transcript with it, and
+    logs `streaming_decode_slower_than_window` once per session.
+- **The stream worker records why it stopped, always**: only the decode inside
+  `_maybe_emit_partial` and the finalization were guarded, so an exception in
+  the energy meters, the merge or the buffer append simply ended the thread.
+  `stop_stream` then joined a dead worker, found no error and an empty
+  `final_text`, and the whole dictation reached the user as "No speech
+  detected" -- and a windowed build has no stderr, so `threading.excepthook`
+  printed the traceback nowhere. `_stream_worker` wraps `_run_stream_worker`
+  in `except BaseException`, records the error (keeping the *first* one, so a
+  failure raised on the way out cannot replace the one that explains the
+  session) and does not re-raise, because at the top of a worker thread
+  re-raising only writes to that same missing stderr.
+- **A streaming window is copied, not the whole recording**:
+  `_trailing_window` returns the window plus the byte range it covers, reading
+  the end once so the two agree. `bytes(pcm_buffer)` grows with the dictation
+  -- measured at 16 kHz mono, 0.21 ms for one minute of audio, 0.93 ms for
+  five and 3.14 ms for fifteen, against a flat 0.10 ms -- on a path that runs
+  every ~350 ms and took up to three such copies when the pause branch also
+  measured the window.
+- **Clear queue stops every job before it delivers anything**: cancelling the
+  rows one at a time is not the same operation.
+  `cancel_queued_transcription` flushes the deferred inserts on purpose, so
+  that the ✕ on one row does not strand the finished transcripts on the rows
+  beside it -- and on the first iteration of a loop over every row, those rows
+  are exactly what is about to be cancelled. Measured with two finished
+  transcripts and one running job: `transcript B.` was pasted into the focused
+  window while `transcript A.`, reached before the flush, was discarded, so
+  which ones survived depended purely on the loop order. Stopping every job
+  first removes each deferred entry with its job, leaving the flush nothing to
+  deliver.
+- **A worker that cannot be scheduled is reported, not dropped**:
+  `Executor.submit` raises once the pool has been shut down and again when the
+  interpreter cannot start a worker thread. Both submit sites now catch it and
+  route through `_on_transcription_failed`. Without that the exception escaped
+  into the Qt slot, the queue row sat at "Processing" with no error and no
+  Retry for the rest of the session, the recording -- often the only copy --
+  was never offered for a retry, and the streaming job's runtime lease, which
+  only its worker's `finally` releases, held `_transcriber_runtime_lock` for
+  the process lifetime.
+- **`_get_or_create_transcriber` evicts before it closes** -- the third site
+  of the rule the two `_reset_*` helpers already follow. `create_transcriber`
+  raises for a missing API key or an absent model, and the closed runtime was
+  then still installed under its *old* key, so switching the settings back
+  handed that dead runtime to the next dictation. The key is cleared with it,
+  because `_local_model_preload_needed` reads the key alone: a stale one
+  beside an empty cache answers "already loaded" and no preload is started.
+- **Every caller parked in the download slot is registered**
+  (`ModelDownloadCoordinator.has_waiting_download`), and a cancelled Local-tab
+  download keeps the partial files while one exists. The mirror-image guard on
+  the preload path checks `has_explicit_interest`, and the waiter it must not
+  rob is typically a *preload*, whose interest is implicit and therefore
+  invisible to that check -- so cancelling deleted the bytes the preload was
+  parked to resume from and it restarted the multi-gigabyte fetch from zero.
+  The registration is unconditional and given back in a `finally`:
+  incrementing only when the slot looks busy is a race, because `release`
+  clears `_active` and notifies, and a caller that slips in before the parked
+  thread wakes would otherwise decrement *its* registration to zero. Nothing
+  can observe the transient count of a caller that takes the slot immediately,
+  since every reader holds the same condition.
+- **A preload queued behind another model's download says so**
+  (`_preload_waits_for_another_model`): the phase is already `download` there,
+  because `_download_model_for_preload` sets it and *then* blocks inside
+  `acquire`, so both the progress detail and the phase word have to ask.
+  Before this the overlay showed a frozen "approx. 60% (919/1531 MB),
+  measuring speed" -- a percentage measured from a directory nothing was
+  writing to -- for as long as the other download took.
+- **Pinned overlay button sizes are measured, not constants**
+  (`OverlayUI._fit_buttons_to_font`). Windows' Accessibility > "Text size"
+  raises the application font's point size *without* changing the DPI, so
+  Qt's device-pixel-ratio does not scale a pixel constant with it. Measured:
+  at 11.2 pt Record needs 82 px against its pinned 78 and Reset Pos 80 against
+  74; at 13.5 pt nine buttons clip and every one of them is 4 px too short; at
+  18 pt Record needs 108x34 against 78x24. At the default 9 pt everything
+  already fits, so the shipped layout is unchanged. Two ordering rules:
+  - **It runs after the first `set_state`**, because only then does the
+    container carry its stylesheet, whose padding and border a button's
+    `sizeHint` includes -- measuring in the constructor came out 1-2 px short
+    at every scale.
+  - **`_balance_header_flanks` runs last, from the sizes that pass sets.**
+    Balancing first and then widening one group is exactly the 12 px offset
+    that balancing exists to remove.
+  Each entry lists every caption its button can ever show, because a caption
+  swap must not reflow its row; Clear is deliberately single-caption, and the
+  Cancel/Retry/Insert slot is sized for the widest of the three.
 - **Custom vocabulary** (`custom_vocabulary`, General tab): user terms parsed
   by `config.parse_custom_vocabulary` (newline/comma/semicolon split,
   case-insensitive dedupe, 100-term cap). Biasing per provider: faster-whisper
