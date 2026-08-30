@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import json
 import queue
 import subprocess
@@ -231,6 +232,70 @@ def test_nonzero_exit_is_error_even_after_streamed_case(monkeypatch, tmp_path):
             case_callback=None,
             cancel_check=None,
         )
+
+
+def _event_bytes(**payload) -> bytes:
+    line = benchmark_worker.BENCHMARK_EVENT_PREFIX + json.dumps(payload) + "\n"
+    return line.encode("utf-8")
+
+
+def test_one_undecodable_byte_does_not_discard_the_rest_of_the_run():
+    """A library writing bytes cp1252 cannot represent must not end the stream.
+
+    `text=True` alone gives cp1252/strict on Windows, and 0x81 is undefined
+    there. The decode raised inside the reader thread, its `finally` pushed
+    the EOF sentinel, and the parent stopped reading, killed the worker and
+    reported the run as a failure -- discarding every case already measured.
+    """
+    raw = (
+        # U+0441 encodes to 0xD1 0x81 in UTF-8, and 0x81 is one of the five
+        # bytes cp1252 leaves undefined. A Cyrillic profile name in a path
+        # printed by a library is enough to produce it.
+        "noise from a library \N{CYRILLIC SMALL LETTER ES}\n".encode()
+        + _event_bytes(event="progress", text="hi")
+        + _event_bytes(event="done")
+    )
+
+    strict = io.TextIOWrapper(io.BytesIO(raw), encoding="cp1252", errors="strict")
+    strict_events: queue.Queue = queue.Queue()
+    with pytest.raises(UnicodeDecodeError):
+        benchmark_process._pump_events(strict, strict_events)
+
+    tolerant = io.TextIOWrapper(io.BytesIO(raw), encoding="utf-8", errors="replace")
+    events: queue.Queue = queue.Queue()
+    benchmark_process._pump_events(tolerant, events)
+
+    collected = []
+    while True:
+        item = events.get_nowait()
+        if item is benchmark_process._EOF:
+            break
+        collected.append(item)
+    assert collected == [
+        {"event": "progress", "text": "hi"},
+        {"event": "done"},
+    ]
+
+
+def test_the_benchmark_child_pipe_is_utf8_on_both_ends(monkeypatch, tmp_path):
+    captured = {}
+    monkeypatch.setattr(benchmark_process, "_repo_root", lambda: tmp_path)
+    monkeypatch.setattr(
+        benchmark_process,
+        "benchmark_command",
+        lambda _path, _env: ["python", "worker"],
+    )
+    monkeypatch.setattr(
+        benchmark_process.subprocess,
+        "Popen",
+        lambda *args, **kwargs: captured.update(args=args, kwargs=kwargs) or object(),
+    )
+
+    benchmark_process.start_benchmark_process(tmp_path / "options.json")
+
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["errors"] == "replace"
+    assert captured["kwargs"]["env"]["PYTHONIOENCODING"] == "utf-8"
 
 
 def test_start_process_creates_posix_process_group(monkeypatch, tmp_path):

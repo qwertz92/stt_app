@@ -200,6 +200,18 @@ def _pump_stderr(stream, tail: collections.deque[str]) -> None:
 
 def start_benchmark_process(options_path: Path) -> subprocess.Popen[str]:
     env = dict(os.environ)
+    # Both halves of the pipe are pinned to UTF-8, and the reading half
+    # tolerates anything that is not. `text=True` alone picks the locale
+    # encoding, which on Windows is cp1252 with errors="strict", and the
+    # five bytes 0x81 0x8D 0x8F 0x90 0x9D are simply undefined there. Any
+    # library writing non-Latin-1 text to the child's stdout -- a path under
+    # a Cyrillic or Greek profile name is enough -- then raised inside the
+    # reader thread, whose `finally` pushes the EOF sentinel: the parent
+    # stopped reading, killed the still-running worker and reported the whole
+    # run as a failure, discarding every case it had already streamed. Our
+    # own events survive that (json.dumps escapes to ASCII), so it is
+    # exactly the "library noise on stdout" the worker documents as ignored.
+    env["PYTHONIOENCODING"] = "utf-8"
     command = benchmark_command(options_path, env)
     cwd = None if getattr(sys, "frozen", False) else str(_repo_root())
     return subprocess.Popen(
@@ -207,6 +219,8 @@ def start_benchmark_process(options_path: Path) -> subprocess.Popen[str]:
         cwd=cwd,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         creationflags=_subprocess_no_window_flags(),
