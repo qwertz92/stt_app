@@ -851,6 +851,33 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             pass
 
     def _stream_worker(self, session: _StreamingSession) -> None:
+        """Run the streaming loop, and never end without saying why.
+
+        Only the decode inside `_maybe_emit_partial` and the finalization
+        below were guarded. The energy meters, the merge and the buffer append
+        were not, so an exception in any of them simply ended the thread:
+        `stop_stream` joined a dead worker, found no error and an empty
+        `final_text`, and the whole dictation reached the user as "No speech
+        detected". A windowed build has no stderr either, so
+        `threading.excepthook` printed the traceback nowhere at all.
+
+        Recording the error instead routes it through the controller's failure
+        path, which keeps the live transcript. It is deliberately not
+        re-raised: this is the top of a worker thread, so re-raising only
+        writes to that same missing stderr.
+        """
+        try:
+            self._run_stream_worker(session)
+        except BaseException as exc:
+            logger.exception("streaming_worker_failed")
+            if session.result.error is None:
+                session.result.error = (
+                    exc
+                    if isinstance(exc, Exception)
+                    else RuntimeError(str(exc) or type(exc).__name__)
+                )
+
+    def _run_stream_worker(self, session: _StreamingSession) -> None:
         while True:
             if session.abort_requested.is_set():
                 return

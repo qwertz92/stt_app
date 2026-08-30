@@ -4300,6 +4300,36 @@ class DictationController(QtCore.QObject):
         self._active_stream_settings = None
         self._stream_abort_requested = False
         self._stream_insert_failures = 0
+        if not text.strip() and session_mode == "streaming":
+            # Naming the mode is locally explicit rather than load-bearing: the
+            # early return at the top of this method already sends every
+            # non-streaming empty result to `_on_transcription_failed`, and the
+            # one way the two mode reads can disagree (a streaming job while
+            # `_active_session_mode` says batch) has an empty streaming text
+            # state anyway, because every writer of that value resets it.
+            #
+            # The third road to a wiped streaming transcript. An explicit
+            # abort and a dying stream runtime both rescue the live text
+            # before the reset below wipes it; a finalize that returned
+            # nothing did not, so the overlay said "No speech detected",
+            # history got no entry and Copy had nothing -- the dictation
+            # survived only as the part already pasted into the document.
+            # Both AssemblyAI and Deepgram can return an empty string from
+            # `stop_stream` after a socket problem, which is exactly when the
+            # live text is the only copy left. A session that really said
+            # nothing has no live text either, so it still reports that.
+            # Already normalized, so no strip is needed. The branch exists for
+            # the log line: a session that really said nothing must not report
+            # "keeping the live transcript (0 chars)".
+            rescued = self._current_streaming_partial_text()
+            if rescued:
+                self._logger.info(
+                    "streaming_finalize_empty: keeping the live transcript "
+                    "(%d chars).",
+                    len(rescued),
+                )
+                text = rescued
+
         # Only a real transcript replaces the last one. Assigning before the
         # empty check meant a streaming session that produced nothing wiped
         # the previous dictation from the tray's "Insert last transcript

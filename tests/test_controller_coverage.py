@@ -5205,3 +5205,63 @@ def test_a_failed_replacement_never_leaves_the_closed_runtime_cached(monkeypatch
     finally:
         controller.shutdown()
     _ = app
+
+
+def test_an_empty_streaming_finalize_keeps_what_was_already_transcribed(tmp_path):
+    """The third road to a wiped streaming transcript, and the last one open.
+
+    An explicit abort and a dying stream runtime both rescue the live text
+    before the reset wipes it. A finalize that returns nothing did not: the
+    overlay said "No speech detected", history got no entry, Copy had nothing,
+    and the whole dictation existed only as the part already pasted into the
+    document. Reachable when a provider's `stop_stream` returns an empty
+    string after a socket problem, which is exactly when the live text is the
+    only copy left.
+    """
+    history = TranscriptHistoryStore(tmp_path / "history.json")
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(
+        overlay=overlay,
+        text_inserter=inserter,
+        history_store=history,
+    )
+    try:
+        controller._active_session_mode = "streaming"
+        controller._stream_committed_text = "der erste teil"
+        controller._stream_live_text = "der erste teil und der zweite"
+        controller._stream_last_partial_text = "der erste teil und der zweite"
+        controller._target_window_handle = 555
+        controller._target_focus_signature = (555, 556, 557)
+
+        controller._on_transcription_ready("")
+
+        assert [entry.text for entry in history.load()] == [
+            "der erste teil und der zweite"
+        ], "the live transcript was not saved anywhere"
+        assert controller._last_transcript == "der erste teil und der zweite"
+        assert overlay.states[-1][0] == "Done"
+        assert "No speech detected" not in overlay.states[-1][1]
+        # The tail past what was already pasted still has to be inserted.
+        assert inserter.calls[-1][0] == " und der zweite", inserter.calls
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_streaming_session_that_really_said_nothing_still_reports_it(caplog):
+    """The other direction: no live text means no rescue and no history entry."""
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    try:
+        controller._active_session_mode = "streaming"
+
+        with caplog.at_level(logging.INFO, logger="test.controller"):
+            controller._on_transcription_ready("")
+
+        assert overlay.states[-1] == ("Done", "No speech detected.")
+        # And it must not claim to have kept anything.
+        assert "streaming_finalize_empty" not in caplog.text, caplog.text
+    finally:
+        controller.shutdown()
+    _ = app

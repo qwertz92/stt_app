@@ -1464,3 +1464,66 @@ def test_disjoint_windows_are_recognised_at_the_boundary(
     assert session.result.slow_decode_warned is expected, (
         f"{label}: the warning did not follow the verdict"
     )
+
+
+def test_a_dying_stream_worker_is_reported_instead_of_vanishing():
+    """A worker that raises must not look like a silent dictation.
+
+    Only the decode inside `_maybe_emit_partial` and the finalization were
+    guarded. The energy meters, the merge and the buffer append were not, so an
+    exception there simply ended the thread: `stop_stream` joined a dead worker,
+    found no error and an empty `final_text`, and the whole dictation reached
+    the user as "No speech detected". A windowed build has no stderr either, so
+    `threading.excepthook` printed the traceback nowhere.
+    """
+    # The worker emits on every drained chunk here, so the meter is reached on
+    # the worker thread -- driving `_maybe_emit_partial` from the test would
+    # raise on the test's own stack and prove nothing about the thread.
+    transcriber = _stream_with(["etwas gesprochenes"])
+
+    def _boom(_pcm_bytes):
+        raise MemoryError("the meter died")
+
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        transcriber._stream_slice_is_quiet = _boom
+        _push_and_wait(transcriber, _ms(400, 6000))
+        worker = transcriber._stream_thread
+        deadline = time.monotonic() + 5.0
+        while worker.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        assert not worker.is_alive(), "the worker survived the raising meter"
+
+        with pytest.raises(TranscriptionError) as failure:
+            transcriber.stop_stream()
+    finally:
+        transcriber.abort_stream()
+
+    assert "the meter died" in str(failure.value), failure.value
+
+
+def test_the_stream_worker_guard_keeps_the_first_error():
+    """A later failure must not replace the one that explains the session.
+
+    The decode and the finalization record their own error and then return
+    normally, so the top-level guard sees them only when something raises on
+    the way out -- a partial callback notification, say. Overwriting there
+    would replace "the model could not be loaded" with whatever failed while
+    reporting it.
+    """
+    transcriber = _stream_with(["x"])
+    transcriber.start_stream(on_partial=lambda text: None)
+    session = transcriber._stream_session
+    try:
+        first = TranscriptionError("the decode failed")
+        session.result.error = first
+
+        def _boom(_session):
+            raise RuntimeError("the notification failed")
+
+        transcriber._run_stream_worker = _boom
+        transcriber._stream_worker(session)
+
+        assert session.result.error is first, session.result.error
+    finally:
+        transcriber.abort_stream()
