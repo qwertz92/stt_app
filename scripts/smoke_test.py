@@ -88,14 +88,16 @@ def _read_settings_without_touching_them() -> tuple[AppSettings | None, str | No
         temp_dir_path = Path(temp_dir)
         copy_path = temp_dir_path / "settings.json"
         # Whichever file parsed above, copied under the primary's name. Not
-        # `real_path`: the loop reaches the backup precisely when the primary
-        # raised `OSError`, and copying a file that just refused to be read
-        # raises it again -- turning the one case the backup exists to rescue
-        # into "reading the saved settings raised PermissionError(...)" and
-        # `--strict` 1, for an install the app starts fine on. The file that
-        # parsed cannot fail for that reason, and using it reproduces what the
-        # app ends up running on, since the store's own recovery reads the
-        # `.bak` and rewrites the primary from it.
+        # `real_path`: the loop falls through to the backup when the primary is
+        # missing, unreadable, not valid UTF-8 or JSON, or a JSON value that is
+        # not an object. Copying `real_path` in the first two cases raises the
+        # same error again -- turning the case the backup exists to rescue into
+        # "reading the saved settings raised PermissionError(...)" and
+        # `--strict` 1, for an install the app starts fine on -- and in the
+        # last two it hands the diagnostic exactly the file the app is going to
+        # discard. The file that parsed has none of those problems, and using
+        # it reproduces what the app ends up running on, since the store's own
+        # recovery reads the `.bak` and rewrites the primary from it.
         shutil.copy2(usable_path, copy_path)
         # No `.bak` is copied alongside. The store would only reach one if it
         # rejected the file that parsed here, and it cannot: both do

@@ -2338,9 +2338,12 @@ class DictationController(QtCore.QObject):
                 # Cleared *before* the close, not after. `_close_cached_transcriber`
                 # swallows `Exception` but not `BaseException`, so with the clear
                 # below it the except arm saw `orphan` still set and closed the
-                # same runtime a second time -- and that second raise replaced the
-                # original, so the caller got the close's exception instead of the
-                # `TranscriptionCanceled` this branch exists to deliver.
+                # same runtime a second time. What that costs is the double close
+                # itself and the original failure, which the second close's
+                # exception replaced on its way out. It does not cost the
+                # `TranscriptionCanceled` below: a close that raises skips that
+                # `raise` either way, so the caller sees a close error in both
+                # shapes -- with this clear it sees the first one.
                 orphan = None
                 self._close_cached_transcriber(transcriber)
                 raise TranscriptionCanceled("Application shutdown is in progress.")

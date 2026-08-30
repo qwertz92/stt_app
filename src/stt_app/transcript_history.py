@@ -223,9 +223,12 @@ class TranscriptHistoryStore:
         except OSError as exc:
             raise ValueError(f"Failed to read import file: {exc}") from exc
         except UnicodeDecodeError as exc:
-            # Caught before `json.JSONDecodeError` would be: both are
-            # `ValueError`s and the caller shows the message verbatim, so
-            # without this the user reads a codec offset instead of what to do.
+            # Raised by `read_text` above, before `json.loads` is ever reached,
+            # and it is not a `json.JSONDecodeError` -- the two are siblings
+            # under `ValueError`, so clause order decides nothing here and the
+            # arm below would never catch it. Without this arm it escapes
+            # uncaught and the caller, which shows the message verbatim, reads
+            # a codec offset instead of what to do.
             raise ValueError(
                 "Selected file is not UTF-8 text. Re-export it, or save it as "
                 "UTF-8, and try again."

@@ -54,10 +54,18 @@ was the difference between a test and a decoration.
 `SendMessageTimeoutW(..., SMTO_ABORTIFHUNG, ...)` before restoring the
 clipboard. `SMTO_ABORTIFHUNG` makes that call return **immediately** for a
 hung target rather than waiting out the timeout -- so the loop had no delay in
-it at all. Measured against a fake that always reports "hung": 953,446 probes
-in one budget window, one core pinned, the Qt thread unavailable for the whole
-time. A `poll_interval_s` (default 10 ms) and an `_is_window` early-out fixed
-it.
+it at all. Measured with the real Win32 probe against a handle that names no
+window, which returns just as fast: 953,446 probes in one budget window, one
+core pinned, the Qt thread unavailable for the whole time. A `poll_interval_s`
+(default 10 ms) and an `_is_window` early-out fixed it.
+
+That provenance was recorded here as "a fake that always reports hung", which
+does not survive being checked. Re-measured on 2026-08-30 on the same machine:
+a pure-Python stub of the probe runs the loop at 15.6 M iterations/s, 33x too
+fast to produce 953,446 in a 2 s budget, while the real
+`SendMessageTimeoutW` against a non-window handle gives 0.99-1.01 M probes in
+2.000 s (494-507 k/s) -- the same shape as the recorded 478 k/s. The number is
+real; only the sentence about where it came from was not.
 
 The same file had a second defect one layer down. `SendInput` can return a
 short count, and the paste batch is `[Ctrl down, V down, V up, Ctrl up]`:

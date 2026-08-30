@@ -222,7 +222,12 @@ _LOCAL_MODEL_NAMES_AND_NOTES: dict[str, tuple[str, str]] = {
         "NVIDIA Nemotron 3.5 ASR 0.6B",
         "true 560 ms streaming",
     ),
-    "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, fastest"),
+    # Not "fastest": `tiny` measured 0.033 RTF against Parakeet's 0.043 in
+    # the same run, and the supportable claim is the narrower one recorded
+    # in AGENTS.md -- the fastest local model that transcribed the
+    # recording. A picker has no room for that qualifier, so it states what
+    # is unambiguous instead.
+    "parakeet-tdt-0.6b-v3": ("NVIDIA Parakeet TDT 0.6B v3", "CPU, multilingual"),
     "canary-1b-v2": ("NVIDIA Canary 1B v2", "CPU, pick a language"),
 }
 

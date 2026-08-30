@@ -215,7 +215,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `wait_for_paste_target_ready`'s loop had no delay in it at all against the
   one case it exists for: measured 953,446 probes inside a single budget
   window, one core pinned and the Qt thread unavailable for the whole time,
-  from nothing worse than pasting into a frozen application. It polls at
+  from nothing worse than pasting into a frozen application. That was measured
+  with the real Win32 probe against a handle that names no window, which
+  returns as fast as `SMTO_ABORTIFHUNG` makes a hung target return; a
+  pure-Python stub of the probe spins 33x faster still and could not have
+  produced it, which is how the "fake that always reports hung" provenance in
+  `docs/learning-log.md` was caught. It polls at
   `PASTE_TARGET_RESPONSIVE_POLL_INTERVAL_S` and returns early for a handle
   that is no longer a window. Never assume a Win32 timeout throttles a loop.
 - **A short `SendInput` past the key-down may already have pasted**: the batch

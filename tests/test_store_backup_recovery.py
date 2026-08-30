@@ -168,19 +168,30 @@ def test_a_deleted_primary_does_not_get_the_backup_overwritten(name, tmp_path):
 
     With the load returning empty, the very next save wrote that emptiness
     over the backup too, so the data was gone rather than merely invisible.
+
+    Stated as "survives the loss twice" rather than "the backup bytes did not
+    change". The byte comparison was written as `unchanged or read() == saved`,
+    and the recovery the test above already pins makes that second half true
+    every time -- so the assertion held whatever the write did to the backup.
     """
     build = _STORES[name]
     store, path, read = build(tmp_path)
     _ = store
     saved = read()
     backup = backup_path(path)
-    before = backup.read_bytes()
+    assert backup.is_file(), f"{name}: no backup was written beside it"
 
     path.unlink()
     read()
 
-    assert backup.read_bytes() == before or read() == saved, (
-        f"{name}: the backup was rewritten from an empty load"
+    assert backup.is_file(), f"{name}: the recovery removed the backup"
+    # The same loss again: whatever the recovery wrote to the backup, it has to
+    # still hold the data. Rewriting it with the recovered payload is fine;
+    # rewriting it with an empty one is the defect.
+    path.unlink()
+
+    assert read() == saved, (
+        f"{name}: the backup no longer holds the data after one recovery"
     )
 
 
