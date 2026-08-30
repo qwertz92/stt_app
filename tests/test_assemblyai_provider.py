@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import threading
 import types
 from types import SimpleNamespace
@@ -882,3 +883,73 @@ class TestSettingsStoreAssemblyAI:
 
         s = AppSettings.from_dict({"engine": "assemblyai"})
         assert s.engine == "assemblyai"
+
+
+def test_the_connection_test_uses_an_ssl_context_like_every_other_provider(
+    monkeypatch,
+):
+    """Without one, a TLS-intercepting proxy failed a key that was fine.
+
+    Transcription goes through the SDK, i.e. `requests`, which reads
+    REQUESTS_CA_BUNDLE; this call goes through urllib, which does not. So
+    behind a corporate proxy the Remote tab reported a broken key while
+    dictation with that same key worked -- and its advice named only
+    REQUESTS_CA_BUNDLE, which could not fix what had just failed.
+    """
+    import urllib.request
+
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    seen: dict[str, object] = {}
+    sentinel = object()
+
+    class _Resp:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    def _fake_urlopen(req, timeout=None, context=None):
+        seen["context"] = context
+        seen["timeout"] = timeout
+        return _Resp()
+
+    monkeypatch.setattr(provider, "create_ssl_context", lambda: sentinel)
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    ok, message = AssemblyAITranscriber(
+        api_key="key", aai_module=_make_fake_aai()
+    ).test_connection()
+
+    assert ok is True, message
+    assert seen["context"] is sentinel, "the connection test ran without TLS setup"
+
+
+def test_a_failed_connection_test_reports_what_the_api_said(monkeypatch):
+    """`exc.reason` is the status phrase; the body says which key is wrong."""
+    import urllib.error
+    import urllib.request
+
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    def _fake_urlopen(req, timeout=None, context=None):
+        raise urllib.error.HTTPError(
+            "https://api.assemblyai.com/v2/transcript",
+            402,
+            "Payment Required",
+            {},
+            io.BytesIO(b'{"error": "This account has run out of credits"}'),
+        )
+
+    monkeypatch.setattr(provider, "create_ssl_context", lambda: None)
+    monkeypatch.setattr(urllib.request, "urlopen", _fake_urlopen)
+
+    ok, message = AssemblyAITranscriber(
+        api_key="key", aai_module=_make_fake_aai()
+    ).test_connection()
+
+    assert ok is False
+    assert "run out of credits" in message, message

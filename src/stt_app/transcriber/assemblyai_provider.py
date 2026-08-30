@@ -22,11 +22,12 @@ from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
-    DOC_SSL_PROXY_PATH,
     language_modes_for_selection,
     parse_custom_vocabulary,
 )
+from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
+from ._http_utils import format_ssl_error_message, http_error_suffix
 from .base import (
     AudioInput,
     ITranscriber,
@@ -206,11 +207,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         except Exception as exc:
             if _is_ssl_error(exc):
                 raise TranscriptionError(
-                    "AssemblyAI: SSL certificate verification failed "
-                    "(likely a corporate proxy such as Zscaler). "
-                    "Set REQUESTS_CA_BUNDLE to your corporate CA .pem, "
-                    "or switch to the local provider.\n"
-                    f"See {DOC_SSL_PROXY_PATH} for details."
+                    format_ssl_error_message("AssemblyAI")
                 ) from exc
             raise TranscriptionError(f"AssemblyAI transcription failed: {exc}") from exc
         finally:
@@ -236,7 +233,13 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         req.add_header("Authorization", self._api_key)
 
         try:
-            with urllib.request.urlopen(req, timeout=10) as resp:
+            # Every other provider's REST call passes this; this one did not,
+            # so behind a TLS-intercepting proxy the connection test failed
+            # while transcription itself worked -- the SDK goes through
+            # `requests`, which reads REQUESTS_CA_BUNDLE, whereas urllib does
+            # not. The test then reported a broken key that was fine.
+            ssl_ctx = create_ssl_context()
+            with urllib.request.urlopen(req, timeout=10, context=ssl_ctx) as resp:
                 if resp.status == 200:
                     return True, "Connection OK — API key is valid."
         except urllib.error.HTTPError as exc:
@@ -245,15 +248,16 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, f"API returned HTTP {exc.code}: {exc.reason}"
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
+            )
         except Exception as exc:
             if _is_ssl_error(exc):
-                return False, (
-                    "SSL certificate verification failed — likely a "
-                    "corporate proxy (Zscaler). Set REQUESTS_CA_BUNDLE "
-                    "to your corporate CA .pem file.\n"
-                    f"See {DOC_SSL_PROXY_PATH} for details."
-                )
+                # The shared message, which names SSL_CERT_FILE too:
+                # this call goes through urllib, and urllib does not read
+                # REQUESTS_CA_BUNDLE, so the old advice could not fix what had
+                # just failed.
+                return False, format_ssl_error_message("AssemblyAI")
             return False, f"Connection failed: {exc}"
 
         return False, "Unexpected response from AssemblyAI API."
