@@ -2771,9 +2771,33 @@ class DictationController(QtCore.QObject):
             self._overlay.set_state("Done", "Transcription canceled.")
 
     def clear_transcription_queue(self) -> None:
-        """Cancel every queued/running transcription."""
-        for token in list(self._jobs.keys()):
-            self.cancel_queued_transcription(token)
+        """Cancel every queued/running transcription.
+
+        Every job is stopped before anything is delivered, which is what makes
+        this different from cancelling the rows one at a time.
+        `cancel_queued_transcription` flushes the deferred inserts on purpose,
+        so that the X on one row does not strand the finished transcripts on
+        the rows beside it -- but on the first iteration of a loop over every
+        row, those rows are exactly what is about to be cancelled. Clearing a
+        queue of two finished transcripts and one running job therefore pasted
+        the second one into the focused window (measured: `transcript B.`),
+        while the first, reached before the flush, was discarded. Stopping
+        every job first removes each deferred entry with its job, so there is
+        nothing left for a flush to deliver.
+        """
+        tokens = list(self._jobs.keys())
+        had_foreground = self._active_request_token in tokens
+        for token in tokens:
+            if token not in self._jobs:
+                continue
+            self._request_job_stop(
+                token,
+                delivery=CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+            )
+        if had_foreground and not self._new_recording_active():
+            # The foreground transcription was canceled; reflect it in the
+            # main overlay area instead of leaving a stale "Processing".
+            self._overlay.set_state("Done", "Transcription canceled.")
 
     def _apply_concurrent_mode_to_active_job(self) -> None:
         """Apply the configured mode to the in-flight transcription when a new
@@ -2838,13 +2862,27 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark last recording as transcribing")
-        job.future = self._executor.submit(
-            self._transcribe_worker,
-            request_token,
-            wav_bytes,
-            settings,
-            job,
-        )
+        try:
+            job.future = self._executor.submit(
+                self._transcribe_worker,
+                request_token,
+                wav_bytes,
+                settings,
+                job,
+            )
+        except Exception as exc:
+            # Same as the streaming finalize above, minus the lease: no worker
+            # means no terminal signal, so the queue row sat at "Processing"
+            # for the rest of the session and the recording -- often the only
+            # copy -- was never offered for a retry.
+            self._logger.exception(
+                "Failed to schedule the transcription. token=%s",
+                request_token,
+            )
+            self._on_transcription_failed(
+                f"The transcription could not be started: {exc}",
+                request_token=request_token,
+            )
 
     def _has_undelivered_older_job(self, request_token: int) -> bool:
         """True while a recording started before this one is still working."""
@@ -2930,10 +2968,31 @@ class DictationController(QtCore.QObject):
             )
         except Exception:
             self._logger.exception("Failed to mark streaming recording as transcribing")
-        job.future = self._stream_finalize_executor_for(
-            settings,
-            request_token=request_token,
-        ).submit(self._finalize_stream_worker, request_token, transcriber, job)
+        try:
+            job.future = self._stream_finalize_executor_for(
+                settings,
+                request_token=request_token,
+            ).submit(self._finalize_stream_worker, request_token, transcriber, job)
+        except Exception as exc:
+            # `Executor.submit` raises once the pool has been shut down and
+            # again when the interpreter cannot start a worker thread, and this
+            # job already owns the live stream's runtime lease. Nothing else
+            # runs the worker's `finally`, so that lease is never handed back:
+            # `_transcriber_runtime_lock` is held for the process lifetime,
+            # every later dictation silently builds its own isolated runtime,
+            # and a preload waits forever for a lease with no owner. The
+            # exception also escaped into the Qt slot that pressed stop, so the
+            # overlay stayed on Processing with no error and no Retry.
+            self._logger.exception(
+                "Failed to schedule the streaming finalize. token=%s",
+                request_token,
+            )
+            self._release_stream_job_runtime(job, abort=True)
+            self._on_transcription_failed(
+                f"The transcript could not be finalized: {exc}",
+                request_token=request_token,
+            )
+            return
         self._flush_deferred_background_results()
 
     def _release_stream_job_runtime(
@@ -4128,7 +4187,19 @@ class DictationController(QtCore.QObject):
                 self._transcriber_cache is None
                 or self._transcriber_cache_key != cache_key
             ):
-                self._close_cached_transcriber(self._transcriber_cache)
+                # Evicted before it is closed, and before the replacement is
+                # built. `create_transcriber` raises for a missing API key or
+                # an absent model, and the closed runtime was then still
+                # installed under its *old* key -- so switching back to the
+                # previous settings handed that dead runtime to the next
+                # dictation. The rule already held at
+                # `_reset_transcriber_cache_locked` and
+                # `_reset_resume_sensitive_transcriber_cache`; this was the
+                # third site.
+                stale = self._transcriber_cache
+                self._transcriber_cache = None
+                self._transcriber_cache_key = None
+                self._close_cached_transcriber(stale)
                 self._transcriber_cache = create_transcriber(
                     settings, secret_store=self._secret_store
                 )

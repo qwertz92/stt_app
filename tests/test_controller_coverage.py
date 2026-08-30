@@ -5055,3 +5055,153 @@ def test_a_capture_failure_re_enumerates_only_when_that_can_repair_it(
     )
     controller.shutdown()
     _ = app
+
+
+class _RefusingExecutor:
+    """An executor that cannot schedule anything.
+
+    `ThreadPoolExecutor.submit` raises `RuntimeError` once the pool has been
+    shut down, and again when the interpreter cannot start a worker thread.
+    """
+
+    def __init__(self, message="cannot schedule new futures after shutdown"):
+        self.message = message
+
+    def submit(self, *_args, **_kwargs):
+        raise RuntimeError(self.message)
+
+    def shutdown(self, *_args, **_kwargs):
+        pass
+
+
+def test_a_stream_finalize_that_cannot_be_scheduled_hands_the_runtime_back():
+    """Nothing else would ever run the worker's `finally`.
+
+    The job carries the live stream's runtime lease, so an unscheduled worker
+    holds `_transcriber_runtime_lock` for the process lifetime: every later
+    dictation silently builds its own isolated runtime, every preload waits
+    forever for a lease nobody owns, and the queue row sits at "Processing"
+    with no error and no Retry.
+    """
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    try:
+        controller._executor = _RefusingExecutor()
+        controller._stream_finalize_executor = _RefusingExecutor()
+        controller._increment_transcriber_runtime_count()
+        lease = controller_module._TranscriberRuntimeLease(
+            controller,
+            object(),
+            owns_shared_lock=False,
+            close_on_release=False,
+        )
+        controller._active_stream_settings = AppSettings(engine="deepgram")
+        controller._active_stream_transcriber = FakeStreamingTranscriber()
+        controller._active_stream_runtime_lease = lease
+        controller._streaming_recording = True
+
+        controller._submit_stream_finalize()
+
+        assert lease._released is True, "the runtime lease was never handed back"
+        assert controller._transcription_runtime_active() is False
+        assert controller._jobs == {}, "the queue row was left behind"
+        assert controller._active_request_token is None
+        assert overlay.states[-1][0] == "Error", overlay.states[-1:]
+        assert controller._streaming_recording is False
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_batch_job_that_cannot_be_scheduled_is_reported():
+    """Same shape without a lease: the row would sit at "Processing" forever.
+
+    The audio still has to survive for a manual retry -- an unschedulable
+    worker is exactly the case where the recording is the only copy.
+    """
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    try:
+        controller._executor = _RefusingExecutor()
+
+        controller._submit_batch_transcription(b"RIFFaudio", AppSettings(engine="local"))
+
+        assert controller._jobs == {}, "the queue row was left behind"
+        assert controller._active_request_token is None
+        assert overlay.states[-1][0] == "Error", overlay.states[-1:]
+        assert controller._last_failed_wav_bytes == b"RIFFaudio", (
+            "the only copy of the recording was dropped"
+        )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_failed_replacement_never_leaves_the_closed_runtime_cached(monkeypatch):
+    """Evict before closing -- the rule AGENTS.md states, at its third site.
+
+    `create_transcriber` raises for a missing API key or an absent model, and
+    the old runtime had already been closed by then while still installed as
+    the cache under its old key. Switching back to the previous settings then
+    handed that closed runtime straight to the next dictation.
+    """
+    controller, app = _make_controller()
+    try:
+        closed: list[str] = []
+
+        class Runtime:
+            def __init__(self, label):
+                self.label = label
+
+            def close(self):
+                closed.append(self.label)
+
+            def set_language_mode(self, mode):
+                pass
+
+        built: list[str] = []
+
+        def _create(settings, **_kwargs):
+            built.append(settings.model_size)
+            if settings.model_size == "medium":
+                raise RuntimeError("the model is not installed")
+            return Runtime(settings.model_size)
+
+        monkeypatch.setattr(controller_module, "create_transcriber", _create)
+        small = AppSettings(engine="local", model_size="small")
+        medium = AppSettings(engine="local", model_size="medium")
+
+        first = controller._get_or_create_transcriber(small)
+        assert isinstance(first, Runtime)
+
+        with pytest.raises(RuntimeError):
+            controller._get_or_create_transcriber(medium)
+
+        assert closed == ["small"]
+        assert controller._transcriber_cache is None, (
+            "the closed runtime is still installed as the cache"
+        )
+        # The key has to go with it. `_local_model_preload_needed` reads the
+        # key alone, so a stale one beside an empty cache answers "already
+        # loaded" and no preload is started -- the next dictation then loads
+        # the model on the transcription worker with no progress shown.
+        #
+        # Recording a successful preload first is what makes that reachable:
+        # with no result stored the method returns True on its own (never
+        # preloaded), so the assertion below held whether the key was cleared
+        # or not.
+        with controller._preload_result_lock:
+            controller._preload_results[controller._model_preload_key(small)] = (
+                controller._preload_generation,
+                None,
+            )
+        assert controller._local_model_preload_needed(small) is True, (
+            "an empty cache still reported the model as loaded"
+        )
+
+        again = controller._get_or_create_transcriber(small)
+        assert again is not first, "a closed runtime was handed back"
+        assert built == ["small", "medium", "small"]
+    finally:
+        controller.shutdown()
+    _ = app

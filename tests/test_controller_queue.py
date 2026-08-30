@@ -551,6 +551,75 @@ def test_clear_transcription_queue_aborts_all(monkeypatch, tmp_path):
     _ = app
 
 
+def test_clear_queue_does_not_paste_the_rows_it_is_clearing(
+    monkeypatch,
+    tmp_path,
+):
+    """The button says clear, so nothing may be typed into the document.
+
+    Clear queue cancelled the jobs one at a time, and a single row's cancel
+    deliberately flushes the deferred inserts beside it -- otherwise the ✕ on
+    one row would strand the finished transcripts on the others. On the first
+    iteration those others were still pending, so clearing a queue that held
+    two finished transcripts and one running job pasted both of them. Which
+    ones survived depended purely on the order the loop reached them in: a row
+    cancelled before the flush was discarded, one cancelled after it was
+    typed. Stopping every job first makes the flush find nothing.
+    """
+    controller, app, _overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A.", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+    controller.start_recording()
+    controller._on_transcription_ready("transcript B.", request_token=token_b)
+    controller.stop_recording()
+
+    # Two finished-but-not-inserted rows plus the running one.
+    assert len(controller._deferred_background_results) == 2
+    assert len(controller._jobs) == 3
+    assert inserter.calls == []
+
+    controller.clear_transcription_queue()
+
+    assert inserter.calls == [], (
+        f"Clear queue pasted the cleared transcripts: {inserter.calls}"
+    )
+    assert controller._deferred_background_results == []
+    # Nothing is destroyed: both transcripts were saved to history when they
+    # finished, which is what the queue rows were waiting on top of.
+    assert [e.text for e in history.load()] == ["transcript A.", "transcript B."]
+    controller.shutdown()
+    _ = app
+
+
+def test_cancelling_one_row_still_delivers_the_others(monkeypatch, tmp_path):
+    """The per-row ✕ keeps its own behaviour, which is the opposite one.
+
+    Cancelling one row must not strand the finished transcripts beside it, so
+    that path still flushes. Only Clear queue changed.
+    """
+    controller, app, _overlay, inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    controller._on_transcription_ready("transcript A.", request_token=token_a)
+    controller.stop_recording()
+    token_b = controller._active_request_token
+
+    controller.cancel_queued_transcription(token_b)
+
+    assert inserter.calls == [("transcript A.", 321, "auto")]
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_recording_flushes_deferred_background_insert(
     monkeypatch,
     tmp_path,
