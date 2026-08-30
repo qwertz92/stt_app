@@ -662,3 +662,172 @@ def test_an_empty_recordings_folder_stays_empty_when_saved(label, typed, expecte
     finally:
         dialog.deleteLater()
     _ = app
+
+
+def test_a_failed_connection_test_moves_nothing_on_the_remote_tab():
+    """Every provider row carries a word-wrapped "Last test" label, and a
+    failure message is two lines where "Last test: never." is one. Only the
+    first line was reserved, so each failing provider pushed everything under
+    it -- including the Run Connection Test button at the bottom of the same
+    grid -- 15 px down: measured at 105 px with all seven failing, with the
+    pointer still on the button that had just caused it.
+    """
+    dialog, app, _secret_store = _make_dialog(AppSettings())
+    dialog.resize(900, 880)
+    dialog.show()
+    for index in range(dialog.tabs.count()):
+        if dialog.tabs.tabText(index) == "Remote":
+            dialog.tabs.setCurrentIndex(index)
+            break
+    else:  # pragma: no cover - the tab is always built
+        raise AssertionError("Remote tab not found")
+
+    tab = dialog.tabs.currentWidget()
+    watched = [
+        widget
+        for widget in tab.findChildren(QtWidgets.QWidget)
+        if widget.isVisible() and widget.width() > 4 and widget.height() > 4
+    ]
+    assert dialog.test_conn_button in watched
+
+    def geometry():
+        for _ in range(10):
+            app.processEvents()
+        return {
+            id(widget): (
+                widget.mapTo(dialog, widget.rect().topLeft()).y(),
+                widget.height(),
+            )
+            for widget in watched
+        }
+
+    before = geometry()
+    assert geometry() == before, "the tab had not settled before the measurement"
+
+    message = (
+        "Failed: HTTP 401: the API key was rejected by the provider. Check that "
+        "the key belongs to an active account with transcription enabled."
+    )
+    for provider in dialog._provider_last_test_labels:
+        dialog._provider_test_history[provider] = (
+            False,
+            message,
+            "2026-08-30 12:00:00",
+        )
+        dialog._apply_provider_connection_test_label(provider)
+
+    assert geometry() == before, "a failed connection test moved the Remote tab"
+
+    label = dialog._provider_last_test_labels["assemblyai"]
+    assert message in label.toolTip(), (
+        "the reserved area holds two lines, so the full message has to stay "
+        "readable on hover"
+    )
+    dialog.hide()
+
+
+_LONG_BENCHMARK_FAILURE = (
+    "The benchmark stopped early: granite-speech-4.1-2b failed to load because "
+    "the ONNX Runtime session could not be created on this machine. "
+    "Cases already measured were saved."
+)
+
+
+def _benchmark_dialog():
+    dialog, app, _secret_store = _make_dialog(AppSettings())
+    dialog.resize(900, 880)
+    dialog.show()
+    for index in range(dialog.tabs.count()):
+        if dialog.tabs.tabText(index) == "Benchmark":
+            dialog.tabs.setCurrentIndex(index)
+            break
+    else:  # pragma: no cover - the tab is always built
+        raise AssertionError("Benchmark tab not found")
+    for _ in range(15):
+        app.processEvents()
+    return dialog, app
+
+
+def test_a_benchmark_failure_does_not_widen_the_settings_dialog():
+    """The tab's status label shares a fixed-height row with a button, so it
+    cannot wrap -- but a plain QLabel then reports the full text width as its
+    minimum, and a failure message pushed the dialog's own minimum width from
+    492 px to 1109 px. It also showed only the leading 77% of that message with
+    no ellipsis and no tooltip, so the reason was both invisible and unsayable.
+    """
+    dialog, app = _benchmark_dialog()
+    label = dialog.benchmark_status_label
+    minimum_before = dialog.minimumSizeHint().width()
+
+    dialog._set_benchmark_status(_LONG_BENCHMARK_FAILURE, "#b71c1c")
+    for _ in range(15):
+        app.processEvents()
+
+    assert dialog.minimumSizeHint().width() == minimum_before
+    assert label.text() == _LONG_BENCHMARK_FAILURE, "text() must report what was set"
+    assert label.toolTip() == _LONG_BENCHMARK_FAILURE
+    shown = QtWidgets.QLabel.text(label)
+    assert shown.endswith("\u2026"), (
+        f"the truncation has to be visible, got {shown!r}"
+    )
+    dialog.hide()
+
+
+def test_the_benchmark_status_re_elides_when_the_dialog_is_resized():
+    """A width-dependent shortening that is computed once is wrong at every
+    other width."""
+    dialog, app = _benchmark_dialog()
+    label = dialog.benchmark_status_label
+    dialog._set_benchmark_status(_LONG_BENCHMARK_FAILURE, "#b71c1c")
+
+    dialog.resize(600, 880)
+    for _ in range(15):
+        app.processEvents()
+    narrow = QtWidgets.QLabel.text(label)
+
+    dialog.resize(1400, 880)
+    for _ in range(15):
+        app.processEvents()
+    wide = QtWidgets.QLabel.text(label)
+
+    assert len(narrow) < len(wide)
+    assert wide == _LONG_BENCHMARK_FAILURE, "a label wide enough must show it all"
+    dialog.hide()
+
+
+def test_a_long_benchmark_status_does_not_move_the_run_and_cancel_buttons():
+    """The pop-out window's status label sits under the scroll area that holds
+    Run/Cancel, so every wrapped line took 16 px off that viewport and lifted
+    both buttons by 16 px -- while the run they belong to reported its failure.
+    """
+    dialog, app = _benchmark_dialog()
+    window = dialog.benchmark_window
+    window.resize(860, 880)
+    window.show()
+    for _ in range(20):
+        app.processEvents()
+
+    watched = {
+        "run": dialog.run_benchmark_button,
+        "cancel": dialog.cancel_benchmark_button,
+        "models": dialog.benchmark_models_list,
+        "status": dialog.benchmark_window_status_label,
+    }
+
+    def geometry():
+        for _ in range(10):
+            app.processEvents()
+        return {
+            name: (widget.mapTo(window, widget.rect().topLeft()).y(), widget.height())
+            for name, widget in watched.items()
+        }
+
+    before = geometry()
+    assert geometry() == before, "the window had not settled before the measurement"
+
+    dialog._set_benchmark_status(_LONG_BENCHMARK_FAILURE, "#b26a00")
+
+    assert geometry() == before, "a long status moved the Run Benchmark window"
+    assert dialog.benchmark_window_status_label.toolTip() == _LONG_BENCHMARK_FAILURE
+    window.hide()
+    dialog.hide()

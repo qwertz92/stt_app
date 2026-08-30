@@ -215,10 +215,13 @@ class _RemoteProvidersMixin:
             provider_grid.addWidget(clear_button, grid_row, 2)
             provider_grid.addWidget(status_badge, grid_row, 3)
             provider_grid.addWidget(last_test_label, grid_row + 1, 1, 1, 3)
-            provider_grid.setRowMinimumHeight(
-                grid_row + 1,
-                max(1, self.fontMetrics().height()),
-            )
+            # Reserve the whole area, not only its first line. The label word-
+            # wraps, and a provider's failure message is two lines where "Last
+            # test: never." is one, so every failing row pushed the rows under
+            # it -- and the "Run Connection Test" button at the bottom of this
+            # grid -- 15 px further down: measured at 105 px with all seven
+            # failing, with the pointer still on the button that caused it.
+            self._reserve_dynamic_hint_height(last_test_label)
             grid_row += 2
 
             self._provider_key_edits[provider] = key_field
@@ -793,9 +796,14 @@ class _RemoteProvidersMixin:
         if result is None:
             self._style_provider_last_test_label(last_label)
             last_label.setText("Last test: never.")
+            last_label.setToolTip("")
             return
         ok, message, timestamp = result
         marker = "\u2713" if ok else "\u2717"
         color = "#1b5e20" if ok else "#b71c1c"
         self._style_provider_last_test_label(last_label, color=color)
-        last_label.setText(f"Last test ({timestamp}): {marker} {message}")
+        text = f"Last test ({timestamp}): {marker} {message}"
+        last_label.setText(text)
+        # The reserved area holds two lines and a provider can return more than
+        # that, so the whole message stays readable on hover.
+        last_label.setToolTip(text)

@@ -42,6 +42,56 @@ def _emit_background_signal(
     return True
 
 
+class ElidingLabel(QtWidgets.QLabel):
+    """A one-line label that shortens its text to fit instead of clipping it.
+
+    A `QLabel` with word wrap off cuts a long line at its right edge with
+    nothing to show that it did, and its `minimumSizeHint` still reports the
+    full text width -- so the benchmark header's status label showed 77% of a
+    failure message with no ellipsis and no tooltip, and raised the settings
+    dialog's own minimum width from 492 px to 1109 px the moment that message
+    appeared. Word wrap is not the answer for a label that shares a fixed-height
+    row with a button, because growing it moves the button.
+
+    `text()` keeps returning the full string, so callers and tests read what was
+    set rather than what happened to fit, and the whole message stays readable
+    in the tooltip.
+    """
+
+    def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._full_text = ""
+        self.setWordWrap(False)
+        # Ignored, not Expanding: the layout must give this label the space that
+        # is left over, never widen the window to fit the text.
+        self.setSizePolicy(QtWidgets.QSizePolicy.Ignored, QtWidgets.QSizePolicy.Fixed)
+        self.setText(text)
+
+    def setText(self, text: str) -> None:
+        self._full_text = str(text)
+        self.setToolTip(self._full_text)
+        self._apply_elide()
+
+    def text(self) -> str:
+        return self._full_text
+
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._apply_elide()
+
+    def _apply_elide(self) -> None:
+        margins = self.contentsMargins()
+        available = self.width() - margins.left() - margins.right()
+        if available <= 0 or not self._full_text:
+            super().setText(self._full_text)
+            return
+        super().setText(
+            self.fontMetrics().elidedText(
+                self._full_text, QtCore.Qt.ElideRight, available
+            )
+        )
+
+
 class _WheelPassthroughComboBox(QtWidgets.QComboBox):
     def wheelEvent(self, event: QtGui.QWheelEvent) -> None:
         view = self.view()

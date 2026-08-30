@@ -31,6 +31,7 @@ from .local_benchmark import (
 )
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
+    ElidingLabel,
     _benchmark_status_text,
     _emit_background_signal,
     _WheelPassthroughComboBox,
@@ -453,13 +454,8 @@ class _BenchmarkMixin:
             self._open_benchmark_window
         )
         header_row.addWidget(self.open_benchmark_window_button)
-        self.benchmark_status_label = QtWidgets.QLabel("")
+        self.benchmark_status_label = ElidingLabel("")
         make_label_selectable(self.benchmark_status_label)
-        self.benchmark_status_label.setWordWrap(False)
-        self.benchmark_status_label.setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding,
-            QtWidgets.QSizePolicy.Fixed,
-        )
         self.benchmark_status_label.setFixedHeight(
             self.open_benchmark_window_button.sizeHint().height()
         )
@@ -1007,6 +1003,11 @@ class _BenchmarkMixin:
         self.benchmark_window_status_label = QtWidgets.QLabel("")
         make_label_selectable(self.benchmark_window_status_label)
         self.benchmark_window_status_label.setWordWrap(True)
+        # Reserve the area. This label sits under the scroll area holding the
+        # Run/Cancel row, so every extra wrapped line took 16 px off that scroll
+        # viewport and lifted both buttons by the same 16 px -- while the run
+        # they belong to was reporting how it had failed.
+        self._reserve_dynamic_hint_height(self.benchmark_window_status_label)
         outer_layout.addWidget(self.benchmark_window_status_label)
 
     def _open_benchmark_window(self) -> None:
@@ -1145,6 +1146,9 @@ class _BenchmarkMixin:
         if hasattr(self, "benchmark_window_status_label"):
             self.benchmark_window_status_label.setText(text)
             self.benchmark_window_status_label.setStyleSheet(style)
+            # Its reserved area holds two lines; a failure message can be
+            # longer, so the whole text stays readable on hover.
+            self.benchmark_window_status_label.setToolTip(text)
 
     def _set_benchmark_options_visible(self, visible: bool) -> None:
         if hasattr(self, "benchmark_options_box"):
