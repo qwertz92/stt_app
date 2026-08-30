@@ -3,6 +3,211 @@
 Project history, decisions, and operational learnings. Referenced by `AGENTS.md`.
 Agents and developers: use this as a knowledge base for past issues and solutions.
 
+## 2026-08-30 (rounds thirteen to sixteen)
+
+Everything below was re-verified by running it, not by reading an agent's
+report. Where a claim could not be measured, it says so.
+
+### Round thirteen to fifteen
+
+- **`os.replace` onto an existing directory does not raise `FileExistsError`.**
+  `scripts/import_model.py` published a staged snapshot with
+  `staging_dir.replace(snapshot_dir)` and caught `FileExistsError` to handle a
+  second importer that had published the same content first. Measured on this
+  machine: Windows raises `PermissionError` (WinError 5) for that call, both
+  when the destination is empty and when it is not, and POSIX raises `OSError`
+  with `ENOTEMPTY` -- `FileExistsError` never appears. So the guard was
+  unreachable and a concurrent import failed with an access-denied traceback.
+  The arm is now `except OSError` with an `is_dir()` re-check, and the comment
+  says which exception each platform really raises so the next reader does not
+  "simplify" it back.
+
+- **A WM_PASTE that times out may still paste.** `_send_wm_paste` treated a
+  `SendMessageTimeoutW` failure as a clean "nothing happened" and let the
+  caller restore the clipboard, so a busy target processed the message
+  afterwards and pasted the *restored old* clipboard. Measured against a real
+  Win32 window whose WM_PASTE handler sleeps one second: `GetLastError()` is
+  `ERROR_TIMEOUT` (1460) both when the target never received the message and
+  when it is mid-handler, so the two are indistinguishable and the safe reading
+  is "it may have landed". An invalid handle is 1400 and stays a clean failure.
+  The timeout now raises `TextMayHaveBeenPastedError`, the same class the
+  SendInput path already uses for exactly this ambiguity.
+
+- **A rolling window that cannot be aligned threw away the part of the floor it
+  re-emitted.** `merge_rolling_window_transcript`'s floor fallback appended the
+  whole unalignable window after `protected_prefix`, duplicating the words the
+  window shared with the floor. The seam search the normal path uses
+  (`_join_at_seam`, extracted for this) is now tried against the floor as well
+  before falling back to a plain join.
+
+- **The remote providers swallowed every callback failure.** Six bare
+  `except Exception: pass` arms across the AssemblyAI and Deepgram providers.
+  The worst is the partial callback: it is what puts live text on screen and
+  into the document, so a dead one was indistinguishable from a user who had
+  stopped talking. Swallowing is still right -- the next partial carries the
+  whole combined text again -- so the fix is a log, latched per session the
+  same way `partial_callback_failed` already is in the local faster-whisper
+  path, because it runs on every turn revision. The error callback needs no
+  latch (`_stream_error_reported` already bounds it) but needs the log most: it
+  is the only path a stream failure takes to the user. Two teardown arms matter
+  for a reason that is not obvious -- a `disconnect` that raises leaves the
+  SDK's reader threads running against a dead socket, and a refused
+  `ws.close()` leaves a Deepgram connection open and billed, and the bounded
+  joins around them cannot tell either apart from a clean shutdown.
+  Mutation testing left two survivors, both equivalent mutants: removing the
+  latch reset from `start_stream` changes nothing because every write of
+  `_stream_state = "idle"` is in `__init__` or `_reset_stream_state_locked`
+  (checked by grepping every writer), and `start_stream` refuses to run in any
+  other state. The redundant re-initialization is kept because the five
+  neighbouring assignments are redundant for the same reason.
+
+- **`HTTPError.reason` is the status phrase, and four providers reported only
+  that.** "API returned HTTP 400: Bad Request" throws away the one part that
+  says what to change. Azure alone read the body; its private reader is now the
+  shared `read_http_error_detail` in `_http_utils`, used by OpenAI, ElevenLabs,
+  Deepgram and AssemblyAI too. Capped at 300 characters so a provider cannot
+  push an HTML error page into a dialog, and it falls back to the status phrase
+  when the body is empty or its read raises.
+
+- **AssemblyAI's connection test was the only REST call in the app without a
+  TLS context.** Behind a TLS-intercepting proxy it therefore failed while
+  transcription itself worked: the SDK goes through `requests`, which reads
+  `REQUESTS_CA_BUNDLE`, and `urllib` does not. Both of its hand-written SSL
+  messages told the user to set `REQUESTS_CA_BUNDLE`, which could not fix the
+  urllib call that had just failed; they now use the shared
+  `format_ssl_error_message`, which names `SSL_CERT_FILE` as well.
+
+- **The AssemblyAI SDK's `wait_for_completion` is `while True:` with no bound of
+  any kind.** A job the service leaves in `queued` therefore held the app's
+  single `max_workers=1` transcription worker for the rest of the session --
+  and blocked process exit with it. That second half is worth stating precisely
+  because it is not obvious from the shutdown code: `ThreadPoolExecutor`
+  registers an atexit hook that *joins* its worker threads, and
+  `shutdown(wait=False, cancel_futures=True)` does not release one that has
+  already started. Measured with a throwaway script: the interpreter never
+  exited. In the app that leaves a process holding the single-instance lock, so
+  the user cannot even restart it. The provider now submits and polls itself
+  against `ASSEMBLYAI_BATCH_MAX_WAIT_S`. Terminal status is the positive test
+  rather than `queued`/`processing`, so a status this SDK version does not know
+  is waited out instead of mistaken for a finished job; and a submit that comes
+  back without a transcript id fails at once rather than spending the whole
+  budget on `get_by_id("")`.
+
+- **A `finally` runs before the code after the statement it belongs to.** My own
+  fix for the benchmark's terminal signal put the success emit after the whole
+  `try/except/finally`, so the `finally`'s last-resort failure emit fired first
+  on every successful run. Caught by reading back the applied patch rather than
+  by the tests, which is the lesson: the success path belongs in `else:`.
+
+- **A test whose two branches happen to agree tests nothing.** The
+  language-mode regression test picked "the first non-`auto` option", which for
+  the `small` model is `de` -- exactly the value already in the store -- so the
+  mutant and the correct code returned the same answer. It now uses two
+  distinct picks.
+
+### Round sixteen
+
+- **A thread that will not start left Settings busy for the rest of the
+  session.** Six `Thread.start()` calls in the settings dialog sat outside any
+  guard. `RuntimeError` from a starved interpreter arrives *after* the busy
+  marker is written, and nothing clears that marker but the completion signal
+  the thread will never send -- so the control stayed disabled and, because
+  `_background_work_active()` reads those same markers, `reload_from_store()`
+  was deferred silently and permanently. The dialog is never recreated, so
+  "permanently" means until the app is restarted. Each site now rolls back what
+  it had already set; the download queue reuses the teardown its own crash arm
+  performs, which is what hands the coordinator's explicit interest back so the
+  model's partial files stay cleanable. Two of the six arms in the first draft
+  called methods that do not exist (`_abandon_local_model_download_queue`,
+  `_on_import_transcription_finished`) -- caught by grepping every name in the
+  patch against the source, not by the tests, which never reached those arms.
+  Thirteen mutations, all detected.
+
+- **The inventory called a faster-whisper model cached where it cannot be
+  loaded.** `find_cached_models(model_dir)` searched the configured Model Dir
+  *and* the default Hugging Face cache, and accepted both the `models--<repo>`
+  and a flat layout. The app always passes a size name, so `WhisperModel` calls
+  `snapshot_download(repo_id, cache_dir=download_root)` -- one cache root, one
+  layout. Measured: with `tiny` present only in the default cache and a custom
+  Model Dir configured, `find_cached_models` returned `['tiny']` while the
+  download destination held no snapshot; the same for a flat folder. The Local
+  tab therefore showed the model as installed and disabled its Download button
+  while the next dictation silently fetched it again, and offline mode could
+  not load it at all. The inventory now answers from
+  `download_destination_dir`, which is what the load path's own pre-fetch
+  already gates on, so the two cannot disagree. The ONNX half is unchanged and
+  deliberately still accepts the other roots -- those models really do load
+  from them. Two existing tests pinned the old behaviour and were rewritten;
+  four mutations, all detected.
+
+- **Double-clicking a benchmark history row during a run merged the two.**
+  `Load Selected` is disabled while `_active_benchmark_thread` is set; the
+  table's double-click was not, and loading replaces `_current_benchmark_cases`
+  -- the list the next finished case appends to. So the stored run's cases and
+  the live one's ended up in one results table and one live summary, and the
+  stored entry's environment could reach the saved history entry of the live
+  run whenever the worker had none of its own. The handler now carries the same
+  gate and says why.
+
+- **Every finished case threw the reader back to run 1.** `set_live_results`
+  runs once per completed case and `_set_transcript_rows` ended in
+  `selectRow(0)`. Measured with the real widget: reading run 3 of the first
+  model, a second case finishing moved the selection to row 0 and replaced the
+  transcript pane. The selection is now restored by the row's
+  `model / device / run` identity -- not by index, because a finished case can
+  insert rows above the selected one -- with row 0 as the fallback when the
+  opened row is gone.
+
+- **An overlay change made an untouched Save look like a real one.** The
+  overlay writes `overlay_opacity_percent`, `overlay_always_on_top` and
+  `language_mode` straight to the store while Settings is open, and the save
+  deliberately reads exactly those three back from the store -- but compared
+  the result against `_loaded_settings`, the dialog-open snapshot. Measured:
+  moving the overlay's opacity slider and then pressing Save without touching
+  anything wrote the file with the bytes already in it, reported
+  "Settings saved", and emitted `settings_changed`, which costs four global
+  hotkey unregister/re-register cycles. Both save paths now compare against
+  what is on disk. The two existing tests for this asserted that a write had
+  happened *carrying* the overlay's value; they now assert the property itself
+  -- that the store still holds it -- which is satisfied by writing nothing.
+  One mutation survived: a line adopting the fresh settings as the new snapshot
+  after a no-op save. Nothing reads `_loaded_settings` for an overlay-owned
+  field (the History tab's own write path already loads fresh), so the line
+  defended against nothing and was removed rather than given a test.
+
+### Earlier in the same day, before the rounds above
+
+- **A failed temp-file write leaked the file it had already created.**
+  `NamedTemporaryFile(delete=False)` creates the file before it returns, and
+  all four batch paths that spool audio to `%TEMP%` recorded the path *after*
+  the write -- so a write that failed on a full disk or a quota left the path
+  variable `None` and the cleanup skipped a real file, once per failed
+  dictation. faster-whisper, the Cohere/Granite ONNX runtime, AssemblyAI and
+  Groq all had it.
+
+- **A CPU fallback restarted the Node child on every batch.** The ONNX runtime
+  reports `fallbackErrors` plus `device: cpu` on any machine without a usable
+  GPU, which is the *normal* answer there, and the restart-on-fallback path
+  therefore paid a full model load per dictation forever.
+  `_MAX_CPU_FALLBACK_RESTARTS` bounds it to one.
+
+- **The download lock's in-process registration could be stranded.**
+  `_close_handle` is the only place that removes a key from
+  `_HELD_RESOURCES`, and it finds the key through `self._held_key` -- which
+  was assigned *after* the registration. An exception in between left the key
+  registered with nothing able to remove it, so every later `acquire` for that
+  resource raised `LockHeldInThisProcess` and no download could start again
+  until the app restarted. The assignment moved first (the reverse order is
+  harmless: `discard` ignores a key that was never added), and `release()`'s
+  early return for an already-closed handle now goes through `_close_handle`
+  too, since a bare `return` there is one more way to leave a key behind.
+
+- **A delayed writer painted over a finished result.** The preload progress
+  poll rewrites the overlay every 600 ms and did not check what was already
+  there, so a `Done` carrying the transcript or an `Error` carrying the reason
+  plus its Retry or Insert action could be replaced by a loading line. The poll
+  now reads `OverlayUI.state`, and the test doubles mirror it.
+
 ## 2026-08-30 (twelfth round: three ways a dictation disappeared)
 
 Every defect below was proved before it was fixed, by running the real code

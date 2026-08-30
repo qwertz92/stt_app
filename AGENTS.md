@@ -2558,6 +2558,100 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Windows groups our windows under the host process (python.exe) and shows its
   generic icon on the taskbar (most visibly for the Settings dialog). Keep the
   ID stable so taskbar pinning/grouping is consistent.
+- **A temp file's path is recorded before the write, not after.**
+  `NamedTemporaryFile(delete=False)` has already created the file when it
+  returns, so the four batch paths that spool audio to `%TEMP%`
+  (faster-whisper, the Cohere/Granite ONNX runtime, AssemblyAI, Groq) left
+  `temp_path` at `None` whenever the write itself failed -- a full disk, a
+  quota -- and their cleanup then skipped a file that really existed, once per
+  failed dictation, forever.
+- **A CPU fallback is the normal answer on a machine without a GPU, so it must
+  not trigger a restart every time.** `resolveDevice("auto")` on Windows
+  returns `["webgpu", "dml", "cpu"]`, so a CPU-only machine always reports two
+  `fallbackErrors` plus `device: cpu` -- and the restart-on-fallback path
+  therefore paid a full Node + ONNX model load on *every* dictation, forever.
+  `_MAX_CPU_FALLBACK_RESTARTS` bounds it to one attempt, and the counter is
+  reset whenever the runtime does come up on an accelerated device, so a
+  transient GPU failure still gets its one retry later.
+- **The ONNX child's stdout queue is bounded, and drops the oldest line.**
+  Only `_read_json_message` drains it, i.e. only while a request is in flight,
+  so a child that keeps writing between requests -- or one discarded after a
+  protocol timeout with lines still in the pipe -- parked the reader thread
+  inside a plain `Queue.put` for the rest of the process's life, holding its
+  `Popen` and all three pipe handles, and every restart leaked another set.
+  `_push_bounded` evicts the oldest entry rather than refusing the new one,
+  because the newest protocol line is the one a caller is waiting for; a
+  response genuinely lost that way surfaces as the request timeout that
+  already discards the child.
+- **`file_lock` writes `_held_key` before registering the key, and every exit
+  goes through `_close_handle`.** `_close_handle` is the only place that takes
+  a key back out of `_HELD_RESOURCES`, and it finds it through `_held_key` --
+  so an exception landing between the registration and the assignment left the
+  key registered with nothing able to remove it, and every later `acquire` for
+  that resource in this process raised `LockHeldInThisProcess`. In practice:
+  no download can start again until the app restarts. The reverse order is
+  harmless, because `discard` does not care about a key that was never added.
+  `release()`'s early return for a handle that is already gone calls
+  `_close_handle` for the same reason.
+- **No delayed overlay writer paints over a finished result.**
+  `show_idle_status` already re-checked `_overlay_session_active()`; the
+  preload progress poll did not, and it rewrites the overlay every 600 ms. A
+  `Done` carries the transcript and an `Error` carries the reason plus the
+  Retry or Insert action that is the only way to recover the recording, so
+  neither may be replaced by a loading line. `_on_preload_progress_poll` reads
+  `OverlayUI.state` -- the state name last passed to `set_state`, exposed as a
+  property for exactly this -- and `tests/conftest.py`'s `FakeOverlay` mirrors
+  it, because the controller tests never touch the real overlay.
+- **A settings-dialog worker thread that will not start rolls back what it
+  claimed.** All six `Thread.start()` calls in the dialog write their busy
+  marker first, and `RuntimeError` from a starved interpreter arrives after
+  that; nothing clears the marker but the completion signal the thread will
+  never send. Because `_background_work_active()` reads exactly those markers,
+  the control stayed disabled *and* `reload_from_store()` was deferred
+  silently for the life of the app -- the dialog is never recreated. Each arm
+  undoes its own site: the connection test and the update check re-enable
+  their controls, the model scan clears its marker, the benchmark drops its
+  cancel event, the import routes through `_finish_import_transcription`, and
+  the download queue reuses the teardown its own crash arm performs, which is
+  what hands the coordinator's explicit interest back so partial files stay
+  cleanable.
+- **The local inventory answers from the directory the loader resolves.** For
+  a faster-whisper model that is `download_destination_dir(name, model_dir)`
+  and nothing else: the app always passes a size name, so `WhisperModel` calls
+  `snapshot_download(repo_id, cache_dir=download_root)`, which reads that one
+  cache root and the `models--<repo>` layout alone. Searching the default
+  Hugging Face cache as well, or accepting a flat folder, reported "cached"
+  for a model the Local tab then refused to offer a Download button for while
+  the next dictation fetched it again -- and offline mode could not load it at
+  all. It is also the gate `_coordinated_download_if_missing` already used, so
+  the inventory and the load path cannot disagree. The ONNX half stays
+  delegated to `find_cached_webgpu_models` and deliberately does accept the
+  other roots and the legacy layout, because `resolve_cached_webgpu_model_root`
+  loads from them.
+- **A stored benchmark run cannot be opened while one is running, and a
+  finished case does not move the reader.** Loading a history entry replaces
+  `_current_benchmark_cases`, which is the list `_on_benchmark_case_finished`
+  appends to, so the table double-click needed the same busy gate `Load
+  Selected` already carried -- without it the stored run's cases and the live
+  one's landed in one results table and one live summary. Separately,
+  `set_live_results` runs once per finished case and `_set_transcript_rows`
+  ended in `selectRow(0)`, so every completed case threw a reader back to run
+  1; the selection is restored by the row's `model / device / run` identity
+  (not by index -- a finished case can insert rows above it), with row 0 as
+  the fallback when the opened row is gone.
+- **A save asks whether the file would change, not whether the snapshot
+  differs.** The overlay writes `overlay_opacity_percent`,
+  `overlay_always_on_top` and `language_mode` straight to the store while
+  Settings is open, and both save paths deliberately read exactly those three
+  back from the store -- so comparing the result against `_loaded_settings`,
+  the dialog-open snapshot, reported a change this dialog had not made. The
+  file was rewritten with the bytes already in it, the status claimed
+  "Settings saved", and `settings_changed` cost four global hotkey
+  unregister/re-register cycles. Both paths now compare against
+  `self._settings_store.load()`. Note what this must *not* break: a key
+  replacement leaves `AppSettings` byte-identical (the `has_*_key` flags do not
+  move), so it writes no settings and still emits `provider_keys_changed`.
+
 
 ## Core flow
 
