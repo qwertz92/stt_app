@@ -5,6 +5,7 @@ import json
 import math
 import xml.etree.ElementTree as ET
 import zipfile
+from pathlib import Path
 
 import pytest
 
@@ -377,3 +378,135 @@ def test_the_backup_recovery_is_reachable_for_entries_that_have_cases(tmp_path):
     recovered = BenchmarkHistoryStore(path=path)
     assert recovered.count() == 1, "the backup was not read"
     assert path.exists(), "the primary was not republished from the backup"
+
+
+_LONE_SURROGATE_TRANSCRIPT = "Guten Tag \ud800 und tschuess"
+
+
+def _entry_with_transcript(text: str) -> BenchmarkHistoryEntry:
+    case = BenchmarkCase(
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=1.0,
+        runs=[
+            BenchmarkRun(
+                run_index=1,
+                seconds=2.0,
+                audio_duration_seconds=20.0,
+                real_time_factor=0.1,
+                transcript_chars=len(text),
+                transcript_words=len(text.split()),
+                detected_language="de",
+                language_probability=0.99,
+                transcript=text,
+            )
+        ],
+    )
+    return BenchmarkHistoryEntry.new(
+        status="completed",
+        summary="one case",
+        options=BenchmarkOptions(
+            audio_path="C:/sample.wav",
+            audio_name="sample.wav",
+            model_names=["small"],
+            device="cpu",
+            compute_type="int8",
+            webgpu_devices=["auto"],
+            runs=1,
+            beam_size=5,
+            language="de",
+            vad_filter=False,
+            warmup=True,
+            threads=0,
+        ),
+        cases=[case],
+    )
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".md", ".xlsx"])
+def test_an_export_never_destroys_the_file_it_replaces(suffix, tmp_path, monkeypatch):
+    """The export target is a path the user picked in a Save dialog, so it is
+    routinely a file that already exists. Two of the three writers opened it
+    directly, which truncates it before a single row has been produced -- and a
+    transcript carrying one lone surrogate then raised `UnicodeEncodeError`
+    part-way through. Measured before the fix: the user's own file replaced by
+    a 638-byte CSV fragment, and by an empty Markdown file.
+    """
+    target = tmp_path / f"important{suffix}"
+    target.write_bytes(b"THE USER'S EXISTING FILE")
+    before = target.read_bytes()
+
+    def explode(_entry):
+        raise RuntimeError("the row builder failed")
+
+    monkeypatch.setattr("stt_app.benchmark_history._export_rows", explode)
+    with pytest.raises(RuntimeError):
+        export_benchmark_entry(target, _entry_with_transcript("ok"))
+
+    assert target.read_bytes() == before, (
+        "a failed export overwrote the file it was told to replace"
+    )
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".md", ".xlsx"])
+def test_every_export_format_survives_a_lone_surrogate(suffix, tmp_path):
+    """A lone surrogate reaches here through the store unchanged --
+    `json.dumps(ensure_ascii=True)` escapes it and `json.loads` decodes it back
+    -- and cannot be encoded as UTF-8 at all. The XLSX writer already replaced
+    it because XML cannot carry it either; the other two raised. The character
+    set is the same set, so it is now one sanitiser for all three.
+    """
+    entry = _entry_with_transcript(_LONE_SURROGATE_TRANSCRIPT)
+    target = tmp_path / f"export{suffix}"
+
+    export_benchmark_entry(target, entry)
+
+    data = target.read_bytes()
+    assert data, "nothing was written"
+    if suffix != ".xlsx":
+        text = data.decode("utf-8")
+        assert "\ufffd" in text, "the unencodable character was not replaced"
+        assert "und tschuess" in text, "the rest of the transcript was lost"
+
+
+def test_the_csv_still_neutralises_a_formula(tmp_path):
+    """Sanitising runs after the formula guard, and must not undo it."""
+    entry = _entry_with_transcript("=cmd|'/c calc'!A1")
+    target = tmp_path / "export.csv"
+
+    export_benchmark_entry(target, entry)
+
+    text = target.read_text(encoding="utf-8")
+    assert "'=cmd" in text, text
+
+
+@pytest.mark.parametrize("suffix", [".csv", ".md", ".xlsx"])
+def test_only_the_atomic_writer_touches_the_export_target(suffix, tmp_path, monkeypatch):
+    """Building the bytes first is half of it; the write itself must also not
+    truncate. `path.write_bytes` and `zipfile.ZipFile(path, "w")` empty the file
+    before the first byte goes in, so a disk that fills up or a permission that
+    changes mid-write still destroys what was there. `atomic_write_bytes` writes
+    a sibling temp file and replaces, so the target only ever changes in one
+    step.
+    """
+    target = tmp_path / f"important{suffix}"
+    target.write_bytes(b"THE USER'S EXISTING FILE")
+    before = target.read_bytes()
+
+    written: list[tuple[Path, int]] = []
+
+    def spy(path, data):
+        written.append((path, len(data)))
+
+    monkeypatch.setattr("stt_app.benchmark_history.atomic_write_bytes", spy)
+    export_benchmark_entry(target, _entry_with_transcript("hallo welt"))
+
+    assert [path for path, _size in written] == [target], (
+        "the export did not go through the atomic writer"
+    )
+    assert written[0][1] > 0, "it handed the writer nothing"
+    assert target.read_bytes() == before, (
+        "something wrote to the target directly, around the atomic writer"
+    )

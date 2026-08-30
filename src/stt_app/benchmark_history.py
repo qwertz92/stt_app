@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import io
 import math
 import re
 import zipfile
@@ -15,6 +16,7 @@ from .benchmark_environment import BenchmarkEnvironment
 from .csv_safety import spreadsheet_safe_cell
 from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
+    atomic_write_bytes,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
@@ -283,32 +285,49 @@ def export_benchmark_entry(path: Path, entry: BenchmarkHistoryEntry) -> None:
     raise ValueError("Benchmark export path must end in .csv, .xlsx, or .md.")
 
 
+def _csv_cell(value: Any) -> Any:
+    """Neutralise a formula, then drop what UTF-8 cannot encode.
+
+    The type check is load-bearing: `spreadsheet_safe_cell` passes numbers
+    through unchanged and `_export_safe_text` needs a string. The order is not
+    -- the sanitiser maps an illegal character to U+FFFD, which is neither a
+    formula prefix nor a space, so either order produces the same cell.
+    """
+    safe = spreadsheet_safe_cell(value)
+    return _export_safe_text(safe) if isinstance(safe, str) else safe
+
+
 def _write_csv(path: Path, entry: BenchmarkHistoryEntry) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(_export_headers())
-        writer.writerows(
-            [spreadsheet_safe_cell(value) for value in row]
-            for row in _export_rows(entry)
-        )
+    # Build first, replace second. Writing straight into the path the user
+    # picked in a Save dialog truncates whatever was there before a single row
+    # has been produced, so an export that then failed destroyed the file it
+    # was told to overwrite: measured, a transcript carrying one lone surrogate
+    # left a 638-byte fragment of a benchmark where the user's own file had
+    # been. Every export goes through `atomic_write_bytes` for that reason.
+    buffer = io.StringIO()
+    writer = csv.writer(buffer, lineterminator="\r\n")
+    writer.writerow(_export_headers())
+    writer.writerows(
+        [_csv_cell(value) for value in row] for row in _export_rows(entry)
+    )
+    atomic_write_bytes(path, buffer.getvalue().encode("utf-8"))
 
 
 def _write_xlsx(path: Path, entry: BenchmarkHistoryEntry) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     rows = [_export_headers()]
     rows.extend(_export_rows(entry))
 
-    with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.writestr("[Content_Types].xml", _content_types_xml())
         archive.writestr("_rels/.rels", _root_rels_xml())
         archive.writestr("xl/workbook.xml", _workbook_xml())
         archive.writestr("xl/_rels/workbook.xml.rels", _workbook_rels_xml())
         archive.writestr("xl/worksheets/sheet1.xml", _worksheet_xml(rows))
+    atomic_write_bytes(path, buffer.getvalue())
 
 
 def _write_markdown(path: Path, entry: BenchmarkHistoryEntry) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
     lines = [
         "# Benchmark Results",
         "",
@@ -321,7 +340,7 @@ def _write_markdown(path: Path, entry: BenchmarkHistoryEntry) -> None:
         _markdown_table(_export_headers(), _export_rows(entry)),
         "",
     ]
-    path.write_text("\n".join(lines), encoding="utf-8")
+    atomic_write_bytes(path, "\n".join(lines).encode("utf-8"))
 
 
 def _export_headers() -> list[str]:
@@ -484,7 +503,7 @@ def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
 
 
 def _escape_markdown_cell(value: Any) -> str:
-    text = _display_value(value)
+    text = _export_safe_text(_display_value(value))
     return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
 
 
@@ -514,14 +533,20 @@ def _worksheet_xml(rows: list[list[Any]]) -> str:
 # The plausible carriers are the fields nobody types -- `runtime_details`
 # built from a runtime's own error text, the environment strings read off
 # the system, and a transcript returned by a remote provider.
-_XML_ILLEGAL_CHARACTERS = re.compile(
+#
+# The same set is what the other two formats need, which is why this is no
+# longer XML-only. A lone surrogate cannot be encoded as UTF-8 at all, so
+# the CSV and Markdown writers raised `UnicodeEncodeError` part-way through
+# writing -- measured, on a transcript carrying one U+D800, exactly the
+# provider-returned text named above.
+_UNEXPORTABLE_CHARACTERS = re.compile(
     "[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
 )
 
 
-def _xml_safe_text(value: str) -> str:
-    """Replace what XML cannot carry, rather than writing a broken file."""
-    return _XML_ILLEGAL_CHARACTERS.sub("\ufffd", value)
+def _export_safe_text(value: str) -> str:
+    """Replace what an export cannot carry, rather than writing a broken file."""
+    return _UNEXPORTABLE_CHARACTERS.sub("\ufffd", value)
 
 
 def _cell_xml(reference: str, value: Any) -> str:
@@ -537,7 +562,7 @@ def _cell_xml(reference: str, value: Any) -> str:
         text = _display_value(value)
     return (
         f'<c r="{reference}" t="inlineStr"><is><t>'
-        f"{escape(_xml_safe_text(text))}"
+        f"{escape(_export_safe_text(text))}"
         "</t></is></c>"
     )
 
