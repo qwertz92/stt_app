@@ -1991,3 +1991,24 @@ def test_a_click_that_never_moves_claims_the_position_it_already_has():
     app.processEvents()
     assert overlay.pos() == resting
     overlay.hide()
+
+
+def test_the_overlay_reports_the_state_it_is_showing():
+    """The controller's delayed writers ask before painting over a result.
+
+    `_on_preload_progress_poll` repaints every 600 ms while a model loads and
+    has to leave a finished Done or Error alone -- that state carries the
+    transcript, or the reason plus the Retry/Insert action that is the only way
+    to recover the recording. It reads this property to find out, and the test
+    doubles mirror it, so the real one has to be there and has to be right.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    app.processEvents()
+
+    assert overlay.state == "Idle", "a fresh overlay is idle"
+    for state in ("Listening", "Processing", "Done", "Error", "Idle"):
+        overlay.set_state(state, f"detail for {state}")
+        app.processEvents()
+        assert overlay.state == state
+    overlay.hide()

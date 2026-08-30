@@ -195,6 +195,11 @@ class FakeOverlay:
         self.states.append((state, detail))
         self.state_kwargs.append(dict(kwargs))
 
+    @property
+    def state(self) -> str:
+        """What the real overlay reports: the state name last written."""
+        return self.states[-1][0] if self.states else "Idle"
+
     def set_transcription_queue(self, items):
         self.queue_updates.append([(int(t), str(label)) for t, label in items])
 

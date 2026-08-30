@@ -282,6 +282,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._manual_anchor: QtCore.QPoint | None = None
         self._screen_change_connected = False
         self._state_background = ""
+        self._state = "Idle"
         self._copy_text: str | None = None
         self._geometry_batch_depth = 0
         self._geometry_batch_dirty = False
@@ -796,6 +797,7 @@ class OverlayUI(QtWidgets.QWidget):
             self._idle_default_detail = detail
         self._state_label.setText(state)
         self._detail_label.setText(detail)
+        self._state = state
         self._copy_text = copy_text
         has_detail = bool(detail.strip())
         if compact is None:
@@ -865,6 +867,11 @@ class OverlayUI(QtWidgets.QWidget):
         self._retry_button.setVisible(show_retry)
         self._insert_button.setVisible(show_insert)
         self._cancel_button.setVisible(not (show_retry or show_insert))
+
+    @property
+    def state(self) -> str:
+        """The state name last passed to `set_state`."""
+        return self._state
 
     def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])

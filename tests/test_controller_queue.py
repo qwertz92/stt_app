@@ -1566,3 +1566,94 @@ def test_a_worker_that_delivered_text_does_not_also_write_the_stash(
     assert [e.text for e in history.load()] == ["teil eins und zwei"]
     controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize("finished_state", ["Done", "Error"])
+def test_the_preload_poll_does_not_paint_over_a_finished_result(
+    monkeypatch, tmp_path, finished_state
+):
+    """The poll repaints the overlay every 600 ms while a model loads, and it
+    only checked for an active *recording*. A preload running while a queued
+    transcription finished -- the user changes the model in Settings while one
+    is still in flight -- therefore replaced the transcript, or the failure
+    reason plus the Retry/Insert action that is the only way to recover the
+    recording, with "Loading model...". `_overlay_session_active` cannot see
+    this either: a delivered result has already cleared its request token.
+    """
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._overlay.set_state(finished_state, "the transcript the user needs")
+    before = len(overlay.states)
+
+    class _RunningPreload:
+        @staticmethod
+        def done() -> bool:
+            return False
+
+    controller._preload_future = _RunningPreload()
+    controller._on_preload_progress_poll()
+
+    assert len(overlay.states) == before, (
+        f"the poll overwrote the {finished_state} state with "
+        f"{overlay.states[-1]!r}"
+    )
+    controller._preload_future = None
+    controller.shutdown()
+    _ = app
+
+
+def test_the_preload_poll_still_reports_progress_over_idle(monkeypatch, tmp_path):
+    """The other half: replacing Idle with the load progress is the whole point
+    of the poll, so the guard must not stop that."""
+    controller, app, overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._overlay.set_state("Idle", "Idle.")
+
+    class _RunningPreload:
+        @staticmethod
+        def done() -> bool:
+            return False
+
+    controller._preload_future = _RunningPreload()
+    controller._on_preload_progress_poll()
+
+    assert overlay.states[-1][0] == "Processing"
+    controller._preload_future = None
+    controller.shutdown()
+    _ = app
+
+
+def test_a_cancel_does_not_paint_over_a_transcript_that_could_not_be_pasted(
+    monkeypatch, tmp_path
+):
+    """Cancel flushes the deferred inserts on purpose, and an insert failing in
+    that flush paints an Error carrying the transcript and the Insert action --
+    the only way left to get the text into the document. "Nothing to cancel."
+    then replaced both, one statement later, and the transcript existed only in
+    history and a tray notification.
+    """
+    controller, app, overlay, inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    token = _record_and_stop(controller)
+    # A newer recording takes over, so the older result is delivered in the
+    # background -- and deferred, because a capture is running.
+    controller.start_recording()
+    inserter.should_fail = True
+    controller._on_transcription_ready("der ganze diktierte text", request_token=token)
+    assert controller._deferred_background_results, "the result was not deferred"
+    controller.stop_recording()
+    assert controller._deferred_background_results, "it was delivered too early"
+
+    # Cancel the now-active transcription. That flush is what fails to paste.
+    controller.cancel_current_action()
+
+    assert overlay.states[-1][0] == "Error", (
+        f"the cancel message replaced the failure report: {overlay.states[-1]!r}"
+    )
+    assert "der ganze diktierte text" in overlay.states[-1][1]
+    assert any("der ganze diktierte text" in e.text for e in history.load())
+    controller.shutdown()
+    _ = app

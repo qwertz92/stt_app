@@ -2812,10 +2812,15 @@ class DictationController(QtCore.QObject):
         # transcription is still running — instead of leaving earlier finished
         # transcripts stuck pending. The flush still no-ops while a recording is
         # active (never insert mid-recording).
-        self._flush_deferred_background_results(ignore_active_transcription=True)
-        if was_active and not self._new_recording_active():
+        reported_failure = self._flush_deferred_background_results(
+            ignore_active_transcription=True
+        )
+        if was_active and not self._new_recording_active() and not reported_failure:
             # The foreground transcription was canceled; reflect it in the
             # main overlay area instead of leaving a stale "Processing".
+            # Unless the flush above just reported a transcript that could not
+            # be pasted: that Error carries the text and the Insert action, and
+            # this line would replace both with three words.
             self._overlay.set_state("Done", "Transcription canceled.")
 
     def clear_transcription_queue(self) -> None:
@@ -3433,6 +3438,16 @@ class DictationController(QtCore.QObject):
             or self._streaming_recording
             or self._recording_start_in_progress
         ):
+            return
+
+        # Nor a finished one. Done carries the transcript, and Error carries
+        # the reason plus the Retry or Insert action that is the only way to
+        # recover the recording -- and this poll repaints every 600 ms, so a
+        # preload running while a queued transcription finished (the user
+        # changes the model in Settings while one is still in flight) replaced
+        # both with "Loading model...". `_overlay_session_active` cannot see
+        # this: a delivered result has already cleared its request token.
+        if self._overlay.state in {"Done", "Error"}:
             return
 
         try:
@@ -4583,7 +4598,14 @@ class DictationController(QtCore.QObject):
         text: str,
         *,
         job_count: int = 1,
-    ) -> bool:
+    ) -> tuple[bool, bool]:
+        """Paste one delivered background transcript.
+
+        Returns ``(inserted, claimed_overlay)``. The second half is what a
+        caller that writes its own overlay state afterwards needs: a failure
+        here paints an Error carrying the transcript and the Insert action, and
+        overwriting it a statement later leaves the text in history alone.
+        """
         target_handle, target_signature = self._resolve_insert_target(
             job.target_handle, job.target_signature
         )
@@ -4595,15 +4617,15 @@ class DictationController(QtCore.QObject):
             target_signature=target_signature,
             show_overlay_error=False,
         )
-        if not inserted:
-            self._report_background_insertion_failure(
-                job,
-                text,
-                job_count=job_count,
-            )
-        else:
+        if inserted:
             self._play_completion_beep()
-        return inserted
+            return True, False
+        claimed = self._report_background_insertion_failure(
+            job,
+            text,
+            job_count=job_count,
+        )
+        return False, claimed
 
     def _report_background_insertion_failure(
         self,
@@ -4611,7 +4633,7 @@ class DictationController(QtCore.QObject):
         text: str,
         *,
         job_count: int = 1,
-    ) -> None:
+    ) -> bool:
         """Surface a queued transcript that was produced but not pasted.
 
         The transcription itself succeeded, so nothing is retryable and the
@@ -4658,7 +4680,7 @@ class DictationController(QtCore.QObject):
             # A newer session owns the overlay (or is one statement away from
             # claiming it); its own transcript must stay the one that
             # Copy/Insert act on. The notification above is the report then.
-            return
+            return False
         # Nothing newer is on screen, so this transcript becomes what the
         # overlay shows — and therefore what Copy and Insert act on.
         transcript = text.strip()
@@ -4675,14 +4697,23 @@ class DictationController(QtCore.QObject):
             ),
         )
         self._reveal_overlay_result(is_error=True)
+        return True
 
     def _flush_deferred_background_results(
         self,
         *,
         ignore_active_transcription: bool = False,
-    ) -> None:
+    ) -> bool:
+        """Deliver the completed results nothing is blocking any more.
+
+        Returns True when a failed insert claimed the overlay's Error state.
+        A caller that writes its own state afterwards has to know: an Error
+        painted here carries the transcript and the Insert action that is the
+        only way to recover it, and overwriting that one statement later left
+        the transcript in history alone.
+        """
         if not self._deferred_background_results:
-            return
+            return False
         # Deferral is per job: with an active capture, only results targeting
         # the current foreground window may insert (immediate mode); the rest
         # stay queued for the next flush.
@@ -4700,11 +4731,12 @@ class DictationController(QtCore.QObject):
                 pending.append((job, text))
         self._deferred_background_results = still_deferred
         if not pending:
-            return
+            return False
         # Coalesce results that target the same window into one paste: each
         # separate paste is its own clipboard set/paste/restore cycle and thus
         # its own race window against the target app, so six queued results
         # used to mean six chances to lose one.
+        claimed_overlay = False
         for jobs, text in self._coalesced_deferred_inserts(
             pending,
             # With current-window insertion every result goes to the same
@@ -4721,24 +4753,29 @@ class DictationController(QtCore.QObject):
                     [job.token for job in jobs],
                 )
             try:
-                self._insert_background_transcription(
+                _inserted, claimed = self._insert_background_transcription(
                     jobs[0],
                     text,
                     job_count=len(jobs),
                 )
+                claimed_overlay = claimed or claimed_overlay
             except Exception:
                 self._logger.exception(
                     "Failed to insert deferred background transcription; "
                     "saved to history only. tokens=%s",
                     [job.token for job in jobs],
                 )
-                self._report_background_insertion_failure(
-                    jobs[0],
-                    text,
-                    job_count=len(jobs),
+                claimed_overlay = (
+                    self._report_background_insertion_failure(
+                        jobs[0],
+                        text,
+                        job_count=len(jobs),
+                    )
+                    or claimed_overlay
                 )
             for job in jobs:
                 self._finish_transcription_job(job.token)
+        return claimed_overlay
 
     @staticmethod
     def _coalesced_deferred_inserts(
@@ -5765,8 +5802,10 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to mark canceled transcription")
             # Clearing the active transcription may unblock deferred background
             # inserts that were waiting behind it; deliver every completed one now.
-            self._flush_deferred_background_results(ignore_active_transcription=True)
-            self._overlay.set_state("Done", "Transcription canceled.")
+            if not self._flush_deferred_background_results(
+                ignore_active_transcription=True
+            ):
+                self._overlay.set_state("Done", "Transcription canceled.")
             return
 
         # Preloading can intentionally overlap a recording or a queued batch
@@ -5777,8 +5816,10 @@ class DictationController(QtCore.QObject):
 
         # Nothing active to cancel, but the hotkey should still deliver any
         # completed results that are stuck pending insertion.
-        self._flush_deferred_background_results(ignore_active_transcription=True)
-        self._overlay.set_state("Done", "Nothing to cancel.")
+        if not self._flush_deferred_background_results(
+            ignore_active_transcription=True
+        ):
+            self._overlay.set_state("Done", "Nothing to cancel.")
 
     def set_overlay_opacity_percent(self, value: int) -> None:
         clamped = max(
