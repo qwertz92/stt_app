@@ -2117,9 +2117,14 @@ def test_a_settings_save_keeps_a_language_the_overlay_picked_meanwhile():
 
     dialog._save()
 
-    assert store.saved is not None
-    assert store.saved.language_mode == "de", (
+    # The property is what the store holds afterwards, not that a write
+    # happened: nothing in the dialog was touched, so the honest save is no
+    # save at all, and the pick survives either way.
+    assert store.load().language_mode == "de", (
         "the save reverted the overlay's language pick"
+    )
+    assert store.saved is None, (
+        "a save with no dialog change rewrote the file it had just read"
     )
     dialog.deleteLater()
     _ = app
@@ -2132,8 +2137,10 @@ def test_saving_api_keys_keeps_a_language_the_overlay_picked_meanwhile():
 
     dialog._save_api_keys_only()
 
-    assert store.saved is not None
-    assert store.saved.language_mode == "de"
+    assert store.load().language_mode == "de"
+    assert store.saved is None, (
+        "a key save that changed no metadata still rewrote settings.json"
+    )
     dialog.deleteLater()
     _ = app
 
@@ -4405,4 +4412,90 @@ def test_the_delete_prompt_names_every_folder_it_will_remove(monkeypatch, tmp_pa
         "the shared default-cache copy is deleted too but is not named in the "
         f"prompt: {prompt}"
     )
+    _ = app
+
+
+def test_an_overlay_only_difference_is_not_a_settings_change():
+    """Pressing Save after moving the overlay slider must do nothing.
+
+    The overlay writes `overlay_opacity_percent` and `overlay_always_on_top`
+    straight to the store, and the save reads exactly those back from it -- so
+    comparing them against `_loaded_settings`, the dialog-open snapshot,
+    reported a change the dialog had not made. The file was rewritten with the
+    bytes already in it, the status said "Settings saved", and
+    `settings_changed` had the controller unregister and re-register all four
+    global hotkeys.
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(overlay_opacity_percent=90, overlay_always_on_top=True)
+    )
+    emitted: list[int] = []
+    dialog.settings_changed.connect(lambda: emitted.append(1))
+    store._settings = dataclasses.replace(
+        store._settings, overlay_opacity_percent=55, overlay_always_on_top=False
+    )
+
+    dialog._save()
+
+    assert store.saved is None
+    assert emitted == []
+    assert dialog._save_status_label.text() == "No settings changes"
+    # And the overlay's own values are still the ones on disk.
+    assert store.load().overlay_opacity_percent == 55
+    assert store.load().overlay_always_on_top is False
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_real_change_still_saves_next_to_an_overlay_one():
+    """The gate must not swallow an edit that arrives with an overlay change."""
+    dialog, store, app = _dialog_with_store(
+        AppSettings(overlay_opacity_percent=90, keep_transcript_in_clipboard=False)
+    )
+    emitted: list[int] = []
+    dialog.settings_changed.connect(lambda: emitted.append(1))
+    store._settings = dataclasses.replace(
+        store._settings, overlay_opacity_percent=55
+    )
+    dialog.keep_clipboard_checkbox.setChecked(True)
+
+    dialog._save()
+
+    assert store.saved is not None
+    assert store.saved.keep_transcript_in_clipboard is True
+    # The overlay's value is carried through, not reverted to the snapshot.
+    assert store.saved.overlay_opacity_percent == 55
+    assert emitted == [1]
+    dialog.deleteLater()
+    _ = app
+
+
+def test_replacing_a_key_saves_the_key_and_not_the_settings():
+    """The one change the settings snapshot cannot see.
+
+    A new value for a provider that already had one leaves every `has_*_key`
+    flag as it was, so `AppSettings` is byte-identical -- which is exactly why
+    `provider_keys_changed` exists. The settings file must not be rewritten for
+    it, and the status must say what actually happened.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(has_openai_key=True))
+    secret_store = _FakeSecretStore()
+    secret_store.set_api_key("openai", "sk-old")
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=secret_store,
+        app_logger=_FakeLogger(),
+    )
+    providers: list[list[str]] = []
+    dialog.provider_keys_changed.connect(providers.append)
+
+    dialog.openai_key_edit.setText("sk-new")
+    dialog._save()
+
+    assert secret_store.get_api_key("openai") == "sk-new"
+    assert providers == [["openai"]]
+    assert store.saved is None, "a key replacement rewrote settings.json"
+    assert "API keys saved" in dialog._save_status_label.text()
+    dialog.deleteLater()
     _ = app

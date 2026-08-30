@@ -262,16 +262,32 @@ class _PersistenceMixin:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
 
-    def _settings_match_loaded_values(self, settings: AppSettings) -> bool:
-        loaded = self._loaded_settings
-        if settings == loaded:
+    def _settings_match_stored_values(
+        self,
+        settings: AppSettings,
+        stored: AppSettings,
+    ) -> bool:
+        """Would saving this change the file?
+
+        Against what is on disk *now*, not against `_loaded_settings`, which is
+        the snapshot from when the dialog was opened. The overlay writes
+        `overlay_opacity_percent`, `overlay_always_on_top` and `language_mode`
+        to the store while the dialog is open, and the save deliberately reads
+        exactly those three back from the store -- so comparing them with the
+        snapshot reported a change this dialog had not made. Measured: moving
+        the overlay's opacity slider and then pressing Save without touching
+        anything rewrote the file with the bytes already in it, reported
+        "Settings saved", and had the controller unregister and re-register all
+        four global hotkeys.
+        """
+        if settings == stored:
             return True
         return replace(
             settings,
             recordings_dir=self._recordings_dir_compare_value(settings.recordings_dir),
         ) == replace(
-            loaded,
-            recordings_dir=self._recordings_dir_compare_value(loaded.recordings_dir),
+            stored,
+            recordings_dir=self._recordings_dir_compare_value(stored.recordings_dir),
         )
 
     def _refresh_secret_store_options_ui(self) -> None:
@@ -391,7 +407,6 @@ class _PersistenceMixin:
             self.key_storage_status_label.setText("No API key changes to save.")
 
     def _save_api_keys_only(self) -> None:
-        previous_settings = self._loaded_settings
         key_states, key_storage_errors, changed = self._persist_provider_key_changes()
         if changed:
             # Report the credential change before any settings signal below, so
@@ -434,19 +449,29 @@ class _PersistenceMixin:
             has_funasr_key=key_states["funasr"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
         )
-        try:
-            self._settings_store.save(updated)
-        except Exception as exc:
-            self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
-            self.key_storage_status_label.setText(
-                f"API keys were saved, but key metadata could not be persisted: {exc}"
-            )
-            if changed:
-                self.settings_changed.emit()
-            return
+        # What is on disk, not `_loaded_settings` -- that is the dialog-open
+        # snapshot, and the three fields above were just read back from the
+        # store precisely because the overlay may have moved them since. A key
+        # save that changes no metadata used to rewrite the file with its own
+        # contents and emit `settings_changed`, which costs four global hotkey
+        # re-registrations.
+        stored_settings = self._settings_store.load()
+        settings_changed = updated != stored_settings
+        if settings_changed:
+            try:
+                self._settings_store.save(updated)
+            except Exception as exc:
+                self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
+                self.key_storage_status_label.setText(
+                    "API keys were saved, but key metadata could not be "
+                    f"persisted: {exc}"
+                )
+                if changed:
+                    self.settings_changed.emit()
+                return
         self._loaded_settings = updated
         self._refresh_secret_store_options_ui()
-        if changed or updated != previous_settings:
+        if changed or settings_changed:
             self.settings_changed.emit()
 
     # Settings the overlay writes to the store itself, with no widget in this
@@ -810,7 +835,10 @@ class _PersistenceMixin:
             model_size=str(self.model_combo.currentData()),
         )
 
-        settings_changed = not self._settings_match_loaded_values(settings)
+        stored_settings = self._settings_store.load()
+        settings_changed = not self._settings_match_stored_values(
+            settings, stored_settings
+        )
         if not settings_changed and not key_storage_changed:
             if not key_storage_errors:
                 self._set_bottom_status("No settings changes")
