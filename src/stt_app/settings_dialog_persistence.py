@@ -467,7 +467,8 @@ class _PersistenceMixin:
         straight to the store. Saving the combo unconditionally therefore
         reverted a language the user had just picked on the overlay, on any
         Settings save at all. Deferring only while the combo still equals the
-        snapshot means a combo the user really did change always wins.
+        snapshot means a combo showing anything other than the value it
+        held when the dialog opened wins.
         """
         if override:
             return str(override)

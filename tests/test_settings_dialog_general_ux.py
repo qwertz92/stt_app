@@ -505,3 +505,45 @@ def test_the_language_hint_never_contradicts_the_language_picker(dialog):
             assert "supports auto" not in note.lower(), (
                 f"{model}: picker has no Auto but the hint promises it -> {note!r}"
             )
+
+
+def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
+    """The Local tab's progress bar appears the instant a download starts.
+
+    Without a retained size it took its 28 px out of the layout while hidden,
+    so pressing Download pulled Download/Cancel/Delete up under the cursor --
+    with Cancel sliding into the place the pointer was already on -- and pushed
+    them back down when the download finished, shrinking the model list twice
+    per download.
+    """
+    dialog.show()
+    _switch_to_tab(dialog, "Local")
+    QtWidgets.QApplication.processEvents()
+
+    watched = {
+        "list": dialog.local_models_list,
+        "action label": dialog.local_models_action_label,
+        "download": dialog.download_selected_models_button,
+        "cancel": dialog.cancel_model_downloads_button,
+        "delete": dialog.delete_selected_model_button,
+    }
+
+    def geometry() -> dict[str, tuple[int, int]]:
+        QtWidgets.QApplication.processEvents()
+        return {
+            name: (widget.mapTo(dialog, QtCore.QPoint(0, 0)).y(), widget.height())
+            for name, widget in watched.items()
+        }
+
+    hidden = geometry()
+    assert geometry() == hidden, "the tab had not settled before the measurement"
+
+    bar = dialog.local_model_download_progress_bar
+    bar.setValue(42)
+    bar.setFormat("small: 210/486 MB (43%)")
+    bar.setVisible(True)
+    assert geometry() == hidden, "starting a download moved the controls"
+
+    bar.setVisible(False)
+    assert geometry() == hidden, "finishing a download moved the controls"
+    dialog.hide()

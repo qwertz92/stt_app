@@ -280,6 +280,14 @@ class _LocalModelsMixin:
         self.local_model_download_progress_bar = QtWidgets.QProgressBar()
         self.local_model_download_progress_bar.setRange(0, 100)
         self.local_model_download_progress_bar.setTextVisible(True)
+        # Keep its space while hidden, for the same reason the action label
+        # above it is reserved: without this the bar appearing the instant a
+        # download starts pulled Download/Cancel/Delete 28 px up -- with the
+        # cursor still on Download and Cancel sliding into its place -- and
+        # pushed them back down on completion, shrinking the model list twice.
+        policy = self.local_model_download_progress_bar.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        self.local_model_download_progress_bar.setSizePolicy(policy)
         self.local_model_download_progress_bar.setVisible(False)
         local_models_layout.addWidget(self.local_model_download_progress_bar)
         self._show_local_model_unverified_state(
