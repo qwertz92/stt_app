@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import logging
 import threading
 import types
 from types import SimpleNamespace
@@ -953,3 +954,66 @@ def test_a_failed_connection_test_reports_what_the_api_said(monkeypatch):
 
     assert ok is False
     assert "run out of credits" in message, message
+
+
+def _stream_log_records(caplog, module_suffix):
+    name = f"stt_app.transcriber.{module_suffix}"
+    return [r for r in caplog.records if r.name == name]
+
+
+def test_a_partial_callback_that_raises_is_logged_once_per_session(caplog):
+    """A dead live-insertion path must not look like a user who stopped talking.
+
+    The callback is what puts live text on screen and into the document, so a
+    bare `pass` made a broken one indistinguishable from silence. It stays
+    swallowed -- the next turn carries the whole combined text again -- and it
+    stays latched, because it runs on every turn revision.
+    """
+    t, clients = _make_streaming_transcriber()
+
+    def _broken(_text):
+        raise RuntimeError("the controller slot is gone")
+
+    with caplog.at_level(logging.DEBUG):
+        t.start_stream(on_partial=_broken)
+        client = clients[0]
+        client.emit_turn("Hello", turn_order=0)
+        client.emit_turn("Hello world", turn_order=0)
+        client.emit_turn("Hello world.", turn_order=0, end_of_turn=True)
+
+        first = _stream_log_records(caplog, "assemblyai_provider")
+        assert len(first) == 1, [r.getMessage() for r in first]
+        assert "partial callback failed" in first[0].getMessage()
+        assert first[0].exc_info is not None, "the traceback was dropped"
+
+        # Swallowed, so the session is unharmed.
+        assert t.stop_stream() == "Hello world."
+
+        # A new session logs again: the latch is per session, not per
+        # process. `_reset_stream_state_locked` is what clears it, so the
+        # identical re-initialization in `start_stream` is redundant --
+        # every write of `_stream_state = "idle"` is in `__init__` or that
+        # reset, and `start_stream` refuses to run in any other state. It
+        # is kept because the five neighbouring assignments are redundant
+        # for the same reason; removing only this one would read as a
+        # difference that is not there.
+        t.start_stream(on_partial=_broken)
+        clients[1].emit_turn("Again", turn_order=0)
+
+    assert len(_stream_log_records(caplog, "assemblyai_provider")) == 2
+
+
+def test_an_error_callback_that_raises_is_logged(caplog):
+    """That callback is the only path a stream failure takes to the user."""
+    t, clients = _make_streaming_transcriber()
+
+    def _broken(_message):
+        raise RuntimeError("the controller slot is gone")
+
+    with caplog.at_level(logging.DEBUG):
+        t.start_stream(on_error=_broken)
+        clients[0].emit_error(RuntimeError("socket died"))
+
+    records = _stream_log_records(caplog, "assemblyai_provider")
+    assert len(records) == 1, [r.getMessage() for r in records]
+    assert "error callback failed" in records[0].getMessage()

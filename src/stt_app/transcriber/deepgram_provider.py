@@ -11,6 +11,7 @@ No Deepgram SDK required; streaming needs `websocket-client`.
 from __future__ import annotations
 
 import json
+import logging
 import queue
 import threading
 import time
@@ -38,6 +39,8 @@ from .base import (
     StreamingErrorCallback,
     TranscriptionError,
 )
+
+logger = logging.getLogger(__name__)
 
 DEEPGRAM_API_BASE = "https://api.deepgram.com/v1"
 
@@ -102,6 +105,8 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._stream_finals: list[str] = []
         self._stream_partial_text = ""
         self._stream_error_reported = False
+        self._stream_partial_callback_failed = False
+        self._stream_message_parse_failed = False
         self._stream_last_message_at = 0.0
 
     def _normalize_language_mode(self, mode: str) -> str:
@@ -167,7 +172,15 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         try:
             callback(self._format_stream_error(error))
         except Exception:
-            pass
+            # `_stream_error_reported` above already makes this at most
+            # once per session. Swallowing stays right -- there is
+            # nowhere else to report to -- but this callback is the only
+            # path a stream failure takes to the user, so losing it
+            # silently leaves the overlay mid-session forever.
+            logger.exception(
+                "Deepgram streaming error callback failed; the failure "
+                "was not reported."
+            )
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via Deepgram pre-recorded API.
@@ -329,6 +342,8 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         self._stream_partial_text = ""
         self._stream_error = None
         self._stream_error_reported = False
+        self._stream_partial_callback_failed = False
+        self._stream_message_parse_failed = False
         self._stream_last_message_at = 0.0
 
     def _record_stream_error(
@@ -391,6 +406,8 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             self._stream_finals = []
             self._stream_partial_text = ""
             self._stream_error_reported = False
+            self._stream_partial_callback_failed = False
+            self._stream_message_parse_failed = False
             self._stream_last_message_at = 0.0
             connected = threading.Event()
             closed = threading.Event()
@@ -691,7 +708,14 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             try:
                 ws.close()
             except Exception:
-                pass
+                # The bounded join below cannot tell a refused close
+                # from a clean one, and a socket that stays open stays
+                # billed until the process exits.
+                logger.warning(
+                    "Deepgram streaming socket close failed; the "
+                    "connection may still be open.",
+                    exc_info=True,
+                )
 
         worker = threading.Thread(
             target=close,
@@ -915,6 +939,19 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         try:
             payload = json.loads(str(message))
         except Exception:
+            with self._stream_lock:
+                already_logged = self._stream_message_parse_failed
+                self._stream_message_parse_failed = True
+            if not already_logged:
+                # Dropping it stays right -- there is nothing to read --
+                # but a message that will not parse may have carried a
+                # transcript, and that is invisible otherwise. Latched,
+                # because a protocol change makes every frame fail.
+                logger.warning(
+                    "Deepgram sent a message that is not JSON; it was "
+                    "dropped. Logged once per session.",
+                    exc_info=True,
+                )
             return
         if not isinstance(payload, dict):
             return
@@ -948,4 +985,18 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         try:
             callback(combined)
         except Exception:
-            pass
+            with self._stream_lock:
+                already_logged = self._stream_partial_callback_failed
+                self._stream_partial_callback_failed = True
+            if not already_logged:
+                # Latched, like `partial_callback_failed` in the local
+                # faster-whisper path: this runs on every interim
+                # result, so an unbounded log would flood. Swallowing
+                # stays right -- the next partial carries the whole
+                # combined text again -- but a dead live-insertion path
+                # must not look like a user who simply stopped talking.
+                logger.exception(
+                    "Deepgram streaming partial callback failed; live "
+                    "text is not being delivered. Logged once per "
+                    "session."
+                )

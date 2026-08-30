@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import threading
 import time
 import urllib.error
@@ -959,3 +960,75 @@ class TestSettingsStoreDeepgram:
 
         s = AppSettings.from_dict({"engine": "deepgram"})
         assert s.engine == "deepgram"
+
+
+def _deepgram_log_records(caplog):
+    return [
+        r for r in caplog.records
+        if r.name == "stt_app.transcriber.deepgram_provider"
+    ]
+
+
+def test_a_deepgram_partial_callback_that_raises_is_logged_once_per_session(
+    monkeypatch, caplog
+):
+    """Same defect as the AssemblyAI one: a broken callback looked like silence."""
+    _FakeWebSocketApp.instances = []
+    t = DeepgramTranscriber(api_key="key")
+    monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+    def _broken(_text):
+        raise RuntimeError("the controller slot is gone")
+
+    def _interim(ws, text):
+        ws.on_message(
+            ws,
+            json.dumps(
+                {
+                    "channel": {"alternatives": [{"transcript": text}]},
+                    "is_final": False,
+                }
+            ),
+        )
+
+    with caplog.at_level(logging.DEBUG):
+        t.start_stream(on_partial=_broken)
+        ws = _FakeWebSocketApp.instances[-1]
+        _interim(ws, "hello")
+        _interim(ws, "hello world")
+        _interim(ws, "hello world again")
+
+        first = _deepgram_log_records(caplog)
+        assert len(first) == 1, [r.getMessage() for r in first]
+        assert "partial callback failed" in first[0].getMessage()
+        assert first[0].exc_info is not None, "the traceback was dropped"
+
+        assert t.stop_stream() == "hello world again"
+
+        t.start_stream(on_partial=_broken)
+        _interim(_FakeWebSocketApp.instances[-1], "again")
+
+    assert len(_deepgram_log_records(caplog)) == 2
+
+
+def test_a_deepgram_message_that_is_not_json_is_logged_once_per_session(
+    monkeypatch, caplog
+):
+    """A frame that will not parse may have carried a transcript.
+
+    Dropping it stays right -- there is nothing to read -- but doing it in
+    silence made a protocol change indistinguishable from a quiet microphone.
+    """
+    _FakeWebSocketApp.instances = []
+    t = DeepgramTranscriber(api_key="key")
+    monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+    with caplog.at_level(logging.DEBUG):
+        t.start_stream()
+        ws = _FakeWebSocketApp.instances[-1]
+        ws.on_message(ws, "<html>not json</html>")
+        ws.on_message(ws, "<html>still not json</html>")
+
+    records = _deepgram_log_records(caplog)
+    assert len(records) == 1, [r.getMessage() for r in records]
+    assert "not JSON" in records[0].getMessage()

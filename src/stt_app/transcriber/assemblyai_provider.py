@@ -13,6 +13,7 @@ language detection enabled. It does not request a fallback model silently.
 
 from __future__ import annotations
 
+import logging
 import tempfile
 import threading
 from pathlib import Path
@@ -36,6 +37,8 @@ from .base import (
     StreamingErrorCallback,
     TranscriptionError,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _default_assemblyai():
@@ -101,6 +104,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         self._stream_turns: dict[int, str] = {}
         self._stream_error: Exception | None = None
         self._stream_error_reported = False
+        self._stream_partial_callback_failed = False
 
     def _get_aai(self):
         if self._aai is None:
@@ -297,7 +301,15 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         try:
             callback(self._format_stream_error(error))
         except Exception:
-            pass
+            # `_stream_error_reported` above already makes this at most
+            # once per session. Swallowing stays right -- there is
+            # nowhere else to report to -- but this callback is the only
+            # path a stream failure takes to the user, so losing it
+            # silently leaves the overlay mid-session forever.
+            logger.exception(
+                "AssemblyAI streaming error callback failed; the failure "
+                "was not reported."
+            )
 
     def _stream_combined_text_locked(self) -> str:
         parts = [self._stream_turns[order] for order in sorted(self._stream_turns)]
@@ -311,6 +323,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         self._stream_turns = {}
         self._stream_error = None
         self._stream_error_reported = False
+        self._stream_partial_callback_failed = False
 
     @staticmethod
     def _shutdown_streaming_client(client, *, join_timeout_s: float) -> None:
@@ -324,7 +337,15 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             try:
                 client.disconnect(terminate=True)
             except Exception:
-                pass
+                # A `disconnect` that raises before terminating leaves
+                # the SDK's reader/writer threads running against a dead
+                # socket, and the bounded join below cannot tell that
+                # apart from a clean shutdown.
+                logger.warning(
+                    "AssemblyAI streaming disconnect failed; SDK "
+                    "threads may still be running.",
+                    exc_info=True,
+                )
 
         worker = threading.Thread(
             target=_disconnect,
@@ -364,6 +385,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             self._stream_turns = {}
             self._stream_error = None
             self._stream_error_reported = False
+            self._stream_partial_callback_failed = False
 
         client = None
         try:
@@ -615,7 +637,22 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             try:
                 callback(combined)
             except Exception:
-                pass
+                with self._stream_lock:
+                    already_logged = self._stream_partial_callback_failed
+                    self._stream_partial_callback_failed = True
+                if not already_logged:
+                    # Latched, like `partial_callback_failed` in the
+                    # local faster-whisper path: this runs on every turn
+                    # revision, so an unbounded log would flood.
+                    # Swallowing stays right -- the next partial carries
+                    # the whole combined text again -- but a dead
+                    # live-insertion path must not look like a user who
+                    # simply stopped talking.
+                    logger.exception(
+                        "AssemblyAI streaming partial callback failed; "
+                        "live text is not being delivered. Logged once "
+                        "per session."
+                    )
 
     def _on_stream_error_event(
         self,
