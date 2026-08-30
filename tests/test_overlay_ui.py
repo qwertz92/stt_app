@@ -1808,3 +1808,186 @@ def test_the_header_flanks_stay_equal_at_a_larger_system_font():
             overlay.deleteLater()
     finally:
         app.setFont(original_font)
+
+
+@pytest.mark.pixel_exact
+def test_a_tall_transcript_does_not_keep_a_dragged_overlay_where_it_pushed_it():
+    """Growth may push the overlay up so it still fits; shrinking must undo it.
+
+    `_reposition_within_current_screen` clamped `self.pos()`, so the position a
+    tall transcript forced became the position every later state started from.
+    Measured on a 1392 px screen: an overlay dragged to y=1233 came back from
+    its first long result at y=1097 and stayed there for the rest of the
+    session, and the loss is whatever the tallest state ever shown costs.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1920, 1080))
+    overlay.show()
+    app.processEvents()
+    overlay._current_screen = lambda: screen
+
+    overlay.set_state("idle", "Idle.")
+    app.processEvents()
+    compact_height = overlay.height()
+    dragged = QtCore.QPoint(200, 1080 - compact_height - 20)
+    overlay.set_initial_position(dragged)
+    overlay.move(dragged)
+    app.processEvents()
+    assert overlay.pos() == dragged
+
+    long_text = "Das ist ein langer diktierter Text. " * 30
+    for _ in range(3):
+        overlay.set_state("done", long_text)
+        app.processEvents()
+        assert overlay.height() > compact_height, "the transcript did not grow it"
+        assert overlay.y() < dragged.y(), "growth has to keep it on the screen"
+        assert overlay.y() + overlay.height() <= 1080
+
+        overlay.set_state("idle", "Idle.")
+        app.processEvents()
+        assert overlay.pos() == dragged, (
+            "the overlay kept the position the transcript pushed it to"
+        )
+    overlay.hide()
+
+
+@pytest.mark.pixel_exact
+def test_a_corner_overlay_still_follows_its_corner_after_growing():
+    """The anchor only applies to a dragged overlay; a configured corner is
+    still recomputed from the screen every time."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1920, 1080))
+    overlay.show()
+    app.processEvents()
+    overlay._current_screen = lambda: screen
+    overlay.move_to_corner("bottom-right", screen=screen)
+    app.processEvents()
+
+    overlay.set_state("done", "Das ist ein langer diktierter Text. " * 30)
+    app.processEvents()
+    grown = overlay.pos()
+    bottom = screen.availableGeometry().bottom()
+    assert grown.y() + overlay.height() == bottom - OVERLAY_MARGIN_Y
+
+    overlay.set_state("idle", "Idle.")
+    app.processEvents()
+    assert overlay.y() + overlay.height() == bottom - OVERLAY_MARGIN_Y
+    overlay.hide()
+
+
+@pytest.mark.pixel_exact
+def test_an_actually_dragged_overlay_returns_to_where_it_was_dropped():
+    """The same property as above, reached the way a user reaches it: press,
+    move, release. `set_initial_position` is the controller's entry point, the
+    mouse handlers are the user's, and only the second one runs when somebody
+    drags the window."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1920, 1080))
+    overlay.show()
+    app.processEvents()
+    overlay._current_screen = lambda: screen
+    overlay.set_state("idle", "Idle.")
+    app.processEvents()
+
+    dropped = QtCore.QPoint(240, 1080 - overlay.height() - 30)
+    grab = QtCore.QPointF(overlay.width() / 2, 4.0)
+    overlay.mousePressEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.MouseButtonPress,
+            grab,
+            overlay.mapToGlobal(grab.toPoint()).toPointF(),
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoModifier,
+        )
+    )
+    release_global = QtCore.QPointF(dropped + overlay._drag_offset)
+    overlay.mouseMoveEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.MouseMove,
+            grab,
+            release_global,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoModifier,
+        )
+    )
+    overlay.mouseReleaseEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.MouseButtonRelease,
+            grab,
+            release_global,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoButton,
+            QtCore.Qt.NoModifier,
+        )
+    )
+    app.processEvents()
+    assert overlay.pos() == dropped
+
+    overlay.set_state("done", "Das ist ein langer diktierter Text. " * 30)
+    app.processEvents()
+    assert overlay.y() < dropped.y()
+
+    overlay.set_state("idle", "Idle.")
+    app.processEvents()
+    assert overlay.pos() == dropped, "the drop position was not restored"
+    overlay.hide()
+
+
+@pytest.mark.pixel_exact
+def test_a_click_that_never_moves_claims_the_position_it_already_has():
+    """`mouseReleaseEvent` is the only handler a click with no movement runs,
+    and it has always ended such a click by marking the overlay manually
+    positioned. It therefore has to record an anchor as well: leaving the flag
+    set with no anchor would send the next resize back to clamping wherever the
+    window happened to be. The click itself must still move nothing.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    screen = _FakeScreen(QtCore.QRect(0, 0, 1920, 1080))
+    overlay.show()
+    app.processEvents()
+    overlay._current_screen = lambda: screen
+    overlay.set_state("idle", "Idle.")
+    resting = QtCore.QPoint(300, 1080 - overlay.height() - 40)
+    overlay.move(resting)
+    app.processEvents()
+
+    point = QtCore.QPointF(overlay.width() / 2, 4.0)
+    global_point = overlay.mapToGlobal(point.toPoint()).toPointF()
+    overlay.mousePressEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.MouseButtonPress,
+            point,
+            global_point,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoModifier,
+        )
+    )
+    overlay.mouseReleaseEvent(
+        QtGui.QMouseEvent(
+            QtCore.QEvent.MouseButtonRelease,
+            point,
+            global_point,
+            QtCore.Qt.LeftButton,
+            QtCore.Qt.NoButton,
+            QtCore.Qt.NoModifier,
+        )
+    )
+    app.processEvents()
+
+    assert overlay.pos() == resting, "a click must not move the overlay"
+    assert overlay._manual_positioned is True
+    assert overlay._manual_anchor == resting
+
+    overlay.set_state("done", "Das ist ein langer diktierter Text. " * 30)
+    app.processEvents()
+    overlay.set_state("idle", "Idle.")
+    app.processEvents()
+    assert overlay.pos() == resting
+    overlay.hide()

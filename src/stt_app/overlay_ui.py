@@ -276,6 +276,10 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_change_blocked = False
         self._idle_default_detail = OVERLAY_INITIAL_DETAIL
         self._manual_positioned = False
+        # Where the user put the overlay, as opposed to where it currently
+        # sits: a tall transcript can push it up to stay on screen, and the
+        # position it is pushed to must not become the new preference.
+        self._manual_anchor: QtCore.QPoint | None = None
         self._screen_change_connected = False
         self._state_background = ""
         self._copy_text: str | None = None
@@ -1058,7 +1062,7 @@ class OverlayUI(QtWidgets.QWidget):
         self.move(target)
         self._initial_position = QtCore.QPoint(target)
         self._initial_corner = normalized
-        self._manual_positioned = False
+        self._claim_manual_position(None)
 
     def apply_corner_setting(self, corner: str) -> None:
         """Apply the configured corner without discarding a dragged position.
@@ -1075,7 +1079,7 @@ class OverlayUI(QtWidgets.QWidget):
     def set_initial_position(self, point: QtCore.QPoint) -> None:
         self._initial_position = QtCore.QPoint(point)
         self._initial_corner = None
-        self._manual_positioned = True
+        self._claim_manual_position(point)
 
     def reset_position(self) -> None:
         self.ensure_compact_size_unless_showing_a_result()
@@ -1094,7 +1098,9 @@ class OverlayUI(QtWidgets.QWidget):
         if screen is not None:
             target = self._clamp_point_to_screen(target, screen)
         self.move(target)
-        self._manual_positioned = self._initial_corner is None
+        self._claim_manual_position(
+            self._initial_position if self._initial_corner is None else None
+        )
 
     def nativeEvent(self, event_type, message):
         """Prevent window activation on mouse click (Windows).
@@ -1224,14 +1230,14 @@ class OverlayUI(QtWidgets.QWidget):
         # drag during startup competes with the preload's overlay updates, and
         # each of those repositions a not-yet-manual overlay back to its
         # configured corner — so the window jumped out from under the cursor.
-        self._manual_positioned = True
+        self._claim_manual_position(target)
         self.move(target)
         event.accept()
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         if event.button() == QtCore.Qt.LeftButton and self._drag_active:
             self._drag_active = False
-            self._manual_positioned = True
+            self._claim_manual_position(self.pos())
             self._reposition_within_current_screen()
             event.accept()
             return
@@ -1306,7 +1312,6 @@ class OverlayUI(QtWidgets.QWidget):
     def _update_detail_height(self) -> None:
         if self._defer_geometry():
             return
-        previous_size = QtCore.QSize(self.size())
         self._apply_queue_scroll_height()
         margins = self._layout.contentsMargins()
         spacing = self._layout.spacing()
@@ -1405,7 +1410,7 @@ class OverlayUI(QtWidgets.QWidget):
             )
         desired_window_height = self._bounded_window_height(desired_window_height)
         self._resize_window(QtCore.QSize(target_window_width, desired_window_height))
-        self._reposition_within_current_screen(previous_size)
+        self._reposition_within_current_screen()
 
     def _resize_window(self, target: QtCore.QSize) -> None:
         """Resize the overlay window, refreshing the layout constraints first.
@@ -1780,6 +1785,15 @@ class OverlayUI(QtWidgets.QWidget):
             y = geometry.top() + OVERLAY_MARGIN_Y
         return QtCore.QPoint(x, y)
 
+    def _claim_manual_position(self, point: QtCore.QPoint | None) -> None:
+        """Record where the user wants the overlay, or that they never said.
+
+        The flag and the anchor are one fact in two fields, and a writer
+        that sets only the flag leaves the previous drag's anchor behind.
+        Both are written here and nowhere else."""
+        self._manual_positioned = point is not None
+        self._manual_anchor = QtCore.QPoint(point) if point is not None else None
+
     def _clamp_point_to_screen(
         self,
         point: QtCore.QPoint,
@@ -1792,10 +1806,7 @@ class OverlayUI(QtWidgets.QWidget):
         clamped_y = max(geometry.top(), min(point.y(), max_y))
         return QtCore.QPoint(clamped_x, clamped_y)
 
-    def _reposition_within_current_screen(
-        self,
-        previous_size: QtCore.QSize | None = None,
-    ) -> None:
+    def _reposition_within_current_screen(self) -> None:
         if self._drag_active:
             # The user is positioning the window right now; nothing may move it
             # until the drag ends (mouseReleaseEvent runs the final clamp).
@@ -1804,12 +1815,19 @@ class OverlayUI(QtWidgets.QWidget):
         if screen is None:
             return
 
-        target = QtCore.QPoint(self.pos())
         if not self._manual_positioned and self._initial_corner:
             target = self._position_for_corner(screen, self._initial_corner)
-        elif previous_size is not None:
-            target = self._clamp_point_to_screen(target, screen)
         else:
+            # Clamp where the user put it, not where it currently is. Both
+            # branches used to clamp `self.pos()`, and `previous_size` was
+            # accepted and never read -- so a transcript tall enough to run off
+            # the bottom pushed the window up to fit and the next state took
+            # that pushed-up position as the new one. Measured on a 1392 px
+            # screen: an overlay dragged to y=1233 came back to y=1097 and
+            # stayed there, and the ceiling is what the tallest state ever
+            # shown costs, up to `OVERLAY_MAX_HEIGHT` (392 px) or more with a
+            # queue.
+            target = QtCore.QPoint(self._manual_anchor or self.pos())
             target = self._clamp_point_to_screen(target, screen)
 
         if target != self.pos():
