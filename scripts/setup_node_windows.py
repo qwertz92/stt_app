@@ -43,6 +43,7 @@ import shutil
 import ssl
 import subprocess
 import tempfile
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -50,12 +51,44 @@ from pathlib import Path
 DEFAULT_VERSION = "24.18.0"
 _VERSION_RE = re.compile(r"^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$")
 
-# Download roots, tried in order. Each release directory publishes both the
-# archive and the authoritative SHASUMS256.txt file used to verify it.
+# Download roots, tried in order. Only the first is nodejs.org, and only
+# nodejs.org publishes the authoritative SHASUMS256.txt: taking the checksum
+# from whichever root served the archive means the mirror vouches for its own
+# bytes, which cannot detect a substituted archive from that mirror.
+_UPSTREAM_ROOT_TEMPLATE = "https://nodejs.org/dist/v{ver}"
 _DOWNLOAD_ROOT_TEMPLATES = (
-    "https://nodejs.org/dist/v{ver}",
+    _UPSTREAM_ROOT_TEMPLATE,
     "https://npmmirror.com/mirrors/node/v{ver}",
 )
+
+# `urlopen` follows redirects with no scheme or host restriction -- CPython's
+# HTTPRedirectHandler allows http, https, ftp and "" -- so an https request can
+# be redirected to plaintext http and followed silently. These are the only
+# hosts (or subdomains of them) a Node download may end up on.
+_ALLOWED_DOWNLOAD_DOMAINS = ("nodejs.org", "npmmirror.com")
+
+
+def _is_allowed_download_url(url: str) -> bool:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        return False
+    host = (parsed.hostname or "").lower().rstrip(".")
+    return any(
+        host == domain or host.endswith(f".{domain}")
+        for domain in _ALLOWED_DOWNLOAD_DOMAINS
+    )
+
+
+def _open_download(url: str, timeout: float):
+    """Open `url`, refusing a redirect that left https or the allowed hosts."""
+    if not _is_allowed_download_url(url):
+        raise RuntimeError(f"Refusing to download from {url}")
+    response = urllib.request.urlopen(url, timeout=timeout)
+    final_url = response.geturl()
+    if not _is_allowed_download_url(final_url):
+        response.close()
+        raise RuntimeError(f"Download was redirected to an untrusted URL: {final_url}")
+    return response
 
 
 def _existing_node() -> str | None:
@@ -103,6 +136,33 @@ def _expected_archive_sha256(checksums: str, archive_name: str) -> str:
     raise RuntimeError(f"No SHA-256 checksum found for {archive_name}.")
 
 
+def _fetch_checksums(version: str, archive_root: str) -> str:
+    """Read SHASUMS256.txt, preferring nodejs.org over whoever served the zip.
+
+    A mirror that supplies both the archive and the checksum it is verified
+    against cannot fail that verification, so the checksum is fetched from
+    nodejs.org whenever it is reachable -- including for a mirror download,
+    where it is the only thing that makes the verification mean anything. The
+    mirror exists for networks where nodejs.org is blocked, so falling back to
+    its own copy keeps it usable; that case says out loud what it is worth.
+    """
+    upstream_url = f"{_UPSTREAM_ROOT_TEMPLATE.format(ver=version)}/SHASUMS256.txt"
+    try:
+        with _open_download(upstream_url, timeout=30) as response:
+            return response.read().decode("ascii")
+    except Exception as exc:
+        fallback_url = f"{archive_root}/SHASUMS256.txt"
+        if fallback_url == upstream_url:
+            raise
+        print(f"WARNING: could not reach {upstream_url}: {exc}")
+        print(
+            "WARNING: verifying the archive against the same mirror that served "
+            "it, which cannot detect a substituted archive from that mirror."
+        )
+        with _open_download(fallback_url, timeout=30) as response:
+            return response.read().decode("ascii")
+
+
 def _download(version: str, dest_zip: Path) -> None:
     version = _validated_version(version)
     archive_name = f"node-v{version}-win-x64.zip"
@@ -110,17 +170,15 @@ def _download(version: str, dest_zip: Path) -> None:
     for template in _DOWNLOAD_ROOT_TEMPLATES:
         root_url = template.format(ver=version)
         archive_url = f"{root_url}/{archive_name}"
-        checksums_url = f"{root_url}/SHASUMS256.txt"
         print(f"Downloading {archive_url} ...")
         try:
-            with urllib.request.urlopen(archive_url, timeout=120) as response, open(
+            with _open_download(archive_url, timeout=120) as response, open(
                 dest_zip, "wb"
             ) as handle:
                 shutil.copyfileobj(response, handle)
             if dest_zip.stat().st_size <= 0:
                 raise RuntimeError("downloaded archive is empty")
-            with urllib.request.urlopen(checksums_url, timeout=30) as response:
-                checksums = response.read().decode("ascii")
+            checksums = _fetch_checksums(version, root_url)
             expected = _expected_archive_sha256(checksums, archive_name)
             actual = _sha256_file(dest_zip)
             if actual != expected:
@@ -136,6 +194,21 @@ def _download(version: str, dest_zip: Path) -> None:
     raise RuntimeError(
         "Could not download Node.js from any mirror:\n  " + "\n  ".join(errors)
     )
+
+
+# node.exe alone does not make a usable install: the app runs `npm install`
+# on first ONNX use. An extraction cut short by Ctrl+C, a full disk or an AV
+# quarantine can leave node.exe in place with npm missing.
+_REQUIRED_NODE_FILES = (
+    "node.exe",
+    "npm.cmd",
+    "npx.cmd",
+    "node_modules/npm/bin/npm-cli.js",
+)
+
+
+def _missing_node_files(node_root: Path) -> list[str]:
+    return [name for name in _REQUIRED_NODE_FILES if not (node_root / name).is_file()]
 
 
 def _extract_zip_safely(archive: zipfile.ZipFile, target_dir: Path) -> None:
@@ -224,7 +297,20 @@ def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) 
     node_root = target_dir / f"node-v{version}-win-x64"
     node_exe = node_root / "node.exe"
 
-    if not node_exe.is_file():
+    # Checking node.exe alone reported a half-extracted install as ready, and
+    # --force could not repair it either: --force only skipped the
+    # already-available early return above, while this guard still saw node.exe
+    # and downloaded nothing.
+    missing = _missing_node_files(node_root)
+    if missing or force:
+        if node_root.exists() and (missing or force):
+            if missing:
+                print(
+                    f"Incomplete Node.js install at {node_root} (missing: "
+                    + ", ".join(missing)
+                    + "); reinstalling."
+                )
+            shutil.rmtree(node_root, ignore_errors=True)
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = Path(tmp) / "node.zip"
             _download(version, zip_path)
@@ -232,8 +318,12 @@ def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) 
             with zipfile.ZipFile(zip_path) as archive:
                 _extract_zip_safely(archive, target_dir)
 
-    if not node_exe.is_file():
-        print(f"ERROR: node.exe not found at {node_exe} after extraction.")
+    missing = _missing_node_files(node_root)
+    if missing:
+        print(
+            f"ERROR: Node.js install at {node_root} is incomplete after "
+            "extraction; missing: " + ", ".join(missing)
+        )
         return 1
 
     print(f"Node.js is ready: {node_exe}")

@@ -31,6 +31,19 @@ def _zip_bytes(entries: dict[str, bytes]) -> bytes:
 
 
 class _Response(io.BytesIO):
+    """Stands in for an `http.client.HTTPResponse`.
+
+    `geturl()` is part of that contract and is what the redirect check reads:
+    a response whose final URL left https, or the allowed hosts, is refused.
+    """
+
+    def __init__(self, payload: bytes, url: str = "https://nodejs.org/dist/x"):
+        super().__init__(payload)
+        self._url = url
+
+    def geturl(self) -> str:
+        return self._url
+
     def __enter__(self):
         return self
 
@@ -54,9 +67,10 @@ def test_download_verifies_published_checksum(monkeypatch, tmp_path):
         assert timeout in {30, 120}
         if str(url).endswith("SHASUMS256.txt"):
             return _Response(
-                f"{checksum}  node-v24.18.0-win-x64.zip\n".encode("ascii")
+                f"{checksum}  node-v24.18.0-win-x64.zip\n".encode("ascii"),
+                url=str(url),
             )
-        return _Response(archive)
+        return _Response(archive, url=str(url))
 
     monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
     destination = tmp_path / "node.zip"
@@ -76,9 +90,10 @@ def test_download_rejects_mismatched_checksums_from_all_mirrors(
         assert timeout in {30, 120}
         if str(url).endswith("SHASUMS256.txt"):
             return _Response(
-                ("0" * 64 + "  node-v24.18.0-win-x64.zip\n").encode("ascii")
+                ("0" * 64 + "  node-v24.18.0-win-x64.zip\n").encode("ascii"),
+                url=str(url),
             )
-        return _Response(archive)
+        return _Response(archive, url=str(url))
 
     monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
     destination = tmp_path / "node.zip"
@@ -116,3 +131,111 @@ def test_safe_extract_allows_expected_node_layout(tmp_path):
         module._extract_zip_safely(archive, target)
 
     assert (target / "node-v24.18.0-win-x64" / "node.exe").read_bytes() == b"node"
+
+
+def test_the_checksum_is_fetched_from_nodejs_org_even_for_a_mirror_archive(
+    monkeypatch, tmp_path
+):
+    """A mirror that supplies both cannot fail its own verification.
+
+    The archive and SHASUMS256.txt used to come from whichever root was being
+    tried, so for the npmmirror fallback the mirror vouched for its own bytes,
+    which cannot detect a substituted archive from that mirror. Only nodejs.org
+    publishes the authoritative list.
+    """
+    module = _load_setup_node_module()
+    archive = _zip_bytes({"node-v24.18.0-win-x64/node.exe": b"node"})
+    checksum = hashlib.sha256(archive).hexdigest()
+    requested: list[str] = []
+
+    def fake_urlopen(url, timeout):
+        url = str(url)
+        requested.append(url)
+        if url.endswith("SHASUMS256.txt"):
+            return _Response(
+                f"{checksum}  node-v24.18.0-win-x64.zip\n".encode("ascii"), url=url
+            )
+        if "nodejs.org" in url:
+            raise OSError("blocked by the corporate proxy")
+        return _Response(archive, url=url)
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    module._download("24.18.0", tmp_path / "node.zip")
+
+    checksum_urls = [u for u in requested if u.endswith("SHASUMS256.txt")]
+    assert checksum_urls, "no checksum was fetched"
+    assert all("nodejs.org" in u for u in checksum_urls), checksum_urls
+    assert any("npmmirror" in u for u in requested), "the mirror was never used"
+
+
+def test_a_download_redirected_off_https_is_refused(monkeypatch, tmp_path):
+    """`urlopen` follows a redirect to plaintext http without complaint.
+
+    CPython's HTTPRedirectHandler allows http, https, ftp and "", with no host
+    restriction, so an https request can silently end up on http elsewhere.
+    """
+    module = _load_setup_node_module()
+    archive = _zip_bytes({"node-v24.18.0-win-x64/node.exe": b"node"})
+
+    def fake_urlopen(url, timeout):
+        return _Response(archive, url="http://mirror.example.com/node.zip")
+
+    monkeypatch.setattr(module.urllib.request, "urlopen", fake_urlopen)
+
+    with pytest.raises(RuntimeError, match=r"Could not download Node\.js"):
+        module._download("24.18.0", tmp_path / "node.zip")
+
+
+def test_allowed_download_urls_cover_the_redirect_cases():
+    module = _load_setup_node_module()
+
+    assert module._is_allowed_download_url("https://nodejs.org/dist/v1/x.zip")
+    assert module._is_allowed_download_url("https://cdn.npmmirror.com/x.zip")
+    assert not module._is_allowed_download_url("http://nodejs.org/dist/v1/x.zip")
+    assert not module._is_allowed_download_url("https://nodejs.org.evil.com/x.zip")
+    assert not module._is_allowed_download_url("https://evil.com/nodejs.org/x.zip")
+    assert not module._is_allowed_download_url("https://user:pw@nodejs.org/x.zip")
+
+
+def test_a_half_extracted_node_is_not_reported_as_ready(monkeypatch, tmp_path):
+    """node.exe alone is not a usable install; the app runs `npm install`.
+
+    An extraction cut short by Ctrl+C, a full disk or an AV quarantine leaves
+    node.exe in place with npm missing, and the old check passed it. --force
+    could not repair it either: it only skipped the already-available early
+    return, while the download guard still saw node.exe and fetched nothing.
+    """
+    module = _load_setup_node_module()
+    node_root = tmp_path / "node-v24.18.0-win-x64"
+    node_root.mkdir(parents=True)
+    (node_root / "node.exe").write_bytes(b"node")
+
+    assert module._missing_node_files(node_root) == [
+        "npm.cmd",
+        "npx.cmd",
+        "node_modules/npm/bin/npm-cli.js",
+    ]
+
+    downloads: list[Path] = []
+
+    def fake_download(version, dest_zip):
+        downloads.append(dest_zip)
+        dest_zip.write_bytes(
+            _zip_bytes(
+                {
+                    "node-v24.18.0-win-x64/node.exe": b"node",
+                    "node-v24.18.0-win-x64/npm.cmd": b"npm",
+                    "node-v24.18.0-win-x64/npx.cmd": b"npx",
+                    "node-v24.18.0-win-x64/node_modules/npm/bin/npm-cli.js": b"cli",
+                }
+            )
+        )
+
+    monkeypatch.setattr(module, "_download", fake_download)
+    monkeypatch.setattr(module, "_existing_node", lambda: None)
+    monkeypatch.setattr(module, "_set_node_path_env", lambda _exe: True)
+
+    assert module.install("24.18.0", tmp_path, force=False, skip_ca=True) == 0
+    assert downloads, "the incomplete install was accepted instead of repaired"
+    assert module._missing_node_files(node_root) == []
