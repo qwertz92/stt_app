@@ -5660,16 +5660,17 @@ class DictationController(QtCore.QObject):
                     preserve_audio=True,
                 )
                 return
-            capture = self._audio_capture
-            self._audio_capture = None
-            self._cancel_audio_callback_watchdog(capture)
-            wav_bytes = b""
-            try:
-                wav_bytes = capture.stop()
-            except Exception:
-                pass
-            self._persist_last_recording_audio(wav_bytes)
-            self._save_recording_artifacts(capture, wav_bytes)
+            # The shared helper rather than a copy of it. This block used to
+            # inline the same detach/stop/persist/archive sequence but caught a
+            # failing `capture.stop()` and did nothing, while the normal stop
+            # path logs it. `stop()` concatenates every recorded chunk and
+            # encodes the WAV, so it raises on exactly the recording that is
+            # worth the most -- a long one that no longer fits in memory -- and
+            # the very next log line then reported `audio_bytes=0`, which is
+            # what an instant cancel looks like.
+            wav_bytes, _source_audio_path = self._stop_active_capture(
+                persist_audio=True
+            )
             self._logger.info(
                 "recording_canceled_before_transcription audio_bytes=%d",
                 len(wav_bytes),

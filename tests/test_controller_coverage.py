@@ -2012,6 +2012,36 @@ def test_cancel_current_action_stops_active_batch_recording():
     _ = app
 
 
+def test_a_cancel_whose_capture_cannot_be_stopped_says_so(caplog):
+    """A cancel must report a capture that refuses to stop, not swallow it.
+
+    `AudioCapture.stop` concatenates every recorded chunk and encodes the WAV,
+    so it raises on exactly the recording that is worth the most -- a long one
+    that no longer fits in memory. The normal stop path logs that; this path
+    caught it and did nothing, so the recording vanished while its own log
+    line reported `audio_bytes=0`, which is what an instant cancel looks like.
+    """
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+
+    class _RefusingCapture(FakeCapture):
+        def stop(self):
+            raise RuntimeError("PortAudio refused to stop the stream")
+
+    controller._audio_capture = _RefusingCapture()
+    controller._streaming_recording = False
+
+    with caplog.at_level(logging.ERROR, logger="test.controller"):
+        controller.cancel_current_action()
+
+    assert controller._audio_capture is None
+    assert "Failed to stop active audio capture" in caplog.text
+    # The cancel itself still completes.
+    assert overlay.states[-1][0] == "Done"
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     overlay = FakeOverlay()
     last_recording_store = FakeLastRecordingStore()
