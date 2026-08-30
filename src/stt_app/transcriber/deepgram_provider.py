@@ -733,6 +733,21 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             closed = self._stream_closed
 
             if ws is None or thread is None or self._stream_state != "active":
+            # Refusing is not enough while the handshake is still running.
+            # `start_stream` would then finish, find the state still
+            # "starting", publish the session as "active" -- and nobody owns
+            # it: the caller has already been told the stop failed and has
+            # torn its own state down. Every later dictation is then refused
+            # with "Streaming session already active" for the rest of the
+            # app's life, and the remote socket stays open and billed.
+            # Marking it retiring is exactly what `abort_stream` does, and
+            # both handshakes already have the branch that tears the client
+            # down when they come back to a state that is no longer
+            # "starting".
+                if self._stream_state == "starting":
+                    self._stream_state = "retiring"
+                    self._stream_on_partial = None
+                    self._stream_on_error = None
                 raise TranscriptionError("Streaming session is not active.")
             self._stream_state = "retiring"
             # A normal server close can produce a socket-level close callback;

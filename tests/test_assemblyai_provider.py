@@ -699,6 +699,71 @@ class TestAssemblyAIStreaming:
         assert t._stream_state == "idle"
 
 
+    def test_a_stop_during_the_handshake_retires_the_session(self):
+        """Refusing the stop is not enough; the session has to be retired.
+
+        `stop_stream` raised for a session that was still connecting and
+        changed nothing else. The handshake then finished, found the state
+        still "starting", and published the session as active -- owned by
+        nobody, because the caller had already been told the stop failed and
+        had torn its own state down. Every later dictation was then refused
+        with "Streaming session already active" for the rest of the app's
+        life, and the remote socket stayed open and billed.
+
+        `abort_stream` always handled this and has its own test; `stop_stream`
+        is the path the controller actually takes when
+        `_await_stream_connect` times out, and it was the untested one.
+        """
+        fake_aai = _make_fake_aai()
+        connect_entered = threading.Event()
+        release_connect = threading.Event()
+
+        class BarrierClient(FakeStreamingClient):
+            def connect(self, params):
+                connect_entered.set()
+                assert release_connect.wait(timeout=2.0)
+                super().connect(params)
+
+        client = BarrierClient(api_key="key")
+        t = AssemblyAITranscriber(
+            api_key="key",
+            aai_module=fake_aai,
+            streaming_client_factory=lambda _key: client,
+        )
+        runtime_errors: list[str] = []
+        start_errors: list[Exception] = []
+
+        def start() -> None:
+            try:
+                t.start_stream(on_error=runtime_errors.append)
+            except Exception as exc:
+                start_errors.append(exc)
+
+        worker = threading.Thread(target=start)
+        worker.start()
+        assert connect_entered.wait(timeout=1.0)
+
+        with pytest.raises(TranscriptionError, match="not active"):
+            t.stop_stream()
+
+        release_connect.set()
+        worker.join(timeout=2.0)
+        assert not worker.is_alive()
+
+        assert len(start_errors) == 1
+        assert "stopped while connecting" in str(start_errors[0])
+        assert client.terminated is True, (
+            "the handshake published a client that nobody owns"
+        )
+        assert t._stream_state == "idle", (
+            "the session was left mid-flight, so every later dictation is "
+            "refused with 'already active'"
+        )
+        assert runtime_errors == [], (
+            f"a refused stop reported a runtime failure: {runtime_errors}"
+        )
+
+
 # ---------------------------------------------------------------------------
 # Tests: factory routing
 # ---------------------------------------------------------------------------

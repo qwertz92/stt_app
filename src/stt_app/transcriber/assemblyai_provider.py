@@ -490,11 +490,28 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         with self._stream_lock:
             client = self._stream_client
             generation = self._stream_generation
-            # Drop the error callback first; close events after a normal
-            # stop must not surface as runtime failures.
-            self._stream_on_error = None
             if client is None or self._stream_state != "active":
+            # Refusing is not enough while the handshake is still running.
+            # `start_stream` would then finish, find the state still
+            # "starting", publish the session as "active" -- and nobody owns
+            # it: the caller has already been told the stop failed and has
+            # torn its own state down. Every later dictation is then refused
+            # with "Streaming session already active" for the rest of the
+            # app's life, and the remote socket stays open and billed.
+            # Marking it retiring is exactly what `abort_stream` does, and
+            # both handshakes already have the branch that tears the client
+            # down when they come back to a state that is no longer
+            # "starting".
+                if self._stream_state == "starting":
+                    self._stream_state = "retiring"
+                    self._stream_on_partial = None
+                    self._stream_on_error = None
                 raise TranscriptionError("Streaming session is not active.")
+            # Drop the error callback only for a stop that proceeds: close
+            # events after a normal stop must not surface as runtime failures.
+            # Dropping it above the guard silenced a session that survived the
+            # refusal, so a dead socket was never reported for the rest of it.
+            self._stream_on_error = None
             self._stream_state = "retiring"
 
         self._shutdown_streaming_client(client, join_timeout_s=5.0)

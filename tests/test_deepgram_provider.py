@@ -737,6 +737,41 @@ class TestDeepgramStreaming:
         )
         assert t.stop_stream() == "current"
 
+    def test_a_stop_during_the_handshake_retires_the_session(self):
+        """Refusing the stop is not enough; the session has to be retired.
+
+        `stop_stream` raised for a session still in `starting` and changed
+        nothing else, so `start_stream` came back, found the state unchanged
+        and published the session as active with nobody owning it -- after
+        which every later dictation is refused with "Streaming session
+        already active" and the socket stays open and billed. The readiness
+        check computes `ready` from `self._stream_state == "starting"`, so
+        moving it to `retiring` is what sends the handshake down its own
+        teardown path instead.
+
+        The end-to-end version of this, with a real barrier in the handshake,
+        is in the AssemblyAI suite; here the state is set directly because
+        this provider's handshake cannot be paused from outside.
+        """
+        t = DeepgramTranscriber(api_key="key")
+        partials: list[str] = []
+        errors: list[str] = []
+        t._stream_state = "starting"
+        t._stream_ws = object()
+        t._stream_thread = object()
+        t._stream_on_partial = partials.append
+        t._stream_on_error = errors.append
+
+        with pytest.raises(TranscriptionError, match="not active"):
+            t.stop_stream()
+
+        assert t._stream_state == "retiring", (
+            "the handshake will publish this session as active and nobody "
+            "will own it"
+        )
+        assert t._stream_on_partial is None
+        assert t._stream_on_error is None
+
     def test_audio_queue_saturation_fails_without_blocking(self, monkeypatch):
         _FakeWebSocketApp.instances = []
         _FakeWebSocketApp.finalize_message = None
