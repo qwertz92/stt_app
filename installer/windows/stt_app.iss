@@ -27,10 +27,26 @@ AppPublisher={#MyAppPublisher}
 AppPublisherURL={#MyAppURL}
 AppSupportURL={#MyAppURL}
 AppUpdatesURL={#MyAppURL}
-DefaultDirName={localappdata}\Programs\{#MyAppName}
+; {autopf}, not {localappdata}: PrivilegesRequiredOverridesAllowed=dialog
+; below lets the user choose an administrative install, and a 'user'
+; constant does not switch with it. An admin picking 'Install for all
+; users' therefore installed into that admin's own profile, while the
+; {auto*} shortcuts went to C:\ProgramData and C:\Users\Public -- visible
+; to every user and openable by none of them, because one user's token
+; cannot read another's profile, and only that admin could uninstall.
+; Inno's own help says the 'user' form must not be used where an
+; administrative mode is reachable; its compiler warning for exactly this
+; keys on a static PrivilegesRequired=admin, so it never fired here.
+; Measured on a per-user install: {autopf} expands to
+; C:\Users\<name>\AppData\Local\Programs, byte-identical to the old
+; default, so nothing changes for an ordinary install.
+DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=yes
 PrivilegesRequired=lowest
+; A silent install has to name its mode -- '/VERYSILENT /CURRENTUSER' or
+; '/VERYSILENT /ALLUSERS'. Without one, this directive still puts the
+; install-mode dialog up and the process waits on it.
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
