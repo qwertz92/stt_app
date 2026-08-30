@@ -936,15 +936,6 @@ dependencies = [
     { name = "websocket-client" },
 ]
 
-[package.optional-dependencies]
-dev = [
-    { name = "pyinstaller" },
-    { name = "pytest" },
-    { name = "pytest-cov" },
-    { name = "pytest-mock" },
-    { name = "ruff" },
-]
-
 [package.dev-dependencies]
 dev = [
     { name = "pyinstaller" },
@@ -964,18 +955,12 @@ requires-dist = [
     { name = "numpy", specifier = "==2.5.2" },
     { name = "onnx-asr", extras = ["cpu", "hub"], specifier = "==0.12.0" },
     { name = "onnxruntime-genai", marker = "sys_platform == 'win32'", specifier = "==0.15.2" },
-    { name = "pyinstaller", marker = "extra == 'dev'", specifier = "==6.22.0" },
     { name = "pyside6", specifier = "==6.11.1" },
-    { name = "pytest", marker = "extra == 'dev'", specifier = "==9.1.1" },
-    { name = "pytest-cov", marker = "extra == 'dev'", specifier = "==7.1.0" },
-    { name = "pytest-mock", marker = "extra == 'dev'", specifier = "==3.15.1" },
     { name = "pywin32", marker = "sys_platform == 'win32'", specifier = "==312" },
-    { name = "ruff", marker = "extra == 'dev'", specifier = "==0.15.8" },
     { name = "sounddevice", specifier = "==0.5.5" },
     { name = "truststore", specifier = "==0.10.4" },
     { name = "websocket-client", specifier = "==1.9.0" },
 ]
-provides-extras = ["dev"]
 
 [package.metadata.requires-dev]
 dev = [
