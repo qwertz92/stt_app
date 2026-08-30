@@ -797,3 +797,55 @@ class TestDownloadScriptSSLDetection:
 
         exc2 = Exception("timeout")
         assert _is_ssl_error(exc2) is False
+
+
+class TestDownloadProgressMeasuresTheDestination:
+    def _make_hf_cache(self, root: Path, repo_id: str, payload: bytes) -> Path:
+        folder = f"models--{repo_id.replace('/', '--')}"
+        snapshot = root / folder / "snapshots" / "abc123"
+        snapshot.mkdir(parents=True)
+        (snapshot / "config.json").write_text("{}")
+        (snapshot / "model.bin").write_bytes(payload)
+        return snapshot
+
+    def test_a_copy_in_the_default_cache_is_not_this_download_s_progress(
+        self, tmp_path
+    ):
+        """`WhisperModel(download_root=...)` reads one cache root.
+
+        So with a Model Dir configured, a complete copy in the default Hugging
+        Face cache is a different file set that this download will not use --
+        and sizing it made the bar report a download that had not started as
+        finished. This became reachable when the inventory stopped calling
+        such a model installed, because until then its Download button was
+        disabled.
+        """
+        default_cache = tmp_path / "hf"
+        default_cache.mkdir()
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        self._make_hf_cache(
+            default_cache, "Systran/faster-whisper-tiny", b"0" * 4096
+        )
+
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(default_cache),
+        ):
+            assert estimate_cached_model_bytes("tiny", str(model_dir)) == 0
+            # And the same copy is measured when it *is* the destination.
+            # 4096 of weights plus the two bytes of config.json.
+            assert estimate_cached_model_bytes("tiny", "") == 4098
+
+    def test_the_destination_is_measured_once_it_exists(self, tmp_path):
+        model_dir = tmp_path / "models"
+        model_dir.mkdir()
+        self._make_hf_cache(
+            model_dir, "Systran/faster-whisper-tiny", b"0" * 2048
+        )
+
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path / "nowhere"),
+        ):
+            assert estimate_cached_model_bytes("tiny", str(model_dir)) == 2050

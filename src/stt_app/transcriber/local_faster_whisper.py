@@ -201,6 +201,14 @@ def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
     it carries none of the required `int8/*` files, so it can never qualify.
     An in-flight download has no valid snapshot anywhere either, so it starts
     at 0% and is measured only at its destination.
+
+    It is also ONNX-only, for the reason the first paragraph gives: those
+    models really are loaded from the other root. A faster-whisper model is
+    not -- `WhisperModel(download_root=...)` reads one cache root -- so a copy
+    in the default cache while a Model Dir is configured is a *different*
+    file set, and sizing it reported a download that had not started as
+    complete. Measured before this: 7 of 78 MB from a synthetic copy, i.e.
+    100% for a real one, on the first tick.
     """
     root = download_destination_dir(model_name, model_dir)
     if root is not None and root.is_dir():
@@ -210,15 +218,13 @@ def estimate_cached_model_bytes(model_name: str, model_dir: str = "") -> int:
 
 
 def _complete_cached_model_root(model_name: str, model_dir: str = "") -> Path | None:
-    if model_name in LOCAL_ONNX_MODEL_SIZES:
-        from .local_webgpu_asr import resolve_cached_webgpu_model_root
+    if model_name not in LOCAL_ONNX_MODEL_SIZES:
+        # Faster-whisper has no second root to fall back to: the loader reads
+        # exactly `download_destination_dir`, which the caller already sized.
+        return None
+    from .local_webgpu_asr import resolve_cached_webgpu_model_root
 
-        return resolve_cached_webgpu_model_root(model_name, model_dir)
-
-    for root in _model_cache_dirs(model_name, model_dir):
-        if _has_valid_model_snapshot(root, {"config.json", "model.bin"}):
-            return root
-    return None
+    return resolve_cached_webgpu_model_root(model_name, model_dir)
 
 
 def _directory_size_bytes(root: Path) -> int:
