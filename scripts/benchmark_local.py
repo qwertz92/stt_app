@@ -75,13 +75,22 @@ def _validate_models(models: list[str]) -> list[str]:
 
 
 def _bytes_to_human(value: int | None) -> str:
+    """Decimal MB, because that is what every other size here means.
+
+    This feeds the same table column as the `MODEL_ESTIMATED_SIZE_MB`
+    branch beside it, and that table is decimal (`model_download_progress`
+    converts it with `* 1_000_000`). Dividing by 1024 and writing "MB"
+    named neither unit and made one model report two different numbers
+    under the same label depending on `--show-sizes`: Parakeet 670 against
+    639.
+    """
     if value is None or value < 0:
         return "-"
     units = ["B", "KB", "MB", "GB", "TB"]
     size = float(value)
     unit_index = 0
-    while size >= 1024 and unit_index < len(units) - 1:
-        size /= 1024.0
+    while size >= 1000 and unit_index < len(units) - 1:
+        size /= 1000.0
         unit_index += 1
     return f"{size:.2f} {units[unit_index]}"
 

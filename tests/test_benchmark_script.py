@@ -1150,3 +1150,29 @@ def test_an_interrupt_while_collecting_terminates_and_reaps_the_child():
         call.startswith("join:") and float(call.split(":")[1]) <= 0.2
         for call in calls[1:]
     ), f"the wind-down was a single long join, which defers a second Ctrl+C: {calls}"
+
+
+def test_a_size_in_MB_means_the_same_thing_in_both_branches_of_the_column():
+    """`--show-sizes` and the estimate print into the same column.
+
+    One divided by 1024 and the other by 1000, both labelled MB, so the same
+    model reported two different numbers -- Parakeet 670 against 639 -- and
+    neither label named the unit it used.
+    """
+    module = _load_benchmark_module()
+
+    assert module._bytes_to_human(670_000_000) == "670.00 MB"
+    assert module._bytes_to_human(1_513_000_000) == "1.51 GB"
+    assert module._bytes_to_human(999) == "999.00 B"
+    assert module._bytes_to_human(1000) == "1.00 KB"
+    assert module._bytes_to_human(None) == "-"
+    assert module._bytes_to_human(-1) == "-"
+
+    # The estimate branch prints `~{MODEL_ESTIMATED_SIZE_MB[model]} MB`, so the
+    # two must agree for a model whose real size matches its estimate.
+    from stt_app.config import MODEL_ESTIMATED_SIZE_MB
+
+    estimated_mb = MODEL_ESTIMATED_SIZE_MB["parakeet-tdt-0.6b-v3"]
+    assert module._bytes_to_human(estimated_mb * 1_000_000) == (
+        f"{estimated_mb:.2f} MB"
+    )
