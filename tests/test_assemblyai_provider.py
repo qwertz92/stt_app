@@ -42,22 +42,17 @@ def _make_fake_aai(transcript_text: str = "hello world", error: str | None = Non
                 self.error = None
                 self.text = transcript_text
 
-        def wait_for_completion(self):
-            return self
-
     class FakeTranscriber:
         calls: list = []
-
-        def transcribe(self, audio_file, config=None):
-            FakeTranscriber.calls.append({"audio_file": audio_file, "config": config})
-            return FakeTranscript()
 
         def upload_file(self, audio_file):
             FakeTranscriber.calls.append({"upload_file": audio_file})
             return "https://assemblyai.test/uploaded.wav"
 
-        def submit(self, audio_url, config=None):
-            FakeTranscriber.calls.append({"audio_url": audio_url, "config": config})
+        def submit(self, audio_file, config=None):
+            FakeTranscriber.calls.append(
+                {"audio_file": audio_file, "config": config}
+            )
             return FakeTranscript()
 
     class FakeSettings:
@@ -205,7 +200,7 @@ class TestAssemblyAITranscribeBatch:
         class PatchedTranscriber:
             calls = []
 
-            def transcribe(self, audio_file, config=None):
+            def submit(self, audio_file, config=None):
                 PatchedTranscriber.calls.append(
                     {"audio_file": audio_file, "config": config}
                 )
@@ -243,7 +238,7 @@ class TestAssemblyAIErrorHandling:
         fake_aai = _make_fake_aai()
 
         class ExplodingTranscriber:
-            def transcribe(self, audio_file, config=None):
+            def submit(self, audio_file, config=None):
                 raise ConnectionError("Network unreachable")
 
         fake_aai.Transcriber = ExplodingTranscriber
@@ -391,7 +386,7 @@ class TestAssemblyAILanguageConfig:
             "AssemblyAI is transcribing audio...",
         ]
         assert fake_aai.Transcriber.calls[0]["upload_file"] == str(wav)
-        assert fake_aai.Transcriber.calls[1]["audio_url"] == (
+        assert fake_aai.Transcriber.calls[1]["audio_file"] == (
             "https://assemblyai.test/uploaded.wav"
         )
 
@@ -1017,3 +1012,140 @@ def test_an_error_callback_that_raises_is_logged(caplog):
     records = _stream_log_records(caplog, "assemblyai_provider")
     assert len(records) == 1, [r.getMessage() for r in records]
     assert "error callback failed" in records[0].getMessage()
+
+
+class _PendingTranscript:
+    """A job AssemblyAI has accepted but not finished."""
+
+    def __init__(self, status="queued", transcript_id="t-123"):
+        self.status = status
+        self.id = transcript_id
+        self.error = None
+        self.text = None
+
+
+def _pending_aai(*, statuses, transcript_id="t-123"):
+    """A fake module whose `get_by_id` walks `statuses`, then stays queued."""
+    aai = _make_fake_aai()
+    remaining = list(statuses)
+    fetched: list[str] = []
+
+    class _SubmittingTranscriber:
+        def submit(self, audio_file, config=None):
+            return _PendingTranscript(transcript_id=transcript_id)
+
+        def upload_file(self, audio_file):
+            return "https://assemblyai.test/uploaded.wav"
+
+    class _TranscriptClass:
+        @staticmethod
+        def get_by_id(tid):
+            fetched.append(tid)
+            status = remaining.pop(0) if remaining else "queued"
+            out = _PendingTranscript(status=status, transcript_id=tid)
+            if status == "completed":
+                out.text = "at last"
+            return out
+
+    aai.Transcriber = _SubmittingTranscriber
+    aai.Transcript = _TranscriptClass
+    return aai, fetched
+
+
+def _fake_clock(monkeypatch, provider):
+    """Make the poll loop deterministic and instant."""
+    now = [0.0]
+    monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(
+        provider.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
+    )
+    return now
+
+
+def test_a_job_that_never_finishes_gives_the_worker_back(monkeypatch):
+    """The SDK's `wait_for_completion` is `while True:` with no bound at all.
+
+    A job AssemblyAI leaves in `queued` therefore held the app's single
+    transcription worker for the rest of the session -- and blocked process
+    exit with it, because `ThreadPoolExecutor` joins its workers from an atexit
+    hook and `shutdown(wait=False, cancel_futures=True)` does not release one
+    that is already running (measured: the interpreter never exits).
+    """
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=[])
+    monkeypatch.setattr(provider, "ASSEMBLYAI_BATCH_MAX_WAIT_S", 10.0)
+    now = _fake_clock(monkeypatch, provider)
+
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+    with pytest.raises(TranscriptionError, match="did not finish"):
+        t.transcribe_batch(b"RIFF....WAVE")
+
+    assert fetched, "it gave up without ever polling"
+    assert now[0] == pytest.approx(10.0), "the budget was over- or under-spent"
+
+
+def test_the_timeout_names_the_transcript_so_it_can_be_fetched_later(monkeypatch):
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, _fetched = _pending_aai(statuses=[], transcript_id="t-abc999")
+    monkeypatch.setattr(provider, "ASSEMBLYAI_BATCH_MAX_WAIT_S", 6.0)
+    _fake_clock(monkeypatch, provider)
+
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+    with pytest.raises(TranscriptionError) as excinfo:
+        t.transcribe_batch(b"RIFF....WAVE")
+
+    assert "t-abc999" in str(excinfo.value), str(excinfo.value)
+
+
+def test_a_slow_job_is_still_delivered(monkeypatch):
+    """The bound must not turn a slow job into a failure."""
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=["processing", "processing", "completed"])
+    monkeypatch.setattr(provider, "ASSEMBLYAI_BATCH_MAX_WAIT_S", 60.0)
+    _fake_clock(monkeypatch, provider)
+
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+    assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
+    assert len(fetched) == 3
+
+
+def test_a_job_with_no_id_fails_at_once_instead_of_polling_nothing(monkeypatch):
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=[], transcript_id="")
+    monkeypatch.setattr(provider, "ASSEMBLYAI_BATCH_MAX_WAIT_S", 600.0)
+    _fake_clock(monkeypatch, provider)
+
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+    with pytest.raises(TranscriptionError, match="no transcript id"):
+        t.transcribe_batch(b"RIFF....WAVE")
+
+    assert fetched == [], "it polled with an empty id"
+
+
+def test_an_already_finished_job_is_never_polled_again(monkeypatch):
+    """The common case must cost no extra request."""
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=[])
+
+    class _ImmediateTranscriber:
+        def submit(self, audio_file, config=None):
+            done = _PendingTranscript(status="completed")
+            done.text = "hello world"
+            return done
+
+        def upload_file(self, audio_file):
+            return "https://assemblyai.test/uploaded.wav"
+
+    aai.Transcriber = _ImmediateTranscriber
+    _fake_clock(monkeypatch, provider)
+
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+    assert t.transcribe_batch(b"RIFF....WAVE") == "hello world"
+    assert fetched == []

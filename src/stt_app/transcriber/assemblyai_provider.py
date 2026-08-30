@@ -16,10 +16,12 @@ from __future__ import annotations
 import logging
 import tempfile
 import threading
+import time
 from pathlib import Path
 
 from ..app_paths import temp_audio_dir
 from ..config import (
+    ASSEMBLYAI_BATCH_MAX_WAIT_S,
     AUDIO_SAMPLE_RATE,
     DEFAULT_ASSEMBLYAI_MODEL,
     DEFAULT_CUSTOM_VOCABULARY,
@@ -155,6 +157,56 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             f"{model}. Choose universal-3-5-pro or universal-2."
         )
 
+    @staticmethod
+    def _wait_for_transcript(aai, transcript):
+        """Poll until the job is terminal, bounded in total.
+
+        The SDK's `wait_for_completion` is `while True:` around a status
+        fetch with no bound of any kind, so a job AssemblyAI leaves in
+        `queued` never returns. That holds the app's single transcription
+        worker for the rest of the session, and it also stops the app from
+        exiting: `ThreadPoolExecutor` registers an atexit hook that joins
+        its workers, and `shutdown(wait=False, cancel_futures=True)` does
+        not release a thread that is already running (measured). The
+        process then stays alive holding the single-instance lock, so the
+        user cannot even restart the app.
+
+        Terminal is the positive test rather than `queued`/`processing`,
+        so a status this SDK version does not know is waited out instead
+        of mistaken for a finished job.
+        """
+        terminal = {aai.TranscriptStatus.completed, aai.TranscriptStatus.error}
+        if transcript.status in terminal:
+            return transcript
+        transcript_id = getattr(transcript, "id", "")
+        if not transcript_id:
+            # Without an id there is nothing to poll, so looping would only
+            # spend the whole budget calling `get_by_id("")`.
+            raise TranscriptionError(
+                "AssemblyAI accepted the audio but returned no transcript id "
+                f"(status: {transcript.status})."
+            )
+        interval = float(
+            getattr(getattr(aai, "settings", None), "polling_interval", 3.0)
+            or 3.0
+        )
+        interval = min(max(interval, 0.5), 10.0)
+        deadline = time.monotonic() + ASSEMBLYAI_BATCH_MAX_WAIT_S
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TranscriptionError(
+                    "AssemblyAI did not finish the transcription within "
+                    f"{int(ASSEMBLYAI_BATCH_MAX_WAIT_S / 60)} minutes "
+                    f"(last status: {transcript.status}). The job may still "
+                    "complete; transcript id "
+                    f"{transcript_id or 'unknown'}."
+                )
+            time.sleep(min(interval, remaining))
+            transcript = aai.Transcript.get_by_id(transcript_id)
+            if transcript.status in terminal:
+                return transcript
+
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via AssemblyAI batch API.
 
@@ -188,9 +240,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 )
                 transcript = transcriber.submit(audio_url, config=config)
                 self._emit_progress("AssemblyAI is transcribing audio...")
-                transcript = transcript.wait_for_completion()
             else:
-                transcript = transcriber.transcribe(file_path, config=config)
+                transcript = transcriber.submit(file_path, config=config)
+            transcript = self._wait_for_transcript(aai, transcript)
 
             if transcript.status == aai.TranscriptStatus.error:
                 raise TranscriptionError(

@@ -1123,6 +1123,19 @@ ASSEMBLYAI_MODELS = (
 )
 DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
 
+# Total time one batch job may stay queued/processing before the app gives
+# up on it. The SDK's own `wait_for_completion` is `while True:` with no
+# bound, so a job AssemblyAI never finishes holds the single transcription
+# worker for the rest of the session -- and, because ThreadPoolExecutor's
+# atexit hook joins its workers, stops the app from exiting at all
+# (measured: `shutdown(wait=False, cancel_futures=True)` does not release
+# it), leaving a process that still holds the single-instance lock.
+# 30 minutes is 10-60x the normal turnaround and covers roughly 85 minutes
+# of audio at AssemblyAI's advertised async speed, so no dictation and few
+# imports can reach it; one that does fails with its transcript id, which
+# can be retrieved from the AssemblyAI dashboard.
+ASSEMBLYAI_BATCH_MAX_WAIT_S = 1800.0
+
 ELEVENLABS_MODELS = (
     "scribe_v2",
 )

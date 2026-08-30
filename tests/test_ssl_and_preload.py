@@ -676,7 +676,7 @@ class TestAssemblyAISSLDetection:
                 pass
 
         class FakeTranscriber:
-            def transcribe(self, f, config=None):
+            def submit(self, f, config=None):
                 cause = Exception(
                     "[SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed"
                 )
