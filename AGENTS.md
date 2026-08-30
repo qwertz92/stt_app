@@ -736,6 +736,42 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Deepgram repeated `keyterm` (nova-3) / `keywords` (nova-2) query params with
   `doseq` encoding. ElevenLabs, Azure, Fun-ASR, Nemotron, and Cohere/Granite
   ONNX expose no biasing input and stay unwired.
+- **A changing status line is reserved or elided, never left to grow.**
+  Three of them were not, and each moved something the user was pointing at:
+  every Remote-tab provider row's word-wrapped "Last test" label reserved one
+  line where a failure message is two, so one failing provider moved 43 of 50
+  widgets by 15 px and all seven pushed the "Run Connection Test" button
+  105 px down; the Run Benchmark window's status label sits under the scroll
+  area holding Run/Cancel, so each wrapped line lifted both buttons 16 px.
+  Both now use the same two-line `_reserve_dynamic_hint_height` reservation as
+  every other changing note, with the full message in the tooltip because two
+  lines cannot hold a 300-character provider body. The Benchmark *tab's* label
+  cannot wrap -- it shares a fixed-height row with a button -- and a plain
+  `QLabel` then reports the full text width as its `minimumSizeHint`, which
+  raised the settings dialog's own minimum width from 492 px to 1109 px while
+  showing the leading 77% of the message with no ellipsis and no tooltip.
+  `settings_dialog_helpers.ElidingLabel` is the answer to that shape: size
+  policy `Ignored` horizontally so the layout never widens for it, elided to
+  whatever width it is given and re-elided on resize, `text()` still returning
+  the full string so callers and tests read what was set, and the whole
+  message in the tooltip.
+- **A widget that appears mid-interaction keeps its space while hidden.**
+  The Local tab's download progress bar appears the instant a download starts,
+  and without `retainSizeWhenHidden` its 28 px left the layout: pressing
+  Download pulled Download/Cancel/Delete up under the cursor -- with Cancel
+  sliding into the place the pointer was on -- and pushed them back down on
+  completion, shrinking the model list twice per download.
+- **A dragged overlay is clamped from where the user put it, not from where it
+  currently is.** `_reposition_within_current_screen` clamped `self.pos()`, so
+  a result tall enough to run off the bottom pushed the window up to keep it
+  on screen and every later state started from the pushed-up position:
+  measured on a 1392 px screen, an overlay dragged to y=1233 came back at
+  y=1097 and stayed there, and the loss is whatever the tallest state ever
+  shown costs (up to `OVERLAY_MAX_HEIGHT`, more with a queue). The remembered
+  position and the `_manual_positioned` flag are one fact in two fields and
+  `_claim_manual_position` is their only writer -- a caller that set just the
+  flag left the previous drag's anchor behind. A configured corner is still
+  recomputed from the screen every time.
 - **Multi-select lists use ExtendedSelection**: Shift selects ranges, Ctrl
   toggles, matching the file explorer. Do not reintroduce `MultiSelection`.
 - **Remote connection test persistence**: last-known provider connection test
@@ -751,7 +787,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   not transactional, any provider changed before a later failure still emits
   `settings_changed` to invalidate cached clients. Persist the settings file
   before trimming history; a failed settings write must never delete history.
-- **The spreadsheet export neutralizes what XML cannot carry.** XML 1.0
+- **Every benchmark export neutralizes what it cannot carry, and none of
+  them writes into the file the user picked.** XML 1.0
   permits #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and #x10000-#x10FFFF and
   nothing else -- not even escaped -- while `saxutils.escape` only rewrites
   `&`, `<` and `>`. So one control byte anywhere in a benchmark row produced a
@@ -760,12 +797,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   tab and a lone surrogate each fail; tab, newline and an emoji are fine. The
   route is the text nobody types -- `runtime_details` built from a runtime's
   own error output, the environment strings read off the system, and a
-  transcript returned by a remote provider. `_xml_safe_text` replaces exactly
-  those characters with U+FFFD and nothing else: stripping non-ASCII instead
-  would trade an unopenable file for a silently mangled German transcript, and
-  the test compares the round-tripped cell text rather than only asserting
-  that the file parses. `_cell_xml` is the single place user text enters XML;
-  every other part of the workbook is static.
+  transcript returned by a remote provider. `_export_safe_text` replaces
+  exactly those characters with U+FFFD and nothing else: stripping non-ASCII
+  instead would trade an unopenable file for a silently mangled German
+  transcript, and the test compares the round-tripped cell text rather than
+  only asserting that the file parses. `_cell_xml` is the single place user
+  text enters XML; every other part of the workbook is static.
+  **The same set is what the other two formats need**, which is why the
+  function is no longer XML-only: a lone surrogate cannot be encoded as UTF-8
+  at all, so the CSV and Markdown writers raised `UnicodeEncodeError`
+  part-way through -- and one such character survives the history store
+  untouched, because `json.dumps(ensure_ascii=True)` escapes it and
+  `json.loads` decodes it straight back. In `_csv_cell` the type check is
+  load-bearing (`spreadsheet_safe_cell` passes numbers through unchanged);
+  the order is not, since U+FFFD is neither a formula prefix nor a space.
+  **And all three build the bytes first and hand them to
+  `atomic_write_bytes`.** The target is a path chosen in a Save dialog, so it
+  is routinely a file that already exists; opening it directly truncates it
+  before the first row is produced, and `zipfile.ZipFile(path, "w")` does the
+  same. Measured before the fix: a transcript with one U+D800 left a 638-byte
+  CSV fragment and a 0-byte Markdown file where the user's own file had been.
+  Two properties are tested separately, because one test cannot see both: an
+  export whose row builder raises must leave the previous bytes intact, and
+  the atomic writer must be the *only* thing that touches the destination.
 - **A store's existence check covers the backup too, not just the primary.**
   `atomic_write_json(keep_backup=True)` writes a `.bak` beside every store and
   `load_json_with_backup` reads it when the primary will not parse -- but five
@@ -785,6 +839,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   republishes the primary, so a second loss cannot take the data.
   `tests/test_store_backup_recovery.py` holds all three properties for all
   five stores.
+- **Deleting a store's primary means deleting its backup, in that order.**
+  The recovery above is exactly what makes a half-deletion permanent:
+  `LastRecordingStore.clear()` unlinked the state file and left the `.bak`,
+  `load` reads the backup precisely when the primary is missing, and it
+  republishes what it finds -- so the cleared state came back pointing at a
+  WAV that had been deleted a moment earlier, and `_orphaned_audio_state()`
+  became unreachable. Measured: `clear()` returned True, the audio was gone,
+  and the next `load()` returned the same `recording_id` with the primary
+  rewritten. The backup goes first, so a failure there leaves the pair intact
+  rather than a primary with no recovery copy, and a backup that cannot be
+  removed refuses the clear the same way a state file that cannot be removed
+  already did.
+- **`quarantine_corrupt_file(include_backup=True)` is only for a backup
+  already known to be unusable**, which is what its own docstring says and
+  what the `payload is None` arm means. `ProviderConnectionTestStore` passed
+  it for a payload that *parsed* but whose `results` key was not an object --
+  a shape only external damage produces, i.e. exactly when the backup is the
+  good copy. Measured: both files moved aside and every later load returned
+  nothing. Quarantine the file the payload actually came from: `source` is
+  what tells the two apart, and without it a bad `.bak` behind a missing
+  primary makes every load fail identically forever. The two history stores
+  already quarantined just the primary in their equivalent arm.
 - **Persistent JSON read-modify-write operations are path-serialized**:
   `persistence.lock_for_path` is the single in-process lock registry. Stores for
   history, benchmarks, settings, provider diagnostics, local inventory, last
