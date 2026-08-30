@@ -673,6 +673,93 @@ def test_nothing_delivered_at_all_stays_retryable(monkeypatch):
     assert not isinstance(raised.value, TextMayHaveBeenPastedError)
 
 
+def test_a_wm_paste_that_timed_out_is_not_reported_as_a_clean_failure(monkeypatch):
+    """The target may be inside its paste handler, just slower than 250 ms.
+
+    Measured against a real window whose WM_PASTE handler takes 1 s:
+    `SendMessageTimeoutW` returned 0 with ERROR_TIMEOUT after 250 ms while the
+    handler had already been entered, and it read the clipboard a second later.
+    Reported as a clean `TextInsertionError`, that made the caller restore the
+    previous clipboard -- so the user's own old clipboard content went into
+    their document instead of the transcript, and the streaming path rolled the
+    words back and pasted them again on the next partial.
+    """
+    backend = Win32ClipboardBackend()
+    monkeypatch.setattr(
+        backend,
+        "_send_message_timeout_result",
+        lambda hwnd, message, timeout_ms: (False, text_inserter.ERROR_TIMEOUT),
+    )
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        backend._send_wm_paste(4321)
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        backend.send_paste_with_mode("wm_paste", target_hwnd=4321)
+
+
+def test_a_wm_paste_to_a_dead_window_is_still_a_clean_failure(monkeypatch):
+    """Only ERROR_TIMEOUT is ambiguous; a rejected handle delivered nothing."""
+    backend = Win32ClipboardBackend()
+    monkeypatch.setattr(
+        backend,
+        "_send_message_timeout_result",
+        lambda hwnd, message, timeout_ms: (False, 1400),  # INVALID_WINDOW_HANDLE
+    )
+
+    assert backend._send_wm_paste(4321) is False
+
+    with pytest.raises(TextInsertionError) as excinfo:
+        backend.send_paste_with_mode("wm_paste", target_hwnd=4321)
+    assert not isinstance(excinfo.value, TextMayHaveBeenPastedError)
+
+
+def test_auto_mode_does_not_fall_through_after_a_wm_paste_timeout(monkeypatch):
+    """`auto` reaches WM_PASTE last, so a timeout there ends the attempt."""
+    backend = Win32ClipboardBackend()
+
+    def _refused_ctrl_v():
+        raise TextInsertionError("SendInput failed (sent 0 events).")
+
+    monkeypatch.setattr(backend, "send_ctrl_v", _refused_ctrl_v)
+    monkeypatch.setattr(
+        backend,
+        "_send_message_timeout_result",
+        lambda hwnd, message, timeout_ms: (False, text_inserter.ERROR_TIMEOUT),
+    )
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        backend.send_paste_with_mode("auto", target_hwnd=4321)
+
+
+class _TimingOutPasteBackend(PasteBackend):
+    """A target that started pasting but did not answer inside the budget."""
+
+    def send_paste_with_mode(self, mode, target_hwnd=None):
+        self.last_requested_mode = mode
+        self.calls.append(f"paste:{target_hwnd}")
+        raise TextMayHaveBeenPastedError(
+            "WM_PASTE timed out; the target may still paste the transcript."
+        )
+
+
+def test_a_timed_out_paste_leaves_the_transcript_on_the_clipboard():
+    """The end of the chain: restoring is what actually loses the transcript."""
+    backend = _TimingOutPasteBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextMayHaveBeenPastedError):
+        inserter.insert_text_with_options(
+            "hello",
+            target_hwnd=123,
+            paste_mode="wm_paste",
+        )
+
+    assert "restore" not in backend.calls, (
+        "the previous clipboard was restored under a paste that may still land"
+    )
+
+
 def test_auto_mode_does_not_paste_again_after_a_partial_sendinput(monkeypatch):
     """`auto` is the default, so this was the shipped path.
 

@@ -271,9 +271,45 @@ class Win32ClipboardBackend:
         hwnd = int(target_hwnd or self._get_focused_hwnd() or 0)
         if hwnd == 0:
             return False
-        return self._send_message_timeout(hwnd, WM_PASTE, WM_PASTE_TIMEOUT_MS)
+        sent, last_error = self._send_message_timeout_result(
+            hwnd, WM_PASTE, WM_PASTE_TIMEOUT_MS
+        )
+        if sent:
+            return True
+        if last_error == ERROR_TIMEOUT:
+            # A timeout is NOT a clean failure: the target may be inside its
+            # paste handler right now, just slower than our 250 ms budget.
+            # Measured against a real window whose WM_PASTE handler takes 1 s:
+            # `SendMessageTimeoutW` returned 0 with ERROR_TIMEOUT after 250 ms
+            # while the handler had already been entered, and it read the
+            # clipboard a second later. Reported as a clean failure, that made
+            # the caller restore the previous clipboard -- so the user's own
+            # old clipboard content was pasted into their document instead of
+            # the transcript, and the streaming path additionally rolled the
+            # words back and pasted them again on the next partial.
+            # `TextMayHaveBeenPastedError` is the existing class for exactly
+            # this: the caller keeps the transcript on the clipboard and does
+            # not retry. (A target that never entered the handler yields the
+            # identical return value and error, so the two cannot be told
+            # apart; the same measurement showed the message is then simply
+            # discarded, which only costs a paste that did not happen.)
+            raise TextMayHaveBeenPastedError(
+                "WM_PASTE timed out; the target may still paste the transcript."
+            )
+        return False
 
     def _send_message_timeout(self, hwnd: int, message: int, timeout_ms: int) -> bool:
+        sent, _last_error = self._send_message_timeout_result(
+            hwnd, message, timeout_ms
+        )
+        return sent
+
+    def _send_message_timeout_result(
+        self,
+        hwnd: int,
+        message: int,
+        timeout_ms: int,
+    ) -> tuple[bool, int]:
         send_message_timeout = self._user32.SendMessageTimeoutW
         send_message_timeout.argtypes = (
             ctypes.wintypes.HWND,
@@ -297,7 +333,7 @@ class Win32ClipboardBackend:
             timeout_ms,
             ctypes.byref(result),
         )
-        return bool(ok)
+        return bool(ok), 0 if ok else ctypes.get_last_error()
 
     def _get_focused_hwnd(self) -> int | None:
         foreground = int(self._user32.GetForegroundWindow() or 0)
@@ -596,6 +632,9 @@ WIN_LONG = ctypes.c_int32
 ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
 WM_NULL = 0x0000
 WM_PASTE = 0x0302
+# `SendMessageTimeoutW` sets this when it gave up waiting. It does NOT mean
+# the target ignored the message -- see `_send_wm_paste`.
+ERROR_TIMEOUT = 1460
 SMTO_ABORTIFHUNG = 0x0002
 
 
