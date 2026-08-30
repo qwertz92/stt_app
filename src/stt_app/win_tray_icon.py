@@ -155,6 +155,18 @@ def high_word(value: int) -> int:
     return (int(value) >> 16) & 0xFFFF
 
 
+def signed_word(value: int) -> int:
+    """Read a packed 16-bit field as a signed number, like ``GET_X_LPARAM``.
+
+    Screen coordinates go negative as soon as a monitor sits left of, or above,
+    the primary one -- the primary's top-left is the origin. Read unsigned, a
+    taskbar at x=-1200 anchored the menu at 64336 and one at y=-100 at 65436,
+    so the tray menu opened on the wrong monitor, clamped to its edge.
+    """
+    word = int(value) & 0xFFFF
+    return word - 0x10000 if word & 0x8000 else word
+
+
 class Win32TrayApi:
     """Thin wrapper over the Win32 calls, so the logic above stays testable."""
 
@@ -217,6 +229,8 @@ class Win32TrayApi:
             wintypes.UINT,
         )
         user32.LoadImageW.restype = wintypes.HANDLE
+        user32.DestroyIcon.argtypes = (wintypes.HICON,)
+        user32.DestroyIcon.restype = wintypes.BOOL
         user32.GetSystemMetrics.argtypes = (ctypes.c_int,)
         user32.GetSystemMetrics.restype = ctypes.c_int
         user32.CreatePopupMenu.argtypes = ()
@@ -333,6 +347,10 @@ class Win32TrayApi:
             raise OSError(f"LoadImageW failed: {ctypes.get_last_error()}")
         return int(handle)
 
+    def destroy_icon(self, icon: int) -> None:
+        """`LoadImageW` with `LR_LOADFROMFILE` hands us an icon we own."""
+        self._user32.DestroyIcon(icon)
+
     def add_icon(self, hwnd: int, icon: int, tooltip: str) -> None:
         data = self._icon_data(hwnd)
         data.uFlags = NIF_MESSAGE | NIF_ICON | NIF_TIP
@@ -443,12 +461,27 @@ class WindowsTrayIcon(QtCore.QObject):
         self._visible = False
         self._closed = False
         self._hwnd = self._api.create_window(self._window_proc)
-        self._icon = self._api.load_icon(icon_path)
-        # Explorer re-broadcasts this after a restart; without re-adding the
-        # icon it would silently disappear for the rest of the session.
-        self._taskbar_created_message = self._api.register_window_message(
-            "TaskbarCreated"
-        )
+        try:
+            self._icon = self._api.load_icon(icon_path)
+            # Explorer re-broadcasts this after a restart; without re-adding
+            # the icon it would silently disappear for the rest of the session.
+            self._taskbar_created_message = self._api.register_window_message(
+                "TaskbarCreated"
+            )
+        except BaseException:
+            # `create_window` registered `self._window_proc` in the class-wide
+            # handler table, so leaving it there keeps this half-built object
+            # alive for the process lifetime -- and its window alive with it,
+            # still dispatching. `create_tray_icon` falls back to
+            # `QSystemTrayIcon` on any failure here, so after an Explorer
+            # restart the dead object's `TaskbarCreated` handler would add a
+            # second, phantom icon beside the fallback's.
+            self._closed = True
+            try:
+                self._api.destroy_window(self._hwnd)
+            except Exception:
+                self._logger.exception("tray_window_cleanup_failed")
+            raise
 
     # -- QSystemTrayIcon-compatible surface -------------------------------
 
@@ -503,6 +536,10 @@ class WindowsTrayIcon(QtCore.QObject):
         try:
             self.hide()
         finally:
+            try:
+                self._api.destroy_icon(self._icon)
+            except Exception:
+                self._logger.exception("tray_icon_destroy_failed")
             self._api.destroy_window(self._hwnd)
 
     # -- message handling --------------------------------------------------
@@ -542,7 +579,10 @@ class WindowsTrayIcon(QtCore.QObject):
             self.activated.emit(QtWidgets.QSystemTrayIcon.MiddleClick)
         elif event == WM_CONTEXTMENU:
             self.activated.emit(QtWidgets.QSystemTrayIcon.Context)
-            self._show_context_menu(low_word(wparam), high_word(wparam))
+            # Signed: these are screen coordinates, not a message id.
+            self._show_context_menu(
+                signed_word(wparam), signed_word(int(wparam) >> 16)
+            )
         return True
 
     def _show_context_menu(self, x: int, y: int) -> None:

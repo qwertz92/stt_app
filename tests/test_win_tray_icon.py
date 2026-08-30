@@ -6,6 +6,7 @@ the lifecycle that Qt used to handle for us.
 """
 from __future__ import annotations
 
+import pytest
 from PySide6 import QtCore, QtTest, QtWidgets
 
 from stt_app import win_tray_icon
@@ -21,6 +22,7 @@ class FakeWin32TrayApi:
         self.destroyed: list[int] = []
         self.added: list[tuple[int, int, str]] = []
         self.deleted: list[int] = []
+        self.destroyed_icons: list[int] = []
         self.tooltips: list[str] = []
         self.balloons: list[tuple[str, str, int]] = []
         self.menus: list[list[tuple[str | None, bool]]] = []
@@ -53,6 +55,9 @@ class FakeWin32TrayApi:
     def delete_icon(self, hwnd):
         self.deleted.append(hwnd)
 
+    def destroy_icon(self, icon):
+        self.destroyed_icons.append(icon)
+
     def track_menu(self, hwnd, entries, x, y):
         self.menus.append((list(entries), x, y))
         return self.menu_choice
@@ -63,10 +68,14 @@ def _make_icon(api: FakeWin32TrayApi) -> WindowsTrayIcon:
 
 
 def _send(icon: WindowsTrayIcon, event: int, x: int = 0, y: int = 0) -> None:
-    """Deliver a notification-icon callback message the way the shell does."""
+    """Deliver a notification-icon callback message the way the shell does.
+
+    The coordinates are packed into two 16-bit fields, so a negative one is
+    masked exactly as Windows delivers it.
+    """
     icon._handle_message(
         win_tray_icon.TRAY_CALLBACK_MESSAGE,
-        (y << 16) | x,
+        ((y & 0xFFFF) << 16) | (x & 0xFFFF),
         event,
     )
 
@@ -244,6 +253,82 @@ def test_unhandled_messages_fall_through_to_the_default_procedure():
 
     assert icon._handle_message(0x0007, 0, 0) is False
     assert icon._window_proc(_HWND, 0x0007, 0, 0) is None
+
+
+def test_the_menu_anchor_is_read_as_a_signed_coordinate():
+    """Screen coordinates go negative left of, or above, the primary monitor.
+
+    The primary monitor's top-left is the origin, so a taskbar on a monitor
+    placed to its left reports a negative x. Read as unsigned 16-bit, x=-1200
+    became 64336 and y=-100 became 65436, and Windows clamps an off-screen
+    anchor to the nearest monitor -- so the menu opened on the wrong screen.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    api = FakeWin32TrayApi()
+    icon = _make_icon(api)
+    menu = QtWidgets.QMenu()
+    menu.addAction("Settings")
+    icon.setContextMenu(menu)
+
+    _send(icon, win_tray_icon.WM_CONTEXTMENU, x=-1200, y=-100)
+
+    assert api.menus, "no menu was tracked"
+    _entries, x, y = api.menus[-1]
+    assert (x, y) == (-1200, -100), (x, y)
+    icon.close()
+
+
+def test_a_positive_menu_anchor_is_unchanged():
+    """The single-monitor case must be untouched by the sign fix."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    api = FakeWin32TrayApi()
+    icon = _make_icon(api)
+    menu = QtWidgets.QMenu()
+    menu.addAction("Settings")
+    icon.setContextMenu(menu)
+
+    _send(icon, win_tray_icon.WM_CONTEXTMENU, x=2400, y=900)
+
+    _entries, x, y = api.menus[-1]
+    assert (x, y) == (2400, 900)
+    icon.close()
+
+
+def test_closing_frees_the_icon_handle_it_loaded():
+    """`LoadImageW` with `LR_LOADFROMFILE` hands us an icon we own."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    api = FakeWin32TrayApi()
+    icon = _make_icon(api)
+    icon.show()
+
+    icon.close()
+
+    assert api.destroyed_icons == [7]
+
+
+def test_a_constructor_that_fails_takes_its_window_with_it():
+    """`create_window` puts `self._window_proc` in the class-wide handler table.
+
+    Leaving it there keeps the half-built object alive for the process
+    lifetime, and its hidden window alive with it, still dispatching messages.
+    `create_tray_icon` falls back to `QSystemTrayIcon` on any failure here, so
+    after an Explorer restart the dead object's `TaskbarCreated` handler would
+    add a second, phantom icon beside the fallback's.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    api = FakeWin32TrayApi()
+
+    def _no_such_icon(_path):
+        raise OSError("LoadImageW failed: 2")
+
+    api.load_icon = _no_such_icon
+
+    with pytest.raises(OSError):
+        WindowsTrayIcon(icon_path="missing.ico", api=api)
+
+    assert api.destroyed == [_HWND], (
+        "the hidden window and its handler entry outlived the failure"
+    )
 
 
 def test_create_tray_icon_falls_back_when_the_native_path_fails(monkeypatch):
