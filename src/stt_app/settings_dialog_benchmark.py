@@ -361,6 +361,21 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
                     consistency = "Differs from run 1"
                 transcript_rows.append((case, run, consistency))
 
+        # What the reader is looking at, before the table is rebuilt. While a
+        # benchmark runs this method is called once per finished case, and
+        # jumping back to row 0 each time took the transcript pane away from
+        # whoever was reading a later run -- as often as a case completes.
+        previous_row = self.transcripts_table.currentRow()
+        previous_item = (
+            self.transcripts_table.item(previous_row, 0) if previous_row >= 0 else None
+        )
+        previous_identity = (
+            str(previous_item.data(QtCore.Qt.UserRole + 1) or "")
+            if previous_item is not None
+            else ""
+        )
+        previous_scroll = self.transcripts_table.verticalScrollBar().value()
+
         self.transcripts_table.setRowCount(len(transcript_rows))
         for row, (case, run, consistency) in enumerate(transcript_rows):
             transcript = run.transcript
@@ -394,7 +409,22 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
                 self.transcripts_table.setItem(row, column, item)
 
         if transcript_rows:
-            self.transcripts_table.selectRow(0)
+            # Identity, not row index: a finished case can insert rows above
+            # the selected one, so the same index is a different transcript.
+            restored = -1
+            if previous_identity:
+                for row in range(self.transcripts_table.rowCount()):
+                    item = self.transcripts_table.item(row, 0)
+                    if (
+                        item is not None
+                        and str(item.data(QtCore.Qt.UserRole + 1) or "")
+                        == previous_identity
+                    ):
+                        restored = row
+                        break
+            self.transcripts_table.selectRow(restored if restored >= 0 else 0)
+            if restored >= 0:
+                restore_vertical_scrollbar(self.transcripts_table, previous_scroll)
             self._show_selected_transcript()
         else:
             self.transcript_text.clear()
@@ -1726,6 +1756,16 @@ class _BenchmarkMixin:
         self,
         item: QtWidgets.QTableWidgetItem,
     ) -> None:
+        # The same gate `Load Selected` carries. Loading replaces
+        # `_current_benchmark_cases`, and that is the list the next finished
+        # case appends to, so a double-click during a run put the stored run's
+        # cases and the live one's into one results table and one live summary.
+        if self._active_benchmark_thread is not None:
+            self._set_benchmark_status(
+                "A stored run cannot be opened while a benchmark is running.",
+                "#b26a00",
+            )
+            return
         entry = item.data(QtCore.Qt.UserRole)
         if not isinstance(entry, BenchmarkHistoryEntry):
             first = self.benchmark_history_list.item(item.row(), 0)
