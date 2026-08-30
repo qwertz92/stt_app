@@ -3,17 +3,17 @@
 Opening this app's tray menu closes the Windows 11 "hidden icons" flyout while
 Electron apps in the same flyout keep it open. Everything observable at menu
 time was measured and ruled out (see docs/learning-log.md). A first run of this
-experiment showed that an icon registered by hand — Electron-style: a bare
+experiment showed that an icon registered by hand -- Electron-style: a bare
 hidden ``WS_POPUP`` host window, ``NOTIFYICON_VERSION_4``, native
-``TrackPopupMenu`` — keeps the flyout open. So the *icon registration* is the
+``TrackPopupMenu`` -- keeps the flyout open. So the *icon registration* is the
 cause, not anything the menu does.
 
 That first run changed two things at once, though: the registration **and** the
 menu type. This version therefore registers TWO icons on the same hand-made
 window and differs only in the menu:
 
-  * icon 1 — native ``TrackPopupMenu`` (what Electron uses)
-  * icon 2 — a Qt ``QMenu``, the app's existing menu type
+  * icon 1 -- native ``TrackPopupMenu`` (what Electron uses)
+  * icon 2 -- a Qt ``QMenu``, the app's existing menu type
 
 It runs inside a real Qt event loop, exactly like the app does.
 

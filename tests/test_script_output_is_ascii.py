@@ -20,11 +20,14 @@ Three files, three different symptoms, one cause. So the assertion is on the
 cause: no non-ASCII in any string literal a script evaluates.
 
 Docstrings are exempt because they are not printed -- *except* a module
-docstring in a script that hands `__doc__` to `argparse`, where `--help`
-prints it verbatim. Two of them do, which is why the exemption is computed
-per file rather than assumed: assuming it hid an em dash in
-`import_model.py`'s own `--help` output. Comments are invisible to `ast` and
-are exempt for free; they are the right place for a real em dash.
+docstring in a script that reads `__doc__`, which is then on its way to
+stdout. Checking only for `ArgumentParser(description=__doc__)` was too
+narrow and missed `print(__doc__)`, which is how four em dashes stayed in
+`experiment_native_tray_icon.py`'s banner. Any load of the name is now
+taken as printable: it subsumes the argparse case, cannot produce a false
+negative, and the cost of a false positive is only that one docstring has
+to stay ASCII. Comments are invisible to `ast` and are exempt for free;
+they are the right place for a real em dash.
 """
 
 from __future__ import annotations
@@ -49,29 +52,29 @@ _DOCSTRING_OWNERS = (
 )
 
 
-def _hands_docstring_to_argparse(tree: ast.Module) -> bool:
-    """`ArgumentParser(description=__doc__)` puts the docstring on `--help`."""
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        name = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
-        if name != "ArgumentParser":
-            continue
-        for keyword in node.keywords:
-            if keyword.arg not in {"description", "epilog"}:
-                continue
-            if isinstance(keyword.value, ast.Name) and keyword.value.id == "__doc__":
-                return True
-    return False
+def _reads_the_module_docstring(tree: ast.Module) -> bool:
+    """Any read of `__doc__` puts the module docstring on its way to stdout.
+
+    `ArgumentParser(description=__doc__)` puts it on `--help`, and a bare
+    `print(__doc__)` puts it there directly. Matching the call shape caught
+    only the first, so `experiment_native_tray_icon.py` kept four em dashes
+    in the banner it prints on every run.
+    """
+    return any(
+        isinstance(node, ast.Name)
+        and node.id == "__doc__"
+        and isinstance(node.ctx, ast.Load)
+        for node in ast.walk(tree)
+    )
 
 
 def _docstring_ids(tree: ast.Module) -> set[int]:
     """Docstrings this file can never print.
 
-    The module docstring is only in that set when nothing forwards it to
-    `argparse`; a nested docstring has no route to stdout either way.
+    The module docstring is only in that set when nothing reads `__doc__`;
+    a nested docstring has no route to stdout either way.
     """
-    printable_module_doc = _hands_docstring_to_argparse(tree)
+    printable_module_doc = _reads_the_module_docstring(tree)
     exempt = set()
     for node in ast.walk(tree):
         if not isinstance(node, _DOCSTRING_OWNERS) or not node.body:
