@@ -199,6 +199,32 @@ def test_refresh_refused_while_a_stream_is_live(monkeypatch):
     assert fake.initialize_calls == 1
 
 
+def test_a_failed_terminate_is_not_reported_as_a_successful_refresh(monkeypatch):
+    """Continuing past it left PortAudio initialized twice, for ever.
+
+    `Pa_Initialize`/`Pa_Terminate` are reference-counted and sounddevice's
+    `_terminate` raises before decrementing its own counter, so initializing
+    on top of a failed terminate put the count at 2. Every later refresh then
+    terminated 2 -> 1 (no real shutdown, so the device list is never rescanned)
+    and initialized 1 -> 2, logged `audio_device_refresh_done` and returned
+    True -- hot-plug detection dead for the session, with the log and the
+    Settings "Refresh" button both reporting success.
+    """
+    fake = _fake_sd_with_wasapi()
+
+    def _boom():
+        fake.terminate_calls += 1
+        raise RuntimeError("Error terminating PortAudio")
+
+    monkeypatch.setattr(fake, "_terminate", _boom, raising=False)
+    monkeypatch.setattr(audio_devices, "sd", fake)
+
+    assert try_refresh_input_devices() is False
+    assert fake.initialize_calls == 0, (
+        "PortAudio was initialized on top of a failed terminate"
+    )
+
+
 def test_unregister_unknown_stream_is_a_noop():
     unregister_live_stream(object())
 

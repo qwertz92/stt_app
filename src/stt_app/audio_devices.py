@@ -246,6 +246,18 @@ def try_refresh_input_devices(logger: logging.Logger | None = None) -> bool:
         except Exception:
             if logger is not None:
                 logger.exception("PortAudio terminate failed during refresh")
+            # Do not initialize on top of it. `Pa_Initialize`/`Pa_Terminate`
+            # are reference-counted, and sounddevice's `_terminate` raises
+            # *before* decrementing its own counter -- so continuing here left
+            # PortAudio at 2. Every later refresh then terminated 2 -> 1
+            # (no real shutdown, no device rescan), initialized 1 -> 2, logged
+            # `audio_device_refresh_done` and returned True: hot-plug
+            # detection silently dead for the rest of the session while the
+            # log and the Settings "Refresh" button both said it worked.
+            # PortAudio is still initialized, so leaving the count alone is
+            # the consistent state; the caller is told the refresh did not
+            # happen.
+            return False
         try:
             sd._initialize()
         except Exception:
