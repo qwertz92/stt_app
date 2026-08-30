@@ -603,7 +603,21 @@ class _RemoteProvidersMixin:
             daemon=True,
         )
         self._active_connection_test_thread = worker
-        worker.start()
+        # `Thread.start()` can raise `RuntimeError` when the interpreter
+        # cannot create another thread. The busy marker is already set at
+        # that point, and nothing clears it but the completion signal that
+        # will never arrive -- so the dialog stays busy for the rest of the
+        # session: the control stays disabled and `reload_from_store` is
+        # deferred forever, silently.
+        try:
+            worker.start()
+        except RuntimeError as exc:
+            self._active_connection_test_thread = None
+            self.test_conn_button.setEnabled(True)
+            self.test_conn_target_combo.setEnabled(True)
+            self._set_test_connection_feedback(
+                f"Could not start the connection test: {exc}", "#b71c1c"
+            )
 
     def _providers_for_connection_target(self, target: str) -> list[str]:
         normalized = str(target or "").strip().lower()

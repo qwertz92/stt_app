@@ -451,11 +451,23 @@ class _ImportTabMixin:
                 str(text),
             )
 
-        threading.Thread(
+        worker = threading.Thread(
             target=_run,
             name="stt_app_import_file_transcription",
             daemon=True,
-        ).start()
+        )
+        # `Thread.start()` can raise `RuntimeError` when the interpreter
+        # cannot create another thread. The busy marker is already set at
+        # that point, and nothing clears it but the completion signal that
+        # will never arrive -- so the dialog stays busy for the rest of the
+        # session: the control stays disabled and `reload_from_store` is
+        # deferred forever, silently.
+        try:
+            worker.start()
+        except RuntimeError as exc:
+            self._finish_import_transcription(
+                False, f"Could not start the transcription: {exc}"
+            )
 
     def _set_import_progress(self, text: str) -> None:
         self._import_progress_message = str(text or "").strip()

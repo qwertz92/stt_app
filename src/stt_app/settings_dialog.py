@@ -1042,7 +1042,20 @@ class SettingsDialog(
             daemon=True,
         )
         self._active_update_check_thread = thread
-        thread.start()
+        # `Thread.start()` can raise `RuntimeError` when the interpreter
+        # cannot create another thread. The busy marker is already set at
+        # that point, and nothing clears it but the completion signal that
+        # will never arrive -- so the dialog stays busy for the rest of the
+        # session: the control stays disabled and `reload_from_store` is
+        # deferred forever, silently.
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            self._active_update_check_thread = None
+            self.check_updates_button.setEnabled(True)
+            self._set_bottom_status(
+                f"Could not start the update check: {exc}", "#b71c1c"
+            )
 
     @QtCore.Slot(object)
     def _on_update_check_finished(self, result: object) -> None:

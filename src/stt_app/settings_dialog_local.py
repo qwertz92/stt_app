@@ -790,7 +790,22 @@ class _LocalModelsMixin:
             name="stt_app_local_model_scan",
             daemon=True,
         )
-        self._active_local_model_scan_thread.start()
+        # `Thread.start()` can raise `RuntimeError` when the interpreter
+        # cannot create another thread. The busy marker is already set at
+        # that point, and nothing clears it but the completion signal that
+        # will never arrive -- so the dialog stays busy for the rest of the
+        # session: the control stays disabled and `reload_from_store` is
+        # deferred forever, silently.
+        try:
+            self._active_local_model_scan_thread.start()
+        except RuntimeError as exc:
+            self._active_local_model_scan_thread = None
+            self._set_local_models_action_text(
+                f"Could not start the model scan: {exc}",
+                "#b71c1c",
+                allow_growth=True,
+            )
+            self._update_local_model_actions()
 
     @QtCore.Slot(int, str, object)
     def _on_local_model_scan_finished(
@@ -1110,7 +1125,28 @@ class _LocalModelsMixin:
             daemon=True,
         )
         self._active_local_model_download_thread = thread
-        thread.start()
+        # `Thread.start()` can raise `RuntimeError` when the interpreter
+        # cannot create another thread. The busy marker is already set at
+        # that point, and nothing clears it but the completion signal that
+        # will never arrive -- so the dialog stays busy for the rest of the
+        # session: the control stays disabled and `reload_from_store` is
+        # deferred forever, silently.
+        try:
+            thread.start()
+        except RuntimeError as exc:
+            self._active_local_model_download_thread = None
+            # The same teardown the queue's own crash arm performs, then its
+            # completion slot for the label, the timer and the progress bar --
+            # clearing `_worker_running` first is what gets that slot past its
+            # "still running" guard.
+            with self._local_model_download_lock:
+                self._discard_queued_downloads_locked()
+                self._local_model_download_active = None
+                self._local_model_download_claimed = None
+                self._local_model_download_worker_running = False
+            self._on_local_model_download_finished(
+                worker_token, False, f"Could not start the download: {exc}"
+            )
         self._update_local_model_actions()
 
     def _cancel_local_model_downloads(self) -> None:

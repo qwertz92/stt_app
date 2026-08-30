@@ -1516,7 +1516,20 @@ class _BenchmarkMixin:
             name="stt_app_local_benchmark",
             daemon=True,
         )
-        self._active_benchmark_thread.start()
+        # `Thread.start()` can raise `RuntimeError` when the interpreter
+        # cannot create another thread. The busy marker is already set at
+        # that point, and nothing clears it but the completion signal that
+        # will never arrive -- so the dialog stays busy for the rest of the
+        # session: the control stays disabled and `reload_from_store` is
+        # deferred forever, silently.
+        try:
+            self._active_benchmark_thread.start()
+        except RuntimeError as exc:
+            self._active_benchmark_thread = None
+            self._benchmark_cancel_event = None
+            self._set_benchmark_status(
+                f"Could not start the benchmark: {exc}", "#b71c1c"
+            )
         self._update_benchmark_actions()
 
     def _on_benchmark_progress(self, text: str) -> None:
