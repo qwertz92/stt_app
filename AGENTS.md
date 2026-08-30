@@ -2733,6 +2733,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   a Ctrl+C landing inside `thread.join()` or the provider call is logged and
   dropped. Only reachable in a console-launched process.
 
+- **With a custom Model Dir, a faster-whisper copy that lives only in the
+  default Hugging Face cache can no longer be deleted from the Local tab.**
+  Delete is gated on the inventory, and the inventory now answers "loadable
+  from the configured Model Dir" -- which that copy is not, because
+  `WhisperModel(download_root=...)` reads one cache root. `cached_model_paths`
+  and `delete_cached_model` still reach it, so nothing about the copy changed;
+  only the row's Delete button is disabled. This is the price of the inventory
+  no longer claiming such a model is installed and then silently
+  re-downloading gigabytes of it, which is the worse failure of the two, and
+  it affects nobody who leaves Model Dir empty -- then the destination *is* the
+  default cache. Restoring the capability means the scan reporting per-model
+  path information rather than names, which the subprocess protocol does not
+  carry today.
+- **Three separate `settings_store.load()` calls decide one save.**
+  `_overlay_owned_settings`, `_stored_language_mode` and the change comparison
+  each read the file, so an overlay write landing between them makes the save
+  act on a mixture. The window is microseconds and the outcome is the same as
+  before the comparison was corrected -- the dialog writes the value it read
+  first -- so it is recorded rather than closed; collapsing them into one read
+  means threading a snapshot through `_construct_settings_from_widgets`, which
+  several other callers share.
 - **Cancel reaches a download only while it is *waiting* for the slot, not
   while it is transferring.** `run_coordinated_download` passes `cancel_check`
   into `acquire()`, so with the slot free -- the ordinary single-user case --
