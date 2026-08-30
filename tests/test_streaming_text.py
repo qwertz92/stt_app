@@ -305,6 +305,64 @@ def test_the_protected_prefix_never_duplicates_text():
     )
 
 
+def test_the_protected_prefix_is_spliced_on_at_the_words_it_shares():
+    """The partial overlap, which the whole-floor check above cannot see.
+
+    The window is the trailing few seconds of audio, so one straddling the
+    measured pause re-decodes the floor's last words before the new speech. It
+    does not *contain* the floor, so the containment check passes it through,
+    and welding it on whole repeated those words in the transcript that gets
+    pasted -- measured with a real floor ending "gesprochene Sprache um." and a
+    window opening with the same three words.
+    """
+    floor = "das system wandelt gesprochene sprache um"
+    previous = f"{floor} danach folgt ein weiterer satz"
+
+    assert (
+        merge_rolling_window_transcript(
+            previous,
+            "gesprochene sprache um und jetzt kommt etwas neues",
+            protected_prefix=floor,
+        )
+        == f"{floor} und jetzt kommt etwas neues"
+    )
+
+
+def test_a_window_boundary_that_cut_the_first_word_still_splices_onto_the_floor():
+    """The floor branch needs the same re-anchoring as the alignment above it.
+
+    `_suffix_prefix_overlap_len` anchors at the window's first word, which is
+    exactly the word the window boundary cut in half, so without skipping past
+    it one mistranscribed fragment brings the duplication back.
+    """
+    floor = "das system wandelt gesprochene sprache um"
+    previous = f"{floor} danach folgt ein weiterer satz"
+
+    assert (
+        merge_rolling_window_transcript(
+            previous,
+            "ochene sprache um und jetzt kommt etwas neues",
+            protected_prefix=floor,
+        )
+        == f"{floor} und jetzt kommt etwas neues"
+    )
+
+
+def test_a_window_sharing_nothing_with_the_floor_is_still_joined_whole():
+    """Splicing must not become a reason to drop a window that does not fit."""
+    floor = "das system wandelt gesprochene sprache um"
+    previous = f"{floor} danach folgt ein weiterer satz"
+
+    assert (
+        merge_rolling_window_transcript(
+            previous,
+            "voellig andere woerter ohne jede ueberlappung",
+            protected_prefix=floor,
+        )
+        == f"{floor} voellig andere woerter ohne jede ueberlappung"
+    )
+
+
 def test_the_protected_prefix_survives_a_window_that_starts_with_punctuation():
     """The case that actually occurs, and the one a word-only check loses.
 

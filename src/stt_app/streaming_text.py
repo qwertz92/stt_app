@@ -174,6 +174,27 @@ class RollingMergeResult:
     aligned: bool
 
 
+def _join_at_seam(
+    base_words: list[str],
+    current_words: list[str],
+    required_overlap: int,
+) -> str | None:
+    """Join a window onto `base_words` at the words they share, or `None`.
+
+    `_suffix_prefix_overlap_len` anchors every candidate at the window's first
+    word -- the word the window boundary cut in half -- so one mistranscribed
+    fragment there defeats the search. Re-anchoring up to
+    `_WINDOW_BOUNDARY_SKIP_WORDS` words in finds the seam anyway.
+    """
+    for skip in range(1, _WINDOW_BOUNDARY_SKIP_WORDS + 1):
+        if skip >= len(current_words):
+            break
+        overlap = _suffix_prefix_overlap_len(base_words, current_words[skip:])
+        if overlap >= required_overlap:
+            return " ".join(base_words + current_words[skip + overlap:]).strip()
+    return None
+
+
 def merge_rolling_window(
     previous_text: str,
     current_text: str,
@@ -209,15 +230,9 @@ def merge_rolling_window(
     previous_words = split_stream_words(previous)
     current_words = split_stream_words(current)
     required_overlap = max(1, int(min_overlap_words))
-    for skip in range(1, _WINDOW_BOUNDARY_SKIP_WORDS + 1):
-        if skip >= len(current_words):
-            break
-        overlap = _suffix_prefix_overlap_len(previous_words, current_words[skip:])
-        if overlap >= required_overlap:
-            joined = " ".join(
-                previous_words + current_words[skip + overlap:]
-            ).strip()
-            return RollingMergeResult(joined, aligned=True)
+    joined = _join_at_seam(previous_words, current_words, required_overlap)
+    if joined is not None:
+        return RollingMergeResult(joined, aligned=True)
 
     # Unalignable: the window replaces the accumulated text, bounded by the
     # floor. What that discards is what the last window that ADDED text
@@ -240,6 +255,24 @@ def merge_rolling_window(
     # the start). Joining then duplicates it.
     if stream_text_extends(protected, current):
         return RollingMergeResult(current, aligned=False)
+    # The window is the trailing few seconds of audio, so one that straddles
+    # the measured pause re-decodes the floor's last words before the new
+    # speech. Welding it on whole then repeated them in the pasted transcript:
+    # for a floor ending "gesprochene Sprache um." and a window starting with
+    # the same three words, the merge produced that clause twice. Splice at the
+    # seam instead -- append-only, so nothing the floor holds can be lost, and
+    # still `aligned=False` because agreeing with the floor is not the two
+    # overlapping windows that are allowed to advance it.
+    spliced = append_only_stream_partial_candidate(
+        protected, current, min_overlap_words=min_overlap_words
+    )
+    if stream_text_extends(protected, spliced):
+        return RollingMergeResult(spliced, aligned=False)
+    spliced_past_boundary = _join_at_seam(
+        split_stream_words(protected), current_words, required_overlap
+    )
+    if spliced_past_boundary is not None:
+        return RollingMergeResult(spliced_past_boundary, aligned=False)
     return RollingMergeResult(stream_join_text(protected, current), aligned=False)
 
 def merge_rolling_window_transcript(
