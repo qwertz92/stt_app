@@ -89,6 +89,12 @@ class _StreamResult:
     # Once per session, like `noise_floor_warned`: the partial callback runs
     # every ~350 ms, so an unbounded log would flood.
     partial_callback_failed: bool = False
+    # The byte range of the audio the last decode covered. When the next
+    # window starts at or after `last_window_end` the two share no audio at
+    # all -- see `_window_shares_no_audio_with_the_last`.
+    last_window_start: int = 0
+    last_window_end: int = 0
+    slow_decode_warned: bool = False
 
 
 @dataclass(frozen=True)
@@ -894,9 +900,17 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                 ):
                     final_text = session.result.merged_text
                 else:
+                    previous_window_end = session.result.last_window_end
                     tail_text = self._transcribe_current_stream_buffer(
                         max_window_seconds=self.stream_partial_window_s,
                         session=session,
+                    )
+                    # The trailing window can be disjoint from the last decoded
+                    # partial for the same reason one partial can be disjoint
+                    # from the one before it, and here it costs the whole
+                    # dictation in a single step rather than gradually.
+                    disjoint = self._window_shares_no_audio_with_the_last(
+                        session, previous_window_end
                     )
                     final_text = merge_rolling_window_transcript(
                         session.result.merged_text,
@@ -906,7 +920,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                         # decoded window really holds speech. Reading
                         # `silent_seconds` alone let a transient at the end of a
                         # long pause append an invented sentence.
-                        new_segment=(
+                        new_segment=disjoint
+                        or (
                             tail_after_long_pause
                             and self._stream_window_has_speech(session)
                         ),
@@ -995,6 +1010,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             # decoupling above was meant to remove.
             session.result.silent_seconds = 0.0
 
+        previous_window_end = session.result.last_window_end
         try:
             text = self._transcribe_current_stream_buffer(
                 max_window_seconds=self.stream_partial_window_s,
@@ -1011,6 +1027,16 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if session.abort_requested.is_set():
             return
         previous_text = session.result.merged_text
+        if self._window_shares_no_audio_with_the_last(session, previous_window_end):
+            # The pause case reached by the other road, and proven rather than
+            # measured: nothing already transcribed can be revised by a window
+            # that shares none of its audio, and there is no seam to search
+            # for. Pinning the floor below is what turns the replace into an
+            # append; `new_segment` only skips a search that cannot succeed --
+            # and that search does sometimes succeed by coincidence, on words
+            # the two windows happen to share, which swallows the window
+            # instead of appending it.
+            new_segment = True
         if new_segment:
             # Everything up to here is closed off: the pause proved no later
             # window shares audio with it.
@@ -1073,6 +1099,45 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         session.result.last_partial_at = time.monotonic()
         session.result.last_partial_size = len(session.pcm_buffer)
+
+    def _window_shares_no_audio_with_the_last(
+        self,
+        session: _StreamingSession,
+        previous_window_end: int,
+    ) -> bool:
+        """Did the previous window's audio scroll fully out of this one?
+
+        A decode that takes about as long as the window itself -- a large model
+        on a slow machine, RTF near 1 -- advances the trailing window by more
+        than its own length, so consecutive windows are disjoint. Nothing else
+        notices: with continuous speech `silent_seconds` never accumulates, so
+        no pause ever pins `segment_floor`, and the unalignable window then
+        replaced the *entire* accumulated transcript. Measured with an 8 s
+        window and 9 s between decodes: "erster teil der nachricht" became
+        "und dann kam etwas ganz anderes", i.e. everything but the last window
+        was lost, however long the dictation had been.
+
+        The speech in the gap between two disjoint windows was never decoded
+        and is gone either way. This only stops that from taking the rest of
+        the transcript with it.
+
+        Takes the previous end as an argument because the decode has already
+        overwritten `last_window_end` by the time the caller can ask.
+        """
+        if previous_window_end <= 0:
+            return False
+        if session.result.last_window_start < previous_window_end:
+            return False
+        if not session.result.slow_decode_warned:
+            session.result.slow_decode_warned = True
+            logger.warning(
+                "streaming_decode_slower_than_window: a partial took longer "
+                "than stream_partial_window_s=%.1f s, so consecutive windows "
+                "no longer overlap and the speech between them is lost. "
+                "Choose a smaller model or use batch mode.",
+                self.stream_partial_window_s,
+            )
+        return True
 
     def _stream_window_has_speech(self, session: _StreamingSession) -> bool:
         """Does the trailing window hold enough speech to append it on trust?
@@ -1139,6 +1204,7 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             self.silence_gate_threshold,
             _NOISE_FLOOR_WARN_AFTER_S,
         )
+
     def _stream_slice_is_quiet(self, pcm_bytes: bytes) -> bool:
         """Is this stretch of stream audio below the speech threshold?
 
@@ -1187,10 +1253,20 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             snapshot = bytes(session.pcm_buffer)
         if not snapshot:
             return ""
+        window_start = 0
+        window_end = len(snapshot)
         if max_window_seconds is not None and max_window_seconds > 0:
             max_bytes = int(max_window_seconds * self.stream_sample_rate * 2)
             if max_bytes > 0 and len(snapshot) > max_bytes:
+                window_start = window_end - max_bytes
                 snapshot = snapshot[-max_bytes:]
+        if session is not None:
+            # Recorded here rather than computed by the caller: the capture
+            # thread keeps appending, so a length read before this call gives
+            # a window start earlier than the real one -- the direction that
+            # reports an overlap where there is none.
+            session.result.last_window_start = window_start
+            session.result.last_window_end = window_end
         wav_bytes = self._pcm16_to_wav_bytes(snapshot)
         return self.transcribe_batch(wav_bytes)
 

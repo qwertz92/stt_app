@@ -1295,3 +1295,172 @@ def test_the_typed_imports_and_the_lazy_map_name_the_same_modules():
         f"typed-only={sorted(set(typed) - set(package._LAZY_ATTRIBUTES))}, "
         f"lazy-only={sorted(set(package._LAZY_ATTRIBUTES) - set(typed))}"
     )
+
+
+def _slow_decode_stream(model_texts):
+    """A stream whose partials only fire when the test asks for one.
+
+    `stream_partial_interval_s=0` lets the worker thread decode on every
+    drained chunk, which makes the sequence of model outputs depend on thread
+    timing. A large interval plus resetting `last_partial_at` by hand puts
+    every decode in the test.
+    """
+    outputs = iter(list(model_texts) + ["x"] * 50)
+
+    class _Model:
+        def transcribe(self, *args, **kwargs):
+            segment = types.SimpleNamespace(text=next(outputs, "x"))
+            info = types.SimpleNamespace(language="de", language_probability=1.0)
+            return [segment], info
+
+    return LocalFasterWhisperTranscriber(
+        model_size="small",
+        stream_partial_interval_s=3600.0,
+        stream_partial_min_audio_s=0.0,
+        stream_final_full_pass=False,
+        model_factory=lambda *args, **kwargs: _Model(),
+    )
+
+
+def _push_and_wait(transcriber, chunk, timeout=5.0):
+    """Push audio and wait for the worker to append it to the buffer."""
+    session = transcriber._stream_session
+    target = len(session.pcm_buffer) + len(chunk)
+    transcriber.push_audio_chunk(chunk)
+    deadline = time.monotonic() + timeout
+    while len(session.pcm_buffer) < target:
+        if time.monotonic() > deadline:
+            raise AssertionError("the stream worker never drained the chunk")
+        time.sleep(0.01)
+
+
+def _emit_partial_now(transcriber):
+    transcriber._stream_session.result.last_partial_at = 0.0
+    transcriber._maybe_emit_partial()
+
+
+def test_a_decode_slower_than_the_window_keeps_the_earlier_transcript():
+    """Two windows that share no audio must append, not replace.
+
+    A decode that takes about as long as `stream_partial_window_s` -- a large
+    model on a slow machine -- advances the trailing window by more than its
+    own length, so consecutive windows are disjoint and cannot be aligned.
+    With continuous speech `silent_seconds` never accumulates, so no pause ever
+    pinned `segment_floor` and the unalignable window replaced the entire
+    accumulated transcript. Whatever the length of the dictation, only the last
+    window survived.
+    """
+    # The two windows must share no words either: three shared trailing words
+    # let the merge's re-anchor search find a seam that the audio says cannot
+    # exist, and the window is then silently swallowed instead -- a different
+    # loss, and one that would have made this test pass for the wrong reason.
+    transcriber = _slow_decode_stream(
+        ["erster teil der nachricht", "und dann kam etwas ganz anderes"]
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        # More than one window of audio between the two decodes: window two
+        # starts after window one ended.
+        _push_and_wait(transcriber, _ms(9000, 6000))
+        _emit_partial_now(transcriber)
+        first = transcriber._stream_session.result.merged_text
+        assert first == "erster teil der nachricht", first
+
+        _push_and_wait(transcriber, _ms(9000, 6000))
+        _emit_partial_now(transcriber)
+        merged = transcriber._stream_session.result.merged_text
+        warned = transcriber._stream_session.result.slow_decode_warned
+    finally:
+        transcriber.stop_stream()
+
+    assert merged == "erster teil der nachricht und dann kam etwas ganz anderes", (
+        f"the disjoint window replaced the transcript instead of appending: "
+        f"{merged!r}"
+    )
+    assert warned, "a machine that cannot keep up was never reported"
+
+
+def test_a_final_window_that_shares_no_audio_keeps_the_dictation():
+    """The finalizer has the same seam, and there it costs everything at once.
+
+    A partial that decodes slowly enough leaves the trailing window the
+    finalizer takes disjoint from the last decoded partial, so the fast
+    finalization replaced the whole dictation with its last few seconds --
+    a single step, at the moment the text is handed over.
+    """
+    transcriber = _slow_decode_stream(
+        ["erster teil der nachricht", "der letzte satz"]
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        _push_and_wait(transcriber, _ms(9000, 6000))
+        _emit_partial_now(transcriber)
+        assert (
+            transcriber._stream_session.result.merged_text
+            == "erster teil der nachricht"
+        )
+        _push_and_wait(transcriber, _ms(9000, 6000))
+        final_text = transcriber.stop_stream()
+    finally:
+        transcriber.abort_stream()
+
+    assert final_text.startswith("erster teil der nachricht"), (
+        f"the finalizer dropped everything but its own window: {final_text!r}"
+    )
+    assert "der letzte satz" in final_text, final_text
+
+
+def test_overlapping_windows_still_merge_by_alignment():
+    """The guard must not fire while the windows do overlap.
+
+    Treating an ordinary rolling window as a new segment would append the
+    words the two windows share, duplicating them at every partial.
+    """
+    transcriber = _slow_decode_stream(
+        ["das ist der erste", "das ist der erste teil"]
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        _push_and_wait(transcriber, _ms(1000, 6000))
+        _emit_partial_now(transcriber)
+        _push_and_wait(transcriber, _ms(1000, 6000))
+        _emit_partial_now(transcriber)
+        merged = transcriber._stream_session.result.merged_text
+        warned = transcriber._stream_session.result.slow_decode_warned
+    finally:
+        transcriber.stop_stream()
+
+    assert merged == "das ist der erste teil", merged
+    assert not warned, "overlapping windows were reported as a slow decode"
+
+
+@pytest.mark.parametrize(
+    ("label", "previous_end", "window_start", "expected"),
+    [
+        ("windows that overlap by a lot", 288000, 32000, False),
+        ("windows that overlap by one byte", 288000, 287999, False),
+        # Adjacent with nothing in common: the last sample of one window and
+        # the first of the next. There is no shared audio, so there is nothing
+        # for the merge to anchor on -- `<=` here would let the whole
+        # transcript be replaced at exactly this offset.
+        ("windows that are exactly adjacent", 288000, 288000, True),
+        ("windows with a gap between them", 288000, 320000, True),
+        ("nothing decoded yet", 0, 0, False),
+    ],
+)
+def test_disjoint_windows_are_recognised_at_the_boundary(
+    label, previous_end, window_start, expected
+):
+    transcriber = _slow_decode_stream(["x"])
+    session = types.SimpleNamespace(
+        result=local_faster_whisper._StreamResult(last_window_start=window_start)
+    )
+
+    disjoint = transcriber._window_shares_no_audio_with_the_last(
+        session, previous_end
+    )
+
+    assert disjoint is expected, label
+    assert session.result.slow_decode_warned is expected, (
+        f"{label}: the warning did not follow the verdict"
+    )
