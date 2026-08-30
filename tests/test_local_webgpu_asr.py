@@ -1242,3 +1242,192 @@ def test_a_model_in_the_default_cache_is_found_with_a_model_dir_set(
     assert local_webgpu_asr.webgpu_download_destination(
         PARAKEET_MODEL_SIZE, str(model_dir)
     ) == model_dir / "parakeet-tdt-0.6b-v3-onnx"
+
+
+def test_a_machine_without_a_gpu_stops_restarting_the_child(monkeypatch, tmp_path):
+    """The `auto` policy tries webgpu, then dml on Windows, then cpu, so a
+    machine with no usable GPU reports two `fallbackErrors` and `device: cpu`
+    for every single request. That made `_should_restart_after_cpu_fallback`
+    permanently true and killed the child after *each* transcription, so
+    `keep_onnx_model_loaded` -- on by default -- bought nothing on exactly the
+    machines that need it most and every dictation paid a fresh Node start plus
+    a full ONNX model load. One retry still covers a GPU that was merely busy.
+    """
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    processes: list[_FakeProcess] = []
+
+    cpu_fallback = {
+        "device": "cpu",
+        "gpuAvailable": False,
+        "fallbackErrors": [
+            "webgpu: no adapter",
+            "dml: DirectML is unavailable",
+        ],
+    }
+    messages = [
+        {"ok": True, **cpu_fallback},
+        {"id": 1, "ok": True, "text": "one", **cpu_fallback},
+        {"ok": True, **cpu_fallback},
+        {"id": 2, "ok": True, "text": "two", **cpu_fallback},
+        {"id": 3, "ok": True, "text": "three", **cpu_fallback},
+        {"id": 4, "ok": True, "text": "four", **cpu_fallback},
+    ]
+
+    def _spawn(command, **kwargs):
+        process = _FakeProcess()
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_ensure_snapshot", lambda self: tmp_path
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_start_reader_threads", lambda self, process: None
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, state, deadline: messages.pop(0),
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+    )
+    monkeypatch.setattr(local_webgpu_asr.subprocess, "Popen", _spawn)
+
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        language_mode="en",
+        device="auto",
+        node_path="node",
+        runner_path=runner,
+    )
+
+    assert transcriber.transcribe_batch(b"RIFF") == "one"
+    assert transcriber.is_model_loaded is False, "the one retry has to happen"
+
+    assert transcriber.transcribe_batch(b"RIFF") == "two"
+    assert transcriber.is_model_loaded is True, (
+        "the second fallback in a row restarted the child again"
+    )
+    assert transcriber.transcribe_batch(b"RIFF") == "three"
+    assert transcriber.transcribe_batch(b"RIFF") == "four"
+    assert transcriber.is_model_loaded is True
+
+    assert len(processes) == 2, (
+        f"four transcriptions started {len(processes)} Node processes"
+    )
+    transcriber.close()
+
+
+def test_a_gpu_that_comes_back_re_arms_the_retry(monkeypatch, tmp_path):
+    """The cap is per fallback event, not per process: once a GPU load has
+    succeeded, the next fallback is a new event and gets its own retry."""
+    runner = tmp_path / "runner.mjs"
+    runner.write_text("", encoding="utf-8")
+    processes: list[_FakeProcess] = []
+
+    cpu_fallback = {
+        "device": "cpu",
+        "gpuAvailable": False,
+        "fallbackErrors": ["webgpu: adapter busy"],
+    }
+    on_gpu = {"device": "webgpu", "gpuAvailable": True, "fallbackErrors": []}
+    messages = [
+        {"ok": True, **cpu_fallback},
+        {"id": 1, "ok": True, "text": "one", **cpu_fallback},
+        # restart 1
+        {"ok": True, **on_gpu},
+        {"id": 2, "ok": True, "text": "two", **on_gpu},
+        # the adapter goes away again on the next request
+        {"id": 3, "ok": True, "text": "three", **cpu_fallback},
+        # restart 2
+        {"ok": True, **cpu_fallback},
+        {"id": 4, "ok": True, "text": "four", **cpu_fallback},
+    ]
+
+    def _spawn(command, **kwargs):
+        process = _FakeProcess()
+        processes.append(process)
+        return process
+
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_ensure_snapshot", lambda self: tmp_path
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber, "_start_reader_threads", lambda self, process: None
+    )
+    monkeypatch.setattr(
+        LocalOnnxWebGpuTranscriber,
+        "_read_json_message",
+        lambda self, state, deadline: messages.pop(0),
+    )
+    monkeypatch.setattr(
+        local_webgpu_asr, "_ensure_js_runtime_available", lambda node_path, runner: None
+    )
+    monkeypatch.setattr(local_webgpu_asr.subprocess, "Popen", _spawn)
+
+    transcriber = LocalOnnxWebGpuTranscriber(
+        model_size="cohere-transcribe-03-2026",
+        language_mode="en",
+        device="auto",
+        node_path="node",
+        runner_path=runner,
+    )
+
+    assert transcriber.transcribe_batch(b"RIFF") == "one"
+    assert transcriber.is_model_loaded is False
+    assert transcriber.transcribe_batch(b"RIFF") == "two"
+    assert transcriber.runtime_device == "webgpu"
+    assert transcriber.is_model_loaded is True
+
+    assert transcriber.transcribe_batch(b"RIFF") == "three"
+    assert transcriber.is_model_loaded is False, (
+        "a fallback after a working GPU has to be retried again"
+    )
+    assert transcriber.transcribe_batch(b"RIFF") == "four"
+    assert len(processes) == 3
+    transcriber.close()
+
+
+def test_the_stdout_reader_finishes_even_when_nobody_drains_it():
+    """The queue is bounded at 128 and only `_read_json_message` drains it, so
+    a child that keeps writing between requests -- or one discarded after a
+    protocol timeout with lines still buffered in the pipe -- parked this
+    thread inside `Queue.put` for the rest of the process's life, holding the
+    `Popen` and all three pipe handles with it. Every restart leaked another
+    set, and the CPU-fallback restart made that once per dictation.
+    """
+    transcriber = LocalOnnxWebGpuTranscriber(model_size="cohere-transcribe-03-2026")
+    lines = [f'{{"id": {index}, "ok": true}}' for index in range(500)]
+
+    class _Process:
+        stdout = io.StringIO("\n".join(lines) + "\n")
+        stderr = None
+
+    state = local_webgpu_asr._NodeProcessState(
+        process=_Process(),
+        stdout_queue=queue.Queue(maxsize=128),
+        stderr_lines=deque(maxlen=64),
+    )
+
+    transcriber._start_reader_threads(state)
+
+    # The thread itself cannot be asserted on: it may well have finished before
+    # `threading.enumerate()` is reached. What it leaves behind can. A reader
+    # parked in `put` stops at the first 128 lines and the newest never arrives.
+    deadline = time.monotonic() + 5.0
+    snapshot: list[str] = []
+    while time.monotonic() < deadline:
+        snapshot = list(state.stdout_queue.queue)
+        if snapshot and snapshot[-1] == lines[-1]:
+            break
+        time.sleep(0.01)
+
+    assert snapshot, "the reader produced nothing at all"
+    assert snapshot[-1] == lines[-1], (
+        "the newest line never arrived, so the reader is parked in put() with "
+        f"the pipe held open; it stopped at {snapshot[-1]!r}"
+    )
+    assert len(snapshot) == 128, f"the bound was not kept: {len(snapshot)}"
+    assert snapshot[0] == lines[-128], f"more than the oldest was dropped: {snapshot[0]!r}"

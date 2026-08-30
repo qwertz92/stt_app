@@ -62,6 +62,38 @@ class _NodeProcessState:
     )
 
 
+def _push_bounded(target: queue.Queue[str], line: str) -> bool:
+    """Enqueue `line`, dropping the oldest entry when the queue is full.
+
+    This replaces a plain `Queue.put`. The queue is bounded at 128 and only
+    `_read_json_message` drains it -- that is, only while a request is in
+    flight -- so a child that keeps writing between requests, or one discarded
+    after a protocol timeout with lines still buffered in the pipe, parked this
+    reader thread inside `put` for the rest of the process's life, holding its
+    `Popen` and all three pipe handles with it. Every restart leaked another
+    set.
+
+    Dropping the oldest keeps the newest protocol line readable, which is the
+    one a caller is waiting for; a response genuinely lost this way surfaces as
+    the request timeout that already discards the child. Returns True when
+    something had to be dropped.
+    """
+    try:
+        target.put_nowait(line)
+        return False
+    except queue.Full:
+        pass
+    try:
+        target.get_nowait()
+    except queue.Empty:  # pragma: no cover - only the reader thread puts
+        pass
+    try:
+        target.put_nowait(line)
+    except queue.Full:  # pragma: no cover - a slot was freed a moment ago
+        pass
+    return True
+
+
 @dataclass(frozen=True)
 class _OnnxModelLayout:
     name: str
@@ -215,6 +247,10 @@ _REQUIRED_FILES: dict[str, tuple[str, ...]] = {
     model_name: layout.required_files for model_name, layout in _MODEL_LAYOUTS.items()
 }
 
+# How many times a CPU fallback may cost a process restart before the
+# runtime accepts that this machine has no usable GPU. See
+# `_should_restart_after_cpu_fallback`.
+_MAX_CPU_FALLBACK_RESTARTS = 1
 _ACCELERATED_DEVICES = {"webgpu", "dml", "cuda", "gpu", "webnn-gpu"}
 _RUNTIME_DEVICE_LABELS = {
     "webgpu": "WebGPU",
@@ -689,6 +725,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         self._runtime_device = ""
         self._gpu_available = False
         self._runtime_fallback_details: list[str] = []
+        self._cpu_fallback_restarts = 0
         self.runtime_warning = ""
 
     @property
@@ -790,6 +827,10 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
                 for detail in fallback_details
                 if str(detail).strip()
             ]
+        if self._runtime_device in _ACCELERATED_DEVICES:
+            # A GPU load succeeded, so the next fallback is a fresh event and
+            # gets its own retry.
+            self._cpu_fallback_restarts = 0
         if self._runtime_device not in _ACCELERATED_DEVICES:
             if self.device == "cpu":
                 self.runtime_warning = (
@@ -810,10 +851,25 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             self.runtime_warning = ""
 
     def _should_restart_after_cpu_fallback(self) -> bool:
+        """Should the child be torn down so the GPU can be tried again?
+
+        Only while a retry is still owed. On a machine with no usable GPU the
+        `auto` policy tries `webgpu`, then `dml` on Windows, then `cpu`, so
+        `fallbackErrors` carries two entries and `_runtime_device` is `cpu` --
+        for every single request, forever. Without the cap that made the answer
+        permanently True, and the child was killed after *each* transcription:
+        `keep_onnx_model_loaded` (on by default) bought nothing on exactly the
+        machines that need it most, and every dictation paid a fresh Node start
+        plus a full ONNX model load. One retry still covers what this exists
+        for -- a GPU that was busy or a driver that had not come back after a
+        resume -- and `_set_runtime_status` re-arms it as soon as a GPU load
+        succeeds.
+        """
         return (
             self.device in {"auto", "gpu"}
             and self._runtime_device == "cpu"
             and bool(self._runtime_fallback_details)
+            and self._cpu_fallback_restarts < _MAX_CPU_FALLBACK_RESTARTS
         )
 
     def _node_executable(self) -> str:
@@ -837,8 +893,17 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         def _read_stdout() -> None:
             if process.stdout is None:
                 return
+            reported = False
             for line in process.stdout:
-                state.stdout_queue.put(line.rstrip("\r\n"))
+                overflowed = _push_bounded(
+                    state.stdout_queue, line.rstrip("\r\n")
+                )
+                if overflowed and not reported:
+                    reported = True
+                    logger.warning(
+                        "webgpu_asr_stdout_overflow dropping the oldest "
+                        "lines: nothing is draining this child's output"
+                    )
 
         def _read_stderr() -> None:
             if process.stderr is None:
@@ -1090,6 +1155,7 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
             ) from exc
         finally:
             if restart_after_cpu_fallback:
+                self._cpu_fallback_restarts += 1
                 self.close()
             if temp_path is not None:
                 try:
