@@ -737,6 +737,61 @@ class TestDeepgramStreaming:
         )
         assert t.stop_stream() == "current"
 
+    def test_a_stop_that_raises_still_frees_the_provider(self, monkeypatch):
+        """Everything between `retiring` and the reset is network work.
+
+        Draining the sender, two control frames and closing the socket each
+        spawn a short-lived thread, so `Thread.start()` alone can raise. A
+        raise there skipped the reset and left the state at `retiring`, and
+        `start_stream` refuses anything that is not `idle` -- so every later
+        dictation failed with "Streaming session already active" for the life
+        of the app, with the remote socket still open and billed.
+        """
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        t.start_stream()
+
+        def _cannot_start_a_thread(*_args, **_kwargs):
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(t, "_drain_stream_sender", _cannot_start_a_thread)
+
+        with pytest.raises(RuntimeError, match="new thread"):
+            t.stop_stream()
+
+        assert t._stream_state == "idle", (
+            "the provider was left retiring and refuses every later dictation"
+        )
+        t.start_stream()
+        t.abort_stream()
+
+    def test_an_abort_that_raises_still_frees_the_provider(self, monkeypatch):
+        """The abort path marks `retiring` too, and had the same gap."""
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        _FakeWebSocketApp.finalize_delay_s = 0.0
+        _FakeWebSocketApp.close_after_finalize = False
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+        t.start_stream()
+
+        def _cannot_start_a_thread(*_args, **_kwargs):
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(t, "_close_streaming_socket", _cannot_start_a_thread)
+
+        with pytest.raises(RuntimeError, match="new thread"):
+            t.abort_stream()
+
+        assert t._stream_state == "idle"
+        t.start_stream()
+        monkeypatch.undo()
+        t.abort_stream()
+
     def test_a_stop_during_the_handshake_retires_the_session(self):
         """Refusing the stop is not enough; the session has to be retired.
 

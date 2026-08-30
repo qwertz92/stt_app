@@ -721,6 +721,27 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                 return
             finalize_received.wait(timeout=0.05)
 
+    def _retire_stream_state_if_ours(self, generation: int, session) -> None:
+        """Hand the provider back to `idle` after a stop/abort that raised.
+
+        Everything between marking a session `retiring` and resetting it is
+        network work -- draining the sender, control frames, closing the
+        socket, joining threads -- and each of those spawns a short-lived
+        thread, so `Thread.start()` alone can raise. A raise anywhere in that
+        span skipped the reset and left the state at `retiring` for good, and
+        `start_stream` refuses anything that is not `idle`: every later
+        dictation then failed with "Streaming session already active" for the
+        life of the app, with the remote socket still open and billed. That is
+        the same end state the `starting` branch in `stop_stream` exists to
+        prevent, reached through the other door.
+
+        A session that no longer matches belongs to a replacement and is left
+        alone, which is also why this cannot undo a normal completion.
+        """
+        with self._stream_lock:
+            if self._stream_session_matches_locked(generation, session):
+                self._reset_stream_state_locked()
+
     def stop_stream(self) -> str:
         with self._stream_lock:
             ws = self._stream_ws
@@ -754,6 +775,38 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             # it is not a runtime failure after finalization has started.
             self._stream_on_error = None
 
+        retired = False
+        try:
+            text, error = self._finalize_stream(
+                generation,
+                ws,
+                thread,
+                send_queue,
+                send_thread,
+                sender_drained,
+                finalize_received,
+                closed,
+            )
+            retired = True
+        finally:
+            if not retired:
+                self._retire_stream_state_if_ours(generation, ws)
+
+        if error is not None and not text:
+            raise TranscriptionError(self._format_stream_error(error)) from error
+        return text
+
+    def _finalize_stream(
+        self,
+        generation,
+        ws,
+        thread,
+        send_queue,
+        send_thread,
+        sender_drained,
+        finalize_received,
+        closed,
+    ) -> tuple[str, Exception | None]:
         # Flush queued audio before finalizing; the sender exits on the
         # sentinel after sending everything queued ahead of it. Finalize and
         # CloseStream must never overtake audio frames.
@@ -815,10 +868,7 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             text = self._stream_combined_text_locked()
             error = self._stream_error
             self._reset_stream_state_locked()
-
-        if error is not None and not text:
-            raise TranscriptionError(self._format_stream_error(error)) from error
-        return text
+        return text, error
 
     def abort_stream(self) -> None:
         with self._stream_lock:
@@ -837,21 +887,24 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             self._stream_on_error = None
             connected.set()
 
-        if ws is not None:
-            self._close_streaming_socket(ws)
-        if send_queue is not None:
-            try:
-                send_queue.put_nowait(_STREAM_SEND_SENTINEL)
-            except queue.Full:
-                pass
-        if send_thread is not None and send_thread.is_alive():
-            send_thread.join(timeout=0.2)
-        if thread is not None and thread.is_alive():
-            thread.join(timeout=0.2)
-
-        with self._stream_lock:
-            if ws is None or self._stream_session_matches_locked(generation, ws):
-                self._reset_stream_state_locked()
+        try:
+            if ws is not None:
+                self._close_streaming_socket(ws)
+            if send_queue is not None:
+                try:
+                    send_queue.put_nowait(_STREAM_SEND_SENTINEL)
+                except queue.Full:
+                    pass
+            if send_thread is not None and send_thread.is_alive():
+                send_thread.join(timeout=0.2)
+            if thread is not None and thread.is_alive():
+                thread.join(timeout=0.2)
+        finally:
+            with self._stream_lock:
+                if ws is None or self._stream_session_matches_locked(
+                    generation, ws
+                ):
+                    self._reset_stream_state_locked()
 
     def _handle_stream_message(self, generation: int, ws, message) -> None:
         try:

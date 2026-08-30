@@ -450,6 +450,50 @@ class TestAssemblyAIStreaming:
         assert client.streamed_chunks[0] == b"\x01\x00" * 160
         t.abort_stream()
 
+    def test_a_stop_that_raises_still_frees_the_provider(self, monkeypatch):
+        """`_shutdown_streaming_client` bounds the SDK disconnect with a helper
+        thread, so `Thread.start()` alone can raise between marking the session
+        `retiring` and resetting it. The reset was then skipped, and
+        `start_stream` refuses anything that is not `idle` -- so every later
+        dictation failed with "Streaming session already active" for the life
+        of the app, with the remote session still open and billed.
+        """
+        t, _clients = _make_streaming_transcriber()
+        t.start_stream()
+
+        def _cannot_start_a_thread(*_args, **_kwargs):
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(t, "_shutdown_streaming_client", _cannot_start_a_thread)
+
+        with pytest.raises(RuntimeError, match="new thread"):
+            t.stop_stream()
+
+        assert t._stream_state == "idle", (
+            "the provider was left retiring and refuses every later dictation"
+        )
+        monkeypatch.undo()
+        t.start_stream()
+        t.abort_stream()
+
+    def test_an_abort_that_raises_still_frees_the_provider(self, monkeypatch):
+        """The abort path marks `retiring` too, and had the same gap."""
+        t, _clients = _make_streaming_transcriber()
+        t.start_stream()
+
+        def _cannot_start_a_thread(*_args, **_kwargs):
+            raise RuntimeError("can't start new thread")
+
+        monkeypatch.setattr(t, "_shutdown_streaming_client", _cannot_start_a_thread)
+
+        with pytest.raises(RuntimeError, match="new thread"):
+            t.abort_stream()
+
+        assert t._stream_state == "idle"
+        monkeypatch.undo()
+        t.start_stream()
+        t.abort_stream()
+
     def test_stop_stream_returns_accumulated_text(self):
         """stop_stream returns all completed turns joined in order."""
         t, clients = _make_streaming_transcriber()

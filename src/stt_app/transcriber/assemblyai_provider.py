@@ -485,6 +485,27 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 f"AssemblyAI streaming: failed to send audio: {exc}"
             ) from exc
 
+    def _retire_stream_state_if_ours(self, generation: int, session) -> None:
+        """Hand the provider back to `idle` after a stop/abort that raised.
+
+        Everything between marking a session `retiring` and resetting it is
+        network work -- draining the sender, control frames, closing the
+        socket, joining threads -- and each of those spawns a short-lived
+        thread, so `Thread.start()` alone can raise. A raise anywhere in that
+        span skipped the reset and left the state at `retiring` for good, and
+        `start_stream` refuses anything that is not `idle`: every later
+        dictation then failed with "Streaming session already active" for the
+        life of the app, with the remote socket still open and billed. That is
+        the same end state the `starting` branch in `stop_stream` exists to
+        prevent, reached through the other door.
+
+        A session that no longer matches belongs to a replacement and is left
+        alone, which is also why this cannot undo a normal completion.
+        """
+        with self._stream_lock:
+            if self._stream_session_matches_locked(generation, session):
+                self._reset_stream_state_locked()
+
     def stop_stream(self) -> str:
         """Finalize the streaming session and return accumulated text."""
         with self._stream_lock:
@@ -514,14 +535,20 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             self._stream_on_error = None
             self._stream_state = "retiring"
 
-        self._shutdown_streaming_client(client, join_timeout_s=5.0)
+        retired = False
+        try:
+            self._shutdown_streaming_client(client, join_timeout_s=5.0)
 
-        with self._stream_lock:
-            if not self._stream_session_matches_locked(generation, client):
-                raise TranscriptionError("Streaming session is not active.")
-            text = self._stream_combined_text_locked()
-            error = self._stream_error
-            self._reset_stream_state_locked()
+            with self._stream_lock:
+                if not self._stream_session_matches_locked(generation, client):
+                    raise TranscriptionError("Streaming session is not active.")
+                text = self._stream_combined_text_locked()
+                error = self._stream_error
+                self._reset_stream_state_locked()
+                retired = True
+        finally:
+            if not retired:
+                self._retire_stream_state_if_ours(generation, client)
 
         if error and not text:
             raise TranscriptionError(self._format_stream_error(error))
@@ -541,12 +568,11 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             self._stream_state = "retiring"
             self._stream_on_partial = None
             self._stream_on_error = None
-        if client is not None:
-            self._shutdown_streaming_client(client, join_timeout_s=0.5)
-
-        with self._stream_lock:
-            if self._stream_session_matches_locked(generation, client):
-                self._reset_stream_state_locked()
+        try:
+            if client is not None:
+                self._shutdown_streaming_client(client, join_timeout_s=0.5)
+        finally:
+            self._retire_stream_state_if_ours(generation, client)
 
     # -- Streaming callbacks (called from the SDK reader thread) ---------------
 
