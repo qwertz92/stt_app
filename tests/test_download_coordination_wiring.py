@@ -8,12 +8,34 @@ here, so each test drives the real call site with a recording coordinator.
 from __future__ import annotations
 
 import threading
+import time
 from dataclasses import dataclass, field
 
 import pytest
 
 from stt_app import model_download_coordinator as coordinator_module
 from stt_app.model_download_coordinator import ACQUIRE_DOWNLOAD
+
+
+def _private_slot(monkeypatch, coordinator, *modules):
+    """Point `modules` at their own download slot for one test.
+
+    The real one is a process-wide singleton, so a test that parks it and then
+    fails an assertion before its release wedges every later test in this file
+    -- observed as a whole-file hang with no failure reported.
+    """
+    for module in modules:
+        monkeypatch.setattr(module, "model_download_coordinator", lambda: coordinator)
+    return coordinator
+
+
+def _wait_until(condition, timeout=5.0):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if condition():
+            return True
+        time.sleep(0.01)
+    raise AssertionError("the condition never became true")
 
 
 @pytest.fixture(autouse=True)
@@ -549,3 +571,244 @@ def test_the_progress_bar_hides_even_while_settings_is_closed():
 
     assert dialog._local_model_download_bar_shown is False
     assert dialog.local_models_action_label.text == "", "stale status line kept"
+
+
+def test_a_finished_local_tab_download_lets_a_waiter_join(monkeypatch):
+    """`succeeded=` decides whether a parked waiter re-downloads.
+
+    It used to read a `result` tuple that was written once at the top of the
+    method and never reassigned, because the one place that would have set it
+    returned the worker call directly -- so the flag was a constant False. Its
+    only consumer is the completion counter behind `ACQUIRE_JOINED`, so the
+    app's main explicit download path never recorded completion and a waiting
+    preload re-ran `snapshot_download` on an already-complete model.
+    """
+    import stt_app.settings_dialog_local as local_module
+    from stt_app.model_download_coordinator import (
+        ACQUIRE_JOINED,
+        ModelDownloadCoordinator,
+    )
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    coordinator = _private_slot(monkeypatch, ModelDownloadCoordinator(), local_module)
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    dialog._local_model_download_lock = threading.RLock()
+    dialog._local_model_download_active = None
+    dialog._local_model_download_claimed = ("small", "")
+    dialog._local_model_download_cancel_event = threading.Event()
+    dialog._run_download_worker = lambda *_args: ("success", "", 0, 0)
+    coordinator.register_explicit_interest("small", "")
+
+    status, _detail, _f, _b = _LocalModelsMixin._download_local_model_in_subprocess(
+        dialog, "small", ""
+    )
+
+    assert status == "success"
+    # The waiter arrives after the fact, which is what the counter is for.
+    assert coordinator.acquire("small", "", explicit=False) == ACQUIRE_DOWNLOAD
+    coordinator.release("small", "", succeeded=False)
+
+    outcome: list[str] = []
+    coordinator.acquire("blocker", "", explicit=False)
+
+    def _park():
+        outcome.append(coordinator.acquire("small", "", explicit=False))
+
+    waiter = threading.Thread(target=_park, daemon=True)
+    waiter.start()
+    _wait_until(lambda: coordinator.has_waiting_download("small", ""))
+    dialog._local_model_download_claimed = ("small", "")
+    coordinator.register_explicit_interest("small", "")
+    coordinator.release("blocker", "", succeeded=False)
+    _LocalModelsMixin._download_local_model_in_subprocess(dialog, "small", "")
+    waiter.join(timeout=5)
+
+    assert outcome == [ACQUIRE_JOINED], (
+        f"the waiter downloaded again instead of joining: {outcome}"
+    )
+
+
+def test_cancelling_keeps_the_partials_a_parked_waiter_will_resume_from(monkeypatch):
+    """The mirror of the preload guard, for the direction that had none.
+
+    The preload path checks `has_explicit_interest` before deleting partials.
+    The Local tab's cancel deleted them unconditionally -- and the waiter it
+    robs is typically a *preload*, whose interest is implicit and therefore
+    invisible to that check. Measured before this: cancel a 2.5 GB download
+    with a preload parked on the same model, and the preload restarts from
+    zero seconds later.
+    """
+    import stt_app.settings_dialog_local as local_module
+    from stt_app.model_download_coordinator import ModelDownloadCoordinator
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    coordinator = _private_slot(monkeypatch, ModelDownloadCoordinator(), local_module)
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    coordinator.acquire("large-v3", "", explicit=True)
+    cleanups: list[tuple[str, str]] = []
+
+    class _Facade:
+        @staticmethod
+        def cleanup_incomplete_model_download(model_name, model_dir):
+            cleanups.append((model_name, model_dir))
+            return 3, 4096
+
+    # Recorded, not left to the real cleanup: with nothing on disk for this
+    # model the real one returns (0, 0) too, so `removed == (0, 0)` alone was
+    # satisfied whether the guard held or not -- a mutation that deleted the
+    # guard outright still passed.
+    monkeypatch.setattr(local_module, "_facade", lambda: _Facade())
+
+    def _park():
+        try:
+            coordinator.acquire("large-v3", "", explicit=False)
+        except Exception:
+            return
+        coordinator.release("large-v3", "", succeeded=False)
+
+    waiter = threading.Thread(target=_park, daemon=True)
+    waiter.start()
+    try:
+        _wait_until(lambda: coordinator.has_waiting_download("large-v3", ""))
+
+        removed = _LocalModelsMixin._cleanup_unless_awaited(dialog, "large-v3", "")
+
+        assert cleanups == [], "the waiter's partial files were deleted"
+        assert removed == (0, 0), f"the cancel reported deleting {removed}"
+    finally:
+        coordinator.release("large-v3", "", succeeded=False)
+        waiter.join(timeout=5)
+
+
+def test_the_waiter_registry_empties_once_nobody_is_parked():
+    """A registration that outlives its waiter never lets the cleanup run.
+
+    `has_waiting_download` gates the partial-file cleanup, so a count left
+    behind by a waiter that has long since finished makes every later cancel
+    keep unusable `*.incomplete` files forever -- the failure the cleanup
+    exists to prevent, arrived at from the other side.
+    """
+    from stt_app.model_download_coordinator import ModelDownloadCoordinator
+
+    coordinator = ModelDownloadCoordinator()
+    coordinator.acquire("blocker", "", explicit=False)
+
+    def _park() -> None:
+        coordinator.acquire("m", "", explicit=False)
+        coordinator.release("m", "", succeeded=False)
+
+    waiter = threading.Thread(target=_park, daemon=True)
+    waiter.start()
+    _wait_until(lambda: coordinator.has_waiting_download("m", ""))
+    coordinator.release("blocker", "", succeeded=False)
+    waiter.join(timeout=5)
+    assert not waiter.is_alive(), "the waiter never got the slot"
+
+    assert coordinator.has_waiting_download("m", "") is False, (
+        "the finished waiter is still registered"
+    )
+    # The uncontended path registers too, and must give it straight back.
+    coordinator.acquire("m", "", explicit=False)
+    try:
+        assert coordinator.has_waiting_download("m", "") is False, (
+            "the caller holding the slot is reported as waiting for it"
+        )
+    finally:
+        coordinator.release("m", "", succeeded=False)
+
+
+def test_cancelling_with_nobody_waiting_still_removes_the_partials():
+    """The other direction: an abandoned partial download must be cleaned up.
+
+    A guard that never lets the cleanup run would leave unusable
+    `*.incomplete` files behind after every cancel.
+    """
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    calls: list[tuple[str, str]] = []
+
+    class _Facade:
+        @staticmethod
+        def cleanup_incomplete_model_download(model_name, model_dir):
+            calls.append((model_name, model_dir))
+            return 3, 4096
+
+    import stt_app.settings_dialog_local as local_module
+
+    original = local_module._facade
+    local_module._facade = lambda: _Facade()
+    try:
+        removed = _LocalModelsMixin._cleanup_unless_awaited(dialog, "small", "")
+    finally:
+        local_module._facade = original
+
+    assert removed == (3, 4096)
+    assert calls == [("small", "")]
+
+
+@pytest.mark.parametrize(
+    ("label", "slot_holder", "expect_waiting"),
+    [
+        ("another model owns the slot", "large-v3", True),
+        ("our own model owns the slot", "medium", False),
+        ("the slot is free", None, False),
+    ],
+)
+def test_the_overlay_never_invents_progress_for_a_queued_preload(
+    label, slot_holder, expect_waiting, monkeypatch
+):
+    """Progress is directory growth, so a queued preload has none to show.
+
+    Two gates for "I am not really downloading" existed -- queued behind
+    another *preload*, and waiting for another *process* -- and neither
+    covered waiting for the in-process download slot. The phase is already
+    `download` there, because `_download_model_for_preload` sets it and then
+    blocks inside `acquire`. Measured before this: a frozen "approx. 60%
+    (919/1531 MB), measuring speed" for as long as the other download took,
+    from partial bytes an earlier cancelled attempt had left behind.
+    """
+    import stt_app.controller as controller_module
+    from stt_app.controller import _PRELOAD_PHASE_DOWNLOAD, DictationController
+    from stt_app.model_download_coordinator import ModelDownloadCoordinator
+    from stt_app.settings_store import AppSettings
+
+    # A private slot, not the process-wide one: this test parks the slot for
+    # the length of an assertion, and the singleton is shared with every other
+    # test in this file.
+    coordinator = ModelDownloadCoordinator()
+    monkeypatch.setattr(
+        controller_module, "model_download_coordinator", lambda: coordinator
+    )
+    controller = DictationController.__new__(DictationController)
+    controller._preload_result_lock = threading.RLock()
+    controller._preload_generation = 7
+    controller._preload_phase = (7, _PRELOAD_PHASE_DOWNLOAD)
+    controller._preload_target_model = "medium"
+    controller._settings = AppSettings(model_size="medium")
+
+    if slot_holder is not None:
+        coordinator.acquire(slot_holder, "", explicit=False)
+    try:
+        waits = DictationController._preload_waits_for_another_model(
+            controller, "medium", ""
+        )
+        word = DictationController._preload_phase_word(controller)
+        # Only the waiting branch returns without measuring the cache, so it
+        # is the only one this bare controller can render.
+        detail = (
+            DictationController._preload_progress_detail(controller)
+            if waits
+            else ""
+        )
+    finally:
+        if slot_holder is not None:
+            coordinator.release(slot_holder, "", succeeded=False)
+
+    assert waits is expect_waiting, label
+    if expect_waiting:
+        assert "Waiting for another model download" in detail, label
+        assert "%" not in detail, f"{label}: a percentage was invented: {detail}"
+        assert word == "waiting for another model to finish", label
+    else:
+        assert word == "downloading", label

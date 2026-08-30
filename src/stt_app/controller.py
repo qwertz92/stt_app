@@ -3004,6 +3004,24 @@ class DictationController(QtCore.QObject):
             if generation == self._preload_generation:
                 self._preload_phase = (generation, phase)
 
+    def _preload_waits_for_another_model(
+        self,
+        model_name: str,
+        model_dir: str,
+    ) -> bool:
+        """True while the preload wants the slot and another model holds it.
+
+        The phase is already `download` at that point -- `_download_model_for
+        _preload` sets it and *then* blocks inside `acquire` -- so every
+        caller that renders download progress or the word "downloading" has to
+        ask this as well.
+        """
+        if self._current_preload_phase() != _PRELOAD_PHASE_DOWNLOAD:
+            return False
+        return model_download_coordinator().downloading_other_model(
+            model_name, model_dir
+        )
+
     def _preload_phase_word(self) -> str:
         """What the preload is actually doing, for "the model is still ...".
 
@@ -3015,6 +3033,14 @@ class DictationController(QtCore.QObject):
         """
         phase = self._current_preload_phase()
         if phase == _PRELOAD_PHASE_DOWNLOAD:
+            if self._preload_waits_for_another_model(
+                self._preload_target_model or self._settings.model_size,
+                str(getattr(self._settings, "model_dir", "") or ""),
+            ):
+                # Queued behind another model's download, so "downloading"
+                # would claim network activity for a model nothing is
+                # fetching.
+                return "waiting for another model to finish"
             return "downloading"
         if phase == _PRELOAD_PHASE_QUEUED:
             return "waiting for another model to finish"
@@ -3230,6 +3256,18 @@ class DictationController(QtCore.QObject):
         from .transcriber.local_faster_whisper import estimate_cached_model_bytes
 
         model_name = self._preload_target_model or self._settings.model_size
+        model_dir = str(getattr(self._settings, "model_dir", "") or "")
+        if self._preload_waits_for_another_model(model_name, model_dir):
+            # Same reason as the cross-process case below, one layer in: the
+            # slot is held by a *different* model, so nothing is writing to
+            # this one's destination and any percentage rendered for it is
+            # invented. Measured before this: a frozen "approx. 60% (919/1531
+            # MB), measuring speed" for as long as the other download took.
+            return (
+                f"Waiting for another model download to finish before "
+                f"downloading '{model_name}'. You can start recording now; "
+                "transcription waits for this model. Use Cancel to abort."
+            )
         if model_download_coordinator().waiting_for_other_process():
             # Progress is directory growth, and another process owns the
             # directory -- so the bar would sit at a frozen 0% and claim to

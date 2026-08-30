@@ -125,6 +125,14 @@ class ModelDownloadCoordinator:
         # Completion counter per model, not a set: several callers can be
         # waiting for the same model, and each of them must learn it is done.
         self._completed: dict[tuple[str, str], int] = {}
+        # Callers parked in the wait loop, per model. Distinct from
+        # `_explicit_interest`: a preload waiting for a model is implicit, so
+        # the explicit-interest check cannot see it -- and cancelling a
+        # Local-tab download for that same model then deleted the partial
+        # bytes the parked preload was about to resume from, so it restarted
+        # the multi-gigabyte fetch from zero seconds after the user cancelled
+        # it.
+        self._waiters: dict[tuple[str, str], int] = {}
         # Models an explicit (user-requested) caller is running *or waiting for*.
         # A waiting request counts: the implicit path must not delete the
         # partial download the waiting caller is about to resume from.
@@ -198,23 +206,44 @@ class ModelDownloadCoordinator:
         interest_already_registered: bool = False,
     ) -> str:
         with self._condition:
-            while self._active is not None:
-                if _SHUTDOWN.is_set():
-                    raise ModelDownloadCanceled("The application is shutting down.")
-                if cancel_check is not None and cancel_check():
-                    raise ModelDownloadCanceled("Model download canceled.")
-                waiting_for_same_model = (
-                    self._active.model_name == model_name
-                    and self._active.model_dir == model_dir
-                )
-                self._condition.wait(_WAIT_POLL_SECONDS)
-                if (
-                    waiting_for_same_model
-                    and self._completed.get(key, 0) > completed_before
-                ):
-                    if explicit and not interest_already_registered:
-                        self._drop_explicit_interest(key)
-                    return ACQUIRE_JOINED
+            # Registered unconditionally, and given back in the `finally`
+            # below. Incrementing only when the slot looks busy is a race:
+            # `release` sets `_active = None` and notifies, and a caller that
+            # slips in before the parked thread wakes sees a free slot, skips
+            # the increment, and then decrements the *parked* thread's
+            # registration to zero -- after which a cancel deletes the bytes
+            # that thread was waiting to resume from, the exact loss this
+            # registry exists to stop. Nothing can observe the transient count
+            # of a caller that takes the slot immediately: every reader holds
+            # `self._condition`, which is only released inside `wait`.
+            self._waiters[key] = self._waiters.get(key, 0) + 1
+            try:
+                while self._active is not None:
+                    if _SHUTDOWN.is_set():
+                        raise ModelDownloadCanceled(
+                            "The application is shutting down."
+                        )
+                    if cancel_check is not None and cancel_check():
+                        raise ModelDownloadCanceled("Model download canceled.")
+                    waiting_for_same_model = (
+                        self._active.model_name == model_name
+                        and self._active.model_dir == model_dir
+                    )
+                    self._condition.wait(_WAIT_POLL_SECONDS)
+                    if (
+                        waiting_for_same_model
+                        and self._completed.get(key, 0) > completed_before
+                    ):
+                        if explicit and not interest_already_registered:
+                            self._drop_explicit_interest(key)
+                        return ACQUIRE_JOINED
+            finally:
+                # Every exit, including the JOINED return and a cancel raise.
+                remaining = self._waiters.get(key, 0) - 1
+                if remaining > 0:
+                    self._waiters[key] = remaining
+                else:
+                    self._waiters.pop(key, None)
             self._active = ActiveModelDownload(model_name, model_dir, bool(explicit))
 
         # Held *outside* the condition: waiting for another process can take
@@ -327,6 +356,32 @@ class ModelDownloadCoordinator:
             self._condition.notify_all()
         if explicit_release:
             self._drop_explicit_interest((model_name, model_dir))
+
+    def has_waiting_download(self, model_name: str, model_dir: str) -> bool:
+        """Is another caller parked waiting to download this exact model?
+
+        Used before deleting partial files: those bytes are what the waiter
+        resumes from, and wiping them turns its wait into a fresh download.
+        Unlike `has_explicit_interest` this sees implicit callers too, which is
+        the case that bit -- a preload is implicit.
+        """
+        with self._condition:
+            return self._waiters.get((model_name, model_dir), 0) > 0
+
+    def downloading_other_model(self, model_name: str, model_dir: str) -> bool:
+        """Is the slot held by a *different* model right now?
+
+        Progress is measured as growth of the destination directory, so while
+        another model owns the slot nothing is writing to ours and any
+        percentage rendered for it is invented. That is the exact symptom the
+        slot was built to remove, so the callers that render progress have to
+        be able to ask.
+        """
+        with self._condition:
+            active = self._active
+            return active is not None and (
+                active.model_name != model_name or active.model_dir != model_dir
+            )
 
     def waiting_for_other_process(self) -> bool:
         """Is a download blocked on another process holding the cache dir?"""

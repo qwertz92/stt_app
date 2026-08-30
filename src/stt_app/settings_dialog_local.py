@@ -1143,7 +1143,14 @@ class _LocalModelsMixin:
         # downloading forever and refuse to queue it again for the rest of the
         # session.
         acquired = False
-        result: tuple[str, str, int, int] = ("failed", "", 0, 0)
+        # A flag, not a tuple the `finally` has to index. It used to be
+        # `result = ("failed", ...)`, and the one place that would have
+        # updated it returned the worker call directly -- so `succeeded=` was
+        # a constant False. That flag has one consumer, the completion counter
+        # that lets a waiter for the same model return ACQUIRE_JOINED instead
+        # of downloading again, so the app's main explicit download path never
+        # recorded completion and the join mechanism was dead for it.
+        download_succeeded = False
         try:
             try:
                 outcome = coordinator.acquire(
@@ -1165,7 +1172,9 @@ class _LocalModelsMixin:
             acquired = True
             with self._local_model_download_lock:
                 self._local_model_download_active = (model_name, model_dir)
-            return self._run_download_worker(model_name, model_dir)
+            result = self._run_download_worker(model_name, model_dir)
+            download_succeeded = result[0] == "success"
+            return result
         finally:
             with self._local_model_download_lock:
                 if self._local_model_download_active == (model_name, model_dir):
@@ -1174,11 +1183,33 @@ class _LocalModelsMixin:
                     self._local_model_download_claimed = None
             if acquired:
                 coordinator.release(
-                    model_name, model_dir, succeeded=result[0] == "success"
+                    model_name, model_dir, succeeded=download_succeeded
                 )
             else:
                 # Never held the slot, but the enqueue-time interest is ours.
                 coordinator.drop_explicit_interest(model_name, model_dir)
+
+    def _cleanup_unless_awaited(
+        self,
+        model_name: str,
+        model_dir: str,
+    ) -> tuple[int, int]:
+        """Remove the partial files, unless someone is parked to resume them.
+
+        The mirror-image guard on the preload path checks
+        `has_explicit_interest`; this direction needs `has_waiting_download`,
+        because the waiter it must not rob is typically a *preload*, which
+        registers implicit interest. Without it, cancelling a Local-tab
+        download while a preload for the same model waits deleted the bytes
+        and the preload restarted the fetch from zero.
+        """
+        if model_download_coordinator().has_waiting_download(model_name, model_dir):
+            _logger.info(
+                "local_model_download_partials_kept model=%s reason=waiter",
+                model_name,
+            )
+            return 0, 0
+        return _facade().cleanup_incomplete_model_download(model_name, model_dir)
 
     def _run_download_worker(
         self,
@@ -1197,7 +1228,7 @@ class _LocalModelsMixin:
                 if self._local_model_download_cancel_event.wait(timeout=0.1):
                     terminate_model_download_process(process)
                     model_download_process_error(process)
-                    removed_files, removed_bytes = _facade().cleanup_incomplete_model_download(
+                    removed_files, removed_bytes = self._cleanup_unless_awaited(
                         model_name,
                         model_dir,
                     )
@@ -1207,7 +1238,7 @@ class _LocalModelsMixin:
             if process.returncode == 0:
                 return "success", "", 0, 0
             if self._local_model_download_cancel_event.is_set():
-                removed_files, removed_bytes = _facade().cleanup_incomplete_model_download(
+                removed_files, removed_bytes = self._cleanup_unless_awaited(
                     model_name,
                     model_dir,
                 )
