@@ -1032,3 +1032,60 @@ def test_a_deepgram_message_that_is_not_json_is_logged_once_per_session(
     records = _deepgram_log_records(caplog)
     assert len(records) == 1, [r.getMessage() for r in records]
     assert "not JSON" in records[0].getMessage()
+
+
+def test_a_close_thread_that_cannot_start_still_retires_the_session(monkeypatch):
+    """The finalize sends control frames on short-lived threads.
+
+    Under thread exhaustion `Thread.start()` raised straight out of the
+    finalize, skipping the socket close below it -- so the connection stayed
+    open and billed, which is the very thing the try/finally around it was
+    added for.
+    """
+    _FakeWebSocketApp.instances = []
+    t = DeepgramTranscriber(api_key="key")
+    monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+    t.start_stream()
+    ws = _FakeWebSocketApp.instances[-1]
+
+    real_thread = threading.Thread
+    control_threads = {"stt_app_deepgram_finalize", "stt_app_deepgram_closestream"}
+
+    class _RefusingThread(real_thread):
+        def start(self):
+            if str(self.name) in control_threads:
+                raise RuntimeError("can't start new thread")
+            return super().start()
+
+    monkeypatch.setattr(threading, "Thread", _RefusingThread)
+
+    # The failure is reported rather than swallowed ...
+    with pytest.raises(TranscriptionError, match="can't start new thread"):
+        t.stop_stream()
+
+    # ... and the teardown below it still ran.
+    assert t._stream_state == "idle", "the session was not retired"
+    assert ws.closed is True, "the socket was left open and billed"
+
+
+def test_a_deepgram_close_thread_that_cannot_start_is_reported(monkeypatch, caplog):
+    """Closing inline would block the finalize worker, so it only reports."""
+    calls: list[str] = []
+
+    class _Ws:
+        def close(self):
+            calls.append("close")
+
+    class _RefusingThread(threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(threading, "Thread", _RefusingThread)
+
+    with caplog.at_level(logging.DEBUG):
+        DeepgramTranscriber._close_streaming_socket(_Ws())
+
+    assert calls == [], "it closed inline, which can hang the finalize worker"
+    assert any(
+        "close thread" in r.getMessage() for r in _deepgram_log_records(caplog)
+    ), [r.getMessage() for r in _deepgram_log_records(caplog)]

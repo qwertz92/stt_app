@@ -404,7 +404,20 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             name="stt_app_assemblyai_disconnect",
             daemon=True,
         )
-        worker.start()
+        try:
+            worker.start()
+        except Exception:
+            # Every caller is a teardown path with state to retire and a
+            # lease to release below it, so raising here would strand
+            # those instead of just failing to disconnect. Not run inline
+            # either: `disconnect` joins the SDK's threads and is on a
+            # thread precisely because it can hang.
+            logger.warning(
+                "Could not start the AssemblyAI disconnect thread; the session "
+                "may stay open until the server times it out.",
+                exc_info=True,
+            )
+            return
         worker.join(timeout=join_timeout_s)
 
     def start_stream(

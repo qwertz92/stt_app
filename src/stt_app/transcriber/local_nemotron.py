@@ -381,7 +381,21 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
             )
             self._stream_thread = thread
             self._stream_workers[run.generation] = thread
-        thread.start()
+        try:
+            thread.start()
+        except Exception:
+            # `_stream_active` was set inside the lock above, so a thread that
+            # cannot start left it True for the process lifetime: every later
+            # dictation was refused with "Streaming session already active",
+            # and `abort_stream` -- the one recovery path -- raised
+            # "cannot join thread before it is started" instead of clearing it.
+            with self._stream_lock:
+                self._stream_workers.pop(run.generation, None)
+                if self._stream_run is run:
+                    self._stream_active = False
+                    self._stream_run = None
+                    self._stream_thread = None
+            raise
 
     def push_audio_chunk(self, chunk: bytes) -> None:
         payload = bytes(chunk or b"")

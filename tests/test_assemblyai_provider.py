@@ -1149,3 +1149,85 @@ def test_an_already_finished_job_is_never_polled_again(monkeypatch):
 
     assert t.transcribe_batch(b"RIFF....WAVE") == "hello world"
     assert fetched == []
+
+
+def test_a_disconnect_thread_that_cannot_start_does_not_break_teardown(
+    monkeypatch, caplog
+):
+    """Every caller is a teardown path with state to retire below it."""
+    import logging as _logging
+    import threading as _threading
+
+    class _RefusingThread(_threading.Thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(_threading, "Thread", _RefusingThread)
+
+    t, _clients = _make_streaming_transcriber()
+    t._stream_client = None
+
+    with caplog.at_level(_logging.DEBUG):
+        # Must not raise: the callers have a lease to release afterwards.
+        t._shutdown_streaming_client(object(), join_timeout_s=0.1)
+
+    records = _stream_log_records(caplog, "assemblyai_provider")
+    assert any("disconnect thread" in r.getMessage() for r in records), [
+        r.getMessage() for r in records
+    ]
+
+
+def test_a_stream_worker_that_cannot_start_leaves_no_session_behind(monkeypatch):
+    """`_stream_active` was set inside the lock before the thread started.
+
+    A thread that cannot start therefore left it True for the process
+    lifetime: every later dictation was refused with "Streaming session
+    already active", and `abort_stream` raised "cannot join thread before it
+    is started" instead of clearing it.
+    """
+    import threading as _threading
+
+    from stt_app.transcriber.local_faster_whisper import LocalFasterWhisperTranscriber
+
+    t = LocalFasterWhisperTranscriber(model_size="tiny")
+    real_thread = _threading.Thread
+
+    class _RefusingThread(real_thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(_threading, "Thread", _RefusingThread)
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        t.start_stream()
+
+    assert t._stream_active is False
+    assert t._stream_session is None
+    assert t._stream_thread is None
+
+    monkeypatch.setattr(_threading, "Thread", real_thread)
+    # The session slot is free again, so a retry is accepted rather than
+    # refused with "Streaming session already active".
+    t.start_stream()
+    t.abort_stream()
+
+
+def test_a_nemotron_worker_that_cannot_start_leaves_no_session_behind(monkeypatch):
+    import threading as _threading
+
+    from stt_app.transcriber.local_nemotron import LocalNemotronTranscriber
+
+    t = LocalNemotronTranscriber()
+    real_thread = _threading.Thread
+
+    class _RefusingThread(real_thread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(_threading, "Thread", _RefusingThread)
+    with pytest.raises(RuntimeError, match="can't start new thread"):
+        t.start_stream()
+
+    assert t._stream_active is False
+    assert t._stream_run is None
+    assert t._stream_thread is None
+    assert t._stream_workers == {}, "the retired worker entry leaked"

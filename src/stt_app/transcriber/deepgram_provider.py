@@ -697,7 +697,15 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             name=f"stt_app_deepgram_{message_type.lower()}",
             daemon=True,
         )
-        worker.start()
+        try:
+            worker.start()
+        except Exception as exc:
+            # Under thread exhaustion this raised straight out of the
+            # finalize, skipping the socket close below it -- so the
+            # connection stayed open and billed, which is the very
+            # thing the surrounding try/finally was added for. This
+            # function already reports by returning.
+            return exc
         if not completed.wait(timeout=_STREAM_CONTROL_SEND_TIMEOUT_S):
             return TimeoutError(f"timed out sending Deepgram {message_type}")
         return errors[0] if errors else None
@@ -722,7 +730,20 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             name="stt_app_deepgram_close",
             daemon=True,
         )
-        worker.start()
+        try:
+            worker.start()
+        except Exception:
+            # Deliberately not closed inline instead: `close()` is on a
+            # thread because it can hang, and hanging here would block
+            # the finalize worker. `run_forever` is a daemon thread, so
+            # the cost is a socket Deepgram bills until its own timeout,
+            # not a process that cannot exit.
+            logger.warning(
+                "Could not start the Deepgram close thread; the connection may "
+                "stay open until the server times it out.",
+                exc_info=True,
+            )
+            return
         worker.join(timeout=_STREAM_SOCKET_CLOSE_TIMEOUT_S)
 
     def _wait_for_finalize_drain(
@@ -836,6 +857,37 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
         finalize_received,
         closed,
     ) -> tuple[str, Exception | None]:
+        try:
+            text, error = self._finalize_stream_control(
+                generation,
+                ws,
+                send_queue,
+                send_thread,
+                sender_drained,
+                finalize_received,
+                closed,
+            )
+        finally:
+            # Never conditional on the block above succeeding: the whole
+            # point of this teardown is that the socket does not stay
+            # open, and every statement in it can raise.
+            if not closed.is_set():
+                self._close_streaming_socket(ws)
+            if send_thread is not None and send_thread.is_alive():
+                send_thread.join(timeout=0.2)
+            thread.join(timeout=2.0)
+        return text, error
+
+    def _finalize_stream_control(
+        self,
+        generation,
+        ws,
+        send_queue,
+        send_thread,
+        sender_drained,
+        finalize_received,
+        closed,
+    ) -> tuple[str, Exception | None]:
         # Flush queued audio before finalizing; the sender exits on the
         # sentinel after sending everything queued ahead of it. Finalize and
         # CloseStream must never overtake audio frames.
@@ -884,12 +936,6 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     )
                 else:
                     closed.wait(timeout=_STREAM_SERVER_CLOSE_TIMEOUT_S)
-
-        if not closed.is_set():
-            self._close_streaming_socket(ws)
-        if send_thread is not None and send_thread.is_alive():
-            send_thread.join(timeout=0.2)
-        thread.join(timeout=2.0)
 
         with self._stream_lock:
             if not self._stream_session_matches_locked(generation, ws):
@@ -940,6 +986,12 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             payload = json.loads(str(message))
         except Exception:
             with self._stream_lock:
+                # Session-scoped like every other write here: a retired
+                # socket delivering one bad frame after a replacement
+                # started would otherwise latch the *new* session's flag
+                # and silence its own protocol failures.
+                if not self._stream_session_matches_locked(generation, ws):
+                    return
                 already_logged = self._stream_message_parse_failed
                 self._stream_message_parse_failed = True
             if not already_logged:
