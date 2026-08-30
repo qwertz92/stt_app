@@ -633,3 +633,70 @@ runtime family, not folded into the Cohere/Granite WebGPU helper.
   <https://opennmt.net/CTranslate2/quantization.html>
 - CTranslate2 installation/build options:
   <https://opennmt.net/CTranslate2/installation.html>
+
+## IBM Granite Speech 5.0 470M TurboCTC - blocked, 2026-08-30
+
+`ibm-granite/granite-speech-5.0-470m-turboctc`, released 2026-08-25, Apache-2.0.
+An attractive candidate on paper and **not integrable today**, for one reason
+that no amount of app-side work changes: there is no ONNX export of it anywhere.
+
+### What it is
+
+An encoder-only Conformer trained with CTC and decoded non-autoregressively,
+dropping the LLM decoder that every earlier Granite Speech model carried. 470M
+parameters, roughly 60,000 hours of English audio, an output layer over 16,384
+BPE units. IBM reports over 20x the throughput of the previous Granite Speech
+models. There is a second checkpoint, `-nc`, trained on ~75,000 hours under
+CC-BY-NC-SA-4.0; only the Apache-2.0 one would be shippable here.
+
+It is **English only**. `stt_app`'s default, Parakeet TDT 0.6B v3, covers 25
+European languages including German at mean RTF 0.043 on CPU, so even once
+this is integrable it is an English-only addition rather than a replacement.
+
+### Why it cannot be integrated
+
+All three local runtimes in this app consume ONNX, and no ONNX build of this
+model exists. Measured against the Hugging Face API on 2026-08-30:
+
+| Model | ONNX builds on Hugging Face |
+| ----- | --------------------------- |
+| Granite Speech 4.0 1B | 2 (`onnx-community`, `huggingworld`) |
+| Granite Speech 4.1 2B | 6 (`smcleod` x3, `christopherthompson81` x2, `valoomba`) |
+| **Granite Speech 5.0 470M** | **0** |
+
+The 18 derivative repositories that do exist for 5.0 are MLX (Apple Silicon,
+q4/q5/q6/q8/fp16) and CoreML. The upstream repository ships `model.safetensors`
+plus `configuration_ctc_conformer.py`, `granite_encoder.py`,
+`modeling_ctc_conformer.py` and `processing_ctc_conformer.py`, i.e. the
+architecture arrives as remote code. `GraniteSpeech5ForCTC` / model type
+`granite_speech5_ctc` is native only from `transformers >= 5.16.0`.
+
+Per runtime:
+
+- `local_onnx_asr.py` loads by **named** architecture. onnx-asr 0.12.0, the
+  installed version, exposes 26 model types (`nemo-conformer-ctc`, `whisper`,
+  `gigaam-*`, `kaldi`, `vosk`, ...) and none of them is Granite.
+- `local_webgpu_asr.py` would need both an ONNX export and the architecture in
+  the Transformers.js JS port. It also uses the
+  `GraniteSpeechForConditionalGeneration` pipeline, which is a generative
+  decoder path; a CTC encoder needs a different one.
+- `local_nemotron.py` is ORT GenAI, for generative models. A CTC encoder is not
+  one.
+
+### The two ways forward
+
+1. **Wait for a community ONNX export** (recommended). That is how Granite
+   Speech 4.1 2B arrived. The integration is then the familiar shape: an
+   `_OnnxModelLayout` entry, `MODEL_REPO_MAP`, `MODEL_ESTIMATED_SIZE_MB`,
+   `LOCAL_MODEL_LABELS`, `LOCAL_ENGLISH_ONLY_MODELS`, and a benchmark run --
+   with the caveat that the runner needs a CTC path.
+2. **Export it here.** That means torch plus `transformers >= 5.16` as dev
+   dependencies, exporting a days-old architecture with block self-attention
+   and self-conditioning, and then a fourth runtime: raw `onnxruntime` plus CTC
+   greedy decoding plus the 16,384-BPE tokenizer plus the log-mel feature
+   extractor. The raw-graph runtime that would host it was deliberately removed
+   on 2026-08-26, and `docs/granite-speech-4.1-onnx-variants.md` records what
+   exporting a Granite encoder does to the WebGPU EP. Not worth it before
+   option 1 has been given time.
+
+A ModelScope mirror is moot until an ONNX export exists at all.
