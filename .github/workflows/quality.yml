@@ -51,7 +51,11 @@ jobs:
         run: uv run --no-sync ruff check .
 
       - name: Run test suite
-        run: uv run --no-sync pytest -q
+        # No -q here: pyproject already sets addopts = "-q", and a
+        # second one is -qq, which suppresses the final "N passed" line
+        # entirely -- a run that collected three tests then looks exactly
+        # like one that collected the whole suite.
+        run: uv run --no-sync pytest
 
   javascript-audit:
     runs-on: ubuntu-latest

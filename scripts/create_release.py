@@ -118,7 +118,10 @@ def create_release(
             ],
             root=root,
         )
-        _run([sys.executable, "-m", "pytest", "-q"], root=root)
+        # No -q: pyproject already sets addopts = "-q", and a second one is
+        # -qq, which suppresses the final "N passed" line -- so a run that
+        # collected three tests looked exactly like the whole suite.
+        _run([sys.executable, "-m", "pytest"], root=root)
 
     _run(["git", "add", *RELEASE_METADATA_PATHS], root=root)
     if _has_staged_changes(root=root):

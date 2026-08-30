@@ -39,11 +39,23 @@ jobs:
           node-version: "24"
           cache: npm
 
-      - name: Install locked dependencies
+      # One native command per step, deliberately. GitHub runs a pwsh step as
+      # `pwsh -command ". '<file>'"` with `$ErrorActionPreference = 'stop'`
+      # prepended and `exit $LASTEXITCODE` appended -- and that preference governs
+      # *cmdlet* errors only. A native command's non-zero exit throws nothing
+      # unless $PSNativeCommandUseErrorActionPreference is $true, which defaults to
+      # $false (measured on pwsh 7.6.5). So in a multi-command block only the LAST
+      # command decides the step and every failure above it is discarded: ruff and
+      # pytest could both fail while this job stayed green and published the
+      # release. Split steps make each exit code the step's own, which is the shape
+      # quality.yml already uses.
+      - name: Install locked Python dependencies
         shell: pwsh
-        run: |
-          uv sync --group dev --locked
-          npm ci --omit=dev
+        run: uv sync --group dev --locked
+
+      - name: Install locked JavaScript dependencies
+        shell: pwsh
+        run: npm ci --omit=dev
 
       - name: Run release quality gates
         shell: pwsh
@@ -62,10 +74,21 @@ jobs:
         # quality.yml runs it without offscreen on every push and PR.
         env:
           QT_QPA_PLATFORM: offscreen
-        run: |
-          uv run --no-sync ruff check .
-          uv run --no-sync pytest -q
-          npm audit --omit=dev --package-lock-only --audit-level=moderate
+        run: uv run --no-sync ruff check .
+
+      - name: Run the release test suite
+        shell: pwsh
+        # offscreen for the same reason as the gate above.
+        # No -q: pyproject already sets addopts = "-q", and a second
+        # one is -qq, which suppresses the final "N passed" line, so the
+        # release log could not show how many tests the gate actually ran.
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: uv run --no-sync pytest
+
+      - name: Audit locked production JavaScript dependencies
+        shell: pwsh
+        run: npm audit --omit=dev --package-lock-only --audit-level=moderate
 
       - name: Install Inno Setup
         shell: pwsh
@@ -74,7 +97,14 @@ jobs:
       - name: Verify release tag matches project version
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
-        run: python .\scripts\release_version.py verify "${{ github.ref_name }}" --against-git-tags
+        # The tag reaches the script through the environment, never through
+        # ${{ }}: that is textual substitution into the generated PowerShell
+        # file, and a ref name may legally contain a quote, a dollar and a
+        # backtick -- git check-ref-format accepts one -- so an interpolated
+        # tag is executable source in a job holding contents: write.
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: python .\scripts\release_version.py verify $env:RELEASE_TAG --against-git-tags
 
       - name: Build portable Windows bundle
         shell: pwsh
@@ -110,10 +140,13 @@ jobs:
       - name: Publish GitHub release assets
         if: startsWith(github.ref, 'refs/tags/v')
         shell: pwsh
+        # RELEASE_TAG for the same reason as the verify step above: a ref name
+        # interpolated with ${{ }} becomes PowerShell source.
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          $tag = "${{ github.ref_name }}"
+          $tag = $env:RELEASE_TAG
           $notesPath = Join-Path $env:RUNNER_TEMP "release-notes.md"
           @'
           Windows release assets for stt_app:
@@ -132,14 +165,28 @@ jobs:
             source for developers, not the built Windows app.
           '@ | Set-Content -Encoding UTF8 $notesPath
 
+          # This block has control flow, so it cannot be one command per step
+          # and every gh call is checked by hand instead. Without that, a
+          # failed `gh release edit` was masked by the upload after it and the
+          # release shipped with whatever notes it already had.
+          function Assert-LastExitCode($what) {
+              if ($LASTEXITCODE -ne 0) {
+                  Write-Error "$what failed with exit code $LASTEXITCODE"
+                  exit $LASTEXITCODE
+              }
+          }
+
+          # This one is allowed to fail: its exit code chooses the branch.
           gh release view $tag *> $null
           if ($LASTEXITCODE -eq 0) {
               gh release edit $tag --notes-file $notesPath
+              Assert-LastExitCode 'gh release edit'
               gh release upload $tag `
                   "release\stt_app-win-x64.zip" `
                   "release\installer\stt_app-win-x64-setup.exe" `
                   "release\installer\stt_app-win-x64-setup.exe.sha256" `
                   --clobber
+              Assert-LastExitCode 'gh release upload'
           }
           else {
               gh release create $tag `
@@ -148,4 +195,5 @@ jobs:
                   "release\installer\stt_app-win-x64-setup.exe.sha256" `
                   --title $tag `
                   --notes-file $notesPath
+              Assert-LastExitCode 'gh release create'
           }
