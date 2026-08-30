@@ -347,6 +347,17 @@ class LastRecordingStore:
                 # Preserve the state file so the recording remains discoverable
                 # and a later retry can finish the cleanup.
                 return False
+            # The backup goes first, and it is not optional. `load` falls
+            # through to it whenever the primary is missing -- which is exactly
+            # what this method has just arranged -- and then republishes it, so
+            # deleting only the primary put the cleared state permanently back,
+            # pointing at the WAV that was deleted a moment earlier. Removing
+            # the backup first also means a failure here leaves the pair intact
+            # rather than a primary with no recovery copy.
+            try:
+                backup_path(self._state_path).unlink(missing_ok=True)
+            except OSError:
+                return False
             try:
                 self._state_path.unlink(missing_ok=True)
             except OSError:

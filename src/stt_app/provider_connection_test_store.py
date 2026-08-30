@@ -9,6 +9,7 @@ from .app_paths import provider_connection_tests_path
 from .config import VALID_ENGINES
 from .persistence import (
     atomic_write_json,
+    backup_path,
     load_json_with_backup,
     lock_for_path,
     parse_json_bool,
@@ -78,7 +79,17 @@ class ProviderConnectionTestStore:
 
             raw_results = payload.get("results", {})
             if not isinstance(raw_results, dict):
-                quarantine_corrupt_file(self._path, include_backup=True)
+                # Only the file this payload actually came from. Reaching here
+                # means the other one was never read, and `include_backup`
+                # threw it away regardless: a primary damaged externally in a
+                # way that still parses as JSON destroyed a perfectly good
+                # backup, and both loads afterwards returned nothing. The two
+                # history stores already quarantine just the file at fault; the
+                # source is what tells them apart when the backup is the one
+                # that parsed.
+                quarantine_corrupt_file(
+                    backup_path(self._path) if source == "backup" else self._path
+                )
                 return {}
 
             results: dict[str, ProviderConnectionTestResult] = {}

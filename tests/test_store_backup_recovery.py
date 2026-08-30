@@ -242,3 +242,102 @@ def test_a_primary_in_the_wrong_encoding_is_recovered_from_the_backup(name, tmp_
     assert read() == saved, (
         f"{name}: a primary that is not UTF-8 was not recovered from the backup"
     )
+
+
+def test_clearing_the_last_recording_clears_its_backup_too(tmp_path):
+    """A backup is only a recovery copy while there is something to recover.
+
+    `clear()` deleted the state file and left the `.bak`, and `load()` reads the
+    backup exactly when the primary is missing -- and republishes it. So the
+    cleared state came straight back, pointing at a WAV that had been deleted a
+    moment earlier, and stayed back for good. Measured: `clear()` returned True,
+    the audio was gone, and the very next `load()` returned the same
+    `recording_id` with the primary rewritten.
+    """
+    state_path = tmp_path / "last_recording.json"
+    audio_path = tmp_path / "last_recording.wav"
+    store = LastRecordingStore(state_path=state_path, audio_path=audio_path)
+
+    store.save_recording(b"RIFF-first", keep_after_success=True)
+    state = store.save_recording(b"RIFF-second", keep_after_success=True)
+    assert backup_path(state_path).is_file(), "no backup was written beside it"
+
+    assert store.clear() is True
+    assert not audio_path.exists()
+    assert not state_path.exists()
+    assert not backup_path(state_path).exists()
+
+    assert store.load() is None, (
+        f"the cleared recording {state.recording_id} came back from its backup"
+    )
+    assert not state_path.exists(), "and the primary was rewritten from it"
+
+
+def test_a_damaged_primary_does_not_take_a_healthy_backup_with_it(tmp_path):
+    """`quarantine_corrupt_file(include_backup=True)` says in its own docstring
+    that it is only for a backup already known to be unusable. The connection
+    test store passed it for a payload that parsed but whose `results` key was
+    not an object -- a state only external damage produces, which is precisely
+    when the backup is the good copy. Measured before the fix: both files were
+    moved aside and every later load returned nothing.
+    """
+    path = tmp_path / "provider_connection_tests.json"
+    store = ProviderConnectionTestStore(path=path)
+    store.save_result(
+        "openai", ok=True, message="Connected.", checked_at="2026-08-30 12:00:00"
+    )
+    assert backup_path(path).is_file()
+
+    path.write_text('{"schema_version": 1, "results": "not an object"}', encoding="utf-8")
+
+    store.load_all()
+    assert backup_path(path).is_file(), "the healthy backup was quarantined"
+
+    recovered = store.load_all()
+    assert "openai" in recovered, "the surviving backup was never used"
+    assert path.is_file(), "a recovered store must republish its primary"
+
+
+def test_a_damaged_backup_is_the_file_that_gets_quarantined(tmp_path):
+    """The mirror case. Quarantining `path` unconditionally is a no-op when the
+    primary is the file that is already gone, so the bad backup stayed and every
+    later load failed on it identically.
+    """
+    path = tmp_path / "provider_connection_tests.json"
+    store = ProviderConnectionTestStore(path=path)
+    store.save_result(
+        "groq", ok=True, message="Connected.", checked_at="2026-08-30 12:00:00"
+    )
+    path.unlink()
+    backup_path(path).write_text(
+        '{"schema_version": 1, "results": []}', encoding="utf-8"
+    )
+
+    assert store.load_all() == {}
+    assert not backup_path(path).exists(), "the unusable backup was left in place"
+    quarantined = sorted(q.name for q in tmp_path.glob("*.corrupt.*"))
+    assert len(quarantined) == 1, quarantined
+    assert quarantined[0].startswith("provider_connection_tests.json.bak.corrupt.")
+
+
+def test_a_backup_that_cannot_be_removed_stops_the_clear(tmp_path):
+    """Reporting success while the backup survives is the bug above with an
+    extra step: the next load would republish the cleared state. `clear()`
+    already treats a failed unlink of the audio or the state file as a refusal,
+    and the backup is no different -- the state file stays, so a later retry can
+    finish the job.
+    """
+    state_path = tmp_path / "last_recording.json"
+    audio_path = tmp_path / "last_recording.wav"
+    store = LastRecordingStore(state_path=state_path, audio_path=audio_path)
+    store.save_recording(b"RIFF", keep_after_success=True)
+
+    # A directory is the portable way to make `Path.unlink` raise `OSError`
+    # without reaching into the store: `missing_ok` only swallows
+    # `FileNotFoundError`.
+    backup = backup_path(state_path)
+    backup.unlink()
+    backup.mkdir()
+
+    assert store.clear() is False
+    assert state_path.is_file(), "the state has to stay discoverable for a retry"
