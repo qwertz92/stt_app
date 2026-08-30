@@ -643,6 +643,11 @@ class SettingsStore:
         self._path = path or settings_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = lock_for_path(self._path)
+        # Keys the last `load` found that this build does not know. Kept so
+        # that a plain `save(settings)` -- which is what the Settings dialog,
+        # the overlay pin button and the opacity slider all do -- writes them
+        # back instead of deleting a newer build's settings.
+        self._unknown_keys: dict[str, object] = {}
 
     @property
     def path(self) -> Path:
@@ -677,10 +682,55 @@ class SettingsStore:
             # an older revision was run once. They are carried through
             # untouched; nothing here interprets them.
             unknown = {name: raw[name] for name in raw.keys() - payload.keys()}
-            if source == "backup" or raw != payload or unknown:
+            # Remembered whether or not a rewrite follows: the common case is
+            # that no rewrite is needed, and a later plain `save` still has to
+            # carry them.
+            self._unknown_keys = dict(unknown)
+            # Compared against exactly what `save` would write, not against
+            # `payload` alone. `payload` never contains the unknown keys, so
+            # `raw != payload` was structurally true for as long as any
+            # existed: every single `load()` rewrote `settings.json` *and*
+            # refreshed its `.bak` -- on the Qt thread, and destroying the one
+            # older copy a backup exists to be.
+            if source == "backup" or raw != self._payload_for_save(
+                settings, unknown
+            ):
                 self.save(settings, extra=unknown)
 
             return settings
+
+    def _payload_for_save(
+        self,
+        settings: AppSettings,
+        extra: dict[str, object] | None = None,
+    ) -> dict[str, Any]:
+        """Exactly the object `save` writes, so `load` can compare against it.
+
+        Built in one place because `load` decides whether a rewrite is needed
+        by comparing the file it read with the file a save would produce. Two
+        separate expressions drifted immediately: the comparison ignored the
+        preserved unknown keys, so a file holding any of them was rewritten on
+        every load, for ever.
+        """
+        payload = settings.to_dict()
+        # `extra` comes either from `load` (the keys it just read from this
+        # same file) or from the store's memory of that load. A known field
+        # can never be overwritten: both are built as
+        # `raw.keys() - payload.keys()`.
+        for name, value in (extra or {}).items():
+            payload.setdefault(name, value)
+
+        for secret_key in (
+            "openai_api_key",
+            "deepgram_api_key",
+            "assemblyai_api_key",
+            "groq_api_key",
+            "elevenlabs_api_key",
+            "azure_api_key",
+            "funasr_api_key",
+        ):
+            payload.pop(secret_key, None)
+        return payload
 
     def save(
         self,
@@ -689,23 +739,16 @@ class SettingsStore:
         extra: dict[str, object] | None = None,
     ) -> None:
         with self._lock:
-            payload = settings.to_dict()
-            # Only `load` passes this, and only with the keys it just read
-            # from the same file. A known field can never be overwritten:
-            # `extra` is built as `raw.keys() - payload.keys()`.
-            for name, value in (extra or {}).items():
-                payload.setdefault(name, value)
-
-            for secret_key in (
-                "openai_api_key",
-                "deepgram_api_key",
-                "assemblyai_api_key",
-                "groq_api_key",
-                "elevenlabs_api_key",
-                "azure_api_key",
-                "funasr_api_key",
-            ):
-                payload.pop(secret_key, None)
+            # Every other caller passes nothing, and used to drop the unknown
+            # keys `load` had just gone to the trouble of preserving -- so
+            # they survived exactly until the first Settings save, or until
+            # the overlay pin button wrote the file. Remembering them here is
+            # what makes the preservation mean anything.
+            if extra is None:
+                extra = self._unknown_keys
+            else:
+                self._unknown_keys = dict(extra)
+            payload = self._payload_for_save(settings, extra)
 
             atomic_write_json(
                 self._path,

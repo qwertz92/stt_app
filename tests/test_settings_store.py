@@ -1094,6 +1094,64 @@ def test_an_older_build_neither_lowers_the_schema_nor_drops_newer_keys(tmp_path)
     assert reloaded.silence_gate_enabled is False
 
 
+def test_a_preserved_unknown_key_survives_an_ordinary_save(tmp_path):
+    """Preserving them only on load meant preserving them until the first save.
+
+    Every other caller -- the Settings dialog, the overlay's Pinned button,
+    the opacity slider, `set_language_mode` -- calls `save(settings)` with no
+    `extra`, and `to_dict()` emits known fields only. So a newer build's
+    setting survived being read and was deleted by the next write, which is
+    the case the preservation exists for.
+    """
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {
+                **AppSettings().to_dict(),
+                "a_setting_from_a_newer_build": {"nested": [1, 2]},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(path)
+    settings = store.load()
+    store.save(dataclasses.replace(settings, overlay_always_on_top=False))
+
+    on_disk = json.loads(path.read_text(encoding="utf-8"))
+    assert on_disk["a_setting_from_a_newer_build"] == {"nested": [1, 2]}
+    assert on_disk["overlay_always_on_top"] is False
+
+
+def test_load_stops_rewriting_the_file_once_it_matches(tmp_path):
+    """A file with an unknown key was rewritten on every single load.
+
+    The rewrite condition compared the file against `settings.to_dict()`,
+    which never contains the unknown keys, so it was structurally true for as
+    long as any existed. Each load then wrote the primary *and* refreshed the
+    `.bak`, on the Qt thread, destroying the one older copy a backup is for.
+    """
+    path = tmp_path / "settings.json"
+    # Deliberately not in save format: a legacy file, so the first load must
+    # still rewrite it.
+    path.write_text(
+        json.dumps({"hotkey": "Ctrl+Alt+D", "from_a_newer_build": 7}),
+        encoding="utf-8",
+    )
+
+    store = SettingsStore(path)
+    rewrites = []
+    for _ in range(4):
+        before = path.read_bytes()
+        store.load()
+        rewrites.append(path.read_bytes() != before)
+
+    assert rewrites == [True, False, False, False], (
+        f"load never converged: {rewrites}"
+    )
+    assert json.loads(path.read_text(encoding="utf-8"))["from_a_newer_build"] == 7
+
+
 def test_an_unknown_key_can_never_overwrite_a_known_field(tmp_path):
     """`extra` is built as `raw.keys() - payload.keys()`, so it cannot collide.
 
