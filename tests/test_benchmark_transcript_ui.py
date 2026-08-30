@@ -222,3 +222,41 @@ def test_the_first_transcript_is_opened_when_the_selected_one_is_gone():
 
     assert view.transcripts_table.currentRow() == 0
     assert "different" in view.transcript_text.toPlainText()
+
+
+def test_two_cases_that_fell_back_to_the_same_device_are_told_apart():
+    """`case.device` is the device the runtime *resolved*, not the one asked for.
+
+    Benchmarking one ONNX model against "All explicit targets" on a machine
+    with no usable GPU brings both the webgpu and the dml case back as `cpu`,
+    so their rows are identical in every visible column. Matching only on the
+    visible label would restore the reader onto the first of the two whichever
+    one they had opened.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    view = _BenchmarkDetailsView()
+    webgpu_attempt = _case("granite-4.0-1b-speech", ["from the webgpu attempt"])
+    dml_attempt = _case("granite-4.0-1b-speech", ["from the dml attempt"])
+    view.set_live_results("running", [webgpu_attempt, dml_attempt])
+    app.processEvents()
+
+    assert view.transcripts_table.rowCount() == 2
+    first = view.transcripts_table.item(0, 0)
+    second = view.transcripts_table.item(1, 0)
+    assert first is not None and second is not None
+    # The visible identity really is ambiguous; the selection key is not.
+    assert first.data(QtCore.Qt.UserRole + 1) == second.data(QtCore.Qt.UserRole + 1)
+    assert first.data(QtCore.Qt.UserRole + 2) != second.data(QtCore.Qt.UserRole + 2)
+
+    view.transcripts_table.selectRow(1)
+    app.processEvents()
+    assert "from the dml attempt" in view.transcript_text.toPlainText()
+
+    # A third case finishes; the reader stays on the second, not the first.
+    view.set_live_results(
+        "running", [webgpu_attempt, dml_attempt, _case("tiny", ["later"])]
+    )
+    app.processEvents()
+
+    assert view.transcripts_table.currentRow() == 1
+    assert "from the dml attempt" in view.transcript_text.toPlainText()

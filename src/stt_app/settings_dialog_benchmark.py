@@ -339,8 +339,8 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
             self.overview_table.setItem(row, 1, item)
 
     def _set_transcript_rows(self, cases: list[BenchmarkCase]) -> None:
-        transcript_rows: list[tuple[BenchmarkCase, object, str]] = []
-        for case in cases:
+        transcript_rows: list[tuple[BenchmarkCase, object, str, int]] = []
+        for case_index, case in enumerate(cases):
             reference = case.runs[0].transcript if case.runs else ""
             available = [run.transcript for run in case.runs if run.transcript]
             all_identical = bool(available) and len(available) == len(case.runs) and all(
@@ -359,7 +359,7 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
                     consistency = "Identical to run 1"
                 else:
                     consistency = "Differs from run 1"
-                transcript_rows.append((case, run, consistency))
+                transcript_rows.append((case, run, consistency, case_index))
 
         # What the reader is looking at, before the table is rebuilt. While a
         # benchmark runs this method is called once per finished case, and
@@ -374,10 +374,15 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
             if previous_item is not None
             else ""
         )
+        previous_key = (
+            str(previous_item.data(QtCore.Qt.UserRole + 2) or "")
+            if previous_item is not None
+            else ""
+        )
         previous_scroll = self.transcripts_table.verticalScrollBar().value()
 
         self.transcripts_table.setRowCount(len(transcript_rows))
-        for row, (case, run, consistency) in enumerate(transcript_rows):
+        for row, (case, run, consistency, case_index) in enumerate(transcript_rows):
             transcript = run.transcript
             preview = " ".join(transcript.split())
             if len(preview) > 140:
@@ -395,10 +400,14 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
                 item.setToolTip(value)
                 if column == 0:
                     item.setData(QtCore.Qt.UserRole, transcript)
-                    item.setData(
-                        QtCore.Qt.UserRole + 1,
-                        f"{case.model} · {case.device} · run {run.run_index}",
-                    )
+                    label = f"{case.model} · {case.device} · run {run.run_index}"
+                    item.setData(QtCore.Qt.UserRole + 1, label)
+                    # The selection key, which the label alone cannot be:
+                    # `case.device` is the device the runtime *resolved*, so on
+                    # a machine with no usable GPU the webgpu and dml targets
+                    # of one model both come back as `cpu` and produce two
+                    # cases whose rows are identical in every visible column.
+                    item.setData(QtCore.Qt.UserRole + 2, f"{case_index}\x1f{label}")
                 if column == 3:
                     if consistency.startswith("Differs"):
                         item.setBackground(QtGui.QColor("#fff4cc"))
@@ -411,23 +420,39 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
         if transcript_rows:
             # Identity, not row index: a finished case can insert rows above
             # the selected one, so the same index is a different transcript.
-            restored = -1
-            if previous_identity:
-                for row in range(self.transcripts_table.rowCount()):
-                    item = self.transcripts_table.item(row, 0)
-                    if (
-                        item is not None
-                        and str(item.data(QtCore.Qt.UserRole + 1) or "")
-                        == previous_identity
-                    ):
-                        restored = row
-                        break
+            # The unique key is tried first and the visible label second, which
+            # is what lets the selection follow a row that moved *and* stay on
+            # the right one of two rows that look alike.
+            restored = self._transcript_row_for(
+                QtCore.Qt.UserRole + 2, previous_key
+            )
+            if restored < 0:
+                restored = self._transcript_row_for(
+                    QtCore.Qt.UserRole + 1, previous_identity
+                )
             self.transcripts_table.selectRow(restored if restored >= 0 else 0)
             if restored >= 0:
                 restore_vertical_scrollbar(self.transcripts_table, previous_scroll)
             self._show_selected_transcript()
         else:
             self.transcript_text.clear()
+
+    def _transcript_row_for(self, role: int, wanted: str) -> int:
+        """The first transcript row whose `role` data equals `wanted`, or -1.
+
+        The empty-`wanted` early-out is equivalent to the scan today, because
+        every column-0 item is given both roles and neither is ever empty --
+        so mutation testing cannot distinguish it. It is kept so that a row
+        later built without one of those roles cannot be matched by "nothing
+        was selected".
+        """
+        if not wanted:
+            return -1
+        for row in range(self.transcripts_table.rowCount()):
+            item = self.transcripts_table.item(row, 0)
+            if item is not None and str(item.data(role) or "") == wanted:
+                return row
+        return -1
 
     def _show_selected_transcript(self) -> None:
         row = self.transcripts_table.currentRow()
