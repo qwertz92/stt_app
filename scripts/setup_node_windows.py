@@ -303,17 +303,30 @@ def install(version: str, target_dir: Path, force: bool, skip_ca: bool = False) 
     # and downloaded nothing.
     missing = _missing_node_files(node_root)
     if missing or force:
-        if node_root.exists() and (missing or force):
-            if missing:
-                print(
-                    f"Incomplete Node.js install at {node_root} (missing: "
-                    + ", ".join(missing)
-                    + "); reinstalling."
-                )
-            shutil.rmtree(node_root, ignore_errors=True)
         with tempfile.TemporaryDirectory() as tmp:
             zip_path = Path(tmp) / "node.zip"
+            # Fetch before removing anything. The audience for this script is
+            # a machine whose network blocks nodejs.org, so a failed download
+            # is the expected case -- and deleting first turned "--force could
+            # not repair a half install" into "--force destroys a working
+            # one", leaving no Node at all.
             _download(version, zip_path)
+            if node_root.exists():
+                if missing:
+                    print(
+                        f"Incomplete Node.js install at {node_root} (missing: "
+                        + ", ".join(missing)
+                        + "); reinstalling."
+                    )
+                try:
+                    shutil.rmtree(node_root)
+                except OSError as exc:
+                    # Usually node.exe is running. Extracting over the tree
+                    # still works -- the archive supplies every file -- and the
+                    # completeness check below is what decides success. Silent
+                    # `ignore_errors=True` hid a half-deleted tree here.
+                    print(f"WARNING: could not remove {node_root}: {exc}")
+                    print("Extracting over the existing files instead.")
             print(f"Extracting to {target_dir} ...")
             with zipfile.ZipFile(zip_path) as archive:
                 _extract_zip_safely(archive, target_dir)

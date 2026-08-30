@@ -239,3 +239,79 @@ def test_a_half_extracted_node_is_not_reported_as_ready(monkeypatch, tmp_path):
     assert module.install("24.18.0", tmp_path, force=False, skip_ca=True) == 0
     assert downloads, "the incomplete install was accepted instead of repaired"
     assert module._missing_node_files(node_root) == []
+
+
+def test_force_keeps_the_working_install_when_the_download_fails(
+    monkeypatch, tmp_path
+):
+    """Deleting first turned a repair into a destruction.
+
+    The audience for this script is a machine whose network blocks
+    nodejs.org, so a failed download is the expected case -- and `--force`
+    removed the tree before fetching, leaving no Node at all and breaking
+    the Cohere/Granite runtimes that were working a moment earlier.
+    """
+    module = _load_setup_node_module()
+    node_root = tmp_path / "node-v24.18.0-win-x64"
+    (node_root / "node_modules" / "npm" / "bin").mkdir(parents=True)
+    for name in ("node.exe", "npm.cmd", "npx.cmd"):
+        (node_root / name).write_bytes(name.encode())
+    (node_root / "node_modules" / "npm" / "bin" / "npm-cli.js").write_bytes(b"cli")
+    assert module._missing_node_files(node_root) == []
+
+    def refuse(_version, _dest_zip):
+        raise RuntimeError("Could not download Node.js")
+
+    monkeypatch.setattr(module, "_download", refuse)
+    monkeypatch.setattr(module, "_existing_node", lambda: None)
+    monkeypatch.setattr(module, "_set_node_path_env", lambda _exe: True)
+
+    with pytest.raises(RuntimeError, match=r"Could not download Node\.js"):
+        module.install("24.18.0", tmp_path, force=True, skip_ca=True)
+
+    assert module._missing_node_files(node_root) == [], (
+        "the working install was destroyed before a replacement existed"
+    )
+
+
+def test_a_tree_that_cannot_be_removed_is_reported_and_extracted_over(
+    monkeypatch, tmp_path, capsys
+):
+    """`ignore_errors=True` hid a half-deleted tree; the archive supplies all files."""
+    module = _load_setup_node_module()
+    node_root = tmp_path / "node-v24.18.0-win-x64"
+    node_root.mkdir(parents=True)
+    (node_root / "node.exe").write_bytes(b"old")
+
+    def fake_download(_version, dest_zip):
+        dest_zip.write_bytes(
+            _zip_bytes(
+                {
+                    "node-v24.18.0-win-x64/node.exe": b"new",
+                    "node-v24.18.0-win-x64/npm.cmd": b"npm",
+                    "node-v24.18.0-win-x64/npx.cmd": b"npx",
+                    "node-v24.18.0-win-x64/node_modules/npm/bin/npm-cli.js": b"cli",
+                }
+            )
+        )
+
+    real_rmtree = module.shutil.rmtree
+
+    def refuse_rmtree(path, *args, **kwargs):
+        # `module.shutil` is the global module, so `TemporaryDirectory`'s own
+        # cleanup comes through here too; only the node tree may refuse.
+        if Path(path) == node_root:
+            raise OSError("node.exe is in use")
+        return real_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(module, "_download", fake_download)
+    monkeypatch.setattr(module.shutil, "rmtree", refuse_rmtree)
+    monkeypatch.setattr(module, "_existing_node", lambda: None)
+    monkeypatch.setattr(module, "_set_node_path_env", lambda _exe: True)
+
+    assert module.install("24.18.0", tmp_path, force=True, skip_ca=True) == 0
+
+    out = capsys.readouterr().out
+    assert "could not remove" in out, out
+    assert (node_root / "node.exe").read_bytes() == b"new"
+    assert module._missing_node_files(node_root) == []
