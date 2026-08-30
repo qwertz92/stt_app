@@ -144,8 +144,13 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
                     delete=False,
                     dir=str(temp_audio_dir()),
                 ) as handle:
-                    handle.write(audio_source)
+                    # The path is claimed before the write, not after: the
+                    # file already exists once `NamedTemporaryFile` returns,
+                    # so a write that fails (a full disk, a quota) left
+                    # `temp_path` None and the cleanup below skipped a real
+                    # file -- once per failed dictation, in %TEMP%, forever.
                     temp_path = Path(handle.name)
+                    handle.write(audio_source)
                 file_path = str(temp_path)
             else:
                 file_path = str(audio_source)

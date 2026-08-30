@@ -1009,8 +1009,13 @@ class LocalOnnxWebGpuTranscriber(ProgressReporter, ITranscriber):
         try:
             if isinstance(audio_source, bytes):
                 with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as handle:
-                    handle.write(audio_source)
+                    # The path is claimed before the write, not after: the
+                    # file already exists once `NamedTemporaryFile` returns,
+                    # so a write that fails (a full disk, a quota) left
+                    # `temp_path` None and the cleanup below skipped a real
+                    # file -- once per failed dictation, in %TEMP%, forever.
                     temp_path = Path(handle.name)
+                    handle.write(audio_source)
                 audio_path = temp_path
             else:
                 audio_path = Path(audio_source)
