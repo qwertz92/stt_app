@@ -447,47 +447,32 @@ def find_cached_models(model_dir: str = "") -> list[str]:
     Returns short model names (e.g. ``["small", "parakeet-tdt-0.6b-v3"]``) in
     the canonical order of ``VALID_MODEL_SIZES``.
 
-    Two different checks, because the two families are stored differently: a
-    faster-whisper model needs a snapshot directory carrying at least
-    ``config.json`` and ``model.bin``, while the ONNX models are delegated to
-    ``find_cached_webgpu_models``, which validates each model's own required
-    file list. Both search the configured Model Dir and the default cache.
+    The two families answer the question differently, because they *load*
+    differently. A faster-whisper model is only cached where its own loader
+    would find it: the app always passes a size name, so `WhisperModel` calls
+    `snapshot_download(repo_id, cache_dir=download_root)`, which reads that one
+    cache root and the `models--<repo>` layout alone. A copy in the default
+    cache is invisible to a configured Model Dir, and a flat folder is
+    invisible to both -- counting either reported "cached" for a model the
+    next dictation would spend gigabytes downloading, and that offline mode
+    could not load at all. `download_destination_dir` is that one directory,
+    which is also what the load path's own pre-fetch gates on.
+
+    The ONNX models are delegated to `find_cached_webgpu_models`, which
+    validates each model's own required file list and deliberately does accept
+    the other roots and the legacy layout: `resolve_cached_webgpu_model_root`
+    loads from them, so a copy there really does mean nothing is downloaded.
     """
     found: set[str] = set()
-
-    search_dirs: list[str] = []
-    if model_dir and model_dir.strip():
-        search_dirs.append(model_dir.strip())
-    search_dirs.append(_default_hf_cache_dir())
-
-    existing_search_dirs: list[Path] = []
-    seen_search_dirs: set[Path] = set()
-    for base_dir in search_dirs:
-        base = Path(base_dir)
-        if not base.is_dir() or base in seen_search_dirs:
-            continue
-        seen_search_dirs.add(base)
-        existing_search_dirs.append(base)
 
     required_files = {"config.json", "model.bin"}
 
     for short_name in FASTER_WHISPER_MODEL_SIZES:
-        repo_id = _MODEL_REPO_MAP.get(short_name)
-        if repo_id is None:
-            continue
-
-        folder_name = f"models--{repo_id.replace('/', '--')}"
-        repo_basename = repo_id.rsplit("/", 1)[-1]
-
-        for base in existing_search_dirs:
-            if _has_valid_model_snapshot(base / folder_name, required_files):
-                found.add(short_name)
-                break
-
-            flat_dir = base / repo_basename
-            if _directory_has_required_files(flat_dir, required_files):
-                found.add(short_name)
-                break
+        destination = download_destination_dir(short_name, model_dir)
+        if destination is not None and _has_valid_model_snapshot(
+            destination, required_files
+        ):
+            found.add(short_name)
 
     try:
         from .local_webgpu_asr import find_cached_webgpu_models

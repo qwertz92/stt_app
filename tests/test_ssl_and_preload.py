@@ -20,10 +20,12 @@ from stt_app.ssl_utils import (
 from stt_app.transcriber.base import TranscriptionError
 from stt_app.transcriber.local_faster_whisper import (
     LocalFasterWhisperTranscriber,
+    _has_valid_model_snapshot,
     _is_ssl_error,
     cached_model_paths,
     cleanup_incomplete_model_download,
     delete_cached_model,
+    download_destination_dir,
     estimate_cached_model_bytes,
     find_cached_models,
 )
@@ -292,7 +294,16 @@ class TestFindCachedModels:
             result = find_cached_models(str(tmp_path))
         assert "tiny" in result
 
-    def test_finds_flat_model_dir(self, tmp_path):
+    def test_a_flat_folder_is_not_a_cached_faster_whisper_model(self, tmp_path):
+        """The app always passes a size name, never a path.
+
+        `WhisperModel` takes the flat-directory branch only for a
+        `model_size_or_path` that *is* a directory; a size name goes to
+        `snapshot_download`, which reads the `models--<repo>` layout alone.
+        A flat folder therefore can never be loaded, and reporting it as
+        cached hid the Download button behind a model the next dictation
+        would still have to fetch.
+        """
         flat_dir = tmp_path / "faster-whisper-base"
         flat_dir.mkdir()
         (flat_dir / "config.json").write_text("{}")
@@ -302,7 +313,7 @@ class TestFindCachedModels:
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
-        assert "base" in result
+        assert "base" not in result
 
     def test_returns_empty_when_no_models(self, tmp_path):
         # Both halves: `find_cached_models` hands the ONNX scan `model_dir`
@@ -350,7 +361,15 @@ class TestFindCachedModels:
         # Should be in canonical order.
         assert result.index("tiny") < result.index("small")
 
-    def test_both_hf_and_custom_dir(self, tmp_path):
+    def test_a_configured_model_dir_hides_the_default_cache(self, tmp_path):
+        """`download_root` is one cache root, not a search path.
+
+        With a Model Dir configured, `snapshot_download(cache_dir=<Model Dir>)`
+        never looks at `~/.cache/huggingface/hub`. Counting a copy there made
+        the Local tab call the model installed while the first dictation
+        silently downloaded it again -- and offline it could not be loaded at
+        all.
+        """
         hf_dir = tmp_path / "hf_cache"
         hf_dir.mkdir()
         custom_dir = tmp_path / "custom"
@@ -362,8 +381,30 @@ class TestFindCachedModels:
             return_value=str(hf_dir),
         ):
             result = find_cached_models(str(custom_dir))
-        assert "tiny" in result
-        assert "small" in result
+        assert result == ["tiny"]
+
+    def test_the_inventory_agrees_with_the_load_path_pre_fetch(self, tmp_path):
+        """One directory decides both, so the two can never disagree.
+
+        `_coordinated_download_if_missing` gates on `download_destination_dir`;
+        while the inventory answered from a wider search, "installed" in the
+        Local tab and "must download" at load time were two different answers
+        about the same model.
+        """
+        custom_dir = tmp_path / "custom"
+        custom_dir.mkdir()
+        self._make_hf_cache(custom_dir, "tiny", "Systran/faster-whisper-tiny")
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            return_value=str(tmp_path / "nowhere"),
+        ):
+            reported = set(find_cached_models(str(custom_dir)))
+        for model in ("tiny", "small"):
+            destination = download_destination_dir(model, str(custom_dir))
+            assert destination is not None
+            assert (model in reported) is _has_valid_model_snapshot(
+                destination, {"config.json", "model.bin"}
+            )
 
     def test_does_not_iterate_entire_cache_root(self, tmp_path, monkeypatch):
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
