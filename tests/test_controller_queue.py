@@ -1429,3 +1429,140 @@ def test_current_window_insertion_coalesces_results_aimed_at_different_targets(
     )
     controller.shutdown()
     _ = app
+
+
+def _streaming_controller_with_live_text(monkeypatch, tmp_path, text):
+    """A streaming session that has produced live text and is finalizing."""
+    controller, app, overlay, inserter, focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    # What the provider has delivered so far -- the only in-app copy of the
+    # dictation while the finalize is in flight.
+    controller._on_transcription_partial(text)
+    controller.stop_recording()
+
+    class _CancellableFuture:
+        """The finalize worker has been submitted but has not started.
+
+        `DeferredExecutor.submit` returns None, so `_request_job_stop` would
+        take its "already running" branch and never reach the terminal
+        handling -- the opposite of the case this models.
+        """
+
+        def cancel(self):
+            return True
+
+    job = controller._jobs.get(controller._active_request_token)
+    assert job is not None
+    job.future = _CancellableFuture()
+    return controller, app, overlay, inserter, focus, history
+
+
+@pytest.mark.parametrize(
+    "cancel",
+    [
+        pytest.param(
+            lambda c, token: c.cancel_current_action(), id="cancel-button-or-hotkey"
+        ),
+        pytest.param(
+            lambda c, token: c.cancel_queued_transcription(token), id="queue-row-x"
+        ),
+        pytest.param(
+            lambda c, _token: c.clear_transcription_queue(), id="clear-queue"
+        ),
+    ],
+)
+def test_cancelling_a_pending_stream_finalize_keeps_the_dictation(
+    monkeypatch, tmp_path, cancel
+):
+    """One second earlier the same press saved the text; here it destroyed it.
+
+    `_request_job_stop` cleared the streaming session state to unblock the
+    next recording, and that state held the only in-app copy: the worker then
+    takes its `canceled_before_start` arm and calls `abort_stream()` rather
+    than `stop_stream()`, so the provider never returns the text either.
+    """
+    spoken = "hallo das ist ein langer diktattext"
+    controller, app, _overlay, _inserter, _focus, history = (
+        _streaming_controller_with_live_text(monkeypatch, tmp_path, spoken)
+    )
+    token = controller._active_request_token
+
+    cancel(controller, token)
+
+    assert [e.text for e in history.load()] == [spoken], (
+        "the whole dictation was discarded by the cancel"
+    )
+    assert controller._last_transcript == spoken, "Copy had nothing to offer"
+    assert controller._streaming_recording is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finalize_that_still_delivers_writes_only_one_history_entry(
+    monkeypatch, tmp_path
+):
+    """The stash must never become a second entry for one dictation."""
+    controller, app, _overlay, _inserter, _focus, history = (
+        _streaming_controller_with_live_text(monkeypatch, tmp_path, "teil eins")
+    )
+    token = controller._active_request_token
+
+    controller._on_transcription_ready("teil eins und zwei", request_token=token)
+
+    assert [e.text for e in history.load()] == ["teil eins und zwei"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finalize_the_worker_had_already_started_also_keeps_its_partial(
+    monkeypatch, tmp_path
+):
+    """The other half of the cancel race: the worker was past its check.
+
+    It then calls `abort_stream()` from its `canceled_before_start` arm and
+    emits `canceled`, so no text arrives that way either.
+    """
+    spoken = "der zweite lange diktattext"
+    controller, app, _overlay, _inserter, _focus, history = (
+        _streaming_controller_with_live_text(monkeypatch, tmp_path, spoken)
+    )
+    token = controller._active_request_token
+    controller._jobs[token].future = None  # `future.cancel()` returns False
+
+    controller.cancel_current_action()
+    assert [e.text for e in history.load()] == [], "written before the worker ended"
+
+    controller._on_transcription_canceled_result(token)
+
+    assert [e.text for e in history.load()] == [spoken]
+    assert controller._last_transcript == spoken
+    controller.shutdown()
+    _ = app
+
+
+def test_a_worker_that_delivered_text_does_not_also_write_the_stash(
+    monkeypatch, tmp_path
+):
+    """The other half of the cancel race, when `stop_stream()` did return text.
+
+    `future.cancel()` fails once the worker is past its `aborting` check, so
+    it stops the stream normally and its transcript arrives in the background.
+    Leaving the stash set then wrote a second history entry for one dictation.
+    """
+    controller, app, _overlay, _inserter, _focus, history = (
+        _streaming_controller_with_live_text(monkeypatch, tmp_path, "teil eins")
+    )
+    token = controller._active_request_token
+    controller._jobs[token].future = None  # `future.cancel()` returns False
+
+    controller.cancel_current_action()
+    assert controller._jobs[token].stashed_partial == "teil eins"
+
+    controller._on_transcription_ready("teil eins und zwei", request_token=token)
+
+    assert [e.text for e in history.load()] == ["teil eins und zwei"]
+    controller.shutdown()
+    _ = app

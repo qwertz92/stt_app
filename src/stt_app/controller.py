@@ -170,6 +170,14 @@ class _TranscriptionJob:
     insertion_deferred: bool = False
     runtime_transcriber: object | None = None
     runtime_lease: object | None = None
+    # The live streaming transcript as it stood when this finalize was
+    # submitted. It is the only in-app copy while the finalize is in
+    # flight, and the finalize can end without producing text at all --
+    # a cancel aborts the stream instead of stopping it, and both
+    # AssemblyAI and Deepgram can return an empty string after a socket
+    # problem. Cleared by whoever delivers real text; written to history
+    # by `_finish_transcription_job` if nobody did.
+    stashed_partial: str = ""
 
 
 class _TranscriberRuntimeLease:
@@ -2654,8 +2662,40 @@ class DictationController(QtCore.QObject):
         self._remove_deferred_background_result(request_token)
         job = self._jobs.pop(request_token, None)
         if job is not None:
+            self._save_stashed_streaming_partial(job)
             job.insertion_deferred = False
             self._update_queue_overlay()
+
+    def _save_stashed_streaming_partial(self, job: _TranscriptionJob) -> None:
+        """Keep a streaming dictation whose finalize produced nothing.
+
+        Every path that delivers real text clears the stash first, so
+        reaching this with one still set means the transcript exists
+        nowhere else: pressing Cancel while the overlay says
+        "Finalizing streaming transcript..." aborts the stream instead of
+        stopping it, so the provider never returns the text either, and
+        the session state that held it was cleared to unblock the next
+        recording. A finished transcription is never discarded, and
+        neither is a cancelled one's partial.
+        """
+        # No clear afterwards: the only caller has already popped the job.
+        partial = (job.stashed_partial or "").strip()
+        if not partial or self._shutdown_started:
+            return
+        self._logger.info(
+            "streaming_partial_rescued token=%s chars=%d",
+            job.token,
+            len(partial),
+        )
+        self._append_transcript_history(
+            partial,
+            job.settings,
+            "streaming",
+            source_recording_id=job.source_recording_id,
+            source_audio_path=job.source_audio_path,
+            track_for_edit=False,
+        )
+        self._last_transcript = partial
 
     def _queue_job_label(
         self,
@@ -2721,7 +2761,12 @@ class DictationController(QtCore.QObject):
             # This job is the pending streaming finalize; stopping it ends the
             # streaming session. Clear the session state so the next recording
             # is not blocked waiting on a finalize that now resolves
-            # history-only in the background.
+            # history-only in the background. Take the live transcript with
+            # it: the reset below is what used to destroy the only in-app
+            # copy, and the aborted stream returns none of its own.
+            job.stashed_partial = (
+                self._current_streaming_partial_text() or job.stashed_partial
+            )
             self._active_stream_settings = None
             self._reset_streaming_state()
         if self._active_request_token == request_token:
@@ -4417,7 +4462,9 @@ class DictationController(QtCore.QObject):
         state is left untouched for the active session.
         """
         if job is None or not text.strip():
+            # The stash stays set, so `_finish_transcription_job` writes it.
             return True
+        job.stashed_partial = ""
         self._append_transcript_history(
             text,
             job.settings,
