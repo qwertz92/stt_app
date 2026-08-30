@@ -14,6 +14,7 @@ from pathlib import Path
 
 import pytest
 
+import stt_app.file_lock as file_lock_module
 from stt_app.file_lock import (
     CrossProcessLock,
     LockHeldInThisProcess,
@@ -241,3 +242,70 @@ def test_the_coordinator_really_holds_the_os_lock_against_another_process(
     assert waited > 0.5, (
         "the coordinator downloaded while another process held the cache lock"
     )
+
+
+def test_an_interrupt_at_the_registration_boundary_does_not_disable_downloads(
+    tmp_path, monkeypatch
+):
+    """`_HELD_RESOURCES` and `_held_key` are the same fact twice, and only the
+    second one can undo the first: `_close_handle` reads `_held_key` to discard
+    the key again. Registering first therefore left a key nothing could remove
+    if anything raised in between, and `acquire` answers a key it already holds
+    with `LockHeldInThisProcess` -- so one Ctrl+C in that window meant no model
+    could be downloaded again until the app restarted.
+
+    The `set` below raises exactly at that boundary, which is the only way to
+    reach a window that is otherwise two adjacent bytecodes.
+    """
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+
+    class _AddThenRaiseOnce(set):
+        """Raise on the first registration only.
+
+        The set has to stay in place for the second acquire, because the check
+        that matters -- `acquire` refusing a key it thinks it already holds --
+        reads this same object. Undoing the patch first would compare against a
+        set the interrupted call never touched.
+        """
+
+        def __init__(self):
+            super().__init__()
+            self.armed = True
+
+        def add(self, value):
+            super().add(value)
+            if self.armed:
+                self.armed = False
+                raise KeyboardInterrupt("delivered between the two statements")
+
+    held = _AddThenRaiseOnce()
+    monkeypatch.setattr(file_lock_module, "_HELD_RESOURCES", held)
+
+    lock = CrossProcessLock("cache", lock_dir=lock_dir)
+    with pytest.raises(KeyboardInterrupt):
+        lock.acquire()
+    lock.release()
+
+    assert not held, "the interrupted acquire left its key registered"
+
+    again = CrossProcessLock("cache", lock_dir=lock_dir)
+    assert again.acquire() is True, "the lock stayed unavailable to this process"
+    again.release()
+
+
+def test_releasing_a_lock_whose_handle_is_gone_still_deregisters(tmp_path):
+    """`release` returned early when the handle was already gone, and the key
+    comes out of `_HELD_RESOURCES` only inside `_close_handle`."""
+    lock_dir = tmp_path / "locks"
+    lock_dir.mkdir()
+    lock = CrossProcessLock("cache", lock_dir=lock_dir)
+    assert lock.acquire() is True
+
+    lock._handle = None  # what a failed close leaves behind
+
+    lock.release()
+
+    again = CrossProcessLock("cache", lock_dir=lock_dir)
+    assert again.acquire() is True
+    again.release()

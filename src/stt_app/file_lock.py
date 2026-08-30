@@ -144,9 +144,17 @@ class CrossProcessLock:
                 self._close_handle()
                 return False
             if self._try_lock():
+                # `_held_key` first. It is what `_close_handle` reads to take
+                # the key out again, so an exception landing between these two
+                # statements used to leave the key in `_HELD_RESOURCES` with
+                # nothing able to remove it -- and every later `acquire` for
+                # this resource in this process then raises
+                # `LockHeldInThisProcess`, i.e. no download can start again
+                # until the app restarts. The other order is harmless:
+                # `discard` does not care about a key that was never added.
+                self._held_key = key
                 with _HELD_LOCK:
                     _HELD_RESOURCES.add(key)
-                self._held_key = key
                 if waited_for_another_process:
                     logger.info(
                         "model_download_lock acquired after waiting for another "
@@ -167,6 +175,10 @@ class CrossProcessLock:
     def release(self) -> None:
         handle = self._handle
         if handle is None:
+            # Still go through `_close_handle`: it is the only place that takes
+            # the key back out of `_HELD_RESOURCES`, and a bare `return` here
+            # is one more way to leave one behind.
+            self._close_handle()
             return
         try:
             if os.name == "nt":  # pragma: no cover - platform split
