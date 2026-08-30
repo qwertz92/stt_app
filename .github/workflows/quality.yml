@@ -72,4 +72,10 @@ jobs:
           cache: npm
 
       - name: Audit locked production dependencies
-        run: npm audit --omit=dev --package-lock-only --audit-level=high
+        # Must match the release job's bar in windows-release.yml.
+        # `npm audit` queries the live advisory database, so its
+        # verdict moves with no code change: with the release job at
+        # `moderate` and this one at `high`, a moderate advisory
+        # published between merge and tag failed the release *after*
+        # create_release.py had already pushed main and the tag.
+        run: npm audit --omit=dev --package-lock-only --audit-level=moderate
