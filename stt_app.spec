@@ -1,5 +1,6 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+import os
 from pathlib import Path
 
 from PyInstaller.utils.hooks import collect_all
@@ -38,6 +39,29 @@ onnx_asr_datas, onnx_asr_binaries, onnx_asr_hiddenimports = collect_all('onnx_as
 datas.extend(onnx_asr_datas)
 binaries.extend(onnx_asr_binaries)
 hiddenimports.extend(onnx_asr_hiddenimports)
+# The Cohere and Granite Speech runtimes are Node.js, so these three are not
+# optional for a release build. Skipping a missing one silently produced a
+# bundle in which selecting either model fails at runtime with a
+# missing-runtime error, and nothing upstream noticed: `npm ci` deletes
+# node_modules before installing, so a failed one leaves the tree empty, and
+# the build script used to read no exit codes at all.
+_missing_node_runtime = [
+    source
+    for source, _target in (
+        ('package.json', '.'),
+        ('package-lock.json', '.'),
+        ('node_modules', 'node_modules'),
+    )
+    if not Path(source).exists()
+]
+if _missing_node_runtime and not os.environ.get('STT_APP_ALLOW_MISSING_NODE_RUNTIME'):
+    raise SystemExit(
+        'Missing JavaScript runtime files for the bundle: '
+        + ', '.join(_missing_node_runtime)
+        + '. Run "npm ci --omit=dev" first, or set '
+        'STT_APP_ALLOW_MISSING_NODE_RUNTIME=1 to build without the '
+        'Cohere/Granite Speech models.'
+    )
 for source, target in (
     ('package.json', '.'),
     ('package-lock.json', '.'),
