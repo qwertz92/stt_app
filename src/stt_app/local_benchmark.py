@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 import logging
 import math
 import statistics
@@ -146,8 +147,28 @@ class BenchmarkCase:
         return statistics.pstdev(run.seconds for run in self.runs)
 
 
+def _run_from_dict(data: dict[str, Any]) -> BenchmarkRun:
+    """Drop fields this build does not declare instead of dying on them.
+
+    `BenchmarkRun(**entry)` raises `TypeError` for one unexpected key,
+    and `%APPDATA%` is shared between builds -- `transcript` itself was
+    added to this dataclass later, so the same edit read the other way
+    round is a newer build's field reaching an older one. That TypeError
+    escaped `benchmark_history`'s `except ValueError`, so the store's
+    backup recovery never ran and `SettingsDialog.__init__` -- which
+    calls `recent_entries` with no guard -- could not build at all.
+    """
+    fields = {f.name for f in dataclasses.fields(BenchmarkRun)}
+    return BenchmarkRun(**{k: v for k, v in data.items() if k in fields})
+
+
 def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
-    runs = [BenchmarkRun(**entry) for entry in data.get("runs", [])]
+    raw_runs = data.get("runs")
+    runs = [
+        _run_from_dict(entry)
+        for entry in (raw_runs if isinstance(raw_runs, list) else [])
+        if isinstance(entry, dict)
+    ]
     return BenchmarkCase(
         model=str(data.get("model", "")),
         device=str(data.get("device", "")),

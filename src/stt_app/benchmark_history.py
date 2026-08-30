@@ -254,7 +254,14 @@ class BenchmarkHistoryStore:
             return []
         try:
             entries = cls._entries_from_payload(payload)
-        except ValueError:
+        except (TypeError, ValueError):
+            # TypeError as well as ValueError: a payload whose shape is
+            # wrong rather than whose text is (`runs` a number, a run
+            # carrying a field this build does not declare) raised past
+            # this guard, so the recovery below never ran and every
+            # caller -- including `SettingsDialog.__init__` -- died with
+            # it. The parser drops unknown fields now, so this is the
+            # backstop rather than the common path.
             quarantine_corrupt_file(path)
             return []
         if source == "backup":

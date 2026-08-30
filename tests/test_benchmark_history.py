@@ -16,6 +16,7 @@ from stt_app.benchmark_history import (
     export_benchmark_entry,
 )
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
+from stt_app.persistence import backup_path
 
 
 def _entry() -> BenchmarkHistoryEntry:
@@ -279,3 +280,100 @@ def test_the_spreadsheet_export_stays_openable_whatever_a_cell_holds(
         f"{label}: the cell round-tripped as something other than "
         f"{expected!r}; sheet holds {cells!r}"
     )
+
+
+def _one_entry_payload(extra_run_field: dict | None = None) -> list:
+    run = {
+        "run_index": 1,
+        "seconds": 1.0,
+        "audio_duration_seconds": 10.0,
+        "real_time_factor": 0.1,
+        "transcript_chars": 5,
+        "transcript_words": 1,
+        "detected_language": "de",
+        "language_probability": 0.9,
+        "transcript": "hallo",
+    }
+    run.update(extra_run_field or {})
+    return [
+        {
+            "created_at": "2026-08-30T10:00:00+00:00",
+            "status": "completed",
+            "summary": "one case",
+            "options": {"audio_name": "sample.wav", "model_names": ["tiny"]},
+            "environment": {},
+            "cases": [
+                {
+                    "model": "tiny",
+                    "device": "cpu",
+                    "compute_type": "int8",
+                    "download_seconds": 0.0,
+                    "load_seconds": 0.5,
+                    "runs": [run],
+                }
+            ],
+        }
+    ]
+
+
+def test_a_run_field_this_build_does_not_know_is_dropped_not_fatal(tmp_path):
+    """`%APPDATA%` is shared between builds, and `transcript` was added late.
+
+    `BenchmarkRun(**entry)` raised `TypeError` for one unexpected key, which
+    escaped the store's `except ValueError`, so the backup recovery never ran
+    and `SettingsDialog.__init__` -- which calls `recent_entries` with no
+    guard -- could not build at all.
+    """
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(
+        json.dumps(_one_entry_payload({"peak_memory_mb": 812})), encoding="utf-8"
+    )
+
+    entries = BenchmarkHistoryStore(path=path).recent_entries(20)
+
+    assert len(entries) == 1
+    assert entries[0].cases[0].runs[0].transcript == "hallo"
+    assert not list(tmp_path.glob("*.corrupt.*")), (
+        "a readable file was quarantined instead of being read"
+    )
+
+
+@pytest.mark.parametrize(
+    "mangle",
+    [
+        pytest.param(lambda p: p[0]["cases"][0].__setitem__("runs", 7), id="runs-int"),
+        pytest.param(lambda p: p[0].__setitem__("cases", 7), id="cases-int"),
+        pytest.param(
+            lambda p: p[0]["options"].__setitem__("model_names", 7), id="models-int"
+        ),
+    ],
+)
+def test_a_payload_of_the_wrong_shape_recovers_instead_of_raising(tmp_path, mangle):
+    """The store must survive it; the caller must not have to."""
+    payload = _one_entry_payload()
+    mangle(payload)
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    # Must not raise -- `SettingsDialog.__init__` has no guard around this.
+    BenchmarkHistoryStore(path=path).recent_entries(20)
+
+
+def test_the_backup_recovery_is_reachable_for_entries_that_have_cases(tmp_path):
+    """The parametrized backup test built entries with `cases=[]`.
+
+    `_entries_from_payload` drops those (`if entry.cases`), so all four of its
+    assertions compared an empty list against an empty list and the benchmark
+    store's recovery was, in effect, untested.
+    """
+    path = tmp_path / "benchmark_history.json"
+    store = BenchmarkHistoryStore(path=path)
+    store.save(store._entries_from_payload(_one_entry_payload()))
+    assert backup_path(path).exists()
+    assert store.count() == 1, "the fixture entry is dropped again"
+
+    path.unlink()
+
+    recovered = BenchmarkHistoryStore(path=path)
+    assert recovered.count() == 1, "the backup was not read"
+    assert path.exists(), "the primary was not republished from the backup"
