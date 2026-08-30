@@ -129,10 +129,20 @@ class WarmMicrophoneStream:
         stream = None
         opened_key = SYSTEM_DEFAULT_INPUT_DEVICE
         try:
-            device_index: int | None = None
-            if self._device_provider is not None:
-                opened_key, device_index = self._device_provider()
+            # Resolved INSIDE the guard, together with the open. A PortAudio
+            # index is only valid until the next re-enumeration -- which is
+            # what `try_refresh_input_devices` does, under this same lock,
+            # from the device-change worker thread. Resolving outside it left
+            # two separate critical sections with a gap between them, so a
+            # hot-plug arriving in that gap renumbered the devices and the
+            # recording opened whatever now sat at the old index: a different
+            # microphone, silently, which is precisely what "never silently
+            # record from another device" forbids. The lock is an RLock, so
+            # widening the section costs nothing but the query itself.
             with portaudio_guard():
+                device_index: int | None = None
+                if self._device_provider is not None:
+                    opened_key, device_index = self._device_provider()
                 stream = sd.InputStream(
                     samplerate=self.sample_rate,
                     channels=self.channels,
@@ -418,10 +428,20 @@ class AudioCapture:
             return
 
         try:
-            device_index: int | None = None
-            if self._device_resolver is not None:
-                device_index = self._device_resolver()
+            # Resolved INSIDE the guard, together with the open. A PortAudio
+            # index is only valid until the next re-enumeration -- which is
+            # what `try_refresh_input_devices` does, under this same lock,
+            # from the device-change worker thread. Resolving outside it left
+            # two separate critical sections with a gap between them, so a
+            # hot-plug arriving in that gap renumbered the devices and the
+            # recording opened whatever now sat at the old index: a different
+            # microphone, silently, which is precisely what "never silently
+            # record from another device" forbids. The lock is an RLock, so
+            # widening the section costs nothing but the query itself.
             with portaudio_guard():
+                device_index: int | None = None
+                if self._device_resolver is not None:
+                    device_index = self._device_resolver()
                 stream = sd.InputStream(
                     samplerate=self.sample_rate,
                     channels=self.channels,

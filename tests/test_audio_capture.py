@@ -411,6 +411,55 @@ def test_late_warm_callback_cannot_write_into_next_recording(monkeypatch):
     warm.close()
 
 
+@pytest.mark.parametrize("warm", [False, True])
+def test_the_device_index_is_resolved_inside_the_portaudio_guard(monkeypatch, warm):
+    """Resolve and open must be one critical section, not two.
+
+    A PortAudio index is only valid until the next re-enumeration, and
+    `try_refresh_input_devices` performs exactly that under this same lock,
+    from the device-change worker thread. Resolving outside the guard left a
+    gap between the two: a hot-plug arriving in it renumbered the devices and
+    the recording then opened whatever now sat at the old index -- a different
+    microphone, with nothing reported. Measured before the fix: the guard was
+    held for the open and not for the resolve, in both the cold and the warm
+    path.
+    """
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    monkeypatch.setattr(
+        "stt_app.audio_capture.input_stream_extra_settings",
+        lambda device_index: None,
+    )
+    FakeInputStream.instances = []
+    held_during_resolve: list[bool] = []
+
+    def note_and_resolve():
+        held_during_resolve.append(audio_devices._portaudio_lock._is_owned())
+        return 3
+
+    if warm:
+        stream = WarmMicrophoneStream(
+            device_provider=lambda: ("mic", note_and_resolve())
+        )
+        stream.ensure_started()
+    else:
+        stream = AudioCapture(device_resolver=note_and_resolve)
+        stream.start()
+
+    try:
+        assert held_during_resolve == [True], (
+            "the device index was resolved outside the guard that protects it "
+            "from a concurrent re-enumeration"
+        )
+        assert audio_devices._portaudio_lock._is_owned() is False, (
+            "the guard was still held after the open"
+        )
+    finally:
+        if warm:
+            stream.close()
+        else:
+            stream.stop()
+
+
 def test_cold_open_passes_extra_settings_for_explicit_device(monkeypatch):
     """Explicitly selected (WASAPI) devices need host-API stream settings.
 
