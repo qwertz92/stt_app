@@ -1899,6 +1899,91 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     _ = app
 
 
+def test_a_crashed_benchmark_child_keeps_the_cases_it_already_streamed(
+    monkeypatch, tmp_path
+):
+    """Every model already measured was thrown away when the worker died.
+
+    The cancel arm passes its completed cases through and they are saved; the
+    failure arm passed `[]`. `benchmark_process` even raises with a message
+    counting what was about to be discarded. The Results table still showed
+    those rows -- they arrive through the case callback -- but nothing reached
+    Benchmark History, Export stayed disabled, and the Details overview kept
+    reading "Status: Running", which contradicts two on-screen promises that
+    partial runs are saved automatically.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda _model_dir="": ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+
+    def _crashing_run(**kwargs):
+        kwargs["case_callback"](
+            BenchmarkCase(
+                model="small",
+                device="auto",
+                compute_type="int8",
+                download_seconds=0.0,
+                load_seconds=0.45,
+                runs=[
+                    BenchmarkRun(
+                        run_index=1,
+                        seconds=1.2,
+                        audio_duration_seconds=2.0,
+                        real_time_factor=0.6,
+                        transcript_chars=12,
+                        transcript_words=2,
+                        detected_language="en",
+                        language_probability=0.98,
+                    )
+                ],
+            )
+        )
+        raise RuntimeError(
+            "Benchmark worker exited with code 1 after streaming 1 completed case(s)"
+        )
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.run_benchmark_cases", _crashing_run
+    )
+
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._benchmark_history_store = BenchmarkHistoryStore(
+        path=tmp_path / "benchmark_history.json"
+    )
+    dialog._refresh_benchmark_history_list()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    QtTest.QTest.qWait(250)
+    dialog._set_benchmark_audio_path(str(audio_path))
+
+    dialog._run_local_benchmark()
+
+    assert dialog.benchmark_results_table.rowCount() == 1
+    assert dialog.benchmark_history_list.count() == 1, (
+        "the measured case was discarded instead of saved"
+    )
+    assert dialog.export_benchmark_results_button.isEnabled() is True
+    summary = dialog.benchmark_summary_text.toPlainText()
+    assert "Status: Failed" in summary, summary
+    assert "Status: Running" not in summary
+    status = dialog.benchmark_status_label.text()
+    assert "stopped early" in status, status
+    assert "exited with code 1" in status, status
+    _ = app
+
+
 def test_benchmark_results_table_and_summary_are_resizable():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(

@@ -1420,12 +1420,36 @@ class _BenchmarkMixin:
                 )
                 return
             except Exception as exc:
+                # The cases already streamed are kept, exactly as the cancel
+                # arm above keeps them. Passing `[]` discarded every model
+                # already measured whenever the worker process died -- and
+                # `benchmark_process` raises with a message that counts them,
+                # so the run reported how much it was throwing away. The
+                # Results table still showed those rows, but nothing reached
+                # Benchmark History, Export stayed disabled and the Details
+                # overview kept reading "Status: Running", contradicting two
+                # on-screen promises that partial runs are saved.
+                summary = self._benchmark_summary(
+                    completed_cases,
+                    status="failed",
+                    options=options,
+                    environment=environment,
+                )
                 _emit_background_signal(
                     self,
                     "benchmark_finished",
                     False,
-                    str(exc),
-                    [],
+                    summary,
+                    {
+                        "cases": completed_cases,
+                        "options": options,
+                        "status": "failed",
+                        "environment": environment,
+                        # Separate from the summary because they go to
+                        # different places: the summary is what History
+                        # stores, the error is what the status line says.
+                        "error": str(exc),
+                    },
                 )
                 return
 
@@ -1482,11 +1506,9 @@ class _BenchmarkMixin:
         self._active_benchmark_thread = None
         self._benchmark_cancel_event = None
         self._update_benchmark_actions()
-        if not success:
-            self._set_benchmark_status(text, "#b71c1c")
-            return
 
-        status = "completed"
+        status = "failed" if not success else "completed"
+        failure_detail = text
         options = self._current_benchmark_options
         raw_cases: object = payload
         if isinstance(payload, dict):
@@ -1498,10 +1520,14 @@ class _BenchmarkMixin:
             if isinstance(raw_environment, BenchmarkEnvironment):
                 self._current_benchmark_environment = raw_environment
             status = str(payload.get("status", status))
+            failure_detail = str(payload.get("error", "") or "")
 
         if not isinstance(raw_cases, (list, tuple)):
             raw_cases = []
         cases = [case for case in raw_cases if isinstance(case, BenchmarkCase)]
+        if not success:
+            # A failure decides the status whatever the payload claims.
+            status = "failed"
         if status == "completed" and any(case.error for case in cases):
             status = "completed_with_errors"
         self._current_benchmark_cases = cases
@@ -1536,6 +1562,15 @@ class _BenchmarkMixin:
                 f"Benchmark finished, but history could not be saved: {history_error}",
                 "#b26a00",
             )
+        elif not success:
+            if cases:
+                self._set_benchmark_status(
+                    f"The benchmark stopped early: {failure_detail} "
+                    "Cases already measured were saved.",
+                    "#b26a00",
+                )
+            else:
+                self._set_benchmark_status(failure_detail, "#b71c1c")
         elif status == "canceled":
             if cases:
                 self._set_benchmark_status(
