@@ -267,6 +267,9 @@ def test_resume_rolls_back_body_that_disagrees_with_content_range(
     assert not (destination / "weights.bin").exists()
 
 
+_ABCDEF_SHA256 = "bef57ec7f53a6d40beb640a780a639c83bc29ac8a9816f1fc6c5c6dcd93c4721"
+
+
 def test_legacy_partial_final_name_is_migrated_before_resume(monkeypatch, tmp_path):
     destination = tmp_path / "models"
     destination.mkdir()
@@ -275,7 +278,7 @@ def test_legacy_partial_final_name_is_migrated_before_resume(monkeypatch, tmp_pa
     monkeypatch.setattr(
         ms,
         "list_repo_files",
-        lambda *_args, **_kwargs: [("weights.bin", 6)],
+        lambda *_args, **_kwargs: [("weights.bin", 6, _ABCDEF_SHA256)],
     )
     monkeypatch.setattr(
         ms,
@@ -290,6 +293,45 @@ def test_legacy_partial_final_name_is_migrated_before_resume(monkeypatch, tmp_pa
     ms.download_repo_to_dir("org/model", destination)
 
     assert target.read_bytes() == b"abcdef"
+    assert not (destination / f"weights.bin{ms._PARTIAL_SUFFIX}").exists()
+
+
+def test_a_short_file_at_the_final_name_is_not_resumed_without_a_digest(
+    monkeypatch, tmp_path
+):
+    """Nothing about the final name says this module wrote the file.
+
+    A complete, verified file is the only thing published there, so a short one
+    is by definition not ours -- it can just as well be somebody else's
+    truncated download. Adopting it as a resumable prefix and appending to it
+    produces a file of exactly the right length holding two different
+    downloads, which a size check cannot see. ModelScope omits the digest for
+    some entries, and those are exactly the transfers where the splice would
+    have been published unnoticed, so there the download restarts instead.
+    """
+    destination = tmp_path / "models"
+    destination.mkdir()
+    target = destination / "weights.bin"
+    target.write_bytes(b"XXX")  # a foreign truncated file, not our prefix
+    monkeypatch.setattr(
+        ms,
+        "list_repo_files",
+        lambda *_args, **_kwargs: [("weights.bin", 6, None)],
+    )
+    requests: list[dict] = []
+
+    def _fake_open(url, headers=None, timeout=None):
+        requests.append(dict(headers or {}))
+        return _FakeResponse([b"abcdef"], status=200)
+
+    monkeypatch.setattr(ms, "_open", _fake_open)
+
+    ms.download_repo_to_dir("org/model", destination)
+
+    assert target.read_bytes() == b"abcdef"
+    assert requests and "Range" not in requests[-1], (
+        "the foreign short file was resumed instead of replaced"
+    )
     assert not (destination / f"weights.bin{ms._PARTIAL_SUFFIX}").exists()
 
 

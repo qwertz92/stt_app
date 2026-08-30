@@ -323,7 +323,22 @@ def _download_file(
                 else:
                     incomplete.unlink(missing_ok=True)
                     return
-            elif final_size < expected_size and not incomplete.exists():
+            elif (
+                sha256
+                and final_size < expected_size
+                and not incomplete.exists()
+            ):
+                # An older version of this module published its partials at
+                # the final name, so a short file there may be a resumable
+                # prefix of ours. It may equally be somebody else's truncated
+                # file: unlike a `.ms-part`, nothing about the final name says
+                # we wrote it, because we only ever publish complete, verified
+                # files there. Appending to a foreign prefix yields a file of
+                # exactly the right length holding two different downloads --
+                # the corruption `_discard_foreign_partials` exists for -- and
+                # only the digest can detect it. So adopt it when ModelScope
+                # published a digest for this entry, and start from zero when
+                # it did not (it omits one for some entries).
                 os.replace(dest, incomplete)
             else:
                 dest.unlink()
