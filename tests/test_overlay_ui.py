@@ -14,7 +14,12 @@ from stt_app.config import (
     OVERLAY_MAX_HEIGHT,
     OVERLAY_QUEUE_MAX_HEIGHT,
 )
-from stt_app.overlay_ui import OverlayUI
+from stt_app.overlay_ui import (
+    _QUEUE_CANCEL_BUTTON_HEIGHT,
+    _QUEUE_CANCEL_BUTTON_WIDTH,
+    _QUEUE_CLEAR_BUTTON_HEIGHT,
+    OverlayUI,
+)
 
 
 class _FakeScreen:
@@ -1698,6 +1703,76 @@ def test_no_overlay_button_clips_its_caption_at_a_larger_system_font(point_scale
             assert not clipped, (
                 f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(clipped)
             )
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)
+
+
+@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5, 2.0])
+def test_the_queue_buttons_do_not_clip_at_a_larger_system_font(point_scale):
+    """The queue panel's buttons are pixel constants too, and were missed.
+
+    `_fit_buttons_to_font` runs once in the constructor and covers the eleven
+    buttons that exist by then. "Clear queue" is one of them but was not in
+    the table, and the per-row Cancel cannot be: rows are built at runtime,
+    one per in-flight transcription. Measured before this: at Windows' 150 %
+    text size the per-row Cancel was 11 px too narrow and 6 px too short, and
+    at 200 % it was 31 px and 14 px -- on the one control that cancels a
+    runaway transcription.
+
+    The row button is grown only after the row is in the container: measured
+    detached it reports 81x26 at 9 pt against its real 54x18, because outside
+    the container it carries the platform's default padding rather than the
+    overlay stylesheet's.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            overlay.set_transcription_queue([(1, "recording one")])
+            row_cancel = overlay._queue_rows_widget.findChild(
+                QtWidgets.QPushButton
+            )
+            assert row_cancel is not None
+            clear = overlay._queue_clear_button
+
+            clipped = []
+            hint = row_cancel.sizeHint()
+            if hint.width() > row_cancel.width():
+                clipped.append(
+                    f"row Cancel: {row_cancel.width()} px wide, "
+                    f"needs {hint.width()} px"
+                )
+            if hint.height() > row_cancel.height():
+                clipped.append(
+                    f"row Cancel: {row_cancel.height()} px tall, "
+                    f"needs {hint.height()} px"
+                )
+            if clear.sizeHint().height() > clear.height():
+                clipped.append(
+                    f"Clear queue: {clear.height()} px tall, "
+                    f"needs {clear.sizeHint().height()} px"
+                )
+            assert not clipped, (
+                f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(clipped)
+            )
+            if point_scale == 1.0:
+                # The shipped layout must not move. Growing is only allowed to
+                # fix a clip, and the row button is measured after it is in
+                # the container for exactly this reason: measured detached it
+                # reports 81 px wide at 9 pt, and `max()` would keep that,
+                # silently widening every queue row by 23 px at the default
+                # font. A clipping check alone cannot see that.
+                assert (row_cancel.width(), row_cancel.height()) == (
+                    _QUEUE_CANCEL_BUTTON_WIDTH,
+                    _QUEUE_CANCEL_BUTTON_HEIGHT,
+                )
+                assert clear.height() == _QUEUE_CLEAR_BUTTON_HEIGHT
         finally:
             overlay.deleteLater()
     finally:

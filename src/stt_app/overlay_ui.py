@@ -63,6 +63,33 @@ _TEXT_ACTION_BUTTON_WIDTH = 64
 
 # Cancel, Retry and Insert share one slot and must stay the same size.
 _ACTION_SLOT_CAPTIONS = ("Retry", "Cancel", "Insert")
+# The queue panel's own two buttons. Named because they are pinned where
+# they are built and grown where the font is known, and the two must agree.
+_QUEUE_CLEAR_BUTTON_HEIGHT = 20
+_QUEUE_CANCEL_BUTTON_WIDTH = 58
+_QUEUE_CANCEL_BUTTON_HEIGHT = 20
+
+
+def _fit_button_height(
+    button: QtWidgets.QAbstractButton,
+    height: int,
+    *captions: str,
+) -> None:
+    """Grow a pinned height to fit the captions, leaving the width free.
+
+    For buttons that are deliberately not width-pinned -- "Clear queue" sizes
+    itself to its caption and sits at the right edge of the queue header --
+    where only the height is a pixel constant chosen for 9 pt.
+    """
+    tallest = height
+    original = button.text()
+    try:
+        for caption in captions or (original,):
+            button.setText(caption)
+            tallest = max(tallest, button.sizeHint().height())
+    finally:
+        button.setText(original)
+    button.setFixedHeight(tallest)
 
 
 def _fit_button(
@@ -73,10 +100,14 @@ def _fit_button(
 ) -> None:
     """Pin ``width`` x ``height``, widened to whatever the captions need.
 
-    See `OverlayUI._fit_buttons_to_font`, the only caller, for why the
-    constants alone are not enough. `sizeHint` is computed from the content
-    and the style and is not clamped by an existing fixed size, so calling
-    this on an already-pinned button is idempotent.
+    See `OverlayUI._fit_buttons_to_font` for why the constants alone are not
+    enough. `sizeHint` is computed from the content and the style and is not
+    clamped by an existing fixed size, and the result is derived from
+    ``width``/``height`` rather than from the button's current size -- so
+    calling this on an already-pinned button is idempotent, and a call made
+    while the button was still detached (where the style gives it the
+    platform's larger default padding) is fully corrected by a later one.
+    `set_transcription_queue` relies on that for the per-row Cancel.
     """
     original = button.text()
     widest = 0
@@ -534,6 +565,16 @@ class OverlayUI(QtWidgets.QWidget):
         self._language_button.setFixedSize(
             self._widest_language_caption_width(),
             max(22, self._language_button.sizeHint().height()),
+        )
+        # The queue panel exists from the constructor, so its header button is
+        # reachable here. Its width is deliberately not pinned -- it sizes to
+        # its caption at the right edge of the header -- so only the height
+        # constant needs to grow. The per-row Cancel cannot be done here: rows
+        # are built at runtime, one per in-flight transcription.
+        _fit_button_height(
+            self._queue_clear_button,
+            _QUEUE_CLEAR_BUTTON_HEIGHT,
+            "Clear queue",
         )
         # Balanced last, because it widens the narrower group from the sizes
         # set above. The stretching state label between the two groups is
@@ -1557,7 +1598,7 @@ class OverlayUI(QtWidgets.QWidget):
         self._queue_clear_button = QtWidgets.QPushButton("Clear queue")
         self._queue_clear_button.setCursor(QtCore.Qt.PointingHandCursor)
         self._queue_clear_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        self._queue_clear_button.setFixedHeight(20)
+        self._queue_clear_button.setFixedHeight(_QUEUE_CLEAR_BUTTON_HEIGHT)
         self._queue_clear_button.setToolTip(
             "Cancel all queued and running transcriptions."
         )
@@ -1612,7 +1653,9 @@ class OverlayUI(QtWidgets.QWidget):
         cancel_button = QtWidgets.QPushButton("Cancel")
         cancel_button.setCursor(QtCore.Qt.PointingHandCursor)
         cancel_button.setFocusPolicy(QtCore.Qt.NoFocus)
-        cancel_button.setFixedSize(58, 20)
+        cancel_button.setFixedSize(
+            _QUEUE_CANCEL_BUTTON_WIDTH, _QUEUE_CANCEL_BUTTON_HEIGHT
+        )
         cancel_button.setToolTip("Cancel this transcription.")
         cancel_button.clicked.connect(
             lambda _checked=False, t=int(token): self.queue_cancel_requested.emit(t)
@@ -1659,6 +1702,23 @@ class OverlayUI(QtWidgets.QWidget):
                 # later. Only the *first* render escaped it, because
                 # `setVisible(True)` on the panel shows its children with it.
                 row.show()
+                # Grown only now, and this is the one moment it can be done.
+                # Measured detached the same button reports 81x26 at 9 pt
+                # against its real 54x18: outside the container it carries the
+                # platform's default padding instead of the overlay
+                # stylesheet's, so sizing it in `_build_queue_row` would pin a
+                # number 23 px too wide at the default font. Attached it is
+                # accurate, and it needs to grow: 62x22 at 11.25 pt and 89x34
+                # at 18 pt against the pinned 58x20, on the one control that
+                # cancels a runaway transcription.
+                cancel_button = row.findChild(QtWidgets.QPushButton)
+                if cancel_button is not None:
+                    _fit_button(
+                        cancel_button,
+                        _QUEUE_CANCEL_BUTTON_WIDTH,
+                        _QUEUE_CANCEL_BUTTON_HEIGHT,
+                        "Cancel",
+                    )
             self._queue_visible = True
             self._queue_widget.setVisible(True)
         else:
