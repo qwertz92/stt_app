@@ -7,7 +7,9 @@ error formatting.
 
 from __future__ import annotations
 
+import json
 import secrets
+import urllib.error
 from pathlib import Path
 
 from ..config import DOC_SSL_PROXY_PATH
@@ -91,6 +93,44 @@ def multipart_form_data(
 def normalize_transcript_text(value: object) -> str:
     """Collapse whitespace runs and trim, defensively handling ``None``."""
     return " ".join(str(value or "").strip().split()).strip()
+
+
+def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
+    """Return what the provider actually said, or "" when it said nothing.
+
+    `HTTPError.reason` is only the status phrase -- "Bad Request" -- so a
+    message built from it throws away the one part that tells the user what to
+    change: OpenAI's "Invalid file format", ElevenLabs' quota text, Deepgram's
+    rejected parameter. The body is read once (an HTTPError is a response
+    object), JSON is unwrapped where the common shapes allow, and the result is
+    capped so a provider cannot push an HTML error page into a dialog.
+    """
+    try:
+        raw = exc.read().decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+    if not raw:
+        return ""
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        return raw.strip()[:300]
+    if isinstance(parsed, dict):
+        error = parsed.get("error")
+        if isinstance(error, dict) and error.get("message"):
+            return str(error["message"])[:300]
+        if isinstance(error, str) and error.strip():
+            return error.strip()[:300]
+        for key in ("message", "detail", "err_msg"):
+            if parsed.get(key):
+                return str(parsed[key])[:300]
+    return raw.strip()[:300]
+
+
+def http_error_suffix(exc: urllib.error.HTTPError) -> str:
+    """`": <what the provider said>"`, falling back to the status phrase."""
+    detail = read_http_error_detail(exc)
+    return f": {detail}" if detail else f": {exc.reason}"
 
 
 def format_ssl_error_message(provider_name: str) -> str:

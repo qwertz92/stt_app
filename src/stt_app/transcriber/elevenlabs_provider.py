@@ -26,8 +26,10 @@ from ..ssl_utils import is_ssl_error as _is_ssl_error
 from ._http_utils import (
     audio_content_type,
     format_ssl_error_message,
+    http_error_suffix,
     multipart_form_data,
     normalize_transcript_text,
+    read_http_error_detail,
 )
 from .base import (
     AudioInput,
@@ -281,7 +283,12 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                     "ElevenLabs: Rate limit exceeded (HTTP 429). "
                     "Wait a moment and try again."
                 ) from exc
-            detail = exc.reason or "unknown error"
+            # The body, not `exc.reason`: that is only the status
+            # phrase, and ElevenLabs puts the quota and format
+            # reasons in the body.
+            detail = read_http_error_detail(exc) or exc.reason or (
+                "unknown error"
+            )
             raise TranscriptionError(
                 f"ElevenLabs transcription failed (HTTP {exc.code}): {detail}"
             ) from exc
@@ -309,7 +316,9 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, f"API returned HTTP {exc.code}: {exc.reason}"
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
+            )
         except Exception as exc:
             return False, f"Connection failed: {self._format_error(exc)}"
         return False, "Unexpected response from ElevenLabs API."

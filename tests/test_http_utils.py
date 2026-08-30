@@ -1,8 +1,16 @@
 from __future__ import annotations
 
+import io
+import urllib.error
+
 import pytest
 
-from stt_app.transcriber._http_utils import audio_content_type, multipart_form_data
+from stt_app.transcriber._http_utils import (
+    audio_content_type,
+    http_error_suffix,
+    multipart_form_data,
+    read_http_error_detail,
+)
 
 
 @pytest.mark.parametrize(
@@ -61,3 +69,57 @@ def test_multipart_escapes_quoted_header_parameters():
 
     assert b'name="model\\"variant"' in body
     assert b'filename="my \\"audio\\".wav"' in body
+
+
+def _http_error(body: bytes, code: int = 400, reason: str = "Bad Request"):
+    return urllib.error.HTTPError(
+        "https://api.example/x", code, reason, {}, io.BytesIO(body)
+    )
+
+
+def test_the_error_detail_is_what_the_provider_said_not_the_status_phrase():
+    """`HTTPError.reason` is only "Bad Request".
+
+    A message built from it throws away the one part that tells the user what
+    to change -- OpenAI's "Invalid file format", ElevenLabs' quota text,
+    Deepgram's rejected parameter -- and four providers built theirs that way
+    while Azure alone read the body.
+    """
+    assert read_http_error_detail(
+        _http_error(b'{"error": {"message": "Invalid file format."}}')
+    ) == "Invalid file format."
+    assert read_http_error_detail(
+        _http_error(b'{"error": "model not found"}')
+    ) == "model not found"
+    assert read_http_error_detail(_http_error(b'{"message": "Quota exceeded"}')) == (
+        "Quota exceeded"
+    )
+    assert read_http_error_detail(_http_error(b'{"err_msg": "invalid model"}')) == (
+        "invalid model"
+    )
+
+
+def test_a_non_json_error_body_is_passed_through_and_capped():
+    """A provider must not be able to push an HTML error page into a dialog."""
+    assert read_http_error_detail(_http_error(b"<html>Gateway timeout</html>")) == (
+        "<html>Gateway timeout</html>"
+    )
+    assert len(read_http_error_detail(_http_error(b'"' + b"x" * 900 + b'"'))) == 300
+
+
+def test_an_unreadable_or_empty_body_falls_back_to_the_status_phrase():
+    assert read_http_error_detail(_http_error(b"")) == ""
+    assert http_error_suffix(_http_error(b"")) == ": Bad Request"
+    assert http_error_suffix(
+        _http_error(b'{"error": {"message": "nope"}}')
+    ) == ": nope"
+
+
+def test_reading_a_body_that_raises_is_not_an_error_of_its_own():
+    class _Unreadable(urllib.error.HTTPError):
+        def read(self, *_args, **_kwargs):
+            raise OSError("connection reset")
+
+    exc = _Unreadable("https://api.example/x", 500, "Server Error", {}, io.BytesIO(b""))
+    assert read_http_error_detail(exc) == ""
+    assert http_error_suffix(exc) == ": Server Error"

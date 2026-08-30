@@ -29,7 +29,7 @@ from ..config import (
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import audio_content_type
+from ._http_utils import audio_content_type, http_error_suffix
 from .base import (
     AudioInput,
     ITranscriber,
@@ -235,7 +235,10 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     "Wait a moment and try again."
                 ) from exc
             raise TranscriptionError(
-                f"Deepgram transcription failed (HTTP {exc.code}): {exc.reason}"
+                f"Deepgram transcription failed (HTTP {exc.code})"
+                # The body, not `exc.reason`: Deepgram names the
+                # rejected parameter there.
+                f"{http_error_suffix(exc)}"
             ) from exc
         except Exception as exc:
             if _is_ssl_error(exc):
@@ -285,7 +288,9 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
                     "Authentication failed (HTTP 401). "
                     "The API key is invalid or expired."
                 )
-            return False, f"API returned HTTP {exc.code}: {exc.reason}"
+            return False, (
+                f"API returned HTTP {exc.code}{http_error_suffix(exc)}"
+            )
         except Exception as exc:
             if _is_ssl_error(exc):
                 return False, (

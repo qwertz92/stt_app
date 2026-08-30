@@ -42,6 +42,7 @@ from ._http_utils import (
     format_ssl_error_message,
     multipart_form_data,
     normalize_transcript_text,
+    read_http_error_detail,
 )
 from .base import (
     AudioInput,
@@ -321,25 +322,7 @@ class AzureLlmSpeechTranscriber(ProgressReporter, ITranscriber):
             f"Azure transcription failed (HTTP {exc.code}){suffix}"
         )
 
-    @staticmethod
-    def _read_error_detail(exc: urllib.error.HTTPError) -> str:
-        try:
-            raw = exc.read().decode("utf-8", errors="replace")
-        except Exception:
-            return ""
-        if not raw:
-            return ""
-        try:
-            parsed = json.loads(raw)
-        except Exception:
-            return raw.strip()[:300]
-        if isinstance(parsed, dict):
-            error = parsed.get("error")
-            if isinstance(error, dict) and error.get("message"):
-                return str(error["message"])[:300]
-            if parsed.get("message"):
-                return str(parsed["message"])[:300]
-        return raw.strip()[:300]
+    _read_error_detail = staticmethod(read_http_error_detail)
 
     # -- Connection test --------------------------------------------------------
 
