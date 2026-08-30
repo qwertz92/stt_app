@@ -16,6 +16,8 @@ from release_version import (
     verify_release,
 )
 
+from stt_app.persistence import atomic_write_text
+
 RELEASE_METADATA_PATHS = [
     "pyproject.toml",
     "uv.lock",
@@ -99,29 +101,41 @@ def create_release(
     _ensure_release_branch(root=root, remote=remote)
     _ensure_no_tracked_changes(root=root)
 
+    # Captured before the bump so a gate below can put them back.
+    # `_ensure_no_tracked_changes` has just proven the tree clean, so this is
+    # the committed state.
+    metadata_before = {
+        name: (root / name).read_text(encoding="utf-8")
+        for name in RELEASE_METADATA_PATHS
+        if (root / name).exists()
+    }
     bump_version(version.text, root=root)
-    _run(["uv", "lock"], root=root)
-    verify_release(version.tag, root=root, released_tags=existing_tags)
+    try:
+        _run(["uv", "lock"], root=root)
+        verify_release(version.tag, root=root, released_tags=existing_tags)
 
-    if not skip_tests:
-        _run(
-            [
-                sys.executable,
-                "-m",
-                "ruff",
-                "check",
-                "AGENTS.md",
-                "docs",
-                "src",
-                "scripts",
-                "tests",
-            ],
-            root=root,
-        )
-        # No -q: pyproject already sets addopts = "-q", and a second one is
-        # -qq, which suppresses the final "N passed" line -- so a run that
-        # collected three tests looked exactly like the whole suite.
-        _run([sys.executable, "-m", "pytest"], root=root)
+        if not skip_tests:
+            _run(
+                [
+                    sys.executable,
+                    "-m",
+                    "ruff",
+                    "check",
+                    "AGENTS.md",
+                    "docs",
+                    "src",
+                    "scripts",
+                    "tests",
+                ],
+                root=root,
+            )
+            # No -q: pyproject already sets addopts = "-q", and a second one is
+            # -qq, which suppresses the final "N passed" line -- so a run that
+            # collected three tests looked exactly like the whole suite.
+            _run([sys.executable, "-m", "pytest"], root=root)
+    except BaseException:
+        _restore_release_metadata(metadata_before, root=root)
+        raise
 
     _run(["git", "add", *RELEASE_METADATA_PATHS], root=root)
     if _has_staged_changes(root=root):
@@ -194,6 +208,34 @@ def _git_stdout(command: Sequence[str], *, root: Path) -> str:
         text=True,
     )
     return result.stdout.strip()
+
+
+def _restore_release_metadata(before: dict[str, str], root: Path) -> None:
+    """Put the four metadata files back after a gate below the bump failed.
+
+    The bump writes pyproject.toml, uv.lock, the package __init__ and the Inno
+    script, and only then do ruff and pytest run. A failure there used to leave
+    `main` dirty at the new version, so the next attempt died at
+    `_ensure_no_tracked_changes` with "Working tree changes are present" --
+    correct, but the user then has to work out which four files to restore.
+    Written from the text captured before the bump rather than with
+    `git checkout --`, so nothing outside these four files can be touched.
+    """
+    failures: list[str] = []
+    for name, original in before.items():
+        try:
+            atomic_write_text(root / name, original)
+        except OSError as exc:
+            failures.append(f"{name}: {exc}")
+    if failures:
+        print(
+            "Warning: the version bump could not be undone for "
+            + "; ".join(failures)
+            + ". Restore these files before retrying: "
+            + " ".join(RELEASE_METADATA_PATHS),
+            file=sys.stderr,
+            flush=True,
+        )
 
 
 def _run(
