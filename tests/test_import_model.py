@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 from pathlib import Path
 
@@ -189,6 +190,126 @@ def test_import_repairs_stale_snapshot_at_matching_content_hash(tmp_path):
     assert (snapshot / "model.bin").read_bytes() == b"weights"
     assert module.compute_fake_hash(snapshot) == snapshot_hash
     assert not list(snapshots.glob(".*.displaced-*"))
+
+
+def test_import_survives_another_importer_publishing_the_same_model(
+    tmp_path,
+    monkeypatch,
+):
+    """The handler for this was unreachable on Windows.
+
+    `os.replace` cannot overwrite a directory: Windows raises PermissionError
+    (WinError 5, measured for an empty and a non-empty destination alike) and
+    POSIX raises ENOTEMPTY -- neither is the `FileExistsError` the clause named.
+    So a second import of the same model, started while the first was still
+    copying, died with an unhandled PermissionError after copying gigabytes and
+    never wrote `refs/main`.
+    """
+    module = _load_import_module()
+    source = _create_small_import_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    snapshot_hash = module.compute_fake_hash(source)
+    repo = cache / "models--Systran--faster-whisper-small"
+    snapshots = repo / "snapshots"
+    rival = snapshots / snapshot_hash
+
+    real_exists = Path.exists
+    raced = []
+
+    def the_other_importer_publishes_between_our_check_and_our_rename(
+        self,
+        *args,
+        **kwargs,
+    ):
+        if self == rival and not raced:
+            raced.append(True)
+            _create_small_import_source(rival)
+            return False
+        return real_exists(self, *args, **kwargs)
+
+    monkeypatch.setattr(
+        Path,
+        "exists",
+        the_other_importer_publishes_between_our_check_and_our_rename,
+    )
+
+    snapshot = module.import_model(source, "small", target_dir=cache)
+
+    assert raced, "the race window was never entered"
+    assert snapshot == rival
+    assert (snapshot / "model.bin").read_bytes() == b"weights"
+    assert (repo / "refs" / "main").read_text(encoding="utf-8") == snapshot_hash
+    assert not list(snapshots.glob(".import-incomplete-*"))
+
+
+def test_a_locked_leftover_does_not_stop_the_reference_from_being_written(
+    tmp_path,
+    monkeypatch,
+):
+    """The displaced directory is unreferenced; failing to delete it is not.
+
+    The cleanup ran between the successful rename and the `refs/main` write, so
+    a Windows delete refused because a running app still had the old
+    `model.bin` mapped aborted the import with the new snapshot already in
+    place and nothing pointing at it -- the one state this function exists to
+    avoid.
+    """
+    module = _load_import_module()
+    source = _create_small_import_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    snapshot_hash = module.compute_fake_hash(source)
+    repo = cache / "models--Systran--faster-whisper-small"
+    stale = repo / "snapshots" / snapshot_hash
+    stale.mkdir(parents=True)
+    (stale / "config.json").write_text("{}", encoding="utf-8")
+
+    real_unlink = os.unlink
+    refused = []
+
+    def the_old_weights_are_still_mapped(path, *args, **kwargs):
+        if ".displaced-" in str(path):
+            refused.append(str(path))
+            raise PermissionError(13, "Access is denied")
+        return real_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "unlink", the_old_weights_are_still_mapped)
+
+    snapshot = module.import_model(source, "small", target_dir=cache)
+
+    assert refused, "the displaced directory was never cleaned up"
+    assert (repo / "refs" / "main").read_text(encoding="utf-8") == snapshot_hash
+    assert (snapshot / "model.bin").read_bytes() == b"weights"
+
+
+def test_a_rename_that_fails_for_another_reason_is_not_mistaken_for_a_race(
+    tmp_path,
+    monkeypatch,
+):
+    """Widening the clause to `OSError` must not swallow a real failure.
+
+    Only a destination that exists means another importer got there first;
+    anything else has to keep propagating, or `refs/main` is written pointing
+    at a snapshot that was never published.
+    """
+    module = _load_import_module()
+    source = _create_small_import_source(tmp_path / "source")
+    cache = tmp_path / "cache"
+    repo = cache / "models--Systran--faster-whisper-small"
+
+    real_replace = Path.replace
+
+    def the_snapshots_directory_refuses_the_rename(self, target, *args, **kwargs):
+        if ".import-incomplete-" in str(self):
+            raise OSError(13, "Access is denied")
+        return real_replace(self, target, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "replace", the_snapshots_directory_refuses_the_rename)
+
+    with pytest.raises(OSError):
+        module.import_model(source, "small", target_dir=cache)
+
+    assert not (repo / "refs" / "main").exists()
+    assert not list((repo / "snapshots").glob("*"))
 
 
 def test_import_copy_failure_leaves_no_published_snapshot_or_ref(

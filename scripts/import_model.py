@@ -354,12 +354,29 @@ def import_model(
                     displaced_dir.replace(snapshot_dir)
                     raise
                 else:
-                    shutil.rmtree(displaced_dir)
+                    # Best-effort: `displaced_dir` is now unreferenced, and
+                    # failing to remove it must not abort before `refs/main`
+                    # is written -- that would publish a snapshot with no
+                    # reference, the one state this function exists to avoid.
+                    # Windows can refuse the delete outright while a running
+                    # app still has the old `model.bin` mapped.
+                    shutil.rmtree(displaced_dir, ignore_errors=True)
         else:
             try:
                 staging_dir.replace(snapshot_dir)
-            except FileExistsError:
-                # Another importer may have published the identical content.
+            except OSError:
+                # NOT `FileExistsError`. `os.replace` cannot overwrite a
+                # directory: Windows raises PermissionError (WinError 5,
+                # measured for both an empty and a non-empty destination) and
+                # POSIX raises ENOTEMPTY, so the old clause was unreachable on
+                # the platform this app ships on. A second importer of the
+                # same model therefore crashed with an unhandled
+                # PermissionError after copying gigabytes, and `refs/main` was
+                # never written.
+                if not snapshot_dir.is_dir():
+                    raise
+                # The snapshot directory is named by the content hash, so one
+                # that already exists holds exactly what we staged.
                 shutil.rmtree(staging_dir)
     finally:
         if staging_dir.exists():
