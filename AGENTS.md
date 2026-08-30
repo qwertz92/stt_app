@@ -1094,6 +1094,40 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   selected; never silently add `universal-2` as a fallback. Legacy
   `universal-3-pro`/`best`/`nano` settings migrate to the current default and
   are not shown in the UI.
+- **No remote batch wait may be unbounded.** The AssemblyAI SDK's
+  `Transcript.wait_for_completion` is `while True:` around a status fetch
+  with no bound of any kind, so a job the service leaves in `queued` never
+  returns. That held the single `max_workers=1` transcription worker for the
+  rest of the session *and* stopped the app from exiting, which is the half
+  that is easy to miss: `ThreadPoolExecutor` registers an atexit hook that
+  **joins** its worker threads, and `shutdown(wait=False,
+  cancel_futures=True)` does not release one that has already started
+  (measured -- the interpreter never exits). The leftover process still holds
+  the single-instance lock, so the user cannot even restart the app.
+  `_wait_for_transcript` polls against `ASSEMBLYAI_BATCH_MAX_WAIT_S` instead.
+  Three properties are load-bearing: terminal status is the *positive* test,
+  so a status this SDK version does not know is waited out rather than
+  mistaken for a finished job; a submit that returns no transcript id fails
+  at once instead of spending the whole budget on `get_by_id("")`; and the
+  poll deliberately does **not** honour the cancel check, because abandoning
+  a transcript the service will finish would break "a finished transcription
+  is never discarded". Individual HTTP calls were already bounded by the
+  SDK's own `settings.http_timeout` (30 s); only the loop around them was not.
+- **A provider error message is never built from `HTTPError.reason`.** That is
+  only the status phrase -- "Bad Request" -- and it drops the one part that
+  says what to change: OpenAI's "Invalid file format", ElevenLabs' quota text,
+  Deepgram's rejected parameter, AssemblyAI's "out of credits". Azure alone
+  read the body; `_http_utils.read_http_error_detail` / `http_error_suffix` is
+  the single reader for all five. The detail is capped at 300 characters so a
+  provider cannot push an HTML error page into a dialog, and it falls back to
+  the status phrase when the body is empty or its read raises.
+- **Every REST call passes `create_ssl_context()`.** AssemblyAI's
+  `test_connection` was the one that did not, so behind a TLS-intercepting
+  proxy the connection test failed while transcription itself worked: the SDK
+  goes through `requests`, which reads `REQUESTS_CA_BUNDLE`, and `urllib` does
+  not. Its hand-written message then told the user to set exactly the variable
+  that could not fix the call that had just failed; `format_ssl_error_message`
+  is the shared text and names `SSL_CERT_FILE` too.
 - **ElevenLabs batch model selection**: `scribe_v2` is the only supported model.
   ElevenLabs removed `scribe_v1` on 2026-07-09; legacy stored selections migrate
   to `scribe_v2` and the removed identifier must not be sent to the API.
@@ -2109,6 +2143,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   delivery costs nothing, the next partial carries the whole merged text
   again -- and it must stay latched behind `partial_callback_failed`, the
   same shape as `noise_floor_warned`, because it runs about every 350 ms.
+  **The same rule now covers the AssemblyAI and Deepgram providers**, which
+  had six bare `except Exception: pass` arms between them
+  (`_stream_partial_callback_failed`, cleared in
+  `_reset_stream_state_locked`). The error callback needs no latch --
+  `_stream_error_reported` already bounds it to once per session -- but needs
+  the log most, being the only path a stream failure takes to the user. Two
+  teardown arms are logged for a less obvious reason: a `disconnect` that
+  raises leaves the AssemblyAI SDK's reader threads running against a dead
+  socket, a refused `ws.close()` leaves a Deepgram connection open and
+  billed, and the bounded joins around them cannot tell either apart from a
+  clean shutdown. A Deepgram frame that will not parse as JSON gets its own
+  latch, because it may have carried a transcript. The lock those arms take
+  is the one the enclosing handler already takes on its normal path, so it
+  adds no new ordering.
 - **`tests/conftest.py` blocks the real `create_transcriber`.** The isolated
   arm of `_acquire_transcriber_runtime` -- taken whenever the shared lock is
   already held -- calls the module-level function, so the 27 patch sites that
@@ -2241,6 +2289,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   a size from it divides by 1000. Dividing by 1024 and writing "GB" names
   neither unit, and the test that should have caught it divided by 1024 as
   well -- a test that shares the code's misunderstanding is not a check.
+  `scripts/benchmark_local.py`'s `_bytes_to_human` was the second instance,
+  and worse because it feeds the *same table column* as the
+  `MODEL_ESTIMATED_SIZE_MB` branch beside it: one model reported two
+  different numbers under the same unit depending on `--show-sizes`
+  (Parakeet 670.00 against 638.96).
 - **A reservation is measured, not predicted**: `retranscribe_dialog` reserves
   a `heightForWidth`, so the candidate is chosen by measuring every candidate
   through the polished label. `key=len` is character count, not drawn width
@@ -2296,8 +2349,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `\uXXXX` on stderr (this wrapped the SSL-proxy guidance in two walls of
   `\u2550`). A character *inside* cp1252, such as an em dash, still renders as
   U+FFFD wherever the log is opened as UTF-8. Comments and docstrings are
-  exempt -- except a module docstring in a script that passes `__doc__` to
-  `argparse`, which `--help` prints; the test computes that per file.
+  exempt -- except a module docstring in a script that *reads* `__doc__`,
+  which is then on its way to stdout; the test computes that per file.
+  Matching `ArgumentParser(description=__doc__)` was too narrow and missed
+  `print(__doc__)`, which is how four em dashes stayed in
+  `experiment_native_tray_icon.py`'s banner. Any load of the name now counts:
+  it subsumes the argparse case, cannot produce a false negative, and the
+  cost of a false positive is only that one more docstring stays ASCII.
 - **The benchmark report's agreement column cannot rank the leading cluster,
   and must never be quoted as if it could.** It is a `difflib` ratio of word
   tokens against `large-v3`, and re-running it with each working transcript as
