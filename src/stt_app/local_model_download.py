@@ -8,6 +8,14 @@ from pathlib import Path
 
 LOCAL_MODEL_DOWNLOAD_WORKER_ARG = "--local-model-download-worker"
 
+# Every wait on the download child is bounded. The caller is the download
+# queue worker thread, and it holds the single in-process download slot --
+# plus, through `file_lock`, the machine-wide one -- for as long as it is
+# blocked here.
+_TERMINATE_GRACE_S = 2.0
+_KILL_GRACE_S = 2.0
+_DRAIN_TIMEOUT_S = 5.0
+
 
 def start_model_download_process(
     model_name: str,
@@ -75,18 +83,45 @@ def terminate_model_download_process(process: subprocess.Popen[str] | None) -> N
         return
     try:
         process.terminate()
-        process.wait(timeout=2.0)
+        process.wait(timeout=_TERMINATE_GRACE_S)
+        return
     except Exception:
-        try:
-            process.kill()
-        except Exception:
-            pass
+        pass
+    try:
+        process.kill()
+    except Exception:
+        pass
+    try:
+        # Reap it, or at least find out that we could not. Without this the
+        # function returned while the child was still alive, and its callers go
+        # straight on to delete the `*.incomplete` files that child may still
+        # be writing. On Windows `terminate()` and `kill()` are the same
+        # `TerminateProcess` call, so a child that outlived the first wait is
+        # not going to fall over on the second one either -- typically one
+        # wedged in an uninterruptible kernel read on the download socket.
+        process.wait(timeout=_KILL_GRACE_S)
+    except Exception:
+        pass
 
 
 def model_download_process_error(process: subprocess.Popen[str]) -> str:
     error_log = getattr(process, "_stt_error_log", None)
     try:
-        _stdout, stderr = process.communicate()
+        _stdout, stderr = process.communicate(timeout=_DRAIN_TIMEOUT_S)
+    except subprocess.TimeoutExpired:
+        # A child that survived terminate and kill still owns the pipe, and an
+        # unbounded `communicate()` there blocked this thread permanently: the
+        # Settings cancel never completed, the download slot was never handed
+        # back, and every later download in this process -- plus the benchmark
+        # worker and `scripts/download_model.py`, which share the machine-wide
+        # lock -- waited on it until the app was restarted. Killing and
+        # draining once more is the documented way to finish a timed-out
+        # `communicate`; it is bounded for the same reason.
+        try:
+            process.kill()
+            _stdout, stderr = process.communicate(timeout=_DRAIN_TIMEOUT_S)
+        except Exception:
+            stderr = ""
     except Exception:
         stderr = ""
     if error_log is not None:

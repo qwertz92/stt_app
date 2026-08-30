@@ -64,7 +64,7 @@ def test_model_download_process_error_reads_and_closes_spooled_log():
             )
             self._stt_error_log.write("first line\nlast useful detail\n")
 
-        def communicate(self):
+        def communicate(self, timeout=None):
             return None, None
 
     process = _Process()
@@ -92,3 +92,68 @@ def test_terminate_model_download_process_stops_running_process():
     local_model_download.terminate_model_download_process(_Process())
 
     assert calls == ["terminate", "wait:2.0"]
+
+
+def test_a_child_that_ignores_terminate_is_waited_for_after_the_kill():
+    """Returning while the child is alive races its own partial files.
+
+    The callers go straight on to delete the `*.incomplete` files the child may
+    still be writing. On Windows `terminate()` and `kill()` are the same
+    `TerminateProcess` call, so a child that outlived the first wait will not
+    fall over on the second either -- but the caller must at least find that
+    out instead of assuming it.
+    """
+    calls: list[str] = []
+
+    class _StubbornProcess:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            calls.append("terminate")
+
+        def kill(self):
+            calls.append("kill")
+
+        def wait(self, timeout):
+            calls.append(f"wait:{timeout}")
+            if len(calls) == 2:
+                raise subprocess.TimeoutExpired("worker", timeout)
+
+    local_model_download.terminate_model_download_process(_StubbornProcess())
+
+    assert calls == ["terminate", "wait:2.0", "kill", "wait:2.0"]
+
+
+def test_reading_the_error_never_waits_on_the_child_for_ever():
+    """This runs on the download queue worker, which holds the download slot.
+
+    An unbounded `communicate()` on a child that survived terminate and kill
+    blocked it permanently: the Settings cancel never completed, the slot was
+    never handed back, and every later download in this process -- plus the
+    benchmark worker and scripts/download_model.py, which share the
+    machine-wide lock -- waited on it until the app was restarted.
+    """
+    calls: list[object] = []
+
+    class _WedgedProcess:
+        def __init__(self):
+            self._killed = False
+
+        def communicate(self, timeout=None):
+            calls.append(timeout)
+            if not self._killed:
+                raise subprocess.TimeoutExpired("worker", timeout)
+            return None, "worker gave up\n"
+
+        def kill(self):
+            calls.append("kill")
+            self._killed = True
+
+    process = _WedgedProcess()
+
+    assert (
+        local_model_download.model_download_process_error(process)
+        == "worker gave up"
+    )
+    assert calls == [5.0, "kill", 5.0], calls
