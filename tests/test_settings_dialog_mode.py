@@ -1985,6 +1985,111 @@ def test_a_crashed_benchmark_child_keeps_the_cases_it_already_streamed(
     _ = app
 
 
+def _benchmark_dialog(monkeypatch, tmp_path):
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda _model_dir="": ["small"],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.threading.Thread",
+        _ImmediateThread,
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._benchmark_history_store = BenchmarkHistoryStore(
+        path=tmp_path / "benchmark_history.json"
+    )
+    dialog._refresh_benchmark_history_list()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    QtTest.QTest.qWait(250)
+    dialog._set_benchmark_audio_path(str(audio_path))
+    return dialog
+
+
+def test_a_benchmark_worker_that_dies_outside_its_handlers_still_frees_the_dialog(
+    monkeypatch, tmp_path
+):
+    """`benchmark_finished` is the only way this thread hands control back.
+
+    It is what clears `_active_benchmark_thread`, and while that is set the
+    dialog counts as busy: Run stays disabled, Cancel stays enabled, and
+    `reload_from_store` is deferred -- for the life of the app, because the
+    settings dialog is never recreated. Anything the two `except` arms cannot
+    catch (a `BaseException`, or a `_benchmark_summary` call inside the arms
+    themselves) left exactly that state.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def _dies_hard(**_kwargs):
+        raise KeyboardInterrupt("worker interrupted")
+
+    monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", _dies_hard)
+    dialog = _benchmark_dialog(monkeypatch, tmp_path)
+
+    with pytest.raises(KeyboardInterrupt):
+        dialog._run_local_benchmark()
+
+    assert dialog._active_benchmark_thread is None, (
+        "the dialog stayed busy for the rest of the session"
+    )
+    assert dialog._benchmark_cancel_event is None
+    assert dialog.run_benchmark_button.isEnabled() is True
+    _ = app
+
+
+def test_a_successful_benchmark_reports_success_exactly_once(monkeypatch, tmp_path):
+    """The guard must not pre-empt the result it is guarding.
+
+    A `finally` runs before anything that follows the whole statement, so with
+    the success emit placed after the block the guard fired its failure first
+    and the real result arrived second, on every successful run. It lives in an
+    `else` clause instead.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    case = BenchmarkCase(
+        model="small",
+        device="auto",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=0.45,
+        runs=[
+            BenchmarkRun(
+                run_index=1,
+                seconds=1.2,
+                audio_duration_seconds=2.0,
+                real_time_factor=0.6,
+                transcript_chars=12,
+                transcript_words=2,
+                detected_language="en",
+                language_probability=0.98,
+            )
+        ],
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.run_benchmark_cases",
+        lambda **kwargs: [case],
+    )
+    dialog = _benchmark_dialog(monkeypatch, tmp_path)
+
+    finished: list[tuple[bool, str]] = []
+    dialog.benchmark_finished.connect(
+        lambda success, text, payload: finished.append(
+            (success, str(payload.get("status")) if isinstance(payload, dict) else "")
+        )
+    )
+
+    dialog._run_local_benchmark()
+
+    assert finished == [(True, "completed")], finished
+    assert "Status: Failed" not in dialog.benchmark_summary_text.toPlainText()
+    _ = app
+
+
 def _dialog_with_store(settings: AppSettings):
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     store = _FakeSettingsStore(settings)

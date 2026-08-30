@@ -1,6 +1,7 @@
 """Settings dialog: benchmark mixin (split from settings_dialog.py)."""
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -36,6 +37,8 @@ from .settings_dialog_helpers import (
     _WheelPassthroughSpinBox,
 )
 from .ui_feedback import restore_vertical_scrollbar
+
+logger = logging.getLogger(__name__)
 
 _BENCHMARK_WINDOW_DEFAULT_SIZE = QtCore.QSize(860, 880)
 _BENCHMARK_WINDOW_MINIMUM_SIZE = QtCore.QSize(680, 560)
@@ -1366,8 +1369,33 @@ class _BenchmarkMixin:
 
         def _run() -> None:
             completed_cases: list[BenchmarkCase] = []
-            environment = collect_benchmark_environment()
-            self._current_benchmark_environment = environment
+            environment: BenchmarkEnvironment | None = None
+            emitted = False
+
+            def _finish(
+                success: bool,
+                summary: str,
+                status: str,
+                cases: list[BenchmarkCase],
+                error: str = "",
+            ) -> None:
+                nonlocal emitted
+                emitted = True
+                payload: dict[str, object] = {
+                    "cases": cases,
+                    "options": options,
+                    "status": status,
+                }
+                if environment is not None:
+                    payload["environment"] = environment
+                if error:
+                    # Separate from the summary because they go to different
+                    # places: the summary is what History stores, the error is
+                    # what the status line says.
+                    payload["error"] = error
+                _emit_background_signal(
+                    self, "benchmark_finished", success, summary, payload
+                )
 
             def _case_finished(case: BenchmarkCase) -> None:
                 completed_cases.append(case)
@@ -1377,6 +1405,8 @@ class _BenchmarkMixin:
                 return cancel_event.is_set()
 
             try:
+                environment = collect_benchmark_environment()
+                self._current_benchmark_environment = environment
                 # Shutdown may arrive while environment metadata is still being
                 # collected. Do not launch a new benchmark child process after
                 # cancellation has already been requested.
@@ -1400,23 +1430,16 @@ class _BenchmarkMixin:
                     cancel_check=_is_canceled,
                 )
             except BenchmarkCancelled:
-                summary = self._benchmark_summary(
-                    completed_cases,
-                    status="canceled",
-                    options=options,
-                    environment=environment,
-                )
-                _emit_background_signal(
-                    self,
-                    "benchmark_finished",
+                _finish(
                     True,
-                    summary,
-                    {
-                        "cases": completed_cases,
-                        "options": options,
-                        "status": "canceled",
-                        "environment": environment,
-                    },
+                    self._benchmark_summary(
+                        completed_cases,
+                        status="canceled",
+                        options=options,
+                        environment=environment,
+                    ),
+                    "canceled",
+                    completed_cases,
                 )
                 return
             except Exception as exc:
@@ -1429,48 +1452,60 @@ class _BenchmarkMixin:
                 # Benchmark History, Export stayed disabled and the Details
                 # overview kept reading "Status: Running", contradicting two
                 # on-screen promises that partial runs are saved.
-                summary = self._benchmark_summary(
-                    completed_cases,
-                    status="failed",
-                    options=options,
-                    environment=environment,
-                )
-                _emit_background_signal(
-                    self,
-                    "benchmark_finished",
+                _finish(
                     False,
-                    summary,
-                    {
-                        "cases": completed_cases,
-                        "options": options,
-                        "status": "failed",
-                        "environment": environment,
-                        # Separate from the summary because they go to
-                        # different places: the summary is what History
-                        # stores, the error is what the status line says.
-                        "error": str(exc),
-                    },
+                    self._benchmark_summary(
+                        completed_cases,
+                        status="failed",
+                        options=options,
+                        environment=environment,
+                    ),
+                    "failed",
+                    completed_cases,
+                    error=str(exc),
                 )
                 return
-
-            status = "completed_with_errors" if any(case.error for case in cases) else "completed"
-            _emit_background_signal(
-                self,
-                "benchmark_finished",
-                True,
-                self._benchmark_summary(
+            else:
+                # An `else` clause, not code after the block: a `finally` runs
+                # BEFORE anything that follows the statement, so the guard
+                # below would have fired its failure emit first and the real
+                # result would have arrived second, on every successful run.
+                status = (
+                    "completed_with_errors"
+                    if any(case.error for case in cases)
+                    else "completed"
+                )
+                _finish(
+                    True,
+                    self._benchmark_summary(
+                        cases,
+                        status=status,
+                        options=options,
+                        environment=environment,
+                    ),
+                    status,
                     cases,
-                    status=status,
-                    options=options,
-                    environment=environment,
-                ),
-                {
-                    "cases": cases,
-                    "options": options,
-                    "status": status,
-                    "environment": environment,
-                },
-            )
+                )
+            finally:
+                if not emitted:
+                    # `benchmark_finished` is the only way this thread hands
+                    # control back to the UI: it is what clears
+                    # `_active_benchmark_thread`, and while that is set the
+                    # dialog counts as busy -- Run stays disabled, Cancel stays
+                    # enabled, and `reload_from_store` is deferred, for the
+                    # life of the app, because the settings dialog is never
+                    # recreated. Anything the arms above cannot catch lands in
+                    # exactly that state: a `BaseException`, or one of the
+                    # `_benchmark_summary` calls inside the arms themselves.
+                    # Nothing is computed here for the same reason.
+                    logger.exception("benchmark_worker_failed")
+                    _finish(
+                        False,
+                        "",
+                        "failed",
+                        completed_cases,
+                        error="The benchmark stopped unexpectedly.",
+                    )
 
         self._active_benchmark_thread = threading.Thread(
             target=_run,
