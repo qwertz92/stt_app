@@ -378,6 +378,14 @@ class TextInserter:
                     # empty and putting it back is the only way the user gets
                     # their content again.
                     clipboard_was_set = True
+                    # And that holds even when the caller asked us NOT to
+                    # restore. `restore_clipboard=False` comes from "Keep
+                    # transcript in clipboard", i.e. "leave what we wrote in
+                    # place" -- and we wrote nothing. Without this line that
+                    # one setting turned the case this class exists for into
+                    # the loss it exists to prevent: the clipboard left empty,
+                    # the user's content gone and no transcript in its place.
+                    restore_previous_state = True
                     raise
                 clipboard_was_set = True
                 clipboard_marker = self._clipboard_sequence_number()

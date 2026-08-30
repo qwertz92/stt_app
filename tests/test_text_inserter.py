@@ -832,6 +832,39 @@ class _EmptiedThenFailedBackend(LegacyBackend):
         )
 
 
+@pytest.mark.parametrize("keep_transcript_in_clipboard", [False, True])
+def test_an_emptied_clipboard_is_restored_even_when_the_transcript_should_stay(
+    keep_transcript_in_clipboard,
+):
+    """`restore_clipboard=False` means "keep what we wrote", not "keep nothing".
+
+    With "Keep transcript in clipboard" enabled the controller passes
+    `restore_clipboard=False`, so `restore_previous_state` was already False
+    before the set was even attempted. The `ClipboardEmptiedError` handler
+    only marked the clipboard as ours, and the restore is guarded by both
+    flags -- so in that one configuration the destructive half of the set had
+    run, the write half had not, and nothing put the user's clipboard back.
+    It was left empty: their content destroyed and no transcript in its place.
+    """
+    backend = _EmptiedThenFailedBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(ClipboardEmptiedError):
+        inserter.insert_text_with_options(
+            "transcript",
+            target_hwnd=None,
+            paste_mode="wm_paste",
+            restore_clipboard=not keep_transcript_in_clipboard,
+        )
+
+    assert "restore" in backend.calls, (
+        "the clipboard we emptied was never put back "
+        f"(keep_transcript_in_clipboard={keep_transcript_in_clipboard}): "
+        f"{backend.calls}"
+    )
+    assert backend.state["text"] == "old"
+
+
 class _CouldNotOpenBackend(LegacyBackend):
     """`OpenClipboard` failed, so nothing was touched."""
 
