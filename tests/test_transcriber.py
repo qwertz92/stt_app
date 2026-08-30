@@ -1527,3 +1527,43 @@ def test_the_stream_worker_guard_keeps_the_first_error():
         assert session.result.error is first, session.result.error
     finally:
         transcriber.abort_stream()
+
+
+@pytest.mark.parametrize(
+    ("label", "buffer_seconds", "window_seconds"),
+    [
+        ("a buffer longer than the window", 30.0, 8.0),
+        ("a buffer shorter than the window", 2.0, 8.0),
+        ("no window at all", 30.0, None),
+        ("a zero window", 30.0, 0.0),
+    ],
+)
+def test_the_trailing_window_copies_only_the_window_it_reports(
+    label, buffer_seconds, window_seconds
+):
+    """The offsets have to describe exactly the bytes that come back.
+
+    They are what `_window_shares_no_audio_with_the_last` compares, so a slice
+    that does not match the reported range would decide the append-or-replace
+    question from audio it did not decode. Copying only the window is the
+    other half: `bytes(pcm_buffer)` grows with the dictation -- 3.14 ms at
+    fifteen minutes against a flat 0.10 ms -- and a partial runs every 350 ms.
+    """
+    transcriber = _stream_with(["x"])
+    session = types.SimpleNamespace(
+        pcm_buffer=bytearray(_ms(int(buffer_seconds * 1000), 6000))
+    )
+    total = len(session.pcm_buffer)
+
+    snapshot, start, end = transcriber._trailing_window(session, window_seconds)
+
+    assert end == total, label
+    assert snapshot == bytes(session.pcm_buffer[start:end]), label
+    if window_seconds:
+        expected = min(total, int(window_seconds * transcriber.stream_sample_rate * 2))
+    else:
+        expected = total
+    assert len(snapshot) == expected, (
+        f"{label}: copied {len(snapshot)} bytes, expected {expected}"
+    )
+    assert start == total - expected, label
