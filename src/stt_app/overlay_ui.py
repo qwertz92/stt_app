@@ -61,6 +61,37 @@ _PIN_BUTTON_WIDTH = 74
 _TEXT_ACTION_BUTTON_WIDTH = 64
 
 
+# Cancel, Retry and Insert share one slot and must stay the same size.
+_ACTION_SLOT_CAPTIONS = ("Retry", "Cancel", "Insert")
+
+
+def _fit_button(
+    button: QtWidgets.QAbstractButton,
+    width: int,
+    height: int,
+    *captions: str,
+) -> None:
+    """Pin ``width`` x ``height``, widened to whatever the captions need.
+
+    See `OverlayUI._fit_buttons_to_font`, the only caller, for why the
+    constants alone are not enough. `sizeHint` is computed from the content
+    and the style and is not clamped by an existing fixed size, so calling
+    this on an already-pinned button is idempotent.
+    """
+    original = button.text()
+    widest = 0
+    tallest = 0
+    try:
+        for caption in captions or (original,):
+            button.setText(caption)
+            hint = button.sizeHint()
+            widest = max(widest, hint.width())
+            tallest = max(tallest, hint.height())
+    finally:
+        button.setText(original)
+    button.setFixedSize(max(width, widest), max(height, tallest))
+
+
 class _OverlayLanguageButton(QtWidgets.QPushButton):
     _ARROW_AREA_WIDTH = 22
     _ARROW_HALF_WIDTH = 4
@@ -395,20 +426,11 @@ class OverlayUI(QtWidgets.QWidget):
         header = QtWidgets.QHBoxLayout(self._header_widget)
         header.setContentsMargins(0, 0, 0, 0)
         header.setSpacing(_HEADER_SPACING)
-        # Equalise the two button groups before they are laid out, so the
-        # stretching state label between them is centred on the header — and
-        # therefore on the overlay, whose horizontal margins are symmetric.
-        self._balance_header_flanks(
-            _HEADER_SPACING,
-            (
-                (self._record_button, RECORD_BUTTON_CAPTIONS),
-                (self._always_on_top_button, PIN_BUTTON_CAPTIONS),
-            ),
-            (
-                (self._clear_button, (CLEAR_BUTTON_TEXT,)),
-                (self._copy_button, COPY_BUTTON_CAPTIONS),
-            ),
-        )
+        # The two button groups are equalised in `_fit_buttons_to_font`, at the
+        # end of this constructor rather than here: it has to run after the
+        # first `set_state` has applied the stylesheet, and it changes the
+        # widths it then balances. Setting a width after `addWidget` is fine --
+        # the layout reads sizes when it is activated, which happens there too.
         header.addWidget(self._record_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._always_on_top_button, 0, QtCore.Qt.AlignLeft)
         header.addWidget(self._state_label, 1)
@@ -459,6 +481,10 @@ class OverlayUI(QtWidgets.QWidget):
         # `set_state` documents). Then take the baseline *structurally*
         # rather than from `self.size()`.
         self.set_state("Idle", "Ready.")
+        # Only now does a button's `sizeHint` include the padding and border
+        # the stylesheet adds, so this is the first point at which the sizes
+        # below can be measured rather than guessed.
+        self._fit_buttons_to_font()
         self._layout.activate()
         self.layout().activate()
         self._initial_compact_size = QtCore.QSize(
@@ -467,6 +493,63 @@ class OverlayUI(QtWidgets.QWidget):
         self.set_state("Idle", OVERLAY_INITIAL_DETAIL)
         self.set_opacity_percent(DEFAULT_OVERLAY_OPACITY_PERCENT, emit_signal=False)
         self._sync_always_on_top_button()
+
+    def _fit_buttons_to_font(self) -> None:
+        """Grow any pinned button whose caption no longer fits, then balance.
+
+        Every button size in this file is a pixel constant chosen for the
+        default 9 pt Segoe UI. Windows' Accessibility > "Text size" raises the
+        application font's point size *without* changing the DPI, so Qt's
+        device-pixel-ratio does not scale these constants with it and the
+        captions are simply cut off. Measured on this machine before this
+        pass: at 9 pt everything fits, so the shipped layout is unchanged; at
+        11.2 pt Record needs 82 px against its pinned 78 and Reset Pos 80
+        against 74; at 13.5 pt nine buttons clip and every one of them is 4 px
+        too short; at 18 pt Record needs 108x34 against 78x24.
+
+        Each entry lists every caption its button can ever show, because a
+        caption swap -- Record/Stop, Pinned/Floating, Copy/Copied -- must not
+        reflow its row. Sizing from the caption a button happens to carry at
+        construction time would leave the wider one clipped.
+        """
+        for button, width, height, captions in (
+            (self._record_button, _RECORD_BUTTON_WIDTH, 24, RECORD_BUTTON_CAPTIONS),
+            (self._history_button, 68, 22, ()),
+            (self._always_on_top_button, _PIN_BUTTON_WIDTH, 24, PIN_BUTTON_CAPTIONS),
+            (self._copy_button, _TEXT_ACTION_BUTTON_WIDTH, 24, COPY_BUTTON_CAPTIONS),
+            (self._edit_button, 58, 22, ()),
+            (self._clear_button, _TEXT_ACTION_BUTTON_WIDTH, 24, ()),
+            (self._reset_pos_button, 74, 22, ()),
+            # Cancel, Retry and Insert never apply at the same time and share
+            # one slot, so all three are sized for the widest of the three
+            # captions: a slot whose width followed the action it shows would
+            # move the controls row on every state change.
+            (self._retry_button, 64, 22, _ACTION_SLOT_CAPTIONS),
+            (self._cancel_button, 64, 22, _ACTION_SLOT_CAPTIONS),
+            (self._insert_button, 64, 22, _ACTION_SLOT_CAPTIONS),
+        ):
+            _fit_button(button, width, height, *captions)
+        # The width is already measured from the captions; only the height was
+        # a constant, and it clips from 13.5 pt onward.
+        self._language_button.setFixedSize(
+            self._widest_language_caption_width(),
+            max(22, self._language_button.sizeHint().height()),
+        )
+        # Balanced last, because it widens the narrower group from the sizes
+        # set above. The stretching state label between the two groups is
+        # centred on the header -- and so on the overlay, whose horizontal
+        # margins are symmetric -- only while both groups are equally wide.
+        self._balance_header_flanks(
+            _HEADER_SPACING,
+            (
+                (self._record_button, RECORD_BUTTON_CAPTIONS),
+                (self._always_on_top_button, PIN_BUTTON_CAPTIONS),
+            ),
+            (
+                (self._clear_button, (CLEAR_BUTTON_TEXT,)),
+                (self._copy_button, COPY_BUTTON_CAPTIONS),
+            ),
+        )
 
     @staticmethod
     def _balance_header_flanks(

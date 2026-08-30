@@ -1635,3 +1635,101 @@ def test_the_copy_button_is_not_repolished_on_every_state_change():
         overlay._copy_button.setProperty = original
         overlay.close()
         overlay.deleteLater()
+
+
+_SCALED_BUTTON_CAPTIONS = {
+    "_record_button": ("Record", "Stop"),
+    "_history_button": ("History",),
+    "_always_on_top_button": ("Pinned", "Floating"),
+    "_copy_button": ("Copy", "Copied"),
+    "_edit_button": ("Edit",),
+    "_clear_button": ("Clear",),
+    "_reset_pos_button": ("Reset Pos",),
+    "_language_button": ("Lang: Auto", "Lang: Luxembourgish"),
+    "_retry_button": ("Retry",),
+    "_cancel_button": ("Cancel",),
+    "_insert_button": ("Insert",),
+}
+
+
+@pytest.mark.parametrize("point_scale", [1.0, 1.25, 1.5, 2.0])
+def test_no_overlay_button_clips_its_caption_at_a_larger_system_font(point_scale):
+    """Windows' Accessibility > "Text size" raises the font, not the DPI.
+
+    Qt's device-pixel-ratio scales a pixel constant with the *display* scaling
+    and not with that setting, so every pinned button size in `overlay_ui` was
+    chosen for 9 pt Segoe UI and simply cut the caption off above it. Measured
+    before `_fit_buttons_to_font`: at 11.2 pt Record needed 82 px against its
+    pinned 78, at 13.5 pt nine buttons clipped and each was 4 px too short, and
+    at 18 pt Record needed 108x34 against 78x24.
+
+    The captions are written out here rather than read from the source, so a
+    caption a button can show but nobody sized it for fails this test.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * point_scale)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            clipped = []
+            for name, captions in _SCALED_BUTTON_CAPTIONS.items():
+                button = getattr(overlay, name)
+                pinned = button.size()
+                previous = button.text()
+                try:
+                    for caption in captions:
+                        button.setText(caption)
+                        hint = button.sizeHint()
+                        if hint.width() > pinned.width():
+                            clipped.append(
+                                f"{name} {caption!r}: {pinned.width()} px wide, "
+                                f"needs {hint.width()} px"
+                            )
+                        if hint.height() > pinned.height():
+                            clipped.append(
+                                f"{name} {caption!r}: {pinned.height()} px tall, "
+                                f"needs {hint.height()} px"
+                            )
+                finally:
+                    button.setText(previous)
+            assert not clipped, (
+                f"at {scaled.pointSizeF():.1f} pt: " + "; ".join(clipped)
+            )
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)
+
+
+def test_the_header_flanks_stay_equal_at_a_larger_system_font():
+    """Growing the buttons must not move the status text off centre.
+
+    The flanks are balanced from the sizes `_fit_buttons_to_font` sets, so the
+    balancing has to run after them -- balancing first and then widening one
+    group is exactly the 12 px offset that pass was written to remove.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    original_font = app.font()
+    try:
+        scaled = QtGui.QFont(original_font)
+        scaled.setPointSizeF(original_font.pointSizeF() * 1.5)
+        app.setFont(scaled)
+        overlay = OverlayUI()
+        try:
+            left = (
+                overlay._record_button.width()
+                + overlay._always_on_top_button.width()
+            )
+            right = overlay._clear_button.width() + overlay._copy_button.width()
+
+            assert left == right, (
+                f"the header flanks differ by {left - right} px at "
+                f"{scaled.pointSizeF():.1f} pt"
+            )
+        finally:
+            overlay.deleteLater()
+    finally:
+        app.setFont(original_font)
