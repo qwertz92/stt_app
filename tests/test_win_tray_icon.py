@@ -329,6 +329,30 @@ def test_a_constructor_that_fails_takes_its_window_with_it():
     assert api.destroyed == [_HWND], (
         "the hidden window and its handler entry outlived the failure"
     )
+    assert api.destroyed_icons == [], "no icon was loaded, so none may be destroyed"
+
+
+def test_a_constructor_that_fails_after_loading_the_icon_takes_that_too():
+    """`load_icon` can succeed before a later step raises.
+
+    The first version of this cleanup arm destroyed only the window, so a
+    failure in `register_window_message` leaked the HICON that `LoadImageW`
+    had just handed us -- an exception arm written without re-deriving what
+    it owns by then.
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    api = FakeWin32TrayApi()
+
+    def _no_message(_name):
+        raise OSError("RegisterWindowMessageW failed")
+
+    api.register_window_message = _no_message
+
+    with pytest.raises(OSError):
+        WindowsTrayIcon(icon_path="app.ico", api=api)
+
+    assert api.destroyed == [_HWND]
+    assert api.destroyed_icons == [7], "the loaded icon handle leaked"
 
 
 def test_create_tray_icon_falls_back_when_the_native_path_fails(monkeypatch):

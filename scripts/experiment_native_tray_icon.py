@@ -124,6 +124,17 @@ def _high_word(value: int) -> int:
     return (value >> 16) & 0xFFFF
 
 
+def _signed_word(value: int) -> int:
+    """Read a packed 16-bit field as signed, like ``GET_X_LPARAM``.
+
+    Mirrors ``win_tray_icon.signed_word``. A monitor left of the
+    primary gives negative screen coordinates, and read unsigned an
+    x of -1200 arrives as 64336, putting the menu off-screen.
+    """
+    packed = int(value) & 0xFFFF
+    return packed - 0x10000 if packed & 0x8000 else packed
+
+
 def _show_native_menu(hwnd: int, x: int, y: int) -> None:
     menu = user32.CreatePopupMenu()
     if not menu:
@@ -177,7 +188,7 @@ def main() -> int:
             # NOTIFYICON_VERSION_4: event in the low word of lParam, icon id in
             # its high word, screen coordinates in wParam.
             if _low_word(lparam) == WM_CONTEXTMENU:
-                x, y = _low_word(wparam), _high_word(wparam)
+                x, y = _signed_word(wparam), _signed_word(int(wparam) >> 16)
                 if _high_word(lparam) == QT_MENU_ICON_ID:
                     user32.SetForegroundWindow(hwnd)
                     qt_menu.popup(QtCore.QPoint(x, y))

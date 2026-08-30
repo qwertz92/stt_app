@@ -151,10 +151,6 @@ def low_word(value: int) -> int:
     return int(value) & 0xFFFF
 
 
-def high_word(value: int) -> int:
-    return (int(value) >> 16) & 0xFFFF
-
-
 def signed_word(value: int) -> int:
     """Read a packed 16-bit field as a signed number, like ``GET_X_LPARAM``.
 
@@ -461,6 +457,7 @@ class WindowsTrayIcon(QtCore.QObject):
         self._visible = False
         self._closed = False
         self._hwnd = self._api.create_window(self._window_proc)
+        self._icon = None
         try:
             self._icon = self._api.load_icon(icon_path)
             # Explorer re-broadcasts this after a restart; without re-adding
@@ -477,6 +474,15 @@ class WindowsTrayIcon(QtCore.QObject):
             # restart the dead object's `TaskbarCreated` handler would add a
             # second, phantom icon beside the fallback's.
             self._closed = True
+            # Both, in the order `close()` uses. `load_icon` may already
+            # have succeeded when `register_window_message` raises, and
+            # the first version of this arm destroyed only the window --
+            # adding an exception arm without re-deriving what it owns.
+            if self._icon is not None:
+                try:
+                    self._api.destroy_icon(self._icon)
+                except Exception:
+                    self._logger.exception("tray_icon_cleanup_failed")
             try:
                 self._api.destroy_window(self._hwnd)
             except Exception:
@@ -536,10 +542,11 @@ class WindowsTrayIcon(QtCore.QObject):
         try:
             self.hide()
         finally:
-            try:
-                self._api.destroy_icon(self._icon)
-            except Exception:
-                self._logger.exception("tray_icon_destroy_failed")
+            if self._icon is not None:
+                try:
+                    self._api.destroy_icon(self._icon)
+                except Exception:
+                    self._logger.exception("tray_icon_destroy_failed")
             self._api.destroy_window(self._hwnd)
 
     # -- message handling --------------------------------------------------
