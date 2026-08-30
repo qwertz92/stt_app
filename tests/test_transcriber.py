@@ -1380,6 +1380,134 @@ def test_a_decode_slower_than_the_window_keeps_the_earlier_transcript():
     assert warned, "a machine that cannot keep up was never reported"
 
 
+def test_a_disjoint_window_of_silence_is_not_appended_on_trust():
+    """The one unguarded append in the design, and why it had to be closed.
+
+    The pause route demands `_stream_window_has_speech` before it appends a
+    window that shares no audio with what came before. The slow-decode route
+    reaches the same append through different geometry and demanded nothing.
+    A decode near RTF 1 makes each increment about as long as the window, so
+    one keystroke in it defeats `_stream_slice_is_quiet` -- a peak measure
+    over the whole increment -- `silent_seconds` resets, the pause route never
+    runs, and a mostly-silent window is decoded, invented, appended AND pinned
+    as the floor. Once per decode: measured over five whisper-typical silence
+    hallucinations, 23 words against the 5 a bounded replace keeps.
+
+    Here the increment is one loud second followed by eight silent ones, so
+    the increment is not quiet but the eight-second window that is actually
+    decoded is silence.
+    """
+    transcriber = _slow_decode_stream(
+        ["erster teil der nachricht", "Untertitel von Stephanie Geiges"]
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        _push_and_wait(transcriber, _ms(9000, 6000))
+        _emit_partial_now(transcriber)
+        assert (
+            transcriber._stream_session.result.merged_text
+            == "erster teil der nachricht"
+        )
+
+        # Loud enough not to be skipped, silent where it counts.
+        _push_and_wait(transcriber, _ms(1000, 6000) + _ms(8000, 0))
+        _emit_partial_now(transcriber)
+        merged = transcriber._stream_session.result.merged_text
+    finally:
+        transcriber.stop_stream()
+
+    assert merged != (
+        "erster teil der nachricht Untertitel von Stephanie Geiges"
+    ), (
+        "a hallucination decoded from eight seconds of silence was appended on "
+        f"trust: {merged!r}"
+    )
+
+
+def test_the_decoded_window_is_measured_by_its_recorded_range():
+    """Not the trailing window -- by the time we can ask, they differ.
+
+    Disjointness is only knowable after the decode, and this path exists
+    because that decode lasted longer than the window itself, so the capture
+    thread appended a whole window's worth of new audio meanwhile. Measuring
+    "the trailing window" would then measure audio the model never saw, which
+    is the wrong question in exactly the case that matters.
+    """
+    transcriber = _slow_decode_stream(["x"])
+    silence = _ms(8000, 0)
+    loud = _ms(8000, 6000)
+    session = types.SimpleNamespace(
+        pcm_buffer=bytearray(silence + loud),
+        result=local_faster_whisper._StreamResult(
+            last_window_start=0,
+            last_window_end=len(silence),
+        ),
+    )
+
+    assert transcriber._decoded_window_has_speech(session) is False, (
+        "the silent range that was actually decoded was reported as speech"
+    )
+    assert transcriber._stream_window_has_speech(session) is True, (
+        "precondition: the trailing window is loud, so the two questions "
+        "really do have different answers here"
+    )
+
+
+def test_audio_that_cannot_be_measured_is_never_appended_on_trust():
+    """"Cannot tell" must fall back to the safe aligning path.
+
+    Appending is the risky direction: it is what grew a transcript to 896
+    invented words during two minutes of an open microphone. The meter
+    returns ``None`` rather than ``0.0`` for audio it cannot measure, and
+    that has to be refused, not waved through.
+    """
+    transcriber = _slow_decode_stream(["x"])
+
+    assert transcriber._pcm_has_enough_speech_to_append(b"") is False
+    # One byte is not a whole int16 sample, so there is nothing to measure.
+    assert transcriber._pcm_has_enough_speech_to_append(b"\x00") is False
+
+
+def test_a_disjoint_final_window_of_silence_is_not_appended_on_trust():
+    """The finalizer needs the same proof as the partial path.
+
+    Here the loss is worse: the fast finalizer runs once, at the moment the
+    transcript is handed over, so an invented window appended on trust goes
+    straight into the document and into history.
+
+    The tail is silence plus one short transient, which is what makes it
+    reach the decode at all: `_stream_tail_window_is_silent` is a peak
+    measure and the transient defeats it, while the 20 ms-bucketed longest
+    run stays far below the append cut.
+    """
+    transcriber = _slow_decode_stream(
+        ["erster teil der nachricht", "Untertitel von Stephanie Geiges"]
+    )
+    transcriber.start_stream(on_partial=lambda text: None)
+    try:
+        _push_and_wait(transcriber, _ms(9000, 6000))
+        _emit_partial_now(transcriber)
+        assert (
+            transcriber._stream_session.result.merged_text
+            == "erster teil der nachricht"
+        )
+        # Exactly one window of new audio, so the finalizer's window starts
+        # where the partial's ended: disjoint, with nothing shared.
+        _push_and_wait(
+            transcriber, _ms(20, 6000) + _ms(7980, 0)
+        )
+        final_text = transcriber.stop_stream()
+    finally:
+        transcriber.abort_stream()
+
+    assert final_text != (
+        "erster teil der nachricht Untertitel von Stephanie Geiges"
+    ), (
+        "the finalizer appended a hallucination decoded from a silent window: "
+        f"{final_text!r}"
+    )
+
+
 def test_a_final_window_that_shares_no_audio_keeps_the_dictation():
     """The finalizer has the same seam, and there it costs everything at once.
 
@@ -1448,22 +1576,36 @@ def test_overlapping_windows_still_merge_by_alignment():
         ("nothing decoded yet", 0, 0, False),
     ],
 )
+@pytest.mark.parametrize("pause_explains_the_gap", [False, True])
 def test_disjoint_windows_are_recognised_at_the_boundary(
-    label, previous_end, window_start, expected
+    label, previous_end, window_start, expected, pause_explains_the_gap
 ):
+    """The verdict is geometry; only the warning depends on the cause.
+
+    Two windows share no audio either because a decode took longer than the
+    window (speech in the gap was never decoded -- a real defect worth a
+    warning) or because the silence gate skipped every partial during a pause,
+    which stops `last_window_end` advancing while the buffer grows. The gap is
+    then measured silence and nothing was lost. Warning there was false three
+    times over, and because the warning latches per session, one ordinary
+    thinking pause consumed it and the genuine case could never be reported
+    again.
+    """
     transcriber = _slow_decode_stream(["x"])
     session = types.SimpleNamespace(
         result=local_faster_whisper._StreamResult(last_window_start=window_start)
     )
 
     disjoint = transcriber._window_shares_no_audio_with_the_last(
-        session, previous_end
+        session,
+        previous_end,
+        pause_explains_the_gap=pause_explains_the_gap,
     )
 
     assert disjoint is expected, label
-    assert session.result.slow_decode_warned is expected, (
-        f"{label}: the warning did not follow the verdict"
-    )
+    assert session.result.slow_decode_warned is (
+        expected and not pause_explains_the_gap
+    ), f"{label}: the warning did not follow the cause"
 
 
 def test_a_dying_stream_worker_is_reported_instead_of_vanishing():
@@ -1484,7 +1626,10 @@ def test_a_dying_stream_worker_is_reported_instead_of_vanishing():
     def _boom(_pcm_bytes):
         raise MemoryError("the meter died")
 
-    transcriber.start_stream(on_partial=lambda text: None)
+    reported: list[str] = []
+    transcriber.start_stream(
+        on_partial=lambda text: None, on_error=reported.append
+    )
     try:
         transcriber._stream_slice_is_quiet = _boom
         _push_and_wait(transcriber, _ms(400, 6000))
@@ -1494,12 +1639,23 @@ def test_a_dying_stream_worker_is_reported_instead_of_vanishing():
             time.sleep(0.01)
         assert not worker.is_alive(), "the worker survived the raising meter"
 
+        # Reported when it happens, not only when the user next presses stop.
+        # `session.result.error` alone is read at stop time, so until then the
+        # live text just stops advancing -- indistinguishable from having
+        # stopped talking -- and everything said meanwhile is lost undecoded.
+        assert reported, (
+            "the worker died without telling the controller, so the session "
+            "kept recording into nothing"
+        )
+        assert "the meter died" in reported[0], reported
+
         with pytest.raises(TranscriptionError) as failure:
             transcriber.stop_stream()
     finally:
         transcriber.abort_stream()
 
     assert "the meter died" in str(failure.value), failure.value
+    assert len(reported) == 1, f"the failure was reported twice: {reported}"
 
 
 def test_the_stream_worker_guard_keeps_the_first_error():

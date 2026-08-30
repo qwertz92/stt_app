@@ -861,21 +861,34 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         detected". A windowed build has no stderr either, so
         `threading.excepthook` printed the traceback nowhere at all.
 
-        Recording the error instead routes it through the controller's failure
-        path, which keeps the live transcript. It is deliberately not
-        re-raised: this is the top of a worker thread, so re-raising only
-        writes to that same missing stderr.
+        Recording the error routes it through the controller's failure path,
+        which keeps the live transcript. It is deliberately not re-raised:
+        this is the top of a worker thread, so re-raising only writes to that
+        same missing stderr.
+
+        Recording it is not enough on its own, and that was the first version
+        of this guard. `session.result.error` is read at *stop* time, so until
+        the user presses the hotkey nothing on screen changes: the live text
+        simply stops advancing, which is indistinguishable from having stopped
+        talking. Everything said between the failure and that keypress is
+        never decoded and cannot be recovered, and the capture keeps pushing
+        ~32 kB/s into a queue nobody drains. `_notify_stream_error` is what
+        ends the session there and then; it latches on `error_reported`, so
+        an error the decode handler already reported is not reported twice.
         """
         try:
             self._run_stream_worker(session)
         except BaseException as exc:
             logger.exception("streaming_worker_failed")
-            if session.result.error is None:
-                session.result.error = (
+            failure = session.result.error
+            if failure is None:
+                failure = (
                     exc
                     if isinstance(exc, Exception)
                     else RuntimeError(str(exc) or type(exc).__name__)
                 )
+                session.result.error = failure
+            self._notify_stream_error(session, failure)
 
     def _run_stream_worker(self, session: _StreamingSession) -> None:
         while True:
@@ -937,7 +950,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                     # from the one before it, and here it costs the whole
                     # dictation in a single step rather than gradually.
                     disjoint = self._window_shares_no_audio_with_the_last(
-                        session, previous_window_end
+                        session,
+                        previous_window_end,
+                        pause_explains_the_gap=tail_after_long_pause,
                     )
                     final_text = merge_rolling_window_transcript(
                         session.result.merged_text,
@@ -947,7 +962,9 @@ class LocalFasterWhisperTranscriber(ITranscriber):
                         # decoded window really holds speech. Reading
                         # `silent_seconds` alone let a transient at the end of a
                         # long pause append an invented sentence.
-                        new_segment=disjoint
+                        new_segment=(
+                            disjoint and self._decoded_window_has_speech(session)
+                        )
                         or (
                             tail_after_long_pause
                             and self._stream_window_has_speech(session)
@@ -1054,7 +1071,14 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if session.abort_requested.is_set():
             return
         previous_text = session.result.merged_text
-        if self._window_shares_no_audio_with_the_last(session, previous_window_end):
+        if self._window_shares_no_audio_with_the_last(
+            session,
+            previous_window_end,
+            # Captured before the reset a few lines up: a pause that has just
+            # ended has already zeroed `silent_seconds`, and that is exactly
+            # the case whose gap is silence rather than lost speech.
+            pause_explains_the_gap=pause_exceeded_window,
+        ):
             # The pause case reached by the other road, and proven rather than
             # measured: nothing already transcribed can be revised by a window
             # that shares none of its audio, and there is no seam to search
@@ -1063,7 +1087,20 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             # and that search does sometimes succeed by coincidence, on words
             # the two windows happen to share, which swallows the window
             # instead of appending it.
-            new_segment = True
+            #
+            # Appending on trust still requires the same proof the pause route
+            # demands: that the decoded window really holds speech. Without
+            # it this route was the one unguarded append in the design. A
+            # decode near RTF 1 makes every increment ~8 s long, so a single
+            # keystroke in it defeats `_stream_slice_is_quiet` (a peak
+            # measure), `silent_seconds` resets, the pause route never runs,
+            # and a mostly-silent window is decoded, invented, appended AND
+            # pinned as the floor -- once per decode, growing linearly.
+            # Measured over five whisper-typical silence hallucinations: 23
+            # words against the 5 a bounded replace keeps. A window that
+            # cannot be shown to hold speech falls through to that bounded
+            # replace instead.
+            new_segment = new_segment or self._decoded_window_has_speech(session)
         if new_segment:
             # Everything up to here is closed off: the pause proved no later
             # window shares audio with it.
@@ -1157,6 +1194,8 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         self,
         session: _StreamingSession,
         previous_window_end: int,
+        *,
+        pause_explains_the_gap: bool,
     ) -> bool:
         """Did the previous window's audio scroll fully out of this one?
 
@@ -1176,12 +1215,23 @@ class LocalFasterWhisperTranscriber(ITranscriber):
 
         Takes the previous end as an argument because the decode has already
         overwritten `last_window_end` by the time the caller can ask.
+
+        ``pause_explains_the_gap`` separates the two causes, and only one of
+        them is a defect. A slow decode leaves undecoded *speech* in the gap.
+        A pause leaves undecoded *silence*: the gate returns before the decode,
+        so `last_window_end` stops advancing while the buffer keeps growing,
+        and any pause longer than the window makes the next one disjoint with
+        nothing having been slow at all. Warning there stated three false
+        things -- that a partial took longer than the window, that this is why
+        they no longer overlap, and that speech was lost -- and because the
+        warning latches, an ordinary thinking pause consumed it and the real
+        RTF-near-1 condition could never be reported again in that session.
         """
         if previous_window_end <= 0:
             return False
         if session.result.last_window_start < previous_window_end:
             return False
-        if not session.result.slow_decode_warned:
+        if not pause_explains_the_gap and not session.result.slow_decode_warned:
             session.result.slow_decode_warned = True
             logger.warning(
                 "streaming_decode_slower_than_window: a partial took longer "
@@ -1192,20 +1242,17 @@ class LocalFasterWhisperTranscriber(ITranscriber):
             )
         return True
 
-    def _stream_window_has_speech(self, session: _StreamingSession) -> bool:
-        """Does the trailing window hold enough speech to append it on trust?
+    def _pcm_has_enough_speech_to_append(self, pcm: bytes) -> bool:
+        """Is there enough speech in ``pcm`` to append it without a seam?
 
-        Measured on the window that is actually decoded. Unmeasurable audio
-        returns ``None`` and is refused: appending is the risky direction, so
-        "cannot tell" must fall back to the safe aligning path.
+        Unmeasurable audio returns ``None`` from the meter and is refused:
+        appending is the risky direction, so "cannot tell" must fall back to
+        the safe aligning path.
         """
-        snapshot, _start, _end = self._trailing_window(
-            session, self.stream_partial_window_s
-        )
-        if not snapshot:
+        if not pcm:
             return False
         speech_seconds = measure_longest_speech_run_s(
-            snapshot,
+            pcm,
             self.stream_sample_rate,
             self.silence_gate_threshold,
             window_ms=STREAMING_SPEECH_RUN_WINDOW_MS,
@@ -1213,6 +1260,35 @@ class LocalFasterWhisperTranscriber(ITranscriber):
         if speech_seconds is None:
             return False
         return speech_seconds >= STREAMING_NEW_SEGMENT_MIN_SPEECH_S
+
+    def _stream_window_has_speech(self, session: _StreamingSession) -> bool:
+        """Does the window about to be decoded hold enough speech to append?
+
+        Asked *before* the decode, so the trailing window is the one that will
+        be decoded a moment later.
+        """
+        snapshot, _start, _end = self._trailing_window(
+            session, self.stream_partial_window_s
+        )
+        return self._pcm_has_enough_speech_to_append(snapshot)
+
+    def _decoded_window_has_speech(self, session: _StreamingSession) -> bool:
+        """The same question about the window that was ALREADY decoded.
+
+        Asked after the decode, which is the only moment the disjointness of
+        two windows can be known -- and by then the trailing window is no
+        longer the decoded one: the capture thread kept appending for the
+        whole decode, which on this path lasted longer than the window itself,
+        so `_stream_window_has_speech` would measure audio the model never
+        saw. The recorded byte range is exact.
+        """
+        start = int(session.result.last_window_start)
+        end = int(session.result.last_window_end)
+        if end <= start:
+            return False
+        return self._pcm_has_enough_speech_to_append(
+            bytes(session.pcm_buffer[start:end])
+        )
 
     def _warn_once_if_the_room_is_never_quiet(
         self, session: _StreamingSession, quiet_slice: bool
