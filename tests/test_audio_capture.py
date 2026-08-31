@@ -12,7 +12,10 @@ from stt_app.audio_capture import (
     AudioCaptureError,
     WarmMicrophoneStream,
 )
-from stt_app.audio_devices import InputDeviceNotFoundError
+from stt_app.audio_devices import (
+    SYSTEM_DEFAULT_INPUT_DEVICE,
+    InputDeviceNotFoundError,
+)
 from stt_app.vad import VadDecision
 
 
@@ -143,8 +146,8 @@ def test_warm_stream_allows_single_consumer(monkeypatch):
     warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
     assert warm.ensure_started()
 
-    assert warm.attach(lambda *a: None) is True
-    assert warm.attach(lambda *a: None) is False
+    assert warm.attach(lambda *a: None, SYSTEM_DEFAULT_INPUT_DEVICE) is True
+    assert warm.attach(lambda *a: None, SYSTEM_DEFAULT_INPUT_DEVICE) is False
     warm.close()
 
 
@@ -224,7 +227,7 @@ def test_attach_does_not_block_while_warm_stream_is_starting(monkeypatch):
     assert start_entered.wait(timeout=1.0)
 
     started = time.perf_counter()
-    attached = warm.attach(lambda *_args: None)
+    attached = warm.attach(lambda *_args: None, SYSTEM_DEFAULT_INPUT_DEVICE)
     elapsed = time.perf_counter() - started
 
     assert attached is False
@@ -327,7 +330,7 @@ def test_warm_request_close_is_deferred_until_detach(monkeypatch):
     warm._dispatch(chunk, 160, None, None)
     assert len(capture._chunks) == 1
     # A pending close also refuses new consumers.
-    assert warm.attach(lambda *a: None) is False
+    assert warm.attach(lambda *a: None, SYSTEM_DEFAULT_INPUT_DEVICE) is False
 
     capture.stop()
     assert _wait_until(lambda: FakeInputStream.instances[0].closed)
@@ -386,6 +389,87 @@ def test_warm_close_if_idle_refuses_while_attached(monkeypatch):
     assert warm.close_if_idle() is True
     assert FakeInputStream.instances[0].closed is True
     assert warm.is_running is False
+
+
+class _BlockingStartStream:
+    """An open that is slow to start, which is the case the warm stream exists for."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def start(self):
+        self.started.set()
+        assert self.release.wait(timeout=5), "the test never released the open"
+
+    def stop(self):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+def test_attach_itself_refuses_a_stream_open_on_another_device(monkeypatch):
+    """The invariant belongs to `attach`, not to the caller that used to check.
+
+    "Never silently record from another device" is the rule the whole
+    device-resolution path exists for, and `AudioCapture.start` used to read
+    `opened_device_key` and then call `attach` -- two acquisitions of the same
+    lock with a gap between them. Nothing was observed going through that gap,
+    but an invariant documented as belonging to a function that does not hold
+    it is the shape a later refactor drops.
+    """
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    FakeInputStream.instances = []
+    warm = WarmMicrophoneStream(
+        sample_rate=16000,
+        channels=1,
+        device_provider=lambda: ("mic-a", 3),
+    )
+    assert warm.ensure_started() is True
+    assert warm.opened_device_key == "mic-a"
+
+    assert warm.attach(lambda *a: None, "mic-b") is False
+    assert warm.attach(lambda *a: None, SYSTEM_DEFAULT_INPUT_DEVICE) is False
+    assert warm.attach(lambda *a: None, "mic-a") is True
+    warm.close()
+
+
+def test_warm_close_if_idle_defers_while_an_open_is_in_flight(monkeypatch):
+    """Reporting the stream closed here loses a refresh that need not be lost.
+
+    The open holds `portaudio_guard()` across construct/start/register, so a
+    refresh begun on the strength of a True blocks on that lock, then finds
+    the stream registered while it waited and refuses -- and the caller only
+    retries a refused refresh on the next recording stop or abort, so a
+    hot-plugged microphone stays invisible until the user records once.
+    """
+    opened: list[_BlockingStartStream] = []
+
+    def _factory(**kwargs):
+        stream = _BlockingStartStream(**kwargs)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    worker = threading.Thread(target=warm.ensure_started, daemon=True)
+    worker.start()
+    try:
+        assert _wait_until(lambda: opened and opened[0].started.is_set())
+
+        assert warm.close_if_idle() is False
+    finally:
+        for stream in opened:
+            stream.release.set()
+        worker.join(timeout=5)
+
+    # The open was not cancelled either, so the stream the deferred refresh
+    # will close is a real one rather than a discarded half-open.
+    assert warm.is_running is True
+    assert warm.close_if_idle() is True
 
 
 def test_late_warm_callback_cannot_write_into_next_recording(monkeypatch):

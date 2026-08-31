@@ -206,14 +206,32 @@ class WarmMicrophoneStream:
             )
         return accepted
 
-    def attach(self, consumer: Callable) -> bool:
-        """Route the running stream's audio to ``consumer``; False if not running."""
+    def attach(self, consumer: Callable, expected_device_key: str) -> bool:
+        """Route the running stream's audio to ``consumer``; False if not running.
+
+        ``expected_device_key`` is required, and checked here rather than by
+        the caller. A warm stream still open on a different device -- a
+        previous selection, or a stale default -- must not serve this
+        recording, because "never silently record from another device" is the
+        rule the whole device-resolution path exists for. `AudioCapture.start`
+        used to read `opened_device_key` and then call `attach`, two separate
+        acquisitions of this lock with a gap between them; the gap is
+        microseconds against a device open that takes milliseconds to seconds,
+        so nothing was observed going through it, but the invariant was
+        documented as belonging to a function that did not hold it, which is
+        exactly the shape a later refactor drops. The system default is
+        ``SYSTEM_DEFAULT_INPUT_DEVICE`` (the empty string), which is what both
+        `AudioCapture`'s own `device_key` and the warm stream's `opened_key`
+        default to -- not ``None``, which only `opened_device_key` reports and
+        only while the stream is idle.
+        """
         with self._lock:
             if (
                 self._stream is None
                 or self._consumer is not None
                 or self._pending_close
                 or self._pending_restart
+                or self._opened_device_key != expected_device_key
             ):
                 return False
             self._consumer = consumer
@@ -273,13 +291,28 @@ class WarmMicrophoneStream:
         self._spawn(self.close, "stt_app_warm_mic_close")
 
     def close_if_idle(self) -> bool:
-        """Synchronous close unless a consumer is attached.
+        """Synchronous close unless a consumer is attached or one is opening.
 
         Used before PortAudio re-enumeration, which must not run while this
         stream is open and must not race a recording that is using it.
         """
         with self._lock:
             if self._consumer is not None:
+                return False
+            if self._starting:
+                # An open is in flight. It holds `portaudio_guard()` across
+                # the construct/start/register block, so a refresh begun on
+                # the strength of a True here blocks on that same lock, then
+                # finds the stream that was registered while it waited and
+                # refuses -- and the caller only retries a refused refresh on
+                # the next recording stop or abort, so a hot-plugged or newly
+                # defaulted microphone stayed invisible until the user
+                # recorded once or pressed Refresh. Reachable whenever two
+                # device events arrive about one coalescing interval apart,
+                # which is likelier the slower the open is -- and a slow open
+                # is the reason the warm stream exists at all. Reproduced with
+                # a stubbed `sd.InputStream` whose `start()` blocks:
+                # `_starting` True, `_stream` None, `close_if_idle()` True.
                 return False
             self._generation += 1
             stream = self._stream
@@ -416,11 +449,12 @@ class AudioCapture:
             warm is not None
             and warm.sample_rate == self.sample_rate
             and warm.block_size == self.block_size
-            # A warm stream still open on a different (e.g. previously
-            # selected or stale-default) device must not serve this
-            # recording; fall through to a cold open on the right one.
-            and warm.opened_device_key == self._device_key
-            and warm.attach(session_callback)
+            # The device check lives inside `attach`, under the lock that
+            # also publishes the stream, so it cannot be separated from the
+            # attach it guards. A warm stream still open on a different
+            # (previously selected, or stale-default) device falls through to
+            # a cold open on the right one.
+            and warm.attach(session_callback, self._device_key)
         ):
             # The shared stream is already running; attaching is instant and
             # audio flows from the very next callback block.
