@@ -1110,3 +1110,42 @@ def test_a_post_paste_reraise_keeps_the_refusal_to_touch_the_clipboard():
     assert isinstance(caught.value.__cause__, ClipboardContentionError)
     assert caught.value.__cause__.allow_clipboard_fallback is False
     assert caught.value.allow_clipboard_fallback is False
+
+
+class _UnreadableClipboardBackend(PasteBackend):
+    """The clipboard read fails the way `pywintypes` fails: a bare `Exception`."""
+
+    class Win32Error(Exception):
+        pass
+
+    def capture_clipboard_state(self):
+        self.calls.append("capture")
+        raise self.Win32Error("(5, 'GetClipboardData', 'Access is denied.')")
+
+
+def test_a_clipboard_read_that_fails_is_a_TextInsertionError():
+    """It was the one backend call outside the guarded region.
+
+    `pywintypes.error` derives straight from `Exception`, not `OSError`
+    (measured), so a failed `GetClipboardData` -- a delayed-rendering format
+    whose owner has exited, a clipboard manager or RDP redirection failing
+    mid-read -- escaped past every `except TextInsertionError`. The streaming
+    partial handler then never ran `rollback_commit`, so words it had already
+    marked committed could never be offered again, and no error was shown.
+
+    Nothing has been pasted at that point, so it must be the plain class and
+    not `TextMayHaveBeenPastedError`: the streaming retry may safely try again.
+    """
+    backend = _UnreadableClipboardBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with pytest.raises(TextInsertionError) as caught:
+        inserter.insert_text("der transkribierte satz")
+
+    assert not isinstance(caught.value, TextMayHaveBeenPastedError), (
+        "a pre-paste failure must not block the streaming retry"
+    )
+    assert isinstance(caught.value.__cause__, _UnreadableClipboardBackend.Win32Error)
+    assert backend.calls == ["capture"], (
+        f"it went on to touch the clipboard after the read failed: {backend.calls}"
+    )

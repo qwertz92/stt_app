@@ -388,7 +388,27 @@ class TextInserter:
                 # A held hotkey modifier would turn the injected Ctrl+V into
                 # e.g. Ctrl+Alt+V for the target; wait for release first.
                 self._wait_for_modifier_release()
-            previous_state = self._backend.capture_clipboard_state()
+            # The one backend call outside the guarded region below, and its
+            # `IsClipboardFormatAvailable` / `GetClipboardData` are unwrapped.
+            # `pywintypes.error` derives straight from `Exception`, not
+            # `OSError`, so a failed read -- a delayed-rendering format whose
+            # owner has exited, a clipboard manager or RDP redirection failing
+            # mid-read -- escaped as something no caller catches. Measured
+            # through `insert_text_with_options`: it came out as a bare
+            # `error`, past every `except TextInsertionError`, so the streaming
+            # partial handler never ran `rollback_commit` and those words could
+            # never be offered again, while the overlay showed no error at all.
+            #
+            # Nothing has been pasted at this point, so it is a plain
+            # `TextInsertionError` and the streaming retry may safely try again.
+            try:
+                previous_state = self._backend.capture_clipboard_state()
+            except TextInsertionError:
+                raise
+            except Exception as exc:
+                raise TextInsertionError(
+                    f"The current clipboard contents could not be read: {exc}"
+                ) from exc
             clipboard_marker: int | None = None
             restore_previous_state = restore_clipboard
             actual_mode = "send_input"
