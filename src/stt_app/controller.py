@@ -4863,6 +4863,20 @@ class DictationController(QtCore.QObject):
                     request_token
                 )
                 self._report_background_failure(job, error_text, retry_available)
+                # The same guarded clear both sibling terminal handlers do.
+                # This one did not, and a job is non-foreground while it is
+                # still the active token whenever a new recording is starting
+                # -- so a failure delivered in that window left the token set
+                # to a job that no longer exists. If the new recording then
+                # submits nothing (silence-gated, no audio captured, cancelled,
+                # a watchdog abort), it stays set for the rest of the session:
+                # `_should_defer_background_insertion` ends in "is the token
+                # set", so every later queued transcript is deferred and never
+                # pasted, and `_overlay_session_active()` answers True forever,
+                # which is what makes `show_idle_status` swallow a failed
+                # hotkey registration.
+                if self._active_request_token == request_token:
+                    self._active_request_token = None
                 self._finish_transcription_job(request_token)
                 self._flush_deferred_background_results()
                 return

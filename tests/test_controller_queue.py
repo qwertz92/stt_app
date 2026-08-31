@@ -1773,3 +1773,61 @@ def test_a_dying_runtime_with_no_finalize_still_resets_the_session(
     assert controller._stream_committed_text == ""
     controller.shutdown()
     _ = app
+
+
+def test_a_background_failure_gives_the_active_token_back(monkeypatch, tmp_path):
+    """The one terminal handler that kept the token of a job it just buried.
+
+    A job is delivered as *background* while it is still the active token
+    whenever a newer recording is running, which is precisely the window this
+    covers. Both sibling terminal handlers clear a matching token; this arm
+    did not, so the token outlived the job. If the new recording then submits
+    nothing -- silence-gated, cancelled, a watchdog abort -- it is never
+    cleared again for the rest of the session, and it is read by two places:
+    `_should_defer_background_insertion` defers every later queued transcript
+    forever, and `_overlay_session_active` answers True forever, which is what
+    makes `show_idle_status` swallow a failed hotkey registration.
+    """
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+
+    token_a = _record_and_stop(controller)
+    controller.start_recording()
+    assert controller._active_request_token == token_a, "precondition"
+
+    controller._on_transcription_failed("provider down", request_token=token_a)
+
+    assert controller._active_request_token is None
+    assert token_a not in controller._jobs
+
+    # The new recording produces nothing, so nothing else will ever clear it.
+    controller.cancel_current_action()
+
+    assert controller._should_defer_background_insertion() is False
+    assert controller._overlay_session_active() is False
+    controller.shutdown()
+    _ = app
+
+
+def test_a_background_failure_leaves_a_newer_active_token_alone(monkeypatch, tmp_path):
+    """The clear is guarded, and the guard is what makes it safe.
+
+    An older job failing must not clear the token of the newer job that has
+    since taken the foreground -- that would hand the overlay away from a live
+    transcription and let queued results paste over it.
+    """
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="history"
+    )
+
+    token_a = _record_and_stop(controller)
+    token_b = _record_and_stop(controller)
+    assert token_a != token_b
+    assert controller._active_request_token == token_b, "precondition"
+
+    controller._on_transcription_failed("provider down", request_token=token_a)
+
+    assert controller._active_request_token == token_b
+    controller.shutdown()
+    _ = app
