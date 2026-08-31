@@ -252,6 +252,24 @@ class _HistoryTabMixin:
             )
             return False
         self._loaded_settings = updated
+        # Tell the controller, exactly as `history_dialog._persist_limit` does
+        # through its `on_history_limit_changed` callback. Without it the two
+        # paths differed in more than "how the active limit is read": the
+        # controller's own `_settings` kept the pre-import limit, and it is
+        # that snapshot -- not the file -- that `add_entry` trims to. Measured:
+        # 400 entries, "import all and set unlimited" with 500 more, disk limit
+        # 0, controller limit still 500, and the next dictation destroyed 401
+        # of them. The controller also saves its whole snapshot on an overlay
+        # opacity drag, so the stale limit went back into the file too.
+        #
+        # It is deliberately after the write and not beside it: told first, the
+        # controller would trim to a limit that never reached disk, and the
+        # next reload would put the old one back -- transcripts deleted for a
+        # setting the user never got.
+        controller = getattr(self, "_controller", None)
+        setter = getattr(controller, "set_history_max_items", None)
+        if callable(setter):
+            setter(limit)
         return True
 
     def _set_history_max_spin_value(self, value: int) -> None:

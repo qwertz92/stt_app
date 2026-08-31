@@ -4873,3 +4873,85 @@ def test_a_save_does_not_write_the_schema_version_back_down():
     )
     dialog.deleteLater()
     _ = app
+
+
+def test_the_history_tab_tells_the_controller_the_limit_it_just_wrote():
+    """The standalone History dialog does; this path did not.
+
+    `controller.add_transcript` trims to the controller's own `_settings`, not
+    to the file, so after "import all and set unlimited" the next dictation
+    trimmed the imported transcripts straight back out. Measured: 400 stored,
+    500 imported, disk limit 0, controller limit still 500, 401 destroyed. The
+    controller also writes its whole snapshot on an overlay opacity drag, so the
+    stale limit went back into the file as well.
+    """
+
+    class _RecordingController:
+        def __init__(self) -> None:
+            self.limits: list[int] = []
+
+        def set_history_max_items(self, value: int) -> None:
+            self.limits.append(int(value))
+
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = _FakeSettingsStore(AppSettings(history_max_items=500))
+    controller = _RecordingController()
+    dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=controller,
+    )
+
+    assert dialog._persist_history_limit_now(0) is True
+
+    assert store.load().history_max_items == 0
+    assert controller.limits == [0], (
+        "the controller kept the pre-import limit and would trim to it"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_failed_limit_write_does_not_tell_the_controller_it_succeeded(monkeypatch):
+    """The notification belongs after the write, not beside it.
+
+    Told first, the controller would trim to a limit that is not on disk, and
+    the next reload would put it straight back -- deleting transcripts for a
+    setting the user never got.
+    """
+
+    class _FailingStore(_FakeSettingsStore):
+        def save(self, settings):
+            raise OSError("disk full")
+
+    class _RecordingController:
+        def __init__(self) -> None:
+            self.limits: list[int] = []
+
+        def set_history_max_items(self, value: int) -> None:
+            self.limits.append(int(value))
+
+    warned: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        lambda _parent, _title, text, *args, **kwargs: warned.append(text),
+    )
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    controller = _RecordingController()
+    dialog = SettingsDialog(
+        settings_store=_FailingStore(AppSettings(history_max_items=500)),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+        controller=controller,
+    )
+
+    assert dialog._persist_history_limit_now(0) is False
+
+    assert warned, "the failure was not reported"
+    assert controller.limits == [], (
+        "the controller was told about a limit that was never written"
+    )
+    dialog.deleteLater()
+    _ = app
