@@ -1657,3 +1657,119 @@ def test_a_cancel_does_not_paint_over_a_transcript_that_could_not_be_pasted(
     assert any("der ganze diktierte text" in e.text for e in history.load())
     controller.shutdown()
     _ = app
+
+
+def _streaming_session_with_a_pending_finalize(controller):
+    """Start a streaming dictation and register a finalize as in flight."""
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    job = _TranscriptionJob(
+        token=999,
+        engine="local",
+        model=controller._settings.model_size,
+        mode="streaming",
+        settings=controller._settings,
+        target_handle=None,
+        target_signature=None,
+    )
+    controller._jobs[999] = job
+    return job
+
+
+def test_a_dying_runtime_stashes_the_partial_for_a_finalize_that_delivers_nothing(
+    monkeypatch, tmp_path
+):
+    """"A finalize will deliver this" is not "a finalize did deliver".
+
+    The guard exists so one dictation does not get two history entries, and it
+    is right about that. But the reset that follows wiped the live text, and
+    the rescue in `_on_transcription_ready` reads that same emptied state -- so
+    a finalize that then returned nothing left the whole dictation nowhere at
+    all. Stash it on the job, exactly as `_request_job_stop` already does:
+    `_finish_transcription_job` writes a stash that nothing cleared, and every
+    path that delivers real text clears it first.
+    """
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    job = _streaming_session_with_a_pending_finalize(controller)
+    controller._stream_text_state.live_text = "ein ganzer satz den ich diktiert habe"
+
+    controller._on_stream_runtime_failed("stream died")
+
+    assert job.stashed_partial == "ein ganzer satz den ich diktiert habe", (
+        "the partial was dropped instead of handed to the pending finalize"
+    )
+    assert [e.text for e in history.load()] == [], "it was written twice"
+
+    # The finalize now delivers nothing, which is exactly when the stash is
+    # the only remaining copy.
+    controller._finish_transcription_job(999)
+
+    assert [e.text for e in history.load()] == [
+        "ein ganzer satz den ich diktiert habe"
+    ]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_dying_runtime_leaves_a_pending_finalize_its_committed_text(
+    monkeypatch, tmp_path
+):
+    """The reset must not empty what the finalize will be measured against.
+
+    With `committed_text` cleared and `_active_session_mode` flipped to
+    "batch", `_on_transcription_ready` took the batch branch and pasted the
+    whole dictation on top of the text already inserted live. The streaming
+    branch would have done the same: `finalize_append_only` computes its
+    insertion against that same emptied `committed_text`.
+    """
+    controller, app, _overlay, _inserter, _focus, _history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    _streaming_session_with_a_pending_finalize(controller)
+    controller._stream_text_state.live_text = "das ist ein laengerer"
+    controller._stream_text_state.committed_text = "das ist ein laengerer"
+
+    controller._on_stream_runtime_failed("stream died")
+
+    assert controller._active_session_mode == "streaming", (
+        "the pending finalize will now be delivered as a batch result"
+    )
+    assert controller._stream_committed_text == "das ist ein laengerer", (
+        "the finalize will now compute its insertion against an empty prefix"
+    )
+    insertion, _final = controller._stream_text_state.finalize_append_only(
+        "das ist ein laengerer diktierter satz"
+    )
+    assert insertion == " diktierter satz", (
+        f"the whole dictation would be pasted a second time: {insertion!r}"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_dying_runtime_with_no_finalize_still_resets_the_session(
+    monkeypatch, tmp_path
+):
+    """`keep_session_text` is for a pending finalize only.
+
+    With nothing in flight the partial goes straight to history and the
+    session must be fully cleared, or the next dictation starts on the last
+    one's committed prefix.
+    """
+    controller, app, _overlay, _inserter, _focus, history = _make_queue_controller(
+        monkeypatch, tmp_path, mode="insert"
+    )
+    controller._settings = replace(controller._settings, mode="streaming")
+    controller.start_recording()
+    controller._stream_text_state.live_text = "halber satz"
+    controller._stream_text_state.committed_text = "halber satz"
+
+    controller._on_stream_runtime_failed("stream died")
+
+    assert [e.text for e in history.load()] == ["halber satz"]
+    assert controller._active_session_mode == "batch"
+    assert controller._stream_committed_text == ""
+    controller.shutdown()
+    _ = app

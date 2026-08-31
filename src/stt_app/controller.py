@@ -2154,7 +2154,17 @@ class DictationController(QtCore.QObject):
             except OSError:
                 break
 
-    def _reset_streaming_state(self) -> None:
+    def _reset_streaming_state(self, *, keep_session_text: bool = False) -> None:
+        """Clear the streaming session. `keep_session_text` spares two fields.
+
+        Everything else here is about a runtime that is going away -- retiring
+        the handshake, stopping the focus poll, dropping preconnect audio --
+        and must run either way. The exception is a finalize that is still in
+        flight: it will be measured against `committed_text` and delivered
+        through the branch `_active_session_mode` selects, so wiping those two
+        while it runs is what turned a dying socket into either a lost
+        dictation or one pasted a second time on top of the live-inserted text.
+        """
         self._focus_poll_timer.stop()
         # Retire any handshake still in flight. Bumping the generation is what
         # stops a late flush from pushing this session's audio into the next
@@ -2166,9 +2176,10 @@ class DictationController(QtCore.QObject):
         self._stream_abort_requested = False
         self._stream_insertion_suspended = False
         self._stream_insert_failures = 0
-        self._stream_text_state.reset()
+        if not keep_session_text:
+            self._stream_text_state.reset()
+            self._active_session_mode = "batch"
         self._active_batch_settings = None
-        self._active_session_mode = "batch"
         self._streaming_recording = False
         self._target_window_handle = None
         self._target_focus_signature = None
@@ -3990,17 +4001,21 @@ class DictationController(QtCore.QObject):
         message = str(error_text or "Streaming failed.").strip()
         self.stream_runtime_failed.emit(message or "Streaming failed.")
 
-    def _has_pending_streaming_job(self) -> bool:
-        """Whether a streaming finalize is still in flight and will deliver text.
+    def _pending_streaming_job(self) -> _TranscriptionJob | None:
+        """The streaming finalize still in flight, if there is one.
 
         An aborting job does not count: it is being canceled and will not
         deliver, so treating it as pending would drop the partial transcript
         this guard exists to avoid duplicating.
         """
-        return any(
-            job.mode == "streaming" and not job.aborting
-            for job in self._jobs.values()
-        )
+        for job in self._jobs.values():
+            if job.mode == "streaming" and not job.aborting:
+                return job
+        return None
+
+    def _has_pending_streaming_job(self) -> bool:
+        """Whether a streaming finalize is still in flight and will deliver text."""
+        return self._pending_streaming_job() is not None
 
     def _current_streaming_partial_text(self) -> str:
         """Best-known transcript of the live streaming session.
@@ -4871,18 +4886,34 @@ class DictationController(QtCore.QObject):
         partial_transcript = ""
         partial_source_audio_path = ""
         partial_settings = self._active_stream_settings or replace(self._settings)
+        pending_finalize = None
         if runtime_stream_failed:
             # Only the *history write* is conditional. The teardown must always
             # run: gating it too abandoned a live capture, its transcriber and
             # its runtime lease, so the microphone kept recording after the
             # overlay already said Error.
-            if not self._has_pending_streaming_job():
+            pending_finalize = self._pending_streaming_job()
+            if pending_finalize is None:
+                partial_transcript = self._current_streaming_partial_text()
+            else:
                 # A finalize already in flight will deliver this session's text
                 # itself; saving the partial too would write two history
                 # entries for one dictation. Providers do reach that state:
                 # AssemblyAI and Deepgram both record a socket error and still
                 # return the accumulated text from stop_stream().
-                partial_transcript = self._current_streaming_partial_text()
+                #
+                # But "it will deliver" is not "it did": a finalize that then
+                # returns nothing left the whole dictation nowhere, because the
+                # reset below had already wiped the live text and the rescue in
+                # `_on_transcription_ready` reads the same emptied state. Stash
+                # it on the job instead -- `_finish_transcription_job` writes a
+                # stash that nothing cleared, and every path that delivers real
+                # text clears it first. Exactly what `_request_job_stop` does
+                # in the same situation.
+                pending_finalize.stashed_partial = (
+                    self._current_streaming_partial_text()
+                    or pending_finalize.stashed_partial
+                )
             wav_bytes, partial_source_audio_path = (
                 self._teardown_active_stream_runtime(preserve_audio=True)
             )
@@ -4893,7 +4924,13 @@ class DictationController(QtCore.QObject):
         self._active_stream_transcriber = None
         self._active_stream_settings = None
         self._last_transcribe_settings = None
-        self._reset_streaming_state()
+        # Spare the two fields the pending finalize is measured against. With
+        # them cleared it took the *batch* branch of `_on_transcription_ready`
+        # and pasted the whole dictation on top of the text already inserted
+        # live -- and the streaming branch would have done the same, because
+        # `finalize_append_only` computes its insertion against a
+        # `committed_text` the reset had emptied.
+        self._reset_streaming_state(keep_session_text=pending_finalize is not None)
         kept_detail = ""
         if partial_transcript.strip():
             self._append_transcript_history(
