@@ -315,7 +315,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `request_close` defer while a consumer is attached and execute on detach, so
   disabling the setting, a resume, or a device event can never cut off a
   running recording's audio source; `attach` additionally requires the warm
-  stream's `opened_device_key` to match the recording's selected device. A
+  stream's `opened_device_key` to match the recording's selected device --
+  inside `attach`, under the lock that publishes the stream, so the check
+  cannot be separated from the attach it guards. It used to sit in
+  `AudioCapture.start`, one lock acquisition earlier, which is a gap of
+  microseconds against a device open of milliseconds to seconds; nothing was
+  observed going through it, and it moved because an invariant documented as
+  belonging to a function that does not hold it is the shape a later refactor
+  drops. `expected_device_key` is a required positional argument for the same
+  reason -- the system default is `SYSTEM_DEFAULT_INPUT_DEVICE` (the empty
+  string), not `None`.
+  **`close_if_idle` defers while an open is in flight, not only while a
+  consumer is attached.** It checked `_consumer` alone, so mid-`ensure_started`
+  -- `_starting` True, `_stream` still None -- it bumped the generation, closed
+  nothing and returned True. The caller reads that as "re-enumeration is safe"
+  and calls `try_refresh_input_devices`, which blocks on the `portaudio_guard()`
+  the open is holding, then finds the stream registered while it waited and
+  refuses; a refused refresh is only retried on the next recording stop or
+  abort, so a hot-plugged or newly defaulted microphone stayed invisible until
+  the user recorded once or pressed Refresh. Reachable whenever two device
+  events arrive about one coalescing interval apart, which is likelier the
+  slower the open is -- and a slow open is the reason the warm stream exists.
+  Reproduced with a stubbed `sd.InputStream` whose `start()` blocks. A
   first-callback watchdog timeout on a warm capture restarts the warm stream
   automatically (self-heal) instead of only suggesting to disable the feature.
   Without COM/comtypes the listener is inert and the Settings "Refresh" button
@@ -1638,7 +1659,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - `STREAMING_ABORT_ON_FOCUS_CHANGE` still selects the old hard abort, and
     the tests for that behaviour opt into it explicitly.
 - **The post-pause speech measurement buckets at 20 ms, not 100 ms**
-  (`STREAMING_SPEECH_RUN_WINDOW_MS`). It takes the longest *unbroken* run
+  (`STREAMING_SPEECH_RUN_WINDOW_MS`), and `measure_longest_speech_run_s` takes
+  that bucket as a required keyword argument. It used to *default* to
+  `SILENCE_GATE_WINDOW_MS` (100) -- the value this very entry explains is
+  wrong for this measurement -- so the safe number was opt-in and the
+  documented-wrong one was what a caller got by omission. The single
+  production caller passes 20 explicitly, so it was latent rather than live;
+  it is required now because this repository has already carried one threshold
+  across a bucket-size change without rederiving it (the 0.15 in the table
+  below), and naming the bucket at every call site makes that impossible to do
+  silently. It takes the longest *unbroken* run
   above the threshold, and the bucket size is what makes that meaningful: at
   100 ms two keystrokes 100–150 ms apart fall into adjacent buckets, the run
   never breaks, and typing at 120 wpm measured a 1.5 s "speech" run — longer

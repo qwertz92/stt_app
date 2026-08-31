@@ -5018,3 +5018,62 @@ before the start.
 - The Bash heredoc mangles backslashes in Python string literals. It silently
   did nothing to a mutation script this round, and the run that followed looked
   like a clean result for mutations that were never applied.
+
+## Round 20 (2026-08-31) - the audio review
+
+Three findings from the streaming-text/audio review, each re-measured before
+being accepted.
+
+### `close_if_idle()` reported success while an open was still in flight
+
+It checked only `_consumer`, so mid-`ensure_started` -- `_starting` True,
+`_stream` still None -- it bumped the generation, closed nothing and returned
+True. Reproduced with a stubbed `sd.InputStream` whose `start()` blocks. The
+caller reads True as "re-enumeration is safe" and calls
+`try_refresh_input_devices`, which blocks on the `portaudio_guard()` the open
+holds, then finds the stream that was registered while it waited and refuses.
+A refused refresh is only retried on the next recording stop or abort, so a
+hot-plugged microphone stayed invisible until the user recorded once. It defers
+now, and the open is left to complete rather than cancelled, so the stream the
+deferred refresh will close is a real one.
+
+### The speech-run measurement defaulted to the bucket it must not use
+
+`measure_longest_speech_run_s(window_ms=SILENCE_GATE_WINDOW_MS)` -- 100 ms,
+which AGENTS.md explains at length is wrong for this measurement, because two
+keystrokes 100-150 ms apart land in adjacent buckets and typing measures as
+1.5 s of speech. The one production caller passes 20 explicitly, so it was
+latent. It is a required keyword argument now: this repository has already
+carried one threshold across a bucket-size change without rederiving it.
+
+### The device-key check was documented in the wrong function
+
+AGENTS.md said `attach` requires the warm stream's `opened_device_key` to
+match. It did not -- `AudioCapture.start` read the property and then called
+`attach`, two acquisitions of the same lock. The gap is microseconds against a
+device open of milliseconds to seconds, so nothing was observed going through
+it. The check moved into `attach`, under the lock that publishes the stream,
+rather than the sentence being reworded: an invariant documented as belonging
+to a function that does not hold it is the shape a later refactor drops.
+
+### Areas the review found clean
+
+`compute_stream_locked_prefix` / `apply_partial_append_only` / `rollback_commit`
+over 300 randomised sessions with revising providers and 15% paste failures: no
+document/`committed_text` divergence, no decreasing committed word count, no
+word emitted twice. `stream_join_text` / `stream_insertion_text` across quotes,
+brackets, hyphens, umlauts, combining accents, NBSP, zero-width space and the
+empty string. Floor containment and branch reporting over 4000 randomised
+merges: no lost floor, no `aligned=True` that is not a word-extension. `vad.py`
+numerics: no sample/byte confusion, no NaN or division by zero on empty, odd,
+sub-bucket or zero-rate input, and `None` honoured as unmeasurable by every
+caller. `audio_devices.py` registration ordering. The PortAudio callback path:
+nothing blocks or allocates unboundedly per callback.
+
+### One more process note
+
+The Bash heredoc's backslash handling bit twice more this round, once
+silently: a mutation script's anchors were rewritten to nothing and the run
+that followed reported clean results for mutations that had never been
+applied. Anything containing a backslash escape now goes through the Write
+tool or a real file, never a heredoc.
