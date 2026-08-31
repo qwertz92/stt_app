@@ -1,9 +1,12 @@
+import pytest
+
 from stt_app.config import STREAMING_REVISION_WORD_WINDOW, STREAMING_STABLE_WORD_GUARD
 from stt_app.streaming_text import (
     StreamingTextState,
     append_only_stream_extension_tail,
     append_only_stream_finalize_tail,
     append_only_stream_partial_candidate,
+    merge_rolling_window,
     merge_rolling_window_transcript,
     normalize_stream_text,
     stream_insertion_text,
@@ -457,3 +460,141 @@ def test_the_merge_reports_which_branch_resolved_it():
     empty = merge_rolling_window("erster teil", "")
     assert empty.text == "erster teil"
     assert empty.aligned is True
+
+
+def test_the_floor_splice_is_not_bounded_by_the_boundary_skip():
+    """Past three junk words the splice used to fall through to a blind weld.
+
+    The floor branch is reached because `previous` has already drifted beyond
+    rescue, so the window's head can hold several words of that drift -- not
+    just the one word the window boundary cut in half, which is what
+    `_WINDOW_BOUNDARY_SKIP_WORDS` describes. Bounding the floor splice by it
+    meant the fourth junk word turned the bounded replace into an unbounded
+    append: measured 19 words where 11 were right, with the floor's last four
+    re-emitted after the junk, and pasted into the document.
+    """
+    floor = "das protokoll der letzten sitzung ist noch nicht fertig"
+    previous = f"{floor} voellig anderer erfundener text hier"
+
+    for junk_words in range(7):
+        junk = " ".join(f"j{index}" for index in range(junk_words))
+        window = f"{junk} ist noch nicht fertig und wird".strip()
+        merged = merge_rolling_window_transcript(
+            previous, window, protected_prefix=floor
+        )
+        assert merged == f"{floor} und wird", (
+            f"{junk_words} junk words produced {merged!r}"
+        )
+
+
+def test_the_seam_search_takes_the_longest_overlap_not_the_first():
+    """A coincidental short match near the head must not beat the real seam.
+
+    `_join_at_seam` returned on the first skip that cleared the threshold, so
+    a two-word coincidence at skip 1 won against a six-word seam at skip 3 and
+    everything between them was emitted twice -- as `aligned=True`, which is
+    the flag the caller pins the floor from, so the duplicate became permanent.
+    """
+    previous = "eins zwei drei vier fuenf sechs sieben acht"
+    window = "x sieben acht drei vier fuenf sechs sieben acht neun zehn"
+
+    assert (
+        merge_rolling_window_transcript(previous, window)
+        == "eins zwei drei vier fuenf sechs sieben acht neun zehn"
+    )
+
+
+# Both inputs below were found by searching the real `merge_rolling_window`
+# for cases where "longest overlap" differs from "first passing skip" and from
+# "last passing skip", because the readable case above separates it from
+# neither: `skip + overlap` is the cut point, so every skip that finds one true
+# seam yields the identical text and all three rules agree. They look
+# artificial because a disagreement needs a repeating phrase -- that is what
+# makes a second, false seam exist at all.
+@pytest.mark.parametrize(
+    ("previous", "window", "expected", "wrong_rule"),
+    [
+        (
+            "und und dann und",
+            "dann dann und dann und",
+            "und und dann und",
+            "taking the first passing skip appends 'dann und' a second time",
+        ),
+        (
+            "und und und dann",
+            "dann und dann und dann",
+            "und und und dann und dann",
+            "taking the last passing skip drops the window's new words",
+        ),
+    ],
+)
+def test_the_seam_rule_is_longest_not_first_and_not_last(
+    previous, window, expected, wrong_rule
+):
+    """Longest sits between the two failure modes, which point opposite ways.
+
+    First-passing duplicates, last-passing loses speech. Pinning only one of
+    them would leave the other free to be reintroduced as a "simplification".
+    """
+    assert merge_rolling_window_transcript(previous, window) == expected, wrong_rule
+
+
+@pytest.mark.parametrize(
+    ("floor", "window", "expected", "wrong_rule"),
+    [
+        (
+            "und und dann und",
+            "dann dann und dann und",
+            "und und dann und",
+            "taking the first passing skip appends 'dann und' a second time",
+        ),
+        (
+            "und und und dann",
+            "dann und dann und dann",
+            "und und und dann und dann",
+            "taking the last passing skip drops the window's new words",
+        ),
+    ],
+)
+def test_the_floor_splice_uses_the_same_seam_rule(
+    floor, window, expected, wrong_rule
+):
+    """The widened floor search must not weaken the rule it searches with.
+
+    Searching the whole window gives a coincidence more places to occur, so
+    the same two failure modes are pinned here as well.
+    """
+    previous = f"{floor} voellig anderer erfundener text"
+    assert (
+        merge_rolling_window_transcript(previous, window, protected_prefix=floor)
+        == expected
+    ), wrong_rule
+
+
+def test_a_seam_of_pure_punctuation_is_not_agreement():
+    """Two windows agreeing on "..." have not agreed on anything.
+
+    `_stream_word_key` strips `.,;:!?)]}`, so every punctuation-only token
+    keys to the empty string and they all match each other. Two of them
+    cleared the two-word overlap threshold, and the merge reads a cleared
+    threshold as the corroboration it may advance the floor on.
+    """
+    resolved = merge_rolling_window(
+        "ich habe gesagt ... !", ": . und dann kam etwas ganz anderes"
+    )
+    assert resolved.aligned is False
+
+
+def test_a_seam_containing_punctuation_still_counts_its_real_words():
+    """The other direction, and why the empty key is counted, not refused.
+
+    Making the mark itself non-matching would break a genuine three-word seam
+    down to no overlap at all, because `_suffix_prefix_overlap_len` needs
+    every word of the slice to match.
+    """
+    assert (
+        merge_rolling_window_transcript(
+            "der erste teil hallo ... welt", "hallo ... welt und weiter"
+        )
+        == "der erste teil hallo ... welt und weiter"
+    )

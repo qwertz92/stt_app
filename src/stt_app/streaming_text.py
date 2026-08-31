@@ -144,7 +144,9 @@ def append_only_stream_partial_candidate(
         return current
 
     overlap = _suffix_prefix_overlap_len(previous_words, current_words)
-    if overlap >= max(1, int(min_overlap_words)):
+    if _substantive_word_count(current_words[:overlap]) >= max(
+        1, int(min_overlap_words)
+    ):
         merged = previous_words + current_words[overlap:]
         return " ".join(merged).strip()
     return current
@@ -178,21 +180,45 @@ def _join_at_seam(
     base_words: list[str],
     current_words: list[str],
     required_overlap: int,
+    *,
+    max_skip: int = _WINDOW_BOUNDARY_SKIP_WORDS,
 ) -> str | None:
     """Join a window onto `base_words` at the words they share, or `None`.
 
     `_suffix_prefix_overlap_len` anchors every candidate at the window's first
     word -- the word the window boundary cut in half -- so one mistranscribed
-    fragment there defeats the search. Re-anchoring up to
-    `_WINDOW_BOUNDARY_SKIP_WORDS` words in finds the seam anyway.
+    fragment there defeats the search. Re-anchoring up to `max_skip` words in
+    finds the seam anyway.
+
+    It takes the LONGEST seam, not the first one over the threshold. Returning
+    early on the first match let a coincidental short overlap near the window's
+    head beat the real seam a word or two further in, and everything between
+    the two was then emitted twice -- reported as `aligned=True`, so the caller
+    pinned the duplicate as the new floor. Measured on a base ending "... sechs
+    sieben acht" against a window "x sieben acht drei vier fuenf sechs sieben
+    acht neun zehn": skip 1 overlaps 2 words and skip 3 overlaps 6, and taking
+    skip 1 repeated six words. Equal overlaps keep the smallest skip, which
+    drops the fewest window words, and this is also what `skip == 0` already
+    does in `append_only_stream_partial_candidate`.
     """
-    for skip in range(1, _WINDOW_BOUNDARY_SKIP_WORDS + 1):
-        if skip >= len(current_words):
-            break
+    best_skip = 0
+    best_overlap = 0
+    for skip in range(1, min(max_skip, len(current_words) - 1) + 1):
         overlap = _suffix_prefix_overlap_len(base_words, current_words[skip:])
-        if overlap >= required_overlap:
-            return " ".join(base_words + current_words[skip + overlap:]).strip()
-    return None
+        if overlap <= best_overlap:
+            continue
+        if (
+            _substantive_word_count(current_words[skip : skip + overlap])
+            < required_overlap
+        ):
+            continue
+        best_skip = skip
+        best_overlap = overlap
+    if not best_overlap:
+        return None
+    return " ".join(
+        base_words + current_words[best_skip + best_overlap :]
+    ).strip()
 
 
 def merge_rolling_window(
@@ -268,8 +294,24 @@ def merge_rolling_window(
     )
     if stream_text_extends(protected, spliced):
         return RollingMergeResult(spliced, aligned=False)
+    # The seam search here is not bounded by `_WINDOW_BOUNDARY_SKIP_WORDS`,
+    # unlike the alignment against `previous` above, and the asymmetry is
+    # deliberate. That bound describes one word cut in half at the window
+    # boundary; here `previous` has already been discarded as unalignable, so
+    # the window's head can hold several words of the same drift -- and past
+    # the fourth of them the splice fell through to the blind append below,
+    # which re-emitted the floor's tail. Measured on a floor ending "ist noch
+    # nicht fertig" against a window "j0 j1 j2 j3 ist noch nicht fertig und
+    # wird": 11 words up to three junk words, 19 from four. Widening it is
+    # safe in a way it would not be above, because the floor is preserved
+    # verbatim either way, the result stays `aligned=False` so no floor is
+    # advanced by it, and the required two substantive words of overlap are
+    # what separate a real seam from a coincidence.
     spliced_past_boundary = _join_at_seam(
-        split_stream_words(protected), current_words, required_overlap
+        split_stream_words(protected),
+        current_words,
+        required_overlap,
+        max_skip=len(current_words),
     )
     if spliced_past_boundary is not None:
         return RollingMergeResult(spliced_past_boundary, aligned=False)
@@ -385,6 +427,24 @@ def _suffix_prefix_overlap_len(left: list[str], right: list[str]) -> int:
 
 def _stream_words_match(left: str, right: str) -> bool:
     return _stream_word_key(left) == _stream_word_key(right)
+
+
+def _substantive_word_count(words: list[str]) -> int:
+    """How many of `words` carry a word, rather than only punctuation.
+
+    `_stream_word_key` strips `.,;:!?)]}` from both ends, so "...", "!", "?!"
+    and ":" all key to the empty string and therefore match each other. Two
+    such tokens cleared a two-word overlap threshold with no lexical
+    agreement at all, and the merge treats a cleared threshold as "two
+    overlapping windows agreed on the seam" -- the corroboration it is
+    allowed to advance the floor on.
+
+    Counted rather than refused in `_stream_words_match`: a genuine seam may
+    contain a standalone mark ("hallo ... welt"), and making the mark itself
+    non-matching would break the whole three-word overlap down to nothing
+    instead of scoring it as the two real words it is.
+    """
+    return sum(1 for word in words if _stream_word_key(word))
 
 
 def _stream_word_key(word: str) -> str:
