@@ -355,3 +355,45 @@ def test_a_backup_that_cannot_be_removed_stops_the_clear(tmp_path):
 
     assert store.clear() is False
     assert state_path.is_file(), "the state has to stay discoverable for a retry"
+
+
+@pytest.mark.parametrize("name", sorted(_STORES))
+def test_a_republish_that_cannot_write_still_returns_the_recovered_data(
+    name, tmp_path, monkeypatch
+):
+    """The republish is a convenience; the data is already in hand.
+
+    Letting its write escape threw the recovery away with it. Measured with
+    the primary gone and the directory unwritable -- an antivirus quarantine
+    on a locked-down profile is both at once -- `load()` raised
+    `PermissionError` and returned nothing, and `SettingsDialog.__init__`
+    calls these readers with no guard of its own.
+    """
+    build = _STORES[name]
+    store, path, read = build(tmp_path)
+    _ = store
+    saved = read()
+    assert backup_path(path).is_file(), f"{name}: no backup was written"
+    path.unlink()
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    for module in (
+        "stt_app.persistence",
+        "stt_app.transcript_history",
+        "stt_app.benchmark_history",
+        "stt_app.last_recording_store",
+        "stt_app.settings_store",
+        "stt_app.local_model_inventory_store",
+        "stt_app.provider_connection_test_store",
+    ):
+        for symbol in ("atomic_write_json", "atomic_write_bytes"):
+            try:
+                monkeypatch.setattr(f"{module}.{symbol}", refuse)
+            except AttributeError:
+                continue
+
+    assert read() == saved, (
+        f"{name}: a republish that could not write discarded the recovery"
+    )

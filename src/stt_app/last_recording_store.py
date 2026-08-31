@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,8 @@ from .persistence import (
     lock_for_path,
     quarantine_corrupt_file,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 RECOVERABLE_RECORDING_STATUSES = {
     "captured",
@@ -122,7 +125,19 @@ class LastRecordingStore:
                 # Republish, like every other store that recovers. Without it
                 # the data lives only in the `.bak` until something happens to
                 # write state again, so a second loss takes it for good.
-                self._save_state(state)
+                #
+                # Guarded because the republish is a convenience: the state is
+                # already in hand. Letting its write escape threw it away with
+                # it -- measured with the primary gone and the directory
+                # unwritable, `load()` raised `PermissionError` and returned
+                # nothing, where the recovered state was right there.
+                try:
+                    self._save_state(state)
+                except OSError:
+                    _LOGGER.exception(
+                        "Could not republish %s from its backup",
+                        self._state_path,
+                    )
             return state
 
     def save_recording(

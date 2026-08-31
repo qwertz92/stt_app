@@ -1168,3 +1168,32 @@ def test_an_unknown_key_can_never_overwrite_a_known_field(tmp_path):
 
     assert on_disk["history_max_items"] == 42
     assert on_disk["future_key"] == "kept"
+
+
+def test_a_load_that_cannot_rewrite_still_returns_the_settings(tmp_path, monkeypatch):
+    """A read-only profile must not stop the app from starting.
+
+    `load` rewrites the file whenever the stored payload differs from the
+    normalised one, which is what a schema migration produces on the first
+    load after an upgrade. That write is a convenience -- the settings are
+    already parsed -- so letting it escape turned a successful read into a
+    startup failure: measured, `PermissionError` out of `load()` on settings
+    the store had just read correctly, before the first window exists.
+    """
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps({"hotkey": "Ctrl+Alt+D", "engine": "groq"}),
+        encoding="utf-8",
+    )
+    before = path.read_bytes()
+
+    def refuse(*_args, **_kwargs):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr("stt_app.settings_store.atomic_write_json", refuse)
+
+    settings = SettingsStore(path).load()
+
+    assert settings.hotkey == "Ctrl+Alt+D"
+    assert settings.engine == "groq"
+    assert path.read_bytes() == before, "the refused write changed the file anyway"

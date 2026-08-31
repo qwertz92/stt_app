@@ -95,6 +95,8 @@ from .persistence import (
     quarantine_corrupt_file,
 )
 
+_LOGGER = logging.getLogger(__name__)
+
 logger = logging.getLogger(__name__)
 
 CURRENT_SCHEMA_VERSION = SCHEMA_VERSION
@@ -695,7 +697,19 @@ class SettingsStore:
             if source == "backup" or raw != self._payload_for_save(
                 settings, unknown
             ):
-                self.save(settings, extra=unknown)
+                # Guarded: the settings are already parsed and correct.
+                # This write only persists the normalisation, so letting it
+                # escape turned a successful read into a startup failure --
+                # measured on an unwritable profile, `load()` raised
+                # `PermissionError` and the app could not build its first
+                # window, for settings it had just read. A migration that
+                # cannot be written simply runs again next time.
+                try:
+                    self.save(settings, extra=unknown)
+                except OSError:
+                    _LOGGER.exception(
+                        "Could not rewrite %s after normalising it", self.path
+                    )
 
             return settings
 

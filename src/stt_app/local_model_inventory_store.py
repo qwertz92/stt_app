@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,6 +15,8 @@ from .persistence import (
     lock_for_path,
     quarantine_corrupt_file,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _CURRENT_SCHEMA_VERSION = 1
 
@@ -141,7 +144,14 @@ class LocalModelInventoryStore:
         raw = dict(payload)
         state = LocalModelInventoryState.from_dict(raw)
         if source == "backup" or raw != state.to_dict():
-            self._save_state(state)
+            # Guarded: the state is already in hand. This write is a
+            # convenience -- a republish after a backup recovery, or
+            # persisting the normalised shape -- and letting it escape
+            # discarded the inventory it had just recovered.
+            try:
+                self._save_state(state)
+            except OSError:
+                _LOGGER.exception("Could not rewrite %s", self._path)
         return state
 
     def _save_state(self, state: LocalModelInventoryState) -> None:

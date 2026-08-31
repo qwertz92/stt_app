@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -15,6 +16,8 @@ from .persistence import (
     parse_json_bool,
     quarantine_corrupt_file,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 _CURRENT_SCHEMA_VERSION = 1
 _REMOTE_PROVIDERS = tuple(engine for engine in VALID_ENGINES if engine != "local")
@@ -104,7 +107,14 @@ class ProviderConnectionTestStore:
                 # Republish, like every other store that recovers: until
                 # something writes again the data lives only in the `.bak`, so
                 # a second loss takes it for good.
-                self._save(results)
+                # Guarded: the results are already in hand, so a write
+                # that cannot land must not discard them.
+                try:
+                    self._save(results)
+                except OSError:
+                    _LOGGER.exception(
+                        "Could not republish %s from its backup", self._path
+                    )
             return results
 
     def save_result(

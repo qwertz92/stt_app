@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections.abc import Iterable
 from dataclasses import asdict, dataclass, replace
@@ -17,6 +18,8 @@ from .persistence import (
     lock_for_path,
     quarantine_corrupt_file,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 HistoryStorageSignature = tuple[int, int] | None
 DISPLAY_TIMEZONE_LOCAL = "local"
@@ -358,7 +361,20 @@ class TranscriptHistoryStore:
             # the republish below overwrite it. A *missing* primary is the other
             # way to reach this branch and quarantining one is a no-op.
             quarantine_corrupt_file(path)
-            cls(path=path).save(entries)
+            # A republish is a convenience: the entries are already in hand,
+            # recovered from the backup. Letting its write escape threw them
+            # away along with it -- measured with the primary gone and the
+            # directory unwritable (an antivirus quarantine plus a locked-down
+            # profile), `load()` raised `PermissionError` and returned nothing,
+            # and `SettingsDialog.__init__` calls these readers with no guard.
+            # The data stays only in the `.bak` until a later write succeeds,
+            # which is exactly the state this recovery already handles.
+            try:
+                cls(path=path).save(entries)
+            except OSError:
+                _LOGGER.exception(
+                    "Could not republish %s from its backup", path
+                )
         return entries
 
 
