@@ -83,7 +83,17 @@ class Win32HotkeyApi:
         return bool(self._user32.UnregisterHotKey(hwnd, hotkey_id))
 
     def get_last_error(self) -> int:
-        return int(ctypes.GetLastError() or 0)
+        # `ctypes.get_last_error()`, not `ctypes.GetLastError()`. The handle
+        # above is opened with `use_last_error=True`, which saves the Windows
+        # error into ctypes' own per-call slot and *restores* the thread's
+        # `GetLastError` to what it was before the call -- so the thread
+        # reader answers 0 and every hotkey failure reported "Unknown Windows
+        # hotkey registration error". Measured against a real double
+        # `RegisterHotKey`: thread reader 0, ctypes slot 1409, which is the
+        # "another program holds this combination" code the fallback and
+        # reclaim machinery exists for. `text_inserter` and `win_tray_icon`
+        # already read the slot; this was the only thread reader left.
+        return int(ctypes.get_last_error() or 0)
 
     def is_key_down(self, virtual_key: int) -> bool:
         return bool(self._user32.GetAsyncKeyState(virtual_key) & KEY_STATE_DOWN_MASK)
