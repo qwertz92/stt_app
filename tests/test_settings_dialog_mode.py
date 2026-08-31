@@ -21,7 +21,7 @@ from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_helpers import local_model_short_label
-from stt_app.settings_store import AppSettings
+from stt_app.settings_store import CURRENT_SCHEMA_VERSION, AppSettings
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from stt_app.update_checker import UpdateCheckResult
 
@@ -4834,5 +4834,42 @@ def test_a_limit_the_user_really_changed_still_wins_and_still_trims(monkeypatch)
     assert store.saved is not None
     assert store.saved.history_max_items == 600
     assert history.trimmed_to == [600]
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_save_does_not_write_the_schema_version_back_down():
+    """`schema_version` was the one widget-less field never read back.
+
+    Its dataclass default is *this build's* `CURRENT_SCHEMA_VERSION`, so against
+    a file written by a newer build it differed from the baseline, counted as an
+    edit, and was applied onto what is on disk. `to_dict`'s `max(...)` only stops
+    the number going below this build's, not above. Round-tripped through an
+    older build, every migration keyed on `raw_schema_version <` re-fires --
+    the silence-gate default flip among them, so a deliberately disabled gate
+    turns itself back on.
+
+    The untouched-Save assertion is the second half: a difference the dialog did
+    not make also rewrote the file and emitted `settings_changed`, which costs
+    four global hotkey re-registrations.
+    """
+    newer = CURRENT_SCHEMA_VERSION + 2
+    dialog, store, app = _dialog_with_store(
+        dataclasses.replace(AppSettings(), schema_version=newer)
+    )
+    emitted: list[int] = []
+    dialog.settings_changed.connect(lambda: emitted.append(1))
+
+    dialog._save()
+    assert emitted == [], "an untouched Save rewrote a file it had only read"
+    assert store.load().schema_version == newer
+
+    dialog.completion_beep_checkbox.setChecked(True)
+    dialog._save()
+
+    assert store.saved is not None and store.saved.completion_beep_enabled is True
+    assert store.load().schema_version == newer, (
+        "a real edit still wrote the schema version back down"
+    )
     dialog.deleteLater()
     _ = app

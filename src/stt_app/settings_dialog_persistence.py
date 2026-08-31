@@ -675,6 +675,27 @@ class _PersistenceMixin:
             has_azure_key = key_states["azure"]
             has_funasr_key = key_states["funasr"]
         return AppSettings(
+            # Carried, not stamped. This is the one field with no widget that
+            # was never read back, and its dataclass default is *this build's*
+            # `CURRENT_SCHEMA_VERSION` -- so against a file written by a newer
+            # build it differed from the baseline, counted as an edit, and was
+            # applied onto what is on disk. `to_dict`'s `max(...)` guard cannot
+            # help: that only stops the number going below this build's, not
+            # above. Measured: a file at 25 came back 23 from a Save with
+            # nothing touched at all -- which also rewrites the file and emits
+            # `settings_changed`, costing four global hotkey re-registrations.
+            # Round-tripped through an older build that way, every one-time
+            # migration re-fires; the silence-gate default flip is one, so a
+            # deliberately disabled gate turned itself back on.
+            #
+            # Reading `_loaded_settings` here is equivalent today and mutation
+            # testing says so: both snapshots hold the dialog-open value until
+            # a save, and after one they differ only by which of two numbers
+            # that are already equal is carried. It is the populated baseline
+            # because that is the snapshot the diff below compares against, so
+            # this field stays out of `edited` by construction rather than by
+            # arithmetic that happens to cancel.
+            schema_version=self._populated_settings.schema_version,
             hotkey=hotkey if hotkey is not None else self._loaded_settings.hotkey,
             cancel_hotkey=(
                 cancel_hotkey

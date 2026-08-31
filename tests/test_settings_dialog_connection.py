@@ -628,8 +628,13 @@ def test_every_settings_field_is_either_built_or_deliberately_exempt():
             passed.update(kw.arg for kw in node.keywords if kw.arg)
 
     # Read back from the store instead of from a widget, because the overlay
-    # owns them; `schema_version` is stamped by `AppSettings` itself.
-    exempt = set(_PersistenceMixin._OVERLAY_OWNED_FIELDS) | {"schema_version"}
+    # owns them. `schema_version` used to be exempt here on the stated ground
+    # that "`AppSettings` stamps it itself" -- true, and the reason it was a
+    # defect: it stamps *this build's* number, so every Save wrote the version
+    # back down and re-armed one-time migrations. It is carried explicitly now
+    # and the exemption is gone, which is the point of listing exemptions at
+    # all: each one has to survive being read out loud.
+    exempt = set(_PersistenceMixin._OVERLAY_OWNED_FIELDS)
     names = {field.name for field in dataclasses.fields(AppSettings)}
 
     assert names - passed - exempt == set(), (
