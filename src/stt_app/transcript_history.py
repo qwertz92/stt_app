@@ -291,11 +291,7 @@ class TranscriptHistoryStore:
         is stable, so entries sharing a timestamp -- the app stamps whole
         seconds -- keep their insertion order.
         """
-        ordered = sorted(entries, key=_chronological_sort_key)
-        keep = _normalize_limit(max_items)
-        if keep == 0 or len(ordered) <= keep:
-            return ordered
-        return ordered[-keep:]
+        return select_newest_entries(entries, max_items=max_items)
 
     @staticmethod
     def _entries_from_payload(payload: Any) -> list[TranscriptHistoryEntry]:
@@ -376,6 +372,32 @@ class TranscriptHistoryStore:
                     "Could not republish %s from its backup", path
                 )
         return entries
+
+
+def select_newest_entries(
+    entries: list[TranscriptHistoryEntry],
+    *,
+    max_items: int,
+) -> list[TranscriptHistoryEntry]:
+    """Order chronologically and keep the newest ``max_items`` (0 = all).
+
+    The one definition of "which entries a limit keeps". The import flow needs
+    the same answer as the trim: it used `imported_entries[:free_slots]`, the
+    *front* of the file, and an export is written oldest-first -- so "Import
+    only N" kept the oldest N and dropped the newest, the opposite of what the
+    limit means everywhere else. Measured on a six-month export with two free
+    slots: the import kept January and February while `apply_max_items(2)` on
+    the same entries keeps May and June.
+
+    By timestamp rather than by position, for the reason `_trim_entries`
+    records: position is only a proxy for time, and an imported or
+    hand-assembled file is exactly where that proxy fails.
+    """
+    ordered = sorted(entries, key=_chronological_sort_key)
+    keep = _normalize_limit(max_items)
+    if keep == 0 or len(ordered) <= keep:
+        return ordered
+    return ordered[-keep:]
 
 
 def _normalize_limit(value: int) -> int:

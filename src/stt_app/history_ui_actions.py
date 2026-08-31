@@ -14,7 +14,10 @@ from pathlib import Path
 
 from PySide6 import QtWidgets
 
-from .transcript_history import TranscriptHistoryStore
+from .transcript_history import (
+    TranscriptHistoryStore,
+    select_newest_entries,
+)
 
 
 def format_history_count_label(total: int, limit: int) -> str:
@@ -192,7 +195,14 @@ def run_history_import(
                         "History is already full. Increase the limit or use unlimited mode.",
                     )
                     return
-                entries_to_append = imported_entries[:free_slots]
+                # The newest that fit, not the front of the file. An
+                # export is written oldest-first, so slicing the front
+                # kept the oldest N and dropped the newest -- the
+                # opposite of what a limit means everywhere else, and
+                # the entries the next trim would delete first.
+                entries_to_append = select_newest_entries(
+                    imported_entries, max_items=free_slots
+                )
             else:
                 if not persist_limit(0):
                     return

@@ -625,3 +625,70 @@ def test_double_click_copies_entry_to_clipboard(monkeypatch, tmp_path):
     assert clipboard.text() == dialog._entries[1].text
     assert dialog._copy_button.text() == "Copied"
     _ = app
+
+
+def test_import_only_free_slots_keeps_the_newest_entries(monkeypatch, tmp_path):
+    """"Import only N" took the front of the file, which is the oldest N.
+
+    An export is written in store order and the store is ordered oldest-first,
+    so the choice kept the oldest entries and dropped the newest -- the
+    opposite of what a limit means everywhere else in the app, and precisely
+    the entries the next trim deletes first. Measured on a six-entry export
+    with two free slots: January and February were imported while
+    `apply_max_items(2)` on the same entries keeps May and June.
+
+    The selection is by timestamp, not by position: an imported file is
+    exactly where position stops being a proxy for time.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("already-here")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=3))
+
+    import_file = tmp_path / "import.json"
+    import_file.write_text(
+        json.dumps(
+            [
+                {
+                    "created_at": f"2026-0{month}-01T09:00:00+00:00",
+                    "text": f"month-{month}",
+                    "engine": "local",
+                    "model": "small",
+                    "mode": "batch",
+                }
+                # Deliberately not in chronological order: a slice of either
+                # end of the *file* is only ever a proxy for time, and an
+                # imported file is where that proxy fails. Newest here are
+                # months 5 and 6, and neither sits at an end.
+                for month in (6, 2, 5, 1, 4, 3)
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *args, **kwargs: (str(import_file), "JSON files (*.json)"),
+    )
+    monkeypatch.setattr(
+        HistoryDialog, "_prompt_import_overflow", lambda *args, **kwargs: "free"
+    )
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "information",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Ok,
+    )
+
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._import_history()
+
+    imported = {entry.text for entry in history_store.load()} - {"already-here"}
+    assert imported == {"month-5", "month-6"}, (
+        f"the oldest entries were imported instead of the newest: {sorted(imported)}"
+    )
+    _ = app
