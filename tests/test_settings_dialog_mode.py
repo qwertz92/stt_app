@@ -36,6 +36,11 @@ class _FakeSettingsStore:
 
     def save(self, settings: AppSettings) -> None:
         self.saved = settings
+        # A real store's `load` returns what `save` last wrote, and the save
+        # path reads the file back to merge the dialog's edits onto it. A fake
+        # that kept answering with the constructor's object made a second save
+        # in one test see disk as if the first had never happened.
+        self._settings = settings
 
 
 class _FakeSecretStore:
@@ -4497,5 +4502,96 @@ def test_replacing_a_key_saves_the_key_and_not_the_settings():
     assert providers == [["openai"]]
     assert store.saved is None, "a key replacement rewrote settings.json"
     assert "API keys saved" in dialog._save_status_label.text()
+    dialog.deleteLater()
+    _ = app
+
+
+class _CountingHistoryStore:
+    """Just enough of the history store for the save path's trim decision."""
+
+    def __init__(self, count: int) -> None:
+        self._count = count
+        self.trimmed_to: list[int] = []
+
+    def count(self) -> int:
+        return self._count
+
+    def apply_max_items(self, limit: int) -> None:
+        self.trimmed_to.append(int(limit))
+        if limit > 0:
+            self._count = min(self._count, int(limit))
+
+
+def test_an_untouched_save_keeps_a_limit_the_history_dialog_raised():
+    """`history_max_items` is written from outside this dialog too.
+
+    `history_dialog._persist_limit` writes it straight to the store and tells
+    only the controller, so the Settings snapshot and its spin box still show
+    the old number. Writing the whole snapshot-derived object back therefore
+    reverted the limit -- and the trim that follows a limit change then deletes
+    the transcripts above it. Measured before this: limit raised to 800, 700
+    entries held, Save pressed with nothing touched, and the next dictation
+    would have destroyed 201 of them.
+    """
+    dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
+    history = _CountingHistoryStore(700)
+    dialog._history_store = history
+    assert dialog.history_max_spin.value() == 500
+    # The standalone History dialog raises the limit while Settings is open.
+    store._settings = dataclasses.replace(store._settings, history_max_items=800)
+
+    dialog._save()
+
+    # `store.saved is None` is what carries this: the fake's `load()` returns
+    # whatever was last set on it, so it cannot contradict a bad write.
+    assert store.saved is None
+    assert store.load().history_max_items == 800
+    assert history.trimmed_to == []
+    assert dialog._save_status_label.text() == "No settings changes"
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_key_save_keeps_a_limit_the_history_dialog_raised():
+    """The key-only path built its object from the same stale snapshot."""
+    dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
+    dialog.openai_key_edit.setText("sk-new")
+    store._settings = dataclasses.replace(store._settings, history_max_items=800)
+
+    dialog._save_api_keys_only()
+
+    # Assert on what was written. `_FakeSettingsStore.load()` does not reflect
+    # a save, so reading it back could not fail whatever the dialog wrote.
+    assert dialog._secret_store.get_api_key("openai") == "sk-new"
+    assert store.saved is not None, "the key metadata was never persisted"
+    assert store.saved.has_openai_key is True
+    assert store.saved.history_max_items == 800
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_limit_the_user_really_changed_still_wins_and_still_trims(monkeypatch):
+    """The merge must not swallow the edit it exists to isolate."""
+    dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
+    history = _CountingHistoryStore(700)
+    dialog._history_store = history
+    store._settings = dataclasses.replace(store._settings, history_max_items=800)
+    dialog.history_max_spin.setValue(600)
+    # Lowering the limit below the stored count asks before deleting.
+    asked: list[str] = []
+
+    def _confirm(_parent, _title, text, *args, **kwargs):
+        asked.append(text)
+        return QtWidgets.QMessageBox.Yes
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "question", _confirm)
+
+    dialog._save()
+
+    assert len(asked) == 1
+
+    assert store.saved is not None
+    assert store.saved.history_max_items == 600
+    assert history.trimmed_to == [600]
     dialog.deleteLater()
     _ = app

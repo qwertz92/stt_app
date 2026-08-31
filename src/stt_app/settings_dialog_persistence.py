@@ -1,6 +1,7 @@
 """Settings dialog: persistence mixin (split from settings_dialog.py)."""
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import replace
 
 from PySide6 import QtCore, QtGui, QtWidgets
@@ -262,6 +263,40 @@ class _PersistenceMixin:
         index = combo.findData(value)
         combo.setCurrentIndex(index if index >= 0 else 0)
 
+    def _dialog_edits_over_stored(
+        self,
+        settings: AppSettings,
+        stored: AppSettings,
+    ) -> AppSettings:
+        """The user's edits, applied on top of what is on disk right now.
+
+        A save rebuilds `AppSettings` from widget state, so it carries a value
+        for every field -- including ones this dialog does not own and cannot
+        have edited. Writing that whole object reverts whatever another window
+        changed while Settings was open. Three such fields were handled by
+        hand (`_OVERLAY_OWNED_FIELDS` plus `language_mode`); `history_max_items`
+        is a fourth, written by the standalone History dialog's own limit
+        control, and it is the one with teeth: the reverted limit then trims
+        the transcript store. Measured before this -- raise the limit to 800 in
+        the History dialog, dictate up to 700 entries, press Save in the
+        untouched Settings window, and the next dictation destroyed 201
+        transcripts.
+
+        So the field list is derived rather than maintained: a field the widget
+        state agrees with the dialog-open snapshot on is not an edit, whatever
+        the file says now. The three hand-handled fields still are handled by
+        hand, because they must also survive the *other* direction -- a field
+        this dialog never reads back would otherwise be written as its
+        dataclass default.
+        """
+        edited = {
+            field.name: getattr(settings, field.name)
+            for field in dataclasses.fields(AppSettings)
+            if getattr(settings, field.name)
+            != getattr(self._loaded_settings, field.name)
+        }
+        return replace(stored, **edited) if edited else stored
+
     def _settings_match_stored_values(
         self,
         settings: AppSettings,
@@ -454,8 +489,11 @@ class _PersistenceMixin:
         # store precisely because the overlay may have moved them since. A key
         # save that changes no metadata used to rewrite the file with its own
         # contents and emit `settings_changed`, which costs four global hotkey
-        # re-registrations.
+        # re-registrations. The merge is what keeps every *other* field this
+        # path never touches -- `history_max_items` above all -- at whatever
+        # another window has since written.
         stored_settings = self._settings_store.load()
+        updated = self._dialog_edits_over_stored(updated, stored_settings)
         settings_changed = updated != stored_settings
         if settings_changed:
             try:
@@ -836,6 +874,7 @@ class _PersistenceMixin:
         )
 
         stored_settings = self._settings_store.load()
+        settings = self._dialog_edits_over_stored(settings, stored_settings)
         settings_changed = not self._settings_match_stored_values(
             settings, stored_settings
         )
@@ -859,9 +898,17 @@ class _PersistenceMixin:
                 return
             self._loaded_settings = settings
             self._refresh_secret_store_options_ui()
-        if history_limit_changed and requested_history_limit > 0:
+        # Trim to the limit that was actually saved, not to the spin box, so
+        # the write and the trim read one baseline instead of two that can
+        # drift -- which is how the revert above went unnoticed. This is an
+        # equivalent change today and mutation testing cannot tell the two
+        # apart: where they differ the old condition also declined to trim.
+        saved_history_limit = int(settings.history_max_items)
+        if saved_history_limit != int(stored_settings.history_max_items) and (
+            saved_history_limit > 0
+        ):
             try:
-                self._history_store.apply_max_items(requested_history_limit)
+                self._history_store.apply_max_items(saved_history_limit)
             except Exception as exc:
                 logger = getattr(self, "_settings_perf_logger", None)
                 if logger is not None:

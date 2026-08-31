@@ -25,6 +25,11 @@ class _FakeSettingsStore:
 
     def save(self, settings: AppSettings) -> None:
         self.saved = settings
+        # A real store's `load` returns what `save` last wrote, and the save
+        # path reads the file back to merge the dialog's edits onto it. A fake
+        # that kept answering with the constructor's object made a second save
+        # in one test see disk as if the first had never happened.
+        self._settings = settings
 
 
 class _FakeSecretStore:
