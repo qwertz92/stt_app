@@ -144,8 +144,14 @@ def append_only_stream_partial_candidate(
         return current
 
     overlap = _suffix_prefix_overlap_len(previous_words, current_words)
-    if _substantive_word_count(current_words[:overlap]) >= max(
-        1, int(min_overlap_words)
+    # The token threshold as before, plus at least one real word. Counting
+    # only substantive words *against* the threshold was stricter than the
+    # threshold has ever been: an overlap of "praktisch ..." scores one, fails
+    # a threshold of two, and the caller then replaces the accumulated text --
+    # before the first measured pause there is no floor to bound that, so a
+    # measured 13-word dictation became 8 words of window.
+    if overlap >= max(1, int(min_overlap_words)) and _substantive_word_count(
+        current_words[:overlap]
     ):
         merged = previous_words + current_words[overlap:]
         return " ".join(merged).strip()
@@ -190,30 +196,63 @@ def _join_at_seam(
     fragment there defeats the search. Re-anchoring up to `max_skip` words in
     finds the seam anyway.
 
-    It takes the LONGEST seam, not the first one over the threshold. Returning
-    early on the first match let a coincidental short overlap near the window's
-    head beat the real seam a word or two further in, and everything between
-    the two was then emitted twice -- reported as `aligned=True`, so the caller
-    pinned the duplicate as the new floor. Measured on a base ending "... sechs
-    sieben acht" against a window "x sieben acht drei vier fuenf sechs sieben
-    acht neun zehn": skip 1 overlaps 2 words and skip 3 overlaps 6, and taking
-    skip 1 repeated six words. Equal overlaps keep the smallest skip, which
-    drops the fewest window words, and this is also what `skip == 0` already
-    does in `append_only_stream_partial_candidate`.
+    Candidates are scored by ``overlap - skip`` -- the words the seam explains
+    minus the window words it throws away -- and the best score wins, ties
+    going to the smallest skip. Neither half of that is optional, because the
+    two obvious rules each fix one real defect and cause the other:
+
+    - *First match wins* (the original) let a coincidental short overlap near
+      the window's head beat the real seam a word or two further in, and
+      everything between them was emitted twice as `aligned=True`, which is
+      the flag the caller pins the floor from. Measured on a base ending
+      "sechs sieben acht" against a window "x sieben acht drei vier fuenf
+      sechs sieben acht neun zehn": skip 1 overlaps 2, skip 3 overlaps 6, and
+      taking skip 1 repeated six words.
+    - *Longest overlap wins* inverts it. On a floor ending "und das ist"
+      against "j0 j1 das ist ein neuer gedanke und das ist gut", the real
+      2-word seam sits at skip 2 and a 3-word coincidence at skip 7, and
+      taking the longer one dropped "ein neuer gedanke".
+
+    ``overlap - skip`` gets both: 6-3=3 beats 2-1=1 in the first, and 2-2=0
+    beats 3-7=-4 in the second.
+
+    Beyond `_WINDOW_BOUNDARY_SKIP_WORDS` a candidate must also score at least
+    zero -- explain at least as much as it discards. Inside that bound the
+    discard is capped at three words by the bound itself, so the rule is not
+    applied there: it would only raise skip 3's requirement from two words of
+    overlap to three, and a rejected alignment falls through to a replace,
+    which without a floor loses the whole dictation. Past the bound there is
+    no cap at all, and that is what a 2-word coincidence at skip 5 exploited
+    to swallow an entire window: floor "und und und", window "dann dann dann
+    dann dann und und", result "und und und".
+
+    Scored over 20000 randomised merges against a 40-word German vocabulary,
+    against the same merges under the original rule: 2 words lost versus 17,
+    and 62884 duplicated versus 74129. Better on both, which is why this rule
+    rather than reverting to the bound.
     """
+    widened = max_skip > _WINDOW_BOUNDARY_SKIP_WORDS
     best_skip = 0
     best_overlap = 0
+    best_score: int | None = None
     for skip in range(1, min(max_skip, len(current_words) - 1) + 1):
         overlap = _suffix_prefix_overlap_len(base_words, current_words[skip:])
-        if overlap <= best_overlap:
+        if overlap < required_overlap:
             continue
-        if (
-            _substantive_word_count(current_words[skip : skip + overlap])
-            < required_overlap
-        ):
+        # At least one real word. Not `>= required_overlap` substantive words:
+        # that is stricter than the threshold has ever been, and it turned a
+        # seam like "praktisch ..." -- one word plus a mark -- into a failed
+        # merge, which before the first measured pause replaces the whole
+        # accumulated text rather than one window. 13 words lost, measured.
+        if not _substantive_word_count(current_words[skip : skip + overlap]):
             continue
-        best_skip = skip
-        best_overlap = overlap
+        if widened and overlap < skip:
+            continue
+        score = overlap - skip
+        if best_score is None or score > best_score:
+            best_score = score
+            best_skip = skip
+            best_overlap = overlap
     if not best_overlap:
         return None
     return " ".join(

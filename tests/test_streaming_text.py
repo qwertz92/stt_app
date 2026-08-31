@@ -462,7 +462,12 @@ def test_the_merge_reports_which_branch_resolved_it():
     assert empty.aligned is True
 
 
-def test_the_floor_splice_is_not_bounded_by_the_boundary_skip():
+_FLOOR = "das protokoll der letzten sitzung ist noch nicht fertig"
+_DRIFTED = f"{_FLOOR} voellig anderer erfundener text hier"
+
+
+@pytest.mark.parametrize("junk_words", [0, 1, 2, 3, 4])
+def test_the_floor_splice_reaches_past_the_boundary_skip(junk_words):
     """Past three junk words the splice used to fall through to a blind weld.
 
     The floor branch is reached because `previous` has already drifted beyond
@@ -473,102 +478,70 @@ def test_the_floor_splice_is_not_bounded_by_the_boundary_skip():
     append: measured 19 words where 11 were right, with the floor's last four
     re-emitted after the junk, and pasted into the document.
     """
-    floor = "das protokoll der letzten sitzung ist noch nicht fertig"
-    previous = f"{floor} voellig anderer erfundener text hier"
-
-    for junk_words in range(7):
-        junk = " ".join(f"j{index}" for index in range(junk_words))
-        window = f"{junk} ist noch nicht fertig und wird".strip()
-        merged = merge_rolling_window_transcript(
-            previous, window, protected_prefix=floor
-        )
-        assert merged == f"{floor} und wird", (
-            f"{junk_words} junk words produced {merged!r}"
-        )
-
-
-def test_the_seam_search_takes_the_longest_overlap_not_the_first():
-    """A coincidental short match near the head must not beat the real seam.
-
-    `_join_at_seam` returned on the first skip that cleared the threshold, so
-    a two-word coincidence at skip 1 won against a six-word seam at skip 3 and
-    everything between them was emitted twice -- as `aligned=True`, which is
-    the flag the caller pins the floor from, so the duplicate became permanent.
-    """
-    previous = "eins zwei drei vier fuenf sechs sieben acht"
-    window = "x sieben acht drei vier fuenf sechs sieben acht neun zehn"
+    junk = " ".join(f"j{index}" for index in range(junk_words))
+    window = f"{junk} ist noch nicht fertig und wird".strip()
 
     assert (
-        merge_rolling_window_transcript(previous, window)
-        == "eins zwei drei vier fuenf sechs sieben acht neun zehn"
+        merge_rolling_window_transcript(_DRIFTED, window, protected_prefix=_FLOOR)
+        == f"{_FLOOR} und wird"
     )
 
 
-# Both inputs below were found by searching the real `merge_rolling_window`
-# for cases where "longest overlap" differs from "first passing skip" and from
-# "last passing skip", because the readable case above separates it from
-# neither: `skip + overlap` is the cut point, so every skip that finds one true
-# seam yields the identical text and all three rules agree. They look
-# artificial because a disagreement needs a repeating phrase -- that is what
-# makes a second, false seam exist at all.
-@pytest.mark.parametrize(
-    ("previous", "window", "expected", "wrong_rule"),
-    [
-        (
-            "und und dann und",
-            "dann dann und dann und",
-            "und und dann und",
-            "taking the first passing skip appends 'dann und' a second time",
-        ),
-        (
-            "und und und dann",
-            "dann und dann und dann",
-            "und und und dann und dann",
-            "taking the last passing skip drops the window's new words",
-        ),
-    ],
-)
-def test_the_seam_rule_is_longest_not_first_and_not_last(
-    previous, window, expected, wrong_rule
-):
-    """Longest sits between the two failure modes, which point opposite ways.
+@pytest.mark.parametrize("junk_words", [5, 6, 7])
+def test_a_seam_that_discards_more_than_it_explains_is_refused(junk_words):
+    """The bound is deliberate, and duplicating is the safe side of it.
 
-    First-passing duplicates, last-passing loses speech. Pinning only one of
-    them would leave the other free to be reintroduced as a "simplification".
+    A candidate past `_WINDOW_BOUNDARY_SKIP_WORDS` must explain at least as
+    much as it throws away, so a four-word seam behind five junk words is
+    refused and the window is welded on whole -- the original behaviour, junk
+    and all. Accepting it instead is what let a two-word coincidence at skip 5
+    swallow an entire window of real speech. Bounded junk beats lost text.
     """
-    assert merge_rolling_window_transcript(previous, window) == expected, wrong_rule
+    junk = " ".join(f"j{index}" for index in range(junk_words))
+    window = f"{junk} ist noch nicht fertig und wird".strip()
+
+    merged = merge_rolling_window_transcript(
+        _DRIFTED, window, protected_prefix=_FLOOR
+    )
+    assert merged.startswith(_FLOOR), merged
+    assert merged.endswith("und wird"), merged
+    assert junk in merged, "the window was dropped instead of welded on"
 
 
-@pytest.mark.parametrize(
-    ("floor", "window", "expected", "wrong_rule"),
-    [
-        (
-            "und und dann und",
-            "dann dann und dann und",
-            "und und dann und",
-            "taking the first passing skip appends 'dann und' a second time",
-        ),
-        (
-            "und und und dann",
-            "dann und dann und dann",
-            "und und und dann und dann",
-            "taking the last passing skip drops the window's new words",
-        ),
-    ],
-)
-def test_the_floor_splice_uses_the_same_seam_rule(
-    floor, window, expected, wrong_rule
-):
-    """The widened floor search must not weaken the rule it searches with.
+def test_a_deep_coincidence_never_beats_a_shallow_real_seam():
+    """The other direction, and the reason the score subtracts the skip.
 
-    Searching the whole window gives a coincidence more places to occur, so
-    the same two failure modes are pinned here as well.
+    Taking the longest overlap inverts the first-match defect: here the real
+    two-word seam sits at skip 2 and a three-word coincidence at skip 7, and
+    preferring the longer one dropped "ein neuer gedanke" from the transcript.
+    `overlap - skip` scores them 0 against -4.
     """
-    previous = f"{floor} voellig anderer erfundener text"
+    floor = "der bericht ist lang und das ist"
+    previous = f"{floor} erfundener text hier"
+    window = "j0 j1 das ist ein neuer gedanke und das ist gut"
+
     assert (
         merge_rolling_window_transcript(previous, window, protected_prefix=floor)
-        == expected
-    ), wrong_rule
+        == f"{floor} ein neuer gedanke und das ist gut"
+    )
+
+
+def test_a_deep_coincidence_cannot_swallow_a_whole_window():
+    """The worst shape: the seam leaves no window words at all.
+
+    The floor's last two words recur at the very end of the window, so the
+    deepest candidate explains two words and discards five -- and the window
+    contributed nothing, with five real words gone and the transcript not
+    advancing at all.
+    """
+    floor = "und und und"
+    previous = f"{floor} erfundener text hier"
+    window = "dann dann dann dann dann und und"
+
+    assert (
+        merge_rolling_window_transcript(previous, window, protected_prefix=floor)
+        == f"{floor} {window}"
+    )
 
 
 def test_a_seam_of_pure_punctuation_is_not_agreement():
@@ -583,6 +556,29 @@ def test_a_seam_of_pure_punctuation_is_not_agreement():
         "ich habe gesagt ... !", ": . und dann kam etwas ganz anderes"
     )
     assert resolved.aligned is False
+
+
+def test_one_real_word_in_the_seam_is_still_a_seam():
+    """The punctuation gate must not be able to cause a replace.
+
+    Counting substantive words *against* the two-word threshold is stricter
+    than the threshold has ever been: an overlap of "praktisch ..." scores
+    one, fails, and the merge falls through to the replace -- and before the
+    first measured pause there is no floor to bound that, so the whole
+    dictation so far is gone, not one window. Measured at 13 words. The rule
+    is the token threshold as before, plus at least one real word.
+    """
+    previous = (
+        "die spracherkennung wandelt sprache in text um und das ist sehr "
+        "praktisch ..."
+    )
+
+    merged = merge_rolling_window_transcript(
+        previous, "praktisch ... und jetzt kommt der naechste satz"
+    )
+
+    assert merged.startswith("die spracherkennung wandelt sprache"), merged
+    assert merged.endswith("und jetzt kommt der naechste satz"), merged
 
 
 def test_a_seam_containing_punctuation_still_counts_its_real_words():
