@@ -5077,3 +5077,150 @@ silently: a mutation script's anchors were rewritten to nothing and the run
 that followed reported clean results for mutations that had never been
 applied. Anything containing a backslash escape now goes through the Write
 tool or a real file, never a heredoc.
+
+## Round 21 (2026-08-31) - the settings, streaming and Win32 round
+
+Three lead-verified findings from the previous round's agents, each reproduced
+against the real component before being accepted, and five documentation
+claims that later measurement falsified.
+
+### The settings merge held for exactly one save
+
+`_dialog_edits_over_stored` exists so that pressing Save writes the user's
+edits onto the file rather than the dialog-open snapshot, which is what stops
+an untouched Settings window reverting a limit the History dialog raised. It
+diffed against `_loaded_settings` -- and `_save` ends by assigning that same
+attribute the *merged* object. So the snapshot absorbed the external 800 while
+the spin box kept showing 500, and the second save read the 500 as a genuine
+edit.
+
+Reproduced against the real `SettingsStore` with 700 entries: save #1 correct
+(disk 800), save #2 wrote 500 and trimmed, 200 transcripts deleted behind a
+prompt naming a limit nobody chose. Silently, with no prompt at all, whenever
+the history was smaller than the limit.
+
+The attribute was doing two incompatible jobs -- "what the widgets were
+populated from" and "what was last written" -- which diverge the moment a
+merge happens. `_populated_settings` now answers the first.
+
+Two wrong versions on the way to the fix, both caught by measurement rather
+than review:
+
+- **A frozen baseline** (written only where widgets are written) fixes the
+  revert and breaks the reverse: set a checkbox, save, change your mind, set
+  it back, and the second save finds the box agreeing with the dialog-open
+  value, calls it no edit, and writes nothing. The probe matrix caught it on
+  `tray_middle_click_toggle`; a probe that had only tested the revert
+  direction would have shipped it.
+- **Recording the merged language on the key-save path** is the same defect
+  one level in. That path writes no language -- it reads the value back off
+  disk precisely so an overlay pick survives -- so recording what it wrote
+  tells the next settings save that the combo has moved, and the untouched
+  combo becomes a deliberate choice again.
+
+Nine mutations, eight detected. The survivor is `_language_mode_for_save`'s
+own snapshot read: `_dialog_edits_over_stored` compares its answer against the
+same baseline afterwards, so an untouched combo produces no edit whichever
+snapshot it consults, and the only caller that bypasses that merge (the Import
+tab, via `_build_current_settings`) always passes an override. The change was
+kept for consistency and the docstring says plainly that it is not
+independently observable -- the alternative was a comment implying a fix that
+no test can demonstrate.
+
+A tenth mutation settled a claim rather than a fix: the trim reading the spin
+box instead of the saved limit was recorded as "an equivalent change today
+that mutation testing cannot tell apart". Once the merge holds across saves
+the two genuinely disagree, and the substitution now fails two tests.
+
+### The seam rule: two obvious rules, each fixing the other's defect
+
+The previous round replaced "first skip over the threshold wins" with "longest
+overlap wins" and widened the floor branch's search past
+`_WINDOW_BOUNDARY_SKIP_WORDS`, recording that "widening it is safe there and
+not above". It is not. Widening without bounding the discard inverts the
+original defect: a deep coincidence beats a shallow real seam. Two measured
+cases -- a 3-word match at skip 7 against the real 2-word seam at skip 2 drops
+"ein neuer gedanke"; a 2-word match at skip 5 discards an entire window ("und
+und und" + "dann dann dann dann dann und und" -> "und und und").
+
+`overlap - skip` -- words explained minus window words discarded -- gets both,
+with a non-negative score additionally required past the boundary bound, where
+nothing else caps the discard. Inside the bound the cap is the bound itself,
+and requiring it there would only raise skip 3's bar; a refused alignment
+falls through to a replace, which before the first measured pause loses the
+whole dictation.
+
+Five candidate rules were evaluated over 20000 randomised German merges, the
+same merges under each: shipped-old 17 words lost / 74129 duplicated,
+longest-wins 29 / 16712, `overlap - skip` 2 / 62884. Better than the original
+on both axes. What this measures is which candidate each rule picks on
+synthetic seams, not accuracy on real audio.
+
+Two lessons about the tests rather than the code:
+
+- The two parametrized seam tests asserted whatever the then-current rule
+  produced on strings a search had found. They pinned a rule, not a behaviour,
+  and broke the moment the rule was corrected -- which is the only reason the
+  correction was noticed to need re-deriving. Every replacement case has an
+  unambiguous right answer.
+- Two of my first mutation cases survived because I had mis-specified them:
+  they changed the tie-break rather than the first-match rule. A mutation that
+  does not revert the property under test proves nothing, and "survived" reads
+  identically either way.
+
+### The punctuation gate could cause a replace
+
+Counting substantive words *against* the overlap threshold is stricter than
+the threshold has ever been. A seam of "praktisch ..." counts one, fails a
+threshold of two, and the merge falls through to a replace with no floor to
+bound it: 13 words of dictation for 8 words of window, measured. The rule is
+the raw token threshold as before, plus at least one real word -- which is all
+that is needed to rule out a seam made of nothing but marks.
+
+### `use_last_error=True` moves the error, and silenced every hotkey failure
+
+Giving `window_focus` and `hotkey` their own `WinDLL` handle was recorded as
+"hardening, not a fix for anything observed". True of `window_focus`; false of
+the change as a whole. `use_last_error=True` saves the Windows error into
+ctypes' private per-call slot and *restores* the thread's `GetLastError` to
+its previous value, so `Win32HotkeyApi.get_last_error`'s
+`ctypes.GetLastError()` answered 0 and every failed registration reported
+"Unknown Windows hotkey registration error".
+
+Measured against a real double `RegisterHotKey`: thread reader 0, ctypes slot
+1409 -- "another program holds this combination", the code the fallback and
+reclaim machinery exists for. The user-facing message is now `Failed to
+register hotkey: Ctrl+Alt+F12. Windows reported hotkey already registered
+(1409).`
+
+The same entry claimed a 64-bit handle "already fails outright" as though the
+undeclared call were the safer one. `wintypes.HWND` *is* `c_void_p`, so
+declaring it removes that check rather than keeping it: measured with
+0x7FF8_1234_5678, undeclared raises `ArgumentError: int too long to convert`
+and declared accepts it and returns 0. The overflow was ctypes refusing a
+legal handle, not a guard -- the declaration is still the right change, for
+the opposite reason to the one written down.
+
+### Withdrawn: the 7.5 -> 2.1 seam figures
+
+"Mean extra words 7.5 -> 2.1, worst case 38 -> 15, while mean lost words moved
+21.2 -> 21.3" came from a harness that was never committed and could not be
+reproduced. The conclusion drawn from it -- "it does not buy the reduction
+with lost speech" -- is false for the rule it described: longest-overlap-wins
+loses 29 words where the original loses 17. Replaced with the rule evaluation
+above, which is reproducible from the numbers it states.
+
+### Process notes
+
+- Probes must test both directions of a fix. The frozen-baseline version
+  passed every revert case and would have shipped a save that silently
+  discarded a change of mind.
+- Two probe failures this round were artefacts of the probe, not the code:
+  `findData("en")` returned -1 because the default model (Parakeet) exposes
+  only `auto`, so the combo has one item. A failing assertion is a claim about
+  the code and needs the same check as a passing one.
+- The mutation harness prints `[lines containing "passed"/"failed"] or
+  lines[-1:]`, and the repository's own `-q` makes that `-qq`, which
+  suppresses the count line. So a run with several failures shows only the
+  last `FAILED` line. It was settled here by re-running with a single-test
+  selector; the harness's reporting should be fixed before it misleads.

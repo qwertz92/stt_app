@@ -66,8 +66,14 @@ def _declare_user32(user32) -> None:
       sign-extended -- a different window. Measured on this machine, real
       handles are far below that (0x30766) and declared and undeclared calls
       agree exactly, so this is hardening rather than a fix for anything
-      observed; a 64-bit handle is the one case that already fails outright
-      ("int too long to convert"), and Windows does not produce one.
+      observed here.
+
+    A 64-bit handle is *not* a case the undeclared call handles better, which
+    an earlier version of this comment claimed. `wintypes.HWND` is `c_void_p`,
+    so declaring it removes the width check instead of keeping it: measured
+    with 0x7FF8_1234_5678, undeclared raises `ArgumentError: int too long to
+    convert` and declared accepts it. The overflow was ctypes refusing a legal
+    handle, not a guard. Windows does not produce one today either way.
     """
     wintypes = ctypes.wintypes
     signatures = {

@@ -1580,16 +1580,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcribes only the trailing partial window and merges it into the
   provider-tracked live transcript, so stop returns quickly and the history
   entry matches the streamed text. Inserted text stays append-only either way.
-- **The seam search takes the longest overlap, and the floor's splice is not
-  bounded by `_WINDOW_BOUNDARY_SKIP_WORDS`.** Two ways the merge duplicated
-  text into the user's document, both measured deterministically:
+- **A seam is scored by what it explains minus what it discards
+  (`overlap - skip`), and the floor's splice searches deeper than
+  `_WINDOW_BOUNDARY_SKIP_WORDS`.** Two ways the merge duplicated text into the
+  user's document, both measured deterministically:
   - `_join_at_seam` returned on the *first* skip whose overlap cleared the
     threshold, so a coincidental two-word match at skip 1 beat the real
     six-word seam at skip 3 and the six words between them were emitted twice
     -- as `aligned=True`, which is the flag the caller pins the floor from, so
-    the duplicate became permanent. It now scores every skip and keeps the
-    largest overlap, smallest skip on a tie, which is also what `skip == 0`
-    already does in `append_only_stream_partial_candidate`.
+    the duplicate became permanent.
   - The floor branch's splice used the same 3-word bound as the alignment
     above it, and past the fourth junk word fell through to
     `stream_join_text(protected, current)` -- a blind weld of the whole
@@ -1597,26 +1596,63 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     noch nicht fertig": 11 words for up to three junk words, 19 for four. The
     bound describes one word cut in half at a window boundary; the floor
     branch is reached only after `previous` was discarded as unalignable, so
-    the window's head can hold several words of that drift. Widening it is
-    safe there and not above, because the floor is preserved verbatim, the
-    result stays `aligned=False` so no floor is advanced by it, and two
-    substantive words of overlap are still required.
-  Measured over 300 randomised sessions per cell (60-word dictations, 12-word
-  windows, a 4-word boundary mistranscription in one window in five): mean
-  extra words 7.5 -> 2.1, worst case 38 -> 15, while mean lost words moved
-  21.2 -> 21.3 with the same number of sessions affected. The direction that
-  matters is that it does not buy the reduction with lost speech; the absolute
-  loss level is the synthetic corruption model, not real audio.
+    the window's head can hold several words of that drift.
+
+  **"Widening it is safe there and not above" was wrong**, and this entry
+  claimed it for one round. Widening the search without also bounding the
+  discard inverts the first defect: taking the *longest* overlap lets a deep
+  coincidence beat a shallow real seam, which dropped "ein neuer gedanke" (a
+  3-word match at skip 7 against the real 2-word seam at skip 2), and a 2-word
+  coincidence at skip 5 discarded an entire window of speech (floor "und und
+  und", window "dann dann dann dann dann und und", result "und und und"). The
+  floor being preserved verbatim bounds the damage to one window; it does not
+  prevent it.
+
+  `overlap - skip` is what gets both directions: 6-3=3 beats 2-1=1 in the
+  first case, 2-2=0 beats 3-7=-4 in the second. Past
+  `_WINDOW_BOUNDARY_SKIP_WORDS` a candidate must additionally score at least
+  zero, because inside that bound the discard is already capped at three words
+  and requiring it there would only raise skip 3's bar from two words of
+  overlap to three -- and a refused alignment falls through to a replace,
+  which without a floor loses the whole dictation. Past the bound nothing caps
+  it, which is what the skip-5 case exploited. A candidate that fails the
+  score is refused and the window is welded on whole, junk and all: bounded
+  duplication is the safe side of this bound.
+
+  Rule evaluation over 20000 randomised German merges (40-word vocabulary),
+  same merges under each rule: shipped-old 17 words lost and 74129 duplicated,
+  longest-overlap-wins 29 and 16712, `overlap - skip` **2 and 62884**. Better
+  than the original on *both* axes, which is why this rather than a revert to
+  the bound. Note what this measures: which candidate each rule picks on
+  synthetic seams, not accuracy on real audio.
+
+  **The "mean extra words 7.5 -> 2.1 ... mean lost words 21.2 -> 21.3" figures
+  this entry used to give are withdrawn.** They came from a harness that was
+  never committed and could not be reproduced, and the conclusion drawn from
+  them -- "it does not buy the reduction with lost speech" -- is false for the
+  rule they described: longest-overlap-wins loses 29 words where the original
+  loses 17.
 - **Punctuation is not corroboration.** `_stream_word_key` strips
   `.,;:!?)]}`, so "...", "!", "?!" and ":" all key to the empty string and
   match each other -- two of them cleared a two-word overlap threshold with no
   lexical agreement at all, and a cleared threshold is what the merge reads as
   "two overlapping windows agreed on the seam". `_substantive_word_count`
-  counts only non-empty keys and every threshold is applied to that count.
+  counts only non-empty keys.
   Counted rather than refused in `_stream_words_match`: a genuine seam may
   contain a standalone mark ("hallo ... welt"), and making the mark itself
   non-matching breaks that three-word overlap down to nothing, because
   `_suffix_prefix_overlap_len` needs every word of the slice to match.
+
+  **The gate is "at least one real word", not "enough real words to clear the
+  threshold".** Applying the threshold to the substantive count -- which this
+  entry described as the rule for one round -- is stricter than the threshold
+  has ever been, and the extra strictness falls on real seams: an overlap of
+  "praktisch ..." counts one, fails a threshold of two, and the merge then
+  falls through to a *replace*. Before the first measured pause there is no
+  `protected_prefix` to bound that, so it is not one window that is lost but
+  the whole dictation so far -- measured at 13 words. The raw token count
+  still has to clear the threshold; the substantive count only has to be
+  non-zero, which is exactly what rules out a seam made of nothing but marks.
 - **Streaming decodes nothing during silence, at either end**: faster-whisper
   invents words from silence (the same reason the batch silence gate exists),
   and in the streaming path an invented window can never be aligned against
@@ -2776,17 +2812,37 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - The benchmark's arm left the Details overview reading the running summary,
     because `setPlainText` had already put it in the Status row a few lines
     above the start -- next to a status line saying the run never began.
-- **`window_focus` and `hotkey` take their own `WinDLL` handle.**
+- **`window_focus` and `hotkey` take their own `WinDLL` handle, and the handle
+  is opened `use_last_error=True`, which changes where the error goes.**
   `ctypes.windll.user32` is a process-wide cached object, so declaring
   `argtypes`/`restype` on it redefines those functions for every other caller;
-  `text_inserter` and `win_tray_icon` already each take their own. This is
-  hardening, not a fix for anything observed: measured on this machine a real
-  `HWND` is 0x30766 and the declared and undeclared calls agree exactly. What
-  the declarations rule out is an `HWND` at or above 0x8000_0000 coming back
+  `text_inserter` and `win_tray_icon` already each take their own. What the
+  declarations rule out is an `HWND` at or above 0x8000_0000 coming back
   negative from the default 32-bit signed `restype` and being passed back
   sign-extended -- a different window -- and `GetAsyncKeyState` being read as
-  an `int` when it returns a `SHORT`. A 64-bit handle already fails outright
-  ("int too long to convert") and Windows does not produce one.
+  an `int` when it returns a `SHORT`. Measured on this machine a real `HWND`
+  is 0x30766 and the declared and undeclared calls agree exactly, so *for
+  `window_focus`* this is hardening rather than a fix for anything observed.
+
+  **"Hardening, not a fix for anything observed" was wrong as a statement
+  about the change as a whole**, and this entry said it for one round. The
+  same switch broke `hotkey`'s error reporting: `use_last_error=True` saves
+  the Windows error into ctypes' own per-call slot and *restores* the thread's
+  `GetLastError` to its previous value, so `Win32HotkeyApi.get_last_error`'s
+  `ctypes.GetLastError()` answered 0 and every failed registration reported
+  "Unknown Windows hotkey registration error" instead of naming the cause.
+  Measured against a real double `RegisterHotKey`: thread reader 0, ctypes
+  slot 1409 -- "another program holds this combination", the code the fallback
+  and reclaim machinery exists for. Read `ctypes.get_last_error()` on any
+  handle opened this way; the other two modules already did.
+
+  **A 64-bit handle fails outright only on the *undeclared* call.** Because
+  `wintypes.HWND` *is* `c_void_p`, declaring it removes that check rather than
+  keeping it: measured with 0x7FF8_1234_5678, the undeclared call raises
+  `ArgumentError: int too long to convert` and the declared one accepts it and
+  returns 0. That is the correct direction -- the overflow was ctypes refusing
+  a legal handle, not a safety net -- but the earlier wording had it backwards.
+  Windows does not produce such a handle today either way.
 - **A save applies the user's edits onto the file, it does not write its
   snapshot back.** The comparison above was only half of it: the dialog also
   *wrote* every field of its dialog-open snapshot, so a value another window
@@ -2799,9 +2855,44 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the constructed object against `_loaded_settings` and applies only the fields
   that differ onto `self._settings_store.load()`, in both save paths, and the
   trim is keyed on the limit that was actually saved. This entry and the one
-  above are the two halves of one rule: **`_loaded_settings` answers "what did
-  the user change", the file answers "what is true now", and neither question
-  may be put to the other.**
+  above are the two halves of one rule: **the baseline answers "what did the
+  user change", the file answers "what is true now", and neither question may
+  be put to the other.**
+- **That baseline is `_populated_settings`, and the whole merge above held for
+  exactly one save until it existed.** `_loaded_settings` was answering both
+  questions: "what the widgets were populated from", which the diff needs, and
+  "what was last written", which the save assigns -- and a save assigns the
+  *merged* object, so the snapshot absorbed the History dialog's 800 while the
+  spin box went on showing 500. The next save read that 500 as a genuine edit
+  and wrote it. Measured on the real `SettingsStore`: 700 entries, two saves
+  with nothing touched between them, 200 transcripts deleted behind a prompt
+  naming a limit the user never chose -- and with no prompt at all whenever
+  the history was smaller than the limit. `_language_mode_for_save` has the
+  same shape (its own snapshot read is now consistent but not independently
+  observable; see its docstring).
+  Four properties, each of which was wrong in some version of the fix:
+  - **It is written in exactly three places, and each is a moment at which
+    what the widgets show becomes settled**: `_populate`, the History tab's
+    programmatic move of the limit spin box, and the end of a successful save.
+    The first two are "a widget moved without the user"; miss either and the
+    diff describes widgets that no longer exist.
+  - **The save must re-record it.** Freezing it at the dialog-open snapshot
+    fixes the revert and breaks the opposite direction: an edit could then
+    never be taken back within one session, because the widget agrees with the
+    dialog-open value again and counts as no edit. Measured on
+    `tray_middle_click_toggle` -- set, save, set back, save, nothing written.
+  - **`language_mode` is put back to what the combo shows when recording**, and
+    only in `_save`. It is the one field `_construct_settings_from_widgets`
+    fills from disk while a widget for it exists. The key-save path must *not*
+    make that correction: it never reads the combo, so claiming the disk value
+    as the baseline there swallows a pick the user had made but not yet saved.
+  - **The key path lists its widget reads once**, and uses that one object for
+    both the write and the baseline, so "a field this path did not touch is
+    not an edit" holds by construction. Built on `_loaded_settings` instead it
+    carries a previous save's merged values into a third window's newer ones.
+  Nine mutations cover these; the one survivor is `_language_mode_for_save`'s
+  own snapshot read, which the diff masks, and that is stated in its docstring
+  rather than left to be rediscovered.
 - **Three `settings_store.load()` calls decide one save, and that is safe only
   because nothing between them pumps the Qt event loop.**
   `_overlay_owned_settings`, `_stored_language_mode` and the change comparison

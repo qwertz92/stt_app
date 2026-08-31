@@ -982,9 +982,15 @@ class _PersistenceMixin:
             self._refresh_secret_store_options_ui()
         # Trim to the limit that was actually saved, not to the spin box, so
         # the write and the trim read one baseline instead of two that can
-        # drift -- which is how the revert above went unnoticed. This is an
-        # equivalent change today and mutation testing cannot tell the two
-        # apart: where they differ the old condition also declined to trim.
+        # drift -- which is how the revert above went unnoticed. When this was
+        # written the two were equivalent and no mutation could tell them
+        # apart; that is no longer true and the note claiming it has been
+        # removed. Now that the merge holds across saves, the spin box and the
+        # saved value genuinely disagree whenever another window raised the
+        # limit: the file keeps 800, the box still shows 500, and reading the
+        # box here would delete every transcript above 500 while the setting
+        # says otherwise. `test_the_merge_still_holds_on_the_second_save_of_one
+        # _session` fails on exactly that substitution.
         saved_history_limit = int(settings.history_max_items)
         if saved_history_limit != int(stored_settings.history_max_items) and (
             saved_history_limit > 0
