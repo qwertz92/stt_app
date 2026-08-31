@@ -5445,11 +5445,37 @@ class DictationController(QtCore.QObject):
                 "transcript again."
             )
             return
+        # Resolve the target instead of pasting at whatever holds the
+        # foreground. This action's main entry point is the tray menu, and the
+        # notification-icon contract requires `SetForegroundWindow` on our own
+        # hidden 0x0 host window before the menu opens -- so at the moment the
+        # action runs, the foreground *is* ours. With no target handle,
+        # `SendInput` delivered Ctrl+V to that hidden window and `WM_PASTE`
+        # went to `_get_focused_hwnd()`, a raw `GetForegroundWindow()` with no
+        # own-window filter, which hands the same handle straight back.
+        # Measured: `window_focus.get_foreground_window()` answers `None` for
+        # that window while `text_inserter._get_focused_hwnd()` returns it.
+        # The insert then reported success, so the overlay said "Done" and the
+        # completion tone played for a paste that reached nothing.
+        #
+        # `_current_focus_signature` is the resolver that refuses our own
+        # windows and answers with the last foreign one instead --
+        # `note_foreground_window`, wired to the tray's `activated` signal,
+        # exists precisely to have recorded it before the menu took over.
+        signature = self._current_focus_signature()
+        target = signature[0] if signature else None
+        if not target:
+            self.show_overlay_error(
+                "No window to insert into. Click into the window you want the "
+                "transcript in, then try again."
+            )
+            self._reveal_overlay_result(is_error=True)
+            return
         if self._insert_text_at_target(
             text,
-            restore_focus=False,
-            target_handle=None,
-            target_signature=None,
+            restore_focus=True,
+            target_handle=target,
+            target_signature=signature,
         ):
             self._overlay.set_state("Done", text)
             self._reveal_overlay_result(is_error=False)

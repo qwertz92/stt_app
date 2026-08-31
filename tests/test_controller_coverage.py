@@ -2636,9 +2636,21 @@ def test_register_repaste_hotkey_disabled_unregisters():
 
 
 def test_repaste_last_transcript_inserts_into_current_window(monkeypatch):
+    """It pastes into the resolved caret window, never at "whatever is in front".
+
+    The target used to be `None`, i.e. the live foreground -- and this action's
+    main entry point is the tray menu, which must call `SetForegroundWindow` on
+    our own hidden host window before it opens. So the paste aimed at that
+    window, and reported success.
+    """
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
-    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    focus_helper = FakeWindowFocusHelper()
+    controller, app = _make_controller(
+        overlay=overlay,
+        text_inserter=inserter,
+        window_focus_helper=focus_helper,
+    )
     beeps: list[bool] = []
     monkeypatch.setattr(
         controller, "_play_completion_beep", lambda: beeps.append(True)
@@ -2647,7 +2659,12 @@ def test_repaste_last_transcript_inserts_into_current_window(monkeypatch):
 
     controller.repaste_last_transcript()
 
-    assert inserter.calls[-1] == ("hello again", None, "auto")
+    assert inserter.calls[-1] == (
+        "hello again",
+        focus_helper.current_caret,
+        "auto",
+    )
+    assert focus_helper.restore_calls[-1] == focus_helper.current
     state, detail = overlay.states[-1]
     assert state == "Done"
     assert detail == "hello again"
@@ -5294,4 +5311,36 @@ def test_a_streaming_session_that_really_said_nothing_still_reports_it(caplog):
         assert "streaming_finalize_empty" not in caplog.text, caplog.text
     finally:
         controller.shutdown()
+    _ = app
+
+
+def test_repaste_refuses_when_no_foreign_window_is_known():
+    """`None` is the honest answer, and it must not become "paste anyway".
+
+    `get_foreground_window` returns `None` while one of our own tool windows
+    holds the foreground and nothing foreign has been remembered yet -- a fresh
+    session whose first action is the tray menu. Pasting then went to our own
+    hidden host window and still reported "Done".
+    """
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    focus_helper.current = None
+    focus_helper.current_focus = None
+    focus_helper.current_caret = None
+    controller, app = _make_controller(
+        overlay=overlay,
+        text_inserter=inserter,
+        window_focus_helper=focus_helper,
+    )
+    controller._last_transcript = "hello again"
+    before = list(inserter.calls)
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls == before, "it pasted with no known target"
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "No window to insert into" in detail
+    controller.shutdown()
     _ = app
