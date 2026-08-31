@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io
 import json
+import time
 import uuid
 import wave
 from pathlib import Path
@@ -30,6 +31,7 @@ from ..config import (
     AUDIO_SAMPLE_RATE,
     DEFAULT_FUNASR_MODEL,
     DEFAULT_LANGUAGE_MODE,
+    FUNASR_BATCH_MAX_WAIT_S,
     FUNASR_LANGUAGE_HINTS,
     FUNASR_MODELS,
     FUNASR_WS_URL_INTL,
@@ -48,6 +50,22 @@ from .base import (
 
 # Send audio in ~256 ms chunks (8192 bytes of 16 kHz mono PCM16).
 _AUDIO_CHUNK_BYTES = 8192
+
+
+class _FunAsrInterrupted(Exception):
+    """The stream ended before the service said the task was finished.
+
+    Private to this module: every caller turns it into a `TranscriptionError`
+    with its own context, and `_collect_transcript` additionally names the
+    text the service had already delivered.
+    """
+
+
+# The recovered text goes into a user-facing error, and the overlay's error
+# detail is selectable, so it can be copied out of the failure. Bounded so a
+# very long dictation cannot fill the overlay end to end; the audio is kept
+# for Retry either way.
+_RECOVERED_TEXT_MAX_CHARS = 2000
 
 
 class FunAsrTranscriber(ProgressReporter, ITranscriber):
@@ -196,14 +214,42 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
 
     # -- Event handling ---------------------------------------------------------
 
-    def _recv_event(self, ws) -> dict:
-        """Receive one JSON event, skipping any binary frames."""
+    def _recv_event(self, ws, deadline: float) -> dict:
+        """Receive one JSON event, skipping any binary frames.
+
+        Bounded in total, and the socket timeout is tightened to whatever is
+        left of that budget. `websocket-client` answers a server PING inside
+        `recv_data_frame` without ever returning to its caller, and each
+        arriving frame restarts the socket timeout, so a service that pings
+        but never sends `task-finished` parked this loop forever -- holding
+        the app's single `max_workers=1` transcription worker and, through
+        that executor's atexit join, stopping the process from exiting.
+        Measured against a connection that never finishes: 198 receive calls
+        in 4 s with no exit in sight.
+        """
         while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise _FunAsrInterrupted(
+                    "Fun-ASR did not finish the transcription within "
+                    f"{int(FUNASR_BATCH_MAX_WAIT_S / 60)} minutes."
+                )
+            ws.settimeout(min(remaining, self._request_timeout_s))
             message = ws.recv()
             if isinstance(message, (bytes, bytearray)):
                 continue
             if not message:
-                continue
+                # `websocket-client` returns "" for every opcode that is
+                # neither TEXT nor BINARY, and PING/PONG never reach here
+                # because `recv_data_frame` answers them itself -- so this is
+                # the server's CLOSE frame. Reading it as "nothing yet, keep
+                # waiting" spun this loop until some later socket error, which
+                # then reported a connection fault instead of a closed stream
+                # (measured: 202 receive calls after the close, still going).
+                raise _FunAsrInterrupted(
+                    "Fun-ASR closed the connection before the transcription "
+                    "was finished."
+                )
             try:
                 payload = json.loads(message)
             except (ValueError, TypeError):
@@ -265,9 +311,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         except Exception as exc:
             raise self._connect_error(exc) from exc
 
+        deadline = time.monotonic() + FUNASR_BATCH_MAX_WAIT_S
         try:
             ws.send(self._run_task_message(task_id, sample_rate))
-            started = self._recv_event(ws)
+            started = self._recv_event(ws, deadline)
             event = self._event_name(started)
             if event == "task-failed":
                 raise TranscriptionError(self._fail_message(started))
@@ -284,9 +331,11 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 ws.send_binary(pcm[offset : offset + _AUDIO_CHUNK_BYTES])
 
             ws.send(self._finish_task_message(task_id))
-            return self._collect_transcript(ws)
+            return self._collect_transcript(ws, deadline)
         except TranscriptionError:
             raise
+        except _FunAsrInterrupted as exc:
+            raise TranscriptionError(str(exc)) from exc
         except Exception as exc:
             if _is_ssl_error(exc):
                 raise TranscriptionError(format_ssl_error_message("Fun-ASR")) from exc
@@ -299,24 +348,64 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             except Exception:
                 pass
 
-    def _collect_transcript(self, ws) -> str:
+    @staticmethod
+    def _recovered_suffix(finalized: list[str], current: str) -> str:
+        """Name what the service had already delivered, if anything.
+
+        Every exit other than `task-finished` used to discard the sentences
+        already received -- measured: two finished sentences lost to a server
+        close, to a read timeout, and to a `task-failed`. The WAV is kept for
+        Retry, so nothing is unrecoverable, but a re-run costs the whole
+        upload and transcription again and this text is often the entire
+        dictation minus its last words. It is reported rather than returned:
+        returning it would hand back a silently truncated transcript that
+        reads exactly like a complete one.
+        """
+        parts = [part for part in [*finalized, current] if part]
+        # One guard, not two: an empty `parts` joins to "" and so does a list
+        # of nothing but whitespace, and both reach the same answer here.
+        text = normalize_transcript_text(" ".join(parts))
+        if not text:
+            return ""
+        if len(text) > _RECOVERED_TEXT_MAX_CHARS:
+            text = text[:_RECOVERED_TEXT_MAX_CHARS].rstrip() + "..."
+        return f' Received before the failure: "{text}"'
+
+    def _collect_transcript(self, ws, deadline: float) -> str:
         finalized: list[str] = []
         current = ""
-        while True:
-            message = self._recv_event(ws)
-            event = self._event_name(message)
-            if event == "result-generated":
-                text, sentence_end = self._sentence_from(message)
-                if sentence_end:
-                    if text:
-                        finalized.append(text)
-                    current = ""
-                elif text:
-                    current = text
-            elif event == "task-finished":
-                break
-            elif event == "task-failed":
-                raise TranscriptionError(self._fail_message(message))
+        try:
+            while True:
+                message = self._recv_event(ws, deadline)
+                event = self._event_name(message)
+                if event == "result-generated":
+                    text, sentence_end = self._sentence_from(message)
+                    if sentence_end:
+                        if text:
+                            finalized.append(text)
+                        current = ""
+                    elif text:
+                        current = text
+                elif event == "task-finished":
+                    break
+                elif event == "task-failed":
+                    raise TranscriptionError(
+                        self._fail_message(message)
+                        + self._recovered_suffix(finalized, current)
+                    )
+        except TranscriptionError:
+            raise
+        except _FunAsrInterrupted as exc:
+            raise TranscriptionError(
+                f"{exc}{self._recovered_suffix(finalized, current)}"
+            ) from exc
+        except Exception as exc:
+            if _is_ssl_error(exc):
+                raise TranscriptionError(format_ssl_error_message("Fun-ASR")) from exc
+            raise TranscriptionError(
+                "Fun-ASR transcription failed: "
+                f"{exc}{self._recovered_suffix(finalized, current)}"
+            ) from exc
         if current:
             finalized.append(current)
         return normalize_transcript_text(" ".join(p for p in finalized if p))
@@ -351,7 +440,9 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         try:
             task_id = uuid.uuid4().hex
             ws.send(self._run_task_message(task_id, AUDIO_SAMPLE_RATE))
-            message = self._recv_event(ws)
+            message = self._recv_event(
+                ws, time.monotonic() + min(self._request_timeout_s, 15)
+            )
             event = self._event_name(message)
             if event == "task-started":
                 return True, "Connection OK — API key is valid."

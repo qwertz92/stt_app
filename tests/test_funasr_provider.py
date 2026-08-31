@@ -44,10 +44,19 @@ def _event(event: str, sentence_text: str | None = None,
 
 
 class FakeWS:
+    """A scripted stand-in for a `websocket-client` connection.
+
+    `settimeout` is part of that interface and is what bounds the receive
+    loop: the socket timeout has to be pulled in as the total budget runs
+    out, because a server PING restarts it and is answered inside
+    `recv_data_frame` without ever returning to the caller.
+    """
+
     def __init__(self, events: list[str]):
         self._events = list(events)
         self.sent_text: list[str] = []
         self.sent_binary: list[bytes] = []
+        self.timeouts: list[float] = []
         self.closed = False
 
     def send(self, data):
@@ -55,6 +64,9 @@ class FakeWS:
 
     def send_binary(self, data):
         self.sent_binary.append(bytes(data))
+
+    def settimeout(self, seconds):
+        self.timeouts.append(seconds)
 
     def recv(self):
         if not self._events:
@@ -231,3 +243,169 @@ class TestFunAsrFactoryRouting:
         assert t._api_key == "test-key"
         assert t._language_mode == "zh"
         assert t._model == "fun-asr-realtime"
+
+
+class TestFunAsrStreamEndsEarly:
+    """Every exit other than `task-finished` used to lose what had arrived."""
+
+    @staticmethod
+    def _two_sentences():
+        return [
+            _event("task-started"),
+            _event("result-generated", sentence_text="Erster Satz.", sentence_end=True),
+            _event("result-generated", sentence_text="Zweiter Satz.", sentence_end=True),
+        ]
+
+    def _fail(self, tail_events, tail_exception=None):
+        events = self._two_sentences() + list(tail_events)
+
+        class _EndingWS(FakeWS):
+            def recv(self):
+                if self._events:
+                    return self._events.pop(0)
+                if tail_exception is not None:
+                    raise tail_exception
+                raise AssertionError("the loop asked for more after the end")
+
+        ws = _EndingWS(events)
+        t = FunAsrTranscriber(api_key="sk")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+        return str(excinfo.value)
+
+    def test_a_server_close_ends_the_loop_instead_of_spinning(self):
+        """`recv()` answers "" for a CLOSE frame, not an exception.
+
+        Treating that as "nothing yet, keep waiting" spun the loop until some
+        later socket error, so a closed stream was reported as a connection
+        fault -- measured at 202 receive calls after the close, still going.
+        """
+        message = self._fail([""])
+
+        assert "closed the connection" in message, message
+        assert "Erster Satz. Zweiter Satz." in message, message
+
+    def test_a_dropped_connection_still_names_what_arrived(self):
+        message = self._fail(
+            [], tail_exception=ConnectionResetError("Connection to remote host was lost")
+        )
+
+        assert "Erster Satz. Zweiter Satz." in message, message
+
+    def test_a_task_failure_still_names_what_arrived(self):
+        message = self._fail([_event("task-failed", error_message="bad request")])
+
+        assert "bad request" in message, message
+        assert "Erster Satz. Zweiter Satz." in message, message
+
+    def test_a_clean_finish_says_nothing_about_recovered_text(self):
+        events = [*self._two_sentences(), _event("task-finished")]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            text = t.transcribe_batch(_wav_bytes())
+
+        assert text == "Erster Satz. Zweiter Satz."
+
+    def test_a_failure_with_nothing_received_stays_plain(self):
+        ws = FakeWS([_event("task-started"), ""])
+        t = FunAsrTranscriber(api_key="sk")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        assert "Received before the failure" not in str(excinfo.value)
+
+    def test_the_recovered_text_is_bounded(self):
+        long_sentence = "wort " * 900
+        events = [
+            _event("task-started"),
+            _event("result-generated", sentence_text=long_sentence, sentence_end=True),
+            "",
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        message = str(excinfo.value)
+        assert len(message) < 2400, len(message)
+        assert message.endswith('..."'), message[-40:]
+
+
+class TestFunAsrTotalBudget:
+    """A service that keeps the socket alive without finishing."""
+
+    def test_a_never_finishing_service_gives_the_worker_back(self, monkeypatch):
+        """No budget existed: measured at 198 receive calls in 4 s.
+
+        The receive loop holds the app's single `max_workers=1` transcription
+        worker, and `ThreadPoolExecutor` joins its started workers from an
+        atexit hook, so an endless one also stops the process from exiting.
+        """
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "FUNASR_BATCH_MAX_WAIT_S", 30.0)
+        now = [0.0]
+        monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
+
+        class _PingingWS(FakeWS):
+            """Never sends an event; each receive costs a little wall clock."""
+
+            def settimeout(self, seconds):
+                super().settimeout(seconds)
+                now[0] += max(seconds, 0.001)
+
+            def recv(self):
+                return ""  # a keep-alive frame this loop cannot act on
+
+        ws = _PingingWS([_event("task-started")])
+        t = FunAsrTranscriber(api_key="sk")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        assert now[0] <= 30.0 + 5.0, f"it overran its budget: {now[0]}"
+        assert "closed the connection" in str(excinfo.value) or "within" in str(
+            excinfo.value
+        )
+
+    def test_the_socket_timeout_is_pulled_in_as_the_budget_runs_out(
+        self, monkeypatch
+    ):
+        """A per-read timeout that a keep-alive restarts cannot bound anything.
+
+        So the remaining budget is handed to the socket: the last read cannot
+        outlive the deadline even if frames keep arriving.
+        """
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "FUNASR_BATCH_MAX_WAIT_S", 4.0)
+        now = [0.0]
+        monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
+
+        ws = FakeWS([_event("task-started"), _event("task-finished")])
+        t = FunAsrTranscriber(api_key="sk", request_timeout_s=30)
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            t.transcribe_batch(_wav_bytes())
+        first = ws.timeouts[0]
+
+        now[0] = 3.5
+        ws2 = FakeWS([_event("task-started"), _event("task-finished")])
+        t2 = FunAsrTranscriber(api_key="sk", request_timeout_s=30)
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws2):
+            t2.transcribe_batch(_wav_bytes())
+
+        assert first == 4.0, ws.timeouts
+        assert ws2.timeouts[0] == 4.0, "the deadline is set at the start of the request"
+        assert ws2.timeouts[-1] == 4.0, ws2.timeouts

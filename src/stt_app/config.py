@@ -1163,6 +1163,13 @@ DEFAULT_FUNASR_MODEL = "fun-asr-realtime"
 # International (Singapore) DashScope inference WebSocket endpoint.
 FUNASR_WS_URL_INTL = "wss://dashscope-intl.aliyuncs.com/api-ws/v1/inference/"
 
+# Total budget for one Fun-ASR request, matching ASSEMBLYAI_BATCH_MAX_WAIT_S.
+# The receive loop had none: `websocket-client` answers a server PING inside
+# `recv_data_frame` without returning, and every arriving frame restarts the
+# socket timeout, so a service that pings but never sends `task-finished`
+# parked the app's single transcription worker forever.
+FUNASR_BATCH_MAX_WAIT_S = 1800.0
+
 AUDIO_SAMPLE_RATE = 16_000
 AUDIO_CHANNELS = 1
 AUDIO_BLOCK_DURATION_MS = 100
