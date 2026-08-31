@@ -594,3 +594,103 @@ def test_a_seam_containing_punctuation_still_counts_its_real_words():
         )
         == "der erste teil hallo ... welt und weiter"
     )
+
+
+def _remote_state() -> StreamingTextState:
+    return StreamingTextState(
+        stable_word_guard=STREAMING_STABLE_WORD_GUARD,
+        revision_word_window=STREAMING_REVISION_WORD_WINDOW,
+    )
+
+
+def test_a_revised_punctuation_mark_does_not_freeze_remote_live_insertion():
+    """The two callers mean opposite things by a suffix/prefix overlap.
+
+    `merge_rolling_window` passes a trailing window of the same audio, where
+    the overlap is the seam. `StreamingTextState` passes the provider's
+    whole-session text, whose head is the start of the dictation -- so an
+    overlap there is a coincidence, and `min_overlap_words` is all that stands
+    in its way. Relaxing that to "two tokens, one of them real" let a revised
+    sentence-final mark through: every mark keys to the empty string and
+    matches every other, the revised-away mark was welded in verbatim, and
+    `committed_text` then stopped being a prefix of anything the provider would
+    send again. Live insertion froze for the rest of the session, the stop-time
+    recovery returned nothing, and the overlay still showed the right
+    transcript, so nothing reported it. Measured: three words never pasted.
+    """
+    partials = [
+        "Ja",
+        "Ja ...",
+        "Ja . wir",
+        "Ja . wir muessen das",
+        "Ja . wir muessen das noch pruefen bevor wir das freigeben",
+    ]
+    state = _remote_state()
+    document = ""
+    for partial in partials:
+        document += state.apply_partial_append_only(partial).insertion
+    tail = append_only_stream_finalize_tail(
+        state.committed_text, partials[-1], state.last_partial_text
+    )
+    document += stream_insertion_text(state.committed_text, tail)
+
+    assert "".join(document.split()) == "".join(partials[-1].split()), (
+        f"the document is not the full dictation: {document!r}"
+    )
+
+
+def test_a_trailing_window_still_merges_on_one_real_word():
+    """The other half of the split: the rolling window keeps the relaxed gate.
+
+    Requiring two real words here refuses a seam of "praktisch ...", and a
+    refused merge before the first measured pause replaces the whole
+    accumulated text -- 11 of 13 words gone, measured.
+    """
+    previous = (
+        "die spracherkennung wandelt sprache in text um und das ist sehr "
+        "praktisch ..."
+    )
+
+    merged = merge_rolling_window_transcript(
+        previous, "praktisch ... und jetzt kommt der naechste satz"
+    )
+
+    assert merged.startswith("die spracherkennung wandelt sprache"), merged
+    assert merged.endswith("und jetzt kommt der naechste satz"), merged
+
+
+def test_the_default_caller_semantics_are_the_safe_ones():
+    """A new caller that forgets the flag gets the strict threshold.
+
+    The permissive branch is only correct for audio-window text, so the
+    parameter defaults to the whole-text reading rather than the other way
+    round.
+    """
+    assert (
+        append_only_stream_partial_candidate("Ja ...", "Ja . wir")
+        == "Ja . wir"
+    )
+    assert (
+        append_only_stream_partial_candidate(
+            "Ja ...", "Ja . wir", current_is_a_trailing_window=True
+        )
+        == "Ja ... wir"
+    )
+
+
+def test_the_floor_splice_also_reads_the_window_as_a_window():
+    """The floor branch passes a trailing window too, and must say so.
+
+    It splices the *floor* against the same audio window, so a seam of one
+    real word plus a mark is as genuine there as in the alignment above it.
+    Reading it as whole-session text refuses the splice and the window is
+    welded on whole, which repeats the words the seam had matched.
+    """
+    floor = "der bericht ueber die sitzung ist praktisch ..."
+    drifted = f"{floor} voellig erfundener text hier"
+
+    merged = merge_rolling_window(
+        drifted, "praktisch ... und jetzt kommt der rest", protected_prefix=floor
+    )
+
+    assert merged.text == f"{floor} und jetzt kommt der rest", merged.text

@@ -132,7 +132,36 @@ def append_only_stream_partial_candidate(
     current_text: str,
     *,
     min_overlap_words: int = 2,
+    current_is_a_trailing_window: bool = False,
 ) -> str:
+    """Extend ``previous`` with whatever ``current`` adds past their overlap.
+
+    ``current_is_a_trailing_window`` is not a tuning knob -- the two callers
+    mean opposite things by a suffix/prefix overlap, and one threshold cannot
+    serve both:
+
+    - `merge_rolling_window` passes a **trailing window of the same audio**, so
+      its head genuinely continues `previous` and an overlap *is* the seam. One
+      real word is enough corroboration there, and requiring more loses speech:
+      an overlap of "praktisch ..." counts one, and a refused merge before the
+      first measured pause replaces the whole accumulated text.
+    - `StreamingTextState.apply_partial_append_only` passes the provider's
+      **whole-session text**, whose head is the start of the dictation. An
+      overlap between the end of what is accumulated and the start of the
+      session can only be a coincidence, and `min_overlap_words` is the only
+      thing standing in its way.
+
+    Relaxing both at once (the first version of this) halved the remote
+    requirement from two real words to one, and `_stream_word_key` strips
+    punctuation so every mark matches every other mark. A provider revising a
+    guessed sentence-final mark then produced a 2-token overlap with one real
+    word: accepted, the revised-away mark welded in verbatim, and
+    `committed_text` stopped being a prefix of anything the provider would send
+    again -- so live insertion froze for the rest of the session, the
+    stop-time recovery returned nothing, and the overlay still showed the
+    correct transcript, so nothing reported the loss. Measured on an eleven-
+    partial session: three words never reached the document.
+    """
     previous = normalize_stream_text(previous_text)
     current = normalize_stream_text(current_text)
     if not previous or not current:
@@ -144,15 +173,17 @@ def append_only_stream_partial_candidate(
         return current
 
     overlap = _suffix_prefix_overlap_len(previous_words, current_words)
-    # The token threshold as before, plus at least one real word. Counting
-    # only substantive words *against* the threshold was stricter than the
-    # threshold has ever been: an overlap of "praktisch ..." scores one, fails
-    # a threshold of two, and the caller then replaces the accumulated text --
-    # before the first measured pause there is no floor to bound that, so a
-    # measured 13-word dictation became 8 words of window.
-    if overlap >= max(1, int(min_overlap_words)) and _substantive_word_count(
-        current_words[:overlap]
-    ):
+    threshold = max(1, int(min_overlap_words))
+    substantive = _substantive_word_count(current_words[:overlap])
+    if current_is_a_trailing_window:
+        # The token threshold as before, plus at least one real word, so a seam
+        # made of nothing but punctuation is still refused.
+        accepted = overlap >= threshold and substantive > 0
+    else:
+        # Whole-session text: the threshold counts real words, because marks
+        # match each other and would otherwise supply the corroboration.
+        accepted = substantive >= threshold
+    if accepted:
         merged = previous_words + current_words[overlap:]
         return " ".join(merged).strip()
     return current
@@ -289,7 +320,10 @@ def merge_rolling_window(
         )
 
     merged = append_only_stream_partial_candidate(
-        previous, current, min_overlap_words=min_overlap_words
+        previous,
+        current,
+        min_overlap_words=min_overlap_words,
+        current_is_a_trailing_window=True,
     )
     if stream_text_extends(previous, merged):
         return RollingMergeResult(merged, aligned=True)
@@ -331,7 +365,10 @@ def merge_rolling_window(
     # still `aligned=False` because agreeing with the floor is not the two
     # overlapping windows that are allowed to advance it.
     spliced = append_only_stream_partial_candidate(
-        protected, current, min_overlap_words=min_overlap_words
+        protected,
+        current,
+        min_overlap_words=min_overlap_words,
+        current_is_a_trailing_window=True,
     )
     if stream_text_extends(protected, spliced):
         return RollingMergeResult(spliced, aligned=False)
