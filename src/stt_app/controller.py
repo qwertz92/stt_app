@@ -5662,10 +5662,16 @@ class DictationController(QtCore.QObject):
         runtime_lease: _TranscriberRuntimeLease | None = None
         transcriber = None
         try:
-            runtime_lease = self._acquire_transcriber_runtime(
-                settings,
-                allow_isolated=False,
-            )
+            # Isolated is allowed here for the same reason `_transcribe_worker`
+            # allows it: this runs on the single shared worker, a live stream
+            # holds the shared lease for its whole session, and the stream's
+            # own finalize is queued onto that same worker. Waiting for the
+            # shared lease here is therefore a cycle -- measured on the real
+            # controller, the import blocked forever, the finalize never
+            # started, and the overlay sat on "Finalizing streaming
+            # transcript" with every later hotkey press refused. Nothing but
+            # the Cancel hotkey or quitting recovered it.
+            runtime_lease = self._acquire_transcriber_runtime(settings)
             transcriber = runtime_lease.transcriber
             if progress_callback is not None:
                 self._set_transcriber_progress_callback(
