@@ -2096,16 +2096,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     added or removed, so replacing a key with a different value leaves the
     settings snapshot byte-identical and the identity cannot see it. The
     settings dialog therefore emits `provider_keys_changed` in addition to
-    `settings_changed`, and `main` connects it to
-    `controller.invalidate_transcriber_credentials` *before* the settings
-    signal so the stale runtime is gone before the preload decision runs. That
-    signal **carries the affected provider names**, and the invalidation is
-    scoped to them: a key belongs to exactly one engine, so a loaded local
-    model (which reads no key at all) and a Groq runtime under an OpenAI key
-    change are both left alone. Selecting that provider later changes
-    `settings.engine`, which the identity does see. The loaded engine is read
-    from `_TranscriberIdentity.engine` rather than a tuple slot, which is why
-    the identity is a `NamedTuple`.
+    `settings_changed`, and `main` routes it to
+    `controller.invalidate_transcriber_credentials` so the stale runtime is
+    gone before the preload decision runs. **What orders the two is the
+    dialog's emit order, not the order of the two `connect` calls** -- they
+    are different signals, so connection order does not relate them at all,
+    and an earlier version of this entry credited the wrong mechanism (the
+    comment in `main.py` says so at the call site). Both save paths emit the
+    key signal first, including the arm that reports a key-storage failure and
+    returns. That signal **carries the affected provider names**, and the
+    invalidation is scoped to them: a key belongs to exactly one engine, so
+    a loaded local model (which reads no key at all) and a Groq runtime
+    under an OpenAI key change are both left alone. Selecting that provider
+    later changes `settings.engine`, which the identity does see. The loaded
+    engine is read from `_TranscriberIdentity.engine` rather than a tuple
+    slot, which is why the identity is a `NamedTuple`.
 - **Bookkeeping in a worker's `finally` must not be able to skip the release**:
   `_transcribe_worker` clears diagnostics and cancel hooks before releasing the
   runtime lease, which is the required order -- so anything raising in that
