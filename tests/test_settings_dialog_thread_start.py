@@ -13,6 +13,7 @@ the dialog came back.
 from __future__ import annotations
 
 import threading
+import time
 
 from PySide6 import QtTest, QtWidgets
 from test_settings_dialog_connection import (
@@ -192,7 +193,12 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tm
 
     dialog = _make_dialog()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
-    QtTest.QTest.qWait(250)
+    # The inventory render is deferred, so poll for it instead of guessing a
+    # budget: a fixed wait passes or fails on how much unrelated queued work
+    # the suite happens to leave in front of it.
+    deadline = time.monotonic() + 10.0
+    while dialog.benchmark_models_list.count() == 0 and time.monotonic() < deadline:
+        QtTest.QTest.qWait(25)
     dialog._set_benchmark_audio_path(str(audio_path))
     assert dialog.benchmark_models_list.count() == 1
     _refuse_new_threads(monkeypatch)
