@@ -694,3 +694,36 @@ def test_the_floor_splice_also_reads_the_window_as_a_window():
     )
 
     assert merged.text == f"{floor} und jetzt kommt der rest", merged.text
+
+
+def test_the_floor_splice_accepts_a_two_word_seam_inside_the_boundary_bound():
+    """The score floor is a test on the candidate's skip, not on the call.
+
+    `widened = max_skip > _WINDOW_BOUNDARY_SKIP_WORDS` was computed once for
+    the whole loop, so the floor-splice call -- the only one that widens --
+    applied `overlap < skip` at skips 1 to 3 as well. The docstring exempts
+    exactly those, and for a reason that holds there too: inside the bound the
+    discard is capped at three words, so the floor only raises skip 3's bar
+    from two words of overlap to three.
+
+    Measured: a real two-word seam at skip 3 was refused, the window welded on
+    whole, and the floor's own "das ist" plus three junk words emitted a
+    second time.
+    """
+    floor = "und dann sagte er das ist"
+    # `previous` must extend the floor or the floor branch is never
+    # reached; its tail is the drift that made the window unalignable.
+    previous = f"{floor} etwas das gar nicht passt"
+    window = "x y z das ist ein voellig neuer gedanke"
+
+    result = merge_rolling_window(
+        previous, window, new_segment=False, protected_prefix=floor
+    )
+
+    assert result.text == "und dann sagte er das ist ein voellig neuer gedanke", (
+        result.text
+    )
+    assert result.aligned is False
+    assert result.text.count("das ist") == 1, (
+        f"the floor's tail was emitted twice: {result.text}"
+    )

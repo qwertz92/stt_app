@@ -248,7 +248,9 @@ def _join_at_seam(
     beats 3-7=-4 in the second.
 
     Beyond `_WINDOW_BOUNDARY_SKIP_WORDS` a candidate must also score at least
-    zero -- explain at least as much as it discards. Inside that bound the
+    zero -- explain at least as much as it discards. That is a test on the
+    candidate's own skip, not on how far the call was allowed to search.
+    Inside that bound the
     discard is capped at three words by the bound itself, so the rule is not
     applied there: it would only raise skip 3's requirement from two words of
     overlap to three, and a rejected alignment falls through to a replace,
@@ -262,7 +264,6 @@ def _join_at_seam(
     and 62893 duplicated versus 74129. Better on both, which is why this rule
     rather than reverting to the bound.
     """
-    widened = max_skip > _WINDOW_BOUNDARY_SKIP_WORDS
     best_skip = 0
     best_overlap = 0
     best_score: int | None = None
@@ -279,7 +280,16 @@ def _join_at_seam(
         # words gone, the two in the overlap the only survivors.
         if not _substantive_word_count(current_words[skip : skip + overlap]):
             continue
-        if widened and overlap < skip:
+        # Per candidate, not per call. `widened = max_skip > BOUND` was
+        # computed once for the whole loop, so the floor-splice call --
+        # the only widened one -- applied the floor at skips 1-3 as well,
+        # which is exactly what the paragraph above exempts and for a
+        # reason that holds there too. Measured on a floor ending "das
+        # ist" against a window "x y z das ist ein voellig neuer
+        # gedanke": the real 2-word seam at skip 3 was refused, the
+        # window welded on whole, and "das ist" plus three junk words
+        # emitted a second time.
+        if skip > _WINDOW_BOUNDARY_SKIP_WORDS and overlap < skip:
             continue
         score = overlap - skip
         if best_score is None or score > best_score:
