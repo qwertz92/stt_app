@@ -90,6 +90,35 @@ _MODIFIER_VIRTUAL_KEYS = frozenset(
 )
 
 
+def _supported_key_names() -> str:
+    """The accepted key names, for the rejection message.
+
+    Derived from `_KEY_MAP` rather than written out, so the message cannot
+    advertise a key the parser would then refuse -- which a hand-written list
+    did, naming Insert, Delete, Home, End, PageUp and PageDown, none of which
+    the map holds. Modifier names are left out because the check below rejects
+    them anyway.
+    """
+    def is_function_key(name: str) -> bool:
+        return name.startswith("F") and name[1:].isdigit()
+
+    function_keys = sorted(
+        (name for name in _KEY_MAP if is_function_key(name)),
+        key=lambda name: int(name[1:]),
+    )
+    named = sorted(
+        name.title()
+        for name, virtual_key in _KEY_MAP.items()
+        if len(name) > 1
+        and virtual_key not in _MODIFIER_VIRTUAL_KEYS
+        and not is_function_key(name)
+    )
+    parts = ["a letter", "a digit", *named]
+    if function_keys:
+        parts.append(f"{function_keys[0]}-{function_keys[-1]}")
+    return ", ".join(parts[:-1]) + f", or {parts[-1]}"
+
+
 def parse_hotkey(value: str, include_norepeat: bool = True) -> tuple[int, int]:
     if not value:
         raise ValueError("Hotkey is empty.")
@@ -120,12 +149,26 @@ def parse_hotkey(value: str, include_norepeat: bool = True) -> tuple[int, int]:
     if include_norepeat:
         modifiers |= MOD_NOREPEAT
 
+    # `_KEY_MAP` is the whole supported set, letters and digits included.
+    # There used to be an `ord(key_name)` fallback for any single character,
+    # and because every letter and digit is already in the map, the only
+    # characters it could ever reach were the ones for which `ord()` is *not*
+    # the virtual-key code. Measured through the real Settings field, which
+    # emits Qt's PortableText verbatim: "Ctrl+Alt+." registered VK_DELETE
+    # (0x2E), "-" VK_INSERT, "#" VK_END, "'" VK_RIGHT, while ";" and "Ä" got
+    # codes Windows assigns to nothing. Two different failures came out of
+    # that, and all five characters are unmodified keys on a German keyboard.
+    # One that lands on a real key steals it globally -- "Ctrl+Shift+." took
+    # Ctrl+Shift+Delete away from every browser while doing nothing itself --
+    # and one that lands on an unassigned code registers successfully and can
+    # never fire, which is the same silent failure the modifier rejection
+    # below exists to prevent.
     vk = _KEY_MAP.get(key_name)
-    if vk is None and len(key_name) == 1:
-        vk = ord(key_name)
-
     if vk is None:
-        raise ValueError(f"Unknown hotkey key: {parts[-1]}")
+        raise ValueError(
+            f"Unsupported hotkey key: {parts[-1]}. Supported keys are "
+            f"{_supported_key_names()}."
+        )
 
     if vk in _MODIFIER_VIRTUAL_KEYS:
         # RegisterHotKey matches the modifier state *exactly*, and pressing a

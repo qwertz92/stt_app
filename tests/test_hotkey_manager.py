@@ -240,3 +240,92 @@ def test_every_fallback_is_a_registrable_combination():
         modifiers, vk = parse_hotkey(combo)
         assert modifiers, f"{combo} has no modifier"
         assert vk, f"{combo} has no key"
+
+
+@pytest.mark.parametrize(
+    ("character", "would_have_bound"),
+    [
+        (".", 0x2E),   # VK_DELETE
+        ("-", 0x2D),   # VK_INSERT
+        ("#", 0x23),   # VK_END
+        ("'", 0x27),   # VK_RIGHT
+        ("/", 0x2F),   # VK_HELP, which no PC keyboard has
+        (";", 0x3B),   # no virtual key at all
+        ("\u00c4", 0xC4),  # no virtual key at all
+    ],
+)
+def test_parse_hotkey_rejects_a_character_that_is_not_a_virtual_key(
+    character, would_have_bound
+):
+    """`ord()` equals the virtual-key code for A-Z and 0-9 and nothing else.
+
+    Every character here is an unmodified key on a German keyboard, and Qt's
+    PortableText emits it verbatim, so these are combinations a user really
+    picks. Two different failures came out of accepting them: one that lands
+    on a real key steals it globally -- "Ctrl+Shift+." took Ctrl+Shift+Delete
+    away from every browser while doing nothing itself -- and one that lands
+    on an unassigned code registers successfully and can never fire, the same
+    silent failure the modifier rejection above exists to prevent.
+    """
+    assert ord(character) == would_have_bound, (
+        "this test documents the wrong binding; keep the codes honest"
+    )
+    with pytest.raises(ValueError, match="Unsupported hotkey key"):
+        parse_hotkey(f"Ctrl+Alt+{character}")
+
+
+def test_parse_hotkey_still_accepts_letters_and_digits():
+    for character in ("A", "z", "0", "9"):
+        _modifiers, vk = parse_hotkey(f"Ctrl+Alt+{character}")
+        assert vk == ord(character.upper())
+
+
+def test_the_rejection_message_only_names_keys_that_are_accepted():
+    """A hand-written list advertised Insert, Delete, Home, End and both Page
+    keys, none of which `_KEY_MAP` holds -- so the message sent the user
+    straight back into the same rejection. It is derived from the map now, and
+    this walks every name it prints back through the parser."""
+    with pytest.raises(ValueError) as excinfo:
+        parse_hotkey("Ctrl+Alt+.")
+    message = str(excinfo.value)
+    _prefix, _, listed = message.partition("Supported keys are ")
+    assert listed, message
+
+    names = [
+        part.strip(" .")
+        for chunk in listed.split(",")
+        for part in chunk.replace(" or ", ",").split(",")
+    ]
+    checked = 0
+    for name in names:
+        if not name or name.startswith("a "):
+            continue
+        if "-" in name:
+            first, last = name.split("-", 1)
+            candidates = [f"F{n}" for n in range(int(first[1:]), int(last[1:]) + 1)]
+        else:
+            candidates = [name]
+        for candidate in candidates:
+            modifiers, vk = parse_hotkey(f"Ctrl+Alt+{candidate}")
+            assert modifiers & MOD_NOREPEAT
+            assert vk > 0
+            checked += 1
+    assert checked >= 12, f"the message listed almost nothing: {listed}"
+
+
+def test_parse_hotkey_accepts_every_shipped_default():
+    """The defaults are all named keys, so narrowing the fallback is safe."""
+    from stt_app.config import (
+        DEFAULT_CANCEL_HOTKEY,
+        DEFAULT_HOTKEY,
+        DEFAULT_SHOW_OVERLAY_HOTKEY,
+    )
+
+    for combination in (
+        DEFAULT_HOTKEY,
+        DEFAULT_CANCEL_HOTKEY,
+        DEFAULT_SHOW_OVERLAY_HOTKEY,
+    ):
+        modifiers, vk = parse_hotkey(combination)
+        assert modifiers & MOD_NOREPEAT
+        assert vk > 0
