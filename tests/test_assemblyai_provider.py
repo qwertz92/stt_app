@@ -1025,7 +1025,15 @@ class _PendingTranscript:
 
 
 def _pending_aai(*, statuses, transcript_id="t-123"):
-    """A fake module whose `get_by_id` walks `statuses`, then stays queued."""
+    """A fake module whose status fetch walks `statuses`, then stays queued.
+
+    The fetch is modelled the way the real SDK models it: one HTTP call
+    (`api.get_transcript`) wrapped back into a transcript by
+    `Transcript.from_response`. `get_by_id` is present and poisoned, because
+    in the real SDK it is `wait_for_completion()` -- an unbounded
+    `while True:` -- so a caller that reaches for it has put this loop's
+    deadline around the very wait it exists to replace.
+    """
     aai = _make_fake_aai()
     remaining = list(statuses)
     fetched: list[str] = []
@@ -1037,28 +1045,70 @@ def _pending_aai(*, statuses, transcript_id="t-123"):
         def upload_file(self, audio_file):
             return "https://assemblyai.test/uploaded.wav"
 
+    class _HttpClient:
+        pass
+
+    class _Client:
+        http_client = _HttpClient()
+
+        @staticmethod
+        def get_default():
+            return _Client
+
+    def _get_transcript(http_client, tid):
+        assert http_client is _Client.http_client, http_client
+        fetched.append(tid)
+        status = remaining.pop(0) if remaining else "queued"
+        out = _PendingTranscript(status=status, transcript_id=tid)
+        if status == "completed":
+            out.text = "at last"
+        return out
+
     class _TranscriptClass:
         @staticmethod
+        def from_response(*, client, response):
+            assert client is _Client, client
+            return response
+
+        @staticmethod
         def get_by_id(tid):
-            fetched.append(tid)
-            status = remaining.pop(0) if remaining else "queued"
-            out = _PendingTranscript(status=status, transcript_id=tid)
-            if status == "completed":
-                out.text = "at last"
-            return out
+            raise AssertionError(
+                "get_by_id is the SDK's own unbounded wait_for_completion, "
+                "not a status fetch -- calling it puts the deadline around "
+                "the wait instead of replacing it"
+            )
 
     aai.Transcriber = _SubmittingTranscriber
     aai.Transcript = _TranscriptClass
+    aai.Client = _Client
+    aai.api = types.SimpleNamespace(get_transcript=_get_transcript)
     return aai, fetched
+
+
+# A poll loop that has lost its deadline sleeps `min(interval, max(deadline -
+# now, 0.0))`, which is 0.0 once the budget is spent -- so the fake clock stops
+# advancing and the loop spins forever. A wall-clock cap cannot see that; a
+# call cap can, and it turns "the bound is gone" into a failure naming itself
+# rather than a run that hangs with no output.
+_FAKE_CLOCK_MAX_SLEEPS = 1000
 
 
 def _fake_clock(monkeypatch, provider):
     """Make the poll loop deterministic and instant."""
     now = [0.0]
+    sleeps = [0]
+
+    def _sleep(seconds):
+        sleeps[0] += 1
+        if sleeps[0] > _FAKE_CLOCK_MAX_SLEEPS:
+            raise AssertionError(
+                f"the poll loop slept {sleeps[0]} times without finishing -- "
+                "it is not bounded by its deadline any more"
+            )
+        now[0] += seconds
+
     monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
-    monkeypatch.setattr(
-        provider.time, "sleep", lambda seconds: now.__setitem__(0, now[0] + seconds)
-    )
+    monkeypatch.setattr(provider.time, "sleep", _sleep)
     return now
 
 
@@ -1231,3 +1281,90 @@ def test_a_nemotron_worker_that_cannot_start_leaves_no_session_behind(monkeypatc
     assert t._stream_run is None
     assert t._stream_thread is None
     assert t._stream_workers == {}, "the retired worker entry leaked"
+
+
+def test_the_status_fetch_uses_names_the_installed_sdk_actually_has():
+    """The fake models three SDK names; if the SDK drops one, it hides it.
+
+    `_fetch_transcript` deliberately steps around `Transcript.get_by_id`, so
+    every batch dictation now depends on `Client.get_default`,
+    `api.get_transcript` and `Transcript.from_response`. An SDK upgrade that
+    renames any of them breaks batch transcription outright, and a fake
+    module cannot notice.
+    """
+    import assemblyai as real_aai
+    import assemblyai.api as real_api
+
+    assert callable(real_aai.Client.get_default)
+    assert callable(real_api.get_transcript)
+    assert callable(real_aai.Transcript.from_response)
+    assert real_aai.api is real_api, "aai.api is how the provider reaches it"
+
+
+def test_a_status_fetch_returns_without_waiting_for_the_job(monkeypatch):
+    """One HTTP call, then control comes back -- against the real SDK.
+
+    Only `api.get_transcript` is stubbed. With `get_by_id` the same setup
+    never returned: measured at 46 status polls inside a single call, still
+    blocked after 12.0 s against a 3.0 s budget, because `get_by_id` is
+    `wait_for_completion()`.
+    """
+    import assemblyai as real_aai
+    import assemblyai.api as real_api
+    from assemblyai import types as real_types
+
+    monkeypatch.setattr(real_aai.settings, "api_key", "key-for-a-local-test")
+    # A regression here is an endless wait, not a wrong answer, so the stub
+    # refuses the second poll: the test then fails in milliseconds instead of
+    # hanging the run with no output naming the cause.
+    monkeypatch.setattr(real_aai.settings, "polling_interval", 0.01)
+    calls: list[str] = []
+
+    def _one_poll(http_client, transcript_id):
+        calls.append(transcript_id)
+        if len(calls) > 1:
+            raise AssertionError(
+                "the fetch polled twice, i.e. it is waiting for the job "
+                "instead of reading its status once"
+            )
+        return real_types.TranscriptResponse(
+            id=transcript_id,
+            status=real_types.TranscriptStatus.queued,
+            audio_url="http://assemblyai.test/a.wav",
+        )
+
+    monkeypatch.setattr(real_api, "get_transcript", _one_poll)
+
+    fetched = AssemblyAITranscriber._fetch_transcript(real_aai, "t-real-sdk")
+
+    assert calls == ["t-real-sdk"], "it polled more than once, i.e. it waited"
+    assert fetched.status == real_types.TranscriptStatus.queued
+    assert fetched.id == "t-real-sdk"
+    # `api.get_transcript` hands back a `TranscriptResponse`, not a
+    # `Transcript`. Both carry status/text/error, so returning the raw one
+    # works right up until it does not -- and `_wait_for_transcript`'s early
+    # return hands back the `Transcript` that `submit` produced, so skipping
+    # `from_response` makes one function return two different types.
+    assert isinstance(fetched, real_aai.Transcript), type(fetched)
+
+
+def test_a_finished_job_is_not_made_to_wait_for_the_polling_interval(monkeypatch):
+    """Ask first, sleep between asks -- not the other way round.
+
+    `submit(poll=False)` always reports `queued`, so the early return above
+    the loop never fires and every batch dictation enters it. Sleeping at the
+    top of the loop therefore spent a full polling interval before the first
+    question was ever asked, on every single dictation -- measured at 3.27 s
+    for a job the service had already finished.
+    """
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=["completed"])
+    monkeypatch.setattr(provider, "ASSEMBLYAI_BATCH_MAX_WAIT_S", 60.0)
+    now = _fake_clock(monkeypatch, provider)
+
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+    assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
+    assert len(fetched) == 1
+    assert now[0] == 0.0, f"it slept {now[0]}s before asking whether it was done"

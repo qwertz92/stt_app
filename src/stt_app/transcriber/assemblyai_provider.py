@@ -158,7 +158,27 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         )
 
     @staticmethod
-    def _wait_for_transcript(aai, transcript):
+    def _fetch_transcript(aai, transcript_id):
+        """Fetch one transcript's current state without waiting for it.
+
+        `Transcript.get_by_id` reads like a status fetch and is not. It is
+        `cls(transcript_id=...).wait_for_completion()`, i.e. the SDK's own
+        unbounded `while True:` around `api.get_transcript` -- the very loop
+        the bound below exists to replace. Calling it from inside that loop
+        put the deadline *around* the unbounded wait instead of in place of
+        it, so the budget bounded nothing: measured against the real SDK with
+        only the HTTP call stubbed, still blocked after 12.0 s on a 3.0 s
+        budget, having issued 46 status polls inside one `get_by_id` call.
+
+        `api.get_transcript` is the single call each of that loop's
+        iterations makes, so this is its body without its loop.
+        """
+        client = aai.Client.get_default()
+        response = aai.api.get_transcript(client.http_client, transcript_id)
+        return aai.Transcript.from_response(client=client, response=response)
+
+    @classmethod
+    def _wait_for_transcript(cls, aai, transcript):
         """Poll until the job is terminal, bounded in total.
 
         The SDK's `wait_for_completion` is `while True:` around a status
@@ -181,7 +201,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         transcript_id = getattr(transcript, "id", "")
         if not transcript_id:
             # Without an id there is nothing to poll, so looping would only
-            # spend the whole budget calling `get_by_id("")`.
+            # spend the whole budget fetching the empty transcript id.
             raise TranscriptionError(
                 "AssemblyAI accepted the audio but returned no transcript id "
                 f"(status: {transcript.status})."
@@ -193,8 +213,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         interval = min(max(interval, 0.5), 10.0)
         deadline = time.monotonic() + ASSEMBLYAI_BATCH_MAX_WAIT_S
         while True:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
+            if time.monotonic() >= deadline:
                 raise TranscriptionError(
                     "AssemblyAI did not finish the transcription within "
                     f"{int(ASSEMBLYAI_BATCH_MAX_WAIT_S / 60)} minutes "
@@ -202,10 +221,13 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     "complete; transcript id "
                     f"{transcript_id or 'unknown'}."
                 )
-            time.sleep(min(interval, remaining))
-            transcript = aai.Transcript.get_by_id(transcript_id)
+            # Fetch first and sleep between fetches, which is also the order
+            # the SDK's own loop uses. Sleeping first spent a full polling
+            # interval before ever asking, on every batch dictation.
+            transcript = cls._fetch_transcript(aai, transcript_id)
             if transcript.status in terminal:
                 return transcript
+            time.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via AssemblyAI batch API.
