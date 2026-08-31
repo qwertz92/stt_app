@@ -484,9 +484,12 @@ def find_cached_models(model_dir: str = "") -> list[str]:
         from .local_webgpu_asr import find_cached_webgpu_models
 
         # `model_dir` unchanged rather than defaulted. Behaviour-neutral --
-        # the ONNX scan adds the default cache itself now, exactly like the
-        # Whisper loop above -- but defaulting a root before handing it to a
-        # function that defaults the same root reads as if it mattered.
+        # the ONNX scan adds the default cache itself -- but defaulting a root
+        # before handing it to a function that defaults the same root reads as
+        # if it mattered. NOT "like the Whisper loop above", which this comment
+        # used to say and which stopped being true when that loop narrowed to
+        # `download_destination_dir`: it now looks in exactly one directory,
+        # and the docstring explains why the two families differ.
         found.update(find_cached_webgpu_models(model_dir))
     except Exception:
         pass

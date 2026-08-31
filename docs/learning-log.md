@@ -4892,3 +4892,129 @@ plus the download lock finally made real.
   0.05774, and every 1.29 run beat every 1.28 run. `onnxruntime-genai` 0.15.2
   loads and runs Nemotron against 1.29 as well. Small but free; kept out of the
   release commit because it changes the native runtime under three engines.
+
+## Round 17-19 (2026-08-30 / 2026-08-31)
+
+Continuation of the adversarial review loop. Nine defects, each re-measured
+independently before being accepted, fixed, and mutation-verified.
+
+### Settings: an untouched Save reverted a limit another window had raised
+
+`2361db7` corrected the *comparison* to ask "would the file change" instead of
+"does this differ from my snapshot", but the save still *wrote* every field of
+that snapshot. `history_dialog._persist_limit` writes `history_max_items`
+straight to the store and notifies only the controller, so Settings kept the
+old number. Measured through the real dialog: disk 800, spin box 500, 700
+entries held, one Save with nothing touched wrote 500 back and the follow-on
+trim deleted 201 transcripts. `_dialog_edits_over_stored` now applies only the
+fields the user actually changed onto what is on disk.
+
+The regression surfaced through a test the fix broke:
+`test_save_persists_repaste_hotkey_and_new_toggles` cleared an optional hotkey
+in a second save and saw the first save's value. The cause was the test fake:
+`_FakeSettingsStore.load()` returned the constructor's object no matter what
+`save()` had written, which no real store does. Corrected in both fake stores,
+and the same sequence re-verified against the real `SettingsStore`.
+
+### Hotkey: a punctuation key bound a completely different Windows key
+
+`_KEY_MAP` already holds every letter and digit, so the `ord(key_name)`
+fallback could only ever be reached by characters where `ord()` is not the
+virtual-key code. Measured through the Settings field: "Ctrl+Alt+." bound
+VK_DELETE, "-" VK_INSERT, "#" VK_END, "'" VK_RIGHT, while ";" and "AE" landed
+on codes Windows assigns to nothing. One steals a system shortcut silently,
+the other registers a hotkey that can never fire. The fallback is gone and the
+rejection message is derived from `_KEY_MAP`, with a test that feeds every
+name it prints back through the parser -- the first version of that message
+advertised Insert, Delete, Home, End, PageUp and PageDown, none of which the
+map holds.
+
+### Streaming: the rolling-window merge emitted text twice
+
+Two independent duplication paths, both reproduced deterministically.
+
+`_join_at_seam` returned on the *first* skip whose overlap cleared the
+threshold. On a base ending "sechs sieben acht" against a window "x sieben acht
+drei vier fuenf sechs sieben acht neun zehn", skip 1 overlaps 2 words and skip
+3 overlaps 6; taking skip 1 repeated six words, as `aligned=True`, which is the
+flag the caller pins the floor from.
+
+The floor branch's splice used the same three-word bound as the alignment above
+it, and past the fourth junk word fell through to a blind weld of the whole
+window. On a floor ending "ist noch nicht fertig": 11 words for up to three
+junk words, 19 for four.
+
+Both fixed, and measured over 300 randomised sessions per cell: mean extra
+words 7.5 -> 2.1, worst case 38 -> 15, mean lost words 21.2 -> 21.3. The first
+run of that measurement reported the two as identical, because the
+reconstructed "old" `_join_at_seam` honoured the new call site's wider
+`max_skip` -- half of what was being measured.
+
+A third, smaller one: `_stream_word_key` strips punctuation, so "...", "!" and
+":" all key to the empty string and match each other, and two of them cleared a
+two-word threshold with no lexical agreement. `_substantive_word_count` counts
+only non-empty keys. Counted rather than refused in `_stream_words_match`,
+because a real seam may contain a standalone mark and refusing it breaks the
+whole overlap down to nothing.
+
+The first regression test for the seam rule separated it from neither mutant:
+`skip + overlap` is the cut point, so every skip that finds one true seam
+yields identical text. Both distinguishing inputs were found by searching the
+real `merge_rolling_window` with each mutant installed. They show the rule
+sits between two opposite failures -- first-passing duplicates, last-passing
+loses speech.
+
+### Tray: a notification icon a few hundred milliseconds early killed the app
+
+`Shell_NotifyIcon(NIM_ADD)` raised out of `show()`, whose only caller is `main`
+before `app.exec()`. Explorer also broadcasts `TaskbarCreated` before it will
+accept icons, so the re-add after a restart routinely fails once -- and the
+arm keyed on `_visible`, which is what the shell has accepted, so a restart
+during a pending retry read a hidden icon and did nothing. With `_visible`
+stuck False, `showMessage` returned early and every later tray notification
+was dropped silently. Now: bounded retries, `_wanted_visible` as the intent,
+a generation on each retry, a separate class for "added but version not set",
+`RegisterWindowMessageW`'s 0 stored as `None` rather than as `WM_NULL`, and a
+log line for a notification that cannot be shown.
+
+### text_inserter: a refusal to touch the clipboard was re-raised as permission
+
+Every re-raise builds a new exception, and a new one starts with
+`allow_clipboard_fallback=True`. AGENTS.md recorded this as unreachable
+"because no caller combines the two" -- both halves wrong: the combination
+happens inside `insert_text`, whose handler *constructs* a
+`ClipboardContentionError` when a non-contention failure after the paste
+keystroke finds the clipboard changed. Measured: cause flag False, re-raised
+flag True, and the controller would then have copied the transcript over the
+clipboard the user had just filled.
+
+### Three rollback arms that undid the wrong thing
+
+All only reachable when the interpreter cannot create another thread. The
+model scan's arm repeated half of its completion slot instead of calling it
+(leaking a timing entry and leaving "Checking ... in the background" over a
+scan that never began); it also wrote the *download's* label, so a user who
+pressed Download was told a model scan had failed; and the benchmark's arm left
+the Details overview reading the running summary it had been given a few lines
+before the start.
+
+### Corrections to earlier entries
+
+- The "Three separate `settings_store.load()` calls" limitation recorded a race
+  that cannot occur: every writer is a direct-connected Qt slot on the main
+  thread and nothing between the reads pumps the event loop. Rewritten as the
+  invariant that makes it safe, and what would break it.
+- The comment in `find_cached_models` still said the ONNX scan works "exactly
+  like the Whisper loop above", which `58c3038` made false.
+- `window_focus` and `hotkey` declared no ctypes signatures and used the
+  process-wide `ctypes.windll.user32`, where a declaration would leak to every
+  other caller. Both now take their own handle. Hardening, not a measured
+  defect: a real HWND here is 0x30766 and declared and undeclared calls agree.
+
+### Two process notes
+
+- `pytest ... | tail -3` returns *tail's* exit code. One round reported
+  "exit code 0" over a real failure. Use `set -o pipefail`, or read the count.
+- The Bash heredoc mangles backslashes in Python string literals. It silently
+  did nothing to a mutation script this round, and the run that followed looked
+  like a clean result for mutations that were never applied.

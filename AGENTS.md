@@ -231,8 +231,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `send_paste_with_mode`'s auto path fall through to `WM_PASTE` and paste the
   transcript a second time, with the clipboard restore running as if nothing
   had happened. Every arm that sees that exception must also leave the
-  clipboard alone. Known gap, currently unreachable: the re-raise does not
-  honour `allow_clipboard_fallback`, because no caller combines the two.
+  clipboard alone. The re-raise carries `allow_clipboard_fallback` across,
+  which this entry previously recorded as an unreachable gap "because no
+  caller combines the two". Both halves of that were wrong: the combination
+  happens inside `insert_text`, not across callers -- a non-contention failure
+  after the paste keystroke lands in the handler, which then *constructs* a
+  `ClipboardContentionError` when it finds the clipboard changed -- and the
+  re-raise built a fresh exception, so the refusal was replaced by the
+  permissive default. Measured through `insert_text`: cause flag False,
+  re-raised flag True, and the controller would then have copied the
+  transcript over the clipboard the user had just filled.
 - **Deferred queue inserts are coalesced**: `_flush_deferred_background_results`
   groups token-ordered pending results by their captured insertion target and
   pastes each group as one space-joined text. Each separate paste is its own
@@ -1551,6 +1559,43 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   transcribes only the trailing partial window and merges it into the
   provider-tracked live transcript, so stop returns quickly and the history
   entry matches the streamed text. Inserted text stays append-only either way.
+- **The seam search takes the longest overlap, and the floor's splice is not
+  bounded by `_WINDOW_BOUNDARY_SKIP_WORDS`.** Two ways the merge duplicated
+  text into the user's document, both measured deterministically:
+  - `_join_at_seam` returned on the *first* skip whose overlap cleared the
+    threshold, so a coincidental two-word match at skip 1 beat the real
+    six-word seam at skip 3 and the six words between them were emitted twice
+    -- as `aligned=True`, which is the flag the caller pins the floor from, so
+    the duplicate became permanent. It now scores every skip and keeps the
+    largest overlap, smallest skip on a tie, which is also what `skip == 0`
+    already does in `append_only_stream_partial_candidate`.
+  - The floor branch's splice used the same 3-word bound as the alignment
+    above it, and past the fourth junk word fell through to
+    `stream_join_text(protected, current)` -- a blind weld of the whole
+    window, which re-emits the floor's tail. Measured on a floor ending "ist
+    noch nicht fertig": 11 words for up to three junk words, 19 for four. The
+    bound describes one word cut in half at a window boundary; the floor
+    branch is reached only after `previous` was discarded as unalignable, so
+    the window's head can hold several words of that drift. Widening it is
+    safe there and not above, because the floor is preserved verbatim, the
+    result stays `aligned=False` so no floor is advanced by it, and two
+    substantive words of overlap are still required.
+  Measured over 300 randomised sessions per cell (60-word dictations, 12-word
+  windows, a 4-word boundary mistranscription in one window in five): mean
+  extra words 7.5 -> 2.1, worst case 38 -> 15, while mean lost words moved
+  21.2 -> 21.3 with the same number of sessions affected. The direction that
+  matters is that it does not buy the reduction with lost speech; the absolute
+  loss level is the synthetic corruption model, not real audio.
+- **Punctuation is not corroboration.** `_stream_word_key` strips
+  `.,;:!?)]}`, so "...", "!", "?!" and ":" all key to the empty string and
+  match each other -- two of them cleared a two-word overlap threshold with no
+  lexical agreement at all, and a cleared threshold is what the merge reads as
+  "two overlapping windows agreed on the seam". `_substantive_word_count`
+  counts only non-empty keys and every threshold is applied to that count.
+  Counted rather than refused in `_stream_words_match`: a genuine seam may
+  contain a standalone mark ("hallo ... welt"), and making the mark itself
+  non-matching breaks that three-word overlap down to nothing, because
+  `_suffix_prefix_overlap_len` needs every word of the slice to match.
 - **Streaming decodes nothing during silence, at either end**: faster-whisper
   invents words from silence (the same reason the batch silence gate exists),
   and in the streaming path an invented window can never be aligned against
@@ -2541,7 +2586,38 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   every `ctypes` call declares `argtypes`/`restype` (defaults truncate handles
   and overflow on a large `LPARAM`), the icon is re-added on `TaskbarCreated`
   after an Explorer restart, and it is deleted before its window is destroyed
-  or a dead icon lingers in the tray. `scripts/diagnose_tray_flyout.py` and
+  or a dead icon lingers in the tray.
+  **Re-adding it is a retry, not a call.** Explorer broadcasts
+  `TaskbarCreated` before it will accept icons, so the re-add right after a
+  restart routinely fails once -- and `NIM_ADD` failing raised out of
+  `show()`, whose only caller is `main` before `app.exec()`, so a logon race
+  ended the process: a dictation app with no window died because a
+  notification icon was a few hundred milliseconds early. `show()` therefore
+  never raises; `_attempt_add` schedules `_ADD_RETRY_DELAYS_MS` retries and
+  logs. Three pieces are load-bearing:
+  - **`_wanted_visible`, not `_visible`, is what the retry and the
+    `TaskbarCreated` arm read.** `_visible` is what the shell has accepted, so
+    keying the restart arm on it meant a restart arriving while a re-add was
+    still failing saw a hidden icon and did nothing -- the icon was gone for
+    the session, and because `showMessage` returns early on `_visible`, every
+    later tray notification was dropped with it.
+  - **A retry carries its generation.** `hide()` then `show()` while one is
+    pending leaves `_wanted_visible` true again by the time the stale retry
+    wakes, and `_attempt_add` does not look at `_visible`, so without the
+    check it calls `NIM_ADD` a second time for an icon the shell already has
+    -- two retry chains, and a second add Windows rejects. Bumping the
+    generation in `hide()` as well was tried and removed: mutation cannot tell
+    it apart, because `show()` bumps it and `_wanted_visible` covers the rest.
+  - **`SetIconVersionError` is separate from a failed add.** `NIM_ADD`
+    succeeded there, so retrying would add a second icon; the icon is kept and
+    the failure reported. Without version 4 the shell sends legacy button
+    messages while `_handle_message` decodes lParam the version-4 way.
+  Also: `RegisterWindowMessageW` returns 0 on failure and 0 is `WM_NULL`, so
+  the result is stored as `None` rather than unchecked -- otherwise every
+  `WM_NULL` this window received would look like an Explorer restart. And a
+  notification that cannot be shown is logged: silence there made a failed
+  background transcription indistinguishable from one that never ran, which is
+  the case those notifications exist for. `scripts/diagnose_tray_flyout.py` and
   `scripts/experiment_native_tray_icon.py` reproduce the measurements.
 - **Tray left-click reveals the overlay**: a single left click (`Trigger`) has
   no other meaning and there is no main window, so it calls
@@ -2651,6 +2727,65 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `self._settings_store.load()`. Note what this must *not* break: a key
   replacement leaves `AppSettings` byte-identical (the `has_*_key` flags do not
   move), so it writes no settings and still emits `provider_keys_changed`.
+- **A rollback arm must undo the state it is rolling back, and say the thing
+  the user's own action was about.** Three `Thread.start()` guards were each
+  wrong in a different way, and all three only appear when the interpreter
+  cannot create another thread:
+  - The model scan's arm repeated half of `_on_local_model_scan_finished`
+    instead of calling it, so it left the
+    `_local_model_scan_started_at_by_token` entry (never popped again for that
+    token) and the "Checking local model availability in the background."
+    line, describing a scan that never began. It now routes through the
+    completion slot with a non-list payload, which is that slot's own "did not
+    finish" branch.
+  - That arm also wrote `_set_local_models_action_text`, which belongs to the
+    download -- and a download whose thread also failed finishes by refreshing
+    the inventory, which starts the scan. So a user who pressed Download was
+    told a *model scan* could not be started. The scan writes its own status
+    line now, and the two labels have exactly one writer each.
+  - The benchmark's arm left the Details overview reading the running summary,
+    because `setPlainText` had already put it in the Status row a few lines
+    above the start -- next to a status line saying the run never began.
+- **`window_focus` and `hotkey` take their own `WinDLL` handle.**
+  `ctypes.windll.user32` is a process-wide cached object, so declaring
+  `argtypes`/`restype` on it redefines those functions for every other caller;
+  `text_inserter` and `win_tray_icon` already each take their own. This is
+  hardening, not a fix for anything observed: measured on this machine a real
+  `HWND` is 0x30766 and the declared and undeclared calls agree exactly. What
+  the declarations rule out is an `HWND` at or above 0x8000_0000 coming back
+  negative from the default 32-bit signed `restype` and being passed back
+  sign-extended -- a different window -- and `GetAsyncKeyState` being read as
+  an `int` when it returns a `SHORT`. A 64-bit handle already fails outright
+  ("int too long to convert") and Windows does not produce one.
+- **A save applies the user's edits onto the file, it does not write its
+  snapshot back.** The comparison above was only half of it: the dialog also
+  *wrote* every field of its dialog-open snapshot, so a value another window
+  had raised meanwhile was reverted. `history_dialog._persist_limit` does
+  exactly that -- it writes `history_max_items` straight to the store and
+  notifies only the controller, so Settings' spin box and snapshot keep the old
+  number -- and an untouched Save then wrote it back *and* ran the follow-on
+  trim at it. Measured: disk 800, spin box 500, 700 entries held, one Save with
+  nothing touched deleted 201 transcripts. `_dialog_edits_over_stored` diffs
+  the constructed object against `_loaded_settings` and applies only the fields
+  that differ onto `self._settings_store.load()`, in both save paths, and the
+  trim is keyed on the limit that was actually saved. This entry and the one
+  above are the two halves of one rule: **`_loaded_settings` answers "what did
+  the user change", the file answers "what is true now", and neither question
+  may be put to the other.**
+- **Three `settings_store.load()` calls decide one save, and that is safe only
+  because nothing between them pumps the Qt event loop.**
+  `_overlay_owned_settings`, `_stored_language_mode` and the change comparison
+  each read the file. Every writer of those three fields is a direct-connected
+  Qt slot on the main thread (`controller.set_overlay_opacity_percent`,
+  `set_overlay_always_on_top`, `set_language_mode`, and both History views'
+  limit writers), the single-instance guard rules out a second process, and
+  `_construct_settings_from_widgets` contains no `exec`, `processEvents`,
+  `QMessageBox` or `QFileDialog` -- so the three reads are one uninterrupted
+  run and cannot see a mixture. An earlier version of this entry recorded that
+  mixture as an accepted race; it is not reachable. What *would* make it real
+  is adding any modal or `processEvents` between the reads, which is why the
+  invariant is written down rather than the reads collapsed. The history-trim
+  prompt is a modal and sits deliberately *before* all three.
 
 
 ## Core flow
@@ -2746,14 +2881,6 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   default cache. Restoring the capability means the scan reporting per-model
   path information rather than names, which the subprocess protocol does not
   carry today.
-- **Three separate `settings_store.load()` calls decide one save.**
-  `_overlay_owned_settings`, `_stored_language_mode` and the change comparison
-  each read the file, so an overlay write landing between them makes the save
-  act on a mixture. The window is microseconds and the outcome is the same as
-  before the comparison was corrected -- the dialog writes the value it read
-  first -- so it is recorded rather than closed; collapsing them into one read
-  means threading a snapshot through `_construct_settings_from_widgets`, which
-  several other callers share.
 - **Cancel reaches a download only while it is *waiting* for the slot, not
   while it is transferring.** `run_coordinated_download` passes `cancel_check`
   into `acquire()`, so with the slot free -- the ordinary single-user case --
