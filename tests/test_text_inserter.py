@@ -1059,3 +1059,54 @@ def test_the_backend_reports_an_emptied_clipboard_distinctly(
     assert fake.calls[0] == "open" and fake.calls[-1] == "close", (
         f"{label}: the clipboard was left open: {fake.calls}"
     )
+
+
+class _SequencedFailAfterPasteBackend(PasteBackend):
+    """The paste keystroke goes out, and the call after it fails."""
+
+    def __init__(self):
+        super().__init__(paste_mode="send_input")
+        self.sequence = 100
+
+    def set_clipboard_text(self, text):
+        self.calls.append(f"set:{text}")
+        self.state = {"has_text": True, "text": text}
+        self.sequence += 1
+
+    def get_clipboard_sequence_number(self):
+        return self.sequence
+
+
+def test_a_post_paste_reraise_keeps_the_refusal_to_touch_the_clipboard():
+    """The re-raise builds a NEW exception, and a new one is permissive.
+
+    `ClipboardContentionError` is the only refusal there is, and the handler
+    *constructs* one when a non-contention failure after the paste keystroke
+    finds the clipboard changed -- so the refusal reached the controller as
+    permission, and `copy_on_error` would have written the transcript over the
+    clipboard the user had just filled. AGENTS.md recorded this as unreachable
+    "because no caller combines the two"; the two are combined here, inside
+    `insert_text`.
+    """
+    backend = _SequencedFailAfterPasteBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    seen = []
+
+    def _clipboard_changed(marker, text):
+        # Clean before the paste, changed by the time the failure is handled.
+        seen.append(1)
+        return len(seen) > 1
+
+    def _readiness_blows_up(target_hwnd):
+        raise OSError("SendMessageTimeoutW failed after the paste went out")
+
+    inserter._clipboard_changed_after_set = _clipboard_changed
+    inserter._wait_for_paste_target_ready = _readiness_blows_up
+
+    with pytest.raises(TextMayHaveBeenPastedError) as caught:
+        inserter.insert_text("der transkribierte satz")
+
+    assert isinstance(caught.value.__cause__, ClipboardContentionError)
+    assert caught.value.__cause__.allow_clipboard_fallback is False
+    assert caught.value.allow_clipboard_fallback is False

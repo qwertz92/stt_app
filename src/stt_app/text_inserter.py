@@ -498,9 +498,31 @@ class TextInserter:
             combined_error = (
                 TextMayHaveBeenPastedError if paste_sent else TextInsertionError
             )
+            # Every re-raise below builds a NEW exception, and a new one starts
+            # with the permissive default. `ClipboardContentionError` is the
+            # only refusal there is, and the handler above *constructs* one --
+            # so a non-contention failure after the paste keystroke that then
+            # found the clipboard changed arrived at the controller saying the
+            # clipboard may be overwritten, which is the one thing that error
+            # exists to forbid. Measured through `insert_text`: cause
+            # `ClipboardContentionError(allow_clipboard_fallback=False)`,
+            # re-raise `TextMayHaveBeenPastedError(allow_clipboard_fallback=
+            # True)`. AGENTS.md recorded this as unreachable "because no caller
+            # combines the two"; the two are combined inside this function.
+            fallback_allowed = getattr(
+                paste_error, "allow_clipboard_fallback", True
+            )
+            # The combined branch below cannot currently observe a False flag,
+            # and mutation testing cannot tell it apart: every path that
+            # produces one -- the pre-paste check, the post-paste check, and
+            # the handler's own construction -- sets `restore_previous_state =
+            # False` first, so `restore_error` stays None. Passed anyway, so a
+            # later False-flag path that leaves the restore enabled does not
+            # have to rediscover this.
             if paste_error is not None and restore_error is not None:
                 raise combined_error(
-                    f"Failed to paste text ({paste_error}) and failed to restore clipboard ({restore_error})."
+                    f"Failed to paste text ({paste_error}) and failed to restore clipboard ({restore_error}).",
+                    allow_clipboard_fallback=fallback_allowed,
                 ) from paste_error
             if paste_error is not None:
                 if isinstance(paste_error, TextInsertionError) and (
@@ -513,10 +535,12 @@ class TextInserter:
                     # retries cannot duplicate text that already landed.
                     raise TextMayHaveBeenPastedError(
                         str(paste_error)
-                        or f"Failed to insert transcribed text: {paste_error}"
+                        or f"Failed to insert transcribed text: {paste_error}",
+                        allow_clipboard_fallback=fallback_allowed,
                     ) from paste_error
                 raise TextInsertionError(
-                    f"Failed to insert transcribed text: {paste_error}"
+                    f"Failed to insert transcribed text: {paste_error}",
+                    allow_clipboard_fallback=fallback_allowed,
                 ) from paste_error
             if restore_error is not None:
                 raise TextMayHaveBeenPastedError(
