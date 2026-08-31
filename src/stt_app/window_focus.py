@@ -51,10 +51,58 @@ _SHELL_SURFACE_CLASSES = frozenset(
 _WINDOW_CLASS_BUFFER_CHARS = 256
 
 
+def _declare_user32(user32) -> None:
+    """Declare every signature this module calls.
+
+    Two reasons, and only the second is about this module's own correctness:
+
+    - `ctypes.windll.user32` is a process-wide cached handle, so declaring on
+      it would silently redefine the same function objects for every other
+      caller in the process. `text_inserter` and `win_tray_icon` each take
+      their own `WinDLL`; this module now does too, and the declarations
+      cannot leak out of it.
+    - Without `restype`, ctypes reads a 32-bit signed int, so an `HWND` at or
+      above 0x8000_0000 comes back negative and is then passed back in
+      sign-extended -- a different window. Measured on this machine, real
+      handles are far below that (0x30766) and declared and undeclared calls
+      agree exactly, so this is hardening rather than a fix for anything
+      observed; a 64-bit handle is the one case that already fails outright
+      ("int too long to convert"), and Windows does not produce one.
+    """
+    wintypes = ctypes.wintypes
+    signatures = {
+        "GetForegroundWindow": ((), wintypes.HWND),
+        "SetForegroundWindow": ((wintypes.HWND,), wintypes.BOOL),
+        "IsWindow": ((wintypes.HWND,), wintypes.BOOL),
+        "IsWindowVisible": ((wintypes.HWND,), wintypes.BOOL),
+        "ShowWindow": ((wintypes.HWND, ctypes.c_int), wintypes.BOOL),
+        "GetWindowLongW": ((wintypes.HWND, ctypes.c_int), wintypes.LONG),
+        "GetWindowThreadProcessId": (
+            (wintypes.HWND, ctypes.POINTER(wintypes.DWORD)),
+            wintypes.DWORD,
+        ),
+        "GetGUIThreadInfo": ((wintypes.DWORD, ctypes.c_void_p), wintypes.BOOL),
+        "GetClassNameW": (
+            (wintypes.HWND, wintypes.LPWSTR, ctypes.c_int),
+            ctypes.c_int,
+        ),
+    }
+    for name, (argtypes, restype) in signatures.items():
+        function = getattr(user32, name, None)
+        if function is None:
+            continue
+        function.argtypes = argtypes
+        function.restype = restype
+
+
 class Win32WindowFocusHelper:
     def __init__(self) -> None:
-        self._user32 = ctypes.windll.user32
-        self._own_process_id = int(ctypes.windll.kernel32.GetCurrentProcessId())
+        self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+        _declare_user32(self._user32)
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.GetCurrentProcessId.argtypes = ()
+        kernel32.GetCurrentProcessId.restype = ctypes.wintypes.DWORD
+        self._own_process_id = int(kernel32.GetCurrentProcessId())
         self._last_foreign_window: int | None = None
 
     def capture_target_window(self) -> int | None:

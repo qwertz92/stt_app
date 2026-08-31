@@ -49,7 +49,24 @@ class HotkeyRegistrationError(RuntimeError):
 
 class Win32HotkeyApi:
     def __init__(self) -> None:
-        self._user32 = ctypes.windll.user32
+        # Its own handle rather than the process-wide `ctypes.windll.user32`,
+        # so the declarations below cannot redefine these functions for other
+        # callers -- the same split `text_inserter` and `win_tray_icon` use.
+        self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+        wintypes = ctypes.wintypes
+        self._user32.RegisterHotKey.argtypes = (
+            wintypes.HWND,
+            ctypes.c_int,
+            ctypes.c_uint,
+            ctypes.c_uint,
+        )
+        self._user32.RegisterHotKey.restype = wintypes.BOOL
+        self._user32.UnregisterHotKey.argtypes = (wintypes.HWND, ctypes.c_int)
+        self._user32.UnregisterHotKey.restype = wintypes.BOOL
+        self._user32.GetAsyncKeyState.argtypes = (ctypes.c_int,)
+        # SHORT, not int: `text_inserter` already declares it this way, and
+        # the bit this module tests (0x8000) is the sign bit of that SHORT.
+        self._user32.GetAsyncKeyState.restype = ctypes.c_short
 
     def register_hotkey(
         self,
