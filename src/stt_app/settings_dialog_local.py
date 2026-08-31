@@ -800,10 +800,21 @@ class _LocalModelsMixin:
             self._active_local_model_scan_thread.start()
         except RuntimeError as exc:
             self._active_local_model_scan_thread = None
-            self._set_local_models_action_text(
-                f"Could not start the model scan: {exc}",
-                "#b71c1c",
-                allow_growth=True,
+            # Route through the completion slot rather than repeating half of
+            # it. It owns three things this arm was leaving behind: the
+            # `_local_model_scan_started_at_by_token` entry (leaked for the
+            # process lifetime), the requested-dir marker, and a queued rescan.
+            # A non-list payload is its own "did not finish" branch, which also
+            # clears the "Checking local model availability in the background."
+            # line this arm left standing over a scan that never began.
+            self._on_local_model_scan_finished(token, model_dir, None)
+            # The scan's own status line, not `_set_local_models_action_text`:
+            # that label belongs to the download, and a download whose thread
+            # also failed to start finishes by refreshing the inventory -- so
+            # the scan's message landed on top of it and a user who had pressed
+            # Download was told a model scan had failed.
+            self._set_local_model_scan_status(
+                f"Could not start the model scan: {exc}", "#b71c1c"
             )
             self._update_local_model_actions()
 

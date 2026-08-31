@@ -108,7 +108,47 @@ def test_a_model_scan_that_cannot_start_does_not_leave_the_tab_scanning(monkeypa
 
     assert dialog._active_local_model_scan_thread is None
     assert dialog._background_work_active() is False
-    assert "Could not start the model scan" in dialog.local_models_action_label.text()
+    # The scan's own status line. It used to write the shared action label,
+    # which belongs to the download -- see the download test below.
+    assert (
+        "Could not start the model scan"
+        in dialog.local_models_scan_status_label.text()
+    )
+
+
+def test_a_model_scan_that_cannot_start_leaves_no_state_behind(monkeypatch):
+    """The arm repeated half the completion slot and forgot the other half.
+
+    Left behind: the `_local_model_scan_started_at_by_token` entry, which is
+    never popped again for that token and so leaks for the process lifetime,
+    and the "Checking local model availability in the background." line, which
+    described a scan that never started.
+    """
+    dialog = _make_dialog()
+    dialog._cached_local_models_available = False
+    _refuse_new_threads(monkeypatch)
+
+    dialog._request_local_model_scan(force=True)
+
+    assert dialog._local_model_scan_started_at_by_token == {}
+    assert "in the background" not in dialog.local_models_label.text()
+
+
+def test_a_failed_download_is_not_reported_as_a_failed_scan(monkeypatch):
+    """The download's completion refreshes the inventory, which starts a scan.
+
+    With no thread available both fail, and the scan's message used to land on
+    the same label a moment later -- so a user who pressed Download was told
+    that a model scan could not be started.
+    """
+    dialog = _make_dialog()
+    _refuse_new_threads(monkeypatch)
+
+    dialog._start_local_model_download(["tiny"])
+
+    shown = dialog.local_models_action_label.text()
+    assert "Could not start the download" in shown, shown
+    assert "model scan" not in shown, shown
 
 
 def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(monkeypatch):
@@ -121,18 +161,6 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(monkey
     """
     dialog = _make_dialog()
     coordinator = model_download_coordinator()
-    # Record the status lines instead of reading the label at the end: the
-    # download's teardown finishes by refreshing the inventory, and with every
-    # thread refused that scan fails too and writes the later message. Both are
-    # honest, and this way the assertion cannot be satisfied by the wrong one.
-    shown: list[str] = []
-    real_set_text = dialog._set_local_models_action_text
-
-    def _record(text: str, color: str, **kwargs) -> None:
-        shown.append(text)
-        real_set_text(text, color, **kwargs)
-
-    monkeypatch.setattr(dialog, "_set_local_models_action_text", _record)
     _refuse_new_threads(monkeypatch)
 
     dialog._start_local_model_download(["tiny"])
@@ -144,7 +172,8 @@ def test_a_download_that_cannot_start_releases_the_queue_and_its_interest(monkey
     assert dialog._active_local_model_download_thread is None
     assert dialog._background_work_active() is False
     assert coordinator.has_explicit_interest("tiny", "") is False
-    assert any("Could not start the download" in text for text in shown), shown
+    shown = dialog.local_models_action_label.text()
+    assert "Could not start the download" in shown, shown
     assert dialog.local_model_download_progress_bar.isVisible() is False
     assert dialog._local_model_download_progress_timer.isActive() is False
 
@@ -175,6 +204,21 @@ def test_a_benchmark_that_cannot_start_gives_the_run_button_back(monkeypatch, tm
     assert dialog._background_work_active() is False
     assert dialog.run_benchmark_button.isEnabled() is True
     assert "Could not start the benchmark" in dialog.benchmark_status_label.text()
+    # The Details overview was primed with the running summary before the
+    # thread was started, and `setPlainText` puts that into its Status row --
+    # so it went on reading "running" next to a status line saying the run
+    # never began.
+    overview = dialog.benchmark_summary_text.overview_table
+    status_values = [
+        overview.item(row, 1).text()
+        for row in range(overview.rowCount())
+        if overview.item(row, 0) is not None
+        and overview.item(row, 0).text() == "Status"
+    ]
+    assert status_values, "the overview has no Status row"
+    assert all("running" not in value.lower() for value in status_values), (
+        f"the overview still claims the benchmark is running: {status_values}"
+    )
 
 
 def test_an_import_that_cannot_start_gives_the_import_controls_back(monkeypatch):

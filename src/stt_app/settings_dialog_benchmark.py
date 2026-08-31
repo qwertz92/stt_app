@@ -1585,6 +1585,14 @@ class _BenchmarkMixin:
             self._set_benchmark_status(
                 f"Could not start the benchmark: {exc}", "#b71c1c"
             )
+            # The summary view was already primed with the running summary a
+            # few lines above, and `setPlainText` puts that straight into the
+            # Overview's Status row -- so Details went on reading "running"
+            # for a benchmark that never began, contradicting the status line
+            # right next to it.
+            self.benchmark_summary_text.setPlainText(
+                f"Could not start the benchmark: {exc}"
+            )
         self._update_benchmark_actions()
 
     def _on_benchmark_progress(self, text: str) -> None:
