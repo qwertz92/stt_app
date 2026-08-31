@@ -562,25 +562,7 @@ class DictationController(QtCore.QObject):
         if self._shutdown_started:
             return
         self._shutdown_started = True
-        try:
-            self._hotkey_manager.unregister()
-        except Exception:
-            self._logger.exception("Failed to unregister recording hotkey")
-        if self._cancel_hotkey_manager is not None:
-            try:
-                self._cancel_hotkey_manager.unregister()
-            except Exception:
-                self._logger.exception("Failed to unregister cancel hotkey")
-        if self._show_overlay_hotkey_manager is not None:
-            try:
-                self._show_overlay_hotkey_manager.unregister()
-            except Exception:
-                self._logger.exception("Failed to unregister show-overlay hotkey")
-        if self._repaste_hotkey_manager is not None:
-            try:
-                self._repaste_hotkey_manager.unregister()
-            except Exception:
-                self._logger.exception("Failed to unregister re-paste hotkey")
+        self._release_all_global_hotkeys()
         self._focus_poll_timer.stop()
         self._cancel_audio_callback_watchdog()
         self._audio_device_change_timer.stop()
@@ -773,12 +755,9 @@ class DictationController(QtCore.QObject):
         ):
             self._invalidate_transcriber_runtime()
         if re_register_hotkey:
-            self._hotkey_registration_ok = self._register_hotkey_with_fallback()
-            self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
-            self._show_overlay_hotkey_registration_ok = (
-                self._register_show_overlay_hotkey()
-            )
-            self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
+            # A save is the one moment a combination moves between our own
+            # hotkeys, so this is the path the release pass exists for.
+            self._register_all_global_hotkeys()
         else:
             self._hotkey_registration_ok = True
             self._hotkey_notice = None
@@ -6307,18 +6286,63 @@ class DictationController(QtCore.QObject):
             )
             return False
 
-    def refresh_hotkey_registration(self) -> None:
-        """Re-register global hotkeys after Windows resumes or opens Explorer."""
+    def _release_all_global_hotkeys(self) -> None:
+        """Give every combination this app holds back to Windows.
+
+        `HotkeyManager.register` unregisters only its *own* id, and Windows
+        refuses a combination another id already holds -- including one of
+        ours. Registering the four in id order therefore fails for any change
+        that moves a combination from a later id onto an earlier one: the
+        show-overlay hotkey taking over the re-paste hotkey's combination, or
+        the two being swapped. Save-time validation does not see it, because
+        the *saved* set has no conflict; the collision exists only during the
+        re-registration. Measured against the real `RegisterHotKey` with both
+        ids on one thread: error 1409, the show-overlay hotkey left
+        unregistered, and the combination it wanted free the moment the later
+        id gave it up. Only the recording hotkey recovers by itself, through
+        the reclaim timer -- the other three stay dead until the app restarts.
+
+        A manager whose `unregister` fails keeps holding its combination and
+        stays marked registered, which is the pre-existing behaviour: whichever
+        registration then collides reports it through its own notice. Keep
+        releasing the rest regardless.
+
+        The recording entry is inert for the registration pass -- `register`
+        unregisters its own id first and nothing registers before id 1, so
+        removing it survives every collision test. `shutdown` shares this
+        helper and does need it, which is what pins it.
+        """
+        managers = (
+            ("recording", self._hotkey_manager),
+            ("cancel", self._cancel_hotkey_manager),
+            ("show-overlay", self._show_overlay_hotkey_manager),
+            ("re-paste", self._repaste_hotkey_manager),
+        )
+        for label, manager in managers:
+            if manager is None:
+                continue
+            try:
+                manager.unregister()
+            except Exception:
+                self._logger.exception("Failed to unregister %s hotkey", label)
+
+    def _register_all_global_hotkeys(self) -> bool:
+        """Release every combination we hold, then claim the configured four."""
+        self._release_all_global_hotkeys()
         self._hotkey_registration_ok = self._register_hotkey_with_fallback()
         self._cancel_hotkey_registration_ok = self._register_cancel_hotkey()
         self._show_overlay_hotkey_registration_ok = (
             self._register_show_overlay_hotkey()
         )
         self._repaste_hotkey_registration_ok = self._register_repaste_hotkey()
-        if not (
+        return (
             self._hotkey_registration_ok
             and self._cancel_hotkey_registration_ok
             and self._show_overlay_hotkey_registration_ok
             and self._repaste_hotkey_registration_ok
-        ):
+        )
+
+    def refresh_hotkey_registration(self) -> None:
+        """Re-register global hotkeys after Windows resumes or opens Explorer."""
+        if not self._register_all_global_hotkeys():
             self._logger.warning("Global hotkey refresh did not fully succeed.")
