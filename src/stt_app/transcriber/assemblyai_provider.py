@@ -57,6 +57,29 @@ def _default_assemblyai():
         ) from None
 
 
+# The SDK's `disconnect(terminate=True)` runs in three stages: it waits
+# `terminate_timeout` for the server's TerminationEvent -- and the final Turn
+# that precedes it, which is the tail of the dictation -- then sets its stop
+# flag and joins its read and write threads with no timeout of its own. Both
+# threads are parked in a 1 s-timeout loop, so the whole call can take
+# `terminate_timeout` plus about two of those.
+#
+# The app's own bound has to clear all of it. It did not: the outer join was
+# 5.0 s against the SDK default `terminate_timeout` of 5.0, so the app gave up
+# at exactly the moment the SDK started tearing down, reset the session, and
+# `_on_turn_event`'s session check then dropped the final Turn -- and because
+# the text collected so far is non-empty, `stop_stream`'s `if error and not
+# text` guard does not fire either, so the user is handed a silently
+# shortened dictation with no error at all.
+#
+# Both numbers are set here rather than one being inherited: a default that
+# moves in an SDK upgrade would put the two back on top of each other with
+# nothing to notice it.
+ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S = 5.0
+ASSEMBLYAI_SDK_THREAD_LOOP_S = 1.0
+ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S = 8.0
+
+
 class AssemblyAITranscriber(ProgressReporter, ITranscriber):
     """Batch transcription using AssemblyAI's REST API via the official SDK.
 
@@ -484,7 +507,14 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             if self._streaming_client_factory is not None:
                 client = self._streaming_client_factory(self._api_key)
             else:
-                client = StreamingClient(StreamingClientOptions(api_key=self._api_key))
+                client = StreamingClient(
+                    StreamingClientOptions(
+                        api_key=self._api_key,
+                        terminate_timeout=(
+                            ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S
+                        ),
+                    )
+                )
             with self._stream_lock:
                 if (
                     generation != self._stream_generation
@@ -655,7 +685,9 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
 
         retired = False
         try:
-            self._shutdown_streaming_client(client, join_timeout_s=5.0)
+            self._shutdown_streaming_client(
+                client, join_timeout_s=ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S
+            )
 
             with self._stream_lock:
                 if not self._stream_session_matches_locked(generation, client):

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 import types
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -1368,3 +1369,136 @@ def test_a_finished_job_is_not_made_to_wait_for_the_polling_interval(monkeypatch
     assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
     assert len(fetched) == 1
     assert now[0] == 0.0, f"it slept {now[0]}s before asking whether it was done"
+
+
+class TestStreamStopBudget:
+    """The app's stop bound has to contain the SDK's own teardown, not equal it."""
+
+    def test_the_outer_bound_clears_the_sdk_teardown_it_contains(self):
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        floor = (
+            provider.ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S
+            + 2 * provider.ASSEMBLYAI_SDK_THREAD_LOOP_S
+        )
+
+        assert floor < provider.ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S, (
+            "the join gives up while `disconnect(terminate=True)` is still "
+            "waiting for the server's final Turn"
+        )
+
+    def test_the_terminate_timeout_is_pinned_on_the_real_options(self, monkeypatch):
+        """Inheriting the SDK's default puts the two numbers back together.
+
+        Driven through the provider's own construction, against the real
+        `StreamingClientOptions`: asserting on an options object the test
+        built itself would pass whether or not the provider passes anything.
+        """
+        import assemblyai.streaming.v3 as sdk
+
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        built: list = []
+
+        class _CapturingClient:
+            def __init__(self, options):
+                built.append(options)
+                self.handlers: dict = {}
+
+            def on(self, event, handler):
+                self.handlers[getattr(event, "value", event)] = handler
+
+            def connect(self, params):
+                pass
+
+            def disconnect(self, terminate=False):
+                pass
+
+        monkeypatch.setattr(sdk, "StreamingClient", _CapturingClient)
+        # A value the SDK's own default is not: the shipped constant happens
+        # to equal that default, so comparing against it cannot tell "pinned"
+        # apart from "inherited" -- which is exactly what this test is for.
+        monkeypatch.setattr(
+            provider, "ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S", 3.25
+        )
+        assert sdk.StreamingClientOptions(api_key="k").terminate_timeout != 3.25
+
+        t = AssemblyAITranscriber(api_key="key", aai_module=_make_fake_aai())
+        t.start_stream()
+        try:
+            assert len(built) == 1
+            assert isinstance(built[0], sdk.StreamingClientOptions)
+            assert built[0].terminate_timeout == 3.25
+        finally:
+            t.abort_stream()
+
+    def test_a_final_turn_during_the_sdk_teardown_is_still_delivered(
+        self, monkeypatch
+    ):
+        """The turn the old bound dropped, with no error to show for it.
+
+        The server sends the last Turn after Terminate, i.e. inside the window
+        `disconnect(terminate=True)` is waiting through -- so a bound that
+        expires first resets the session and `_on_turn_event` discards it.
+        """
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        monkeypatch.setattr(
+            provider, "ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S", 0.05
+        )
+        monkeypatch.setattr(provider, "ASSEMBLYAI_SDK_THREAD_LOOP_S", 0.01)
+        monkeypatch.setattr(
+            provider, "ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S", 0.40
+        )
+
+        t, clients = _make_streaming_transcriber()
+        t.start_stream()
+        client = clients[0]
+        client.emit_turn("das war der anfang", turn_order=0, end_of_turn=True)
+
+        def _slow_disconnect(terminate=False):
+            # The SDK dispatches the server's last Turn from its read thread
+            # while `disconnect` is still inside its terminate wait.
+            time.sleep(0.10)
+            client.emit_turn("und das war das ende", turn_order=1, end_of_turn=True)
+            client.terminated = bool(terminate)
+            client.connected = False
+
+        client.disconnect = _slow_disconnect
+
+        text = t.stop_stream()
+
+        assert "das war der anfang" in text, text
+        assert "und das war das ende" in text, text
+
+    def test_the_stop_join_actually_uses_the_constant(self, monkeypatch):
+        """A literal at the call site ignores the budget this class defines.
+
+        Pinned by making the disconnect outlast the bound: with the constant
+        honoured `stop_stream` gives up at it, with a literal 5.0 it does not.
+        """
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        monkeypatch.setattr(
+            provider, "ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S", 0.15
+        )
+
+        t, clients = _make_streaming_transcriber()
+        t.start_stream()
+        client = clients[0]
+        client.emit_turn("etwas gesagt", turn_order=0, end_of_turn=True)
+
+        released = threading.Event()
+
+        def _hanging_disconnect(terminate=False):
+            released.wait(5.0)
+
+        client.disconnect = _hanging_disconnect
+        started = time.monotonic()
+        try:
+            t.stop_stream()
+            elapsed = time.monotonic() - started
+        finally:
+            released.set()
+
+        assert elapsed < 1.0, f"the join ignored its budget: {elapsed:.2f}s"
