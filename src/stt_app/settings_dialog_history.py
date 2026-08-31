@@ -258,6 +258,14 @@ class _HistoryTabMixin:
         blocker = QtCore.QSignalBlocker(self.history_max_spin)
         self.history_max_spin.setValue(value)
         del blocker
+        # This and `_populate` are the only places a widget is written without
+        # the user touching it, so both keep the edit baseline in step. Left
+        # behind, choosing "import all and set unlimited" would look like a
+        # deliberate limit edit to the next Save and re-write it over anything
+        # another window had since chosen.
+        self._populated_settings = replace(
+            self._populated_settings, history_max_items=value
+        )
 
     def _on_history_imported(self, imported_count: int, _active_limit: int) -> None:
         self._set_history_status(

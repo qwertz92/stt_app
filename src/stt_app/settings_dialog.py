@@ -180,6 +180,11 @@ class SettingsDialog(
         )
         self._update_check_runner = update_check_runner or check_for_updates
         self._loaded_settings = self._settings_store.load()
+        # What the widgets currently show; `_populate` below reassigns it and
+        # is the only place that may. Kept apart from `_loaded_settings`, which
+        # tracks what was last written to disk -- the two diverge the moment a
+        # save merges in a field another window changed.
+        self._populated_settings = self._loaded_settings
         self._connection_test_id = 0
         self._connection_test_details: dict[int, dict[str, tuple[bool, str]]] = {}
         self._provider_key_edits: dict[str, QtWidgets.QLineEdit] = {}

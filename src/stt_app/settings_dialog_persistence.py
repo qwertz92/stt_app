@@ -43,6 +43,12 @@ from .settings_store import AppSettings, normalize_local_onnx_device
 
 class _PersistenceMixin:
     def _populate(self, settings: AppSettings) -> None:
+        # The baseline every "did the user edit this?" question is answered
+        # against, recorded here because this is the one place that writes all
+        # the widgets. `_loaded_settings` cannot serve that: a save assigns it
+        # the *merged* object, which absorbs a value the widgets never showed.
+        # See `_dialog_edits_over_stored` for what that cost.
+        self._populated_settings = settings
         self.hotkey_edit.setKeySequence(
             QtGui.QKeySequence(
                 _app_hotkey_to_qt_hotkey_text(settings.hotkey)
@@ -283,17 +289,36 @@ class _PersistenceMixin:
         transcripts.
 
         So the field list is derived rather than maintained: a field the widget
-        state agrees with the dialog-open snapshot on is not an edit, whatever
-        the file says now. The three hand-handled fields still are handled by
-        hand, because they must also survive the *other* direction -- a field
-        this dialog never reads back would otherwise be written as its
-        dataclass default.
+        state agrees with the snapshot the widgets were populated from is not
+        an edit, whatever the file says now. The three hand-handled fields
+        still are handled by hand, because they must also survive the *other*
+        direction -- a field this dialog never reads back would otherwise be
+        written as its dataclass default.
+
+        The baseline is `_populated_settings`, not `_loaded_settings`, and the
+        difference is the whole merge holding for exactly one save. A save ends
+        by assigning `_loaded_settings = settings`, and `settings` is the
+        *merged* object, so the snapshot absorbed the external 800 while the
+        spin box kept showing 500. The second save then read that 500 as a
+        genuine edit and wrote it: measured on the real store, two saves in one
+        dialog session with nothing touched between them deleted 200
+        transcripts, behind one prompt naming a limit the user never chose --
+        and reverted silently whenever the history was smaller than the limit.
+
+        `_populated_settings` is therefore written in exactly three places, and
+        every one of them is a moment at which what the widgets show becomes
+        settled: `_populate`, the History tab's programmatic move of the limit
+        spin box, and the end of a successful save. The save is the one that is
+        easy to leave out, and leaving it out breaks the opposite direction --
+        an edit could then never be taken back within a session, because the
+        widget would agree with the dialog-open value again and count as no
+        edit. Both directions have their own test.
         """
         edited = {
             field.name: getattr(settings, field.name)
             for field in dataclasses.fields(AppSettings)
             if getattr(settings, field.name)
-            != getattr(self._loaded_settings, field.name)
+            != getattr(self._populated_settings, field.name)
         }
         return replace(stored, **edited) if edited else stored
 
@@ -463,17 +488,16 @@ class _PersistenceMixin:
                 self.settings_changed.emit()
             return
 
-        updated = replace(
-            self._loaded_settings,
-            # `_loaded_settings` is the snapshot from when the dialog was
-            # opened, so without this an overlay change made while it was open
-            # is written back to its old value by a key save.
-            **self._overlay_owned_settings(),
-            # Saving API keys says nothing about the language, so an overlay
-            # pick made while the dialog was open must survive it. This path
-            # reverted one with no dialog edit at all.
-            language_mode=self._stored_language_mode()
-            or self._loaded_settings.language_mode,
+        # What this path reads out of the widgets, listed once: it is both what
+        # gets written and what the edit baseline must become afterwards. Built
+        # on `_populated_settings`, the baseline `_dialog_edits_over_stored`
+        # diffs against, so every field this path does not touch is equal to it
+        # by construction, counts as no edit, and leaves whatever is on disk
+        # alone. Built on `_loaded_settings` instead, a key save following a
+        # settings save would carry that save's merged values and write them
+        # over a third window's newer ones.
+        widget_settings = replace(
+            self._populated_settings,
             allow_insecure_key_storage=self.insecure_key_storage_checkbox.isChecked(),
             has_openai_key=key_states["openai"],
             has_deepgram_key=key_states["deepgram"],
@@ -483,6 +507,18 @@ class _PersistenceMixin:
             has_azure_key=key_states["azure"],
             has_funasr_key=key_states["funasr"],
             azure_endpoint=self.azure_endpoint_edit.text().strip(),
+        )
+        updated = replace(
+            widget_settings,
+            # `_populated_settings` is what the widgets were filled from, so
+            # without this an overlay change made while the dialog was open is
+            # written back to its old value by a key save.
+            **self._overlay_owned_settings(),
+            # Saving API keys says nothing about the language, so an overlay
+            # pick made while the dialog was open must survive it. This path
+            # reverted one with no dialog edit at all.
+            language_mode=self._stored_language_mode()
+            or widget_settings.language_mode,
         )
         # What is on disk, not `_loaded_settings` -- that is the dialog-open
         # snapshot, and the three fields above were just read back from the
@@ -508,6 +544,7 @@ class _PersistenceMixin:
                     self.settings_changed.emit()
                 return
         self._loaded_settings = updated
+        self._advance_populated_settings(widget_settings)
         self._refresh_secret_store_options_ui()
         if changed or settings_changed:
             self.settings_changed.emit()
@@ -522,6 +559,28 @@ class _PersistenceMixin:
     # remembered in one place and forgotten in the other.
     _OVERLAY_OWNED_FIELDS = ("overlay_opacity_percent", "overlay_always_on_top")
 
+    def _advance_populated_settings(self, widget_settings: AppSettings) -> None:
+        """Re-record the edit baseline from the values a save just read out.
+
+        The baseline has to keep describing the widgets, and a save is the
+        other moment at which what they show becomes settled -- not because
+        anything moved, but because those values are now on disk. Leaving it
+        at the dialog-open snapshot instead makes an edit permanent for the
+        session: set a checkbox, save, change your mind, set it back, and the
+        second save sees the box agreeing with the baseline again, calls it no
+        edit, and writes nothing. Measured on `tray_middle_click_toggle`.
+
+        ``widget_settings`` must be the pre-merge object and must describe the
+        widgets: their own values rather than the ones the merge kept, since
+        the widgets were not updated by the merge, and no value read from disk
+        for a field that has a widget.
+        """
+        self._populated_settings = widget_settings
+
+    def _language_mode_shown(self) -> str:
+        """The combo's own value, with no deference to what is on disk."""
+        return str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
+
     def _language_mode_for_save(self, override: str | None) -> str:
         """The combo's value, unless the user never touched it.
 
@@ -532,11 +591,22 @@ class _PersistenceMixin:
         Settings save at all. Deferring only while the combo still equals the
         snapshot means a combo showing anything other than the value it
         held when the dialog opened wins.
+
+        Against `_populated_settings`, i.e. what the combo was actually filled
+        with, because that is what the question means. Reading `_loaded_settings`
+        here is *not* independently observable today and the mutation reverting
+        it survives the suite: `_dialog_edits_over_stored` compares this
+        method's answer against the same baseline afterwards, so an untouched
+        combo produces no edit whichever snapshot is consulted, and the only
+        caller that bypasses that merge -- the Import tab, through
+        `_build_current_settings` -- always passes an override, which returns
+        above. The change is here so the two readers cannot drift, not because
+        a defect was measured through this one.
         """
         if override:
             return str(override)
-        combo = str(self.language_combo.currentData() or DEFAULT_LANGUAGE_MODE)
-        snapshot = str(getattr(self._loaded_settings, "language_mode", "") or "")
+        combo = self._language_mode_shown()
+        snapshot = str(getattr(self._populated_settings, "language_mode", "") or "")
         if snapshot and combo == snapshot:
             return self._stored_language_mode() or combo
         return combo
@@ -826,7 +896,7 @@ class _PersistenceMixin:
         requested_history_limit = int(self.history_max_spin.value())
         current_history_count = self._history_store.count()
         history_limit_changed = (
-            requested_history_limit != int(self._loaded_settings.history_max_items)
+            requested_history_limit != int(self._populated_settings.history_max_items)
         )
         if (
             history_limit_changed
@@ -863,7 +933,7 @@ class _PersistenceMixin:
                 self.settings_changed.emit()
             return
 
-        settings = self._construct_settings_from_widgets(
+        widget_settings = self._construct_settings_from_widgets(
             hotkey=hotkey,
             cancel_hotkey=cancel_hotkey,
             show_overlay_hotkey=show_overlay_hotkey,
@@ -874,7 +944,7 @@ class _PersistenceMixin:
         )
 
         stored_settings = self._settings_store.load()
-        settings = self._dialog_edits_over_stored(settings, stored_settings)
+        settings = self._dialog_edits_over_stored(widget_settings, stored_settings)
         settings_changed = not self._settings_match_stored_values(
             settings, stored_settings
         )
@@ -897,6 +967,18 @@ class _PersistenceMixin:
                     self.settings_changed.emit()
                 return
             self._loaded_settings = settings
+            # `language_mode` is put back to what the combo shows, because it
+            # is the one field `_construct_settings_from_widgets` fills from
+            # disk while a widget for it exists: `_language_mode_for_save`
+            # defers an untouched combo to whatever the overlay's Lang button
+            # has since written. Recording that deferred value would make the
+            # combo differ from the baseline on the next save, turning the same
+            # untouched combo into a deliberate choice and reverting the
+            # overlay after all. The key-save path needs no such correction --
+            # it never reads the combo.
+            self._advance_populated_settings(
+                replace(widget_settings, language_mode=self._language_mode_shown())
+            )
             self._refresh_secret_store_options_ui()
         # Trim to the limit that was actually saved, not to the spin box, so
         # the write and the trim read one baseline instead of two that can

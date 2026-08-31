@@ -4570,6 +4570,237 @@ def test_a_key_save_keeps_a_limit_the_history_dialog_raised():
     _ = app
 
 
+def test_the_merge_still_holds_on_the_second_save_of_one_session(monkeypatch):
+    """The merge above used to hold for exactly one save, then destroy data.
+
+    `_save` ended by assigning the *merged* object to `_loaded_settings`, the
+    same snapshot the edit diff reads -- so it absorbed the external 800 while
+    the spin box went on showing 500. The next save therefore read that 500 as
+    a genuine edit, wrote it, and trimmed the store to it. Measured on the real
+    `SettingsStore`: 700 entries, two saves with nothing touched between them,
+    200 transcripts deleted behind a prompt naming a limit the user never
+    chose -- and silently, with no prompt at all, whenever the history was
+    smaller than the limit.
+    """
+    dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
+    history = _CountingHistoryStore(700)
+    dialog._history_store = history
+    store._settings = dataclasses.replace(store._settings, history_max_items=800)
+    asked: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda _p, _t, text, *a, **k: (
+            asked.append(text) or QtWidgets.QMessageBox.Yes
+        ),
+    )
+
+    # Two unrelated edits, one per save. Neither says anything about history.
+    dialog.completion_beep_checkbox.setChecked(True)
+    dialog._save()
+    dialog.tray_middle_click_checkbox.setChecked(False)
+    dialog._save()
+
+    assert store.load().history_max_items == 800, (
+        "the second save reverted the limit the History dialog had raised"
+    )
+    assert history.trimmed_to == [], f"transcripts were trimmed: {history.trimmed_to}"
+    assert asked == [], f"a trim was proposed for a limit nobody set: {asked}"
+    # The edits themselves must still have landed.
+    assert store.load().completion_beep_enabled is True
+    assert store.load().tray_middle_click_toggle is False
+    dialog.deleteLater()
+    _ = app
+
+
+def test_an_edit_taken_back_in_the_same_session_is_still_written():
+    """The other direction, and why the baseline advances on every save.
+
+    The diff baseline has to keep describing the widgets, so a save re-records
+    it. Freezing it at the dialog-open snapshot instead fixes the revert above
+    and breaks this: set a checkbox, save, change your mind, set it back, and
+    the second save finds the box agreeing with the dialog-open value again,
+    calls it no edit, and leaves the first save's value on disk.
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(tray_middle_click_toggle=True)
+    )
+
+    dialog.tray_middle_click_checkbox.setChecked(False)
+    dialog._save()
+    assert store.load().tray_middle_click_toggle is False
+    dialog.tray_middle_click_checkbox.setChecked(True)
+    dialog._save()
+
+    assert store.load().tray_middle_click_toggle is True, (
+        "taking an edit back within one dialog session wrote nothing"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_an_overlay_language_pick_survives_every_save_not_only_the_first():
+    """`_language_mode_for_save` had the same one-save shape.
+
+    It defers an untouched combo to what is on disk by comparing the combo
+    against the snapshot. Read against `_loaded_settings` that held once: the
+    snapshot absorbed the deferred "de", the combo did not, and the next save
+    saw the two differ and read the untouched combo as a deliberate "auto".
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(engine="deepgram", language_mode="auto")
+    )
+    assert dialog.language_combo.count() > 1, "the combo offers no explicit language"
+    # The overlay's Lang button picks German while the dialog is open.
+    store._settings = dataclasses.replace(store._settings, language_mode="de")
+
+    for index in range(3):
+        dialog.completion_beep_checkbox.setChecked(index % 2 == 0)
+        dialog._save()
+        assert store.load().language_mode == "de", (
+            f"save {index + 1} reverted the overlay's language pick"
+        )
+
+    assert dialog.language_combo.currentData() == "auto", (
+        "the test moved the combo, so it no longer covers an untouched one"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_key_save_does_not_swallow_a_language_pick_not_yet_saved():
+    """The key path re-records the baseline too, but must not claim the combo.
+
+    It writes no language, so recording the combo's pending value as "already
+    baselined" would make the following settings save treat a combo the user
+    had genuinely changed as untouched, and defer to disk instead.
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(engine="deepgram", language_mode="auto")
+    )
+    dialog.language_combo.setCurrentIndex(dialog.language_combo.findData("en"))
+    dialog.openai_key_edit.setText("sk-new")
+
+    dialog._save_api_keys_only()
+    dialog._save()
+
+    assert store.load().language_mode == "en", (
+        "the key save swallowed the language the user had picked"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_key_metadata_edit_can_be_taken_back_in_the_same_session():
+    """The key path re-records the baseline for the same reason `_save` does.
+
+    It writes the insecure-storage flag, the Azure endpoint and the key-present
+    flags from widgets, so leaving the baseline behind makes them permanent for
+    the session: enable the fallback, save keys, decide against it, save keys
+    again, and the second save finds the box agreeing with the dialog-open
+    value and writes nothing.
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(allow_insecure_key_storage=False)
+    )
+
+    dialog.insecure_key_storage_checkbox.setChecked(True)
+    dialog._save_api_keys_only()
+    assert store.load().allow_insecure_key_storage is True
+    dialog.insecure_key_storage_checkbox.setChecked(False)
+    dialog._save_api_keys_only()
+
+    assert store.load().allow_insecure_key_storage is False, (
+        "the insecure-storage choice could not be taken back"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_key_save_does_not_claim_an_overlay_language_as_its_baseline():
+    """What the key path records must be the widgets, not what it wrote.
+
+    It writes no language at all: the value it persists is read back off the
+    disk precisely so an overlay pick survives. Recording *that* as the
+    baseline tells the next settings save that the combo has moved away from
+    it, which turns the same untouched combo into a deliberate choice and
+    reverts the overlay after all -- one save later than before.
+    """
+    dialog, store, app = _dialog_with_store(
+        AppSettings(engine="deepgram", language_mode="auto")
+    )
+    # The overlay's Lang button picks German while the dialog is open.
+    store._settings = dataclasses.replace(store._settings, language_mode="de")
+    dialog.openai_key_edit.setText("sk-new")
+
+    dialog._save_api_keys_only()
+    dialog._save()
+
+    assert store.load().language_mode == "de", (
+        "the settings save after a key save reverted the overlay's pick"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
+def test_a_key_save_after_a_settings_save_writes_no_merged_value_of_its_own():
+    """Three writers, which is what separates the two snapshots.
+
+    The key path replaces a handful of fields on a baseline and relies on
+    everything else being equal to it, so that the merge counts those as no
+    edit and leaves the file alone. Built on `_loaded_settings` that stops
+    holding after one settings save: the snapshot then carries that save's
+    merged 800 while the spin box shows 500, so a key save writes 800 over a
+    limit a third window has since raised to 900 -- and re-records 800, which
+    the next settings save reads as a 500-to-800 edit and trims to.
+    """
+    dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
+    history = _CountingHistoryStore(950)
+    dialog._history_store = history
+    store._settings = dataclasses.replace(store._settings, history_max_items=800)
+    dialog.completion_beep_checkbox.setChecked(True)
+    dialog._save()
+    assert store.load().history_max_items == 800
+    # A third window raises it again, after the settings save.
+    store._settings = dataclasses.replace(store._settings, history_max_items=900)
+    dialog.openai_key_edit.setText("sk-new")
+
+    dialog._save_api_keys_only()
+
+    assert store.load().history_max_items == 900, (
+        "the key save wrote a limit it had inherited from the settings save"
+    )
+    assert history.trimmed_to == [], f"transcripts were trimmed: {history.trimmed_to}"
+    dialog.deleteLater()
+    _ = app
+
+
+def test_switching_history_to_unlimited_is_not_a_pending_limit_edit():
+    """A widget written programmatically is already saved, not a pending edit.
+
+    Choosing "import all and set unlimited" persists the limit itself and moves
+    the spin box to match. Leaving the edit baseline at the dialog-open number
+    makes that box look edited to the next Save, which then writes it over
+    whatever another window has since chosen. `_populate` and this are the only
+    two places a widget moves without the user, so both keep the baseline in
+    step.
+    """
+    dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
+    dialog._set_history_max_spin_value(0)
+    assert dialog.history_max_spin.value() == 0
+    # Another window then sets a limit of its own.
+    store._settings = dataclasses.replace(store._settings, history_max_items=900)
+    dialog.completion_beep_checkbox.setChecked(True)
+
+    dialog._save()
+
+    assert store.load().history_max_items == 900, (
+        "the unlimited switch was replayed as an edit over a newer limit"
+    )
+    dialog.deleteLater()
+    _ = app
+
+
 def test_a_limit_the_user_really_changed_still_wins_and_still_trims(monkeypatch):
     """The merge must not swallow the edit it exists to isolate."""
     dialog, store, app = _dialog_with_store(AppSettings(history_max_items=500))
