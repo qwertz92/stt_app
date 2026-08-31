@@ -67,6 +67,18 @@ def _make_icon(api: FakeWin32TrayApi) -> WindowsTrayIcon:
     return WindowsTrayIcon(icon_path="icon.ico", tooltip="Tip", api=api)
 
 
+@pytest.fixture
+def qapp_events():
+    """Drain the Qt event loop so zero-delay `singleShot` retries run."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    def drain(passes: int = 12) -> None:
+        for _ in range(passes):
+            app.processEvents()
+            QtTest.QTest.qWait(1)
+
+    return drain
+
 def _send(icon: WindowsTrayIcon, event: int, x: int = 0, y: int = 0) -> None:
     """Deliver a notification-icon callback message the way the shell does.
 
@@ -386,3 +398,177 @@ def test_checkable_entries_are_reported_with_their_state():
 
     entries, _x, _y = api.menus[0]
     assert entries == [("Plain", True, None), ("Checkable", True, True)]
+
+
+class RefusingAddApi(FakeWin32TrayApi):
+    """A shell that rejects `NIM_ADD` the first `refusals` times."""
+
+    def __init__(self, refusals: int) -> None:
+        super().__init__()
+        self.refusals = refusals
+        self.attempts = 0
+
+    def add_icon(self, hwnd, icon, tooltip):
+        self.attempts += 1
+        if self.attempts <= self.refusals:
+            raise OSError("Shell_NotifyIconW(NIM_ADD) failed: 1")
+        super().add_icon(hwnd, icon, tooltip)
+
+
+@pytest.fixture
+def instant_retries(monkeypatch):
+    """Keep the retry schedule but take the waiting out of it."""
+    monkeypatch.setattr(win_tray_icon, "_ADD_RETRY_DELAYS_MS", (0, 0, 0, 0))
+
+
+def test_show_does_not_raise_when_the_shell_refuses_the_icon(instant_retries):
+    """Its only caller runs before `app.exec()`.
+
+    A logon race in which Explorer is not yet accepting icons used to end the
+    process: `main` calls `tray_icon.show()` unguarded, and the app has no
+    window to fall back to. The hotkeys and the overlay must survive it.
+    """
+    api = RefusingAddApi(refusals=99)
+    icon = _make_icon(api)
+
+    icon.show()
+
+    assert icon._visible is False
+    assert api.added == []
+
+
+def test_a_refused_icon_is_retried_until_the_shell_accepts_it(
+    instant_retries, qapp_events
+):
+    api = RefusingAddApi(refusals=2)
+    icon = _make_icon(api)
+
+    icon.show()
+    qapp_events()
+
+    assert api.attempts == 3
+    assert api.added == [(_HWND, 7, "Tip")]
+    assert icon._visible is True
+
+
+def test_the_retries_stop_after_the_schedule_is_exhausted(
+    instant_retries, qapp_events
+):
+    api = RefusingAddApi(refusals=99)
+    icon = _make_icon(api)
+
+    icon.show()
+    qapp_events()
+
+    assert api.attempts == len(win_tray_icon._ADD_RETRY_DELAYS_MS) + 1
+
+
+def test_hiding_retires_a_pending_retry(instant_retries, qapp_events):
+    """A re-add that lands after `hide()` puts back an icon nobody asked for."""
+    api = RefusingAddApi(refusals=1)
+    icon = _make_icon(api)
+
+    icon.show()
+    icon.hide()
+    qapp_events()
+
+    assert api.added == []
+    assert icon._visible is False
+
+
+def test_an_explorer_restart_retries_an_icon_that_never_came_back(
+    instant_retries, qapp_events
+):
+    """The restart arm reads what the app wanted, not what the shell accepted.
+
+    Keying it on `_visible` meant a restart arriving while the first re-add was
+    still failing saw a hidden icon and did nothing, so the icon was gone for
+    the rest of the session -- and with `_visible` stuck False every later tray
+    notification was dropped too.
+    """
+    api = RefusingAddApi(refusals=99)
+    icon = _make_icon(api)
+    icon.show()
+    qapp_events()
+    assert icon._visible is False
+
+    api.refusals = 0
+    icon._handle_message(_TASKBAR_CREATED, 0, 0)
+    qapp_events()
+
+    assert icon._visible is True
+    assert api.added == [(_HWND, 7, "Tip")]
+
+
+def test_a_dropped_notification_is_reported(instant_retries, caplog):
+    """Silence here is indistinguishable from a transcription that never ran."""
+    api = RefusingAddApi(refusals=99)
+    icon = _make_icon(api)
+    icon.show()
+
+    with caplog.at_level("WARNING"):
+        icon.showMessage("Transcription failed", "the recording was kept")
+
+    assert any("tray_notification_dropped" in r.message for r in caplog.records)
+    assert api.balloons == []
+
+
+def test_a_failed_taskbar_message_registration_is_not_wm_null():
+    """`RegisterWindowMessageW` returns 0 on failure, and 0 is WM_NULL.
+
+    Stored unchecked, every WM_NULL this window received would look like an
+    Explorer restart and re-add the icon.
+    """
+
+    class NoMessageApi(FakeWin32TrayApi):
+        def register_window_message(self, name):
+            return 0
+
+    api = NoMessageApi()
+    icon = _make_icon(api)
+    icon.show()
+    assert icon._visible is True
+
+    assert icon._handle_message(0, 0, 0) is False
+    assert api.added == [(_HWND, 7, "Tip")]
+
+
+def test_an_icon_whose_version_could_not_be_set_is_kept_not_retried():
+    """`NIM_ADD` succeeded, so retrying would add a second icon."""
+
+    class VersionFailureApi(FakeWin32TrayApi):
+        def add_icon(self, hwnd, icon, tooltip):
+            super().add_icon(hwnd, icon, tooltip)
+            raise win_tray_icon.SetIconVersionError("NIM_SETVERSION failed: 1")
+
+    api = VersionFailureApi()
+    icon = _make_icon(api)
+
+    icon.show()
+
+    assert icon._visible is True
+    assert len(api.added) == 1
+
+
+def test_a_retry_from_a_retired_attempt_cannot_add_a_second_icon(
+    instant_retries, qapp_events
+):
+    """`hide()` then `show()` while a retry is still pending.
+
+    `_wanted_visible` is true again by the time the stale retry wakes up, and
+    `_attempt_add` does not look at `_visible`, so without the generation check
+    it calls `add_icon` a second time for an icon the shell has already
+    accepted -- two retry chains from then on, and the second `NIM_ADD` is one
+    Windows rejects.
+    """
+    api = RefusingAddApi(refusals=1)
+    icon = _make_icon(api)
+
+    icon.show()
+    icon.hide()
+    api.refusals = 0
+    icon.show()
+    qapp_events()
+
+    assert api.added == [(_HWND, 7, "Tip")]
+    assert icon._visible is True

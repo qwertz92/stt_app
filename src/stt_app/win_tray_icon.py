@@ -45,6 +45,11 @@ NIN_SELECT = 0x0400
 NIN_KEYSELECT = 0x0401
 
 NIM_ADD = 0
+# Explorer broadcasts `TaskbarCreated` before it is ready to accept icons, so
+# the re-add right after a restart routinely fails once. Without a retry the
+# icon was gone for the rest of the session and `_visible` stayed False, which
+# also silently swallowed every later tray notification.
+_ADD_RETRY_DELAYS_MS = (500, 2000, 5000, 10000)
 NIM_MODIFY = 1
 NIM_DELETE = 2
 NIM_SETVERSION = 4
@@ -161,6 +166,10 @@ def signed_word(value: int) -> int:
     """
     word = int(value) & 0xFFFF
     return word - 0x10000 if word & 0x8000 else word
+
+
+class SetIconVersionError(OSError):
+    """NIM_ADD succeeded, NIM_SETVERSION did not: the icon exists."""
 
 
 class Win32TrayApi:
@@ -360,7 +369,16 @@ class Win32TrayApi:
         # Version 4 is what makes the shell send WM_CONTEXTMENU with screen
         # coordinates instead of the legacy button messages.
         data.uVersion = NOTIFYICON_VERSION_4
-        self._shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(data))
+        if not self._shell32.Shell_NotifyIconW(NIM_SETVERSION, ctypes.byref(data)):
+            # Not fatal -- the icon is added and visible -- but the shell then
+            # sends the legacy button messages, and `_handle_message` decodes
+            # lParam the version-4 way, so clicks and the menu anchor would be
+            # read out of the wrong fields. Reported rather than raised,
+            # because raising here would leave an icon nobody deletes.
+            raise SetIconVersionError(
+                f"Shell_NotifyIconW(NIM_SETVERSION) failed: "
+                f"{ctypes.get_last_error()}"
+            )
 
     def update_tooltip(self, hwnd: int, tooltip: str) -> None:
         data = self._icon_data(hwnd)
@@ -456,14 +474,25 @@ class WindowsTrayIcon(QtCore.QObject):
         self._context_menu: QtWidgets.QMenu | None = None
         self._visible = False
         self._closed = False
+        # What the app asked for, as opposed to what the shell has accepted.
+        # A retry needs to know the difference: `hide()` must cancel a pending
+        # re-add, and `TaskbarCreated` must only restore an icon that was
+        # meant to be there.
+        self._wanted_visible = False
+        self._add_attempt = 0
+        self._add_generation = 0
         self._hwnd = self._api.create_window(self._window_proc)
         self._icon = None
         try:
             self._icon = self._api.load_icon(icon_path)
             # Explorer re-broadcasts this after a restart; without re-adding
             # the icon it would silently disappear for the rest of the session.
-            self._taskbar_created_message = self._api.register_window_message(
-                "TaskbarCreated"
+            # `RegisterWindowMessageW` returns 0 on failure, and 0 is
+            # WM_NULL -- so storing it unchecked would make every WM_NULL this
+            # window receives look like an Explorer restart and re-add the
+            # icon. `None` compares equal to no message id at all.
+            self._taskbar_created_message = (
+                self._api.register_window_message("TaskbarCreated") or None
             )
         except BaseException:
             # `create_window` registered `self._window_proc` in the class-wide
@@ -492,16 +521,70 @@ class WindowsTrayIcon(QtCore.QObject):
     # -- QSystemTrayIcon-compatible surface -------------------------------
 
     def show(self) -> None:
-        if self._visible or self._closed:
+        if self._closed:
             return
-        self._api.add_icon(self._hwnd, self._icon, self._tooltip)
-        self._visible = True
+        self._wanted_visible = True
+        if self._visible:
+            return
+        self._add_attempt = 0
+        self._add_generation += 1
+        self._attempt_add(self._add_generation)
 
     def hide(self) -> None:
+        # This is what retires a pending retry: `_attempt_add` checks it on
+        # every wake-up. Bumping `_add_generation` here as well was tried and
+        # removed -- mutation could not tell it apart, because a later `show()`
+        # bumps the generation itself, so the stale retry is refused either by
+        # this flag or by that bump and never by the one in `hide()`.
+        self._wanted_visible = False
         if not self._visible:
             return
         self._api.delete_icon(self._hwnd)
         self._visible = False
+
+    def _attempt_add(self, generation: int) -> None:
+        """Add the icon, and schedule a retry when the shell refuses.
+
+        `show()` deliberately does not raise. Its only caller runs before
+        `app.exec()`, so an exception there ended the process during a logon
+        race -- a dictation app with no window died because a notification
+        icon was a few hundred milliseconds early. Failing softly leaves the
+        hotkeys and the overlay working while the retries run.
+        """
+        if self._closed or generation != self._add_generation:
+            return
+        if not self._wanted_visible:
+            return
+        try:
+            self._api.add_icon(self._hwnd, self._icon, self._tooltip)
+        except SetIconVersionError:
+            # The icon IS in the tray; only its message version is legacy.
+            # Keeping it and reporting beats retrying, which would add a
+            # second icon.
+            self._visible = True
+            self._logger.exception("tray_icon_version_not_set")
+            return
+        except Exception:
+            self._add_attempt += 1
+            if self._add_attempt > len(_ADD_RETRY_DELAYS_MS):
+                self._logger.exception(
+                    "tray_icon_add_failed attempts=%d giving_up=1",
+                    self._add_attempt,
+                )
+                return
+            delay = _ADD_RETRY_DELAYS_MS[self._add_attempt - 1]
+            self._logger.warning(
+                "tray_icon_add_failed attempt=%d retry_in_ms=%d",
+                self._add_attempt,
+                delay,
+                exc_info=True,
+            )
+            QtCore.QTimer.singleShot(
+                delay, lambda: self._attempt_add(generation)
+            )
+            return
+        self._visible = True
+        self._add_attempt = 0
 
     def setToolTip(self, tooltip: str) -> None:
         self._tooltip = str(tooltip or "")
@@ -525,6 +608,16 @@ class WindowsTrayIcon(QtCore.QObject):
         is accepted for API compatibility and ignored."""
         del msecs
         if not self._visible:
+            # The only reason to be here is an icon the shell has not accepted
+            # (yet). Dropping the notification is unavoidable -- a balloon
+            # needs an icon to hang off -- but dropping it silently made a
+            # failed background transcription indistinguishable from one that
+            # never happened, which is the exact case these notifications
+            # exist for.
+            self._logger.warning(
+                "tray_notification_dropped title=%r reason=icon_not_registered",
+                str(title or ""),
+            )
             return
         self._api.show_balloon(
             self._hwnd,
@@ -565,10 +658,18 @@ class WindowsTrayIcon(QtCore.QObject):
     def _handle_message(self, message: int, wparam: int, lparam: int) -> bool:
         """Return True when the message was consumed. Kept free of ctypes so
         the whole dispatch table is directly testable."""
-        if message == self._taskbar_created_message:
-            if self._visible:
+        if (
+            self._taskbar_created_message is not None
+            and message == self._taskbar_created_message
+        ):
+            # `_wanted_visible`, not `_visible`: a restart that arrives while
+            # a retry is still pending must restart the retries rather than
+            # read the not-yet-added icon as "the app wanted it hidden".
+            if self._wanted_visible:
                 self._visible = False
-                self.show()
+                self._add_attempt = 0
+                self._add_generation += 1
+                self._attempt_add(self._add_generation)
             return True
         if message == WM_DESTROY:
             return True
