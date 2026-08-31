@@ -5152,9 +5152,14 @@ whole dictation.
 
 Five candidate rules were evaluated over 20000 randomised German merges, the
 same merges under each: shipped-old 17 words lost / 74129 duplicated,
-longest-wins 29 / 16712, `overlap - skip` 2 / 62884. Better than the original
-on both axes. What this measures is which candidate each rule picks on
-synthetic seams, not accuracy on real audio.
+longest-wins 29 / 16712, `overlap - skip` 2 / 62893. Better than the original
+on both axes. (Published first as 62884, which is the figure for a variant
+that applies the net requirement at every depth rather than only past the
+boundary bound. The scratch harness that produced the original numbers did
+not run as saved -- it passed an argument its own builder did not accept --
+so re-deriving it was what surfaced the mix-up. A number that cannot be
+re-run is not yet a measurement.) What this measures is which candidate
+each rule picks on synthetic seams, not accuracy on real audio.
 
 Two lessons about the tests rather than the code:
 
@@ -5173,9 +5178,11 @@ Two lessons about the tests rather than the code:
 Counting substantive words *against* the overlap threshold is stricter than
 the threshold has ever been. A seam of "praktisch ..." counts one, fails a
 threshold of two, and the merge falls through to a replace with no floor to
-bound it: 13 words of dictation for 8 words of window, measured. The rule is
-the raw token threshold as before, plus at least one real word -- which is all
-that is needed to rule out a seam made of nothing but marks.
+bound it: a 13-word dictation becomes the 8-word window, so 11 words are
+gone and only the two in the overlap survive. The commit message says "13
+words lost", which is the size of the dictation rather than the loss. The
+rule is the raw token threshold as before, plus at least one real word --
+which is all that is needed to rule out a seam made of nothing but marks.
 
 ### `use_last_error=True` moves the error, and silenced every hotkey failure
 

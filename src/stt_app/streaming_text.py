@@ -228,7 +228,7 @@ def _join_at_seam(
 
     Scored over 20000 randomised merges against a 40-word German vocabulary,
     against the same merges under the original rule: 2 words lost versus 17,
-    and 62884 duplicated versus 74129. Better on both, which is why this rule
+    and 62893 duplicated versus 74129. Better on both, which is why this rule
     rather than reverting to the bound.
     """
     widened = max_skip > _WINDOW_BOUNDARY_SKIP_WORDS
@@ -243,7 +243,9 @@ def _join_at_seam(
         # that is stricter than the threshold has ever been, and it turned a
         # seam like "praktisch ..." -- one word plus a mark -- into a failed
         # merge, which before the first measured pause replaces the whole
-        # accumulated text rather than one window. 13 words lost, measured.
+        # accumulated text rather than one window. Measured on a 13-word
+        # dictation whose 8-word window re-heard "praktisch ...": 11 of those
+        # words gone, the two in the overlap the only survivors.
         if not _substantive_word_count(current_words[skip : skip + overlap]):
             continue
         if widened and overlap < skip:

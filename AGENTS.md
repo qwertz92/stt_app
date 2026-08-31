@@ -1621,7 +1621,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 
   Rule evaluation over 20000 randomised German merges (40-word vocabulary),
   same merges under each rule: shipped-old 17 words lost and 74129 duplicated,
-  longest-overlap-wins 29 and 16712, `overlap - skip` **2 and 62884**. Better
+  longest-overlap-wins 29 and 16712, `overlap - skip` **2 and 62893**. Better
   than the original on *both* axes, which is why this rather than a revert to
   the bound. Note what this measures: which candidate each rule picks on
   synthetic seams, not accuracy on real audio.
@@ -1650,7 +1650,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   "praktisch ..." counts one, fails a threshold of two, and the merge then
   falls through to a *replace*. Before the first measured pause there is no
   `protected_prefix` to bound that, so it is not one window that is lost but
-  the whole dictation so far -- measured at 13 words. The raw token count
+  the whole dictation so far. Measured on a 13-word dictation whose 8-word
+  window re-heard "praktisch ...": the merge returns the window alone, so 11
+  words are gone and the two in the overlap are the only survivors. (The
+  commit message and an earlier version of this entry said "13 words lost".
+  13 is the size of the dictation; the loss is 11.) The raw token count
   still has to clear the threshold; the substantive count only has to be
   non-zero, which is exactly what rules out a seam made of nothing but marks.
 - **Streaming decodes nothing during silence, at either end**: faster-whisper
