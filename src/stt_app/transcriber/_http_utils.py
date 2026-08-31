@@ -95,6 +95,19 @@ def normalize_transcript_text(value: object) -> str:
     return " ".join(str(value or "").strip().split()).strip()
 
 
+# What is read off the socket, as opposed to what survives into the message.
+# The 300-character cap below is applied to the extracted text and says
+# nothing about how much reached memory first: `exc.read()` is unbounded, and
+# `urlopen(timeout=...)` bounds each socket read rather than the total, so a
+# 50,000,000-byte error body was pulled off in full to produce a 300-character
+# detail (measured with a counting body behind a real HTTPError). 64 KiB is
+# far more than any provider's JSON error object and small enough to be
+# uninteresting; a body that overruns it stops parsing as JSON and falls
+# through to the truncated-text arm, which is the right answer for a response
+# that large.
+_MAX_ERROR_BODY_BYTES = 64 * 1024
+
+
 def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
     """Return what the provider actually said, or "" when it said nothing.
 
@@ -103,10 +116,11 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
     change: OpenAI's "Invalid file format", ElevenLabs' quota text, Deepgram's
     rejected parameter. The body is read once (an HTTPError is a response
     object), JSON is unwrapped where the common shapes allow, and the result is
-    capped so a provider cannot push an HTML error page into a dialog.
+    capped so a provider cannot push an HTML error page into a dialog. The
+    read itself is capped too -- see `_MAX_ERROR_BODY_BYTES`.
     """
     try:
-        raw = exc.read().decode("utf-8", errors="replace")
+        raw = exc.read(_MAX_ERROR_BODY_BYTES).decode("utf-8", errors="replace")
     except Exception:
         return ""
     if not raw:

@@ -123,3 +123,50 @@ def test_reading_a_body_that_raises_is_not_an_error_of_its_own():
     exc = _Unreadable("https://api.example/x", 500, "Server Error", {}, io.BytesIO(b""))
     assert read_http_error_detail(exc) == ""
     assert http_error_suffix(exc) == ": Server Error"
+
+
+class _CountingBody(io.BytesIO):
+    """Reports how much was actually pulled off the response."""
+
+    def __init__(self, size: int):
+        super().__init__(b"x" * size)
+        self.read_amounts: list[int | None] = []
+
+    def read(self, amt=None):
+        self.read_amounts.append(amt)
+        return super().read(amt)
+
+
+def test_a_huge_error_body_is_not_pulled_into_memory_whole():
+    """The 300-char cap is applied to the extracted text, not to the read.
+
+    Measured before this: a 50,000,000-byte error body was read in full to
+    produce a 300-character detail. `urlopen(timeout=...)` bounds each socket
+    read, not the total, so nothing else stopped it.
+    """
+    from stt_app.transcriber._http_utils import _MAX_ERROR_BODY_BYTES
+
+    body = _CountingBody(50_000_000)
+    exc = urllib.error.HTTPError(
+        "https://api.example/x", 400, "Bad Request", {}, body
+    )
+
+    detail = read_http_error_detail(exc)
+
+    assert body.read_amounts == [_MAX_ERROR_BODY_BYTES], body.read_amounts
+    assert len(detail) <= 300, len(detail)
+    assert body.tell() <= _MAX_ERROR_BODY_BYTES, body.tell()
+
+
+def test_a_normal_json_error_body_is_still_read_and_unwrapped():
+    """The bound must not clip a real provider error object."""
+    from stt_app.transcriber._http_utils import _MAX_ERROR_BODY_BYTES
+
+    padding = "a" * 4000
+    body = (
+        '{"padding": "' + padding + '", '
+        '"error": {"message": "Invalid file format"}}'
+    ).encode("utf-8")
+    assert len(body) < _MAX_ERROR_BODY_BYTES
+
+    assert read_http_error_detail(_http_error(body)) == "Invalid file format"
