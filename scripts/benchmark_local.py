@@ -48,6 +48,7 @@ from stt_app.local_benchmark import (
 from stt_app.local_benchmark import (
     run_benchmark_cases as _shared_run_benchmark_cases,
 )
+from stt_app.persistence import atomic_write_bytes
 from stt_app.transcriber.local_faster_whisper import (
     download_model_snapshot,
     find_cached_models,
@@ -868,8 +869,14 @@ def main() -> int:
             "environment": asdict(environment),
             "results": [asdict(case) for case in cases],
         }
-        args.json_out.parent.mkdir(parents=True, exist_ok=True)
-        args.json_out.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        # `write_text` truncates the destination before the first byte goes
+        # in, and `--json-out` is routinely a file that already exists, so a
+        # disk that fills up mid-write destroys it. Same rule as every other
+        # export here: build the bytes, then replace in one step.
+        atomic_write_bytes(
+            args.json_out,
+            json.dumps(payload, indent=2).encode("utf-8"),
+        )
         print(f"Saved JSON report to: {args.json_out.resolve()}")
 
     if args.csv_out is not None:

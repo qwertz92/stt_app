@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 import io
 import math
-import re
 import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
@@ -13,7 +12,7 @@ from xml.sax.saxutils import escape
 
 from .app_paths import benchmark_history_path
 from .benchmark_environment import BenchmarkEnvironment
-from .csv_safety import spreadsheet_safe_cell
+from .csv_safety import export_safe_text, spreadsheet_safe_cell
 from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
     atomic_write_bytes,
@@ -311,12 +310,12 @@ def _csv_cell(value: Any) -> Any:
     """Neutralise a formula, then drop what UTF-8 cannot encode.
 
     The type check is load-bearing: `spreadsheet_safe_cell` passes numbers
-    through unchanged and `_export_safe_text` needs a string. The order is not
+    through unchanged and `export_safe_text` needs a string. The order is not
     -- the sanitiser maps an illegal character to U+FFFD, which is neither a
     formula prefix nor a space, so either order produces the same cell.
     """
     safe = spreadsheet_safe_cell(value)
-    return _export_safe_text(safe) if isinstance(safe, str) else safe
+    return export_safe_text(safe) if isinstance(safe, str) else safe
 
 
 def _write_csv(path: Path, entry: BenchmarkHistoryEntry) -> None:
@@ -525,7 +524,7 @@ def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
 
 
 def _escape_markdown_cell(value: Any) -> str:
-    text = _export_safe_text(_display_value(value))
+    text = export_safe_text(_display_value(value))
     return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
 
 
@@ -545,32 +544,6 @@ def _worksheet_xml(rows: list[list[Any]]) -> str:
     )
 
 
-# XML 1.0 permits #x9, #xA, #xD, #x20-#xD7FF, #xE000-#xFFFD and
-# #x10000-#x10FFFF, and nothing else -- not even escaped.
-# `saxutils.escape` only rewrites `&`, `<` and `>`, so one stray control
-# byte anywhere in a benchmark row produced a worksheet that will not
-# parse, inside a `.xlsx` that was written without error and that Excel
-# then refuses to open. Verified with `ElementTree`: NUL, BEL, vertical
-# tab and a lone surrogate each fail, while tab and an emoji are fine.
-# The plausible carriers are the fields nobody types -- `runtime_details`
-# built from a runtime's own error text, the environment strings read off
-# the system, and a transcript returned by a remote provider.
-#
-# The same set is what the other two formats need, which is why this is no
-# longer XML-only. A lone surrogate cannot be encoded as UTF-8 at all, so
-# the CSV and Markdown writers raised `UnicodeEncodeError` part-way through
-# writing -- measured, on a transcript carrying one U+D800, exactly the
-# provider-returned text named above.
-_UNEXPORTABLE_CHARACTERS = re.compile(
-    "[^\u0009\u000a\u000d\u0020-\ud7ff\ue000-\ufffd\U00010000-\U0010ffff]"
-)
-
-
-def _export_safe_text(value: str) -> str:
-    """Replace what an export cannot carry, rather than writing a broken file."""
-    return _UNEXPORTABLE_CHARACTERS.sub("\ufffd", value)
-
-
 def _cell_xml(reference: str, value: Any) -> str:
     if isinstance(value, bool):
         text = "TRUE" if value else "FALSE"
@@ -584,7 +557,7 @@ def _cell_xml(reference: str, value: Any) -> str:
         text = _display_value(value)
     return (
         f'<c r="{reference}" t="inlineStr"><is><t>'
-        f"{escape(_export_safe_text(text))}"
+        f"{escape(export_safe_text(text))}"
         "</t></is></c>"
     )
 

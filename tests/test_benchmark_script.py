@@ -1176,3 +1176,121 @@ def test_a_size_in_MB_means_the_same_thing_in_both_branches_of_the_column():
     assert module._bytes_to_human(estimated_mb * 1_000_000) == (
         f"{estimated_mb:.2f} MB"
     )
+
+
+def _one_case(module, transcript: str):
+    return module.BenchmarkCase(
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=0.5,
+        runs=[
+            module.BenchmarkRun(
+                run_index=1,
+                seconds=1.2,
+                audio_duration_seconds=2.0,
+                real_time_factor=0.6,
+                transcript_chars=len(transcript),
+                transcript_words=len(transcript.split()),
+                detected_language="de",
+                language_probability=0.98,
+                transcript=transcript,
+            )
+        ],
+    )
+
+
+def test_the_csv_export_survives_a_character_utf_8_cannot_encode(tmp_path):
+    """A lone surrogate used to destroy the file the user picked.
+
+    `--csv-out` is routinely an existing file, and the writer opened it
+    directly: the truncate happened first and `UnicodeEncodeError` landed
+    part-way through the rows. Measured before the fix, an 880-byte file of the
+    user's came back as a 422-byte fragment.
+    """
+    module = _load_benchmark_module()
+    out_path = tmp_path / "bench.csv"
+    precious = b"the user's own spreadsheet\n" * 40
+    out_path.write_bytes(precious)
+
+    module._write_csv(out_path, [_one_case(module, "hallo \ud800 welt")])
+
+    rows = list(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
+    assert rows[0]["transcript"] == "hallo \ufffd welt"
+
+
+def test_the_csv_export_drops_control_bytes_like_the_dialog_export_does(tmp_path):
+    """The same run exported two ways must not differ in what it carries.
+
+    UTF-8 encodes NUL and BEL happily, so these reached the CLI's file raw
+    while the settings-dialog exporters replaced them with U+FFFD.
+    """
+    module = _load_benchmark_module()
+    out_path = tmp_path / "bench.csv"
+
+    module._write_csv(out_path, [_one_case(module, "a\x00b\x07c\x0bd")])
+
+    body = out_path.read_bytes()
+    assert b"\x00" not in body
+    assert b"\x07" not in body
+    assert b"\x0b" not in body
+    rows = list(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
+    assert rows[0]["transcript"] == "a\ufffdb\ufffdc\ufffdd"
+
+
+def test_a_csv_export_that_fails_leaves_the_previous_file_untouched(tmp_path):
+    """Build the bytes first; the destination is only ever replaced whole."""
+    module = _load_benchmark_module()
+    out_path = tmp_path / "bench.csv"
+    precious = b"the user's own spreadsheet\n" * 40
+    out_path.write_bytes(precious)
+
+    class _Exploding:
+        model = "small"
+        device = "cpu"
+        compute_type = "int8"
+        download_seconds = 0.0
+        load_seconds = 0.5
+        runtime_details = ""
+        error = None
+
+        @property
+        def runs(self):
+            raise RuntimeError("row building failed")
+
+    with pytest.raises(RuntimeError, match="row building failed"):
+        module._write_csv(out_path, [_Exploding()])
+
+    assert out_path.read_bytes() == precious
+
+
+def test_only_the_atomic_writer_touches_the_csv_target(tmp_path, monkeypatch):
+    """Building the bytes first is half of it; the write must not truncate.
+
+    `path.open("w")` empties the file before the first byte goes in, so a disk
+    that fills up or a permission that changes mid-write still destroys what
+    was there. The settings-dialog exporters already carry this property; this
+    is the same one for the CLI writer.
+    """
+    module = _load_benchmark_module()
+    target = tmp_path / "important.csv"
+    target.write_bytes(b"THE USER'S EXISTING FILE")
+    before = target.read_bytes()
+
+    written: list[tuple[Path, int]] = []
+    monkeypatch.setattr(
+        local_benchmark,
+        "atomic_write_bytes",
+        lambda path, data: written.append((path, len(data))),
+    )
+
+    module._write_csv(target, [_one_case(module, "hallo welt")])
+
+    assert [path for path, _size in written] == [target], (
+        "the export did not go through the atomic writer"
+    )
+    assert written[0][1] > 0, "it handed the writer nothing"
+    assert target.read_bytes() == before, (
+        "something wrote to the target directly, around the atomic writer"
+    )

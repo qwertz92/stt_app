@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import dataclasses
+import io
 import logging
 import math
 import statistics
@@ -21,7 +22,8 @@ from .config import (
     LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS,
     nemotron_provider_order,
 )
-from .csv_safety import spreadsheet_safe_mapping
+from .csv_safety import export_safe_text, spreadsheet_safe_mapping
+from .persistence import atomic_write_bytes
 
 
 class BenchmarkCancelled(RuntimeError):
@@ -734,98 +736,76 @@ def _write_csv(
     cases: list[BenchmarkCase],
     environment: BenchmarkEnvironment | None = None,
 ) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=[
-                "environment_os",
-                "environment_python",
-                "environment_cpu",
-                "environment_logical_cpus",
-                "environment_memory",
-                "environment_gpus",
-                "environment_frameworks",
-                "environment_node",
-                "row_type",
-                "model",
-                "device",
-                "compute_type",
-                "run_index",
-                "seconds",
-                "audio_duration_seconds",
-                "real_time_factor",
-                "transcript_chars",
-                "transcript_words",
-                "transcript",
-                "detected_language",
-                "language_probability",
-                "download_seconds",
-                "load_seconds",
-                "avg_seconds",
-                "stdev_seconds",
-                "avg_rtf",
-                "status",
-                "runtime_details",
-                "error",
-            ],
-        )
-        writer.writeheader()
+    """Build the whole file, then replace the destination in one step.
 
-        environment_row = _environment_csv_values(environment)
-        for case in cases:
-            status = "ok" if case.error is None else "error"
-            for run in case.runs:
-                writer.writerow(
-                    spreadsheet_safe_mapping(
-                        {
-                            **environment_row,
-                            "row_type": "run",
-                            "model": case.model,
-                            "device": case.device,
-                            "compute_type": case.compute_type,
-                            "run_index": run.run_index,
-                            "seconds": run.seconds,
-                            "audio_duration_seconds": run.audio_duration_seconds,
-                            "real_time_factor": run.real_time_factor,
-                            "transcript_chars": run.transcript_chars,
-                            "transcript_words": run.transcript_words,
-                            "transcript": run.transcript,
-                            "detected_language": run.detected_language,
-                            "language_probability": run.language_probability,
-                            "download_seconds": case.download_seconds,
-                            "load_seconds": case.load_seconds,
-                            "avg_seconds": case.avg_seconds,
-                            "stdev_seconds": case.stdev_seconds,
-                            "avg_rtf": case.avg_rtf,
-                            "status": status,
-                            "runtime_details": case.runtime_details,
-                            "error": case.error or "",
-                        }
-                    )
-                )
+    The path comes from `--csv-out`, so it is routinely a file that already
+    exists. Writing into it directly truncates it before the first row is
+    produced: measured on a transcript carrying one lone surrogate, an 880-byte
+    file of the user's became a 422-byte fragment, because `UnicodeEncodeError`
+    landed part-way through. That is the same defect the three settings-dialog
+    exporters already fixed; this writer was the last one left, and it also
+    skipped their `export_safe_text` pass, so a control byte a benchmarked
+    model emits was written raw into the CSV here and replaced with U+FFFD
+    there -- the same run, two different files.
+    """
+    buffer = io.StringIO(newline="")
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=[
+            "environment_os",
+            "environment_python",
+            "environment_cpu",
+            "environment_logical_cpus",
+            "environment_memory",
+            "environment_gpus",
+            "environment_frameworks",
+            "environment_node",
+            "row_type",
+            "model",
+            "device",
+            "compute_type",
+            "run_index",
+            "seconds",
+            "audio_duration_seconds",
+            "real_time_factor",
+            "transcript_chars",
+            "transcript_words",
+            "transcript",
+            "detected_language",
+            "language_probability",
+            "download_seconds",
+            "load_seconds",
+            "avg_seconds",
+            "stdev_seconds",
+            "avg_rtf",
+            "status",
+            "runtime_details",
+            "error",
+        ],
+    )
+    writer.writeheader()
 
+    environment_row = _environment_csv_values(environment)
+    for case in cases:
+        status = "ok" if case.error is None else "error"
+        for run in case.runs:
             writer.writerow(
                 spreadsheet_safe_mapping(
                     {
                         **environment_row,
-                        "row_type": "summary",
+                        "row_type": "run",
                         "model": case.model,
                         "device": case.device,
                         "compute_type": case.compute_type,
-                        "run_index": "",
-                        "seconds": "",
-                        "audio_duration_seconds": "",
-                        "real_time_factor": "",
-                        "transcript_chars": "",
-                        "transcript_words": "",
-                        "transcript": "",
-                        "detected_language": (
-                            case.runs[0].detected_language if case.runs else ""
-                        ),
-                        "language_probability": (
-                            case.runs[0].language_probability if case.runs else ""
-                        ),
+                        "run_index": run.run_index,
+                        "seconds": run.seconds,
+                        "audio_duration_seconds": run.audio_duration_seconds,
+                        "real_time_factor": run.real_time_factor,
+                        "transcript_chars": run.transcript_chars,
+                        "transcript_words": run.transcript_words,
+                        "transcript": run.transcript,
+                        "detected_language": run.detected_language,
+                        "language_probability": run.language_probability,
                         "download_seconds": case.download_seconds,
                         "load_seconds": case.load_seconds,
                         "avg_seconds": case.avg_seconds,
@@ -837,6 +817,41 @@ def _write_csv(
                     }
                 )
             )
+
+        writer.writerow(
+            spreadsheet_safe_mapping(
+                {
+                    **environment_row,
+                    "row_type": "summary",
+                    "model": case.model,
+                    "device": case.device,
+                    "compute_type": case.compute_type,
+                    "run_index": "",
+                    "seconds": "",
+                    "audio_duration_seconds": "",
+                    "real_time_factor": "",
+                    "transcript_chars": "",
+                    "transcript_words": "",
+                    "transcript": "",
+                    "detected_language": (
+                        case.runs[0].detected_language if case.runs else ""
+                    ),
+                    "language_probability": (
+                        case.runs[0].language_probability if case.runs else ""
+                    ),
+                    "download_seconds": case.download_seconds,
+                    "load_seconds": case.load_seconds,
+                    "avg_seconds": case.avg_seconds,
+                    "stdev_seconds": case.stdev_seconds,
+                    "avg_rtf": case.avg_rtf,
+                    "status": status,
+                    "runtime_details": case.runtime_details,
+                    "error": case.error or "",
+                }
+            )
+        )
+
+    atomic_write_bytes(path, export_safe_text(buffer.getvalue()).encode("utf-8"))
 
 
 def _environment_csv_values(
