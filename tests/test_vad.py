@@ -138,9 +138,27 @@ def test_a_real_spoken_word_still_counts_as_speech(duration_ms):
 
 def test_unmeasurable_audio_is_never_reported_as_silence():
     """Callers must not skip audio they could not measure."""
-    assert measure_longest_speech_run_s(b"", 16000, 0.004) is None
-    assert measure_longest_speech_run_s(b"\x00", 16000, 0.004) is None
-    assert measure_longest_speech_run_s(_pcm(100, 6000), 0, 0.004) is None
+    window = STREAMING_SPEECH_RUN_WINDOW_MS
+    assert measure_longest_speech_run_s(b"", 16000, 0.004, window_ms=window) is None
+    assert (
+        measure_longest_speech_run_s(b"\x00", 16000, 0.004, window_ms=window) is None
+    )
+    assert (
+        measure_longest_speech_run_s(_pcm(100, 6000), 0, 0.004, window_ms=window)
+        is None
+    )
+
+
+def test_the_bucket_size_has_to_be_named_at_the_call_site():
+    """It used to default to the silence gate's 100 ms bucket.
+
+    That is the value this measurement is documented as needing to avoid: at
+    100 ms two keystrokes 100-150 ms apart land in adjacent buckets, the run
+    never breaks, and typing measures as speech. Requiring it keyword-only
+    means no caller can inherit the wrong one by omission.
+    """
+    with pytest.raises(TypeError):
+        measure_longest_speech_run_s(_pcm(100, 6000), 16000, 0.004)
 
 _SAMPLE_WAV = Path(__file__).resolve().parents[1] / "samples" / "benchmark_sample.wav"
 

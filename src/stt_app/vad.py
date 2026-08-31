@@ -50,7 +50,8 @@ def measure_longest_speech_run_s(
     pcm_bytes: bytes,
     sample_rate: int,
     threshold: float,
-    window_ms: int = SILENCE_GATE_WINDOW_MS,
+    *,
+    window_ms: int,
 ) -> float | None:
     """Longest *unbroken* stretch of raw PCM at or above ``threshold``.
 
@@ -63,6 +64,18 @@ def measure_longest_speech_run_s(
     The longest contiguous run does: a spoken word is continuous for its
     whole duration, while transients are isolated spikes with silence
     between them however many of them there are.
+
+    ``window_ms`` is required and keyword-only. It used to default to
+    ``SILENCE_GATE_WINDOW_MS`` (100), which is the bucket size this
+    measurement is documented as needing to avoid: at 100 ms two keystrokes
+    100-150 ms apart land in adjacent buckets, the run never breaks, and
+    typing at 120 wpm measures as a 1.5 s "speech" run. The one production
+    caller passes ``STREAMING_SPEECH_RUN_WINDOW_MS`` (20) explicitly, so the
+    default was latent rather than live -- but the safe value being opt-in
+    and the wrong one being what you get by omission is the wrong way round,
+    and this repository has already carried one threshold across a bucket-size
+    change without rederiving it. Naming the bucket at every call site makes
+    that impossible to do silently.
 
     Returns ``None`` when the audio cannot be measured at all, which callers
     must never treat as silence.
