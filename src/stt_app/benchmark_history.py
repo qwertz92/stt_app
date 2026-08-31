@@ -244,13 +244,35 @@ class BenchmarkHistoryStore:
                 entries.append(entry)
         return entries
 
+    @staticmethod
+    def _payload_is_usable(payload: Any) -> bool:
+        """Structural, not semantic -- unlike the transcript history's version.
+
+        There the test can be "does this yield an entry", because the app never
+        writes a transcript with blank text. Here it cannot: `_entries_from_payload`
+        drops a run with no cases, and a run with no cases is a shape this store
+        does write (a benchmark cancelled before its first case). Asking the
+        stronger question quarantined a perfectly good file. What remains is the
+        part that really cannot come from this app -- a list holding no object at
+        all, e.g. `["a", 1, null]`.
+        """
+        if not payload:
+            return True
+        return any(isinstance(item, dict) for item in payload)
+
     @classmethod
     def _load_from_path(cls, path: Path) -> list[BenchmarkHistoryEntry]:
         # Both: a deleted primary leaves the `.bak` as the only copy of
         # every recorded run, and the next saved run would overwrite it.
         if not path.exists() and not backup_path(path).exists():
             return []
-        payload, source = load_json_with_backup(path, expected_type=list)
+        # See `TranscriptHistoryStore._payload_is_usable`: a primary that is a
+        # list but holds no readable run is external damage, and without this
+        # the intact backup was never opened and the next saved run overwrote
+        # it. An empty list is a store with no runs yet and must still win.
+        payload, source = load_json_with_backup(
+            path, expected_type=list, is_usable=cls._payload_is_usable
+        )
         if payload is None:
             quarantine_corrupt_file(path, include_backup=True)
             return []

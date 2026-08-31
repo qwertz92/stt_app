@@ -36,6 +36,7 @@ from stt_app.benchmark_history import (
     BenchmarkOptions,
 )
 from stt_app.last_recording_store import LastRecordingStore
+from stt_app.local_benchmark import BenchmarkCase
 from stt_app.local_model_inventory_store import LocalModelInventoryStore
 from stt_app.persistence import backup_path
 from stt_app.provider_connection_test_store import ProviderConnectionTestStore
@@ -85,7 +86,20 @@ def _benchmark_history(tmp_path: Path):
                     warmup=False,
                     threads=0,
                 ),
-                cases=[],
+                # A run with no cases is dropped by `_entries_from_payload`, so
+                # with `cases=[]` every assertion in this file compared `[]`
+                # against `[]` for this store and could not fail. Three of them
+                # were passing vacuously.
+                cases=[
+                    BenchmarkCase(
+                        model="small",
+                        device="cpu",
+                        compute_type="int8",
+                        download_seconds=0.0,
+                        load_seconds=0.5,
+                        runs=[],
+                    )
+                ],
             )
             for index in range(3)
         ]

@@ -77,6 +77,32 @@ class TranscriptHistoryEntry:
         )
 
 
+_UNDATED_SORTS_OLDEST = datetime.min.replace(tzinfo=UTC)
+
+
+def _chronological_sort_key(
+    entry: TranscriptHistoryEntry,
+) -> tuple[int, datetime]:
+    """Sort by the recorded time, with anything undatable treated as oldest.
+
+    The app always writes `datetime.now(UTC).isoformat(timespec="seconds")`, so
+    only an imported or hand-edited file can carry something else. Such an entry
+    sorting oldest means a trim removes it before it removes a real dictation,
+    which is the safer of the two directions. Parsed rather than compared as a
+    string so a file written with a different UTC offset still orders correctly.
+    """
+    raw = str(entry.created_at or "").strip()
+    if not raw:
+        return (0, _UNDATED_SORTS_OLDEST)
+    try:
+        parsed = datetime.fromisoformat(raw)
+    except ValueError:
+        return (0, _UNDATED_SORTS_OLDEST)
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return (1, parsed)
+
+
 class TranscriptHistoryStore:
     def __init__(self, path: Path | None = None) -> None:
         self._path = path or transcript_history_path()
@@ -243,12 +269,30 @@ class TranscriptHistoryStore:
         *,
         max_items: int,
     ) -> list[TranscriptHistoryEntry]:
+        """Order chronologically, then keep the newest ``max_items``.
+
+        Position used to stand in for time, and an import breaks that: the
+        imported entries are appended at the end whatever their timestamps say,
+        so the front of the list -- what this deletes -- is no longer the
+        oldest. Measured: twelve August-2026 dictations, a 40-entry export from
+        March 2024 imported back, then the limit lowered to 40. **All twelve
+        dictations were deleted and all forty imports kept**, while both
+        confirmation prompts said "will delete N oldest entries".
+        `recent_entries` had the same defect from the same cause and reported
+        the 2024 entries as the newest.
+
+        The sort runs before the early returns on purpose: "import all and set
+        unlimited" is exactly the flow that produces a mis-ordered store, and
+        it lands here with ``max_items == 0``, so returning early would leave
+        the file out of order for the *next* limit change to trim wrongly. It
+        is stable, so entries sharing a timestamp -- the app stamps whole
+        seconds -- keep their insertion order.
+        """
+        ordered = sorted(entries, key=_chronological_sort_key)
         keep = _normalize_limit(max_items)
-        if keep == 0:
-            return entries
-        if len(entries) <= keep:
-            return entries
-        return entries[-keep:]
+        if keep == 0 or len(ordered) <= keep:
+            return ordered
+        return ordered[-keep:]
 
     @staticmethod
     def _entries_from_payload(payload: Any) -> list[TranscriptHistoryEntry]:
@@ -267,6 +311,21 @@ class TranscriptHistoryStore:
         return entries
 
     @classmethod
+    def _payload_is_usable(cls, payload: Any) -> bool:
+        """Does this list carry anything this store can read?
+
+        Empty means a cleared history and is usable. Non-empty that yields no
+        entry means the members are not entries at all, which no code path here
+        can write -- so it is external damage and the backup should be tried.
+        """
+        if not payload:
+            return True
+        try:
+            return bool(cls._entries_from_payload(payload))
+        except ValueError:
+            return False
+
+    @classmethod
     def _load_from_path(cls, path: Path) -> list[TranscriptHistoryEntry]:
         # Both, not just the primary. An external deletion of
         # `transcript_history.json` -- a sync tool, an antivirus quarantine, a
@@ -276,7 +335,15 @@ class TranscriptHistoryStore:
         # measured, five entries became one.
         if not path.exists() and not backup_path(path).exists():
             return []
-        payload, source = load_json_with_backup(path, expected_type=list)
+        # `expected_type=list` alone was too weak: any JSON list satisfied it,
+        # so a primary rewritten as `["a", 1, null]` or as dicts with no `text`
+        # key counted as the good copy, the intact backup was never opened, and
+        # the next dictation saved that emptiness over the backup too --
+        # measured, five transcripts became one, with no quarantine and no log
+        # line. An *empty* list is a cleared history and must still win.
+        payload, source = load_json_with_backup(
+            path, expected_type=list, is_usable=cls._payload_is_usable
+        )
         if payload is None:
             quarantine_corrupt_file(path, include_backup=True)
             return []
@@ -286,6 +353,11 @@ class TranscriptHistoryStore:
             quarantine_corrupt_file(path)
             return []
         if source == "backup":
+            # Whatever is in the primary lost to the backup, so it is unusable
+            # by definition; keep it under a `.corrupt.` name instead of having
+            # the republish below overwrite it. A *missing* primary is the other
+            # way to reach this branch and quarantining one is a no-op.
+            quarantine_corrupt_file(path)
             cls(path=path).save(entries)
         return entries
 

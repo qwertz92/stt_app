@@ -503,3 +503,126 @@ def test_importing_a_file_that_is_not_utf8_says_so_in_words(tmp_path):
     assert "codec" not in message, (
         f"the raw decoder error reached the user: {message}"
     )
+
+
+def _dated(created_at: str, text: str) -> TranscriptHistoryEntry:
+    return TranscriptHistoryEntry(
+        created_at=created_at,
+        text=text,
+        engine="local",
+        model="small",
+        mode="batch",
+    )
+
+
+def test_a_trim_after_an_import_deletes_the_oldest_by_time_not_by_position(tmp_path):
+    """Position stood in for time, and an import breaks that proxy.
+
+    Imported entries are appended at the end whatever their timestamps say, so
+    the front of the list -- what the trim deletes -- stopped being the oldest.
+    Measured before this: twelve August-2026 dictations, a 40-entry export from
+    March 2024 imported back, limit lowered to 40, and **all twelve dictations
+    were deleted while all forty imports were kept** -- behind a prompt that
+    says "will delete N oldest entries", and with `recent_entries` reporting
+    the 2024 entries as the newest.
+    """
+    store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    for day in range(15, 27):
+        store.add_entry(_dated(f"2026-08-{day:02d}T09:00:00+00:00", f"neu {day}"), 500)
+    old = [_dated(f"2024-03-{n:02d}T09:00:00+00:00", f"alt {n}") for n in range(1, 41)]
+    store.append_entries(old, max_items=500)
+
+    assert [e.text for e in store.recent_entries(3)] == ["neu 26", "neu 25", "neu 24"]
+
+    removed = store.apply_max_items(40)
+
+    kept = store.load()
+    assert removed == 12
+    assert sum(1 for e in kept if e.created_at.startswith("2026")) == 12, (
+        "real dictations were deleted in favour of older imported entries"
+    )
+    assert sum(1 for e in kept if e.created_at.startswith("2024")) == 28
+    assert kept == sorted(kept, key=lambda e: e.created_at), "stored out of order"
+
+
+def test_entries_sharing_a_timestamp_keep_their_insertion_order(tmp_path):
+    """The app stamps whole seconds, so ties are ordinary, not exotic."""
+    store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    same = "2026-08-31T09:00:00+00:00"
+    for index in range(4):
+        store.add_entry(_dated(same, f"satz {index}"), 500)
+
+    assert [e.text for e in store.load()] == [f"satz {i}" for i in range(4)]
+    assert [e.text for e in store.recent_entries(2)] == ["satz 3", "satz 2"]
+
+
+def test_an_entry_with_an_unreadable_timestamp_is_trimmed_before_a_real_one(tmp_path):
+    """Undatable sorts oldest, which is the safer of the two directions.
+
+    Only an imported or hand-edited file can carry one, and treating it as the
+    newest would have it push a real dictation out instead.
+    """
+    store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    store.append_entries(
+        [
+            _dated("", "kein datum"),
+            _dated("not a timestamp", "kaputtes datum"),
+            _dated("2026-08-30T09:00:00+00:00", "echte diktat"),
+        ],
+        max_items=0,
+    )
+
+    store.apply_max_items(1)
+
+    assert [e.text for e in store.load()] == ["echte diktat"]
+
+
+def test_a_list_primary_that_holds_no_entry_falls_through_to_the_backup(tmp_path):
+    """`expected_type=list` was too weak a test for "the primary survived".
+
+    Any JSON list satisfied it, so external damage that still parses as a list
+    counted as the good copy, the intact `.bak` was never opened, and the next
+    dictation saved that emptiness over it too. Measured: five transcripts
+    became one.
+    """
+    for index, damaged in enumerate((["a", 1, None], [{"engine": "local"}], [{}, {}])):
+        # One directory per case, so a `.corrupt.` file left by an earlier
+        # iteration cannot satisfy the assertion for a later one.
+        folder = tmp_path / f"case{index}"
+        folder.mkdir()
+        path = folder / "history.json"
+        store = TranscriptHistoryStore(path=path)
+        store.save(
+            [_dated(f"2026-08-{n + 1:02d}T09:00:00+00:00", f"t{n}") for n in range(5)]
+        )
+        assert backup_path(path).is_file()
+
+        path.write_text(json.dumps(damaged), encoding="utf-8")
+
+        assert len(store.load()) == 5, f"{damaged}: the backup was never opened"
+        store.add_entry(_dated("2026-09-01T09:00:00+00:00", "danach"), 500)
+        assert len(store.load()) == 6, f"{damaged}: the recovery did not stick"
+        assert [item.name for item in folder.iterdir() if ".corrupt." in item.name], (
+            f"{damaged}: the damaged primary was overwritten instead of kept"
+        )
+
+
+def test_a_cleared_history_is_not_mistaken_for_damage(tmp_path):
+    """An empty list is a user who pressed Clear, and must beat the backup.
+
+    Asserting only that `load()` returns `[]` is not enough: a predicate that
+    calls an empty store damaged also ends at `[]`, having found the backup
+    equally "damaged" and quarantined *both* files on the way. So the files
+    themselves are what this checks.
+    """
+    path = tmp_path / "history.json"
+    store = TranscriptHistoryStore(path=path)
+    store.save([_dated("2026-08-30T09:00:00+00:00", "vorher")])
+
+    store.clear()
+
+    assert store.load() == []
+    assert store.load() == [], "the second load resurrected the cleared entries"
+    assert path.is_file(), "a cleared history was quarantined as damaged"
+    assert backup_path(path).is_file(), "the backup of a cleared history was moved aside"
+    assert not [item for item in tmp_path.iterdir() if ".corrupt." in item.name]

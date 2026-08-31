@@ -1199,7 +1199,13 @@ def test_settings_history_import_appends_entries(monkeypatch, tmp_path):
         json.dumps(
             [
                 {
-                    "created_at": "2026-03-03T00:00:00+00:00",
+                    # Dated *after* the stored entry, which `_history_entry`
+                    # stamps with `datetime.now`. It read 2026-03-03 before --
+                    # five months earlier than the entry it is named newer
+                    # than -- so the assertion below pinned position rather
+                    # than time, which is the confusion that let an import
+                    # push real dictations out of the store.
+                    "created_at": "2099-03-03T00:00:00+00:00",
                     "text": "new-1",
                     "engine": "local",
                     "model": "small",
@@ -1226,6 +1232,10 @@ def test_settings_history_import_appends_entries(monkeypatch, tmp_path):
 
     assert history_store.count() == 2
     assert [entry.text for entry in history_store.load()] == ["old", "new-1"]
+    assert [entry.text for entry in history_store.recent_entries(2)] == [
+        "new-1",
+        "old",
+    ]
     assert "Imported 1 entry" in dialog.history_status_label.text()
     _ = app
 

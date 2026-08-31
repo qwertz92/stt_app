@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import threading
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -130,7 +131,25 @@ def load_json_with_backup(
     path: Path,
     *,
     expected_type: type[Any],
+    is_usable: Callable[[Any], bool] | None = None,
 ) -> tuple[Any | None, str]:
+    """The primary if it is readable and usable, else the backup.
+
+    ``is_usable`` exists because ``expected_type`` alone is too weak a test for
+    "the primary survived". A store's payload can parse, be the right container,
+    and still carry nothing the store can read -- a transcript history rewritten
+    as ``["a", 1, null]``, or a list of dicts with no ``text`` key. That is not a
+    shape the app can write, so it means external damage, which is exactly the
+    condition the backup exists for; without this the backup was never even
+    opened, and the next write put the emptiness over it as well. Measured on
+    the transcript history: five entries, primary rewritten as a list of
+    scalars, ``load()`` returned 0 and one further dictation left the backup
+    holding 1.
+
+    Callers must accept a *legitimately* empty store here -- an empty list is a
+    cleared history, not damage -- so the predicate tests usability, not
+    emptiness.
+    """
     for candidate, source in (
         (path, "primary"),
         (backup_path(path), "backup"),
@@ -148,6 +167,9 @@ def load_json_with_backup(
             # unprotected, so the app could not start at all -- with a perfectly
             # good backup sitting next to it.
             continue
-        if isinstance(payload, expected_type):
-            return payload, source
+        if not isinstance(payload, expected_type):
+            continue
+        if is_usable is not None and not is_usable(payload):
+            continue
+        return payload, source
     return None, "missing"
