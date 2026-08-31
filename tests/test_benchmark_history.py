@@ -510,3 +510,32 @@ def test_only_the_atomic_writer_touches_the_export_target(suffix, tmp_path, monk
     assert target.read_bytes() == before, (
         "something wrote to the target directly, around the atomic writer"
     )
+def test_a_carriage_return_never_splits_a_markdown_table_row(tmp_path):
+    """Only `\n` was folded into `<br>`, and the sanitiser permits `\r`.
+
+    XML 1.0 allows #xD, so a carriage return survives `export_safe_text` and
+    reached the Markdown table raw. The routine source is `runtime_details`,
+    built from a child process's own output -- CRLF on Windows. Measured on
+    "WebGPU rejected\r\nfell back to cpu": the row carried a bare CR, so
+    anything treating a lone CR as a line terminator saw two fragments where a
+    table row should be, and the table broke from that row on.
+    """
+    target = tmp_path / "report.md"
+
+    export_benchmark_entry(
+        target,
+        _entry_with_transcript("erste zeile\r\nzweite | zeile\rdritte"),
+    )
+
+    # Bytes, not `read_text`: universal newlines would strip the very
+    # character under test.
+    body = target.read_bytes().decode("utf-8")
+    assert "\r" not in body, "a carriage return reached the table"
+    result_table = body.split("## Result Rows", 1)[1]
+    rows = [line for line in result_table.split("\n") if line.startswith("|")]
+    # Count separators, not pipe characters: an escaped pipe is content.
+    widths = {row.replace("\\|", "").count("|") for row in rows}
+    assert len(widths) == 1, f"result rows disagree on their column count: {widths}"
+    assert "erste zeile<br>zweite \\| zeile<br>dritte" in body, (
+        "a pipe in the transcript was not escaped, so it opened a column"
+    )

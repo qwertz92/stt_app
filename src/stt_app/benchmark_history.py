@@ -540,8 +540,25 @@ def _markdown_table(headers: list[str], rows: list[list[Any]]) -> str:
 
 
 def _escape_markdown_cell(value: Any) -> str:
+    """Keep one cell on one row, whatever line break the text carries.
+
+    Only a newline was folded into `<br>`, and `export_safe_text` permits
+    a carriage return because XML 1.0 does -- so a `runtime_details`
+    string built from a child process's output, which is CRLF on Windows,
+    left a bare CR inside a table row. Anything that treats a lone CR as a
+    line terminator then reads that row as two fragments, neither of them
+    a valid table row, and the table breaks from there on. Measured on
+    "WebGPU rejected<CR><LF>fell back to cpu".
+
+    `splitlines` is what covers every form at once -- CRLF, a lone CR, and
+    the separators U+0085 and U+2028 that the sanitiser also lets past --
+    without a replace chain whose order has to be right. It drops a
+    trailing break rather than emitting a dangling `<br>`, which is the
+    one behavioural difference from the newline-only version.
+    """
     text = export_safe_text(_display_value(value))
-    return text.replace("\\", "\\\\").replace("|", "\\|").replace("\n", "<br>")
+    text = text.replace("\\", "\\\\").replace("|", "\\|")
+    return "<br>".join(text.splitlines())
 
 
 def _worksheet_xml(rows: list[list[Any]]) -> str:
