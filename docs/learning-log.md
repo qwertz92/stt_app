@@ -5627,6 +5627,23 @@ log arrives.
   passed the same 20 real-audio cases, but the repository supplied neither the
   conversion code nor parity evidence, so it was evidence of feasibility rather
   than an input to this export.
+- The checked FP32 graph now has reproducible FP16 and per-channel dynamic-QInt8
+  derivatives. FP16 is 946,797,887 bytes and produced all 31 reference token
+  streams exactly. INT8 is 551,294,349 bytes; it produced 30/31 reference
+  transcripts and 19/20 real-audio transcripts exactly. Its one difference is
+  not a demonstrated error against the fixture text, so the small comparison is
+  reported as graph-health evidence rather than a WER claim.
+- Precision did not predict speed. On the Ryzen 5 7600X, warm 12-thread RTFx was
+  30.36 for FP32, 3.46 for FP16, and 104.43 for INT8. ONNX Runtime logged missing
+  FP16 CPU kernels. On the Intel Arc A750 through DirectML, RTFx was 275.55,
+  164.39, and 214.08 respectively: FP32 won despite its size. CPU thread scaling
+  flattened from six to twelve threads, especially for INT8, so warm inference
+  is neither purely compute-bound nor purely memory-bound; cold graph loading
+  tracks graph size much more directly.
+- The source Safetensors file is mostly BF16 (502 BF16, 32 FP32, 16 INT64
+  tensors). The FP32 ONNX graph therefore expands most source values without
+  inventing precision; FP16 changes storage/computation precision, and dynamic
+  INT8 is genuinely lossy for the selected matrix weights and activations.
 
 ### Wave 3 (2026-09-04) - the second wave on the round-24 fixes
 

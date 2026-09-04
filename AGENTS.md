@@ -1790,8 +1790,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   equality before serialization, and writes the graph only after a full ONNX
   checker pass. `scripts/validate_granite_speech5_onnx.py` is the independent
   PyTorch/ONNX Runtime gate across real audio, block-boundary lengths, and batch
-  size two. Keep the export and validation environments separate from the app;
-  exact versions and the current verified hashes live in
+  size two. `scripts/convert_granite_speech5_onnx_precision.py` derives checked
+  FP16 and per-channel dynamic QInt8 variants; INT8 quantizes eligible
+  `MatMul`/`Gemm` nodes and deliberately leaves unsupported operators floating
+  point. `scripts/benchmark_granite_speech5_onnx.py` measures CPU inference and
+  emits a portable little-endian token hash. Keep the export, conversion, and
+  validation environments separate from the app; exact versions, current
+  verified hashes, precision evidence, and CPU/DirectML measurements live in
   `docs/granite-speech-5-onnx-export.md`.
 - **Nemotron 3.5 true streaming**:
   `nemotron-3.5-asr-streaming-0.6b-int4` uses the published 793 MB multilingual
