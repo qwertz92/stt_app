@@ -221,6 +221,9 @@ class SettingsDialog(
         self._local_model_download_worker_running = False
         self._local_model_download_worker_token = 0
         self._local_model_download_cancel_event = threading.Event()
+        # Queued entries the Cancel handler discarded, for the drain's
+        # summary; consumed together with the cancel event, under the lock.
+        self._local_model_download_removed_by_cancel: list[str] = []
         self._local_model_download_process = None
         self._local_model_download_speed_tracker = ModelDownloadSpeedTracker()
         self._local_model_download_progress_timer = QtCore.QTimer(self)
