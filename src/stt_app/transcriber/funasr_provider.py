@@ -46,10 +46,40 @@ from .base import (
     ProgressReporter,
     StreamingCallback,
     TranscriptionError,
+    transcription_shutdown_requested,
 )
 
 # Send audio in ~256 ms chunks (8192 bytes of 16 kHz mono PCM16).
 _AUDIO_CHUNK_BYTES = 8192
+
+
+class _UnusableFrameBudget:
+    """Consecutive frames that carried no event, across `_recv_event` calls.
+
+    The count lived inside `_recv_event` and restarted at zero on every JSON
+    object it returned, while `_collect_transcript` discards objects that are
+    not transcript events -- so a peer sending `{}` alone, or one `{}` after
+    every thousand junk frames, never tripped the bound and spun for the
+    whole thirty-minute budget (measured against an instant fake: 921,555
+    and 4,101,846 receive calls in 2 s). The reader resets it only when a
+    frame was actually consumed as an event.
+    """
+
+    __slots__ = ("count",)
+
+    def __init__(self) -> None:
+        self.count = 0
+
+    def spend(self) -> None:
+        self.count += 1
+        if self.count > _MAX_UNUSABLE_FRAMES:
+            raise _FunAsrInterrupted(
+                f"Fun-ASR sent {self.count} frames in a row that were not "
+                "events."
+            )
+
+    def reset(self) -> None:
+        self.count = 0
 
 
 class _FunAsrInterrupted(Exception):
@@ -233,8 +263,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
 
     # -- Event handling ---------------------------------------------------------
 
-    def _recv_event(self, ws, deadline: float) -> dict:
-        """Receive one JSON event, skipping any binary frames.
+    def _recv_event(
+        self, ws, deadline: float, budget: _UnusableFrameBudget
+    ) -> dict:
+        """Receive one JSON object, skipping frames that cannot be one.
 
         Bounded in total, and the socket timeout is tightened to whatever is
         left of that budget. `websocket-client` answers a server PING inside
@@ -246,22 +278,21 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         Measured against a connection that never finishes: 198 receive calls
         in 4 s with no exit in sight.
         """
-        unusable = 0
         while True:
+            if transcription_shutdown_requested():
+                # Bounded by the socket timeout below, not by the budget: the
+                # executor's atexit join otherwise kept the process alive for
+                # the rest of the thirty minutes after the user quit.
+                raise _FunAsrInterrupted("The application is shutting down.")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise _FunAsrInterrupted(
                     "Fun-ASR did not finish the transcription within "
                     f"{int(FUNASR_BATCH_MAX_WAIT_S / 60)} minutes."
                 )
-            if unusable > _MAX_UNUSABLE_FRAMES:
-                raise _FunAsrInterrupted(
-                    f"Fun-ASR sent {unusable} frames in a row that were not "
-                    "events."
-                )
             ws.settimeout(min(remaining, self._request_timeout_s))
             message = ws.recv()
-            unusable += 1
+            budget.spend()
             if isinstance(message, (bytes, bytearray)):
                 continue
             if not message:
@@ -300,8 +331,13 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             return "", False
         sentence = output.get("sentence")
         if isinstance(sentence, dict):
-            return str(sentence.get("text", "")), bool(
-                sentence.get("sentence_end", False)
+            # Typed before trusted: `bool("false")` is True and `str(None)` is
+            # "None", and a `sentence_end` that only *looked* true duplicated
+            # the pending partial into the final sentence.
+            text = sentence.get("text")
+            return (
+                text if isinstance(text, str) else "",
+                sentence.get("sentence_end") is True,
             )
         # Defensive fallback for a flatter schema.
         if isinstance(output.get("text"), str):
@@ -340,7 +376,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         deadline = time.monotonic() + FUNASR_BATCH_MAX_WAIT_S
         try:
             ws.send(self._run_task_message(task_id, sample_rate))
-            started = self._recv_event(ws, deadline)
+            started = self._recv_event(ws, deadline, _UnusableFrameBudget())
             event = self._event_name(started)
             if event == "task-failed":
                 raise TranscriptionError(self._fail_message(started))
@@ -400,10 +436,13 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
     def _collect_transcript(self, ws, deadline: float) -> str:
         finalized: list[str] = []
         current = ""
+        budget = _UnusableFrameBudget()
         try:
             while True:
-                message = self._recv_event(ws, deadline)
+                message = self._recv_event(ws, deadline, budget)
                 event = self._event_name(message)
+                if event in ("result-generated", "task-finished", "task-failed"):
+                    budget.reset()
                 if event == "result-generated":
                     text, sentence_end = self._sentence_from(message)
                     if sentence_end:
@@ -476,7 +515,9 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             task_id = uuid.uuid4().hex
             ws.send(self._run_task_message(task_id, AUDIO_SAMPLE_RATE))
             message = self._recv_event(
-                ws, time.monotonic() + min(self._request_timeout_s, 15)
+                ws,
+                time.monotonic() + min(self._request_timeout_s, 15),
+                _UnusableFrameBudget(),
             )
             event = self._event_name(message)
             if event == "task-started":

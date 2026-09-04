@@ -455,6 +455,49 @@ class TestFunAsrSentenceEnd:
         assert out == "Hallo Welt."
 
 
+class TestFunAsrFieldTypes:
+    """`bool("false")` is True and `str(None)` is "None": JSON values are
+    checked for their type before they are trusted, as the HTTP error reader
+    already does."""
+
+    def test_a_sentence_end_that_is_not_a_boolean_is_not_a_sentence_end(self):
+        events = [
+            _event("task-started"),
+            _event("result-generated", "Hallo", False),
+            json.dumps({
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": {
+                    "output": {"sentence": {"text": "", "sentence_end": "false"}}
+                },
+            }),
+            _event("result-generated", "Hallo Welt.", True),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            # Not "Hallo Hallo Welt.": the string closed no sentence.
+            assert t.transcribe_batch(_wav_bytes()) == "Hallo Welt."
+
+    def test_a_null_text_is_no_text(self):
+        events = [
+            _event("task-started"),
+            _event("result-generated", "Hallo", False),
+            json.dumps({
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": {
+                    "output": {"sentence": {"text": None, "sentence_end": True}}
+                },
+            }),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            # The partial ends the sentence; the literal word "None" does not.
+            assert t.transcribe_batch(_wav_bytes()) == "Hallo"
+
+
 class TestFunAsrUnusableFrames:
     """The receive loop skips frames that are not events; it may not spin on them."""
 
@@ -489,6 +532,105 @@ class TestFunAsrUnusableFrames:
         assert "frames" in message
         assert "so far" in message, "the text already received was discarded"
         assert ws.closed
+
+    @pytest.mark.parametrize(
+        "filler",
+        [
+            "{}",
+            json.dumps({"header": {"event": "ping"}}),
+        ],
+        ids=["empty-object", "unknown-event"],
+    )
+    def test_an_object_that_is_not_an_event_does_not_reset_the_bound(self, filler):
+        """The count lived inside `_recv_event` and restarted on every JSON
+        object it returned; `_collect_transcript` then discarded objects that
+        were not transcript events. One `{}` after every thousand junk frames
+        therefore never tripped the bound and the loop spun for the whole
+        thirty-minute budget (measured: 4,101,846 receive calls in 2 s)."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        junk = ["not json"] * provider._MAX_UNUSABLE_FRAMES
+        ws = FakeWS([
+            _event("task-started"),
+            _event("result-generated", "so far", True),
+            *junk,
+            filler,
+            *junk,
+            filler,
+            *junk,
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        message = str(excinfo.value)
+        assert "frames" in message, message
+        assert "so far" in message
+        # It tripped inside the second block, not after all three.
+        assert len(ws._events) > 0
+
+    def test_a_flood_of_empty_objects_fails_too(self):
+        from stt_app.transcriber import funasr_provider as provider
+
+        ws = FakeWS([
+            _event("task-started"),
+            *(["{}"] * (provider._MAX_UNUSABLE_FRAMES + 1)),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+        assert "frames" in str(excinfo.value)
+
+    def test_a_real_event_resets_the_bound(self):
+        from stt_app.transcriber import funasr_provider as provider
+
+        junk = ["not json"] * (provider._MAX_UNUSABLE_FRAMES - 1)
+        ws = FakeWS([
+            _event("task-started"),
+            *junk,
+            _event("result-generated", "eins", False),
+            *junk,
+            _event("result-generated", "eins zwei", True),
+            *junk,
+            _event("task-finished"),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            assert t.transcribe_batch(_wav_bytes()) == "eins zwei"
+
+    def test_a_shutdown_ends_the_receive_loop(self):
+        from stt_app.transcriber.base import (
+            request_transcription_shutdown,
+            reset_transcription_shutdown_for_tests,
+        )
+
+        class _ShutdownOnFirstRecv(FakeWS):
+            def recv(self):
+                request_transcription_shutdown()
+                return super().recv()
+
+        ws = _ShutdownOnFirstRecv([
+            _event("task-started"),
+            _event("result-generated", "so far", True),
+            *(["not json"] * 50),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        try:
+            with (
+                patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+                pytest.raises(TranscriptionError) as excinfo,
+            ):
+                t.transcribe_batch(_wav_bytes())
+        finally:
+            reset_transcription_shutdown_for_tests()
+        assert "shutting down" in str(excinfo.value)
+        assert len(ws._events) > 40, "it went on reading after the shutdown"
 
     def test_the_budget_is_re_read_on_every_frame(self, monkeypatch):
         """A `remaining` computed once outside the loop is the hang B3 measured."""
