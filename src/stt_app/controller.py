@@ -3415,6 +3415,15 @@ class DictationController(QtCore.QObject):
             # substituting a model, and the next settings save retries.
             failure = f"Model preload could not be started: {exc}"
             self._logger.exception("Model preload worker could not be scheduled")
+            # `previous` is still installed, and it is what
+            # `_matching_model_preload_running` and `_preload_owns_overlay`
+            # read. A worker that `cancel()` could not stop -- it had already
+            # started -- kept both answering "running" for the *new* key, so
+            # the save the user made to fix the problem found nothing to
+            # retry until that stale worker finished, and the idle line
+            # stayed off the overlay for as long (measured: a model load).
+            with self._preload_result_lock:
+                self._preload_future = None
             self._record_model_preload_result(key, generation, failure)
             self._on_model_preload_done(generation, False, failure)
             return
