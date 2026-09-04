@@ -202,9 +202,11 @@ class UpdateDownloadDialog(QtWidgets.QDialog):
     def _on_progress(self, downloaded: int, total: int) -> None:
         percent = 0 if total <= 0 else round(downloaded * 100 / total)
         self._progress_bar.setValue(max(0, min(100, percent)))
+        # Decimal megabytes, like every other size the app shows
+        # (`MODEL_ESTIMATED_SIZE_MB`, the download-cleanup summary): dividing
+        # by 1024 squared and writing "MB" named neither unit.
         self._status_label.setText(
-            f"Downloaded {downloaded / (1024 * 1024):.1f} of "
-            f"{total / (1024 * 1024):.1f} MB"
+            f"Downloaded {downloaded / 1_000_000:.1f} of {total / 1_000_000:.1f} MB"
         )
 
     @QtCore.Slot(object, bool, str)

@@ -145,3 +145,24 @@ def test_the_update_status_dialog_text_is_readable(monkeypatch):
     finally:
         box.close()
     _ = app
+
+
+def test_the_download_progress_reports_decimal_megabytes():
+    """1024 squared and the label "MB" named neither unit.
+
+    The release page reports the asset in decimal MB, and every other size the
+    app shows is decimal too, so a 100 MB installer read as "95.4 of 95.4 MB".
+    """
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    result = UpdateCheckResult(
+        current_version="0.9.0",
+        latest_version="1.0.0",
+        latest_tag="v1.0.0",
+        update_available=True,
+    )
+    dialog = UpdateDownloadDialog(result, downloader=lambda *_a, **_k: None)
+
+    dialog._on_progress(25_000_000, 100_000_000)
+
+    assert dialog._status_label.text() == "Downloaded 25.0 of 100.0 MB"
+    assert dialog._progress_bar.value() == 25
