@@ -35,6 +35,7 @@ from stt_app.config import (
     DEFAULT_MODEL_SIZE,
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
+    OVERLAY_ERROR_ACTION_NONE,
 )
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
@@ -5568,6 +5569,275 @@ def test_a_refusal_with_nothing_pending_paints_only_the_refusal():
     assert "Streaming is not available" in detail
     assert "Still not inserted" not in detail
     assert "error_action" not in overlay.state_kwargs[-1]
+    controller.shutdown()
+    _ = app
+
+
+def _post_paste_failure(inserter):
+    """Make the fake inserter fail *after* the paste keystroke went out."""
+    from stt_app.text_inserter import TextMayHaveBeenPastedError
+
+    def insert_text_with_options(
+        text, target_hwnd=None, paste_mode="auto", restore_clipboard=True
+    ):
+        inserter.calls.append((text, target_hwnd, paste_mode))
+        raise TextMayHaveBeenPastedError(
+            "The text was pasted but the clipboard could not be restored."
+        )
+
+    inserter.insert_text_with_options = insert_text_with_options
+
+
+def _failed_tail_offer(inserter):
+    """A streaming finalize whose tail insert failed before the paste."""
+    controller, app, overlay, _focus = _streaming_session_with_a_pasted_prefix(
+        inserter=inserter
+    )
+    inserter.should_fail = True
+    controller._on_transcription_ready("erster teil zweiter teil")
+    assert controller._insert_action_text == " zweiter teil"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    inserter.should_fail = False
+    return controller, app, overlay
+
+
+def _refuse_a_start(controller):
+    """Streaming mode on a batch-only model: a refusal that needs no preload."""
+    controller._settings = replace(
+        controller._settings, mode="streaming", model_size="parakeet-tdt-0.6b-v3"
+    )
+    controller.start_recording()
+    assert controller._audio_capture is None, "the start was not refused"
+
+
+def test_a_refusal_does_not_re_arm_an_insert_the_paste_may_have_delivered():
+    """The paste keystroke went out and only the clipboard restore failed:
+    the overlay said "most likely inserted; check the target window" and
+    withheld Insert. One refused start then said "Still not inserted" about
+    the same text and offered a button that pasted it a second time."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+
+    _post_paste_failure(inserter)
+    controller.insert_failed_text()
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    assert controller._insert_action_text == " zweiter teil"
+    pasted_before = len(inserter.calls)
+
+    _refuse_a_start(controller)
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Streaming is not available" in detail
+    assert "Still not inserted" not in detail
+    assert "check the target window" in detail
+    assert " zweiter teil" in detail, "the text must stay readable and copyable"
+    assert overlay.state_kwargs[-1]["copy_text"] == " zweiter teil"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    # Nothing on the overlay pastes it again.
+    controller.insert_failed_text()
+    assert len(inserter.calls) == pasted_before + 1, (
+        "insert_failed_text is the button's slot; the button is hidden, but "
+        "the slot itself still pastes what it is asked to"
+    )
+    controller.shutdown()
+    _ = app
+
+
+def test_a_refusal_keeps_the_offer_a_queued_insert_withheld_after_its_paste():
+    """The background arm: a queued transcript whose insert failed after the
+    paste keystroke sets the offer text with no Insert action. A refusal
+    must not upgrade that to Insert."""
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, model_size="parakeet-tdt-0.6b-v3")
+        ),
+        text_inserter=inserter,
+    )
+    overlay = controller._overlay
+    controller._last_insert_may_have_pasted = True
+    job = controller_module._TranscriptionJob(
+        token=7,
+        engine="local",
+        model="parakeet-tdt-0.6b-v3",
+        mode="batch",
+        settings=controller.settings,
+        target_handle=123,
+        target_signature=None,
+    )
+    assert controller._report_background_insertion_failure(job, "transcript A")
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    assert controller._insert_action_text == "transcript A"
+
+    _refuse_a_start(controller)
+
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    assert overlay.state_kwargs[-1]["copy_text"] == "transcript A"
+    assert "check the target window" in overlay.states[-1][1]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_resume_that_changes_nothing_leaves_a_finished_result_alone():
+    """`refresh_hotkey_registration` re-registers after every wake from
+    sleep and 500 ms after the two "open recordings folder" buttons. With
+    nothing changed it painted "Idle" over a Done transcript and over the
+    Error whose Insert button is the only way to recover a failed streaming
+    tail -- and the resume path reveals the overlay right afterwards."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    # `run()` registers at startup; the session helper never called it, and
+    # the first registration is itself a change. Register without painting.
+    assert controller._register_all_global_hotkeys()
+    painted = len(overlay.states)
+
+    controller.refresh_hotkey_registration()
+
+    assert len(overlay.states) == painted, "nothing changed, nothing to repaint"
+    assert overlay.states[-1][0] == "Error"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    controller.shutdown()
+    _ = app
+
+
+def test_a_resume_that_changes_the_registration_keeps_the_insert_offer():
+    """When the registration state does change the idle line is repainted --
+    and a pending offer rides along in it instead of being wiped."""
+    from stt_app.config import FALLBACK_HOTKEYS
+
+    preferred = FALLBACK_HOTKEYS[0]
+    inserter = FakeTextInserter()
+    settings = AppSettings(
+        hotkey=preferred,
+        keep_transcript_in_clipboard=False,
+        model_size="small",
+        mode="streaming",
+        silence_gate_enabled=False,
+    )
+    manager = _BusyAfterResumeHotkeyManager()
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=manager,
+        overlay=overlay,
+        text_inserter=inserter,
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller.refresh_hotkey_registration()
+    controller._active_session_mode = "streaming"
+    controller._streaming_recording = True
+    controller._stream_text_state.committed_text = "erster teil"
+    controller._stream_text_state.live_text = "erster teil"
+    controller._target_window_handle = 123
+    controller._target_focus_signature = None
+    inserter.should_fail = True
+    controller._on_transcription_ready("erster teil zweiter teil")
+    assert controller._insert_action_text == " zweiter teil"
+
+    manager.busy = {preferred}
+    controller.refresh_hotkey_registration()
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert controller._active_hotkey in detail
+    assert "used by another program" in detail
+    assert "Still not inserted" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["copy_text"] == " zweiter teil"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "repaint",
+    [
+        "idle_line",
+        "hotkey_error_line",
+        "nothing_to_cancel",
+        "model_ready",
+        "preload_canceled",
+        "preload_failed_canceled",
+        "preload_failed",
+        "no_window_to_insert_into",
+    ],
+)
+def test_a_status_repaint_keeps_the_pending_insert_offer(repaint):
+    """Every status writer that is not a session result keeps the offer on
+    screen: the idle line after a save (and the hotkey-error line it paints
+    instead when a registration failed), "Nothing to cancel.", each of the
+    preload's four end-of-preload lines, and the re-paste refusals. Each of
+    these hid the Insert button while the text stayed pending, and the
+    button is the only entry point to inserting a failed streaming tail
+    without the prefix."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+
+    if repaint == "idle_line":
+        # Registered, as after `run()`: the plain idle line is what paints.
+        assert controller._register_all_global_hotkeys()
+        controller.show_idle_status()
+    elif repaint == "hotkey_error_line":
+        # Never registered: `show_idle_status` paints the hotkey error.
+        controller.show_idle_status()
+    elif repaint == "nothing_to_cancel":
+        controller.cancel_current_action()
+    elif repaint == "model_ready":
+        with controller._preload_result_lock:
+            generation = controller._preload_generation
+        controller._on_model_preload_done(generation, True, "loaded")
+    elif repaint == "preload_canceled":
+        with controller._preload_result_lock:
+            generation = controller._preload_generation
+        controller._preload_cancel_requested = True
+        controller._on_model_preload_done(generation, False, "stopped")
+    elif repaint == "preload_failed_canceled":
+        with controller._preload_result_lock:
+            generation = controller._preload_generation
+        controller._on_model_preload_done(
+            generation, False, "Model download canceled before it finished."
+        )
+    elif repaint == "preload_failed":
+        with controller._preload_result_lock:
+            generation = controller._preload_generation
+        controller._on_model_preload_done(
+            generation, False, "Model could not be loaded: no such file."
+        )
+    elif repaint == "no_window_to_insert_into":
+        controller._window_focus_helper.current = None
+        controller._window_focus_helper.current_focus = None
+        controller._window_focus_helper.current_caret = None
+        controller.insert_failed_text()
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Still not inserted" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["copy_text"] == " zweiter teil"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    # And the button still pastes exactly the tail.
+    controller._window_focus_helper.current = 987
+    controller._window_focus_helper.current_focus = 654
+    controller._window_focus_helper.current_caret = 321
+    controller.insert_failed_text()
+    assert inserter.calls[-1][0] == " zweiter teil"
+    assert controller._insert_action_text == ""
+    controller.shutdown()
+    _ = app
+
+
+def test_a_status_repaint_with_nothing_pending_is_unchanged():
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+    )
+    overlay = controller._overlay
+    assert controller._register_all_global_hotkeys()
+    controller.show_idle_status()
+    assert overlay.states[-1][0] == "Idle"
+    assert "error_action" not in overlay.state_kwargs[-1]
+    controller.cancel_current_action()
+    assert overlay.states[-1] == ("Done", "Nothing to cancel.")
     controller.shutdown()
     _ = app
 

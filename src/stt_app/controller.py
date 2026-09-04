@@ -835,27 +835,30 @@ class DictationController(QtCore.QObject):
         # then really stopped the running capture mid-sentence.
         if self._overlay_session_active():
             return
+        # Every write below goes through `_paint_status_keeping_offer`: a
+        # failed insert's text stays on screen with its Insert button through
+        # a settings save, a resume and the preload's delayed return to idle.
         if not self._hotkey_registration_ok:
-            self._overlay.set_state(
+            self._paint_status_keeping_offer(
                 "Error",
                 self._hotkey_notice or "Hotkey registration failed.",
             )
             return
         if not self._cancel_hotkey_registration_ok:
-            self._overlay.set_state(
+            self._paint_status_keeping_offer(
                 "Error",
                 self._cancel_hotkey_notice or "Cancel hotkey registration failed.",
             )
             return
         if not self._show_overlay_hotkey_registration_ok:
-            self._overlay.set_state(
+            self._paint_status_keeping_offer(
                 "Error",
                 self._show_overlay_hotkey_notice
                 or "Show-overlay hotkey registration failed.",
             )
             return
         if not self._repaste_hotkey_registration_ok:
-            self._overlay.set_state(
+            self._paint_status_keeping_offer(
                 "Error",
                 self._repaste_hotkey_notice
                 or "Re-paste hotkey registration failed.",
@@ -896,7 +899,7 @@ class DictationController(QtCore.QObject):
             detail = f"{detail} | Re-paste: {repaste_hotkey}"
             if self._repaste_hotkey_notice:
                 detail = f"{detail} ({self._repaste_hotkey_notice})"
-        self._overlay.set_state("Idle", detail)
+        self._paint_status_keeping_offer("Idle", detail)
 
     @contextlib.contextmanager
     def _overlay_batch(self):
@@ -3730,14 +3733,14 @@ class DictationController(QtCore.QObject):
         if self._preload_cancel_requested:
             self._preload_cancel_requested = False
             if not session_active:
-                self._overlay.set_state("Done", "Model preload canceled.")
+                self._paint_status_keeping_offer("Done", "Model preload canceled.")
                 QtCore.QTimer.singleShot(1200, self.show_idle_status)
             return
 
         if success:
             self._logger.info("Model preload: %s", message)
             if not session_active:
-                self._overlay.set_state(
+                self._paint_status_keeping_offer(
                     "Done",
                     f"Model '{ready_model}' is ready.",
                 )
@@ -3750,7 +3753,7 @@ class DictationController(QtCore.QObject):
             self._logger.warning("Model preload failed: %s", message)
             if "canceled" in message.lower():
                 if not session_active:
-                    self._overlay.set_state("Done", message)
+                    self._paint_status_keeping_offer("Done", message)
                     QtCore.QTimer.singleShot(1200, self.show_idle_status)
             else:
                 if session_active:
@@ -3759,7 +3762,7 @@ class DictationController(QtCore.QObject):
                         message,
                     )
                 else:
-                    self._overlay.set_state("Error", message)
+                    self._paint_status_keeping_offer("Error", message)
 
     # -- Transcription workers ------------------------------------------------
 
@@ -5359,9 +5362,45 @@ class DictationController(QtCore.QObject):
         document. The pending text stays on screen, with Copy and Insert
         acting on exactly it.
         """
+        self._paint_status_keeping_offer("Error", detail)
+
+    def _paint_status_keeping_offer(self, state: str, detail: str) -> None:
+        """Write a status that is not a session result, keeping the offer.
+
+        `_insert_action_text` is the text of an insert that failed, and the
+        overlay's Insert button -- shown only by an Error state carrying
+        `OVERLAY_ERROR_ACTION_INSERT` -- is the one entry point that pastes
+        exactly that text (the tray re-paste pastes the whole dictation,
+        which for a streaming tail lands on top of the prefix already in the
+        document). Every status writer that is not itself a result therefore
+        goes through here: the idle line, the hotkey notices, "Nothing to
+        cancel.", the preload's ready/failed line, and the re-paste refusals.
+        Each of them used to paint plainly and hide the button while the text
+        stayed pending, so a save, a resume, a Cancel press, a finished
+        preload or "No window to insert into" made the tail unrecoverable.
+
+        The offer carries its own action. Two insert paths fail *after* the
+        paste keystroke went out and deliberately withhold Insert, because
+        the text is most likely in the document already; a repaint that read
+        the pending text alone upgraded that to an Insert button, and
+        pressing it pasted the transcript a second time (measured through
+        the overlay's own Insert and through a queued transcript's flush).
+        `_last_insert_may_have_pasted` is what those paths recorded, so it
+        decides here as well: the text stays readable and copyable, the
+        button stays hidden, and the wording says which of the two it is.
+        """
         pending = self._insert_action_text
         if not pending:
-            self._overlay.set_state("Error", detail)
+            self._overlay.set_state(state, detail)
+            return
+        if self._last_insert_may_have_pasted:
+            self._overlay.set_state(
+                "Error",
+                f"{detail}\n\nPossibly inserted already -- check the target "
+                f"window before inserting it again:\n{pending}",
+                copy_text=pending,
+                error_action=OVERLAY_ERROR_ACTION_NONE,
+            )
             return
         self._overlay.set_state(
             "Error",
@@ -5665,8 +5704,13 @@ class DictationController(QtCore.QObject):
     def show_overlay_error(self, message: str) -> None:
         """Surface a transient error on the overlay without exposing the
         overlay widget to callers (kept so main.py does not reach into
-        ``_overlay`` directly)."""
-        self._overlay.set_state("Error", str(message))
+        ``_overlay`` directly).
+
+        Through the offer-keeping painter: "No window to insert into" is
+        what the overlay's own Insert answers when the user has not clicked
+        into a document yet, and painted plainly it hid the button the user
+        was about to press again."""
+        self._paint_status_keeping_offer("Error", str(message))
         self._reveal_overlay_result(is_error=True)
 
     def _reveal_overlay_result(self, *, is_error: bool) -> None:
@@ -5983,7 +6027,7 @@ class DictationController(QtCore.QObject):
             if not self._flush_deferred_background_results(
                 ignore_active_transcription=True
             ):
-                self._overlay.set_state("Done", "Transcription canceled.")
+                self._paint_status_keeping_offer("Done", "Transcription canceled.")
             return
 
         # Preloading can intentionally overlap a recording or a queued batch
@@ -5997,7 +6041,7 @@ class DictationController(QtCore.QObject):
         if not self._flush_deferred_background_results(
             ignore_active_transcription=True
         ):
-            self._overlay.set_state("Done", "Nothing to cancel.")
+            self._paint_status_keeping_offer("Done", "Nothing to cancel.")
 
     def set_overlay_opacity_percent(self, value: int) -> None:
         clamped = max(
@@ -6541,17 +6585,40 @@ class DictationController(QtCore.QObject):
             and self._repaste_hotkey_registration_ok
         )
 
+    def _hotkey_registration_state(self) -> tuple:
+        """Everything the idle line prints about the four registrations."""
+        return (
+            self._active_hotkey,
+            self._hotkey_registration_ok,
+            self._hotkey_notice,
+            self._cancel_hotkey_registration_ok,
+            self._cancel_hotkey_notice,
+            self._show_overlay_hotkey_registration_ok,
+            self._show_overlay_hotkey_notice,
+            self._repaste_hotkey_registration_ok,
+            self._repaste_hotkey_notice,
+        )
+
     def refresh_hotkey_registration(self) -> None:
-        """Re-register global hotkeys after Windows resumes or opens Explorer."""
+        """Re-register global hotkeys after Windows resumes or opens Explorer.
+
+        Repainted only when the registration state changed. Every other
+        writer of that state repaints the idle line (`reload_settings`, the
+        reclaim timer, a failed reclaim); this one did not, so a resume that
+        substituted a fallback -- or lost every combination -- left the
+        overlay advertising a key that no longer fired, and one that repaired
+        an earlier failure left it on Error until the next save. But an
+        *unconditional* repaint was the wrong fix: this runs after every wake
+        from sleep -- with `restore_visibility` right behind it -- and 500 ms
+        after the two "open recordings folder" buttons, and it painted "Idle"
+        over a finished Done transcript and over the Error whose Insert
+        button is the only way to recover a failed streaming tail. A resume
+        that changed nothing now paints nothing, as before; one that did
+        repaints through `show_idle_status`, which keeps a pending Insert
+        offer in the line it paints.
+        """
+        before = self._hotkey_registration_state()
         if not self._register_all_global_hotkeys():
             self._logger.warning("Global hotkey refresh did not fully succeed.")
-        # Every other writer of the registration state repaints the idle line
-        # (`reload_settings`, the reclaim timer, a failed reclaim). This one
-        # did not, so a resume that substituted a fallback -- or lost every
-        # combination -- left the overlay advertising a key that no longer
-        # fired, and a resume that repaired an earlier failure left it on
-        # Error until the next settings save. `show_idle_status` returns
-        # early while a session owns the overlay, and its hotkey-error
-        # branches sit above the preload gate, so a failure still shows
-        # during a preload.
-        self.show_idle_status()
+        if self._hotkey_registration_state() != before:
+            self.show_idle_status()
