@@ -52,6 +52,13 @@ _CANARY_LANGUAGE_WARNING = (
 )
 # Every name the substitution sentence can carry. Not "the longest" -- there
 # is no such thing here, see `_reserve_note_height`.
+# One literal for the note and for the worst case the reservation measures,
+# so the two cannot drift apart.
+_LANGUAGE_SUBSTITUTION_NOTE = (
+    "The selected language ({requested}) is not offered by this model, so "
+    "{selected} was chosen."
+)
+
 _SUBSTITUTABLE_MODEL_NAMES = tuple(
     dict.fromkeys(local_model_short_label(name) for name in LOCAL_MODEL_LABELS)
 )
@@ -247,12 +254,14 @@ class RetranscribeDialog(QtWidgets.QDialog):
         # with the dialog width, and an id carrying no break opportunity never
         # wraps at all.
         #
-        # Deliberately a superset. Sentences 2 and 3 are emitted only when the
+        # Deliberately a superset. Sentence 3 is emitted only when the
         # *selected* model is Canary, so of these candidates only the Canary
         # one is a note the dialog can actually display; the rest pair three
         # sentences with a name that cannot appear beside them, and the entry
         # model appears in the chosen set although the substitution sentence
-        # is guarded on the entry model *not* being offered. Restricting the
+        # is guarded on the entry model *not* being offered. Sentence 2 uses
+        # `auto` in both slots: language codes are at most four characters
+        # and `auto` is one of them, so no real pair is wider. Restricting the
         # set to the reachable pairs would save 6 px of note height at most
         # widths and 15 px for a long imported id -- and would couple this
         # tuple to `_update_substitution_note`'s guards, where being wrong
@@ -267,8 +276,9 @@ class RetranscribeDialog(QtWidgets.QDialog):
                     f"This entry was recorded with '{entry_label}', which "
                     f"this version no longer offers, so {chosen} was "
                     f"chosen instead.",
-                    "This entry's language (auto) is unavailable here, so de "
-                    "was chosen.",
+                    _LANGUAGE_SUBSTITUTION_NOTE.format(
+                        requested="auto", selected="auto"
+                    ),
                     _CANARY_LANGUAGE_WARNING,
                 )
             )
@@ -533,10 +543,16 @@ class RetranscribeDialog(QtWidgets.QDialog):
         * The entry's **model** was removed from the app (Granite 4.1 Plus and
           NAR on 2026-08-26), so the picker quietly offers another one and the
           new transcript is not comparable with the old.
-        * The entry's **language** is unavailable for the chosen model. Canary
-          has no auto-detect, so an entry recorded with `auto` (the app
-          default) lands on the first offered language, and running an English
-          recording that way stores a German *translation* as a new entry.
+        * The **language** selected before the model changed -- on open, the
+          configured one; history entries store no language -- is not offered
+          by the chosen model, so the picker lands on another. This used to
+          be said for Canary alone, and Canary is only the extreme case: it
+          has no auto-detect, so `auto` (the app default) lands on the first
+          offered language, and running an English recording that way stores
+          a German *translation* as a new entry. Cohere and Granite refuse
+          `auto` too, and a remote provider can lack the configured language
+          outright (Fun-ASR has no German), and each of those substituted
+          silently.
         """
         if not hasattr(self, "_language_note"):
             return
@@ -555,13 +571,14 @@ class RetranscribeDialog(QtWidgets.QDialog):
                 f"{local_model_short_label(self.selected_model())} was chosen "
                 f"instead."
             )
-        if self.selected_model() == CANARY_MODEL_SIZE:
-            selected = self.selected_language_mode()
-            if requested and requested != selected:
-                parts.append(
-                    f"This entry's language ({requested}) is unavailable "
-                    f"here, so {selected} was chosen."
+        selected = self.selected_language_mode()
+        if requested and requested != selected:
+            parts.append(
+                _LANGUAGE_SUBSTITUTION_NOTE.format(
+                    requested=requested, selected=selected
                 )
+            )
+        if self.selected_model() == CANARY_MODEL_SIZE:
             parts.append(_CANARY_LANGUAGE_WARNING)
         self._language_note.setText(" ".join(parts))
 

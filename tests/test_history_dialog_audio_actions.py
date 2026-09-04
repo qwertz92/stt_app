@@ -310,6 +310,50 @@ def test_retranscribe_dialog_says_nothing_when_the_entrys_model_is_available(
     assert dialog._language_note.text() == ""
 
 
+def test_the_retranscribe_note_says_when_a_model_does_not_offer_the_language(
+    tmp_path,
+):
+    """Cohere never offers `auto`, so an entry re-run on it with `auto`
+    configured lands on Cohere's first language. The note said so only for
+    Canary; every other model made the substitution silently."""
+    QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    audio = tmp_path / "recording.wav"
+    audio.write_bytes(b"RIFF")
+    dialog = RetranscribeDialog(
+        entry=_entry(engine="local", model="small"),
+        audio_path=audio,
+        base_settings=AppSettings(
+            engine="local", model_size="small", language_mode="auto"
+        ),
+        transcribe=lambda *args, **kwargs: (True, ""),
+    )
+    dialog.show()
+    QtWidgets.QApplication.processEvents()
+    assert dialog._language_note.text() == ""
+    reserved = dialog._language_note.height()
+
+    assert dialog._select_data(dialog._model_combo, "cohere-transcribe-03-2026")
+    QtWidgets.QApplication.processEvents()
+
+    chosen = dialog.selected_language_mode()
+    assert chosen != "auto"
+    label = dialog._language_note
+    note = label.text()
+    assert "(auto) is not offered" in note, note
+    assert f"so {chosen} was chosen" in note, note
+    assert "Canary" not in note
+    # Newly reachable text, same rules: nothing below the note moves, and
+    # nothing is cut off.
+    assert label.height() == reserved
+    assert label.heightForWidth(label.width()) <= label.height()
+
+    # Back on a model that offers the language picked meanwhile: nothing to say.
+    assert dialog._select_data(dialog._model_combo, "small")
+    assert dialog.selected_language_mode() == chosen
+    assert dialog._language_note.text() == ""
+    dialog.close()
+
+
 def test_the_retranscribe_note_never_moves_the_widgets_below_it(tmp_path):
     """The note's reserved area must cover its longest possible text.
 
