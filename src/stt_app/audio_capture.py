@@ -88,6 +88,7 @@ class WarmMicrophoneStream:
         block_duration_ms: int = AUDIO_BLOCK_DURATION_MS,
         logger: logging.Logger | None = None,
         device_provider: Callable[[], tuple[str, int | None]] | None = None,
+        selected_key_provider: Callable[[], str] | None = None,
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
@@ -97,6 +98,16 @@ class WarmMicrophoneStream:
         # index) so a restart after a device change resolves freshly instead of
         # reusing an index that re-enumeration may have invalidated.
         self._device_provider = device_provider
+        # The persisted key alone, read before the resolution above starts.
+        # `opening_device_key` is published from it, so a save that changes
+        # the microphone while the open is still inside the device query --
+        # milliseconds to seconds on the stacks this feature exists for --
+        # can tell the open apart from one that resolves the new selection.
+        # Published only from the resolved key, it stayed None for the whole
+        # of that query and the save asked for no restart: the open finished
+        # on the old microphone, `attach` refused it, and every recording
+        # cold-opened until the next save.
+        self._selected_key_provider = selected_key_provider
         self._lock = threading.Lock()
         self._stream = None
         self._consumer: Callable | None = None
@@ -136,17 +147,32 @@ class WarmMicrophoneStream:
 
     @property
     def opening_device_key(self) -> str | None:
-        """Device key the open in flight resolved; None before it has, or idle.
+        """Device key the open in flight is opening; None when idle.
 
         `opened_device_key` is None for the whole of an open, so a save that
         compared it with the selected microphone restarted the open on every
         save -- an opacity or hotkey change discarded the in-flight open and
-        paid the cold-open latency twice. The provider reads the live settings
-        at resolution time, so an open that has not resolved yet needs no
-        restart either.
+        paid the cold-open latency twice. This is the selected key as the
+        open read it (see `selected_key_provider`), so a save can compare
+        against what the open is actually going to produce. It is None only
+        between the open passing its gate and that read, a couple of
+        statements; an open that has not read the settings yet resolves the
+        saved ones when it does.
         """
         with self._lock:
             return self._opening_device_key if self._starting else None
+
+    def device_state(self) -> tuple[str | None, str | None, bool]:
+        """`(opened_device_key, opening_device_key, is_opening)` in one read.
+
+        Three property reads are three lock acquisitions with gaps between
+        them, in which an open can finish or a restart begin, and the caller
+        then reasons about a state no moment had.
+        """
+        with self._lock:
+            opened = self._opened_device_key if self._stream is not None else None
+            opening = self._opening_device_key if self._starting else None
+            return opened, opening, self._starting
 
     def ensure_started(self, *, generation: int | None = None) -> bool:
         """Open and start the shared stream if needed. Safe off the UI thread.
@@ -163,32 +189,49 @@ class WarmMicrophoneStream:
         under the same lock that sets `_starting`, so a bump lands either
         before it (refused) or after it (the bumper sees `_starting`, waits,
         and closes the stream this open produces).
-        """
-        with self._lock:
-            if generation is not None and generation != self._generation:
-                return False
-            if self._stream is not None:
-                return True
-            if self._starting:
-                return False
-            self._starting = True
-            self._opening_device_key = None
-            generation = self._generation
 
+        The PortAudio guard is taken *before* the gate. The device-refresh
+        worker holds that guard across "close the idle stream, re-enumerate"
+        (`_refresh_audio_devices_worker`), so an open arriving meanwhile -- a
+        settings save's retry, a helper's reopen -- waits here and then runs
+        its gate against the bumped generation, instead of passing the gate
+        first and opening a stream beside the one still closing. Measured
+        with the gate outside the guard: `close_if_idle() -> True`,
+        `live_stream_count() -> 1`, `try_refresh_input_devices() -> False`,
+        and the deferred refresh -- a hot-plugged microphone invisible --
+        retried only at the next recording stop. The order also keeps an
+        open that is merely queued for the guard invisible to
+        `close_if_idle`, which would otherwise wait its full budget for an
+        open that cannot proceed until the guard is released.
+        """
         stream = None
         opened_key = SYSTEM_DEFAULT_INPUT_DEVICE
-        try:
-            # Resolved INSIDE the guard, together with the open. A PortAudio
-            # index is only valid until the next re-enumeration -- which is
-            # what `try_refresh_input_devices` does, under this same lock,
-            # from the device-change worker thread. Resolving outside it left
-            # two separate critical sections with a gap between them, so a
-            # hot-plug arriving in that gap renumbered the devices and the
-            # recording opened whatever now sat at the old index: a different
-            # microphone, silently, which is precisely what "never silently
-            # record from another device" forbids. The lock is an RLock, so
-            # widening the section costs nothing but the query itself.
-            with portaudio_guard():
+        # Resolved INSIDE the guard, together with the open. A PortAudio
+        # index is only valid until the next re-enumeration -- which is
+        # what `try_refresh_input_devices` does, under this same lock,
+        # from the device-change worker thread. Resolving outside it left
+        # two separate critical sections with a gap between them, so a
+        # hot-plug arriving in that gap renumbered the devices and the
+        # recording opened whatever now sat at the old index: a different
+        # microphone, silently, which is precisely what "never silently
+        # record from another device" forbids. The lock is an RLock, so
+        # widening the section costs nothing but the query itself.
+        with portaudio_guard():
+            with self._lock:
+                if generation is not None and generation != self._generation:
+                    return False
+                if self._stream is not None:
+                    return True
+                if self._starting:
+                    return False
+                self._starting = True
+                self._opening_device_key = None
+                generation = self._generation
+            try:
+                if self._selected_key_provider is not None:
+                    selected = self._selected_key_provider()
+                    with self._lock:
+                        self._opening_device_key = selected
                 device_index: int | None = None
                 if self._device_provider is not None:
                     opened_key, device_index = self._device_provider()
@@ -215,43 +258,47 @@ class WarmMicrophoneStream:
                     stream = None
                     raise
                 register_live_stream(stream)
-        except (
-            AudioSystemUnavailableError,
-            InputDeviceNotFoundError,
-            NoInputDeviceError,
-        ) as exc:
-            if self._logger is not None:
-                self._logger.warning("Warm microphone stream not started: %s", exc)
-        except Exception:
-            if self._logger is not None:
-                self._logger.exception("Failed to start warm microphone stream")
-        finally:
-            with self._lock:
-                self._starting = False
-                self._opening_device_key = None
-                accepted = stream is not None and generation == self._generation
-                if accepted:
-                    self._stream = stream
-                    self._opened_device_key = opened_key
-                elif stream is not None:
-                    # Superseded by a bump during the open. Retired under the
-                    # lock so that a `close_if_idle` waiting on this open finds
-                    # it and closes it itself. Closed from here outside the
-                    # accounting, it was open and registered after the waiter
-                    # had already answered True: the re-enumeration it went on
-                    # to run refused, and `ensure_started` opened a second
-                    # stream beside the one still closing.
-                    self._retiring.append(stream)
-                # A restart requested mid-open bumped the generation, so the
-                # stream above was discarded; honor the request with a fresh
-                # open that re-resolves the device. `close_if_idle` and
-                # `close` clear the flag when they bump, because their bump
-                # means "no stream until the caller says so".
-                retry = self._pending_restart and self._consumer is None
-                if retry:
-                    self._pending_restart = False
-                retry_generation = self._generation
-                self._idle.notify_all()
+            except (
+                AudioSystemUnavailableError,
+                InputDeviceNotFoundError,
+                NoInputDeviceError,
+            ) as exc:
+                if self._logger is not None:
+                    self._logger.warning(
+                        "Warm microphone stream not started: %s", exc
+                    )
+            except Exception:
+                if self._logger is not None:
+                    self._logger.exception("Failed to start warm microphone stream")
+            finally:
+                with self._lock:
+                    self._starting = False
+                    self._opening_device_key = None
+                    accepted = stream is not None and generation == self._generation
+                    if accepted:
+                        self._stream = stream
+                        self._opened_device_key = opened_key
+                    elif stream is not None:
+                        # Superseded by a bump during the open. Retired under
+                        # the lock so that a `close_if_idle` waiting on this
+                        # open finds it and closes it itself. Closed from
+                        # here outside the accounting, it was open and
+                        # registered after the waiter had already answered
+                        # True: the re-enumeration it went on to run refused,
+                        # and `ensure_started` opened a second stream beside
+                        # the one still closing.
+                        self._retiring.append(stream)
+                    # A restart requested mid-open bumped the generation, so
+                    # the stream above was discarded; honor the request with
+                    # a fresh open that re-resolves the device.
+                    # `close_if_idle` and `close` clear the flag when they
+                    # bump, because their bump means "no stream until the
+                    # caller says so".
+                    retry = self._pending_restart and self._consumer is None
+                    if retry:
+                        self._pending_restart = False
+                    retry_generation = self._generation
+                    self._idle.notify_all()
 
         if not accepted and stream is not None:
             self._close_retiring()
@@ -300,6 +347,7 @@ class WarmMicrophoneStream:
 
     def detach(self, consumer: Callable) -> None:
         action = None
+        restart: Callable[[], None] | None = None
         with self._lock:
             # Bound methods compare equal but are not identical, so use ==.
             if self._consumer == consumer:
@@ -309,12 +357,20 @@ class WarmMicrophoneStream:
                     self._pending_restart = False
                     action = "close"
                 elif self._pending_restart:
+                    # Under this same hold, not through `request_restart`
+                    # after it: released in between, a `close_if_idle` on
+                    # the device-refresh thread bumped and closed
+                    # everything, and the restart then bumped again on its
+                    # own acquisition -- so its helper's reopen carried the
+                    # current generation and opened a fresh stream behind
+                    # the caller's re-enumeration (forced schedule; 0 hits
+                    # in 400 natural trials).
                     self._pending_restart = False
-                    action = "restart"
+                    restart = self._restart_locked()
         if action == "close":
             self._spawn_or_run(self.close, "stt_app_warm_mic_close", fallback=self.close)
-        elif action == "restart":
-            self.request_restart()
+        elif restart is not None:
+            restart()
 
     def request_restart(self) -> None:
         """Close and reopen with a freshly resolved device.
@@ -333,24 +389,35 @@ class WarmMicrophoneStream:
         recording's chunks were drained, so the whole recording was lost.
         """
         with self._lock:
-            if self._pending_close:
-                return
-            if self._consumer is not None:
-                self._pending_restart = True
-                return
-            self._generation += 1
-            generation = self._generation
-            stream = self._stream
-            self._stream = None
-            self._opened_device_key = None
-            if self._starting:
-                # The in-flight open observes the generation bump, discards
-                # its stream, and retries via the pending flag.
-                self._pending_restart = True
-                return
-            if stream is not None:
-                self._retiring.append(stream)
-        self._spawn_or_run(
+            restart = self._restart_locked()
+        if restart is not None:
+            restart()
+
+    def _restart_locked(self) -> Callable[[], None] | None:
+        """The restart's bookkeeping; the caller holds `_lock`.
+
+        Returns the helper spawn to run *outside* the lock, or None when the
+        restart was deferred (a consumer is attached, a close is pending) or
+        handed to the open in flight through `_pending_restart`.
+        """
+        if self._pending_close:
+            return None
+        if self._consumer is not None:
+            self._pending_restart = True
+            return None
+        self._generation += 1
+        generation = self._generation
+        stream = self._stream
+        self._stream = None
+        self._opened_device_key = None
+        if self._starting:
+            # The in-flight open observes the generation bump, discards
+            # its stream, and retries via the pending flag.
+            self._pending_restart = True
+            return None
+        if stream is not None:
+            self._retiring.append(stream)
+        return lambda: self._spawn_or_run(
             lambda: self._close_and_reopen(generation),
             "stt_app_warm_mic_restart",
             fallback=self._close_retiring,
@@ -403,9 +470,21 @@ class WarmMicrophoneStream:
         cancelled the helper's reopen, the stream stays closed until that
         deferred refresh runs and reopens it, which is the honest state for
         an audio stack that has not finished a close in ten seconds.
+
+        Its own closes go through `_close_retiring`, i.e. are counted in
+        `_closes_in_flight`, and it answers True only once nothing is in
+        flight *after* they are done. Closed outside the accounting, a
+        second `close_if_idle` -- two device notifications more than the
+        settle interval apart, or Settings > Refresh during one -- found
+        nothing to wait for and answered True while the first was still
+        inside `stream.close()` (measured: `live_stream_count() -> 1`, the
+        re-enumeration refused). What this method cannot do on its own is
+        keep a *new* open out of that window: only the caller holding the
+        PortAudio guard across the close and the re-enumeration does that,
+        because `ensure_started` takes the guard before its gate.
         """
         deadline = time.monotonic() + self._CLOSE_WAIT_S
-        with self._idle:
+        with self._lock:
             if self._consumer is not None:
                 return False
             self._generation += 1
@@ -415,37 +494,32 @@ class WarmMicrophoneStream:
             # stream opened behind the caller's re-enumeration, which the
             # bump exists to make impossible. The deferred refresh reopens.
             self._pending_restart = False
-            while True:
+        while True:
+            with self._idle:
                 if self._consumer is not None:
                     return False
-                if not self._starting and not self._closes_in_flight:
-                    break
-                remaining = deadline - time.monotonic()
-                if remaining <= 0:
-                    if self._logger is not None:
-                        self._logger.warning(
-                            "warm_microphone_stream_busy opening=%s "
-                            "closes_in_flight=%d; device re-enumeration deferred",
-                            self._starting,
-                            self._closes_in_flight,
-                        )
-                    return False
-                self._idle.wait(remaining)
-            streams = [
-                stream
-                for stream in (self._stream, *self._retiring)
-                if stream is not None
-            ]
-            self._stream = None
-            self._opened_device_key = None
-            self._retiring = []
-        for stream in streams:
-            _close_input_stream(
-                stream,
-                logger=self._logger,
-                context="warm microphone stream",
-            )
-        return True
+                stream = self._stream
+                self._stream = None
+                self._opened_device_key = None
+                if stream is not None:
+                    self._retiring.append(stream)
+                if not self._retiring:
+                    if not self._starting and not self._closes_in_flight:
+                        return True
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        if self._logger is not None:
+                            self._logger.warning(
+                                "warm_microphone_stream_busy opening=%s "
+                                "closes_in_flight=%d; device re-enumeration "
+                                "deferred",
+                                self._starting,
+                                self._closes_in_flight,
+                            )
+                        return False
+                    self._idle.wait(remaining)
+                    continue
+            self._close_retiring()
 
     def close(self) -> None:
         with self._lock:

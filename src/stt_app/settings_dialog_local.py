@@ -108,6 +108,16 @@ def _describe_doomed_folders(doomed: list[str]) -> str:
     return f"\n\n{len(unique)} folders will be deleted:\n{listed}"
 
 
+# How `_canceled_drain_summary` names each kind of drain event, and how the
+# names of one group are joined (failures carry a ": detail" of their own).
+_DRAIN_EVENT_LABELS = {
+    "downloaded": ("Downloaded", ", "),
+    "failed": ("Failed", " | "),
+    "canceled": ("Canceled", ", "),
+    "removed": ("Removed from the queue", ", "),
+}
+
+
 class _LocalModelsMixin:
     def _build_local_tab(self) -> None:
         tab, content = self._create_scroll_tab()
@@ -1172,6 +1182,15 @@ class _LocalModelsMixin:
                 return
             self._local_model_download_cancel_event.set()
             queued_count = len(self._local_model_download_queue)
+            # Named in the drain's summary. The transient label below is
+            # overwritten by that summary, which used to list only the
+            # download the Cancel killed -- so a Cancel that emptied the
+            # queue before the worker looked at it reported "Downloaded: "
+            # in the success colour, and one that landed between two queued
+            # models never mentioned the second.
+            self._local_model_download_removed_by_cancel.extend(
+                name for name, _model_dir in self._local_model_download_queue
+            )
             self._discard_queued_downloads_locked()
             self._local_model_download_queue.clear()
             process = self._local_model_download_process
@@ -1334,13 +1353,37 @@ class _LocalModelsMixin:
             )
             raise
 
+    def _consume_cancel_locked(self, events: list[tuple[str, str]]) -> bool:
+        """Clear the cancel event and record what it removed; the caller
+        holds `_local_model_download_lock`.
+
+        Answers whether this Cancel removed queued entries. A Cancel that
+        found nothing queued and nothing running did nothing the drain has to
+        report (the Cancel handler already said so), and what the user queues
+        afterwards is an ordinary result -- headlining it "Download canceled."
+        would put a successful download in the error colour. A Cancel that
+        killed the running download is reported by the "canceled" status that
+        download returns, not here.
+        """
+        self._local_model_download_cancel_event.clear()
+        removed = self._local_model_download_removed_by_cancel
+        self._local_model_download_removed_by_cancel = []
+        events.extend(("removed", name) for name in removed)
+        self._local_model_download_active = None
+        self._local_model_download_claimed = None
+        return bool(removed)
+
     def _drive_local_model_download_queue(self, worker_token: int) -> None:
         successes: list[str] = []
         failures: list[str] = []
-        canceled_names: list[str] = []
-        # Set when a Cancel is consumed: how much of `successes`/`failures`
-        # predates it. Whatever follows ran because the user queued more.
-        before_cancel: tuple[int, int] | None = None
+        # What happened, in order: ("downloaded", name), ("failed", detail),
+        # ("canceled", name) for a download the Cancel killed, ("removed",
+        # name) for a queued entry it discarded. A single "how much came
+        # before the cancel" snapshot could describe one Cancel only; with
+        # two in a drain it read a model downloaded between them as finished
+        # before either.
+        events: list[tuple[str, str]] = []
+        canceled = False
         cleaned_files = 0
         cleaned_bytes = 0
         while True:
@@ -1353,10 +1396,7 @@ class _LocalModelsMixin:
                     # used to be discarded here, silently, after the tab had
                     # already said "Queued for download". Consume the cancel
                     # and carry on with the newer work.
-                    self._local_model_download_cancel_event.clear()
-                    before_cancel = (len(successes), len(failures))
-                    self._local_model_download_active = None
-                    self._local_model_download_claimed = None
+                    canceled = self._consume_cancel_locked(events) or canceled
                 if not self._local_model_download_queue:
                     self._local_model_download_active = None
                     self._local_model_download_claimed = None
@@ -1395,6 +1435,7 @@ class _LocalModelsMixin:
             cleaned_bytes += removed_bytes
             if status == "success":
                 successes.append(model_name)
+                events.append(("downloaded", model_name))
                 with self._local_model_download_lock:
                     self._local_model_download_completed_names.add(model_name)
             elif status == "canceled":
@@ -1402,12 +1443,10 @@ class _LocalModelsMixin:
                 # cleared what was queued before it, so the loop continues
                 # with whatever was queued after it and exits when that is
                 # nothing.
-                canceled_names.append(model_name)
+                canceled = True
+                events.append(("canceled", model_name))
                 with self._local_model_download_lock:
-                    self._local_model_download_cancel_event.clear()
-                    before_cancel = (len(successes), len(failures))
-                    self._local_model_download_active = None
-                    self._local_model_download_claimed = None
+                    self._consume_cancel_locked(events)
                     if not self._local_model_download_queue:
                         self._local_model_download_worker_running = False
                         break
@@ -1420,28 +1459,21 @@ class _LocalModelsMixin:
                 )
             else:
                 failures.append(f"{model_name}: {detail}")
+                events.append(("failed", f"{model_name}: {detail}"))
 
-        if before_cancel is not None and (
-            canceled_names or before_cancel != (0, 0)
-        ):
+        if canceled:
             # The Cancel is the headline whenever the drain has something of
-            # its own to report about it: a download it killed, or work that
-            # finished before it. A Cancel that found nothing running and
-            # nothing done was already reported by the Cancel itself, and the
-            # work queued afterwards is then an ordinary result below.
+            # its own to report about it: a download it killed, work that
+            # finished before it, or queued entries it removed. The last of
+            # the three was missing, so a Cancel that emptied the queue
+            # before the worker's first iteration fell through to the
+            # success line below -- "Downloaded: " with no model, in green.
             _emit_background_signal(
                 self,
                 "local_model_download_finished",
                 worker_token,
                 False,
-                self._canceled_drain_summary(
-                    successes,
-                    failures,
-                    canceled_names,
-                    before_cancel,
-                    cleaned_files,
-                    cleaned_bytes,
-                ),
+                self._canceled_drain_summary(events, cleaned_files, cleaned_bytes),
             )
             return
 
@@ -1477,23 +1509,24 @@ class _LocalModelsMixin:
 
     @staticmethod
     def _canceled_drain_summary(
-        successes: list[str],
-        failures: list[str],
-        canceled_names: list[str],
-        before_cancel: tuple[int, int],
+        events: list[tuple[str, str]],
         cleaned_files: int,
         cleaned_bytes: int,
     ) -> str:
-        """The Cancel first, then what ran before it and what ran after.
+        """The Cancel first, then the cleanup, then what happened in order.
 
-        `resumed = canceled and bool(successes or failures)` -- the previous
+        `resumed = canceled and bool(successes or failures)` -- the first
         shape -- read a model that finished *before* the Cancel as the drain
         having resumed after it, so the commonest Cancel there is (two models
         queued, the first done, the second killed) reported "Downloaded: A
         (an earlier download was canceled)" in the success colour, dropped
-        the incomplete-file cleanup and never named the killed model.
+        the incomplete-file cleanup and never named the killed model. The
+        second shape split the lists at one "before the cancel" snapshot,
+        which two Cancels in a drain overwrite, and named only the download
+        a Cancel killed -- never the queued entries it removed. A timeline
+        has neither problem: consecutive events of one kind are grouped, and
+        every group after the first starts with "Then".
         """
-        done_before, failed_before = before_cancel
         parts = ["Download canceled."]
         if cleaned_files:
             cleanup_mb = cleaned_bytes / 1_000_000.0
@@ -1503,21 +1536,17 @@ class _LocalModelsMixin:
             )
         else:
             parts.append("No incomplete files remained.")
-        if successes[:done_before]:
-            parts.append(
-                "Completed before cancellation: "
-                f"{', '.join(successes[:done_before])}."
-            )
-        if failures[:failed_before]:
-            parts.append(
-                f"Failed before cancellation: {' | '.join(failures[:failed_before])}."
-            )
-        if canceled_names:
-            parts.append(f"Canceled: {', '.join(canceled_names)}.")
-        if successes[done_before:]:
-            parts.append(f"Downloaded afterwards: {', '.join(successes[done_before:])}.")
-        if failures[failed_before:]:
-            parts.append(f"Failed afterwards: {' | '.join(failures[failed_before:])}.")
+        groups: list[tuple[str, list[str]]] = []
+        for kind, name in events:
+            if groups and groups[-1][0] == kind:
+                groups[-1][1].append(name)
+            else:
+                groups.append((kind, [name]))
+        for index, (kind, names) in enumerate(groups):
+            label, separator = _DRAIN_EVENT_LABELS[kind]
+            if index:
+                label = f"Then {label[0].lower()}{label[1:]}"
+            parts.append(f"{label}: {separator.join(names)}.")
         return " ".join(parts)
 
     def _on_local_model_download_progress(self, worker_token: int, text: str) -> None:

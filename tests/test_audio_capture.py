@@ -705,6 +705,185 @@ def test_the_warm_stream_names_the_device_its_open_is_resolving(monkeypatch):
     warm.close()
 
 
+class _BlockingCloseOnlyStream:
+    """Opens at once, closes only when the test says so."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+        self.closing = threading.Event()
+        self.release_close = threading.Event()
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        self.closing.set()
+        assert self.release_close.wait(timeout=5), "the test never released the close"
+        self.closed = True
+
+
+def _running_warm_stream_with_blocking_close(monkeypatch):
+    opened: list[_BlockingCloseOnlyStream] = []
+
+    def _factory(**kwargs):
+        stream = _BlockingCloseOnlyStream(**kwargs)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    return warm, opened
+
+
+def test_warm_close_if_idle_counts_its_own_closes(monkeypatch):
+    """Two `close_if_idle` calls at once -- two device notifications more
+    than the settle interval apart, or Settings > Refresh during one. The
+    second found nothing in flight, because the first closed outside the
+    accounting, and answered True while the stream was still inside
+    `close()` and registered: the re-enumeration it went on to run refused."""
+    live_before = audio_devices.live_stream_count()
+    warm, opened = _running_warm_stream_with_blocking_close(monkeypatch)
+    first = _answers_with_registry(warm)
+    second = _answers_with_registry(warm)
+    first_thread = threading.Thread(target=first.run, daemon=True)
+    first_thread.start()
+    assert _wait_until(opened[0].closing.is_set)
+    second_thread = threading.Thread(target=second.run, daemon=True)
+    second_thread.start()
+    time.sleep(0.2)
+    try:
+        assert second_thread.is_alive(), "it answered while the stream was closing"
+        assert second.seen == []
+    finally:
+        opened[0].release_close.set()
+        first_thread.join(timeout=5)
+        second_thread.join(timeout=5)
+
+    assert first.seen == [(True, live_before)]
+    assert second.seen == [(True, live_before)]
+    assert opened[0].closed is True
+
+
+def test_an_open_waits_for_a_refresh_that_holds_the_portaudio_guard(monkeypatch):
+    """The device-refresh worker holds the PortAudio guard across "close the
+    idle stream, re-enumerate". An `ensure_started` arriving meanwhile -- a
+    settings save's retry -- used to pass its gate first (`_stream` None,
+    nothing starting) and open a second stream beside the one closing;
+    `close_if_idle` had answered True and the re-enumeration then refused.
+    The gate now sits behind the guard, so the open waits until the worker
+    is done and finds the bumped generation and the fresh device list."""
+    live_before = audio_devices.live_stream_count()
+    warm, opened = _running_warm_stream_with_blocking_close(monkeypatch)
+    answers = _answers_with_registry(warm)
+    refresh_done = threading.Event()
+    reenumerated_with: list[int] = []
+
+    def _worker():
+        with audio_devices.portaudio_guard():
+            answers.run()
+            # Stands in for `try_refresh_input_devices`: what it sees is
+            # what decides whether the re-enumeration runs.
+            reenumerated_with.append(audio_devices.live_stream_count())
+            assert refresh_done.wait(timeout=5)
+
+    worker = threading.Thread(target=_worker, daemon=True)
+    worker.start()
+    assert _wait_until(opened[0].closing.is_set)
+    opener = threading.Thread(target=warm.ensure_started, daemon=True)
+    opener.start()
+    time.sleep(0.2)
+    try:
+        assert len(opened) == 1, "a second stream was opened beside the closing one"
+        # Waiting for the guard, it has not claimed the open: a `close_if_idle`
+        # arriving now has nothing to wait for, and the controller's save
+        # path reads "not opening" rather than an open that has not begun.
+        assert warm.is_opening is False
+        opened[0].release_close.set()
+        assert _wait_until(lambda: len(answers.seen) == 1)
+        time.sleep(0.2)
+        assert len(opened) == 1, "the open did not wait for the re-enumeration"
+        assert opener.is_alive()
+    finally:
+        opened[0].release_close.set()
+        refresh_done.set()
+        worker.join(timeout=5)
+        opener.join(timeout=5)
+
+    assert answers.seen == [(True, live_before)]
+    assert reenumerated_with == [live_before]
+    assert len(opened) == 2
+    assert warm.is_running is True
+    warm.close()
+
+
+def test_detach_restarts_under_the_lock_it_released_the_consumer_under(monkeypatch):
+    """`detach` used to consume the pending restart, release the lock, and
+    call `request_restart`, which bumped the generation on its own
+    acquisition -- so a `close_if_idle` in between bumped and closed
+    everything, and the restart's helper then reopened behind the caller's
+    re-enumeration (forced schedule). The restart's bookkeeping now runs
+    under the hold that released the consumer."""
+    warm, opened = _running_warm_stream_with_blocking_close(monkeypatch)
+    consumer = object()
+    assert warm.attach(consumer, SYSTEM_DEFAULT_INPUT_DEVICE) is True
+    warm.request_restart()
+    assert warm._pending_restart is True
+
+    def _not_this_way():
+        raise AssertionError("detach must not restart through request_restart")
+
+    monkeypatch.setattr(warm, "request_restart", _not_this_way)
+    warm.detach(consumer)
+
+    assert _wait_until(opened[0].closing.is_set)
+    opened[0].release_close.set()
+    assert _wait_until(lambda: len(opened) == 2)
+    assert _wait_until(lambda: warm.is_running)
+    warm.close()
+
+
+def test_the_warm_stream_publishes_the_selected_device_before_resolving_it(
+    monkeypatch,
+):
+    """`opening_device_key` was published from the *resolved* key, i.e. only
+    after the device query -- milliseconds to seconds on the stacks this
+    feature exists for. A save landing inside that query saw None, asked for
+    no restart, and the open finished on the old microphone: `attach`
+    refused it and every recording cold-opened until the next save."""
+    resolving = threading.Event()
+    release = threading.Event()
+
+    def _device_provider():
+        resolving.set()
+        assert release.wait(timeout=5)
+        return "mic-A", 3
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+    warm = WarmMicrophoneStream(
+        sample_rate=16000,
+        channels=1,
+        device_provider=_device_provider,
+        selected_key_provider=lambda: "mic-A",
+    )
+    opener = threading.Thread(target=warm.ensure_started, daemon=True)
+    opener.start()
+    assert resolving.wait(timeout=5)
+    try:
+        assert warm.opening_device_key == "mic-A"
+        assert warm.device_state() == (None, "mic-A", True)
+    finally:
+        release.set()
+        opener.join(timeout=5)
+    assert warm.opened_device_key == "mic-A"
+    assert warm.device_state() == ("mic-A", None, False)
+    warm.close()
+
+
 def test_warm_close_if_idle_gives_up_on_a_close_that_never_finishes(monkeypatch):
     monkeypatch.setattr(WarmMicrophoneStream, "_CLOSE_WAIT_S", 0.2)
     warm = _warm_with_blocking_close(monkeypatch)

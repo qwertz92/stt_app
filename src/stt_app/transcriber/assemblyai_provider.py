@@ -235,7 +235,8 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         fetch with no bound of any kind, so a job AssemblyAI leaves in
         `queued` never returns. That holds the app's single transcription
         worker for the rest of the session, and it also stops the app from
-        exiting: `ThreadPoolExecutor` registers an atexit hook that joins
+        exiting: `ThreadPoolExecutor` registers an exit handler (through
+        `threading._register_atexit`, not `atexit.register`) that joins
         its workers, and `shutdown(wait=False, cancel_futures=True)` does
         not release a thread that is already running (measured). The
         process then stays alive holding the single-instance lock, so the

@@ -166,6 +166,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   controller are unaffected; `_build_audio_tab` must run after
   `_build_general_tab` because it applies the shared label column across both
   tabs.
+- **`recordings_max_count` 0 means unlimited**: the retention cap was 500 with
+  no way to keep everything, so the decision was the app's rather than the
+  user's. 0 now prunes nothing (`RECORDINGS_MAX_COUNT_UNLIMITED`), the ceiling
+  is `RECORDINGS_MAX_COUNT_CEILING`, and the default stays 10. **No schema
+  bump**: every earlier version clamped this field to >= 1 on write, so a
+  stored 0 cannot come from an older app. A *negative* value falls back to the
+  default instead of clamping to 0 -- the spin box cannot produce one, so it is
+  garbage, and reading "unlimited" into garbage would switch pruning off
+  silently. Note what the old clamp did with 0: `max(1, int(keep_count or 1))`
+  made it "keep exactly one", the most destructive value in the range.
 - **Model selection is unified on the General tab; Local tab is management-only**:
   "what do I use" (engine, model, language, mode) all live in the General tab's
   "Engine && Mode" group box. A single "Model" form row hosts a
@@ -405,6 +415,46 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   automatically (self-heal) instead of only suggesting to disable the feature.
   Without COM/comtypes the listener is inert and the Settings "Refresh" button
   plus watchdog self-heal remain the manual/backstop paths.
+- **A warm-stream open queues behind the device refresh, and `close_if_idle`
+  counts its own closes.** Four things the second wave on the round-24 fixes
+  measured, each closed at the place the invariant lives:
+  - **`ensure_started` takes the PortAudio guard before its gate**, and
+    `_refresh_audio_devices_worker` holds that guard across `close_if_idle`
+    and `try_refresh_input_devices`. An open arriving meanwhile -- a settings
+    save's retry, a helper's reopen, a second refresh worker -- waits, then
+    runs its gate against the bumped generation and opens on the fresh device
+    list. With the gate outside the guard it passed first and opened a stream
+    beside the one still closing: `close_if_idle() -> True`,
+    `live_stream_count() -> 1`, the re-enumeration refused and deferred to the
+    next recording stop, i.e. the hot-plugged microphone invisible until the
+    user recorded once. The same hold serializes two workers, which several
+    device notifications more than the settle interval apart used to run
+    side by side.
+  - **`close_if_idle` closes through `_close_retiring`**, inside
+    `_closes_in_flight`, and answers True only once nothing is in flight
+    *after* its own closes. Closed outside the accounting, a second
+    `close_if_idle` found nothing to wait for and answered True while the
+    first was still inside `stream.close()`.
+  - **`detach` runs the restart's bookkeeping under the hold that released
+    the consumer** (`_restart_locked`, shared with `request_restart`). With
+    the lock released in between, a `close_if_idle` on the refresh thread
+    bumped and closed everything and the restart then bumped again on its
+    own acquisition, so its helper's reopen carried the current generation
+    and opened behind the caller's re-enumeration -- a forced schedule, 0
+    hits in 400 natural trials, closed because the shape allowed it.
+  - **`opening_device_key` is published from the selected key the open reads
+    *before* resolving the device** (`selected_key_provider`, wired by the
+    controller). Published from the resolved key it was None for the whole
+    device query -- milliseconds to seconds on the stacks this feature
+    exists for -- so a microphone change saved inside that query asked for
+    no restart and the open finished on the old device, which `attach` then
+    refused for the rest of the session. The controller reads
+    `device_state()`, the three fields under one lock hold; three property
+    reads had gaps an open could finish in.
+  A stream built without `selected_key_provider` keeps the old gap: the
+  controller is the one constructor call, and
+  `tests/test_controller_audio_devices.py` drives that wiring with the real
+  stream and a blocking device query.
 - **Nothing may escape the PortAudio callback, and the VAD auto-stop latch
   is set after its thread exists.** sounddevice's wrapper catches only
   `CallbackStop`/`CallbackAbort`; any other exception reaches the cffi
@@ -799,7 +849,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   worker was ever going to complete that generation, so they said so for
   good. `_start_local_model_preload` records the failure against the key and
   routes it through `_on_model_preload_done`, so the next dictation raises it
-  instead of substituting a model and the next save retries.
+  instead of substituting a model and the next save retries. That arm first
+  drops the previous worker's future: `_matching_model_preload_running` and
+  `_preload_owns_overlay` read it, and a worker `cancel()` could not stop kept
+  both answering "running" for the *new* key, so the save meant to fix the
+  problem found nothing to retry until the stale worker finished (measured:
+  a model load) and the idle line stayed off the overlay for as long.
 - **`_get_or_create_transcriber` evicts before it closes** -- the third site
   of the rule the two `_reset_*` helpers already follow. `create_transcriber`
   raises for a missing API key or an absent model, and the closed runtime was
@@ -1042,14 +1097,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   outcome: with `medium` canceled and a later `small` downloaded the summary
   said "Downloaded: small" and the row of the canceled model said nothing,
   and with a Cancel after the first model finished the run read as a plain
-  success. `_canceled_drain_summary` puts the headline "Download canceled."
-  on every drain that consumed a Cancel and then lists, on its own side of
-  the cut, what completed or failed before it, which entries the cancel
-  removed (`canceled_names`), and what ran afterwards; `before_cancel` is a
-  snapshot of the two counters taken where the event is consumed, at both
-  sites. The headline is kept only while the drain has something of its own
-  to say -- a Cancel that removed nothing and saw nothing finish is not a
-  cancellation. And `_start_local_model_download` refuses after
+  success. The second version split the lists at one "before the cancel"
+  snapshot, which two Cancels in a drain overwrote (a model downloaded
+  between them read as finished before either), and named only the download
+  a Cancel *killed*: the queued entries it removed were never mentioned, and
+  a Cancel that emptied the queue before the worker's first iteration was
+  not a cancellation at all -- the drain reported "Downloaded: " with no
+  model, in the success colour. `_cancel_local_model_downloads` therefore
+  records what it discards (`_local_model_download_removed_by_cancel`), the
+  drain consumes that list together with the cancel event at both sites
+  (`_consume_cancel_locked`), and `_canceled_drain_summary` renders an
+  ordered event list -- downloaded, failed, canceled, removed -- grouping
+  consecutive events of one kind, every group after the first starting with
+  "Then". The headline "Download canceled." is kept for a Cancel that killed
+  a download or removed queued entries; one that found nothing queued and
+  nothing running did nothing the drain has to report, and what the user
+  queues afterwards is an ordinary result. And `_start_local_model_download`
+  refuses after
   `_shutdown_started`: the worker exits when the queue is empty, so an entry
   queued during shutdown would have started a fresh download from the
   `aboutToQuit` handler's own drain. Progress and its rolling transfer rate are approximate
@@ -1346,6 +1410,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   pending offer with the text still on screen ("Still not inserted:") and
   `copy_text`/`error_action` acting on exactly it. The background arm's
   `copy_text` is the stripped transcript, the same value Insert reads.
+  **Every status writer that is not a session result paints through
+  `_paint_status_keeping_offer`**: the idle line and the hotkey-error lines
+  of `show_idle_status`, "Nothing to cancel." and "Transcription canceled.",
+  the preload's four end-of-preload lines, the re-paste refusals and the
+  refusal above. Fixing the refusal alone left every one of the others
+  hiding the button while the text stayed pending -- a save, a resume, a
+  Cancel press, a finished preload, "No window to insert into". **And the
+  offer carries its own action**: two insert paths fail *after* the paste
+  keystroke went out and deliberately withhold Insert (the text is most
+  likely in the document already), and a repaint that read the pending text
+  alone upgraded that to an Insert button -- pressing it pasted the
+  transcript a second time, measured through the overlay's Insert and
+  through a queued transcript's flush. `_last_insert_may_have_pasted`, which
+  those paths record, decides in the painter as well: the text stays
+  readable and copyable, the button stays hidden, the wording says which of
+  the two it is. A parametrized test drives every writer.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy
@@ -1357,8 +1437,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   with no bound of any kind, so a job the service leaves in `queued` never
   returns. That held the single `max_workers=1` transcription worker for the
   rest of the session *and* stopped the app from exiting, which is the half
-  that is easy to miss: `ThreadPoolExecutor` registers an atexit hook that
-  **joins** its worker threads, and `shutdown(wait=False,
+  that is easy to miss: `ThreadPoolExecutor` registers an exit handler --
+  through `threading._register_atexit`, not `atexit.register`, so a grep
+  for the latter finds nothing -- that **joins** its worker threads, and
+  `shutdown(wait=False,
   cancel_futures=True)` does not release one that has already started
   (measured -- the interpreter never exits). The leftover process still holds
   the single-instance lock, so the user cannot even restart the app.
@@ -1402,12 +1484,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   peer alternating one JSON object that is not an event with any junk reset
   it every call and the spin was back -- an empty object, or an unknown
   event name, counts as unusable too. `_UnusableFrameBudget` is created per
-  transcript, spent on every unusable frame the loop sees, and reset only by
-  `result-generated`, `task-finished` and `task-failed`. Fields are typed
+  transcript and reset by `result-generated` (the two terminal events end
+  the loop). **It is spent only on a frame classified as unusable** -- by
+  `_recv_event` for what is not a JSON object, by the transcript loop for an
+  object that is not one of its events. Spent on every frame *before*
+  classification, it consumed the frame that would have reset it: exactly
+  `_MAX_UNUSABLE_FRAMES` junk frames followed by a real `task-finished`
+  reported the transcription as "1001 frames in a row that were not events"
+  (measured). The `task-failed` detail is capped at 300 characters like
+  every HTTP provider's error body. Fields are typed
   before they are trusted: a `text` that is not a string is "", and
   `sentence_end` is a sentence end only when it is `True`, because a number
   or a list there reached `str.strip` and `bool()` before. The receive loop
-  also ends when `transcription_shutdown_requested()`.
+  also ends when `transcription_shutdown_requested()`. **A `result-generated`
+  whose `sentence.heartbeat` is `True` is skipped** (`_is_heartbeat`): the
+  vendor's server-events page documents it as a heartbeat packet that "can
+  be ignored" (`sentence_id` always 0), and this provider asks for
+  heartbeats, so such packets are expected on a long pause; read as a
+  sentence, one carrying `sentence_end` would close the pending partial
+  early and the real final would then be appended a second time. Which
+  fields a live heartbeat packet carries is unverified from here; it still
+  resets the frame bound, because it is the server saying it is alive.
   The run-task also asks for the vendor's
   documented `heartbeat: true` (default false, "the connection times out
   and closes after a period of continuously silent audio", which a paused
@@ -1436,7 +1533,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   overwrote a handler where the real SDK appends to a list, which would have
   hidden an accumulate-vs-replace regression.
 - **The batch poll ends when the app quits, and the real bound is the budget
-  plus one request.** `ThreadPoolExecutor`'s atexit hook joins its worker,
+  plus one request.** `ThreadPoolExecutor`'s exit handler joins its worker,
   so a poll that ignored shutdown held the interpreter for the rest of its
   30-minute budget after the tray icon was gone -- with the single-instance
   lock still held, so the app could not be restarted either.
@@ -1553,8 +1650,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   writer of the registration state calls `show_idle_status`, so a resume that
   substituted a fallback -- or lost every combination -- left the overlay
   advertising a key that no longer fired, and one that repaired an earlier
-  failure left it on Error until the next save. It ends in `show_idle_status`,
-  whose session check keeps it off a live overlay.
+  failure left it on Error until the next save. It repaints through
+  `show_idle_status` -- whose session check keeps it off a live overlay --
+  **only when `_hotkey_registration_state()` changed**: the unconditional
+  repaint that fixed this first painted "Idle" over a finished Done
+  transcript and over the Error whose Insert button is the only way to
+  recover a failed streaming tail, after every wake from sleep and 500 ms
+  after the two "open recordings folder" buttons. When the registration
+  *did* change the repaint still replaces a Done or Error result, because
+  the user has to see the key that now fires; a failed transcription's
+  Retry then lives in the tray's "Retry transcription" action, which reads
+  the same retained bytes (`_last_failed_wav_bytes`) as the overlay button.
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.

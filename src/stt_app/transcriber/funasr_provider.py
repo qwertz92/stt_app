@@ -63,6 +63,14 @@ class _UnusableFrameBudget:
     whole thirty-minute budget (measured against an instant fake: 921,555
     and 4,101,846 receive calls in 2 s). The reader resets it only when a
     frame was actually consumed as an event.
+
+    Spent only on a frame that has been *classified* as unusable -- by
+    `_recv_event` for what is not a JSON object, by the transcript loop for
+    an object that is not one of its events. Spent on every frame before
+    classification, it consumed the frame that would have reset it: exactly
+    `_MAX_UNUSABLE_FRAMES` junk frames followed by a real `task-finished`
+    reported the transcription as "1001 frames in a row that were not
+    events" (measured).
     """
 
     __slots__ = ("count",)
@@ -104,6 +112,9 @@ _RECOVERED_TEXT_MAX_CHARS = 2000
 # 1.37 million receive calls in 0.31 s against an instant fake). The
 # service never sends such frames, so any real flood is a fault.
 _MAX_UNUSABLE_FRAMES = 1000
+# A vendor's `task-failed` message reaches the overlay; the HTTP providers cap
+# an error body at 300 characters for the same reason (`_http_utils`).
+_FAILURE_DETAIL_MAX_CHARS = 300
 
 
 class FunAsrTranscriber(ProgressReporter, ITranscriber):
@@ -292,8 +303,8 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 )
             ws.settimeout(min(remaining, self._request_timeout_s))
             message = ws.recv()
-            budget.spend()
             if isinstance(message, (bytes, bytearray)):
+                budget.spend()
                 continue
             if not message:
                 # `websocket-client` returns "" for every opcode that is
@@ -310,9 +321,11 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             try:
                 payload = json.loads(message)
             except (ValueError, TypeError):
+                budget.spend()
                 continue
             if isinstance(payload, dict):
                 return payload
+            budget.spend()
 
     @staticmethod
     def _event_name(message: dict) -> str:
@@ -320,6 +333,27 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         if isinstance(header, dict):
             return str(header.get("event", ""))
         return ""
+
+    @staticmethod
+    def _is_heartbeat(message: dict) -> bool:
+        """A `result-generated` whose `sentence.heartbeat` is true.
+
+        The vendor's server-events page documents it as "a heartbeat packet
+        [that] can be ignored", with `sentence_id` always 0. This provider
+        asks for heartbeats in `run-task`, so such packets are expected
+        during a long pause; read as a sentence, one that carries
+        `sentence_end` would close the pending partial early and the real
+        final would then be appended a second time. Typed before trusted,
+        like `sentence_end`: only a boolean `True` counts.
+        """
+        payload = message.get("payload")
+        if not isinstance(payload, dict):
+            return False
+        output = payload.get("output")
+        if not isinstance(output, dict):
+            return False
+        sentence = output.get("sentence")
+        return isinstance(sentence, dict) and sentence.get("heartbeat") is True
 
     @staticmethod
     def _sentence_from(message: dict) -> tuple[str, bool]:
@@ -349,7 +383,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         if isinstance(header, dict):
             detail = header.get("error_message") or header.get("error_code")
             if detail:
-                return f"Fun-ASR task failed: {detail}"
+                return (
+                    "Fun-ASR task failed: "
+                    f"{str(detail)[:_FAILURE_DETAIL_MAX_CHARS]}"
+                )
         return "Fun-ASR task failed."
 
     # -- Batch transcription ----------------------------------------------------
@@ -441,9 +478,16 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             while True:
                 message = self._recv_event(ws, deadline, budget)
                 event = self._event_name(message)
-                if event in ("result-generated", "task-finished", "task-failed"):
-                    budget.reset()
                 if event == "result-generated":
+                    # An event: the run of frames that were not is over. The
+                    # two terminal events below end the loop, so nothing
+                    # reads a reset made for them.
+                    budget.reset()
+                    if self._is_heartbeat(message):
+                        # Counted as an event for the frame bound above (the
+                        # server is alive), carried no further: see
+                        # `_is_heartbeat`.
+                        continue
                     text, sentence_end = self._sentence_from(message)
                     if sentence_end:
                         # A final carries the whole sentence and replaces the
@@ -467,6 +511,11 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         self._fail_message(message)
                         + self._recovered_suffix(finalized, current)
                     )
+                else:
+                    # `{}`, or an event name this loop does not act on: an
+                    # object, but not an event -- counted like junk, or a
+                    # peer alternating one such object with junk spins.
+                    budget.spend()
         except TranscriptionError:
             raise
         except _FunAsrInterrupted as exc:

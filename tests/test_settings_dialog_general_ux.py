@@ -3,8 +3,13 @@ from __future__ import annotations
 import pytest
 from PySide6 import QtCore, QtTest, QtWidgets
 
+from stt_app.config import (
+    DEFAULT_RECORDINGS_MAX_COUNT,
+    RECORDINGS_MAX_COUNT_CEILING,
+    RECORDINGS_MAX_COUNT_UNLIMITED,
+)
 from stt_app.settings_dialog import SettingsDialog
-from stt_app.settings_store import AppSettings
+from stt_app.settings_store import AppSettings, SettingsStore
 
 
 class _SettingsStore:
@@ -283,6 +288,95 @@ def test_audio_and_recording_tab_hosts_capture_settings(
         dialog.paste_mode_combo,
     ):
         assert general_tab.isAncestorOf(widget)
+
+
+def test_recordings_retention_offers_unlimited_at_zero(
+    dialog: SettingsDialog,
+) -> None:
+    """0 is a reachable, labelled choice, not a number the user has to guess."""
+    spin = dialog.recordings_max_spin
+
+    assert spin.minimum() == RECORDINGS_MAX_COUNT_UNLIMITED
+    assert spin.maximum() == RECORDINGS_MAX_COUNT_CEILING
+    assert spin.specialValueText() == "Unlimited (0)"
+    assert spin.value() == DEFAULT_RECORDINGS_MAX_COUNT
+
+    spin.setValue(RECORDINGS_MAX_COUNT_UNLIMITED)
+
+    assert spin.text() == "Unlimited (0)"
+    assert "0 = keep every recording" in dialog.recordings_max_hint_label.text()
+    assert "0 keeps every one" in spin.toolTip()
+
+
+def test_a_saved_unlimited_recordings_count_reloads_as_unlimited(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    """The whole round trip: spin box -> real store -> file -> spin box.
+
+    The store used to clamp this field to >= 1, so a 0 chosen in the dialog
+    came back as 1 -- "keep exactly one recording", the most destructive value
+    in the range, from the setting that means "delete nothing".
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    store = SettingsStore(tmp_path / "settings.json")
+    settings_dialog = SettingsDialog(
+        settings_store=store,
+        secret_store=_SecretStore(),
+        app_logger=_Logger(),
+    )
+    try:
+        settings_dialog.recordings_max_spin.setValue(RECORDINGS_MAX_COUNT_UNLIMITED)
+
+        settings_dialog._save()
+
+        assert store.load().recordings_max_count == RECORDINGS_MAX_COUNT_UNLIMITED
+
+        settings_dialog.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
+        settings_dialog.reload_from_store()
+
+        assert (
+            settings_dialog.recordings_max_spin.value()
+            == RECORDINGS_MAX_COUNT_UNLIMITED
+        )
+        assert settings_dialog.recordings_max_spin.text() == "Unlimited (0)"
+    finally:
+        settings_dialog.close()
+        app.processEvents()
+
+
+def test_the_recordings_retention_spin_box_never_changes_width(
+    dialog: SettingsDialog,
+) -> None:
+    """Nothing may jump: the widest text the box can hold decides its size.
+
+    A special value text and a five-digit ceiling both widen a `QSpinBox`'s
+    size hint, so the risk is a box that resizes as the user types past 999 or
+    steps down onto "Unlimited (0)". Qt sizes it from the widest of its range
+    and its special text rather than from the current value, which is what
+    this pins -- together with the box still being narrower than the field
+    column it sits in, so it is not what decides the row's width.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    _switch_to_tab(dialog, "Audio && Recording")
+    dialog.show()
+    app.processEvents()
+    spin = dialog.recordings_max_spin
+
+    measured: list[tuple[int, int, int]] = []
+    for value in (
+        RECORDINGS_MAX_COUNT_UNLIMITED,
+        DEFAULT_RECORDINGS_MAX_COUNT,
+        RECORDINGS_MAX_COUNT_CEILING,
+    ):
+        spin.setValue(value)
+        app.processEvents()
+        assert spin.value() == value
+        measured.append((spin.width(), spin.sizeHint().width(), spin.x()))
+
+    assert len(set(measured)) == 1, measured
+    assert spin.sizeHint().width() <= spin.width()
 
 
 def test_microphone_picker_lists_devices_and_keeps_missing_selection(

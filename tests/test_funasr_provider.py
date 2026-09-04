@@ -455,6 +455,24 @@ class TestFunAsrSentenceEnd:
         assert out == "Hallo Welt."
 
 
+class TestFunAsrFailureMessage:
+    def test_a_vendor_failure_message_is_capped(self):
+        """The HTTP providers cap a vendor's error body at 300 characters so it
+        cannot fill the overlay; the WebSocket failure message had no cap."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        ws = FakeWS([_event("task-failed", error_message="x" * 5000)])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+        message = str(excinfo.value)
+        assert "Fun-ASR task failed: " + "x" * provider._FAILURE_DETAIL_MAX_CHARS in message
+        assert "x" * (provider._FAILURE_DETAIL_MAX_CHARS + 1) not in message
+
+
 class TestFunAsrFieldTypes:
     """`bool("false")` is True and `str(None)` is "None": JSON values are
     checked for their type before they are trusted, as the HTTP error reader
@@ -496,6 +514,80 @@ class TestFunAsrFieldTypes:
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             # The partial ends the sentence; the literal word "None" does not.
             assert t.transcribe_batch(_wav_bytes()) == "Hallo"
+
+
+class TestFunAsrHeartbeat:
+    """The vendor's server-events page: a `result-generated` whose
+    `sentence.heartbeat` is true "is a heartbeat packet and can be ignored"
+    (its `sentence_id` is always 0). This provider asks for heartbeats, so
+    such packets are expected on a long pause; read as a sentence, one that
+    carries `sentence_end` closes the pending partial early and the real
+    final is then appended a second time."""
+
+    @staticmethod
+    def _sentence(fields: dict) -> str:
+        return json.dumps({
+            "header": {"event": "result-generated", "task_id": "t"},
+            "payload": {"output": {"sentence": fields}},
+        })
+
+    @pytest.mark.parametrize(
+        "heartbeat_fields",
+        [
+            {"text": "", "sentence_end": True, "heartbeat": True, "sentence_id": 0},
+            {"text": "Hallo Welt.", "sentence_end": True, "heartbeat": True},
+            {"text": "", "sentence_end": False, "heartbeat": True},
+        ],
+        ids=["empty-final", "text-final", "empty-partial"],
+    )
+    def test_a_heartbeat_packet_does_not_touch_the_transcript(self, heartbeat_fields):
+        events = [
+            _event("task-started"),
+            _event("result-generated", "Hallo", False),
+            self._sentence(heartbeat_fields),
+            _event("result-generated", "Hallo Welt.", True),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            # Not "Hallo Hallo Welt.": the heartbeat closed no sentence.
+            assert t.transcribe_batch(_wav_bytes()) == "Hallo Welt."
+
+    def test_only_a_boolean_true_marks_a_heartbeat(self):
+        """Typed before trusted, like `sentence_end`: the string "false" is
+        not a heartbeat, so that packet is an ordinary partial."""
+        events = [
+            _event("task-started"),
+            _event("result-generated", "Hallo", False),
+            self._sentence({"text": "Welt", "sentence_end": False, "heartbeat": "false"}),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            assert t.transcribe_batch(_wav_bytes()) == "Welt"
+
+    def test_a_heartbeat_packet_still_resets_the_frame_bound(self):
+        """A heartbeat is the server saying it is alive; it must count as an
+        event for the unusable-frame bound like any other."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        limit = provider._MAX_UNUSABLE_FRAMES
+        junk = ["not json"] * (limit - 1)
+        events = [
+            _event("task-started"),
+            _event("result-generated", "Hallo", False),
+            *junk,
+            self._sentence({"text": "", "sentence_end": False, "heartbeat": True}),
+            *junk,
+            _event("result-generated", "Hallo Welt.", True),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            assert t.transcribe_batch(_wav_bytes()) == "Hallo Welt."
 
 
 class TestFunAsrUnusableFrames:
@@ -603,6 +695,75 @@ class TestFunAsrUnusableFrames:
         t = FunAsrTranscriber(api_key="sk", language_mode="en")
         with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
             assert t.transcribe_batch(_wav_bytes()) == "eins zwei"
+
+    @pytest.mark.parametrize("terminal", ["task-finished", "result-generated"])
+    def test_an_event_as_the_frame_after_the_bound_is_honoured(self, terminal):
+        """The budget was spent one statement before the frame was looked
+        at, so exactly `_MAX_UNUSABLE_FRAMES` junk frames followed by a real
+        event discarded that event: a `task-finished` there was reported as
+        "1001 frames in a row that were not events"."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        junk = ["not json"] * provider._MAX_UNUSABLE_FRAMES
+        if terminal == "task-finished":
+            tail = [_event("task-finished")]
+        else:
+            tail = [_event("result-generated", "zwei", True), _event("task-finished")]
+        events = [
+            _event("task-started"),
+            _event("result-generated", "eins", False),
+            *junk,
+            *tail,
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            # A final with text replaces the partial of the same sentence; an
+            # empty end (`task-finished` alone) keeps the last partial.
+            expected = "eins" if terminal == "task-finished" else "zwei"
+            assert t.transcribe_batch(_wav_bytes()) == expected
+
+    @pytest.mark.parametrize(
+        "frame",
+        [b"\x00\x01", "[1, 2]", "42", "not json"],
+        ids=["binary", "json-list", "json-number", "not-json"],
+    )
+    def test_every_kind_of_unusable_frame_is_counted(self, frame):
+        """Each of the reader's three skip arms spends the budget, and the
+        transcript loop's own skip does too: a flood of any one kind fails
+        one frame past the bound and succeeds at the bound."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        limit = provider._MAX_UNUSABLE_FRAMES
+        at_the_bound = [_event("task-started"), *([frame] * limit), _event("task-finished")]
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=FakeWS(at_the_bound)):
+            assert t.transcribe_batch(_wav_bytes()) == ""
+
+        past_the_bound = [_event("task-started"), *([frame] * (limit + 1)), _event("task-finished")]
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=FakeWS(past_the_bound)),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+        assert f"{limit + 1} frames" in str(excinfo.value)
+
+    def test_one_junk_frame_past_the_bound_still_fails(self):
+        from stt_app.transcriber import funasr_provider as provider
+
+        events = [
+            _event("task-started"),
+            *(["not json"] * (provider._MAX_UNUSABLE_FRAMES + 1)),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(events)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+        assert f"{provider._MAX_UNUSABLE_FRAMES + 1} frames" in str(excinfo.value)
 
     def test_a_shutdown_ends_the_receive_loop(self):
         from stt_app.transcriber.base import (

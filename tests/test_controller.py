@@ -1356,6 +1356,44 @@ def test_a_preload_worker_that_cannot_be_scheduled_is_reported():
     _ = app
 
 
+def test_a_preload_that_cannot_be_scheduled_is_retried_by_the_next_save():
+    """The failure arm left `_preload_future` pointing at the previous
+    generation's worker. `_matching_model_preload_running` paired that stale
+    future with the new target key and answered True, so the save the user
+    made to fix the problem found nothing to retry until the old worker
+    finished -- and `_preload_owns_overlay` kept the idle line away too."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=FakeOverlay(),
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+
+    class _StillRunning:
+        def done(self):
+            return False
+
+        def cancel(self):
+            return False
+
+    controller._preload_future = _StillRunning()
+    controller._preload_executor = _RefusingExecutor()
+
+    controller._start_local_model_preload()
+
+    assert controller._preload_future is None
+    assert controller._matching_model_preload_running(controller.settings) is False
+    assert controller._local_model_preload_needed(controller.settings) is True
+    assert controller._preload_owns_overlay() is False
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_preload_failure_is_reported_without_fallback():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
