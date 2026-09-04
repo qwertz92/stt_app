@@ -5405,3 +5405,174 @@ names the lines to grep.
 - The Bash heredoc failed once on a script containing several triple-quoted
   strings; generating patch scripts as files and running them is the reliable
   path, and it leaves the exact edit on disk.
+
+## Round 24 (2026-09-04) - the second wave on the round-22/23 fixes
+
+Four breakers with fresh contexts and distinct briefs -- concurrency, boundaries
+and hostile input, external facts, and reachability of the previous round's
+fixes -- against the commits of rounds 22-23 and the two still-open warm-stream
+items. Every finding below was reproduced by the lead before it was acted on,
+every fix was mutation-tested (a fix whose test does not fail on the old code
+is not a fix), and the refutations are listed with the reason so they are not
+re-raised.
+
+### The warm stream: the previous fix left two ways to the same refusal
+
+`close_if_idle` waited for `_starting` and `_closes_in_flight` and then closed
+what was left. Two streams escaped that accounting:
+
+- The open a restart superseded closed its stream on its own thread *after*
+  releasing the lock, and nothing counted that close. `close_if_idle` answered
+  True with the stream still registered (measured: `close_if_idle() -> True`,
+  `live_stream_count() -> 1`), the refresh it arms found the stream and
+  refused, and the microphone the refresh was for stayed invisible until the
+  next recording stop. The superseded open now hands its stream to `_retiring`
+  under the lock and closes it through `_close_retiring`, the same road every
+  other retired stream takes.
+- A `request_restart` during a capture leaves `_pending_restart` set, and the
+  `detach` at the recording stop honours it. `close_if_idle` bumped the
+  generation and cleared nothing else, so the detach reopened the stream the
+  refresh had just closed and the refresh was refused on the next stop too. It
+  clears the flag with the bump.
+
+The first version of the controller half restarted *every* open in flight on
+a settings save, which the reachability breaker measured as one extra device
+open per unrelated save -- an opacity change during the seconds a locked-down
+audio stack takes to open. `opening_device_key` names the device an open is
+resolving, and the controller restarts only when it differs from the saved
+one. Also from that review: the once-per-capture callback log was latched
+once per *process*, because nothing re-armed `_callback_failed` between
+recordings.
+
+Refuted on the same code: the reachability breaker's probes for
+`close_if_idle` failed on the fixed tree, and both failures were probe
+assumptions -- one fake never released the close gate in the order the fixed
+code needs, and one stub predated `opening_device_key`. Neither is a defect;
+both are recorded so the next round does not rerun them as findings.
+
+### The download queue's drain summary reported its last outcome
+
+The round-23 rule -- a drain that downloaded something after a Cancel says so
+-- was implemented as "report what ran", so with `medium` canceled and a later
+`small` downloaded the summary read "Downloaded: small" and the canceled row
+said nothing; with a Cancel after the first model finished, the run reported
+as a plain success. `_canceled_drain_summary` now leads every drain that
+consumed a Cancel with "Download canceled." and lists what completed, failed,
+was removed and ran afterwards on its own side of the cut, from a counter
+snapshot taken where the event is consumed. The headline is dropped only when
+the drain has nothing of its own to say. The concurrency breaker's second
+finding here was a hardening: an entry queued during shutdown would have
+started a fresh download from the `aboutToQuit` handler's own drain, so the
+enqueue refuses after `_shutdown_started`.
+
+### Fun-ASR: the frame bound reset once per event
+
+The round-23 bound on unusable frames lived inside `_recv_event`, which the
+transcript loop calls once per *event*. A peer alternating one JSON object
+that is not an event with any junk therefore reset the counter every call, and
+the spin the bound existed to stop was back (an empty object or an unknown
+event name counts as unusable as well). The budget is now created per
+transcript, spent on every unusable frame, and reset only by the three event
+names the loop acts on. From the boundaries breaker's hostile-input file:
+`text` was `str.strip`-ed and `sentence_end` `bool()`-ed without a type check,
+so a number or a list in either reached the loop; both are typed before they
+are trusted.
+
+### AssemblyAI: the poll outlived the app, and a status-less object was "still waiting"
+
+`ThreadPoolExecutor` joins its worker at exit, and the batch poll had no
+reason to stop, so a quit during a job the service never finishes kept the
+process alive for the rest of the thirty-minute budget -- holding the
+single-instance lock, so the app could not even be restarted. An app-wide
+shutdown flag in `transcriber/base.py` is set as the first statement of
+`DictationController.shutdown`; the poll reads it at the top of its loop and
+between the half-second slices its sleep is cut into, and the Fun-ASR receive
+loop reads the same flag. Two smaller ones: a fetch returning an object
+without a `status` raised `AttributeError` past the whole wait instead of
+counting as a failed fetch, and the docstring's bound was the budget alone
+while the true bound is the budget plus one request in flight.
+
+### The controller: a refused start retired the Insert offer
+
+The round-23 Insert fix cleared `_insert_action_text` on the statement after
+`_recording_start_in_progress`, before any branch that decides whether a
+recording starts. A refused start -- "Model is still loading" right after a
+dictation, the common case -- therefore retired the tail of a failed
+streaming finalize and repainted the overlay without it, leaving only the
+whole-dictation re-paste, which pastes on top of the prefix already in the
+document. The clear now sits past every refusal, and a refusal painted while
+an offer is pending keeps the text on screen with Copy and Insert acting on
+exactly it. Two more from the same file: `refresh_hotkey_registration` was the
+one writer of the registration state that did not repaint the idle line, so a
+resume that substituted a fallback advertised a key that no longer fired; and
+the preload's `Executor.submit` was the third unguarded submit site, leaving
+the overlay on "Loading" for good when it raised.
+
+### Smaller ones
+
+- A download queued while the old worker was still draining its cancel was
+  discarded silently; the worker now consumes the event and continues.
+- The update dialog's download label divided by 1024 squared and wrote "MB":
+  the third decimal-megabyte instance in this repository.
+- The retranscribe dialog's language-substitution note was Canary-only, while
+  any model can decline the selected language; the sentence is hoisted and
+  the reservation measured for the worst case.
+- The download lock lives under the calling user's `%APPDATA%`, so it covers
+  one Windows user's processes, not a second account sharing the Model Dir;
+  the table row, the coordinator's docstring and one test docstring said
+  "machine-wide" and no longer do.
+- The nested-status HTTP test asserted only that a dict was not returned; it
+  now asserts the unwrapped string.
+
+### Refuted or judged, with the reason
+
+- Two identical USB microphones are one picker entry and the first index
+  wins: real, and kept -- the name is what makes a selection survive a
+  re-enumeration and a reboot. Recorded under Known limitations.
+- The update label showing `downloaded > total`: unreachable, because the
+  verified download raises before reporting progress past the declared size.
+- A Download refused while `_claimed` still names a dying process: transient
+  and pre-existing; the refusal is correct while the claim stands.
+- The strip mismatch between the background arm's Copy and Insert: no
+  observable difference for any text a transcriber returns, unified anyway
+  because two readers of one value should read one value.
+- Two test observations from the reachability breaker (structural
+  `AttributeError` failures in the stub-based tests): verified by mutation to
+  fail on the old code; the stubs are deliberate.
+- The 9.02 s measured against the 10.00 s `close_timeout`: a different
+  measurement stack, not a contradiction of the SDK source.
+- A failed `UnregisterHotKey` message naming the wrong key: unreachable, the
+  managers are built thread-bound (`hwnd=None`), so the call cannot fail that
+  way.
+- AltGr suppression dropping a genuine Ctrl+Alt hotkey while the right Alt is
+  held: deliberate, and documented.
+- Deepgram's 32-chunk sender queue (about 3.2 s of audio at 100 ms blocks) and
+  the 2 s stop drain: a tuning decision for the user, not a defect.
+
+### The field report
+
+Still not reproducible: the Parakeet batch path is byte-identical between
+HEAD and the 2026-08-28 checkout on three independent measurements (AST
+function diff, coverage differential of a complete dictation, cache-layout
+differential), and the one HEAD divergence that produces the symptom applies
+to faster-whisper with a custom Model Dir, which Parakeet's inventory does
+not share. The instrument is the work machine's `dictation.log`; the report
+to the user names the lines to grep. The `aug28` worktree stays until the
+log arrives.
+
+### Process notes
+
+- A mutant that "survives" can be a no-op edit: adding a redundant line in
+  front of the real assignment changes nothing, so the test cannot see it.
+  Check that the mutant changes behaviour before reading a survival as a weak
+  test.
+- A probe that fails on the fixed tree is a finding about the probe until
+  the failure is reproduced against the fix's own claim. Two of four probes
+  this round encoded the old code's ordering.
+- The Bash heredoc failed again on a script with several triple-quoted
+  strings; writing the patch script as a file and running it remains the
+  reliable path.
+- Restaging mixed working-tree changes into logical commits is worth the
+  detour: backing the verified files up, reverting, and re-applying stage by
+  stage gave three commits that each say one thing, and a byte comparison
+  against the backups proved nothing was lost on the way.

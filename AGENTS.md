@@ -379,7 +379,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `attach` then refused the stream and every recording cold-opened, i.e. the
   feature was silently dead, and the losing case is the slow open the
   feature exists for. A restart requested mid-open makes the open discard
-  its stream and re-resolve, at worst one extra open. A
+  its stream and re-resolve, at worst one extra open.
+  **A superseded open retires its stream through the accounting**, and
+  **`close_if_idle` cancels the reopen a pending restart scheduled.** The
+  open that a restart superseded closed its stream on its own thread after
+  the lock was released, so `close_if_idle` -- which waits only for
+  `_starting` and `_closes_in_flight` -- answered True while that stream was
+  still registered, and the refresh it arms found it and refused (measured:
+  `close_if_idle() -> True`, `live_stream_count() -> 1`). The discarded
+  stream now goes into `_retiring` under the lock and is closed by
+  `_close_retiring`, i.e. the same road every other retired stream takes.
+  And `close_if_idle` cleared nothing but the generation: a `_pending_restart`
+  left by a `request_restart` during a capture made the `detach` that followed
+  reopen the stream the refresh had just closed, so the re-enumeration was
+  refused on the next stop as well. It clears the flag with the bump.
+  **The controller restarts an in-flight open only when the device differs**
+  (`WarmMicrophoneStream.opening_device_key`, the selected key while
+  `_starting`, else None): the first fix restarted every open in flight,
+  so an unrelated save during the seconds a locked-down stack takes to open
+  -- an opacity change, a hotkey -- cost one extra open each time. And
+  `AudioCapture.start()` re-arms `_callback_failed`, which is what makes the
+  once-per-capture callback log once per *capture* rather than once per
+  process; the latch used to survive into the next recording. A
   first-callback watchdog timeout on a warm capture restarts the warm stream
   automatically (self-heal) instead of only suggesting to disable the feature.
   Without COM/comtypes the listener is inert and the Settings "Refresh" button
@@ -773,7 +794,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Retry for the rest of the session, the recording -- often the only copy --
   was never offered for a retry, and the streaming job's runtime lease, which
   only its worker's `finally` releases, held `_transcriber_runtime_lock` for
-  the process lifetime.
+  the process lifetime. **The preload's submit is the third site**: the
+  result slot and the overlay both said "loading" before the submit, and no
+  worker was ever going to complete that generation, so they said so for
+  good. `_start_local_model_preload` records the failure against the key and
+  routes it through `_on_model_preload_done`, so the next dictation raises it
+  instead of substituting a model and the next save retries.
 - **`_get_or_create_transcriber` evicts before it closes** -- the third site
   of the rule the two `_reset_*` helpers already follow. `create_transcriber`
   raises for a missing API key or an absent model, and the closed runtime was
@@ -1011,9 +1037,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   said "Queued for download" -- and the worker used to discard exactly that,
   silently. It now consumes the event and continues with the newer entries,
   both at the top of its loop and when the canceled subprocess reports back,
-  and exits only when nothing is queued; a drain that then downloaded
-  something says so in its summary instead of reporting "Download canceled."
-  for work that ran. Progress and its rolling transfer rate are approximate
+  and exits only when nothing is queued. **A drain that saw a Cancel reports
+  it as one.** The first version of that rule reported the drain's *last*
+  outcome: with `medium` canceled and a later `small` downloaded the summary
+  said "Downloaded: small" and the row of the canceled model said nothing,
+  and with a Cancel after the first model finished the run read as a plain
+  success. `_canceled_drain_summary` puts the headline "Download canceled."
+  on every drain that consumed a Cancel and then lists, on its own side of
+  the cut, what completed or failed before it, which entries the cancel
+  removed (`canceled_names`), and what ran afterwards; `before_cancel` is a
+  snapshot of the two counters taken where the event is consumed, at both
+  sites. The headline is kept only while the drain has something of its own
+  to say -- a Cancel that removed nothing and saw nothing finish is not a
+  cancellation. And `_start_local_model_download` refuses after
+  `_shutdown_started`: the worker exits when the queue is empty, so an entry
+  queued during shutdown would have started a fresh download from the
+  `aboutToQuit` handler's own drain. Progress and its rolling transfer rate are approximate
   because they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
 - **Error text must be selectable**: Qt hands a `QMessageBox` only
@@ -1297,6 +1336,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   queued job's failing insert without one -- Insert then pasted the old tail
   while the overlay displayed the queued transcript. The wiring is pinned by
   emitting the signal at a fake controller, not by reading `run()`.
+  **A refused recording start keeps the offer.** The clear sat on the
+  statement after `_recording_start_in_progress`, before any branch that
+  decides whether a recording starts, so a refusal -- "Model is still
+  loading" right after a dictation is the common one -- retired the tail and
+  repainted the overlay without it, and the only remaining road to that
+  tail was the whole-dictation re-paste. The clear now sits past every
+  refusal, and `_refuse_recording_start` paints a refusal that finds a
+  pending offer with the text still on screen ("Still not inserted:") and
+  `copy_text`/`error_action` acting on exactly it. The background arm's
+  `copy_text` is the stripped transcript, the same value Insert reads.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy
@@ -1347,7 +1396,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   single transcription worker for the whole budget (measured 1.37 million
   receive calls in 0.31 s against an instant fake).
   `_MAX_UNUSABLE_FRAMES` consecutive unusable frames now fail the request
-  with the text received so far. The run-task also asks for the vendor's
+  with the text received so far. **The bound counts across the transcript
+  loop, not per call.** The first version kept the counter inside
+  `_recv_event`, which `_collect_transcript` calls once per *event*, so a
+  peer alternating one JSON object that is not an event with any junk reset
+  it every call and the spin was back -- an empty object, or an unknown
+  event name, counts as unusable too. `_UnusableFrameBudget` is created per
+  transcript, spent on every unusable frame the loop sees, and reset only by
+  `result-generated`, `task-finished` and `task-failed`. Fields are typed
+  before they are trusted: a `text` that is not a string is "", and
+  `sentence_end` is a sentence end only when it is `True`, because a number
+  or a list there reached `str.strip` and `bool()` before. The receive loop
+  also ends when `transcription_shutdown_requested()`.
+  The run-task also asks for the vendor's
   documented `heartbeat: true` (default false, "the connection times out
   and closes after a period of continuously silent audio", which a paused
   dictation uploaded over the realtime protocol is); **unverified against
@@ -1374,6 +1435,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   test pins the sleep between fetches; and `FakeStreamingClient.on`
   overwrote a handler where the real SDK appends to a list, which would have
   hidden an accumulate-vs-replace regression.
+- **The batch poll ends when the app quits, and the real bound is the budget
+  plus one request.** `ThreadPoolExecutor`'s atexit hook joins its worker,
+  so a poll that ignored shutdown held the interpreter for the rest of its
+  30-minute budget after the tray icon was gone -- with the single-instance
+  lock still held, so the app could not be restarted either.
+  `transcriber/base.py` owns an app-wide `_SHUTDOWN` event
+  (`request_transcription_shutdown`, set as the first statement of
+  `DictationController.shutdown`); the AssemblyAI poll reads it at the top
+  of its loop and inside `_sleep_between_fetches`, which sleeps in
+  `ASSEMBLYAI_SHUTDOWN_POLL_S` slices, so a quit ends the wait within one
+  slice and the error names the transcript id and its last status. The
+  Fun-ASR receive loop reads the same flag. A fetch that returns an object
+  without a `status` is a fetch failure, not a job "still waiting":
+  `status = fetched.status` sits inside the retry `try`, where before it
+  raised `AttributeError` past the whole wait. And the bound is
+  `ASSEMBLYAI_BATCH_MAX_WAIT_S` plus one SDK `http_timeout` (30 s), because a
+  request in flight when the deadline passes is not interrupted; the
+  docstring states the bound that way rather than as the budget alone.
 - **A nested provider error object is unwrapped, never `str()`-ed.**
   ElevenLabs' documented shape is `{"detail": {"message": ...}}` (read from
   the vendor's error page), and the key loop found `detail`, a dict, and
@@ -1463,7 +1542,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `HOTKEY_RECLAIM_INTERVAL_MS` and stops once it succeeds. The idle line shows
   `_active_hotkey`, because printing the stored preference would name a key
   that does nothing. The reclaim never swaps the binding while a dictation is
-  running.
+  running. **A resume repaints the idle line**: `refresh_hotkey_registration`
+  re-registered all four hotkeys and painted nothing, while every other
+  writer of the registration state calls `show_idle_status`, so a resume that
+  substituted a fallback -- or lost every combination -- left the overlay
+  advertising a key that no longer fired, and one that repaired an earlier
+  failure left it on Error until the next save. It ends in `show_idle_status`,
+  whose session check keeps it off a live overlay.
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.
@@ -3213,6 +3298,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   kills it. Closing this properly means routing the transcriber's load-path
   download through that same worker process; a poll inside the mirror loop
   would only cover the fallback and would make Cancel look like it works.
+- **Two input devices with the same name are one entry.** The microphone
+  picker stores and resolves the device by *name*, so two identical USB
+  microphones show as one row and `resolve_input_device` opens the first
+  PortAudio index that carries the name -- every time, whichever the user
+  meant. Keying the selection on an index instead would break the property
+  the name buys: a selection that survives a re-enumeration and a reboot,
+  where PortAudio's indices do not. Recorded, not fixed.
 - Streaming: inserted text is append-only and never rewritten. A focus
   change suspends live insertion rather than aborting the session; the
   detection is best-effort polling, so a very brief switch can be missed.
