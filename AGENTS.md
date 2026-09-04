@@ -103,7 +103,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `local_model_inventory_store.py` | Persistent cache of last-known local model inventories keyed by `model_dir` |
 | `local_model_download.py` | Cancellable source/packaged worker-process launcher for local model downloads |
 | `model_download_coordinator.py` | The single download slot; serializes every download path — in-process and, via `file_lock`, across processes |
-| `file_lock.py` | OS-level cross-process advisory lock (`msvcrt.locking` / `fcntl.flock`) used to make the download slot machine-wide |
+| `file_lock.py` | OS-level cross-process advisory lock (`msvcrt.locking` / `fcntl.flock`) that makes the download slot hold across every process of one Windows user |
 | `model_download_progress.py` | Shared approximate model download percent and transfer-rate calculation |
 | `local_model_download_worker.py` | Subprocess entry point that downloads one model |
 | `local_model_scan.py` | Local model inventory scan shared by the app and its worker |
@@ -1004,8 +1004,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   writer needs its own worker process, its own progress row, and its own share
   of the cancel/partial-cleanup bookkeeping. Cancel clears the queue and
   removes unusable `*.incomplete` files while preserving completed files for a
-  later resume. Progress and its rolling transfer rate are approximate because
-  they are derived from cache growth and the estimated total sizes in
+  later resume. **A Download pressed while the old worker is still draining
+  its cancel runs.** A Cancel clears the queue under the download lock, so
+  anything the worker finds queued when it observes the cancel event was
+  queued *after* it -- the user pressed Download again and the tab already
+  said "Queued for download" -- and the worker used to discard exactly that,
+  silently. It now consumes the event and continues with the newer entries,
+  both at the top of its loop and when the canceled subprocess reports back,
+  and exits only when nothing is queued; a drain that then downloaded
+  something says so in its summary instead of reporting "Download canceled."
+  for work that ran. Progress and its rolling transfer rate are approximate
+  because they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
 - **Error text must be selectable**: Qt hands a `QMessageBox` only
   `LinksAccessibleByMouse`, so its text could be captured only by retyping it
@@ -1022,7 +1031,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   dead. The whole body of `make_message_text_selectable` is guarded, because it
   runs from an event filter and an exception there escapes the caller's
   `show()`.
-- **There is exactly one download slot, and it is enforced machine-wide**
+- **There is exactly one download slot, and it is enforced across every
+  process of the same Windows user**
   (`model_download_coordinator`). It exists because the controller's preload
   path and the Local tab's queue each used to spawn a worker against the same
   cache directory, which the user hit as three failures in one sitting:
@@ -1085,16 +1095,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     a `threading.Condition` serializes callers and provides the join and
     explicit-interest behaviour the Local tab depends on. Across processes an
     OS-level lock (`file_lock.CrossProcessLock`, `msvcrt.locking` on Windows /
-    `fcntl.flock` elsewhere) covers the out-of-process benchmark worker,
-    `scripts/download_model.py`, and a second Windows user sharing one Model
-    Dir (a second copy of the app is separately refused by the
-    single-instance guard in `main.py`) — none of which
-    the in-process half can even see. It is a real kernel lock rather than a
+    `fcntl.flock` elsewhere) covers the out-of-process benchmark worker and
+    `scripts/download_model.py` (a second copy of the app is separately
+    refused by the single-instance guard in `main.py`) — neither of which
+    the in-process half can even see. **It does not reach a second Windows
+    user**: the lock files live in `appdata_root() / "locks"`, i.e. under
+    the calling user's `%APPDATA%`, so two accounts sharing one Model Dir
+    hold two different locks (this entry claimed otherwise until
+    2026-09-04; see Known limitations). It is a real kernel lock rather than a
     PID file on purpose: the OS drops it when the owner exits for any reason,
     so there is no stale-lock detection, no heartbeat, and no timeout that
     guesses whether the other side is alive — the three things a PID file gets
     wrong, each of which leaves downloading permanently broken.
-  - The machine-wide lock is keyed on the **cache directory**, not the model:
+  - The cross-process lock is keyed on the **cache directory**, not the model:
     two writers corrupt each other through the shared blob and ref trees even
     when fetching different models, and directory-growth progress becomes
     meaningless for both. An empty Model Dir maps onto one shared identity
@@ -1113,9 +1126,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     `_release_cache_lock` finds it through `self._cache_lock` -- so a raise
     after `lock.acquire()` returned True and before the assignment strands a
     real kernel lock with no reference to it. Because the lock is keyed on the
-    cache directory and is machine-wide, that blocks the benchmark worker,
-    `scripts/download_model.py` and any second user of that Model Dir until
-    this process exits, not just this process. The publication therefore
+    cache directory and shared by every process of this user, that blocks the
+    benchmark worker and `scripts/download_model.py` until this process
+    exits, not just this process. The publication therefore
     releases the lock and re-raises. `CrossProcessLock.release()` is idempotent
     and swallows `OSError`, so the defensive call costs nothing.
   - The app's own download subprocess needs no lock of its own: the parent
@@ -2647,7 +2660,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and worse because it feeds the *same table column* as the
   `MODEL_ESTIMATED_SIZE_MB` branch beside it: one model reported two
   different numbers under the same unit depending on `--show-sizes`
-  (Parakeet 670.00 against 638.96).
+  (Parakeet 670.00 against 638.96). `update_ui.py`'s download label was the
+  third: it divided by 1024 squared and wrote "MB".
 - **A reservation is measured, not predicted**: `retranscribe_dialog` reserves
   a `heightForWidth`, so the candidate is chosen by measuring every candidate
   through the polished label. `key=len` is character count, not drawn width
@@ -3156,6 +3170,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   a Ctrl+C landing inside `thread.join()` or the provider call is logged and
   dropped. Only reachable in a console-launched process.
 
+- **The download slot is not enforced across Windows user accounts.** The
+  cross-process lock file lives under the calling user's `%APPDATA%`
+  (`appdata_root() / "locks"`), so two accounts on one machine that point at
+  the same Model Dir can download into it at the same time and corrupt each
+  other's blob and ref trees. Sharing a Model Dir between accounts is not a
+  configuration the app offers or documents; a lock beside the shared
+  directory would need write access for every account and the docstring on
+  `_download_lock_dir` says why it is not inside the cache. Recorded rather
+  than fixed.
 - **With a custom Model Dir, a faster-whisper copy that lives only in the
   default Hugging Face cache can no longer be deleted from the Local tab.**
   Delete is gated on the inventory, and the inventory now answers "loadable
