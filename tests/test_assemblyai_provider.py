@@ -1624,7 +1624,7 @@ class TestSetupFailuresAreWrapped:
 
 def test_a_shutdown_ends_the_poll_within_one_slice(monkeypatch):
     """`executor.shutdown(wait=False, cancel_futures=True)` does not stop a
-    running worker, and the executor's atexit hook joins it -- so a job the
+    running worker, and the executor's exit handler joins it -- so a job the
     service leaves queued kept the process alive for the whole thirty-minute
     budget after the user quit, still holding the single-instance lock. The
     poll now reads the app-wide shutdown flag between slices of its sleep."""

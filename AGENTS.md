@@ -170,8 +170,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   no way to keep everything, so the decision was the app's rather than the
   user's. 0 now prunes nothing (`RECORDINGS_MAX_COUNT_UNLIMITED`), the ceiling
   is `RECORDINGS_MAX_COUNT_CEILING`, and the default stays 10. **No schema
-  bump**: every earlier version clamped this field to >= 1 on write, so a
-  stored 0 cannot come from an older app. A *negative* value falls back to the
+  bump**: every earlier version clamped this field to >= 1 when reading it
+  (`from_dict`) and the spin box could not go below 1, so no older app ever
+  held a 0 to write and a stored 0 cannot come from one. A *negative* value falls back to the
   default instead of clamping to 0 -- the spin box cannot produce one, so it is
   garbage, and reading "unlimited" into garbage would switch pruning off
   silently. Note what the old clamp did with 0: `max(1, int(keep_count or 1))`
@@ -853,8 +854,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   drops the previous worker's future: `_matching_model_preload_running` and
   `_preload_owns_overlay` read it, and a worker `cancel()` could not stop kept
   both answering "running" for the *new* key, so the save meant to fix the
-  problem found nothing to retry until the stale worker finished (measured:
-  a model load) and the idle line stayed off the overlay for as long.
+  problem found nothing to retry until the stale worker finished -- for a
+  preload worker, its model load -- and the idle line stayed off the overlay
+  for as long.
 - **`_get_or_create_transcriber` evicts before it closes** -- the third site
   of the rule the two `_reset_*` helpers already follow. `create_transcriber`
   raises for a missing API key or an absent model, and the closed runtime was
@@ -1417,15 +1419,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   refusal above. Fixing the refusal alone left every one of the others
   hiding the button while the text stayed pending -- a save, a resume, a
   Cancel press, a finished preload, "No window to insert into". **And the
-  offer carries its own action**: two insert paths fail *after* the paste
-  keystroke went out and deliberately withhold Insert (the text is most
-  likely in the document already), and a repaint that read the pending text
+  offer carries its own action**: the insert paths that fail *after* the
+  paste keystroke went out (four raise sites of `TextMayHaveBeenPastedError`
+  in `text_inserter.py`) deliberately withhold Insert -- the text is most
+  likely in the document already -- and a repaint that read the pending text
   alone upgraded that to an Insert button -- pressing it pasted the
   transcript a second time, measured through the overlay's Insert and
   through a queued transcript's flush. `_last_insert_may_have_pasted`, which
   those paths record, decides in the painter as well: the text stays
   readable and copyable, the button stays hidden, the wording says which of
-  the two it is. A parametrized test drives every writer.
+  the two it is. A parametrized test drives every writer except
+  `_refuse_recording_start`, which two tests of its own drive.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy

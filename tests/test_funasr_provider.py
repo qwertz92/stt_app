@@ -349,7 +349,7 @@ class TestFunAsrTotalBudget:
 
         The receive loop holds the app's single `max_workers=1` transcription
         worker, and `ThreadPoolExecutor` joins its started workers from an
-        atexit hook, so an endless one also stops the process from exiting.
+        exit handler, so an endless one also stops the process from exiting.
         """
         from stt_app.transcriber import funasr_provider as provider
 

@@ -1463,11 +1463,12 @@ class _LocalModelsMixin:
 
         if canceled:
             # The Cancel is the headline whenever the drain has something of
-            # its own to report about it: a download it killed, work that
-            # finished before it, or queued entries it removed. The last of
-            # the three was missing, so a Cancel that emptied the queue
-            # before the worker's first iteration fell through to the
-            # success line below -- "Downloaded: " with no model, in green.
+            # its own to report about it: a download it killed, or queued
+            # entries it removed (`_consume_cancel_locked` says why work that
+            # merely finished before it is not one). The second trigger was
+            # missing, so a Cancel that emptied the queue before the worker's
+            # first iteration fell through to the success line below --
+            # "Downloaded: " with no model, in green.
             _emit_background_signal(
                 self,
                 "local_model_download_finished",

@@ -19,7 +19,7 @@ ProgressCallback = Callable[[str], None]
 
 
 # Set once at application quit. A remote batch wait that keeps polling after
-# that keeps the process alive: `ThreadPoolExecutor` registers an atexit hook
+# that keeps the process alive: `ThreadPoolExecutor` registers an exit handler
 # that *joins* its workers, and `shutdown(wait=False, cancel_futures=True)`
 # does not release a worker that has already started (measured: a poll with a
 # 4 s budget kept the interpreter alive for exactly 4 s after shutdown had

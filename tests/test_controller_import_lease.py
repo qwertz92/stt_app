@@ -79,7 +79,7 @@ def test_an_import_completes_while_a_stream_holds_the_shared_lease(controller):
     finally:
         # Always hand the lease back, even on the failing path. A worker
         # blocked in `_acquire_transcriber_runtime` waits on a plain lock with
-        # no timeout, and `ThreadPoolExecutor`'s atexit hook joins its threads
+        # no timeout, and `ThreadPoolExecutor`'s exit handler joins its threads
         # -- so a regression here would hang the whole run at interpreter exit
         # instead of reporting a failure.
         stream_lease.release()

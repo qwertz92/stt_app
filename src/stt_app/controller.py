@@ -3426,8 +3426,9 @@ class DictationController(QtCore.QObject):
             # read. A worker that `cancel()` could not stop -- it had already
             # started -- kept both answering "running" for the *new* key, so
             # the save the user made to fix the problem found nothing to
-            # retry until that stale worker finished, and the idle line
-            # stayed off the overlay for as long (measured: a model load).
+            # retry until that stale worker finished -- for a preload worker,
+            # its model load -- and the idle line stayed off the overlay for
+            # as long.
             with self._preload_result_lock:
                 self._preload_future = None
             self._record_model_preload_result(key, generation, failure)

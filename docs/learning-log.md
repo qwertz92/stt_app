@@ -5662,5 +5662,8 @@ by running the breaker's own probe before anything was changed.
   "removed queued entries"; a killed download reports itself through its
   own status.
 - `ThreadPoolExecutor` registers its exit handler through
-  `threading._register_atexit`, not `atexit.register`; three documents said
-  "atexit hook" and a grep for the latter finds nothing.
+  `threading._register_atexit`, not `atexit.register`, so a grep for the
+  latter finds nothing. Eight files said "atexit hook" or "atexit join";
+  `e8b1456` corrected the three documents and the wave-4 facts review found
+  the other five (two source comments, a docstring, three test comments),
+  which are corrected in the wave-4 wording commit.

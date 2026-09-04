@@ -285,14 +285,14 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         arriving frame restarts the socket timeout, so a service that pings
         but never sends `task-finished` parked this loop forever -- holding
         the app's single `max_workers=1` transcription worker and, through
-        that executor's atexit join, stopping the process from exiting.
+        that executor's exit-handler join, stopping the process from exiting.
         Measured against a connection that never finishes: 198 receive calls
         in 4 s with no exit in sight.
         """
         while True:
             if transcription_shutdown_requested():
                 # Bounded by the socket timeout below, not by the budget: the
-                # executor's atexit join otherwise kept the process alive for
+                # executor's exit-handler join otherwise kept the process alive for
                 # the rest of the thirty minutes after the user quit.
                 raise _FunAsrInterrupted("The application is shutting down.")
             remaining = deadline - time.monotonic()

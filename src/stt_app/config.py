@@ -1132,7 +1132,7 @@ DEFAULT_ASSEMBLYAI_MODEL = "universal-3-5-pro"
 # up on it. The SDK's own `wait_for_completion` is `while True:` with no
 # bound, so a job AssemblyAI never finishes holds the single transcription
 # worker for the rest of the session -- and, because ThreadPoolExecutor's
-# atexit hook joins its workers, stops the app from exiting at all
+# exit handler joins its workers, stops the app from exiting at all
 # (measured: `shutdown(wait=False, cancel_futures=True)` does not release
 # it), leaving a process that still holds the single-instance lock.
 # 30 minutes is 10-60x the normal turnaround and covers roughly 85 minutes
