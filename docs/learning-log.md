@@ -82,7 +82,8 @@ report. Where a claim could not be measured, it says so.
   single `max_workers=1` transcription worker for the rest of the session --
   and blocked process exit with it. That second half is worth stating precisely
   because it is not obvious from the shutdown code: `ThreadPoolExecutor`
-  registers an atexit hook that *joins* its worker threads, and
+  registers an exit handler (`threading._register_atexit`) that *joins* its
+  worker threads, and
   `shutdown(wait=False, cancel_futures=True)` does not release one that has
   already started. Measured with a throwaway script: the interpreter never
   exited. In the app that leaves a process holding the single-instance lock, so
@@ -5278,7 +5279,8 @@ leaves `close_timeout` to the library.
 ### Fun-ASR: three ways the receive loop lost text, and one it could spin
 
 No total budget (198 receive calls in 4 s, holding the single transcription
-worker and blocking process exit through the executor's atexit join); a server
+worker and blocking process exit through the executor's exit-handler join); a
+server
 CLOSE frame -- which `websocket-client` returns as `""` -- read as "keep
 waiting"; and every exit other than `task-finished` discarding the sentences
 already received. Then, from the boundaries breaker: a `result-generated` with
@@ -5521,7 +5523,8 @@ the overlay on "Loading" for good when it raised.
   one Windows user's processes, not a second account sharing the Model Dir;
   the table row, the coordinator's docstring and one test docstring said
   "machine-wide" and no longer do.
-- The nested-status HTTP test asserted only that a dict was not returned; it
+- The nested-status HTTP test asserted a substring and a length, both of
+  which the stringified dict also satisfied; it
   now asserts the unwrapped string.
 
 ### Refuted or judged, with the reason
@@ -5587,3 +5590,77 @@ log arrives.
   suite's count, and the pipeline's exit code was `tail`'s. Both halves are
   now rules in AGENTS.md: process-global state set by `shutdown()` gets an
   autouse reset, and a push waits for the printed `N passed` line.
+
+### Wave 3 (2026-09-04) - the second wave on the round-24 fixes
+
+Four read-only breakers with distinct lenses (concurrency, reach, boundaries,
+external facts) on the round-24 commits; every finding below was reproduced
+by running the breaker's own probe before anything was changed.
+
+**Confirmed and fixed**
+
+- *Warm stream* (`d5e4f2a`): `close_if_idle` closed outside its own
+  accounting, so a second `close_if_idle` answered True during the first's
+  `stream.close()`; a bare `ensure_started` during that close opened a
+  second stream and the re-enumeration was refused (measured: streams
+  constructed 2, `try_refresh_input_devices() -> False`,
+  `_pending_audio_device_refresh` True); `detach` restarted through
+  `request_restart` after releasing its lock (forced schedule only, 0 hits
+  in 400 natural trials); and `opening_device_key` was None for the whole
+  device query, so a microphone change saved inside it did not restart the
+  open (the setting said Mic B, the stream opened Mic A, `attach` refused
+  it). The guard now sits before the gate, the worker holds it across close
+  and refresh, closes are counted, the restart runs under one hold, and the
+  selected key is published before resolution.
+- *Insert offer* (`8506509`): the refusal fix of round 24 re-armed an
+  Insert button for a paste that had most likely landed (double paste,
+  measured through the overlay's Insert and a queued flush); the
+  unconditional resume repaint painted "Idle" over Done and over the Error
+  carrying the only Insert button; every other non-result status writer
+  hid the button. One painter, the may-have-pasted flag deciding, the
+  resume repainting only on a changed registration state.
+- *Preload* (`cdb3ca9`): the submit-failure arm left the stale future
+  installed, so the save meant to fix the problem found "running" and
+  nothing to retry.
+- *Drain summary* (`60f0b6c`): a Cancel that only emptied the queue printed
+  "Downloaded: " in green; removed entries were never named; two Cancels in
+  one drain shared one snapshot. Now a timeline.
+- *Fun-ASR* (`5407c85`): the budget was spent before classification, so
+  exactly the bound of junk followed by a real `task-finished` failed the
+  transcription; heartbeat packets (documented by the vendor as ignorable,
+  requested by this provider) were read as sentences; the `task-failed`
+  detail had no cap.
+
+**Refuted, with the evidence**
+
+- A bare-string AssemblyAI status "is not recognized as terminal": the
+  installed SDK's `TranscriptStatus` is a `str` enum, so
+  `'completed' in {TranscriptStatus.completed, ...}` is True.
+- A NaN `http_timeout` sleeping forever: an SDK global setting, not
+  reachable from this code.
+- Hostile `_on_progress` calls and a 300-character language code: unreachable
+  from any caller.
+- The frame bound "evaded by one real event per 1000 frames": inherent to a
+  consecutive-frame bound and equal to the pre-fix worst case, and the
+  receive loop still ends on the app's shutdown flag.
+- `_callback_failed` read outside the lock: one duplicated log line at
+  worst, not a finding.
+
+**Process notes**
+
+- The mutation harness takes one test file per case. Two files in one
+  argument reach pytest as a path with a space, the run errors, and the
+  harness reports DETECTED with an empty failure list -- a false kill. Every
+  DETECTED must name a `FAILED ...` line.
+- A Bash heredoc handed `b"\x00\x01"` to Python as real NUL and 0x01 bytes
+  inside a test file ("source code string cannot contain null bytes"). Byte
+  escapes in a patch go through a script file, not a heredoc.
+- The first draft of the drain rule headlined *every* consumed Cancel and
+  broke the round-24 test for a Cancel that found nothing queued and nothing
+  running: that Cancel did nothing the drain has to report, and headlining
+  it put a successful later download in the error colour. Substance is
+  "removed queued entries"; a killed download reports itself through its
+  own status.
+- `ThreadPoolExecutor` registers its exit handler through
+  `threading._register_atexit`, not `atexit.register`; three documents said
+  "atexit hook" and a grep for the latter finds nothing.
