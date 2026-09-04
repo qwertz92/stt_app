@@ -1077,7 +1077,13 @@ class _LocalModelsMixin:
         return missing
 
     def _start_local_model_download(self, model_names: list[str]) -> None:
-        if not model_names:
+        if not model_names or getattr(self, "_shutdown_started", False):
+            # After `shutdown()` nothing may be queued: the worker it
+            # cancelled carries on past a Cancel with whatever is queued
+            # afterwards, and that must never be a download the quit is
+            # waiting on. Today the Qt thread is inside `shutdown()`'s join
+            # while that worker drains, so nothing reaches here; the guard
+            # is what makes that true by construction rather than by timing.
             return
 
         model_dir = self.model_dir_edit.text().strip()
@@ -1331,7 +1337,10 @@ class _LocalModelsMixin:
     def _drive_local_model_download_queue(self, worker_token: int) -> None:
         successes: list[str] = []
         failures: list[str] = []
-        canceled = False
+        canceled_names: list[str] = []
+        # Set when a Cancel is consumed: how much of `successes`/`failures`
+        # predates it. Whatever follows ran because the user queued more.
+        before_cancel: tuple[int, int] | None = None
         cleaned_files = 0
         cleaned_bytes = 0
         while True:
@@ -1345,7 +1354,7 @@ class _LocalModelsMixin:
                     # already said "Queued for download". Consume the cancel
                     # and carry on with the newer work.
                     self._local_model_download_cancel_event.clear()
-                    canceled = True
+                    before_cancel = (len(successes), len(failures))
                     self._local_model_download_active = None
                     self._local_model_download_claimed = None
                 if not self._local_model_download_queue:
@@ -1393,9 +1402,10 @@ class _LocalModelsMixin:
                 # cleared what was queued before it, so the loop continues
                 # with whatever was queued after it and exits when that is
                 # nothing.
-                canceled = True
+                canceled_names.append(model_name)
                 with self._local_model_download_lock:
                     self._local_model_download_cancel_event.clear()
+                    before_cancel = (len(successes), len(failures))
                     self._local_model_download_active = None
                     self._local_model_download_claimed = None
                     if not self._local_model_download_queue:
@@ -1411,34 +1421,34 @@ class _LocalModelsMixin:
             else:
                 failures.append(f"{model_name}: {detail}")
 
-        resumed = canceled and bool(successes or failures)
-        if canceled and not resumed:
-            cleanup_mb = cleaned_bytes / 1_000_000.0
-            cleanup_detail = (
-                f" Removed {cleaned_files} incomplete file"
-                f"{'s' if cleaned_files != 1 else ''} ({cleanup_mb:.1f} MB)."
-                if cleaned_files
-                else " No incomplete files remained."
-            )
-            success_detail = (
-                f" Completed before cancellation: {', '.join(successes)}."
-                if successes
-                else ""
-            )
+        if before_cancel is not None and (
+            canceled_names or before_cancel != (0, 0)
+        ):
+            # The Cancel is the headline whenever the drain has something of
+            # its own to report about it: a download it killed, or work that
+            # finished before it. A Cancel that found nothing running and
+            # nothing done was already reported by the Cancel itself, and the
+            # work queued afterwards is then an ordinary result below.
             _emit_background_signal(
                 self,
                 "local_model_download_finished",
                 worker_token,
                 False,
-                f"Download canceled.{cleanup_detail}{success_detail}",
+                self._canceled_drain_summary(
+                    successes,
+                    failures,
+                    canceled_names,
+                    before_cancel,
+                    cleaned_files,
+                    cleaned_bytes,
+                ),
             )
             return
 
-        note = " (an earlier download was canceled)" if resumed else ""
         if failures and successes:
             message = (
                 f"Completed with errors. Downloaded: {', '.join(successes)}. "
-                f"Failed: {' | '.join(failures)}{note}"
+                f"Failed: {' | '.join(failures)}"
             )
             _emit_background_signal(
                 self,
@@ -1454,7 +1464,7 @@ class _LocalModelsMixin:
                 "local_model_download_finished",
                 worker_token,
                 False,
-                f"Download failed: {' | '.join(failures)}{note}",
+                f"Download failed: {' | '.join(failures)}",
             )
             return
         _emit_background_signal(
@@ -1462,8 +1472,53 @@ class _LocalModelsMixin:
             "local_model_download_finished",
             worker_token,
             True,
-            f"Downloaded: {', '.join(successes)}{note}",
+            f"Downloaded: {', '.join(successes)}",
         )
+
+    @staticmethod
+    def _canceled_drain_summary(
+        successes: list[str],
+        failures: list[str],
+        canceled_names: list[str],
+        before_cancel: tuple[int, int],
+        cleaned_files: int,
+        cleaned_bytes: int,
+    ) -> str:
+        """The Cancel first, then what ran before it and what ran after.
+
+        `resumed = canceled and bool(successes or failures)` -- the previous
+        shape -- read a model that finished *before* the Cancel as the drain
+        having resumed after it, so the commonest Cancel there is (two models
+        queued, the first done, the second killed) reported "Downloaded: A
+        (an earlier download was canceled)" in the success colour, dropped
+        the incomplete-file cleanup and never named the killed model.
+        """
+        done_before, failed_before = before_cancel
+        parts = ["Download canceled."]
+        if cleaned_files:
+            cleanup_mb = cleaned_bytes / 1_000_000.0
+            parts.append(
+                f"Removed {cleaned_files} incomplete file"
+                f"{'s' if cleaned_files != 1 else ''} ({cleanup_mb:.1f} MB)."
+            )
+        else:
+            parts.append("No incomplete files remained.")
+        if successes[:done_before]:
+            parts.append(
+                "Completed before cancellation: "
+                f"{', '.join(successes[:done_before])}."
+            )
+        if failures[:failed_before]:
+            parts.append(
+                f"Failed before cancellation: {' | '.join(failures[:failed_before])}."
+            )
+        if canceled_names:
+            parts.append(f"Canceled: {', '.join(canceled_names)}.")
+        if successes[done_before:]:
+            parts.append(f"Downloaded afterwards: {', '.join(successes[done_before:])}.")
+        if failures[failed_before:]:
+            parts.append(f"Failed afterwards: {' | '.join(failures[failed_before:])}.")
+        return " ".join(parts)
 
     def _on_local_model_download_progress(self, worker_token: int, text: str) -> None:
         if worker_token != self._local_model_download_worker_token:

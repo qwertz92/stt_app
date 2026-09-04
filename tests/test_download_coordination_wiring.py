@@ -939,9 +939,13 @@ def test_a_download_queued_while_the_active_one_is_being_canceled_runs_next(
 
     assert downloads == ["medium", "small"]
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
-    assert finished[-1][3] is True
-    assert "small" in finished[-1][4]
-    assert "canceled" in finished[-1][4].lower()
+    # A download was killed, so the Cancel is the headline; what the user
+    # queued afterwards is listed after it, not reported as a plain success.
+    assert finished[-1][3] is False
+    assert finished[-1][4] == (
+        "Download canceled. No incomplete files remained. "
+        "Canceled: medium. Downloaded afterwards: small."
+    )
 
 
 def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
@@ -978,3 +982,148 @@ def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     assert finished[-1][3] is False
     assert finished[-1][4].startswith("Download canceled.")
+
+
+def test_a_cancel_after_the_first_model_finished_is_reported_as_a_cancel(
+    monkeypatch,
+):
+    """Queue [medium, small]; medium finishes; the user cancels before the
+    worker looks at the queue again. `resumed = canceled and bool(successes)`
+    read medium's success as the drain having resumed after the cancel and
+    reported "Downloaded: medium (an earlier download was canceled)" in the
+    success colour, while small -- the model the user was waiting for -- was
+    dropped without a word."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [("medium", ""), ("small", "")]
+    downloads: list[str] = []
+
+    def _download(self, name, model_dir):
+        downloads.append(name)
+        result = _through_the_slot(name, model_dir, "success")
+        # Lands after the subprocess exited 0 and before the loop top.
+        _LocalModelsMixin._cancel_local_model_downloads(self)
+        return result
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    assert downloads == ["medium"]
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is False
+    assert finished[-1][4] == (
+        "Download canceled. No incomplete files remained. "
+        "Completed before cancellation: medium."
+    )
+    assert dialog._local_model_download_cancel_event.is_set() is False
+
+
+def test_a_cancel_that_kills_the_second_model_names_it_and_keeps_the_cleanup(
+    monkeypatch,
+):
+    """The commonest Cancel there is: two models queued, the first done, the
+    second killed. The cleanup numbers and the killed model's name were lost
+    with the success-coloured report."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [("medium", ""), ("small", "")]
+
+    def _download(self, name, model_dir):
+        if name == "medium":
+            return _through_the_slot(name, model_dir, "success")
+        _LocalModelsMixin._cancel_local_model_downloads(self)
+        _through_the_slot(name, model_dir, "canceled")
+        return ("canceled", "", 3, 1_500_000)
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is False
+    assert finished[-1][4] == (
+        "Download canceled. Removed 3 incomplete files (1.5 MB). "
+        "Completed before cancellation: medium. Canceled: small."
+    )
+
+
+def test_work_before_and_after_a_cancel_is_listed_on_its_side_of_it(monkeypatch):
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [
+        ("tiny", ""),
+        ("medium", ""),
+        ("small", ""),
+    ]
+
+    def _download(self, name, model_dir):
+        if name == "tiny":
+            _through_the_slot(name, model_dir, "error")
+            return ("error", "disk full", 0, 0)
+        if name == "medium":
+            return _through_the_slot(name, model_dir, "success")
+        if name == "small":
+            _LocalModelsMixin._cancel_local_model_downloads(self)
+            _LocalModelsMixin._start_local_model_download(self, ["large-v3"])
+            _through_the_slot(name, model_dir, "canceled")
+            return ("canceled", "", 1, 200_000)
+        _through_the_slot(name, model_dir, "error")
+        return ("error", "network error", 0, 0)
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is False
+    assert finished[-1][4] == (
+        "Download canceled. Removed 1 incomplete file (0.2 MB). "
+        "Completed before cancellation: medium. "
+        "Failed before cancellation: tiny: disk full. "
+        "Canceled: small. "
+        "Failed afterwards: large-v3: network error."
+    )
+
+
+def test_nothing_is_queued_after_the_dialog_shut_down(monkeypatch):
+    """The worker now continues past a Cancel with whatever is queued after
+    it, so an enqueue that slipped in after `shutdown()`'s cancel would be a
+    download the user's quit then waits on."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, _emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_worker_running = False
+    dialog._shutdown_started = True
+
+    _LocalModelsMixin._start_local_model_download(dialog, ["small"])
+
+    assert dialog._local_model_download_queue == []
+    assert dialog._local_model_download_worker_running is False
+    assert model_download_coordinator().has_explicit_interest("small", "") is False
+    assert dialog.local_models_action_label.texts == []
