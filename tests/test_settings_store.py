@@ -31,6 +31,8 @@ from stt_app.config import (
     DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_START_BEEP_TONE,
     DEFAULT_VAD_ENERGY_THRESHOLD,
+    RECORDINGS_MAX_COUNT_CEILING,
+    RECORDINGS_MAX_COUNT_UNLIMITED,
     parse_custom_vocabulary,
 )
 from stt_app.persistence import backup_path
@@ -654,6 +656,81 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
     assert settings.vad_energy_threshold <= 0.1
 
 
+@pytest.mark.parametrize(
+    ("label", "stored", "expected"),
+    [
+        (
+            "0 is the user's explicit 'keep every recording'",
+            RECORDINGS_MAX_COUNT_UNLIMITED,
+            RECORDINGS_MAX_COUNT_UNLIMITED,
+        ),
+        ("a normal count survives untouched", 42, 42),
+        ("1 is still a legal count", 1, 1),
+        (
+            "the ceiling itself is kept",
+            RECORDINGS_MAX_COUNT_CEILING,
+            RECORDINGS_MAX_COUNT_CEILING,
+        ),
+        (
+            "anything above the ceiling is clamped down to it",
+            RECORDINGS_MAX_COUNT_CEILING + 1,
+            RECORDINGS_MAX_COUNT_CEILING,
+        ),
+        ("a huge number is clamped, not accepted", 10**9, RECORDINGS_MAX_COUNT_CEILING),
+        (
+            "a negative count is garbage, so it lands on the default",
+            -1,
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
+        (
+            "a large negative count lands there too",
+            -10**9,
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
+    ],
+)
+def test_recordings_max_count_treats_zero_as_unlimited(label, stored, expected):
+    """0 means "keep every recording"; a negative value means nothing.
+
+    The negative case is the decision worth pinning: clamping it to 0 would
+    read "unlimited" into a value the spin box cannot even produce and would
+    switch pruning off silently, so it falls back to the default like every
+    other unusable value in `from_dict`.
+    """
+    settings = AppSettings.from_dict({"recordings_max_count": stored})
+
+    assert settings.recordings_max_count == expected, label
+
+
+def test_recordings_max_count_defaults_when_the_key_is_absent():
+    settings = AppSettings.from_dict({})
+
+    assert settings.recordings_max_count == DEFAULT_RECORDINGS_MAX_COUNT
+
+
+def test_an_unlimited_recordings_count_survives_a_file_round_trip(tmp_path):
+    """A stored 0 must come back as 0 rather than being rewritten to 1.
+
+    Every version before this change clamped the field to >= 1 on write, so
+    the file the store produces here is the only source a 0 can have -- which
+    is why the change needs no schema bump.
+    """
+    settings_path = tmp_path / "settings.json"
+    store = SettingsStore(settings_path)
+    store.save(
+        dataclasses.replace(
+            store.load(),
+            recordings_max_count=RECORDINGS_MAX_COUNT_UNLIMITED,
+        )
+    )
+
+    persisted = json.loads(settings_path.read_text(encoding="utf-8"))
+
+    assert persisted["recordings_max_count"] == RECORDINGS_MAX_COUNT_UNLIMITED
+    reloaded = SettingsStore(settings_path).load()
+    assert reloaded.recordings_max_count == RECORDINGS_MAX_COUNT_UNLIMITED
+
+
 def test_keep_transcript_in_clipboard_defaults_to_false():
     """Clipboard should NOT keep transcript by default (opt-in, not opt-out)."""
     assert DEFAULT_KEEP_TRANSCRIPT_IN_CLIPBOARD is False
@@ -1041,7 +1118,11 @@ def test_a_hostile_number_never_escapes_from_dict(label, payload):
     settings = AppSettings.from_dict(json.loads(payload))
 
     assert 0 <= settings.history_max_items <= 5000, label
-    assert 1 <= settings.recordings_max_count <= 500, label
+    assert (
+        RECORDINGS_MAX_COUNT_UNLIMITED
+        <= settings.recordings_max_count
+        <= RECORDINGS_MAX_COUNT_CEILING
+    ), label
     assert 0 <= settings.overlay_opacity_percent <= 100, label
     assert math.isfinite(settings.silence_gate_threshold), label
     assert math.isfinite(settings.vad_energy_threshold), label

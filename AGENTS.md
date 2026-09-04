@@ -166,6 +166,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   controller are unaffected; `_build_audio_tab` must run after
   `_build_general_tab` because it applies the shared label column across both
   tabs.
+- **`recordings_max_count` 0 means unlimited**: the retention cap was 500 with
+  no way to keep everything, so the decision was the app's rather than the
+  user's. 0 now prunes nothing (`RECORDINGS_MAX_COUNT_UNLIMITED`), the ceiling
+  is `RECORDINGS_MAX_COUNT_CEILING`, and the default stays 10. **No schema
+  bump**: every earlier version clamped this field to >= 1 on write, so a
+  stored 0 cannot come from an older app. A *negative* value falls back to the
+  default instead of clamping to 0 -- the spin box cannot produce one, so it is
+  garbage, and reading "unlimited" into garbage would switch pruning off
+  silently. Note what the old clamp did with 0: `max(1, int(keep_count or 1))`
+  made it "keep exactly one", the most destructive value in the range.
 - **Model selection is unified on the General tab; Local tab is management-only**:
   "what do I use" (engine, model, language, mode) all live in the General tab's
   "Engine && Mode" group box. A single "Model" form row hosts a

@@ -36,6 +36,7 @@ from stt_app.config import (
     FALLBACK_HOTKEY,
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
+    RECORDINGS_MAX_COUNT_UNLIMITED,
 )
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
@@ -109,6 +110,38 @@ def test_recording_prune_leaves_unmanaged_wav_files_untouched(tmp_path):
     assert unrelated.exists()
     assert not managed_old.exists()
     assert managed_new.exists()
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("label", "keep_count"),
+    [
+        ("0 is the user's 'keep every recording'", RECORDINGS_MAX_COUNT_UNLIMITED),
+        ("a negative count keeps the audio rather than deleting it", -1),
+    ],
+)
+def test_recording_prune_keeps_everything_when_the_count_is_unlimited(
+    tmp_path, label, keep_count
+):
+    """0 must delete nothing at all.
+
+    The old clamp was `max(1, int(keep_count or 1))`, so 0 meant "keep exactly
+    one" -- the most destructive value in the range -- and every archived
+    recording but the newest was deleted on the next stop.
+    """
+    controller, app = _make_controller()
+    managed = [
+        tmp_path / f"recording_2026071{index}_100000_00000{index}.wav"
+        for index in range(1, 5)
+    ]
+    for index, path in enumerate(managed, start=1):
+        path.write_bytes(b"audio")
+        os.utime(path, (index, index))
+
+    controller._prune_recordings(str(tmp_path), keep_count=keep_count)
+
+    assert all(path.exists() for path in managed), label
     controller.shutdown()
     _ = app
 

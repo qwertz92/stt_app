@@ -49,6 +49,7 @@ from .config import (
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
     OVERLAY_RESULT_REVEAL_MS,
+    RECORDINGS_MAX_COUNT_UNLIMITED,
     STREAMING_ABORT_BEEP_DURATION_MS,
     STREAMING_ABORT_BEEP_HZ,
     STREAMING_ABORT_ON_FOCUS_CHANGE,
@@ -2194,7 +2195,12 @@ class DictationController(QtCore.QObject):
             return ""
 
     def _prune_recordings(self, directory: str, keep_count: int) -> None:
-        keep = max(1, int(keep_count or 1))
+        keep = int(keep_count or RECORDINGS_MAX_COUNT_UNLIMITED)
+        if keep <= RECORDINGS_MAX_COUNT_UNLIMITED:
+            # 0 is "keep every recording", so nothing is deleted at all. A
+            # missing or negative count lands here too: erring towards keeping
+            # the user's audio beats deleting all but the newest file.
+            return
         try:
             files = [
                 os.path.join(directory, name)

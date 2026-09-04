@@ -162,6 +162,11 @@ DEFAULT_SAVE_LAST_WAV = False
 DEFAULT_SAVE_ALL_RECORDINGS = False
 DEFAULT_RECORDINGS_DIR = ""
 DEFAULT_RECORDINGS_MAX_COUNT = 10
+# 0 turns pruning off entirely: every archived recording is kept.
+RECORDINGS_MAX_COUNT_UNLIMITED = 0
+# Upper bound of the retention spin box; past this "keep unlimited" is the
+# honest setting rather than a number nobody counts to.
+RECORDINGS_MAX_COUNT_CEILING = 100_000
 DEFAULT_HISTORY_MAX_ITEMS = 500
 HISTORY_MAX_ITEMS_MAX = 5_000
 DISPLAY_TIMEZONE_LOCAL = "local"

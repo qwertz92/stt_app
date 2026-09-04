@@ -69,6 +69,8 @@ from .config import (
     OPENAI_MODELS,
     OVERLAY_OPACITY_MAX_PERCENT,
     OVERLAY_OPACITY_MIN_PERCENT,
+    RECORDINGS_MAX_COUNT_CEILING,
+    RECORDINGS_MAX_COUNT_UNLIMITED,
     SCHEMA_VERSION,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
@@ -393,7 +395,17 @@ class AppSettings:
             )
         except (TypeError, ValueError, OverflowError):
             recordings_max_count = DEFAULT_RECORDINGS_MAX_COUNT
-        recordings_max_count = max(1, min(500, recordings_max_count))
+        # 0 is "keep every recording". No schema bump is needed for it: every
+        # earlier version clamped this field to >= 1 on write, so a stored 0
+        # cannot come from an older app. A negative value is garbage rather
+        # than a stronger "unlimited" -- reading it that way would switch
+        # pruning off silently -- so it lands on the default like every other
+        # unusable value here.
+        if recordings_max_count < RECORDINGS_MAX_COUNT_UNLIMITED:
+            recordings_max_count = DEFAULT_RECORDINGS_MAX_COUNT
+        recordings_max_count = min(
+            RECORDINGS_MAX_COUNT_CEILING, recordings_max_count
+        )
         raw_history_max_items = merged.get(
             "history_max_items",
             DEFAULT_HISTORY_MAX_ITEMS,

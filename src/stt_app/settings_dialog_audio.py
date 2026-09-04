@@ -15,6 +15,8 @@ from .config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
     DEFAULT_SILENCE_GATE_THRESHOLD,
     DEFAULT_VAD_ENERGY_THRESHOLD,
+    RECORDINGS_MAX_COUNT_CEILING,
+    RECORDINGS_MAX_COUNT_UNLIMITED,
     SILENCE_GATE_THRESHOLD_MAX,
     SILENCE_GATE_THRESHOLD_MIN,
     VAD_ENERGY_THRESHOLD_MAX,
@@ -288,19 +290,29 @@ class _AudioTabMixin:
         recordings_form.addRow("Recordings Folder", recordings_dir_layout)
 
         self.recordings_max_spin = _WheelPassthroughSpinBox()
-        self.recordings_max_spin.setRange(1, 500)
+        self.recordings_max_spin.setRange(
+            RECORDINGS_MAX_COUNT_UNLIMITED,
+            RECORDINGS_MAX_COUNT_CEILING,
+        )
+        # Same wording as the two history limits so one Settings dialog does
+        # not name the same idea two ways.
+        self.recordings_max_spin.setSpecialValueText("Unlimited (0)")
         self.recordings_max_spin.setValue(DEFAULT_RECORDINGS_MAX_COUNT)
         self.recordings_max_spin.setToolTip(
-            "Keep only the newest N archived recordings."
+            "Keep only the newest N archived recordings; 0 keeps every one."
         )
-        recordings_hint = QtWidgets.QLabel(
-            "Maximum number of archived WAV files; the oldest files are removed first."
+        self.recordings_max_hint_label = QtWidgets.QLabel(
+            "Maximum number of archived WAV files; the oldest files are "
+            "removed first. 0 = keep every recording."
         )
-        recordings_hint.setWordWrap(True)
-        self._style_field_hint_label(recordings_hint)
+        self.recordings_max_hint_label.setWordWrap(True)
+        self._style_field_hint_label(self.recordings_max_hint_label)
         recordings_form.addRow(
             "Keep Recordings",
-            self._field_with_hint(self.recordings_max_spin, recordings_hint),
+            self._field_with_hint(
+                self.recordings_max_spin,
+                self.recordings_max_hint_label,
+            ),
         )
         layout.addWidget(recordings_box)
 
