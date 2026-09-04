@@ -83,7 +83,13 @@ class FakeStreamingClient:
         self.streamed_chunks: list[bytes] = []
 
     def on(self, event, handler):
-        self.handlers[getattr(event, "value", event)] = handler
+        # The real `_BaseStreamingClient.on` appends to a list per event; an
+        # overwrite here would hide an accumulate-vs-replace regression.
+        self.handlers.setdefault(getattr(event, "value", event), []).append(handler)
+
+    def emit(self, key, *args):
+        for handler in self.handlers[key]:
+            handler(self, *args)
 
     def connect(self, params):
         self.connect_params = params
@@ -106,10 +112,10 @@ class FakeStreamingClient:
             end_of_turn=end_of_turn,
             turn_is_formatted=formatted,
         )
-        self.handlers["Turn"](self, event)
+        self.emit("Turn", event)
 
     def emit_error(self, error):
-        self.handlers["Error"](self, error)
+        self.emit("Error", error)
 
 
 def _make_streaming_transcriber(api_key="key"):
@@ -666,7 +672,7 @@ class TestAssemblyAIStreaming:
 
         class HandlerErrorClient(FakeStreamingClient):
             def connect(self, params):
-                self.handlers["Error"](self, RuntimeError("Not Authorized"))
+                self.emit("Error", RuntimeError("Not Authorized"))
 
         t = AssemblyAITranscriber(
             api_key="key",
@@ -1059,6 +1065,10 @@ def _pending_aai(*, statuses, transcript_id="t-123"):
     def _get_transcript(http_client, tid):
         assert http_client is _Client.http_client, http_client
         fetched.append(tid)
+        if len(fetched) > _FAKE_MAX_FETCHES:
+            raise AssertionError(
+                f"the poll loop fetched {len(fetched)} times without finishing"
+            )
         status = remaining.pop(0) if remaining else "queued"
         out = _PendingTranscript(status=status, transcript_id=tid)
         if status == "completed":
@@ -1092,6 +1102,10 @@ def _pending_aai(*, statuses, transcript_id="t-123"):
 # call cap can, and it turns "the bound is gone" into a failure naming itself
 # rather than a run that hangs with no output.
 _FAKE_CLOCK_MAX_SLEEPS = 1000
+# And a cap on the operation that always runs: a mutation that deletes the
+# sleep makes the sleep-count guard unreachable and hangs pytest instead of
+# failing it (measured: 23.5 million iterations in 2 s, guard never fired).
+_FAKE_MAX_FETCHES = 5000
 
 
 def _fake_clock(monkeypatch, provider):
@@ -1520,3 +1534,106 @@ class TestStreamStopBudget:
             released.set()
 
         assert elapsed < 1.0, f"the join ignored its budget: {elapsed:.2f}s"
+
+
+class TestTransientFetchFailures:
+    """One failed status fetch must not abort a job the service will finish."""
+
+    def test_a_transient_fetch_error_is_retried_within_the_budget(self, monkeypatch):
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        aai, fetched = _pending_aai(statuses=["queued", "processing", "completed"])
+        real_get = aai.api.get_transcript
+        blips = [TimeoutError("Read timed out")]
+
+        def _flaky(http_client, tid):
+            if blips:
+                fetched.append(tid)
+                raise blips.pop()
+            return real_get(http_client, tid)
+
+        aai.api.get_transcript = _flaky
+        _fake_clock(monkeypatch, provider)
+        t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+        assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
+        assert len(fetched) == 4
+
+    def test_persistent_fetch_errors_fail_naming_the_transcript_id(self, monkeypatch):
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        aai, fetched = _pending_aai(statuses=[], transcript_id="tid-later-999")
+
+        def _always_fails(http_client, tid):
+            fetched.append(tid)
+            raise TimeoutError("Read timed out")
+
+        aai.api.get_transcript = _always_fails
+        _fake_clock(monkeypatch, provider)
+        t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+        with pytest.raises(TranscriptionError) as excinfo:
+            t.transcribe_batch(b"RIFF....WAVE")
+
+        message = str(excinfo.value)
+        assert "tid-later-999" in message
+        assert "Read timed out" in message
+        assert len(fetched) == provider.ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES
+
+    def test_a_failure_count_is_reset_by_a_successful_fetch(self, monkeypatch):
+        from stt_app.transcriber import assemblyai_provider as provider
+
+        limit = provider.ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES
+        statuses = []
+        for _ in range(3):
+            statuses.extend(["queued"] * (limit - 1) + ["processing"])
+        statuses.append("completed")
+        aai, fetched = _pending_aai(statuses=list(statuses))
+        real_get = aai.api.get_transcript
+        # Fail every fetch except one in `limit`, so a count that is never
+        # reset crosses the limit while a reset one never does.
+        calls = [0]
+
+        def _mostly_failing(http_client, tid):
+            calls[0] += 1
+            if calls[0] % limit != 0:
+                fetched.append(tid)
+                raise ConnectionError("blip")
+            return real_get(http_client, tid)
+
+        aai.api.get_transcript = _mostly_failing
+        _fake_clock(monkeypatch, provider)
+        t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+        assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
+
+
+class TestSetupFailuresAreWrapped:
+    def test_a_broken_sdk_module_surfaces_as_a_transcription_error(self, monkeypatch):
+        """`_configure` ran before the try; an odd SDK escaped as an AttributeError."""
+
+        aai = types.SimpleNamespace()  # no `settings`, no `Transcriber`
+        t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+        with pytest.raises(TranscriptionError, match="AssemblyAI"):
+            t.transcribe_batch(b"RIFF....WAVE")
+
+
+def test_the_loop_sleeps_one_polling_interval_between_fetches(monkeypatch):
+    """Between two non-terminal fetches it sleeps `polling_interval`, once.
+
+    Pinned because the fake-clock guard sits inside the patched sleep: a loop
+    that stops sleeping makes that guard unreachable, and only the fetch cap
+    then turns the hang into a failure. Measured with the sleep deleted:
+    23.5 million iterations in 2 s and the sleep guard never fired.
+    """
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=["queued", "processing", "completed"])
+    aai.settings.polling_interval = 2.0
+    now = _fake_clock(monkeypatch, provider)
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+
+    assert t.transcribe_batch(b"RIFF....WAVE") == "at last"
+    assert len(fetched) == 3
+    assert now[0] == 4.0, "two non-terminal fetches, one interval after each"

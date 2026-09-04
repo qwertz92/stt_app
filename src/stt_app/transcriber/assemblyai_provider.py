@@ -94,6 +94,15 @@ ASSEMBLYAI_STREAM_TERMINATE_TIMEOUT_S = 5.0
 ASSEMBLYAI_SDK_THREAD_LOOP_S = 1.0
 ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S = 8.0
 
+# A status fetch inside the batch poll that raises -- a read timeout, a
+# DNS blip, a 5xx -- used to abort the whole wait on the spot and the
+# message then omitted the transcript id, the one thing that would let
+# the job be recovered. It is retried across this many consecutive
+# failures, one polling interval apart, so a blip survives while a
+# persistent fault (a revoked key answering 401 forever) still fails in
+# under a minute rather than spending the thirty-minute budget.
+ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES = 3
+
 
 class AssemblyAITranscriber(ProgressReporter, ITranscriber):
     """Batch transcription using AssemblyAI's REST API via the official SDK.
@@ -250,6 +259,7 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         )
         interval = min(max(interval, 0.5), 10.0)
         deadline = time.monotonic() + ASSEMBLYAI_BATCH_MAX_WAIT_S
+        consecutive_failures = 0
         while True:
             if time.monotonic() >= deadline:
                 raise TranscriptionError(
@@ -262,9 +272,22 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             # Fetch first and sleep between fetches, which is also the order
             # the SDK's own loop uses. Sleeping first spent a full polling
             # interval before ever asking, on every batch dictation.
-            transcript = cls._fetch_transcript(aai, transcript_id)
-            if transcript.status in terminal:
-                return transcript
+            try:
+                transcript = cls._fetch_transcript(aai, transcript_id)
+            except TranscriptionError:
+                raise
+            except Exception as exc:
+                consecutive_failures += 1
+                if consecutive_failures >= ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES:
+                    raise TranscriptionError(
+                        "AssemblyAI transcription failed: could not fetch the "
+                        f"transcript status ({exc}). The job may still complete; "
+                        f"transcript id {transcript_id}."
+                    ) from exc
+            else:
+                consecutive_failures = 0
+                if transcript.status in terminal:
+                    return transcript
             time.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
@@ -272,11 +295,12 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
 
         Accepts WAV bytes, a file path, or a Path object.
         """
-        self._configure()
-        aai = self._get_aai()
-
         temp_path: Path | None = None
         try:
+            # Inside the try like everything else: these two ran before it,
+            # so an SDK that lacks what they touch escaped unwrapped.
+            self._configure()
+            aai = self._get_aai()
             if isinstance(audio_source, bytes):
                 # Write WAV bytes to a temp file for the SDK.
                 with tempfile.NamedTemporaryFile(
