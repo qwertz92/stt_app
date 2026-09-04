@@ -5231,3 +5231,177 @@ above, which is reproducible from the numbers it states.
   suppresses the count line. So a run with several failures shows only the
   last `FAILED` line. It was settled here by re-running with a single-test
   selector; the harness's reporting should be fixed before it misleads.
+
+## Round 22-23 (2026-08-31 / 2026-09-04) - remote providers, the warm stream, and a field report
+
+Round 22 was cut short by the weekly limit and resumed on 2026-09-04 with four
+breakers in parallel (concurrency, external facts against the installed SDK
+sources, boundaries and hostile input, and a hunt for a field regression). Every
+finding below was reproduced by the lead before it was accepted; the refutations
+are listed with the reason, so they are not re-raised.
+
+### The AssemblyAI poll was bounded around the wrong thing
+
+`_wait_for_transcript` put a deadline around `Transcript.get_by_id`, which in
+SDK 0.64.33 is `cls(transcript_id=...).wait_for_completion()` -- the SDK's own
+unbounded `while True:`. The deadline therefore bounded nothing: measured still
+blocked after 12.0 s on a 3.0 s budget, 46 polls inside one call. AGENTS.md had
+recorded the defect as fixed for a month. The fetch is now
+`api.get_transcript(http_client, id)` wrapped by `Transcript.from_response`,
+which is the single request the SDK's own loop is built from; one test runs
+that fetch against the installed SDK with a stub that raises on a second poll,
+so a fetch that waits fails instead of hanging the suite.
+
+Two later findings on the same loop: a status fetch that raised (a read
+timeout, a 5xx) aborted the whole wait and the message omitted the transcript
+id, the one thing that would let the job be recovered -- it is now retried
+across three consecutive failures one interval apart, with the id in the
+message; and the fake-clock guard sat inside the patched `time.sleep`, so a
+loop that stops sleeping makes the guard unreachable and hangs pytest instead
+of failing it (measured: 23.5 million iterations in 2 s, guard never fired).
+The pending fake now caps fetches as well, and a test pins the sleep itself.
+
+### The stop budget modelled the teardown wrongly, twice
+
+The first version put the app's 5.0 s join on top of the SDK's 5.0 s
+`terminate_timeout`, so the final Turn was dropped and returned as a silently
+shortened transcript. The second version's comment modelled the whole of
+`disconnect(terminate=True)` as `terminate_timeout + 2 s`. It is not: the call
+ends in `websockets.sync`'s `close()`, which waits for the peer's close
+handshake up to a `close_timeout` the SDK never passes -- 10 s by default,
+measured 9.02 s against a loopback peer that never acknowledges the close
+frame. The 8 s budget deliberately stops short of that stage, because nothing
+is dispatched once the read thread is joined and the turn is stored before the
+joins begin; the comment now says so, and a test pins that the SDK source still
+leaves `close_timeout` to the library.
+
+### Fun-ASR: three ways the receive loop lost text, and one it could spin
+
+No total budget (198 receive calls in 4 s, holding the single transcription
+worker and blocking process exit through the executor's atexit join); a server
+CLOSE frame -- which `websocket-client` returns as `""` -- read as "keep
+waiting"; and every exit other than `task-finished` discarding the sentences
+already received. Then, from the boundaries breaker: a `result-generated` with
+`sentence_end` true and empty `text` reset the pending partial after an
+`if text: append` that did nothing, so the transcript came back truncated *as
+a clean success* (partial 'Hallo', empty final, task-finished -> ''). The last
+partial is now the sentence's text when the final carries none. And the loop
+skipped frames that were not events with no bound but the budget: a real
+socket blocks in `recv`, so only a flooding peer can make it spin, but it then
+pinned a core for thirty minutes (1.37 million receive calls in 0.31 s against
+an instant fake). More than 1000 unusable frames in a row now fail the request
+with the text received so far.
+
+A duplicate finalized sentence is deliberately not de-duplicated: nothing shows
+the service re-delivers one, and a user can say the same sentence twice.
+
+The external-facts breaker read the vendor's client-events page: `heartbeat`
+defaults to false, and the documented contract is that the connection is
+closed after a period of continuously silent audio -- which a paused recording
+uploaded over the realtime protocol is. The run-task now asks for it. This is
+the one change this round that could not be verified against the live service
+from here, and it is labelled so in AGENTS.md and the commit.
+
+### The overlay's Insert pasted the whole dictation
+
+A streaming finalize inserts only the tail past `committed_text`; the Error
+state's Insert was wired to `repaste_last_transcript`, which pastes the last
+transcript. Measured: finalize inserted ' zweiter teil', Insert then pasted
+'erster teil zweiter teil' on top of the 'erster teil' already in the document.
+The text of the failed insert is recorded where the Error is painted and a new
+slot pastes exactly it; the overlay wiring was extracted from `main.run` so it
+can be pinned by emitting the signal. The background arm must record it too,
+even though it sets `_last_transcript` to the same text: the cancel hotkey's
+"nothing to cancel" path flushes a queued job's failing insert without a new
+recording in between, and Insert then pasted the previous failure's tail while
+the overlay displayed the queued transcript.
+
+### The warm microphone stream and its own re-enumeration
+
+`close_if_idle` answered True while a helper thread was still closing the
+stream `request_restart` had handed it, and while an open was in flight. The
+device refresh then found a live stream, refused, and was only retried at the
+next recording stop -- so a hot-plugged microphone stayed invisible until the
+user recorded once. Routine: a recording stop runs `detach` (a deferred
+restart) and then arms exactly this refresh.
+
+The fix went through two versions. The first waited on a `Condition` for the
+open and the close to finish and then bumped the generation. It lost a race:
+the helper that finishes its close reaches its reopen on its own lock
+acquisition, and the notify does not hand the waiter the lock first -- the
+helper reopened, the waiter waited for that open too, closed the new stream,
+and the test timed out inside the second close. Bumping the generation
+*before* the wait refuses the helper's reopen whichever thread wins.
+
+Three more from the same review, all measured: a helper thread that could not
+be started (`Thread.start` raising) left the microphone open and registered for
+the process lifetime with nothing able to close it, and through `detach` inside
+`AudioCapture.stop` the error escaped before the chunks were drained, losing the
+recording; disabling the feature during an in-flight restart let the helper
+open a fresh stream after the controller had dropped its reference; and a
+microphone change saved while the stream was opening took a retry branch whose
+`ensure_started` no-ops on the `_starting` guard, pinning the stream to the
+old device for the session. The retired stream now stays reachable until
+closed, `close` cancels the reopen through the generation, and the controller
+restarts an in-flight open.
+
+Also from that review: anything escaping the PortAudio callback makes
+sounddevice abort the stream (its wrapper catches only its own two exception
+types), so a cold-stream recording went silently deaf; and the VAD auto-stop
+latch was set before the thread that delivers it existed. The callback is now
+exception-tight and the latch is reset when the thread cannot start.
+
+### Smaller ones
+
+- The provider error body was read in full before being capped to 300 chars
+  (50,000,000 bytes pulled off the socket for a 300-char detail); the read is
+  capped at 64 KiB.
+- ElevenLabs' documented error shape nests the message under `detail`, and the
+  key loop `str()`-ed the dict; nested objects are now unwrapped.
+- `_on_transcription_failed`'s background arm never gave the active token back.
+- The microphone picker called a plugged-in microphone "(not connected)" while
+  PortAudio was being re-initialized; it now distinguishes "did not answer".
+
+### Refuted or deferred, with the reason
+
+- Deepgram's 32-chunk sender queue and 2 s drain: a tuning decision, not a
+  defect; still open for a decision before the release.
+- A negative `ASSEMBLYAI_BATCH_MAX_WAIT_S` renders "-1 minutes": the constant
+  is not user-configurable; unreachable.
+- `Authorization: bearer` in lower case against DashScope's documented
+  `Bearer`: RFC 7235 makes the scheme token case-insensitive; unverifiable
+  without a live call, left as is.
+- `_make_fake_aai`'s transcript starts in a terminal status, unlike a real
+  `submit(poll=False)`: a test-design observation; the poll loop's own tests use
+  the pending fake.
+- `_report_background_failure` raising and skipping the token clear: a
+  hypothesis with no raise site; not acted on.
+
+### The field report
+
+On a corporate machine the user could record but every transcription failed
+at HEAD, with Parakeet selected, and a checkout from 2026-08-28 worked; no
+logs. Not reproducible on HomeBase in three configurations, and the hunt
+breaker proved the negative for Parakeet three ways: an AST function diff
+(`local_onnx_asr`, `factory`, `base`: zero changed functions), a coverage
+differential of a complete dictation (HEAD runs three extra functions, all
+no-ops on the batch path), and a cache-layout differential (cached in all four
+layouts in both trees). The one confirmed HEAD divergence that produces the
+symptom -- the inventory answering only from the configured Model Dir, so a
+faster-whisper model that lives elsewhere is downloaded at startup and behind
+a blocked proxy every dictation waits and then cancels -- cannot apply to
+Parakeet, whose inventory still searches every root. The instrument that
+settles it is the work machine's `dictation.log`, and the report to the user
+names the lines to grep.
+
+### Process notes
+
+- A retraction was avoided this time by writing the claim before the test: the
+  `close_if_idle` fix was tested by the sequence that had been measured, and
+  the first version failed that test rather than shipping.
+- Two breakers reported the same warm-stream defect from different briefs;
+  the lead reproduced it once and refuted nothing twice. Deduplicate findings
+  across briefs before reproducing.
+- The Bash heredoc failed once on a script containing several triple-quoted
+  strings; generating patch scripts as files and running them is the reliable
+  path, and it leaves the exact edit on disk.
