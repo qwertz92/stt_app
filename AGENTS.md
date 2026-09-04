@@ -325,22 +325,84 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   drops. `expected_device_key` is a required positional argument for the same
   reason -- the system default is `SYSTEM_DEFAULT_INPUT_DEVICE` (the empty
   string), not `None`.
-  **`close_if_idle` defers while an open is in flight, not only while a
-  consumer is attached.** It checked `_consumer` alone, so mid-`ensure_started`
-  -- `_starting` True, `_stream` still None -- it bumped the generation, closed
-  nothing and returned True. The caller reads that as "re-enumeration is safe"
-  and calls `try_refresh_input_devices`, which blocks on the `portaudio_guard()`
-  the open is holding, then finds the stream registered while it waited and
-  refuses; a refused refresh is only retried on the next recording stop or
-  abort, so a hot-plugged or newly defaulted microphone stayed invisible until
-  the user recorded once or pressed Refresh. Reachable whenever two device
-  events arrive about one coalescing interval apart, which is likelier the
-  slower the open is -- and a slow open is the reason the warm stream exists.
-  Reproduced with a stubbed `sd.InputStream` whose `start()` blocks. A
+  **`close_if_idle` waits for an open or a close in flight, then closes
+  the stream itself, and only an attached consumer makes it answer False.**
+  Two ways it used to answer True with the registry still holding a stream,
+  and in both the caller (`_refresh_audio_devices_worker`) then ran
+  `try_refresh_input_devices`, which found the stream registered and
+  refused -- and a refused refresh is only retried on the next recording stop
+  or abort, so a hot-plugged or newly defaulted microphone stayed invisible
+  until the user recorded once or pressed Refresh:
+  - **An open in flight**: `_starting` True, `_stream` still None. The open
+    holds `portaudio_guard()` across construct/start/register, so the refresh
+    blocked on that lock and then found the stream. Answering False here (the
+    first fix) only deferred the same refresh to the same moment.
+  - **A close handed to a helper thread**: `request_restart`, `request_close`
+    and a deferred `detach` null `_stream` under the lock and close outside
+    it, so the stream was open and registered while `_stream` already said
+    idle. Routine, not exotic: a recording stop runs `detach` (a deferred
+    restart) and then arms exactly this refresh. Measured:
+    `close_if_idle() -> True`, `live_stream_count() -> 1`,
+    `try_refresh_input_devices() -> False`.
+  It now waits on a `Condition` for `_starting` and `_closes_in_flight` to
+  clear (bounded by `_CLOSE_WAIT_S`), bumps the generation **before** the
+  wait, and then closes whatever is left. The order is load-bearing: a
+  restart helper that finishes its close while this waits reaches its reopen
+  on its own lock acquisition, and the notify does not hand the waiter the
+  lock first -- measured, the helper reopened, the waiter then waited for
+  that open and closed the new stream, and the test timed out inside the
+  second close. Bumped first, the helper's `ensure_started(generation=...)`
+  is refused whichever thread wins. A wait that runs out answers False, logs
+  `warm_microphone_stream_busy`, and leaves the stream closed until the
+  deferred refresh reopens it -- honest for an audio stack that has not
+  finished a close in ten seconds.
+  **A retired stream stays reachable until something has closed it**
+  (`_retiring`, drained by `_close_retiring`; whoever gets there first
+  closes). `request_restart` used to hand the stream to the helper's closure
+  and nowhere else, so a `Thread.start` that raised left a PortAudio stream
+  open and registered for the process lifetime with `close`,
+  `close_if_idle` and `request_close` all finding `_stream` None -- and,
+  reached through `detach` inside `AudioCapture.stop`, the `RuntimeError`
+  escaped before the chunks were drained, so the whole recording was lost.
+  `_spawn_or_run` now runs the close on the calling thread when no helper
+  can start, and never reopens there. `close` drains `_retiring` too and
+  bumps the generation, which is what cancels a restart helper's reopen:
+  disabling `keep_microphone_warm` during an in-flight restart used to let
+  the helper open a fresh stream *after* the controller had dropped its
+  reference -- a microphone open for the process lifetime, invisible to
+  shutdown, every re-enumeration refused.
+  **A microphone change saved while the warm stream is opening restarts
+  it** (`WarmMicrophoneStream.is_opening`): `opened_device_key` is None
+  during an open exactly as it is after a failed one, and the save took the
+  retry branch, whose `ensure_started` no-ops on the `_starting` guard -- so
+  the open finished on the previous device and nothing ever restarted it;
+  `attach` then refused the stream and every recording cold-opened, i.e. the
+  feature was silently dead, and the losing case is the slow open the
+  feature exists for. A restart requested mid-open makes the open discard
+  its stream and re-resolve, at worst one extra open. A
   first-callback watchdog timeout on a warm capture restarts the warm stream
   automatically (self-heal) instead of only suggesting to disable the feature.
   Without COM/comtypes the listener is inert and the Settings "Refresh" button
   plus watchdog self-heal remain the manual/backstop paths.
+- **Nothing may escape the PortAudio callback, and the VAD auto-stop latch
+  is set after its thread exists.** sounddevice's wrapper catches only
+  `CallbackStop`/`CallbackAbort`; any other exception reaches the cffi
+  callback built with `error=paAbort`, which ends the stream at once, so a
+  cold-stream recording went silently deaf with the traceback on a stderr a
+  windowed build does not have (a warm stream's `_dispatch` swallowed it, so
+  audio kept flowing there). `_process_audio` wraps the whole body and logs
+  once. The auto-stop set `_auto_stop_fired = True` *before*
+  `Thread(...).start()`, so a start that raised latched auto-stop off for the
+  rest of the recording; the flag is reset on that failure and the next block
+  tries again.
+- **The microphone picker says "(device list unavailable)" when PortAudio
+  did not answer, and "(not connected)" only when it did.** The refresh
+  worker holds `portaudio_guard` across terminate/initialize, which can take
+  seconds on a locked-down stack, and `query_input_devices` takes no lock
+  (deliberately: it runs on the Qt thread), so a populate in that window gets
+  no list at all -- and called the user's plugged-in microphone "(not
+  connected)". The item data is the same either way, so a Save in the window
+  keeps the selection; the repopulate timer corrects the label.
 - **First audio callback watchdog**: after a successful capture start, a bounded
   Qt timer verifies that PortAudio actually delivered a callback. A timeout is
   an abort, never a normal stop/transcription: a callback can race just after
@@ -1277,7 +1339,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `format_turns` parameter. The batch selector does not alter realtime routing.
   Turn text is keyed by `turn_order` because later events can refine the same
   turn. Bound SDK `disconnect` joins with a helper thread; they can hang on dead
-  connections.
+  connections. **The stop budget contains the text-bearing teardown and
+  deliberately not the websocket close**: `disconnect(terminate=True)` waits
+  `terminate_timeout` (pinned to 5 s, not inherited), joins its two 1 s-loop
+  threads, and then calls `websockets.sync`'s `close()`, which waits for the
+  peer's close handshake up to a `close_timeout` the SDK never overrides --
+  10 s by default, measured 9.02 s against a loopback peer that never
+  acknowledges the close frame. Nothing is dispatched after the read thread
+  is joined and the turn is stored before the joins begin, so the 8 s join
+  stops short of that stage on purpose; the helper thread outlives
+  `stop_stream` by up to ~9 s on a daemon thread holding no app lock. An
+  earlier comment modelled the teardown as `terminate_timeout + 2 s` and
+  called that the whole of it. A test pins that the SDK source still leaves
+  `close_timeout` to the library, because the model above depends on it.
 - **Streaming provider sends must not block the audio callback**:
   `push_audio_chunk` runs on the PortAudio callback thread. Providers must
   only enqueue there (Deepgram has a dedicated sender thread; the AssemblyAI
