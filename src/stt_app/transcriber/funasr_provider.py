@@ -66,6 +66,14 @@ class _FunAsrInterrupted(Exception):
 # very long dictation cannot fill the overlay end to end; the audio is kept
 # for Retry either way.
 _RECOVERED_TEXT_MAX_CHARS = 2000
+# Consecutive frames that are not events (binary, non-JSON, non-object)
+# before the receive loop gives up. A real socket blocks in `recv`, so
+# the loop cannot spin on its own; a peer that floods unusable frames
+# could make it, and the total budget alone would then pin a core and
+# the single transcription worker for up to thirty minutes (measured:
+# 1.37 million receive calls in 0.31 s against an instant fake). The
+# service never sends such frames, so any real flood is a fault.
+_MAX_UNUSABLE_FRAMES = 1000
 
 
 class FunAsrTranscriber(ProgressReporter, ITranscriber):
@@ -148,7 +156,18 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         return FUNASR_LANGUAGE_HINTS.get(self._language_mode, self._language_mode)
 
     def _run_task_message(self, task_id: str, sample_rate: int) -> str:
-        parameters: dict = {"format": "pcm", "sample_rate": int(sample_rate)}
+        # `heartbeat` is documented on the vendor's client-events page as
+        # default false, with the contract that the connection is then closed
+        # after a period of continuously silent audio. A recording with a
+        # long pause is exactly that, and this provider uploads the whole
+        # recording over the realtime protocol. Unverified against the live
+        # service from here; the CLOSE-frame handling in `_recv_event` is
+        # what bounds the damage if it is ignored.
+        parameters: dict = {
+            "format": "pcm",
+            "sample_rate": int(sample_rate),
+            "heartbeat": True,
+        }
         if self._language_mode != DEFAULT_LANGUAGE_MODE:
             parameters["language_hints"] = [self._funasr_language()]
         return json.dumps(
@@ -227,6 +246,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         Measured against a connection that never finishes: 198 receive calls
         in 4 s with no exit in sight.
         """
+        unusable = 0
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
@@ -234,8 +254,14 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                     "Fun-ASR did not finish the transcription within "
                     f"{int(FUNASR_BATCH_MAX_WAIT_S / 60)} minutes."
                 )
+            if unusable > _MAX_UNUSABLE_FRAMES:
+                raise _FunAsrInterrupted(
+                    f"Fun-ASR sent {unusable} frames in a row that were not "
+                    "events."
+                )
             ws.settimeout(min(remaining, self._request_timeout_s))
             message = ws.recv()
+            unusable += 1
             if isinstance(message, (bytes, bytearray)):
                 continue
             if not message:
@@ -381,8 +407,17 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 if event == "result-generated":
                     text, sentence_end = self._sentence_from(message)
                     if sentence_end:
-                        if text:
-                            finalized.append(text)
+                        # A final carries the whole sentence and replaces the
+                        # partials that led up to it. A final with *no* text
+                        # ends the sentence too, and the last partial is then
+                        # the best text there is for it: dropping it -- which
+                        # `if text: append` on its own did, followed by the
+                        # unconditional reset -- returned a truncated
+                        # transcript as a clean success. Measured: partial
+                        # 'Hallo', empty final, task-finished -> ''.
+                        final_text = text or current
+                        if final_text:
+                            finalized.append(final_text)
                         current = ""
                     elif text:
                         current = text
