@@ -1646,7 +1646,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   repaint that fixed this first painted "Idle" over a finished Done
   transcript and over the Error whose Insert button is the only way to
   recover a failed streaming tail, after every wake from sleep and 500 ms
-  after the two "open recordings folder" buttons.
+  after the two "open recordings folder" buttons. When the registration
+  *did* change the repaint still replaces a Done or Error result, because
+  the user has to see the key that now fires; a failed transcription's
+  Retry then lives in the tray's "Retry transcription" action, which reads
+  the same retained bytes (`_last_failed_wav_bytes`) as the overlay button.
 - **AltGr hotkey alias**: Windows reports AltGr as Ctrl+Alt. The hotkey
   manager ignores Ctrl+Alt hotkey messages while the right Alt key is down so
   AltGr combinations do not trigger dictation accidentally.
