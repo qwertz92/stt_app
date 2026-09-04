@@ -1313,6 +1313,57 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   outcome: one runs the fetch against the *installed* SDK with a stub that
   raises on a second poll, so a fetch that waits fails instead of hanging the
   suite; the other's fake SDK poisons `get_by_id` outright.
+- **A Fun-ASR final with no text ends the sentence with the last partial,
+  and the receive loop gives up on a flood of frames that are not events.**
+  `result-generated` with `sentence_end` true and empty `text` used to reset
+  `current` after an `if text: append` that did nothing, so the partial that
+  preceded it was gone and the transcript came back truncated *as a clean
+  success* -- no error, no recovered-text suffix, because nothing had
+  failed. Measured: partial 'Hallo', empty final, `task-finished` -> ''. A
+  final with text still replaces the partials it refines. Separately,
+  `_recv_event` skipped binary, non-JSON and non-object frames with no
+  bound but the thirty-minute budget; a real socket blocks in `recv`, so
+  only a flooding peer can make it spin, but then it pinned a core and the
+  single transcription worker for the whole budget (measured 1.37 million
+  receive calls in 0.31 s against an instant fake).
+  `_MAX_UNUSABLE_FRAMES` consecutive unusable frames now fail the request
+  with the text received so far. The run-task also asks for the vendor's
+  documented `heartbeat: true` (default false, "the connection times out
+  and closes after a period of continuously silent audio", which a paused
+  dictation uploaded over the realtime protocol is); **unverified against
+  the live service from here** -- the CLOSE-frame handling is what bounds
+  the damage if the parameter is ignored. A duplicate finalized sentence is
+  deliberately *not* de-duplicated: nothing shows the service re-delivers
+  one, and a user can say the same sentence twice.
+- **One failed AssemblyAI status fetch does not abort the batch wait.** A
+  read timeout or a 5xx inside the poll used to propagate straight out of
+  `_wait_for_transcript` into the generic `except Exception`, which reported
+  it *without the transcript id* -- the one thing that would let the job be
+  recovered -- while the service went on transcribing. Fetch failures are
+  now retried across `ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES` (3)
+  consecutive failures one polling interval apart, the count resets on a
+  successful fetch, and the message names the id; a persistent fault (a
+  revoked key answering 401 forever) therefore fails in under a minute
+  instead of spending the budget. `_configure()` and `_get_aai()` moved
+  inside `transcribe_batch`'s `try`, because everything else in there is
+  wrapped and those two escaped as raw `AttributeError`s. Two test-fake
+  rules learned here: the fake-clock guard sat inside the patched
+  `time.sleep`, so a loop that stops sleeping makes it unreachable and hangs
+  pytest instead of failing it (measured 23.5 million iterations in 2 s,
+  guard never fired) -- the pending fake now also caps *fetches*, and one
+  test pins the sleep between fetches; and `FakeStreamingClient.on`
+  overwrote a handler where the real SDK appends to a list, which would have
+  hidden an accumulate-vs-replace regression.
+- **A nested provider error object is unwrapped, never `str()`-ed.**
+  ElevenLabs' documented shape is `{"detail": {"message": ...}}` (read from
+  the vendor's error page), and the key loop found `detail`, a dict, and
+  handed the user Python dict syntax with the request id in it, capped
+  mid-dict. `read_http_error_detail` tries the nested object's `message`,
+  `detail`, `status` and `code` before falling back to the JSON text; a
+  number or a list falls back to the JSON text as well, which reads better
+  than one field. It is also **not idempotent** -- the body is a stream, a
+  second call on the same `HTTPError` returns the status phrase -- and every
+  call site calls it exactly once; do not add a second read.
 - **A provider error message is never built from `HTTPError.reason`.** That is
   only the status phrase -- "Bad Request" -- and it drops the one part that
   says what to change: OpenAI's "Invalid file format", ElevenLabs' quota text,
