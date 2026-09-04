@@ -292,8 +292,8 @@ def test_microphone_picker_lists_devices_and_keeps_missing_selection(
     from stt_app.audio_devices import InputDeviceInfo
 
     monkeypatch.setattr(
-        "stt_app.audio_devices.list_input_devices",
-        lambda: [InputDeviceInfo(name="USB Mic", index=3)],
+        "stt_app.audio_devices.query_input_devices",
+        lambda: ([InputDeviceInfo(name="USB Mic", index=3)], True),
     )
 
     dialog._populate_microphone_combo("Old Mic")
@@ -307,6 +307,27 @@ def test_microphone_picker_lists_devices_and_keeps_missing_selection(
     # The stored-but-disconnected device stays selected so saving cannot
     # silently drop the user's choice.
     assert combo.currentData() == "Old Mic"
+
+
+def test_microphone_picker_does_not_call_a_device_disconnected_when_portaudio_did_not_answer(
+    dialog: SettingsDialog,
+    monkeypatch,
+) -> None:
+    """During a re-enumeration the query answers nothing, not "no devices".
+
+    The picker labelled the user's plugged-in microphone "(not connected)"
+    for the window between the refresh worker's terminate/initialize and the
+    dialog's repopulate timer. The selection itself must still survive.
+    """
+    monkeypatch.setattr("stt_app.audio_devices.query_input_devices", lambda: ([], False))
+
+    dialog._populate_microphone_combo("Headset Microphone (Jabra)")
+
+    combo = dialog.microphone_combo
+    labels = [combo.itemText(index) for index in range(combo.count())]
+    assert labels[1] == "Headset Microphone (Jabra) (device list unavailable)"
+    assert "not connected" not in labels[1]
+    assert combo.currentData() == "Headset Microphone (Jabra)"
 
 
 @pytest.mark.pixel_exact
@@ -367,7 +388,9 @@ def test_microphone_refresh_requests_controller_reenumeration(
     dialog: SettingsDialog,
     monkeypatch,
 ) -> None:
-    monkeypatch.setattr("stt_app.audio_devices.list_input_devices", list)
+    monkeypatch.setattr(
+        "stt_app.audio_devices.query_input_devices", lambda: ([], True)
+    )
     requests: list[bool] = []
     dialog.audio_device_refresh_requested.connect(
         lambda: requests.append(True)

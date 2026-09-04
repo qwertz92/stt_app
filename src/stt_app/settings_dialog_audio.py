@@ -316,19 +316,32 @@ class _AudioTabMixin:
     def _populate_microphone_combo(self, selected_name: str) -> None:
         """Fill the picker: system default, connected devices, stored-but-
         missing selection marked "(not connected)" so saving cannot silently
-        drop it."""
+        drop it.
+
+        "Not connected" is only claimed when PortAudio answered. While the
+        controller's refresh worker re-initializes PortAudio (which holds
+        `portaudio_guard` across terminate/initialize and can take seconds on
+        a locked-down audio stack) a query from this thread gets no device
+        list at all, and the picker then called a plugged-in microphone
+        "(not connected)" -- a false statement about the user's hardware,
+        for the 600 ms between the refresh settling and the repopulate timer,
+        or longer. The item data is the same either way, so a Save during
+        that window still keeps the selection.
+        """
         combo = self.microphone_combo
         blocker = QtCore.QSignalBlocker(combo)
         combo.clear()
         combo.addItem("System default (follow Windows)", "")
         try:
-            names = [info.name for info in audio_devices.list_input_devices()]
+            devices, answered = audio_devices.query_input_devices()
         except Exception:
-            names = []
+            devices, answered = [], False
+        names = [info.name for info in devices]
         for name in names:
             combo.addItem(name, name)
         if selected_name and selected_name not in names:
-            combo.addItem(f"{selected_name} (not connected)", selected_name)
+            suffix = "(not connected)" if answered else "(device list unavailable)"
+            combo.addItem(f"{selected_name} {suffix}", selected_name)
         self._select_combo_data(combo, selected_name)
         del blocker
 
