@@ -1199,7 +1199,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   selected; never silently add `universal-2` as a fallback. Legacy
   `universal-3-pro`/`best`/`nano` settings migrate to the current default and
   are not shown in the UI.
-- **No remote batch wait may be unbounded.** The AssemblyAI SDK's
+- **No remote batch wait may be unbounded, and the AssemblyAI poll must fetch
+  a status, not call something that waits.** The SDK's
   `Transcript.wait_for_completion` is `while True:` around a status fetch
   with no bound of any kind, so a job the service leaves in `queued` never
   returns. That held the single `max_workers=1` transcription worker for the
@@ -1209,15 +1210,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   cancel_futures=True)` does not release one that has already started
   (measured -- the interpreter never exits). The leftover process still holds
   the single-instance lock, so the user cannot even restart the app.
-  `_wait_for_transcript` polls against `ASSEMBLYAI_BATCH_MAX_WAIT_S` instead.
-  Three properties are load-bearing: terminal status is the *positive* test,
-  so a status this SDK version does not know is waited out rather than
-  mistaken for a finished job; a submit that returns no transcript id fails
-  at once instead of spending the whole budget on `get_by_id("")`; and the
-  poll deliberately does **not** honour the cancel check, because abandoning
-  a transcript the service will finish would break "a finished transcription
-  is never discarded". Individual HTTP calls were already bounded by the
-  SDK's own `settings.http_timeout` (30 s); only the loop around them was not.
+  **The first fix bounded nothing, and this entry said it did for a month.**
+  `_wait_for_transcript` polled with `Transcript.get_by_id`, which in SDK
+  0.64.33 is `cls(transcript_id=...).wait_for_completion()` -- the very loop
+  above -- so the deadline sat *around* an unbounded call: measured still
+  blocked after 12.0 s on a 3.0 s budget, 46 polls inside one call.
+  `_fetch_transcript` now goes through `api.get_transcript(http_client, id)`
+  and `Transcript.from_response`, the one-request fetch the SDK's own loop is
+  built from, and `_wait_for_transcript` loops over that against
+  `ASSEMBLYAI_BATCH_MAX_WAIT_S`. Three properties are load-bearing: terminal
+  status is the *positive* test, so a status this SDK version does not know
+  is waited out rather than mistaken for a finished job; a submit that
+  returns no transcript id fails at once instead of spending the whole budget
+  fetching an empty id; and the poll deliberately does **not** honour the
+  cancel check, because abandoning a transcript the service will finish would
+  break "a finished transcription is never discarded". Individual HTTP calls
+  were already bounded by the SDK's own `settings.http_timeout` (30 s); only
+  the loop around them was not. Two tests guard the shape rather than the
+  outcome: one runs the fetch against the *installed* SDK with a stub that
+  raises on a second poll, so a fetch that waits fails instead of hanging the
+  suite; the other's fake SDK poisons `get_by_id` outright.
 - **A provider error message is never built from `HTTPError.reason`.** That is
   only the status phrase -- "Bad Request" -- and it drops the one part that
   says what to change: OpenAI's "Invalid file format", ElevenLabs' quota text,
