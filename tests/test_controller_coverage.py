@@ -30,7 +30,12 @@ from conftest import (
 
 from stt_app import controller as controller_module
 from stt_app.audio_capture import AudioCaptureError
-from stt_app.config import DEFAULT_ENGINE, DEFAULT_MODEL_SIZE, FALLBACK_HOTKEY
+from stt_app.config import (
+    DEFAULT_ENGINE,
+    DEFAULT_MODEL_SIZE,
+    FALLBACK_HOTKEY,
+    OVERLAY_ERROR_ACTION_INSERT,
+)
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.transcriber.base import TranscriptionCanceled, TranscriptionError
@@ -5343,4 +5348,196 @@ def test_repaste_refuses_when_no_foreign_window_is_known():
     assert state == "Error"
     assert "No window to insert into" in detail
     controller.shutdown()
+    _ = app
+
+
+# ---------------------------------------------------------------------------
+# The overlay's Insert action re-pastes what failed, not the last transcript
+# ---------------------------------------------------------------------------
+
+
+def _streaming_session_with_a_pasted_prefix(*, inserter):
+    """A live streaming dictation whose first half already reached the document."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+        model_size="small",
+        mode="streaming",
+        silence_gate_enabled=False,
+    )
+    overlay = FakeOverlay()
+    focus_helper = FakeWindowFocusHelper()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        text_inserter=inserter,
+        window_focus_helper=focus_helper,
+    )
+    controller._active_session_mode = "streaming"
+    controller._streaming_recording = True
+    controller._stream_text_state.committed_text = "erster teil"
+    controller._stream_text_state.live_text = "erster teil"
+    controller._target_window_handle = 123
+    controller._target_focus_signature = None
+    return controller, app, overlay, focus_helper
+
+
+def test_the_overlay_insert_re_pastes_only_the_text_that_failed():
+    """A streaming finalize inserts the tail past `committed_text`; so must Insert.
+
+    The Error state's Insert action was wired to `repaste_last_transcript`,
+    which reads `_last_transcript` -- the whole dictation. Measured: the
+    finalize inserted ' zweiter teil', the overlay offered Insert for exactly
+    that text, and pressing it pasted 'erster teil zweiter teil' on top of the
+    'erster teil' already in the document.
+    """
+    inserter = FakeTextInserter()
+    controller, app, overlay, _focus = _streaming_session_with_a_pasted_prefix(
+        inserter=inserter
+    )
+    inserter.should_fail = True
+
+    controller._on_transcription_ready("erster teil zweiter teil")
+
+    failed_text = inserter.calls[-1][0]
+    assert failed_text == " zweiter teil"
+    state, _detail = overlay.states[-1]
+    assert state == "Error"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    assert overlay.state_kwargs[-1]["copy_text"] == failed_text
+    assert controller._last_transcript == "erster teil zweiter teil"
+
+    inserter.should_fail = False
+    controller.insert_failed_text()
+
+    assert inserter.calls[-1][0] == failed_text
+    assert overlay.states[-1] == ("Done", failed_text)
+    controller.shutdown()
+    _ = app
+
+
+def test_the_tray_re_paste_still_pastes_the_whole_transcript_after_a_failed_finalize():
+    """The tray action and the re-paste hotkey mean "the last transcript"."""
+    inserter = FakeTextInserter()
+    controller, app, _overlay, _focus = _streaming_session_with_a_pasted_prefix(
+        inserter=inserter
+    )
+    inserter.should_fail = True
+    controller._on_transcription_ready("erster teil zweiter teil")
+
+    inserter.should_fail = False
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == "erster teil zweiter teil"
+    controller.shutdown()
+    _ = app
+
+
+def test_the_overlay_insert_falls_back_to_the_last_transcript_when_nothing_failed():
+    """With no failed insert on record, Insert behaves like the tray action."""
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    focus_helper = FakeWindowFocusHelper()
+    controller, app = _make_controller(
+        overlay=overlay, text_inserter=inserter, window_focus_helper=focus_helper
+    )
+    controller._last_transcript = "hello again"
+
+    controller.insert_failed_text()
+
+    assert inserter.calls[-1] == ("hello again", focus_helper.current_caret, "auto")
+    assert overlay.states[-1] == ("Done", "hello again")
+    controller.shutdown()
+    _ = app
+
+
+def test_a_successful_re_paste_retires_the_failed_insert_offer():
+    """Once the failed text is in the document, Insert must not offer it again."""
+    inserter = FakeTextInserter()
+    controller, app, _overlay, _focus = _streaming_session_with_a_pasted_prefix(
+        inserter=inserter
+    )
+    inserter.should_fail = True
+    controller._on_transcription_ready("erster teil zweiter teil")
+    inserter.should_fail = False
+    controller.insert_failed_text()
+    assert inserter.calls[-1][0] == " zweiter teil"
+
+    controller.insert_failed_text()
+
+    assert inserter.calls[-1][0] == "erster teil zweiter teil"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_new_recording_retires_the_failed_insert_offer(monkeypatch):
+    """A failed insert from one dictation must not be pasted after the next one.
+
+    Batch settings so the recording start needs no stream; the failed insert
+    is produced through the real error arm of `_insert_text_at_target`.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+        engine="local",
+        mode="batch",
+    )
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        text_inserter=inserter,
+    )
+    controller._last_transcript = "erster teil zweiter teil"
+    inserter.should_fail = True
+    assert controller._insert_text_at_target(" zweiter teil", restore_focus=True) is False
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    inserter.should_fail = False
+
+    controller.start_recording()
+    controller.cancel_current_action()
+    controller.insert_failed_text()
+
+    assert inserter.calls[-1][0] == "erster teil zweiter teil"
+    controller.shutdown()
+    _ = app
+
+
+def test_the_overlay_insert_after_a_background_failure_pastes_what_is_displayed():
+    """A stale offer from an earlier failed insert must not outlive a newer one.
+
+    Reachable without a new recording in between: a streaming finalize insert
+    fails (Insert offers its tail), then the cancel hotkey's "nothing to
+    cancel" path flushes a queued older job whose insert fails too. The
+    overlay now displays that job's transcript, so Insert must paste exactly
+    that -- not the tail of the previous failure.
+    """
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = _make_controller(overlay=overlay, text_inserter=inserter)
+    try:
+        controller._last_transcript = "erster teil zweiter teil"
+        inserter.should_fail = True
+        assert (
+            controller._insert_text_at_target(" zweiter teil", restore_focus=True)
+            is False
+        )
+        job = controller._register_transcription_job(
+            controller._next_request_token(),
+            AppSettings(hotkey=FALLBACK_HOTKEY),
+            "batch",
+        )
+        controller._report_background_insertion_failure(job, "der transkript")
+        assert overlay.states[-1][0] == "Error"
+        assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+        assert overlay.state_kwargs[-1]["copy_text"] == "der transkript"
+
+        inserter.should_fail = False
+        controller.insert_failed_text()
+
+        assert inserter.calls[-1][0] == "der transkript"
+    finally:
+        controller.shutdown()
     _ = app

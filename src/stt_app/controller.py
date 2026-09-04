@@ -450,6 +450,12 @@ class DictationController(QtCore.QObject):
         self._target_window_handle: int | None = None
         self._target_focus_signature: FocusSignature | None = None
         self._last_transcript: str = ""
+        # What the overlay's Insert action re-pastes: the text of the insert
+        # that failed, which is not always the last transcript -- a streaming
+        # finalize inserts only the tail past `committed_text`. Written by the
+        # two paths that paint an Error carrying `OVERLAY_ERROR_ACTION_INSERT`,
+        # cleared by a successful re-paste and by the next recording start.
+        self._insert_action_text: str = ""
         self._last_history_entry: TranscriptHistoryEntry | None = None
         self._last_failed_wav_bytes: bytes = b""
         self._last_transcribe_settings: AppSettings | None = None
@@ -960,6 +966,8 @@ class DictationController(QtCore.QObject):
             )
             return
         self._recording_start_in_progress = True
+        # A new dictation retires the previous Error state's Insert offer.
+        self._insert_action_text = ""
         try:
             start_target_handle = self._window_focus_helper.capture_target_window()
             start_target_signature = self._capture_target_signature(
@@ -4679,6 +4687,7 @@ class DictationController(QtCore.QObject):
         # overlay shows — and therefore what Copy and Insert act on.
         transcript = text.strip()
         self._last_transcript = transcript
+        self._insert_action_text = transcript
         detail = f"{message}\n\n{transcript}" if transcript else message
         self._overlay.set_state(
             "Error",
@@ -5435,6 +5444,7 @@ class DictationController(QtCore.QObject):
                 # The transcription itself succeeded, so Retry (which
                 # re-transcribes) has nothing to work with; offer inserting the
                 # transcript again instead.
+                self._insert_action_text = insertion_text
                 self._overlay.set_state(
                     "Error",
                     detail,
@@ -5481,7 +5491,25 @@ class DictationController(QtCore.QObject):
         of a recording snapshot. Blocked while a recording is active so the
         paste cannot interfere with a capture or live streaming inserts.
         """
-        text = self._last_transcript
+        self._repaste(self._last_transcript)
+
+    def insert_failed_text(self) -> None:
+        """Insert the text the overlay's Error state offered Insert for.
+
+        That is the text of the insert that failed, and only that. A
+        streaming finalize inserts only the tail past `committed_text` -- the
+        rest is already in the document, pasted live -- and its Error state
+        carries that tail as `copy_text`. The overlay's Insert used to be wired
+        to `repaste_last_transcript`, which reads `_last_transcript`, the whole
+        dictation: measured, the finalize inserted ' zweiter teil' and Insert
+        then pasted 'erster teil zweiter teil' on top of the text already in
+        the document. The batch case is unaffected either way, because there
+        the failed insert and the last transcript are the same text -- which
+        is also why the fallback below is safe.
+        """
+        self._repaste(self._insert_action_text or self._last_transcript)
+
+    def _repaste(self, text: str) -> None:
         if not text.strip():
             self.show_overlay_error("No transcript available to insert yet.")
             return
@@ -5528,6 +5556,7 @@ class DictationController(QtCore.QObject):
             target_handle=target,
             target_signature=signature,
         ):
+            self._insert_action_text = ""
             self._overlay.set_state("Done", text)
             self._reveal_overlay_result(is_error=False)
             self._play_completion_beep()

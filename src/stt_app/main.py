@@ -61,6 +61,31 @@ def _set_windows_app_user_model_id() -> None:
         pass
 
 
+def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
+    """Wire the overlay's user actions to the controller.
+
+    Kept as its own function so the wiring can be tested by emitting the
+    signals: the Error state's Insert was once connected to
+    `repaste_last_transcript`, which pastes the *last transcript*, while the
+    insert that failed after a streaming finalize was only the tail past the
+    text already in the document -- so Insert pasted the whole dictation on
+    top of it. `insert_failed_text` pastes exactly what the Error state offers.
+    The tray action and the re-paste hotkey keep `repaste_last_transcript`,
+    because there "the last transcript" is what the user asked for.
+    """
+    overlay.record_toggle_requested.connect(controller.toggle_recording)
+    overlay.history_requested.connect(open_history_dialog)
+    overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
+    overlay.retry_requested.connect(controller.retry_last_transcription)
+    overlay.insert_again_requested.connect(controller.insert_failed_text)
+    overlay.cancel_requested.connect(controller.cancel_current_action)
+    overlay.queue_cancel_requested.connect(controller.cancel_queued_transcription)
+    overlay.queue_clear_requested.connect(controller.clear_transcription_queue)
+    overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
+    overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
+    overlay.language_changed.connect(controller.set_language_mode)
+
+
 def run() -> int:
     # SSL: trust OS certificate store (handles corporate proxies like Zscaler)
     # and synchronize env vars so all HTTP libraries use the same CA bundle.
@@ -170,17 +195,7 @@ def run() -> int:
     )
     open_history_dialog = history_dialog_presenter.open
 
-    overlay.record_toggle_requested.connect(controller.toggle_recording)
-    overlay.history_requested.connect(open_history_dialog)
-    overlay.edit_requested.connect(lambda: controller.edit_last_transcript(overlay))
-    overlay.retry_requested.connect(controller.retry_last_transcription)
-    overlay.insert_again_requested.connect(controller.repaste_last_transcript)
-    overlay.cancel_requested.connect(controller.cancel_current_action)
-    overlay.queue_cancel_requested.connect(controller.cancel_queued_transcription)
-    overlay.queue_clear_requested.connect(controller.clear_transcription_queue)
-    overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
-    overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
-    overlay.language_changed.connect(controller.set_language_mode)
+    _connect_overlay_actions(overlay, controller, open_history_dialog)
 
     try:
         controller.initialize()

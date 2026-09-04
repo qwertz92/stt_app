@@ -78,6 +78,7 @@ class FakeController:
         self.bring_overlay_calls = 0
         self.audio_device_refresh_calls = 0
         self.repaste_calls = 0
+        self.insert_failed_calls = 0
         self.credentials_invalidated = 0
         self.credentials_providers: list[str] = []
         self.note_foreground_calls = 0
@@ -94,6 +95,27 @@ class FakeController:
 
     def repaste_last_transcript(self):
         self.repaste_calls += 1
+
+    def insert_failed_text(self):
+        self.insert_failed_calls += 1
+
+    def edit_last_transcript(self, overlay):
+        pass
+
+    def cancel_queued_transcription(self, token):
+        pass
+
+    def clear_transcription_queue(self):
+        pass
+
+    def set_overlay_opacity_percent(self, percent):
+        pass
+
+    def set_overlay_always_on_top(self, enabled):
+        pass
+
+    def set_language_mode(self, mode):
+        pass
 
     def reload_settings(self, re_register_hotkey=True):
         pass
@@ -1034,3 +1056,48 @@ def test_every_tray_activation_notes_the_foreground_first(reason):
     assert controller.note_foreground_calls == 1, (
         "the foreground was not recorded before the menu takes it"
     )
+
+
+class _OverlaySignals(QtCore.QObject):
+    """The overlay's user-action signals and nothing else."""
+
+    record_toggle_requested = QtCore.Signal()
+    history_requested = QtCore.Signal()
+    edit_requested = QtCore.Signal()
+    retry_requested = QtCore.Signal()
+    insert_again_requested = QtCore.Signal()
+    cancel_requested = QtCore.Signal()
+    opacity_changed = QtCore.Signal(int)
+    always_on_top_changed = QtCore.Signal(bool)
+    language_changed = QtCore.Signal(str)
+    queue_cancel_requested = QtCore.Signal(int)
+    queue_clear_requested = QtCore.Signal()
+
+
+def test_the_overlay_insert_action_reaches_the_failed_text_slot_not_the_tray_re_paste():
+    """The Error state's Insert pastes what failed; the tray pastes the last transcript.
+
+    Wired to `repaste_last_transcript`, Insert after a failed streaming
+    finalize pasted the whole dictation on top of the half already in the
+    document. The two slots differ only there, which is why the wiring is
+    pinned by emitting the signal rather than by reading `run()`.
+    """
+    from stt_app.overlay_ui import OverlayUI
+
+    assert set(vars(_OverlaySignals)) >= {
+        name for name, value in vars(OverlayUI).items() if isinstance(value, QtCore.Signal)
+    }
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = _OverlaySignals()
+    controller = FakeController()
+    history_opened = []
+
+    main_module._connect_overlay_actions(overlay, controller, lambda: history_opened.append(1))
+    overlay.insert_again_requested.emit()
+    overlay.record_toggle_requested.emit()
+    overlay.history_requested.emit()
+
+    assert controller.insert_failed_calls == 1
+    assert controller.repaste_calls == 0
+    assert controller.toggle_calls == 1
+    assert history_opened == [1]
