@@ -1227,9 +1227,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   default" rule. The overlay's "Recent Transcriptions" dialog offers
   Retranscribe/Show audio file per entry (buttons plus a right-click menu)
   and a Recordings-folder shortcut. `retranscribe_dialog.py` preselects the
-  entry's own engine, model, and language — repeating a run with a corrected
-  language is the case it exists for — but all three stay changeable so a
-  quick "try the bigger model on this one" needs no detour through Settings.
+  entry's own engine and model and the *configured* language -- history
+  entries store no language -- and repeating a run with a corrected language
+  is the case it exists for, so all three stay changeable and a quick "try
+  the bigger model on this one" needs no detour through Settings. The note
+  under the language picker says when the chosen model does not offer the
+  language selected before it (`_LANGUAGE_SUBSTITUTION_NOTE`, one literal
+  shared with the height reservation's worst case); it used to say so for
+  Canary alone, while Cohere and Granite, which refuse `auto` as well, and a
+  remote provider lacking the configured language substituted silently.
+  Canary additionally warns that a wrong language yields a translation.
   The dialog is resizable (long transcripts) and its pickers are dependent:
   changing the engine repopulates the models (restoring the entry's model when
   the user returns to its engine) and the language list follows both via
