@@ -1674,6 +1674,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   benchmark CLI use.
   Keep `granite-4.0-1b-speech` selectable as a smaller q4 option until real
   benchmarks justify removing it.
+- **Granite Speech 5.0 conversion is tooling-only for now**:
+  `scripts/export_granite_speech5_onnx.py` reproduces a dynamic FP32 opset-17
+  graph (minimum four feature frames) from the pinned English 470M TurboCTC
+  checkpoint; it does not add a model to the application. Feature extraction
+  and CTC decoding remain outside
+  the graph. The export replaces only the two dynamic-unfriendly subsampling
+  residual `unfold` operations with equivalent `avg_pool1d`, requires full-model
+  equality before serialization, and writes the graph only after a full ONNX
+  checker pass. `scripts/validate_granite_speech5_onnx.py` is the independent
+  PyTorch/ONNX Runtime gate across real audio, block-boundary lengths, and batch
+  size two. Keep the export and validation environments separate from the app;
+  exact versions and the current verified hashes live in
+  `docs/granite-speech-5-onnx-export.md`.
 - **Nemotron 3.5 true streaming**:
   `nemotron-3.5-asr-streaming-0.6b-int4` uses the published 793 MB multilingual
   ONNX Runtime GenAI export through `transcriber/local_nemotron.py`. It reuses

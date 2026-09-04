@@ -5587,3 +5587,38 @@ log arrives.
   suite's count, and the pipeline's exit code was `tail`'s. Both halves are
   now rules in AGENTS.md: process-global state set by `shutdown()` gets an
   autouse reset, and a push waits for the printed `N passed` line.
+
+## 2026-09-04 (Granite Speech 5.0 ONNX export)
+
+- The official English 470M TurboCTC checkpoint at revision
+  `18ca3c1de6cd092b5a30c39fb0f04550b38ed1a0` exports as one embedded-weight
+  FP32 opset-17 graph: float32 `[batch, time, 320]` to
+  `[batch, floor(time / 4), 16384]`. Audio features and CTC decoding stay in
+  the host processor. This is conversion tooling only; no application model,
+  dependency, or runtime path changed.
+- The current `torch.export` ONNX path fails on a symbolic reshape in Granite's
+  attention code. The legacy exporter gets further but cannot preserve dynamic
+  length through the subsampling residual's `Tensor.unfold`. Replacing only that
+  residual with equivalent `avg_pool1d` exported cleanly; the full 470M model's
+  pre-export maximum difference was exactly `0.0`. The graph contains no
+  `Einsum` nodes.
+- Independent validation used PyTorch 2.11 for the reference and ONNX Runtime
+  1.29 for the graph. All 20 pinned LibriSpeech clips, ten block-boundary input
+  lengths, and a batch-size-two case produced the same CTC argmax tokens and
+  decoded transcripts: 31/31 exact, maximum absolute logit difference
+  `0.0009813308715820312`, weighted mean `0.000002765029560252943`.
+- The source model rejects one to three feature frames at its second
+  subsampling block, while the exported ONNX operators return one output frame.
+  Those inputs are therefore explicitly outside the graph contract. Four is
+  the supported minimum and matches the source; the breaker also exercised
+  every length around 128/256/512 and a 2,048-frame input with finite output.
+- ONNX Runtime 1.29's official Linux wheel enabled POSIX telemetry and tried to
+  create a persistent device ID at import, leaving a literal `:memory:.ses`
+  file when persistence failed. The validator now sets the runtime's documented
+  `ORT_DISABLE_TELEMETRY=1` opt-out before import; a clean-directory probe
+  produced neither the warning nor the file.
+- A third-party export appeared at
+  `diarizeapp/granite-speech-5.0-470m-turboctc-onnx` during the work. Its graph
+  passed the same 20 real-audio cases, but the repository supplied neither the
+  conversion code nor parity evidence, so it was evidence of feasibility rather
+  than an input to this export.
