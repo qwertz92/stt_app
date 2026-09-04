@@ -5511,6 +5511,67 @@ def test_the_overlay_insert_re_pastes_only_the_text_that_failed():
     _ = app
 
 
+def test_a_refused_recording_start_keeps_the_insert_offer():
+    """The offer was cleared on the statement after `_recording_start_in_progress`
+    -- before any of the branches that decide whether a recording starts. A
+    refused start records nothing, yet it retired the offer and repainted the
+    overlay without it, so after a failed streaming-tail insert one refused
+    hotkey press left the tail reachable only through the whole-dictation
+    re-paste, which pastes on top of the prefix already in the document."""
+    inserter = FakeTextInserter()
+    controller, app, overlay, _focus = _streaming_session_with_a_pasted_prefix(
+        inserter=inserter
+    )
+    inserter.should_fail = True
+    controller._on_transcription_ready("erster teil zweiter teil")
+    assert controller._insert_action_text == " zweiter teil"
+
+    # Streaming mode on a batch-only model: a refusal that needs no preload.
+    controller._settings = replace(
+        controller._settings, mode="streaming", model_size="parakeet-tdt-0.6b-v3"
+    )
+    controller.start_recording()
+
+    assert controller._audio_capture is None, "the start was not refused"
+    assert controller._insert_action_text == " zweiter teil"
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Streaming is not available" in detail
+    assert "Still not inserted" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    assert overlay.state_kwargs[-1]["copy_text"] == " zweiter teil"
+
+    inserter.should_fail = False
+    controller.insert_failed_text()
+
+    assert inserter.calls[-1][0] == " zweiter teil"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_refusal_with_nothing_pending_paints_only_the_refusal():
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(
+                hotkey=FALLBACK_HOTKEY,
+                mode="streaming",
+                model_size="parakeet-tdt-0.6b-v3",
+            )
+        ),
+    )
+    overlay = controller._overlay
+    controller.start_recording()
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Streaming is not available" in detail
+    assert "Still not inserted" not in detail
+    assert "error_action" not in overlay.state_kwargs[-1]
+    controller.shutdown()
+    _ = app
+
+
 def test_the_tray_re_paste_still_pastes_the_whole_transcript_after_a_failed_finalize():
     """The tray action and the re-paste hotkey mean "the last transcript"."""
     inserter = FakeTextInserter()

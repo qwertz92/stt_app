@@ -975,8 +975,6 @@ class DictationController(QtCore.QObject):
             )
             return
         self._recording_start_in_progress = True
-        # A new dictation retires the previous Error state's Insert offer.
-        self._insert_action_text = ""
         try:
             start_target_handle = self._window_focus_helper.capture_target_window()
             start_target_signature = self._capture_target_signature(
@@ -996,16 +994,15 @@ class DictationController(QtCore.QObject):
                 and self._settings.engine == DEFAULT_ENGINE
                 and self._settings.mode == "streaming"
             ):
-                self._overlay.set_state(
-                    "Error",
+                self._refuse_recording_start(
                     f"Model is still {self._preload_phase_word()}. Streaming "
-                    "starts after the selected model is ready.",
+                    "starts after the selected model is ready."
                 )
                 return
 
             preload_failure = self._model_preload_failure(self._settings)
             if preload_failure is not None:
-                self._overlay.set_state("Error", preload_failure)
+                self._refuse_recording_start(preload_failure)
                 return
             # Check if the selected engine supports streaming mode.
             if self._settings.mode == "streaming" and not supports_streaming(
@@ -1029,12 +1026,14 @@ class DictationController(QtCore.QObject):
                         "Switch to batch mode, or use local/AssemblyAI/Deepgram "
                         "for streaming."
                     )
-                self._overlay.set_state(
-                    "Error",
-                    detail,
-                )
+                self._refuse_recording_start(detail)
                 return
 
+            # Past every refusal: this dictation now takes the overlay, and
+            # with it retires the previous Error state's Insert offer. Cleared
+            # at the top of this method it went with every *refused* start
+            # too (see `_refuse_recording_start`).
+            self._insert_action_text = ""
             # Do not invite the user to speak until the microphone has actually
             # started. Opening a cold device (or a remote streaming session) can
             # take seconds on a locked-down machine, and audio spoken before
@@ -4728,10 +4727,12 @@ class DictationController(QtCore.QObject):
         self._last_transcript = transcript
         self._insert_action_text = transcript
         detail = f"{message}\n\n{transcript}" if transcript else message
+        # One value for Copy and Insert; a raw `text` here and the stripped
+        # one there would let the two act on different strings.
         self._overlay.set_state(
             "Error",
             detail,
-            copy_text=text,
+            copy_text=transcript,
             error_action=(
                 OVERLAY_ERROR_ACTION_NONE
                 if may_have_pasted
@@ -5321,6 +5322,30 @@ class DictationController(QtCore.QObject):
                 self._logger.exception("Failed to read foreground window")
                 return None
         return self._window_focus_helper.capture_target_window()
+
+    def _refuse_recording_start(self, detail: str) -> None:
+        """Paint a refusal without discarding a pending Insert offer.
+
+        Nothing started, so the failed text of the previous Error state is
+        still the last thing to recover. The refusal used to replace that
+        state outright while the offer had already been cleared at the top of
+        `start_recording`, so one refused hotkey press -- typically "Model is
+        still loading" right after a dictation -- left the tail of a failed
+        streaming finalize reachable only through the whole-dictation
+        re-paste, which pastes it on top of the prefix already in the
+        document. The pending text stays on screen, with Copy and Insert
+        acting on exactly it.
+        """
+        pending = self._insert_action_text
+        if not pending:
+            self._overlay.set_state("Error", detail)
+            return
+        self._overlay.set_state(
+            "Error",
+            f"{detail}\n\nStill not inserted:\n{pending}",
+            copy_text=pending,
+            error_action=OVERLAY_ERROR_ACTION_INSERT,
+        )
 
     def _capture_target_signature(
         self,
