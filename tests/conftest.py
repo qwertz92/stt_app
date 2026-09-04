@@ -656,3 +656,19 @@ def _forbid_building_a_real_transcriber(monkeypatch):
         )
 
     monkeypatch.setattr(controller_module, "create_transcriber", _refuse)
+
+
+@pytest.fixture(autouse=True)
+def _reset_the_transcription_shutdown_flag():
+    """`DictationController.shutdown()` sets a process-wide flag that every
+    remote wait reads (`transcriber.base.request_transcription_shutdown`), and
+    nearly every controller test ends in `shutdown()`. The flag is once-per-
+    process by design -- a quit is -- so nothing in `src/` clears it, and it
+    leaked into every later test's provider loop, which then gave up at once:
+    26 failures in the full suite that no single-file run could show, because
+    a single file never runs a controller test before a provider test."""
+    from stt_app.transcriber.base import reset_transcription_shutdown_for_tests
+
+    reset_transcription_shutdown_for_tests()
+    yield
+    reset_transcription_shutdown_for_tests()

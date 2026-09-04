@@ -5576,3 +5576,14 @@ log arrives.
   detour: backing the verified files up, reverting, and re-applying stage by
   stage gave three commits that each say one thing, and a byte comparison
   against the backups proved nothing was lost on the way.
+- **The suite went red and was pushed red.** Every per-file run this round
+  was green; the full suite had 26 failures, all one cause: the new
+  process-wide shutdown flag is set by every controller test's `shutdown()`
+  and nothing reset it, so every provider loop that ran after a controller
+  test gave up at once. No single file runs a controller test before a
+  provider test, which is why the per-file runs could not see it. The
+  fixture that resets it is in `tests/conftest.py`. The push happened
+  because the docs commit sat in a shell chain that did not gate on the
+  suite's count, and the pipeline's exit code was `tail`'s. Both halves are
+  now rules in AGENTS.md: process-global state set by `shutdown()` gets an
+  autouse reset, and a push waits for the printed `N passed` line.

@@ -1446,7 +1446,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   of its loop and inside `_sleep_between_fetches`, which sleeps in
   `ASSEMBLYAI_SHUTDOWN_POLL_S` slices, so a quit ends the wait within one
   slice and the error names the transcript id and its last status. The
-  Fun-ASR receive loop reads the same flag. A fetch that returns an object
+  Fun-ASR receive loop reads the same flag. **The flag is once per process
+  by design, so nothing in `src/` clears it, and `tests/conftest.py` resets
+  it around every test** (`_reset_the_transcription_shutdown_flag`): nearly
+  every controller test ends in `shutdown()`, and without the reset the flag
+  leaked into every later provider test's loop -- 26 failures in the full
+  suite that no single-file run showed, because no single file runs a
+  controller test before a provider test. A fetch that returns an object
   without a `status` is a fetch failure, not a job "still waiting":
   `status = fetched.status` sits inside the retry `try`, where before it
   raised `AttributeError` past the whole wait. And the bound is
@@ -3236,6 +3242,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   with no output naming the cause. A test that legitimately drives one of these
   paths patches it and asserts on the call, which every current one does — so
   these fixtures are preventive and currently catch nothing.
+- A third autouse fixture, `_reset_the_transcription_shutdown_flag`, clears
+  the process-wide transcription shutdown flag before and after every test.
+  Any future process-global state that a controller's `shutdown()` sets needs
+  the same treatment, and the full suite is the only run that can show the
+  leak: per-file runs were green while the suite had 26 failures.
+- **Read the suite's count before anything that publishes.** A shell chain
+  that commits and pushes after a background suite has *started* publishes
+  before the result exists; on 2026-09-04 four green per-file runs and one
+  such chain pushed a red suite. Gate the push on the printed
+  `N passed` line, never on the exit code of a pipeline ending in `tail`.
 
 ## Known limitations
 
