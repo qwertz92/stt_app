@@ -1336,12 +1336,19 @@ class _LocalModelsMixin:
         cleaned_bytes = 0
         while True:
             with self._local_model_download_lock:
-                if (
-                    self._local_model_download_cancel_event.is_set()
-                    or not self._local_model_download_queue
-                ):
-                    canceled = self._local_model_download_cancel_event.is_set()
-                    self._discard_queued_downloads_locked()
+                if self._local_model_download_cancel_event.is_set():
+                    # A Cancel clears the queue and gives its interest back
+                    # under this lock, so anything queued now arrived *after*
+                    # the cancel: the user pressed Download again while this
+                    # worker had not yet observed the cancel. That request
+                    # used to be discarded here, silently, after the tab had
+                    # already said "Queued for download". Consume the cancel
+                    # and carry on with the newer work.
+                    self._local_model_download_cancel_event.clear()
+                    canceled = True
+                    self._local_model_download_active = None
+                    self._local_model_download_claimed = None
+                if not self._local_model_download_queue:
                     self._local_model_download_active = None
                     self._local_model_download_claimed = None
                     self._local_model_download_worker_running = False
@@ -1382,16 +1389,30 @@ class _LocalModelsMixin:
                 with self._local_model_download_lock:
                     self._local_model_download_completed_names.add(model_name)
             elif status == "canceled":
+                # Same rule as at the top of the loop: the cancel already
+                # cleared what was queued before it, so the loop continues
+                # with whatever was queued after it and exits when that is
+                # nothing.
                 canceled = True
                 with self._local_model_download_lock:
-                    self._discard_queued_downloads_locked()
+                    self._local_model_download_cancel_event.clear()
                     self._local_model_download_active = None
-                    self._local_model_download_worker_running = False
-                break
+                    self._local_model_download_claimed = None
+                    if not self._local_model_download_queue:
+                        self._local_model_download_worker_running = False
+                        break
+                _emit_background_signal(
+                    self,
+                    "local_model_download_progress",
+                    worker_token,
+                    f"'{model_name}' canceled; continuing with the models "
+                    "queued afterwards.",
+                )
             else:
                 failures.append(f"{model_name}: {detail}")
 
-        if canceled:
+        resumed = canceled and bool(successes or failures)
+        if canceled and not resumed:
             cleanup_mb = cleaned_bytes / 1_000_000.0
             cleanup_detail = (
                 f" Removed {cleaned_files} incomplete file"
@@ -1413,10 +1434,11 @@ class _LocalModelsMixin:
             )
             return
 
+        note = " (an earlier download was canceled)" if resumed else ""
         if failures and successes:
             message = (
                 f"Completed with errors. Downloaded: {', '.join(successes)}. "
-                f"Failed: {' | '.join(failures)}"
+                f"Failed: {' | '.join(failures)}{note}"
             )
             _emit_background_signal(
                 self,
@@ -1432,7 +1454,7 @@ class _LocalModelsMixin:
                 "local_model_download_finished",
                 worker_token,
                 False,
-                f"Download failed: {' | '.join(failures)}",
+                f"Download failed: {' | '.join(failures)}{note}",
             )
             return
         _emit_background_signal(
@@ -1440,7 +1462,7 @@ class _LocalModelsMixin:
             "local_model_download_finished",
             worker_token,
             True,
-            f"Downloaded: {', '.join(successes)}",
+            f"Downloaded: {', '.join(successes)}{note}",
         )
 
     def _on_local_model_download_progress(self, worker_token: int, text: str) -> None:

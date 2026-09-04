@@ -812,3 +812,169 @@ def test_the_overlay_never_invents_progress_for_a_queued_preload(
         assert word == "waiting for another model to finish", label
     else:
         assert word == "downloading", label
+
+
+class _DrainLabel:
+    def __init__(self):
+        self.texts: list[str] = []
+
+    def setStyleSheet(self, _style):
+        pass
+
+    def setText(self, text):
+        self.texts.append(text)
+
+
+class _DrainTimer:
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+
+def _through_the_slot(name, model_dir, status):
+    """What the real `_download_local_model_in_subprocess` does around a fetch:
+    take the slot and give it back, which is what drops the explicit interest
+    the enqueue registered."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+
+    coordinator = model_download_coordinator()
+    # The enqueue registered the interest; the real path says so, or the
+    # release would drop one of two registrations and leave the other behind.
+    coordinator.acquire(
+        name, model_dir, explicit=True, interest_already_registered=True
+    )
+    coordinator.release(name, model_dir, succeeded=status == "success")
+    return (status, "", 0, 0)
+
+
+def _draining_dialog(monkeypatch):
+    """A Local tab whose worker has not yet observed the Cancel it was sent."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+    dialog._local_model_download_lock = threading.RLock()
+    dialog._local_model_download_queue = []
+    dialog._local_model_download_active = None
+    dialog._local_model_download_claimed = None
+    dialog._local_model_download_completed_names = set()
+    dialog._local_model_download_worker_running = True
+    dialog._local_model_download_cancel_event = threading.Event()
+    dialog._local_model_download_cancel_event.set()
+    dialog._local_model_download_worker_token = 1
+    dialog._local_model_download_process = None
+    dialog.model_dir_edit = type("Edit", (), {"text": lambda self: ""})()
+    dialog.local_models_action_label = _DrainLabel()
+    dialog._local_model_download_progress_timer = _DrainTimer()
+    dialog._refresh_local_models_list = lambda: None
+    dialog._update_local_model_actions = lambda: None
+    dialog._refresh_local_model_download_progress = lambda: None
+    emitted: list[tuple] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local._emit_background_signal",
+        lambda *args: emitted.append(args),
+    )
+    return dialog, emitted
+
+
+def test_a_download_queued_during_a_cancel_drain_still_runs(monkeypatch):
+    """Cancel, then Download: the tab said "Queued for download: small" and the
+    old worker's drain then discarded it, silently, when it observed the cancel."""
+    from stt_app.model_download_coordinator import model_download_coordinator
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    downloads: list[str] = []
+    monkeypatch.setattr(
+        _LocalModelsMixin,
+        "_download_local_model_in_subprocess",
+        lambda self, name, model_dir: downloads.append(name)
+        or _through_the_slot(name, model_dir, "success"),
+    )
+
+    _LocalModelsMixin._start_local_model_download(dialog, ["small"])
+    assert dialog.local_models_action_label.texts[-1] == "Queued for download: small"
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    assert downloads == ["small"]
+    assert dialog._local_model_download_worker_running is False
+    assert dialog._local_model_download_cancel_event.is_set() is False
+    assert model_download_coordinator().has_explicit_interest("small", "") is False
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is True, finished
+    assert "small" in finished[-1][4]
+
+
+def test_a_download_queued_while_the_active_one_is_being_canceled_runs_next(
+    monkeypatch,
+):
+    """The Download click lands while the canceled subprocess is still dying."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [("medium", "")]
+    downloads: list[str] = []
+
+    def _download(self, name, model_dir):
+        downloads.append(name)
+        if name == "medium":
+            # The user presses Cancel, then Download on another model, while
+            # this one's process is being terminated.
+            _LocalModelsMixin._cancel_local_model_downloads(self)
+            _LocalModelsMixin._start_local_model_download(self, ["small"])
+            return ("canceled", "", 0, 0)
+        return _through_the_slot(name, model_dir, "success")
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    assert downloads == ["medium", "small"]
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is True
+    assert "small" in finished[-1][4]
+    assert "canceled" in finished[-1][4].lower()
+
+
+def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [("medium", "")]
+    downloads: list[str] = []
+
+    def _download(self, name, model_dir):
+        downloads.append(name)
+        _LocalModelsMixin._cancel_local_model_downloads(self)
+        _LocalModelsMixin._start_local_model_download(self, ["small"])
+        _LocalModelsMixin._cancel_local_model_downloads(self)
+        return ("canceled", "", 0, 0)
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    assert downloads == ["medium"]
+    assert dialog._local_model_download_worker_running is False
+    # The worker consumed the cancel on its way out; a set event left behind
+    # would make the next worker start with a phantom cancel and report the
+    # user's fresh download as resumed after "an earlier download".
+    assert dialog._local_model_download_cancel_event.is_set() is False
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is False
+    assert finished[-1][4].startswith("Download canceled.")
