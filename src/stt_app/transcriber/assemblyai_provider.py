@@ -57,20 +57,35 @@ def _default_assemblyai():
         ) from None
 
 
-# The SDK's `disconnect(terminate=True)` runs in three stages: it waits
+# The SDK's `disconnect(terminate=True)` runs in four stages: it waits
 # `terminate_timeout` for the server's TerminationEvent -- and the final Turn
 # that precedes it, which is the tail of the dictation -- then sets its stop
-# flag and joins its read and write threads with no timeout of its own. Both
-# threads are parked in a 1 s-timeout loop, so the whole call can take
-# `terminate_timeout` plus about two of those.
+# flag and joins its read and write threads with no timeout of its own (both
+# are parked in a 1 s-timeout loop, and they exit concurrently, so the two
+# joins cost about one loop together), and last closes the websocket. That
+# close is `websockets.sync`'s `close()`, which waits for the peer's close
+# handshake up to `close_timeout` -- 10 s by default, and the SDK never passes
+# its own (`websocket_connect(uri, additional_headers=..., open_timeout=...)`
+# only). Measured against a loopback peer that never acknowledges the close
+# frame: 9.02 s inside `close()`.
 #
-# The app's own bound has to clear all of it. It did not: the outer join was
-# 5.0 s against the SDK default `terminate_timeout` of 5.0, so the app gave up
-# at exactly the moment the SDK started tearing down, reset the session, and
-# `_on_turn_event`'s session check then dropped the final Turn -- and because
-# the text collected so far is non-empty, `stop_stream`'s `if error and not
-# text` guard does not fire either, so the user is handed a silently
-# shortened dictation with no error at all.
+# The app's own bound has to clear the stages that can still deliver text.
+# It did not: the outer join was 5.0 s against the SDK default
+# `terminate_timeout` of 5.0, so the app gave up at exactly the moment the SDK
+# started tearing down, reset the session, and `_on_turn_event`'s session
+# check then dropped the final Turn -- and because the text collected so far
+# is non-empty, `stop_stream`'s `if error and not text` guard does not fire
+# either, so the user is handed a silently shortened dictation with no error
+# at all.
+#
+# The bound deliberately stops short of the close handshake. Nothing is
+# dispatched after the read thread has been joined, so the only thing a
+# 16-17 s worst case would buy is a stop that takes that long on a dead
+# connection; with 8 s the helper thread outlives `stop_stream` by up to ~9 s
+# on a daemon thread that holds no app lock, and the transcript is already
+# stored under `_stream_lock` before the joins begin. An earlier version of
+# this comment modelled the teardown as `terminate_timeout + 2 s` and called
+# that the whole of it, which it is not.
 #
 # Both numbers are set here rather than one being inherited: a default that
 # moves in an SDK upgrade would put the two back on top of each other with

@@ -1372,7 +1372,14 @@ def test_a_finished_job_is_not_made_to_wait_for_the_polling_interval(monkeypatch
 
 
 class TestStreamStopBudget:
-    """The app's stop bound has to contain the SDK's own teardown, not equal it."""
+    """The app's stop bound has to contain the SDK's text-bearing teardown, not equal it.
+
+    "Text-bearing" is the terminate wait plus the thread joins. The websocket
+    close that follows can take `websockets`' 10 s `close_timeout` on a dead
+    peer, and the bound deliberately does not contain that: nothing is
+    dispatched once the read thread is joined, and the turn is stored before
+    the joins begin.
+    """
 
     def test_the_outer_bound_clears_the_sdk_teardown_it_contains(self):
         from stt_app.transcriber import assemblyai_provider as provider
@@ -1386,6 +1393,17 @@ class TestStreamStopBudget:
             "the join gives up while `disconnect(terminate=True)` is still "
             "waiting for the server's final Turn"
         )
+
+    def test_the_sdk_still_leaves_the_websocket_close_timeout_to_the_library(self):
+        """The comment above rests on this: if the SDK ever bounds the close
+        itself, the worst case changes and the model here must be re-derived."""
+        import inspect
+
+        from assemblyai.streaming.v3 import client as sdk_client
+
+        source = inspect.getsource(sdk_client)
+        assert "websocket_connect(" in source
+        assert "close_timeout" not in source
 
     def test_the_terminate_timeout_is_pinned_on_the_real_options(self, monkeypatch):
         """Inheriting the SDK's default puts the two numbers back together.
