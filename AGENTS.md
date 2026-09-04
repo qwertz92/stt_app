@@ -1194,6 +1194,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   state and writing the foreground result's own overlay state: the flush runs
   there, so without the guard the Error would flash and be overwritten one
   statement later. The notification always fires regardless.
+- **The overlay's Insert pastes the text that failed, which is not always the
+  last transcript.** A streaming finalize inserts only the tail past
+  `committed_text` -- the rest already reached the document live -- and its
+  Error state offers Insert for exactly that tail. The button was wired to
+  `repaste_last_transcript`, which reads `_last_transcript`, the whole
+  dictation: measured, the finalize inserted ' zweiter teil' and Insert then
+  pasted 'erster teil zweiter teil' on top of the 'erster teil' already in
+  the document. `_insert_action_text` is written by the two paths that paint
+  an Error with `OVERLAY_ERROR_ACTION_INSERT` (`_insert_text_at_target`'s
+  error arm and `_report_background_insertion_failure`), read by
+  `insert_failed_text` -- the slot `main._connect_overlay_actions` wires the
+  button to -- cleared by a successful re-paste and at the next recording
+  start, and it falls back to `_last_transcript` when nothing failed. The
+  tray action and the re-paste hotkey keep `repaste_last_transcript`, because
+  there "the last transcript" is what the user asked for. The background arm
+  must write it too even though it also sets `_last_transcript` to the same
+  text: a stale tail from an earlier failed finalize survives until the next
+  recording start, and the cancel hotkey's "nothing to cancel" path flushes a
+  queued job's failing insert without one -- Insert then pasted the old tail
+  while the overlay displayed the queued transcript. The wiring is pinned by
+  emitting the signal at a fake controller, not by reading `run()`.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy
