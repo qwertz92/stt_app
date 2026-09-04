@@ -8,8 +8,9 @@ import stt_app.controller as controller_module
 
 
 class _StubWarmStream:
-    def __init__(self, opened_device_key=""):
+    def __init__(self, opened_device_key="", *, is_opening=False):
         self._opened_device_key = opened_device_key
+        self.is_opening = is_opening
         self.request_close_calls = 0
         self.request_restart_calls = 0
         self.ensure_started_calls = 0
@@ -172,5 +173,58 @@ def test_device_change_signal_starts_coalescing_timer():
     controller._on_audio_devices_changed("default")
 
     assert controller._audio_device_change_timer.isActive()
+    controller.shutdown()
+    _ = app
+
+
+def test_a_microphone_change_saved_while_the_warm_stream_opens_restarts_it(
+    monkeypatch,
+):
+    """`opened_device_key` is None during an open, exactly as when it failed.
+
+    The save took the retry branch, whose `ensure_started` no-ops on the
+    `_starting` guard, so the in-flight open finished on the previous
+    microphone and nothing restarted it: the warm stream was pinned to the
+    old device for the session, `attach` refused it, and every recording
+    cold-opened. The losing case is the slow open -- the one the feature
+    exists for.
+    """
+    controller, app = make_controller()
+    stub = _StubWarmStream(opened_device_key=None, is_opening=True)
+    controller._warm_mic_stream = stub
+    controller._settings = replace(
+        controller._settings, keep_microphone_warm=True, input_device_name="Mic B"
+    )
+    monkeypatch.setattr(
+        controller,
+        "_start_warm_microphone_stream_async",
+        lambda: stub.ensure_started(),
+    )
+
+    controller._sync_warm_microphone_stream()
+
+    assert stub.request_restart_calls == 1
+    assert stub.ensure_started_calls == 0
+    controller.shutdown()
+    _ = app
+
+
+def test_a_failed_earlier_open_is_retried_on_save_without_a_restart(monkeypatch):
+    controller, app = make_controller()
+    stub = _StubWarmStream(opened_device_key=None, is_opening=False)
+    controller._warm_mic_stream = stub
+    controller._settings = replace(
+        controller._settings, keep_microphone_warm=True, input_device_name="Mic B"
+    )
+    monkeypatch.setattr(
+        controller,
+        "_start_warm_microphone_stream_async",
+        lambda: stub.ensure_started(),
+    )
+
+    controller._sync_warm_microphone_stream()
+
+    assert stub.ensure_started_calls == 1
+    assert stub.request_restart_calls == 0
     controller.shutdown()
     _ = app

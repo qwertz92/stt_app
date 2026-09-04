@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import logging
 import threading
+import time
 import wave
 from collections.abc import Callable
 from pathlib import Path
@@ -104,6 +105,12 @@ class WarmMicrophoneStream:
         self._opened_device_key: str | None = None
         self._pending_restart = False
         self._pending_close = False
+        # Streams handed off for closing but not yet taken by a closer, and
+        # the number a closer is working on right now; `close_if_idle` waits
+        # on `_idle` until both are zero and no open is in flight.
+        self._retiring: list = []
+        self._closes_in_flight = 0
+        self._idle = threading.Condition(self._lock)
 
     @property
     def is_running(self) -> bool:
@@ -116,9 +123,33 @@ class WarmMicrophoneStream:
         with self._lock:
             return self._opened_device_key if self._stream is not None else None
 
-    def ensure_started(self) -> bool:
-        """Open and start the shared stream if needed. Safe off the UI thread."""
+    _CLOSE_WAIT_S = 10.0
+
+    @property
+    def is_opening(self) -> bool:
+        """True while an open is in flight; `opened_device_key` is None then too."""
         with self._lock:
+            return self._starting
+
+    def ensure_started(self, *, generation: int | None = None) -> bool:
+        """Open and start the shared stream if needed. Safe off the UI thread.
+
+        ``generation`` is passed by a restart helper and by the retry a
+        pending restart schedules: the open is refused once the generation
+        has moved since the restart was requested, because whoever bumped it
+        -- a newer restart, `close_if_idle` ahead of a device re-enumeration,
+        or `close` -- now decides whether a stream runs at all. Without this
+        a restart helper reopened the stream *after* `close_if_idle` had
+        closed everything for the re-enumeration, so the refresh found a live
+        stream and refused; and after `close` had run for a disabled feature,
+        which left a microphone open that nothing referenced. The check sits
+        under the same lock that sets `_starting`, so a bump lands either
+        before it (refused) or after it (the bumper sees `_starting`, waits,
+        and closes the stream this open produces).
+        """
+        with self._lock:
+            if generation is not None and generation != self._generation:
+                return False
             if self._stream is not None:
                 return True
             if self._starting:
@@ -187,6 +218,8 @@ class WarmMicrophoneStream:
                 retry = self._pending_restart and self._consumer is None
                 if retry:
                     self._pending_restart = False
+                retry_generation = self._generation
+                self._idle.notify_all()
 
         if not accepted and stream is not None:
             _close_input_stream(
@@ -195,7 +228,7 @@ class WarmMicrophoneStream:
                 context="superseded warm microphone stream",
             )
         if retry:
-            return self.ensure_started()
+            return self.ensure_started(generation=retry_generation)
         if accepted and self._logger is not None:
             self._logger.info(
                 "warm_microphone_stream_started sample_rate=%d block_size=%d "
@@ -251,7 +284,7 @@ class WarmMicrophoneStream:
                     self._pending_restart = False
                     action = "restart"
         if action == "close":
-            self._spawn(self.close, "stt_app_warm_mic_close")
+            self._spawn_or_run(self.close, "stt_app_warm_mic_close", fallback=self.close)
         elif action == "restart":
             self.request_restart()
 
@@ -260,6 +293,16 @@ class WarmMicrophoneStream:
 
         While a recording is attached the restart is deferred until ``detach``
         so an active capture never loses its audio source mid-recording.
+
+        The stream being retired stays reachable in `_retiring` until a closer
+        has actually closed it. It used to be handed to the helper's closure
+        and nowhere else, so a helper thread that could not be started left a
+        PortAudio stream open and registered with no reference able to close
+        it: `close`, `close_if_idle` and `request_close` all found `_stream`
+        None, the microphone stayed open for the process lifetime, and every
+        device re-enumeration was refused. Reached through `detach` inside
+        `AudioCapture.stop`, the same `RuntimeError` also escaped before the
+        recording's chunks were drained, so the whole recording was lost.
         """
         with self._lock:
             if self._pending_close:
@@ -268,6 +311,7 @@ class WarmMicrophoneStream:
                 self._pending_restart = True
                 return
             self._generation += 1
+            generation = self._generation
             stream = self._stream
             self._stream = None
             self._opened_device_key = None
@@ -276,9 +320,12 @@ class WarmMicrophoneStream:
                 # its stream, and retries via the pending flag.
                 self._pending_restart = True
                 return
-        self._spawn(
-            lambda: self._close_and_reopen(stream),
+            if stream is not None:
+                self._retiring.append(stream)
+        self._spawn_or_run(
+            lambda: self._close_and_reopen(generation),
             "stt_app_warm_mic_restart",
+            fallback=self._close_retiring,
         )
 
     def request_close(self) -> None:
@@ -288,37 +335,77 @@ class WarmMicrophoneStream:
             if self._consumer is not None:
                 self._pending_close = True
                 return
-        self._spawn(self.close, "stt_app_warm_mic_close")
+        self._spawn_or_run(self.close, "stt_app_warm_mic_close", fallback=self.close)
 
     def close_if_idle(self) -> bool:
-        """Synchronous close unless a consumer is attached or one is opening.
+        """Synchronous close unless a consumer is attached.
 
         Used before PortAudio re-enumeration, which must not run while this
-        stream is open and must not race a recording that is using it.
+        stream is open and must not race a recording that is using it. Only
+        an attached consumer answers False at once; an open or a close in
+        flight is waited for (bounded by `_CLOSE_WAIT_S`), and the stream is
+        then closed here, because the caller reads True as "the registry is
+        clear" and acts on it immediately:
+
+        - An open holds `portaudio_guard()` across construct/start/register,
+          so a refresh begun on the strength of a True blocks on that lock,
+          then finds the stream registered while it waited and refuses.
+          Reproduced with a stubbed `sd.InputStream` whose `start()` blocks:
+          `_starting` True, `_stream` None, and the old `close_if_idle()`
+          answered True.
+        - `request_restart`, `request_close` and a deferred `detach` hand the
+          stream to a helper thread, which closes it *outside* the lock. With
+          `_stream` already None this method answered True while that close
+          was still running, `try_refresh_input_devices` found the stream
+          still registered and refused, and a refused refresh is only retried
+          on the next recording stop or abort -- so a hot-plugged or newly
+          defaulted microphone stayed invisible until the user recorded once
+          or pressed Refresh. Routine rather than exotic: a recording stop
+          runs `detach` and then arms exactly this refresh.
+
+        The generation is bumped *before* the wait, not after it: a restart
+        helper that finishes its close while this waits reaches its reopen on
+        its own lock acquisition, and the notify does not hand this thread
+        the lock first (measured: the helper reopened, this method then waited
+        for that open and closed the new stream, and the test timed out
+        inside the second close). Bumped first, the helper's reopen is
+        refused whichever thread wins (see `ensure_started`). A wait that
+        runs out answers False and logs; the caller then defers the refresh
+        as it does for an attached consumer -- and because the bump already
+        cancelled the helper's reopen, the stream stays closed until that
+        deferred refresh runs and reopens it, which is the honest state for
+        an audio stack that has not finished a close in ten seconds.
         """
-        with self._lock:
+        deadline = time.monotonic() + self._CLOSE_WAIT_S
+        with self._idle:
             if self._consumer is not None:
                 return False
-            if self._starting:
-                # An open is in flight. It holds `portaudio_guard()` across
-                # the construct/start/register block, so a refresh begun on
-                # the strength of a True here blocks on that same lock, then
-                # finds the stream that was registered while it waited and
-                # refuses -- and the caller only retries a refused refresh on
-                # the next recording stop or abort, so a hot-plugged or newly
-                # defaulted microphone stayed invisible until the user
-                # recorded once or pressed Refresh. Reachable whenever two
-                # device events arrive about one coalescing interval apart,
-                # which is likelier the slower the open is -- and a slow open
-                # is the reason the warm stream exists at all. Reproduced with
-                # a stubbed `sd.InputStream` whose `start()` blocks:
-                # `_starting` True, `_stream` None, `close_if_idle()` True.
-                return False
             self._generation += 1
-            stream = self._stream
+            while True:
+                if self._consumer is not None:
+                    return False
+                if not self._starting and not self._closes_in_flight:
+                    break
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    if self._logger is not None:
+                        self._logger.warning(
+                            "warm_microphone_stream_busy opening=%s "
+                            "closes_in_flight=%d; device re-enumeration deferred",
+                            self._starting,
+                            self._closes_in_flight,
+                        )
+                    return False
+                self._idle.wait(remaining)
+            streams = [
+                stream
+                for stream in (self._stream, *self._retiring)
+                if stream is not None
+            ]
             self._stream = None
             self._opened_device_key = None
-        if stream is not None:
+            self._retiring = []
+        for stream in streams:
             _close_input_stream(
                 stream,
                 logger=self._logger,
@@ -335,22 +422,63 @@ class WarmMicrophoneStream:
             self._opened_device_key = None
             self._pending_restart = False
             self._pending_close = False
-        if stream is None:
-            return
-        _close_input_stream(
-            stream,
-            logger=self._logger,
-            context="warm microphone stream",
-        )
+            if stream is not None:
+                self._retiring.append(stream)
+        self._close_retiring()
 
-    def _close_and_reopen(self, stream) -> None:
-        if stream is not None:
-            _close_input_stream(
-                stream,
-                logger=self._logger,
-                context="warm microphone stream (restart)",
-            )
-        self.ensure_started()
+    def _close_and_reopen(self, generation: int) -> None:
+        self._close_retiring()
+        self.ensure_started(generation=generation)
+
+    def _close_retiring(self) -> None:
+        """Close every retired stream, one at a time, outside the lock.
+
+        Whoever gets to a retired stream first closes it -- a helper, `close`,
+        or `close_if_idle` -- and `close_if_idle` waits for the ones a helper
+        has already taken, which is what `_closes_in_flight` counts.
+        """
+        while True:
+            with self._lock:
+                if not self._retiring:
+                    return
+                stream = self._retiring.pop(0)
+                self._closes_in_flight += 1
+            try:
+                _close_input_stream(
+                    stream,
+                    logger=self._logger,
+                    context="retired warm microphone stream",
+                )
+            finally:
+                with self._idle:
+                    self._closes_in_flight -= 1
+                    self._idle.notify_all()
+
+    def _spawn_or_run(
+        self,
+        target: Callable[[], None],
+        name: str,
+        *,
+        fallback: Callable[[], None],
+    ) -> None:
+        """Run ``target`` on a helper thread, or ``fallback`` right here.
+
+        `Thread.start` raises when the interpreter cannot create another
+        thread. The stream involved must be closed either way, and the
+        fallback does that on the calling thread -- slower than the helper
+        would have been, but bounded, logged, and never a leaked microphone.
+        No reopen is attempted then: an open on the calling thread is what
+        the helper exists to avoid, and the next recording cold-opens.
+        """
+        try:
+            self._spawn(target, name)
+        except Exception:
+            if self._logger is not None:
+                self._logger.exception(
+                    "Could not start %s; running its close on the calling thread",
+                    name,
+                )
+            fallback()
 
     @staticmethod
     def _spawn(target: Callable[[], None], name: str) -> None:
@@ -397,6 +525,7 @@ class AudioCapture:
         self._lock = threading.Lock()
         self._chunks: list[np.ndarray] = []
         self._auto_stop_fired = False
+        self._callback_failed = False
         self._capture_generation = 0
         self._accepting_audio = False
         self._active_callback: Callable | None = None
@@ -569,6 +698,26 @@ class AudioCapture:
         self._process_audio(indata, frames, status, generation=generation)
 
     def _process_audio(self, indata, frames, status, *, generation: int | None) -> None:
+        # sounddevice's callback wrapper catches only CallbackStop/CallbackAbort;
+        # any other exception reaches the cffi callback built with
+        # `error=paAbort`, which ends the stream at once -- a cold-stream
+        # recording then goes silently deaf, with the traceback on a stderr
+        # a windowed build does not have. Logged once, because this runs for
+        # every block.
+        try:
+            self._process_audio_unguarded(indata, frames, status, generation=generation)
+        except Exception:
+            if self._callback_failed:
+                return
+            self._callback_failed = True
+            if self._logger is not None:
+                self._logger.exception(
+                    "Audio callback failed; later failures are not logged"
+                )
+
+    def _process_audio_unguarded(
+        self, indata, frames, status, *, generation: int | None
+    ) -> None:
         if status and self._logger is not None:
             self._logger.warning("Audio stream status: %s", status)
 
@@ -602,7 +751,19 @@ class AudioCapture:
                 and not self._auto_stop_fired
             ):
                 self._auto_stop_fired = True
-                threading.Thread(target=self.auto_stop_callback, daemon=True).start()
+                try:
+                    threading.Thread(
+                        target=self.auto_stop_callback,
+                        name="stt_app_vad_auto_stop",
+                        daemon=True,
+                    ).start()
+                except RuntimeError:
+                    # Latched *after* the thread exists: a start that fails
+                    # used to leave the flag set, so auto-stop was silently
+                    # off for the rest of the recording. The next block
+                    # tries again; the guard above logs the failure once.
+                    self._auto_stop_fired = False
+                    raise
 
     def _to_wav_bytes(self, audio: np.ndarray) -> bytes:
         pcm = self._to_pcm16_array(audio)

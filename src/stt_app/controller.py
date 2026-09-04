@@ -1720,11 +1720,20 @@ class DictationController(QtCore.QObject):
             selected = str(
                 getattr(self._settings, "input_device_name", "") or ""
             )
-            if opened is None:
-                # Not running (earlier open failed or still starting); a
-                # settings save is a natural retry point.
+            if opened is None and not stream.is_opening:
+                # Not running (an earlier open failed); a settings save is a
+                # natural retry point.
                 self._start_warm_microphone_stream_async()
             elif opened != selected:
+                # Also taken while an open is in flight: `opened_device_key`
+                # is None then, and which microphone that open resolved is
+                # unknowable from here. `ensure_started` no-ops on its
+                # `_starting` guard, so the old "retry" branch let the open
+                # finish on the previous device and nothing ever restarted
+                # it -- the warm stream was then pinned to the old microphone
+                # for the session, `attach` refused it, and every recording
+                # cold-opened. A restart requested mid-open makes the open
+                # discard its stream and re-resolve; at worst one extra open.
                 stream.request_restart()
 
     def _warm_microphone_device(self) -> tuple[str, int | None]:
