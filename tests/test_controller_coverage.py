@@ -5788,7 +5788,11 @@ def test_a_resume_that_changes_the_registration_keeps_the_insert_offer():
     [
         "idle_line",
         "hotkey_error_line",
+        "cancel_hotkey_error_line",
+        "overlay_hotkey_error_line",
+        "repaste_hotkey_error_line",
         "nothing_to_cancel",
+        "transcription_canceled",
         "model_ready",
         "preload_canceled",
         "preload_failed_canceled",
@@ -5814,8 +5818,29 @@ def test_a_status_repaint_keeps_the_pending_insert_offer(repaint):
     elif repaint == "hotkey_error_line":
         # Never registered: `show_idle_status` paints the hotkey error.
         controller.show_idle_status()
+    elif repaint == "cancel_hotkey_error_line":
+        assert controller._register_all_global_hotkeys()
+        controller._cancel_hotkey_registration_ok = False
+        controller._cancel_hotkey_notice = "Cancel hotkey is busy."
+        controller.show_idle_status()
+    elif repaint == "overlay_hotkey_error_line":
+        assert controller._register_all_global_hotkeys()
+        controller._show_overlay_hotkey_registration_ok = False
+        controller._show_overlay_hotkey_notice = "Overlay hotkey is busy."
+        controller.show_idle_status()
+    elif repaint == "repaste_hotkey_error_line":
+        assert controller._register_all_global_hotkeys()
+        controller._repaste_hotkey_registration_ok = False
+        controller._repaste_hotkey_notice = "Re-paste hotkey is busy."
+        controller.show_idle_status()
     elif repaint == "nothing_to_cancel":
         controller.cancel_current_action()
+    elif repaint == "transcription_canceled":
+        # A queued transcription is running; Cancel stops it and paints
+        # "Transcription canceled." -- through the painter, like the rest.
+        controller._active_request_token = 99
+        controller.cancel_current_action()
+        assert "Transcription canceled." in overlay.states[-1][1]
     elif repaint == "model_ready":
         with controller._preload_result_lock:
             generation = controller._preload_generation
