@@ -388,17 +388,16 @@ def test_a_cancelled_cross_process_wait_clears_the_waiting_flag(
 
 
 def test_a_raise_while_publishing_the_held_lock_still_releases_it(monkeypatch, tmp_path):
-    """An OS lock that is held but not stored is stranded machine-wide.
+    """An OS lock that is held but not stored is stranded for the whole user.
 
     `acquire()` one frame up gives the in-process slot back on any exception,
     but it cannot see the `CrossProcessLock` object, and
     `_release_cache_lock` looks it up through `self._cache_lock`. So a raise
     between holding the lock and storing it leaves a real kernel lock held with
     no reference: `_release_cache_lock` finds `None` and does nothing, and
-    because the lock is keyed on the cache directory and shared across
-    processes, every other writer -- the benchmark worker,
-    `scripts/download_model.py`, a second Windows user on one Model Dir --
-    blocks until this process exits.
+    because the lock is keyed on the cache directory and shared across this
+    user's processes, every other writer -- the benchmark worker,
+    `scripts/download_model.py` -- blocks until this process exits.
 
     `_acquire_cache_lock` touches `self._condition` exactly twice: once to set
     the waiting flag and once to publish. Raising on the second entry

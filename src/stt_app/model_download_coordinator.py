@@ -22,14 +22,15 @@ cancelled by the implicit preload path.
 Scope: the slot is enforced at two levels. Inside one process a
 `threading.Condition` serializes callers and lets a second request for the same
 model join the running one. Across processes -- the out-of-process benchmark
-worker, `scripts/download_model.py`, a second Windows user sharing one
-Model Dir -- an OS-level
-lock on the cache directory (`file_lock.CrossProcessLock`) makes sure only one
-of them writes it at a time. Both levels are needed: the in-process half
-provides the join/interest behaviour the UI depends on, and only the OS half can
-see another process at all.
+worker and `scripts/download_model.py` -- an OS-level lock on the cache
+directory (`file_lock.CrossProcessLock`) makes sure only one of them writes it
+at a time. Both levels are needed: the in-process half provides the
+join/interest behaviour the UI depends on, and only the OS half can see another
+process at all. The lock files live under the calling user's `%APPDATA%`
+(`_download_lock_dir`), so the OS half covers every process of one Windows
+user and not a second account sharing the same Model Dir.
 
-The machine-wide lock is keyed on the *cache directory*, not on the model: two
+The cross-process lock is keyed on the *cache directory*, not on the model: two
 writers corrupt each other through the shared blob and ref trees even when they
 fetch different models, and the progress reading (directory growth) becomes
 meaningless for both.
