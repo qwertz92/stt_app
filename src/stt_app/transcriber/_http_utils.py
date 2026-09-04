@@ -130,14 +130,24 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
     except Exception:
         return raw.strip()[:300]
     if isinstance(parsed, dict):
-        error = parsed.get("error")
-        if isinstance(error, dict) and error.get("message"):
-            return str(error["message"])[:300]
-        if isinstance(error, str) and error.strip():
-            return error.strip()[:300]
-        for key in ("message", "detail", "err_msg"):
-            if parsed.get(key):
-                return str(parsed[key])[:300]
+        # Two nesting levels cover every documented shape: OpenAI's
+        # `{"error": {"message"}}`, ElevenLabs' `{"detail": {"message"}}`,
+        # Deepgram's flat `message` / `err_msg`, Azure's wrapped `error`. A
+        # nested object without a `message` used to be `str()`-ed whole, so
+        # the user read Python dict syntax with the request id in it, capped
+        # mid-dict; the nested object's own text fields are tried first and
+        # the JSON text is the last resort.
+        for key in ("error", "message", "detail", "err_msg"):
+            value = parsed.get(key)
+            if isinstance(value, dict):
+                for inner in ("message", "detail", "status", "code"):
+                    if isinstance(value.get(inner), str) and value[inner].strip():
+                        return value[inner].strip()[:300]
+                continue
+            if isinstance(value, str) and value.strip():
+                return value.strip()[:300]
+        # Anything else -- a number, a list, an empty object -- reads better as
+        # the JSON text itself than as `str()` of one field.
     return raw.strip()[:300]
 
 

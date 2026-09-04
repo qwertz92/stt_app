@@ -170,3 +170,41 @@ def test_a_normal_json_error_body_is_still_read_and_unwrapped():
     assert len(body) < _MAX_ERROR_BODY_BYTES
 
     assert read_http_error_detail(_http_error(body)) == "Invalid file format"
+
+
+def test_a_message_nested_under_detail_is_unwrapped_not_stringified():
+    """ElevenLabs' documented shape is `{"detail": {"message": ...}}`.
+
+    The key loop found `detail`, a dict, and `str()`-ed the whole thing: the
+    user was shown Python dict syntax with the request id and the parameter
+    name, capped mid-dict at 300 characters. Read from the vendor's own error
+    page, not assumed.
+    """
+    body = (
+        b'{"detail": {"type": "validation_error", "code": "invalid_parameters", '
+        b'"message": "The \'keyterms\' parameter is only supported with the '
+        b'\'scribe_v2\' model. You specified \'scribe_v1\'.", '
+        b'"status": "invalid_parameters", "request_id": "3c807fc4c3a1705f9638ecc7", '
+        b'"param": "keyterms"}}'
+    )
+
+    detail = read_http_error_detail(_http_error(body))
+
+    assert detail == (
+        "The 'keyterms' parameter is only supported with the 'scribe_v2' model. "
+        "You specified 'scribe_v1'."
+    )
+    assert "{" not in detail
+
+
+def test_a_detail_object_without_a_message_still_shows_something_readable():
+    body = b'{"detail": {"status": "quota_exceeded", "code": 429}}'
+
+    detail = read_http_error_detail(_http_error(body))
+
+    assert "quota_exceeded" in detail
+    assert len(detail) <= 300
+
+
+def test_a_detail_that_is_a_plain_string_is_kept_as_before():
+    assert read_http_error_detail(_http_error(b'{"detail": "Not Found"}')) == "Not Found"
