@@ -2600,6 +2600,24 @@ def test_refresh_hotkey_registration_includes_show_overlay():
     _ = app
 
 
+def test_shutdown_tells_every_remote_wait_to_give_up():
+    """The flag the AssemblyAI poll and the Fun-ASR receive loop read."""
+    from stt_app.transcriber.base import (
+        reset_transcription_shutdown_for_tests,
+        transcription_shutdown_requested,
+    )
+
+    controller, app = _make_controller()
+    reset_transcription_shutdown_for_tests()
+    try:
+        assert transcription_shutdown_requested() is False
+        controller.shutdown()
+        assert transcription_shutdown_requested() is True
+    finally:
+        reset_transcription_shutdown_for_tests()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # Re-paste hotkey registration and action
 # ---------------------------------------------------------------------------

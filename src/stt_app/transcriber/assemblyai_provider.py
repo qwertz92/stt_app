@@ -38,6 +38,7 @@ from .base import (
     StreamingCallback,
     StreamingErrorCallback,
     TranscriptionError,
+    transcription_shutdown_requested,
 )
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,8 @@ ASSEMBLYAI_STREAM_STOP_JOIN_TIMEOUT_S = 8.0
 # persistent fault (a revoked key answering 401 forever) still fails in
 # under a minute rather than spending the thirty-minute budget.
 ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES = 3
+# How long a quit can wait for the poll's sleep to notice it.
+ASSEMBLYAI_SHUTDOWN_POLL_S = 0.5
 
 
 class AssemblyAITranscriber(ProgressReporter, ITranscriber):
@@ -238,9 +241,21 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         process then stays alive holding the single-instance lock, so the
         user cannot even restart the app.
 
+        The budget alone did not close that second half: a quit during a
+        job the service never finishes still kept the process alive for the
+        rest of the thirty minutes. The loop therefore also reads the
+        app-wide shutdown flag -- at the top, and between the
+        `ASSEMBLYAI_SHUTDOWN_POLL_S` slices its sleep is cut into -- and
+        gives up naming the transcript id. The true bound of one poll is the
+        budget plus one `settings.http_timeout` (30 s in the installed SDK),
+        because a fetch in flight cannot be interrupted.
+
         Terminal is the positive test rather than `queued`/`processing`,
         so a status this SDK version does not know is waited out instead
-        of mistaken for a finished job.
+        of mistaken for a finished job. A fetch that returns an object
+        without a status is a failed fetch, counted with the raising ones:
+        read outside the `try` it was an `AttributeError` that skipped the
+        retry and reported without the id.
         """
         terminal = {aai.TranscriptStatus.completed, aai.TranscriptStatus.error}
         if transcript.status in terminal:
@@ -261,6 +276,12 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
         deadline = time.monotonic() + ASSEMBLYAI_BATCH_MAX_WAIT_S
         consecutive_failures = 0
         while True:
+            if transcription_shutdown_requested():
+                raise TranscriptionError(
+                    "The application is shutting down; the AssemblyAI job was "
+                    f"left running (last status: {transcript.status}, "
+                    f"transcript id {transcript_id})."
+                )
             if time.monotonic() >= deadline:
                 raise TranscriptionError(
                     "AssemblyAI did not finish the transcription within "
@@ -273,7 +294,8 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
             # the SDK's own loop uses. Sleeping first spent a full polling
             # interval before ever asking, on every batch dictation.
             try:
-                transcript = cls._fetch_transcript(aai, transcript_id)
+                fetched = cls._fetch_transcript(aai, transcript_id)
+                status = fetched.status
             except TranscriptionError:
                 raise
             except Exception as exc:
@@ -286,9 +308,22 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                     ) from exc
             else:
                 consecutive_failures = 0
-                if transcript.status in terminal:
+                transcript = fetched
+                if status in terminal:
                     return transcript
-            time.sleep(min(interval, max(deadline - time.monotonic(), 0.0)))
+            cls._sleep_between_fetches(
+                min(interval, max(deadline - time.monotonic(), 0.0))
+            )
+
+    @staticmethod
+    def _sleep_between_fetches(seconds: float) -> None:
+        """One polling interval, in slices, so a quit ends it within a slice."""
+        end = time.monotonic() + seconds
+        while not transcription_shutdown_requested():
+            remaining = end - time.monotonic()
+            if remaining <= 0:
+                return
+            time.sleep(min(remaining, ASSEMBLYAI_SHUTDOWN_POLL_S))
 
     def transcribe_batch(self, audio_source: AudioInput) -> str:
         """Transcribe audio via AssemblyAI batch API.

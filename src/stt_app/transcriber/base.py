@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import logging
 import re
+import threading
 from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
@@ -15,6 +16,30 @@ AudioInput = bytes | str | Path
 StreamingCallback = Callable[[str], None]
 StreamingErrorCallback = Callable[[str], None]
 ProgressCallback = Callable[[str], None]
+
+
+# Set once at application quit. A remote batch wait that keeps polling after
+# that keeps the process alive: `ThreadPoolExecutor` registers an atexit hook
+# that *joins* its workers, and `shutdown(wait=False, cancel_futures=True)`
+# does not release a worker that has already started (measured: a poll with a
+# 4 s budget kept the interpreter alive for exactly 4 s after shutdown had
+# returned). With the shipped thirty-minute budgets the user was left with a
+# windowless process holding the single-instance lock, unable to restart the
+# app. The poll loops read this between slices of their waits.
+_SHUTDOWN = threading.Event()
+
+
+def request_transcription_shutdown() -> None:
+    """Tell every remote wait to give up: the application is exiting."""
+    _SHUTDOWN.set()
+
+
+def transcription_shutdown_requested() -> bool:
+    return _SHUTDOWN.is_set()
+
+
+def reset_transcription_shutdown_for_tests() -> None:
+    _SHUTDOWN.clear()
 
 
 class TranscriptionError(RuntimeError):

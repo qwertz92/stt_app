@@ -1101,7 +1101,10 @@ def _pending_aai(*, statuses, transcript_id="t-123"):
 # advancing and the loop spins forever. A wall-clock cap cannot see that; a
 # call cap can, and it turns "the bound is gone" into a failure naming itself
 # rather than a run that hangs with no output.
-_FAKE_CLOCK_MAX_SLEEPS = 1000
+# The interval is slept in `ASSEMBLYAI_SHUTDOWN_POLL_S` slices so a quit can
+# end it; a full thirty-minute budget at the 3 s default interval is 600
+# intervals of 6 slices. The fetch cap is the guard that cannot be starved.
+_FAKE_CLOCK_MAX_SLEEPS = 20000
 # And a cap on the operation that always runs: a mutation that deletes the
 # sleep makes the sleep-count guard unreachable and hangs pytest instead of
 # failing it (measured: 23.5 million iterations in 2 s, guard never fired).
@@ -1617,6 +1620,72 @@ class TestSetupFailuresAreWrapped:
 
         with pytest.raises(TranscriptionError, match="AssemblyAI"):
             t.transcribe_batch(b"RIFF....WAVE")
+
+
+def test_a_shutdown_ends_the_poll_within_one_slice(monkeypatch):
+    """`executor.shutdown(wait=False, cancel_futures=True)` does not stop a
+    running worker, and the executor's atexit hook joins it -- so a job the
+    service leaves queued kept the process alive for the whole thirty-minute
+    budget after the user quit, still holding the single-instance lock. The
+    poll now reads the app-wide shutdown flag between slices of its sleep."""
+    from stt_app.transcriber import assemblyai_provider as provider
+    from stt_app.transcriber.base import (
+        request_transcription_shutdown,
+        reset_transcription_shutdown_for_tests,
+    )
+
+    aai, fetched = _pending_aai(statuses=["queued"])
+    aai.settings.polling_interval = 3.0
+    now = [0.0]
+
+    def _sleep(seconds):
+        now[0] += seconds
+        # The quit lands during the first slice of the first interval.
+        request_transcription_shutdown()
+
+    monkeypatch.setattr(provider.time, "monotonic", lambda: now[0])
+    monkeypatch.setattr(provider.time, "sleep", _sleep)
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+    try:
+        with pytest.raises(TranscriptionError) as excinfo:
+            t.transcribe_batch(b"RIFF....WAVE")
+    finally:
+        reset_transcription_shutdown_for_tests()
+
+    assert len(fetched) == 1, "it fetched again after the shutdown"
+    assert now[0] <= provider.ASSEMBLYAI_SHUTDOWN_POLL_S
+    message = str(excinfo.value)
+    assert "shutting down" in message
+    assert "t-123" in message, "the id is the only way to recover the job"
+
+
+def test_a_fetch_result_without_a_status_is_a_fetch_failure(monkeypatch):
+    """A response the SDK wraps into an object with no `status` raised
+    `AttributeError` outside the retry arm: one attempt, no retry, and a
+    message without the transcript id."""
+    from stt_app.transcriber import assemblyai_provider as provider
+
+    aai, fetched = _pending_aai(statuses=["queued"])
+    original = aai.Transcript.from_response
+
+    class _NoStatus:
+        text = None
+
+    aai.Transcript.from_response = staticmethod(
+        lambda *, client, response: _NoStatus()
+    )
+    _fake_clock(monkeypatch, provider)
+    t = AssemblyAITranscriber(api_key="key", aai_module=aai)
+    try:
+        with pytest.raises(TranscriptionError) as excinfo:
+            t.transcribe_batch(b"RIFF....WAVE")
+    finally:
+        aai.Transcript.from_response = original
+
+    assert len(fetched) == provider.ASSEMBLYAI_MAX_CONSECUTIVE_FETCH_FAILURES
+    message = str(excinfo.value)
+    assert "could not fetch" in message
+    assert "t-123" in message
 
 
 def test_the_loop_sleeps_one_polling_interval_between_fetches(monkeypatch):

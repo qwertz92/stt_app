@@ -97,7 +97,11 @@ from .text_inserter import (
     TextMayHaveBeenPastedError,
 )
 from .transcriber import create_transcriber
-from .transcriber.base import TranscriptionCanceled, TranscriptionError
+from .transcriber.base import (
+    TranscriptionCanceled,
+    TranscriptionError,
+    request_transcription_shutdown,
+)
 from .transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 from .vad import EnergyVad, measure_peak_windowed_rms
 from .window_focus import FocusSignature, Win32WindowFocusHelper, WindowFocusHelper
@@ -565,6 +569,11 @@ class DictationController(QtCore.QObject):
             self.show_idle_status()
 
     def shutdown(self) -> None:
+        # Before anything else: the executor shutdown below cannot stop a
+        # worker that is already inside a remote poll, and the interpreter
+        # joins that worker at exit. The poll loops end within a slice once
+        # this is set.
+        request_transcription_shutdown()
         if self._shutdown_started:
             return
         self._shutdown_started = True
