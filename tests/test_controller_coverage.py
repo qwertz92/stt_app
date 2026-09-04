@@ -2618,6 +2618,83 @@ def test_shutdown_tells_every_remote_wait_to_give_up():
     _ = app
 
 
+class _BusyAfterResumeHotkeyManager(FakeHotkeyManager):
+    """Accepts every combination except the one another program took."""
+
+    def __init__(self):
+        super().__init__()
+        self.busy = set()
+
+    def register(self, hotkey):
+        self.calls.append(hotkey)
+        if "*" in self.busy or hotkey in self.busy:
+            raise ValueError("blocked")
+
+    def unregister(self):
+        pass
+
+
+def test_a_resume_that_substitutes_a_fallback_repaints_the_idle_line():
+    """After a resume the preferred key belongs to another program: the line
+    must name the fallback that fires, and stop naming it once the preferred
+    key is taken back by a later refresh."""
+    from stt_app.config import FALLBACK_HOTKEYS
+
+    preferred = FALLBACK_HOTKEYS[0]
+    manager = _BusyAfterResumeHotkeyManager()
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=preferred)),
+        hotkey_manager=manager,
+        overlay=overlay,
+    )
+    # The startup registration, with every combination free.
+    controller.refresh_hotkey_registration()
+    assert controller._active_hotkey == preferred
+
+    manager.busy = {preferred}
+    painted = len(overlay.states)
+    controller.refresh_hotkey_registration()
+
+    assert controller._active_hotkey != preferred
+    assert len(overlay.states) > painted, "the refresh repainted nothing"
+    state, detail = overlay.states[-1]
+    assert state == "Idle"
+    assert controller._active_hotkey in detail
+    assert "used by another program" in detail
+
+    manager.busy = set()
+    controller.refresh_hotkey_registration()
+
+    assert controller._active_hotkey == preferred
+    state, detail = overlay.states[-1]
+    assert state == "Idle"
+    assert preferred in detail
+    assert "used by another program" not in detail
+    controller.shutdown()
+    _ = app
+
+
+def test_a_resume_that_loses_every_hotkey_shows_the_error():
+    manager = _BusyAfterResumeHotkeyManager()
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        hotkey_manager=manager,
+        overlay=overlay,
+    )
+
+    manager.busy = {"*"}
+    controller.refresh_hotkey_registration()
+
+    assert controller._hotkey_registration_ok is False
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "every fallback" in detail
+    controller.shutdown()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # Re-paste hotkey registration and action
 # ---------------------------------------------------------------------------

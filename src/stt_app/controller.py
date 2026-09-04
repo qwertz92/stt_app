@@ -3372,12 +3372,27 @@ class DictationController(QtCore.QObject):
             self._preload_target_model,
             preload_cached_bytes,
         )
-        preload_future = self._preload_executor.submit(
-            self._preload_model_worker,
-            settings,
-            generation,
-            key,
-        )
+        try:
+            preload_future = self._preload_executor.submit(
+                self._preload_model_worker,
+                settings,
+                generation,
+                key,
+            )
+        except RuntimeError as exc:
+            # `Executor.submit` raises once the pool has been shut down and
+            # when the interpreter cannot start a worker thread. The result
+            # slot above already says "in progress" and the overlay says
+            # "Loading", and no worker will ever complete this generation,
+            # so letting it escape left both saying so for good. Report it
+            # through the slot a failed worker uses: the failure is recorded
+            # against the key, so the next dictation raises it instead of
+            # substituting a model, and the next settings save retries.
+            failure = f"Model preload could not be started: {exc}"
+            self._logger.exception("Model preload worker could not be scheduled")
+            self._record_model_preload_result(key, generation, failure)
+            self._on_model_preload_done(generation, False, failure)
+            return
         with self._preload_result_lock:
             if generation == self._preload_generation:
                 self._preload_future = preload_future
@@ -6482,3 +6497,13 @@ class DictationController(QtCore.QObject):
         """Re-register global hotkeys after Windows resumes or opens Explorer."""
         if not self._register_all_global_hotkeys():
             self._logger.warning("Global hotkey refresh did not fully succeed.")
+        # Every other writer of the registration state repaints the idle line
+        # (`reload_settings`, the reclaim timer, a failed reclaim). This one
+        # did not, so a resume that substituted a fallback -- or lost every
+        # combination -- left the overlay advertising a key that no longer
+        # fired, and a resume that repaired an earlier failure left it on
+        # Error until the next settings save. `show_idle_status` returns
+        # early while a session owns the overlay, and its hotkey-error
+        # branches sit above the preload gate, so a failure still shows
+        # during a preload.
+        self.show_idle_status()

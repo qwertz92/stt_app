@@ -1314,6 +1314,48 @@ def test_controller_initialize_local_uses_preload_executor_only():
     _ = app
 
 
+class _RefusingExecutor:
+    """`Executor.submit` after `shutdown()`, or when no thread can start."""
+
+    def submit(self, fn, *args, **kwargs):
+        raise RuntimeError("cannot schedule new futures after shutdown")
+
+    def shutdown(self, wait=False, cancel_futures=False):
+        pass
+
+
+def test_a_preload_worker_that_cannot_be_scheduled_is_reported():
+    """The result slot and the overlay both said "loading" before the submit;
+    with nothing to complete the generation they said so for good."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
+    overlay = FakeOverlay()
+    controller = DictationController(
+        settings_store=FakeSettingsStore(settings),
+        hotkey_manager=FakeHotkeyManager(),
+        cancel_hotkey_manager=FakeHotkeyManager(),
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+        logger=logging.getLogger("test.controller"),
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    controller._preload_executor = _RefusingExecutor()
+
+    controller.initialize()
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "could not be started" in detail
+    assert controller._current_preload_phase() == ""
+    assert controller._preload_target_model is None
+    failure = controller._model_preload_failure(controller.settings)
+    assert failure is not None and "could not be started" in failure
+    # The next save retries the preload instead of trusting the recorded slot.
+    assert controller._local_model_preload_needed(controller.settings) is True
+    controller.shutdown()
+    _ = app
+
+
 def test_controller_preload_failure_is_reported_without_fallback():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     settings = AppSettings(engine="local", model_size="medium", hotkey=FALLBACK_HOTKEY)
