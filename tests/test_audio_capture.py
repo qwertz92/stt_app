@@ -495,23 +495,22 @@ def test_warm_close_if_idle_waits_for_an_open_in_flight_and_then_closes_it(
     warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
     opener = threading.Thread(target=warm.ensure_started, daemon=True)
     opener.start()
-    answers: list[bool] = []
-    closer = threading.Thread(
-        target=lambda: answers.append(warm.close_if_idle()), daemon=True
-    )
+    answers = _answers_with_registry(warm)
+    closer = threading.Thread(target=answers.run, daemon=True)
     try:
         assert _wait_until(lambda: opened and opened[0].started.is_set())
         closer.start()
         time.sleep(0.2)
         assert closer.is_alive(), "it answered while the open was still in flight"
-        assert answers == []
+        assert answers.seen == []
     finally:
         for stream in opened:
             stream.release.set()
         opener.join(timeout=5)
         closer.join(timeout=5)
 
-    assert answers == [True]
+    # The registry is what the caller acts on, at the moment of the answer.
+    assert answers.seen == [(True, live_before)]
     assert opened[0].closed is True
     assert warm.is_running is False
     assert audio_devices.live_stream_count() == live_before
@@ -534,10 +533,8 @@ def test_warm_close_if_idle_waits_for_a_close_a_restart_handed_to_a_helper(
     warm.request_restart()
     first = _BlockingCloseStream.instances[0]
     assert _wait_until(first.closing.is_set)
-    answers: list[bool] = []
-    closer = threading.Thread(
-        target=lambda: answers.append(warm.close_if_idle()), daemon=True
-    )
+    answers = _answers_with_registry(warm)
+    closer = threading.Thread(target=answers.run, daemon=True)
     closer.start()
     time.sleep(0.2)
     try:
@@ -547,13 +544,165 @@ def test_warm_close_if_idle_waits_for_a_close_a_restart_handed_to_a_helper(
         first.release.set()
         closer.join(timeout=5)
 
-    assert answers == [True]
-    assert audio_devices.live_stream_count() == live_before
+    assert answers.seen == [(True, live_before)]
     # The helper's reopen was superseded by the close: nothing runs behind
     # the caller's back while it re-enumerates.
     time.sleep(0.2)
     assert len(_BlockingCloseStream.instances) == 1
     assert warm.is_running is False
+
+
+class _answers_with_registry:
+    """`close_if_idle`'s answer paired with the registry at that instant.
+
+    The caller reads True as "the registry is clear" and re-enumerates on the
+    spot, so a count taken after joining the other threads proves nothing
+    about what the caller saw.
+    """
+
+    def __init__(self, warm):
+        self._warm = warm
+        self.seen: list[tuple[bool, int]] = []
+
+    def run(self):
+        answer = self._warm.close_if_idle()
+        self.seen.append((answer, audio_devices.live_stream_count()))
+
+
+class _BlockingStartAndCloseStream:
+    """Slow to start *and* slow to close: the superseded-open case needs both."""
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.closed = False
+        self.started = threading.Event()
+        self.release_start = threading.Event()
+        self.closing = threading.Event()
+        self.release_close = threading.Event()
+
+    def start(self):
+        self.started.set()
+        assert self.release_start.wait(timeout=5), "the test never released the open"
+
+    def stop(self):
+        pass
+
+    def close(self):
+        self.closing.set()
+        assert self.release_close.wait(timeout=5), "the test never released the close"
+        self.closed = True
+
+
+def _superseded_open(monkeypatch):
+    opened: list[_BlockingStartAndCloseStream] = []
+
+    def _factory(**kwargs):
+        stream = _BlockingStartAndCloseStream(**kwargs)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    opener = threading.Thread(target=warm.ensure_started, daemon=True)
+    opener.start()
+    assert _wait_until(lambda: opened and opened[0].started.is_set())
+    return warm, opened, opener
+
+
+def test_warm_close_if_idle_closes_a_superseded_open_before_it_answers(
+    monkeypatch,
+):
+    """The open that `close_if_idle` waits for produces a stream *it* must
+    close. That stream used to be closed by the open thread, outside the lock
+    and outside `_retiring`/`_closes_in_flight`, so the waiter woke on the
+    open's notify, found nothing to close and answered True while the stream
+    was registered and still closing -- the refresh then refused, exactly the
+    outcome the wait exists to prevent, and `ensure_started` opened a second
+    stream beside the first."""
+    live_before = audio_devices.live_stream_count()
+    warm, opened, opener = _superseded_open(monkeypatch)
+    answers = _answers_with_registry(warm)
+    closer = threading.Thread(target=answers.run, daemon=True)
+    closer.start()
+    time.sleep(0.2)
+    try:
+        assert closer.is_alive(), "it answered while the open was still in flight"
+        opened[0].release_start.set()
+        assert _wait_until(opened[0].closing.is_set)
+        time.sleep(0.2)
+        assert closer.is_alive(), "it answered while the stream was still closing"
+        assert answers.seen == []
+    finally:
+        opened[0].release_start.set()
+        opened[0].release_close.set()
+        opener.join(timeout=5)
+        closer.join(timeout=5)
+
+    assert answers.seen == [(True, live_before)]
+    assert opened[0].closed is True
+    assert len(opened) == 1
+    assert warm.is_running is False
+    assert warm.is_opening is False
+
+
+def test_warm_close_if_idle_cancels_the_reopen_a_pending_restart_scheduled(
+    monkeypatch,
+):
+    """A restart requested during an open defers to the open's retry, and the
+    retry read the generation *after* `close_if_idle` had bumped it -- so it
+    passed the generation check and opened a fresh stream behind the caller's
+    re-enumeration, which the bump-before-wait exists to make impossible."""
+    live_before = audio_devices.live_stream_count()
+    warm, opened, opener = _superseded_open(monkeypatch)
+    warm.request_restart()
+    answers = _answers_with_registry(warm)
+    closer = threading.Thread(target=answers.run, daemon=True)
+    closer.start()
+    time.sleep(0.2)
+    try:
+        assert closer.is_alive()
+        opened[0].release_start.set()
+        assert _wait_until(opened[0].closing.is_set)
+    finally:
+        opened[0].release_start.set()
+        opened[0].release_close.set()
+        opener.join(timeout=5)
+        closer.join(timeout=5)
+
+    assert answers.seen == [(True, live_before)]
+    time.sleep(0.2)
+    assert len(opened) == 1, "the pending restart reopened behind the caller"
+    assert warm.is_running is False
+    assert warm.is_opening is False
+    assert audio_devices.live_stream_count() == live_before
+
+
+def test_the_warm_stream_names_the_device_its_open_is_resolving(monkeypatch):
+    opened: list[_BlockingStartStream] = []
+
+    def _factory(**kwargs):
+        stream = _BlockingStartStream(**kwargs)
+        opened.append(stream)
+        return stream
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    warm = WarmMicrophoneStream(
+        sample_rate=16000, channels=1, device_provider=lambda: ("mic-a", 3)
+    )
+    assert warm.opening_device_key is None
+    opener = threading.Thread(target=warm.ensure_started, daemon=True)
+    opener.start()
+    try:
+        assert _wait_until(lambda: opened and opened[0].started.is_set())
+        assert warm.is_opening is True
+        assert warm.opening_device_key == "mic-a"
+    finally:
+        for stream in opened:
+            stream.release.set()
+        opener.join(timeout=5)
+    assert warm.opening_device_key is None
+    assert warm.opened_device_key == "mic-a"
+    warm.close()
 
 
 def test_warm_close_if_idle_gives_up_on_a_close_that_never_finishes(monkeypatch):
@@ -709,6 +858,51 @@ def test_an_exception_in_the_audio_callback_never_escapes_to_portaudio():
 
     assert capture.callback_count == 2, "the audio itself was kept"
     assert logger.exceptions == 1, "logged once, not per block"
+
+
+def test_the_callback_failure_log_re_arms_for_the_next_capture(monkeypatch):
+    """Once per capture, not once per object: a reused capture that failed in
+    an earlier recording stayed silent for every later one."""
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", FakeInputStream)
+
+    class _BrokenVad:
+        def process_chunk(self, chunk):
+            raise ValueError("boom")
+
+        def reset(self):
+            pass
+
+    class _CountingLogger:
+        def __init__(self):
+            self.exceptions = 0
+
+        def exception(self, *args, **kwargs):
+            self.exceptions += 1
+
+        def warning(self, *args, **kwargs):
+            pass
+
+        def info(self, *args, **kwargs):
+            pass
+
+        def debug(self, *args, **kwargs):
+            pass
+
+    logger = _CountingLogger()
+    capture = AudioCapture(
+        sample_rate=16000, channels=1, vad=_BrokenVad(), logger=logger
+    )
+    chunk = np.full((160, 1), 0.25, dtype=np.float32)
+    capture.start()
+    capture._on_audio(chunk, 160, None, None)
+    capture._on_audio(chunk, 160, None, None)
+    capture.stop()
+    assert logger.exceptions == 1
+
+    capture.start()
+    capture._on_audio(chunk, 160, None, None)
+    capture.stop()
+    assert logger.exceptions == 2, "the second capture's failure was not logged"
 
 
 def test_late_warm_callback_cannot_write_into_next_recording(monkeypatch):

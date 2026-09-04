@@ -103,6 +103,9 @@ class WarmMicrophoneStream:
         self._starting = False
         self._generation = 0
         self._opened_device_key: str | None = None
+        # The key the open in flight resolved, so a settings save can tell
+        # "still opening the microphone I selected" from "opening another".
+        self._opening_device_key: str | None = None
         self._pending_restart = False
         self._pending_close = False
         # Streams handed off for closing but not yet taken by a closer, and
@@ -131,6 +134,20 @@ class WarmMicrophoneStream:
         with self._lock:
             return self._starting
 
+    @property
+    def opening_device_key(self) -> str | None:
+        """Device key the open in flight resolved; None before it has, or idle.
+
+        `opened_device_key` is None for the whole of an open, so a save that
+        compared it with the selected microphone restarted the open on every
+        save -- an opacity or hotkey change discarded the in-flight open and
+        paid the cold-open latency twice. The provider reads the live settings
+        at resolution time, so an open that has not resolved yet needs no
+        restart either.
+        """
+        with self._lock:
+            return self._opening_device_key if self._starting else None
+
     def ensure_started(self, *, generation: int | None = None) -> bool:
         """Open and start the shared stream if needed. Safe off the UI thread.
 
@@ -155,6 +172,7 @@ class WarmMicrophoneStream:
             if self._starting:
                 return False
             self._starting = True
+            self._opening_device_key = None
             generation = self._generation
 
         stream = None
@@ -174,6 +192,8 @@ class WarmMicrophoneStream:
                 device_index: int | None = None
                 if self._device_provider is not None:
                     opened_key, device_index = self._device_provider()
+                with self._lock:
+                    self._opening_device_key = opened_key
                 stream = sd.InputStream(
                     samplerate=self.sample_rate,
                     channels=self.channels,
@@ -208,13 +228,25 @@ class WarmMicrophoneStream:
         finally:
             with self._lock:
                 self._starting = False
+                self._opening_device_key = None
                 accepted = stream is not None and generation == self._generation
                 if accepted:
                     self._stream = stream
                     self._opened_device_key = opened_key
+                elif stream is not None:
+                    # Superseded by a bump during the open. Retired under the
+                    # lock so that a `close_if_idle` waiting on this open finds
+                    # it and closes it itself. Closed from here outside the
+                    # accounting, it was open and registered after the waiter
+                    # had already answered True: the re-enumeration it went on
+                    # to run refused, and `ensure_started` opened a second
+                    # stream beside the one still closing.
+                    self._retiring.append(stream)
                 # A restart requested mid-open bumped the generation, so the
                 # stream above was discarded; honor the request with a fresh
-                # open that re-resolves the device.
+                # open that re-resolves the device. `close_if_idle` and
+                # `close` clear the flag when they bump, because their bump
+                # means "no stream until the caller says so".
                 retry = self._pending_restart and self._consumer is None
                 if retry:
                     self._pending_restart = False
@@ -222,11 +254,7 @@ class WarmMicrophoneStream:
                 self._idle.notify_all()
 
         if not accepted and stream is not None:
-            _close_input_stream(
-                stream,
-                logger=self._logger,
-                context="superseded warm microphone stream",
-            )
+            self._close_retiring()
         if retry:
             return self.ensure_started(generation=retry_generation)
         if accepted and self._logger is not None:
@@ -381,6 +409,12 @@ class WarmMicrophoneStream:
             if self._consumer is not None:
                 return False
             self._generation += 1
+            # A restart requested during the open in flight would otherwise
+            # be honoured by that open's retry, which reads the generation
+            # *after* this bump and therefore passes the check -- a fresh
+            # stream opened behind the caller's re-enumeration, which the
+            # bump exists to make impossible. The deferred refresh reopens.
+            self._pending_restart = False
             while True:
                 if self._consumer is not None:
                     return False
@@ -559,6 +593,8 @@ class AudioCapture:
             self._auto_stop_fired = False
             self._accepting_audio = True
             self._callback_count = 0
+            # Once per capture, not once per object.
+            self._callback_failed = False
 
         def session_callback(indata, frames, time_info, status) -> None:
             self._on_audio_for_generation(

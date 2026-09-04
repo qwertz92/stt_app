@@ -1724,16 +1724,22 @@ class DictationController(QtCore.QObject):
                 # Not running (an earlier open failed); a settings save is a
                 # natural retry point.
                 self._start_warm_microphone_stream_async()
-            elif opened != selected:
-                # Also taken while an open is in flight: `opened_device_key`
-                # is None then, and which microphone that open resolved is
-                # unknowable from here. `ensure_started` no-ops on its
+            elif opened is None:
+                # An open is in flight. `ensure_started` no-ops on its
                 # `_starting` guard, so the old "retry" branch let the open
                 # finish on the previous device and nothing ever restarted
                 # it -- the warm stream was then pinned to the old microphone
                 # for the session, `attach` refused it, and every recording
-                # cold-opened. A restart requested mid-open makes the open
-                # discard its stream and re-resolve; at worst one extra open.
+                # cold-opened. But `opened_device_key` is None for the whole
+                # of an open, so "opened != selected" restarted the open on
+                # *every* save -- an opacity or hotkey change discarded it
+                # and paid the cold-open latency twice. Only an open that
+                # already resolved a different microphone is restarted; one
+                # that has not resolved yet reads the live settings itself.
+                resolving = stream.opening_device_key
+                if resolving is not None and resolving != selected:
+                    stream.request_restart()
+            elif opened != selected:
                 stream.request_restart()
 
     def _warm_microphone_device(self) -> tuple[str, int | None]:

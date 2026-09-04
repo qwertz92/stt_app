@@ -2,15 +2,19 @@
 
 from dataclasses import replace
 
+import pytest
 from conftest import FakeCapture, make_controller
 
 import stt_app.controller as controller_module
 
 
 class _StubWarmStream:
-    def __init__(self, opened_device_key="", *, is_opening=False):
+    def __init__(
+        self, opened_device_key="", *, is_opening=False, opening_device_key=None
+    ):
         self._opened_device_key = opened_device_key
         self.is_opening = is_opening
+        self.opening_device_key = opening_device_key
         self.request_close_calls = 0
         self.request_restart_calls = 0
         self.ensure_started_calls = 0
@@ -190,7 +194,9 @@ def test_a_microphone_change_saved_while_the_warm_stream_opens_restarts_it(
     exists for.
     """
     controller, app = make_controller()
-    stub = _StubWarmStream(opened_device_key=None, is_opening=True)
+    stub = _StubWarmStream(
+        opened_device_key=None, is_opening=True, opening_device_key="Mic A"
+    )
     controller._warm_mic_stream = stub
     controller._settings = replace(
         controller._settings, keep_microphone_warm=True, input_device_name="Mic B"
@@ -204,6 +210,46 @@ def test_a_microphone_change_saved_while_the_warm_stream_opens_restarts_it(
     controller._sync_warm_microphone_stream()
 
     assert stub.request_restart_calls == 1
+    assert stub.ensure_started_calls == 0
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("resolving", "selected"),
+    [
+        ("Mic B", "Mic B"),
+        ("", ""),
+        # Not resolved yet: the open reads the live settings itself.
+        (None, "Mic B"),
+    ],
+)
+def test_a_save_that_keeps_the_microphone_does_not_restart_an_open_in_flight(
+    monkeypatch, resolving, selected
+):
+    """`opened_device_key` is None during every open, so comparing it with the
+    selected device restarted the open on *every* save -- an opacity or hotkey
+    change discarded the in-flight open and paid the cold-open latency the
+    warm stream exists to hide, twice."""
+    controller, app = make_controller()
+    stub = _StubWarmStream(
+        opened_device_key=None, is_opening=True, opening_device_key=resolving
+    )
+    controller._warm_mic_stream = stub
+    controller._settings = replace(
+        controller._settings,
+        keep_microphone_warm=True,
+        input_device_name=selected,
+    )
+    monkeypatch.setattr(
+        controller,
+        "_start_warm_microphone_stream_async",
+        lambda: stub.ensure_started(),
+    )
+
+    controller._sync_warm_microphone_stream()
+
+    assert stub.request_restart_calls == 0
     assert stub.ensure_started_calls == 0
     controller.shutdown()
     _ = app
