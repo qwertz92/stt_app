@@ -1712,6 +1712,7 @@ class DictationController(QtCore.QObject):
             self._warm_mic_stream = WarmMicrophoneStream(
                 logger=self._logger,
                 device_provider=self._warm_microphone_device,
+                selected_key_provider=self._warm_microphone_selected_device,
             )
             self._start_warm_microphone_stream_async()
         elif not enabled and self._warm_mic_stream is not None:
@@ -1724,11 +1725,11 @@ class DictationController(QtCore.QObject):
             stream.request_close()
         elif enabled and self._warm_mic_stream is not None:
             stream = self._warm_mic_stream
-            opened = stream.opened_device_key
-            selected = str(
-                getattr(self._settings, "input_device_name", "") or ""
-            )
-            if opened is None and not stream.is_opening:
+            # One snapshot: three property reads are three lock acquisitions,
+            # and an open can finish between them.
+            opened, resolving, opening = stream.device_state()
+            selected = self._warm_microphone_selected_device()
+            if opened is None and not opening:
                 # Not running (an earlier open failed); a settings save is a
                 # natural retry point.
                 self._start_warm_microphone_stream_async()
@@ -1741,18 +1742,27 @@ class DictationController(QtCore.QObject):
                 # cold-opened. But `opened_device_key` is None for the whole
                 # of an open, so "opened != selected" restarted the open on
                 # *every* save -- an opacity or hotkey change discarded it
-                # and paid the cold-open latency twice. Only an open that
-                # already resolved a different microphone is restarted; one
-                # that has not resolved yet reads the live settings itself.
-                resolving = stream.opening_device_key
+                # and paid the cold-open latency twice. Only an open that is
+                # opening a different microphone is restarted. The stream
+                # publishes the key it read *before* resolving it, so this
+                # sees the device the open will produce for the whole of the
+                # device query -- published only afterwards, a save landing
+                # inside that query saw None, asked for no restart, and the
+                # open finished on the old microphone (measured: the setting
+                # said mic-B, the stream opened mic-A, `attach` refused it
+                # for the rest of the session).
                 if resolving is not None and resolving != selected:
                     stream.request_restart()
             elif opened != selected:
                 stream.request_restart()
 
+    def _warm_microphone_selected_device(self) -> str:
+        """The persisted microphone key the next warm-stream open will use."""
+        return str(getattr(self._settings, "input_device_name", "") or "")
+
     def _warm_microphone_device(self) -> tuple[str, int | None]:
         """Resolve the currently selected microphone for a warm-stream open."""
-        name = str(getattr(self._settings, "input_device_name", "") or "")
+        name = self._warm_microphone_selected_device()
         return name, audio_devices.resolve_input_device(name)
 
     def _start_warm_microphone_stream_async(self) -> None:
@@ -1856,11 +1866,24 @@ class DictationController(QtCore.QObject):
         concurrently is never torn down; the refresh is retried later instead.
         """
         warm = self._warm_mic_stream
-        if warm is not None and not warm.close_if_idle():
-            self._pending_audio_device_refresh = True
-            return
-        if not audio_devices.try_refresh_input_devices(self._logger):
-            self._pending_audio_device_refresh = True
+        # The guard is held across both steps. Every warm-stream open takes
+        # it before its own gate, so an open arriving meanwhile -- a settings
+        # save's retry, a restart helper's reopen, a second refresh worker --
+        # waits until the re-enumeration is done and then opens against the
+        # fresh device list. Without this a save landing inside the close
+        # opened a stream beside the one closing, `close_if_idle` had
+        # already answered True, the re-enumeration refused, and the refresh
+        # was deferred to the next recording stop (measured: streams
+        # constructed 2, `try_refresh_input_devices() -> False`,
+        # `_pending_audio_device_refresh` True). The same hold serializes
+        # two of these workers, which a hot-plug's several notifications more
+        # than the settle interval apart used to run side by side.
+        with audio_devices.portaudio_guard():
+            if warm is not None and not warm.close_if_idle():
+                self._pending_audio_device_refresh = True
+                return
+            if not audio_devices.try_refresh_input_devices(self._logger):
+                self._pending_audio_device_refresh = True
         if self._shutdown_started:
             return
         warm = self._warm_mic_stream
