@@ -202,8 +202,10 @@ def test_a_detail_object_without_a_message_still_shows_something_readable():
 
     detail = read_http_error_detail(_http_error(body))
 
-    assert "quota_exceeded" in detail
-    assert len(detail) <= 300
+    # The inner `status`, not `str()` of the dict: the parent produced
+    # "{'status': 'quota_exceeded', 'code': 429}", which the two assertions
+    # this test used to make also accepted.
+    assert detail == "quota_exceeded"
 
 
 def test_a_detail_that_is_a_plain_string_is_kept_as_before():
