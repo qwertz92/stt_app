@@ -6444,3 +6444,28 @@ def test_the_trays_re_paste_of_the_whole_dictation_marks_the_tail_offer():
     assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
     controller.shutdown()
     _ = app
+
+
+def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(monkeypatch):
+    """`Thread.start` raises when the interpreter cannot create another
+    thread. Raised out of the deferred flush's success arm -- the tone is
+    the last statement of a paste that already landed -- it reported the
+    pasted transcript as not inserted and armed Insert, which pasted it a
+    second time (measured through the flush and the overlay's Insert)."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        completion_beep_enabled=True,
+        completion_beep_tone="high",
+    )
+    controller, app = _make_controller(settings_store=FakeSettingsStore(settings))
+
+    class _RefusingThread(_ImmediateThread):
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr("stt_app.controller.threading.Thread", _RefusingThread)
+
+    controller._play_completion_beep()
+
+    controller.shutdown()
+    _ = app

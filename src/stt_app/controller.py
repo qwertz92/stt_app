@@ -2154,12 +2154,20 @@ class DictationController(QtCore.QObject):
         )
         if tone not in VALID_START_BEEP_TONES:
             tone = DEFAULT_COMPLETION_BEEP_TONE
-        threading.Thread(
-            target=self._play_tone,
-            args=(tone,),
-            name="stt_app_completion_beep",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=self._play_tone,
+                args=(tone,),
+                name="stt_app_completion_beep",
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            # A starved interpreter cannot start another thread. The tone
+            # is a courtesy after a paste that already landed; raised out
+            # of the deferred flush's success arm, this reported the pasted
+            # transcript as not inserted and armed Insert, which pasted it
+            # a second time.
+            self._logger.warning("Completion tone skipped: %s", exc)
 
     @staticmethod
     def _play_tone(tone: str) -> None:
