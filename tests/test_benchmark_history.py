@@ -95,6 +95,10 @@ def test_benchmark_history_roundtrip(tmp_path):
     assert loaded[0].options.model_names == ["small"]
     assert loaded[0].environment.cpu == "AMD Ryzen"
     assert loaded[0].environment.gpus == ["Intel Arc A750"]
+    assert loaded[0].environment.physical_cores == 6
+    assert loaded[0].environment.cpu_clock == "4.70 GHz nominal"
+    assert loaded[0].environment.cpu_cache == "L2 6 MB, L3 32 MB"
+    assert loaded[0].environment.memory_modules == _MEMORY_MODULES
     assert loaded[0].cases[0].avg_rtf == 0.6
     assert loaded[0].cases[0].runs[0].transcript == "hello world"
     assert loaded[0].cases[0].runtime_details == "Fallback attempts: webgpu: unsupported"
