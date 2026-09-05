@@ -18,7 +18,11 @@ class BenchmarkEnvironment:
     python: str = ""
     cpu: str = ""
     logical_cpus: int = 0
+    physical_cores: int = 0
+    cpu_clock: str = ""
+    cpu_cache: str = ""
     memory: str = ""
+    memory_modules: str = ""
     gpus: list[str] = field(default_factory=list)
     frameworks: dict[str, str] = field(default_factory=dict)
     node: str = ""
@@ -34,7 +38,11 @@ class BenchmarkEnvironment:
             python=str(raw.get("python", "")),
             cpu=str(raw.get("cpu", "")),
             logical_cpus=_safe_int(raw.get("logical_cpus"), default=0),
+            physical_cores=_safe_int(raw.get("physical_cores"), default=0),
+            cpu_clock=str(raw.get("cpu_clock", "")),
+            cpu_cache=str(raw.get("cpu_cache", "")),
             memory=str(raw.get("memory", "")),
+            memory_modules=str(raw.get("memory_modules", "")),
             gpus=[str(item) for item in gpus if str(item).strip()]
             if isinstance(gpus, list)
             else [],
@@ -49,12 +57,20 @@ class BenchmarkEnvironment:
         )
 
     def summary_details(self) -> dict[str, Any]:
+        # `or ""` on the two core counts is load-bearing: two of the four
+        # consumers of this mapping drop a value only when it is "" (or a
+        # falsy container), and an int 0 passes both filters and renders as a
+        # bare "0" for a machine whose core count could not be read.
         return {
             "OS": self.os,
             "Python": self.python,
             "CPU": self.cpu,
             "Logical CPU cores": self.logical_cpus or "",
+            "Physical CPU cores": self.physical_cores or "",
+            "CPU clock": self.cpu_clock,
+            "CPU cache": self.cpu_cache,
             "Memory": self.memory,
+            "Memory modules": self.memory_modules,
             "GPU": self.gpus,
             "Frameworks": [
                 f"{name} {version}" for name, version in self.frameworks.items()
@@ -63,13 +79,35 @@ class BenchmarkEnvironment:
         }
 
 
+@dataclass(slots=True, frozen=True)
+class _HardwareFacts:
+    """What one PowerShell query can say about this machine's CPU and RAM.
+
+    Every field is best-effort: a query that fails, times out or returns
+    something unparsable leaves all of them at these defaults, and the CPU
+    name then falls back to `platform.processor()` exactly as it did before
+    the query existed.
+    """
+
+    cpu: str = ""
+    physical_cores: int = 0
+    cpu_clock: str = ""
+    cpu_cache: str = ""
+    memory_modules: str = ""
+
+
 def collect_benchmark_environment() -> BenchmarkEnvironment:
+    hardware = _windows_hardware_facts()
     return BenchmarkEnvironment(
         os=_os_label(),
         python=_python_label(),
-        cpu=_cpu_label(),
+        cpu=_cpu_label(hardware.cpu),
         logical_cpus=os.cpu_count() or 0,
+        physical_cores=hardware.physical_cores,
+        cpu_clock=hardware.cpu_clock,
+        cpu_cache=hardware.cpu_cache,
         memory=_memory_label(),
+        memory_modules=hardware.memory_modules,
         gpus=_gpu_labels(),
         frameworks=_framework_versions(),
         node=_node_version(),
@@ -97,19 +135,9 @@ def _python_label() -> str:
     return f"{implementation} {version} {bitness}".strip()
 
 
-def _cpu_label() -> str:
-    if platform.system().lower() == "windows":
-        cpu = _first_command_line(
-            [
-                "powershell",
-                "-NoProfile",
-                "-Command",
-                "Get-CimInstance Win32_Processor | "
-                "Select-Object -First 1 -ExpandProperty Name",
-            ]
-        )
-        if cpu:
-            return cpu
+def _cpu_label(detected: str = "") -> str:
+    if detected:
+        return detected
 
     cpu = platform.processor().strip()
     if cpu:
@@ -128,6 +156,210 @@ def _cpu_label() -> str:
         except OSError:
             pass
     return "Unknown CPU"
+
+
+# One PowerShell process answers for both WMI classes. A launch costs 0.5-1.5 s
+# on a locked-down machine, so asking twice would double the only slow part of
+# the collection; the CPU name used to be a query of its own and now comes out
+# of this one. `@(...)` keeps a single-socket / single-module machine from
+# collapsing to a bare object, which the parser nevertheless still accepts.
+_HARDWARE_QUERY = (
+    "@{ cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, "
+    "MaxClockSpeed, NumberOfCores, NumberOfLogicalProcessors, L2CacheSize, "
+    "L3CacheSize); memory = @(Get-CimInstance Win32_PhysicalMemory | "
+    "Select-Object Capacity, Speed, ConfiguredClockSpeed, SMBIOSMemoryType) }"
+    " | ConvertTo-Json -Depth 3 -Compress"
+)
+
+# SMBIOS "Memory Device -- Type" (structure type 17, offset 12h), which is what
+# `Win32_PhysicalMemory.SMBIOSMemoryType` reports verbatim. Transcribed from the
+# DMTF table as implemented by dmidecode's `dmi_memory_device_type` and by
+# smbios-lib: 0x12 DDR, 0x13 DDR2, 0x14 DDR2 FB-DIMM, 0x15-0x17 reserved,
+# 0x18 DDR3, 0x19 FBD2, 0x1A DDR4, 0x1B-0x1E LPDDR..LPDDR4, 0x1F logical
+# non-volatile device, 0x20 HBM, 0x21 HBM2, 0x22 DDR5, 0x23 LPDDR5, 0x24 HBM3.
+# This is NOT the `Win32_PhysicalMemory.MemoryType` enumeration, where DDR is 20
+# and DDR2 is 21; the two tables agree only from DDR3 (24) upwards, so reading
+# one table with the other's numbers mislabels exactly the pre-DDR3 machines.
+_SMBIOS_MEMORY_TYPES = {
+    18: "DDR",
+    19: "DDR2",
+    20: "DDR2 FB-DIMM",
+    24: "DDR3",
+    25: "FBD2",
+    26: "DDR4",
+    27: "LPDDR",
+    28: "LPDDR2",
+    29: "LPDDR3",
+    30: "LPDDR4",
+    32: "HBM",
+    33: "HBM2",
+    34: "DDR5",
+    35: "LPDDR5",
+    36: "HBM3",
+}
+
+# Anything the table does not name is reported without a number, because the
+# raw SMBIOS code says nothing to a reader and guessing a generation is worse
+# than admitting the type is unknown.
+_UNKNOWN_MEMORY_TYPE = "RAM"
+
+
+def _windows_hardware_facts() -> _HardwareFacts:
+    if platform.system().lower() != "windows":
+        # Reading the same facts out of /proc/cpuinfo is a separate job and
+        # nothing here needs it: the app only runs on Windows.
+        return _HardwareFacts()
+    lines = _command_lines(
+        [
+            "powershell",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            _HARDWARE_QUERY,
+        ],
+        timeout=6.0,
+    )
+    if not lines:
+        return _HardwareFacts()
+    try:
+        # `-Compress` yields one line; joining is only for the case where it
+        # does not, and JSON carries no raw newline inside a string anyway.
+        payload = json.loads("".join(lines))
+    except ValueError:
+        return _HardwareFacts()
+    return _hardware_facts_from_payload(payload)
+
+
+def _hardware_facts_from_payload(payload: object) -> _HardwareFacts:
+    if not isinstance(payload, dict):
+        return _HardwareFacts()
+    processors = _payload_entries(payload.get("cpu"))
+    modules = _payload_entries(payload.get("memory"))
+    first = processors[0] if processors else {}
+    return _HardwareFacts(
+        cpu=" ".join(str(first.get("Name", "")).split()),
+        physical_cores=sum(
+            max(_safe_int(entry.get("NumberOfCores"), default=0), 0)
+            for entry in processors
+        ),
+        cpu_clock=_cpu_clock_label(_safe_int(first.get("MaxClockSpeed"), default=0)),
+        # Clock and cache describe one processor package. Two identical
+        # sockets each have this much cache, and summing them would claim a
+        # single shared cache that does not exist; only the core count adds up.
+        cpu_cache=_cpu_cache_label(
+            _safe_int(first.get("L2CacheSize"), default=0),
+            _safe_int(first.get("L3CacheSize"), default=0),
+        ),
+        memory_modules=_memory_modules_label(modules),
+    )
+
+
+def _payload_entries(value: object) -> list[dict[str, Any]]:
+    """`ConvertTo-Json` in older PowerShell unwraps a one-element array."""
+    if isinstance(value, dict):
+        return [value]
+    if isinstance(value, list):
+        return [entry for entry in value if isinstance(entry, dict)]
+    return []
+
+
+def _cpu_clock_label(max_clock_mhz: int) -> str:
+    """`MaxClockSpeed` is the nominal (base) frequency Windows reports.
+
+    Turbo is not in it and cannot be read from WMI, which is why the label
+    says "nominal" rather than "max": a 4.70 GHz part that boosts to 5.30 GHz
+    would otherwise be recorded as if 4.70 were its ceiling.
+    """
+    if max_clock_mhz <= 0:
+        return ""
+    return f"{max_clock_mhz / 1000:.2f} GHz nominal"
+
+
+def _cpu_cache_label(l2_kb: int, l3_kb: int) -> str:
+    """WMI reports cache sizes in KiB.
+
+    They are rendered as "MB" the way every OS tool writes a cache size, so
+    the number is really MiB: 6144 KiB reads as "6 MB". This is deliberately
+    neither `_format_bytes` (whose 1024 ladder is for byte totals and always
+    keeps one decimal) nor the decimal megabytes of `MODEL_ESTIMATED_SIZE_MB`.
+    """
+    parts = [
+        f"{name} {_mebibytes(size_kb)} MB"
+        for name, size_kb in (("L2", l2_kb), ("L3", l3_kb))
+        if size_kb > 0
+    ]
+    return ", ".join(parts)
+
+
+def _memory_modules_label(modules: list[dict[str, Any]]) -> str:
+    """Describe the installed modules, grouped by everything that matters.
+
+    The rated speed against the configured one is the whole point: a kit sold
+    as DDR5-6000 that runs at 4800 because XMP/EXPO was never enabled is the
+    single most common reason one machine benchmarks far below another with
+    the same CPU name.
+    """
+    groups: dict[tuple[int, int, int, int], int] = {}
+    for module in modules:
+        if not isinstance(module, dict):
+            continue
+        key = (
+            max(_safe_int(module.get("Capacity"), default=0), 0),
+            _safe_int(module.get("SMBIOSMemoryType"), default=0),
+            max(_safe_int(module.get("Speed"), default=0), 0),
+            max(_safe_int(module.get("ConfiguredClockSpeed"), default=0), 0),
+        )
+        capacity, type_code, rated, configured = key
+        if (
+            capacity <= 0
+            and type_code not in _SMBIOS_MEMORY_TYPES
+            and rated <= 0
+            and configured <= 0
+        ):
+            # An entry that says nothing at all; "1 x RAM" would be noise.
+            continue
+        groups[key] = groups.get(key, 0) + 1
+    return " + ".join(_memory_group_label(key, count) for key, count in groups.items())
+
+
+def _memory_group_label(key: tuple[int, int, int, int], count: int) -> str:
+    capacity, type_code, rated, configured = key
+    # With only one of the two speeds known it has to serve as both: naming a
+    # rated speed the module may not be running at is the misleading half.
+    effective_rated = rated or configured
+    effective_configured = configured or rated
+
+    descriptor = _SMBIOS_MEMORY_TYPES.get(type_code, _UNKNOWN_MEMORY_TYPE)
+    if effective_rated > 0:
+        descriptor = f"{descriptor}-{effective_rated}"
+    if capacity > 0:
+        descriptor = f"{_drop_trailing_zero(_format_bytes(capacity))} {descriptor}"
+
+    label = f"{count} x {descriptor}"
+    if rated > 0 and configured > 0 and rated != configured:
+        label += f", rated {rated} MT/s, running at {configured} MT/s"
+    elif effective_configured > 0:
+        label += f", running at {effective_configured} MT/s"
+    if effective_configured > 0:
+        # One 64-bit channel transfers 8 bytes per transfer. WMI does not say
+        # how many channels are populated, so this is never multiplied and the
+        # label says "per channel" instead of pretending to a system total.
+        label += (
+            f" ({effective_configured * 8 / 1000:.1f} GB/s per channel, theoretical)"
+        )
+    return label
+
+
+def _mebibytes(size_kb: int) -> str:
+    return _drop_trailing_zero(f"{size_kb / 1024:.1f}")
+
+
+def _drop_trailing_zero(text: str) -> str:
+    """Turn "16.0" into "16" and "16.0 GB" into "16 GB"."""
+    number, separator, rest = text.partition(" ")
+    if number.endswith(".0"):
+        number = number[:-2]
+    return number + separator + rest
 
 
 def _memory_label() -> str:
