@@ -18,6 +18,7 @@ from .config import (
     DEFAULT_REPASTE_HOTKEY_ID,
     DEFAULT_SHOW_OVERLAY_HOTKEY_ID,
     SESSION_START_LOG_MARKER,
+    TRAY_CANCEL_ACTION_LABEL,
 )
 from .controller import DictationController
 from .dialog_style import install_selectable_message_text, styled_message_box
@@ -316,7 +317,7 @@ def _create_tray_icon(
     settings_action = menu.addAction("Settings")
     history_action = menu.addAction("History")
     retry_action = menu.addAction("Retry transcription")
-    cancel_action = menu.addAction("Cancel current action")
+    cancel_action = menu.addAction(TRAY_CANCEL_ACTION_LABEL)
 
     copy_last_action = menu.addAction("Copy transcript")
     repaste_action = menu.addAction("Insert transcript again")

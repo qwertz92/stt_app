@@ -1369,6 +1369,9 @@ OVERLAY_INITIAL_DETAIL = "Press hotkey to start dictation"
 # (which re-transcribes) with Insert when the transcription succeeded and only
 # the insertion failed, because there is no failed transcription to retry then.
 OVERLAY_ERROR_ACTION_INSERT = "insert"
+# The tray menu's cancel entry, named by the preload's progress line when no
+# cancel hotkey reaches the download and the overlay's slot holds Insert.
+TRAY_CANCEL_ACTION_LABEL = "Cancel current action"
 # An Error state that must offer NO action at all. `None` cannot express
 # this: the action slot treats "not Insert" as Retry, so passing None gave
 # the user a Retry button on a transcript that had already been inserted --

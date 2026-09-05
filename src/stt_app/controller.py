@@ -62,6 +62,7 @@ from .config import (
     STREAMING_PRECONNECT_BUFFER_MAX_BYTES,
     STREAMING_REVISION_WORD_WINDOW,
     STREAMING_STABLE_WORD_GUARD,
+    TRAY_CANCEL_ACTION_LABEL,
     VAD_ENERGY_THRESHOLD_MIN,
     VAD_MAX_SILENCE_MS,
     VAD_MIN_SPEECH_MS,
@@ -420,6 +421,9 @@ class DictationController(QtCore.QObject):
         self._preload_target_key: tuple[object, ...] | None = None
         self._preload_result_lock = threading.Lock()
         self._preload_canceled_generations: set[int] = set()
+        # Generation -> the sentence about partials a canceled preload's
+        # cleanup could not remove, read once by `_on_model_preload_done`.
+        self._preload_cleanup_notes: dict[int, str] = {}
         self._preload_results: dict[tuple[object, ...], tuple[int, str | None]] = {}
         self._transcriber_cache_lock = threading.Lock()
         # Preload, batch inference, and a live stream may all request the cached
@@ -3513,21 +3517,24 @@ class DictationController(QtCore.QObject):
         return bool(offer) and offer in " ".join(insertion_text.split())
 
     def _preload_abort_hint(self, action: str) -> str:
-        """The " Use Cancel to <action>." sentence, or the hotkey, or nothing.
+        """The " Use Cancel to <action>." sentence, or the hotkey, or the tray.
 
         With an Insert offer pending the progress line is painted as an
         Error whose action slot holds Insert (or a disabled Cancel), so the
         button the sentence named was not on screen for the length of a
         multi-gigabyte fetch. The cancel hotkey still reaches
-        `_cancel_model_preload_if_running`; without one, nothing on the
-        overlay aborts the download and the sentence is dropped.
+        `_cancel_model_preload_if_running`; without one -- none configured,
+        or its registration failed -- nothing on the overlay aborts the
+        download, and the tray's cancel entry, which every configuration
+        has, is named. Dropping the sentence left a multi-gigabyte fetch
+        with no way out on screen and no explanation.
         """
         if not self._insert_action_text:
             return f" Use Cancel to {action}."
         hotkey = str(self._settings.cancel_hotkey or "").strip()
         if hotkey and self._cancel_hotkey_registration_ok:
             return f" Press {hotkey} to {action}."
-        return ""
+        return f" Use the tray's {TRAY_CANCEL_ACTION_LABEL} to {action}."
 
     def _preload_progress_detail(self) -> str:
         from .transcriber.local_faster_whisper import estimate_cached_model_bytes
@@ -3827,6 +3834,7 @@ class DictationController(QtCore.QObject):
             return
         with self._preload_result_lock:
             self._preload_canceled_generations.discard(generation)
+            cleanup_note = self._preload_cleanup_notes.pop(generation, "")
             if generation != self._preload_generation:
                 self._logger.info(
                     "Ignoring stale model preload completion generation=%s current=%s",
@@ -3849,7 +3857,9 @@ class DictationController(QtCore.QObject):
         if self._preload_cancel_requested:
             self._preload_cancel_requested = False
             if not session_active:
-                self._paint_status_keeping_offer("Done", "Model preload canceled.")
+                self._paint_status_keeping_offer(
+                    "Done", "Model preload canceled." + cleanup_note
+                )
                 QtCore.QTimer.singleShot(1200, self.show_idle_status)
             return
 
@@ -6308,6 +6318,21 @@ class DictationController(QtCore.QObject):
         self._paint_status_keeping_offer("Processing", "Canceling model download...")
         return True
 
+    def _note_preload_cleanup(self, generation: int, left_files: int) -> None:
+        """Record that a canceled preload left partials it could not remove.
+
+        The Local tab's drain says so; this road ignored the same count and
+        painted "Model preload canceled." over gigabytes a scanner still
+        held. Keyed by generation so a retired worker's note cannot describe
+        the current preload's cancel.
+        """
+        plural = "" if left_files == 1 else "s"
+        with self._preload_result_lock:
+            self._preload_cleanup_notes[generation] = (
+                f" {left_files} incomplete file{plural} could not be removed: "
+                "still in use."
+            )
+
     def _set_preload_download_process(
         self,
         process: subprocess.Popen | None,
@@ -6419,7 +6444,11 @@ class DictationController(QtCore.QObject):
                                 cleanup_incomplete_model_download,
                             )
 
-                            cleanup_incomplete_model_download(model_name, model_dir)
+                            left = cleanup_incomplete_model_download(
+                                model_name, model_dir
+                            ).left_files
+                            if left:
+                                self._note_preload_cleanup(generation, left)
                         raise RuntimeError("Model download canceled.")
                     returncode = process.poll()
                     if returncode is not None:

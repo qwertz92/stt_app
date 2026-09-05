@@ -6316,7 +6316,9 @@ def test_the_progress_line_names_the_cancel_hotkey_while_the_offer_holds_the_slo
     whose action slot holds Insert (or a disabled Cancel), so "Use Cancel to
     abort download." named a button that was not on screen for the length of
     a multi-gigabyte fetch. The cancel hotkey still reaches the preload;
-    without one nothing on the overlay does, and the sentence is dropped."""
+    without one -- none configured, or its registration failed -- nothing
+    on the overlay does, and the tray's Cancel, which every configuration
+    has, is named instead of leaving the fetch with no way out on screen."""
     inserter = FakeTextInserter()
     controller, app, overlay = _failed_tail_offer(inserter)
     assert controller._register_all_global_hotkeys()
@@ -6338,8 +6340,19 @@ def test_the_progress_line_names_the_cancel_hotkey_while_the_offer_holds_the_slo
     controller._settings = replace(controller._settings, cancel_hotkey="")
     controller._on_preload_progress_poll()
     detail = overlay.states[-1][1]
-    assert "abort" not in detail
-    assert "waits for this model.\n\nStill not inserted" in detail
+    assert "Press " not in detail
+    assert (
+        "waits for this model. Use the tray's Cancel current action to abort "
+        "download.\n\nStill not inserted"
+    ) in detail
+
+    controller._settings = replace(controller._settings, cancel_hotkey=hotkey)
+    controller._cancel_hotkey_registration_ok = False
+    controller._on_preload_progress_poll()
+    detail = overlay.states[-1][1]
+    assert f"Press {hotkey}" not in detail
+    assert "Use the tray's Cancel current action to abort download." in detail
+    controller._cancel_hotkey_registration_ok = True
 
     controller._retire_insert_offer()
     overlay.set_state("Processing", "Loading selected model...")
@@ -6467,5 +6480,60 @@ def test_a_completion_tone_that_cannot_start_a_thread_is_only_logged(monkeypatch
 
     controller._play_completion_beep()
 
+    controller.shutdown()
+    _ = app
+
+
+def test_a_canceled_preload_names_the_partials_it_could_not_remove(monkeypatch):
+    """The Local tab's drain has said which partials are still in use since
+    c911b55; the preload road ignored the same triple and painted "Model
+    preload canceled." over gigabytes a scanner still held. The note is
+    keyed by generation, so a retired preload's note cannot describe the
+    current one's cancel."""
+    controller, app = _make_controller()
+    overlay = controller._overlay
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+
+    class _Process:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def communicate(self):
+            return "", ""
+
+    def _start(model_name, model_dir=""):
+        controller._preload_cancel_requested = True
+        return _Process()
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": [],
+    )
+    monkeypatch.setattr("stt_app.controller.start_model_download_process", _start)
+    monkeypatch.setattr(
+        "stt_app.controller.terminate_model_download_process", lambda process: None
+    )
+    from stt_app.transcriber.local_faster_whisper import IncompleteCleanup
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.cleanup_incomplete_model_download",
+        lambda model_name, model_dir="": IncompleteCleanup(0, 0, 2),
+    )
+
+    with pytest.raises(RuntimeError, match="Model download canceled"):
+        controller._download_model_for_preload(settings)
+
+    generation = controller._preload_generation
+    assert controller._preload_cleanup_notes == {
+        generation: " 2 incomplete files could not be removed: still in use."
+    }
+    controller._on_model_preload_done(generation, False, "Model download canceled.")
+    assert overlay.states[-1] == (
+        "Done",
+        "Model preload canceled. 2 incomplete files could not be removed: still in use.",
+    )
+    assert controller._preload_cleanup_notes == {}
     controller.shutdown()
     _ = app
