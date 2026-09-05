@@ -2348,6 +2348,52 @@ def test_rejecting_settings_hides_benchmark_window():
     assert dialog.benchmark_window.isVisible() is False
 
 
+def test_rejecting_settings_hides_a_benchmark_results_window(tmp_path):
+    """A pop-out results window is a `Qt.Window` child, like the run window."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    entry = BenchmarkHistoryEntry.new(
+        status="completed",
+        summary="Benchmark summary:\nsmall",
+        options=BenchmarkOptions(
+            audio_path="C:/sample.wav",
+            audio_name="sample.wav",
+            model_names=["small"],
+            device="auto",
+            compute_type="int8",
+            webgpu_devices=["auto"],
+            runs=1,
+            beam_size=5,
+            language="auto",
+            vad_filter=False,
+            warmup=False,
+            threads=0,
+        ),
+        cases=[],
+    )
+    dialog.show()
+    dialog._open_benchmark_results_window(entry)
+    app.processEvents()
+    window = dialog._benchmark_result_windows[entry.identity_key()]
+    assert window.isVisible() is True
+
+    dialog.reject()
+    app.processEvents()
+
+    assert dialog.isVisible() is False
+    assert window.isVisible() is False
+    # Hiding is not closing: the window keeps its place, so reopening the same
+    # entry raises this one instead of building a second.
+    assert dialog._benchmark_result_windows[entry.identity_key()] is window
+    window.close()
+    app.processEvents()
+    _ = tmp_path
+
+
 def test_reopen_reload_is_deferred_while_dialog_work_is_busy():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(

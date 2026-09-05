@@ -47,10 +47,9 @@ from .model_download_progress import ModelDownloadSpeedTracker
 from .provider_connection_test_store import ProviderConnectionTestStore
 from .secret_store import SecretStore
 from .settings_dialog_audio import _AudioTabMixin
-from .settings_dialog_benchmark import _BenchmarkMixin
+from .settings_dialog_benchmark import BenchmarkResultsWindow, _BenchmarkMixin
 from .settings_dialog_general import _GeneralTabMixin
 from .settings_dialog_helpers import (
-    _ACTION_ROW_SPACING_PX,
     _COMPACT_LIST_ITEM_STYLESHEET,
     _COMPACT_LIST_ROW_EXTRA_PX,
     _DEFAULT_SETTINGS_DIALOG_SIZE,
@@ -69,6 +68,7 @@ from .settings_dialog_helpers import (
     _hotkeys_conflict,
     _qt_hotkey_sequence_to_app_hotkey,
     _qt_hotkey_text_to_app_hotkey,
+    configure_button_row,
 )
 from .settings_dialog_history import _HistoryTabMixin
 from .settings_dialog_import import _ImportTabMixin
@@ -236,6 +236,13 @@ class SettingsDialog(
         self._current_benchmark_entry: BenchmarkHistoryEntry | None = None
         self._current_benchmark_options: BenchmarkOptions | None = None
         self._current_benchmark_environment: BenchmarkEnvironment | None = None
+        # Stored runs opened in a window of their own, keyed by
+        # `BenchmarkHistoryEntry.identity_key()` so one entry never gets two
+        # windows. Populated before any of them can be shown, so every path
+        # that hides or closes them can read it without a guard.
+        self._benchmark_result_windows: dict[
+            tuple[str, str, str], BenchmarkResultsWindow
+        ] = {}
         self._remote_model_values: dict[str, str] = {
             "groq": self._loaded_settings.groq_model,
             "openai": self._loaded_settings.openai_model,
@@ -586,14 +593,10 @@ class SettingsDialog(
         label.setAlignment(QtCore.Qt.AlignTop | QtCore.Qt.AlignLeft)
         label.setStyleSheet("color: #555; font-size: 11px; padding: 0;")
 
-    @staticmethod
-    def _configure_button_row(
-        layout: QtWidgets.QHBoxLayout,
-        *,
-        spacing: int = _ACTION_ROW_SPACING_PX,
-    ) -> None:
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(spacing)
+    # The shared helper, reachable as `self._configure_button_row(...)` from
+    # every mixin exactly as before; the free function is what the benchmark
+    # results window uses, which is not a dialog.
+    _configure_button_row = staticmethod(configure_button_row)
 
     @staticmethod
     def _match_field_button_height(
@@ -966,6 +969,12 @@ class SettingsDialog(
         window = getattr(self, "benchmark_window", None)
         if window is not None:
             window.hide()
+        # The pop-out results windows are `Qt.Window` children of this dialog
+        # too, so they stay on screen unless every dismissal path hides them.
+        # Hiding emits no `finished`, so they keep their place in the registry
+        # and reopening the same entry raises the window it already has.
+        for results_window in list(self._benchmark_result_windows.values()):
+            results_window.hide()
 
     def hideEvent(self, event: QtGui.QHideEvent) -> None:
         # QDialog.reject()/done() hide the dialog without sending closeEvent.

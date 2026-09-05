@@ -398,6 +398,21 @@ _FIELD_HINT_MIN_WIDTH_PX = 460
 _ACTION_ROW_SPACING_PX = 8
 
 
+def configure_button_row(
+    layout: QtWidgets.QHBoxLayout,
+    *,
+    spacing: int = _ACTION_ROW_SPACING_PX,
+) -> None:
+    """Give an action row explicit spacing instead of the platform default.
+
+    A free function for the same reason as `compact_table_row_height` above:
+    the benchmark results window builds an action row and is not a
+    `SettingsDialog`.
+    """
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(spacing)
+
+
 _INLINE_FIELD_BUTTON_SPACING_PX = 6
 
 
