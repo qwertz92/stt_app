@@ -158,11 +158,13 @@ def _cpu_label(detected: str = "") -> str:
     return "Unknown CPU"
 
 
-# One PowerShell process answers for both WMI classes. A launch costs 0.5-1.5 s
-# on a locked-down machine, so asking twice would double the only slow part of
-# the collection; the CPU name used to be a query of its own and now comes out
-# of this one. `@(...)` keeps a single-socket / single-module machine from
-# collapsing to a bare object, which the parser nevertheless still accepts.
+# One PowerShell process answers for both WMI classes. A launch is the
+# expensive part of this collection -- measured on one Windows 11 machine, this
+# whole query takes 1.35-1.41 s while the shorter video-controller query takes
+# 0.35 s -- so the CPU name, which used to be a query of its own, now comes out
+# of this payload and the added facts cost no extra process start.
+# `@(...)` keeps a single-socket / single-module machine from collapsing to a
+# bare object, which the parser nevertheless still accepts.
 _HARDWARE_QUERY = (
     "@{ cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, "
     "MaxClockSpeed, NumberOfCores, NumberOfLogicalProcessors, L2CacheSize, "
@@ -294,10 +296,10 @@ def _cpu_cache_label(l2_kb: int, l3_kb: int) -> str:
 def _memory_modules_label(modules: list[dict[str, Any]]) -> str:
     """Describe the installed modules, grouped by everything that matters.
 
-    The rated speed against the configured one is the whole point: a kit sold
-    as DDR5-6000 that runs at 4800 because XMP/EXPO was never enabled is the
-    single most common reason one machine benchmarks far below another with
-    the same CPU name.
+    The rated speed beside the configured one is what this label exists for:
+    a kit sold as DDR5-6000 that runs at 4800 because XMP/EXPO was never
+    enabled is invisible in the CPU name and in the RAM total, and it is a
+    plausible explanation for a machine benchmarking below a comparable one.
     """
     groups: dict[tuple[int, int, int, int], int] = {}
     for module in modules:

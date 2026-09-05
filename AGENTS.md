@@ -2939,11 +2939,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   same CPU name and the same 32 GB can differ in either. `BenchmarkEnvironment`
   therefore also carries `physical_cores`, `cpu_clock`, `cpu_cache` and
   `memory_modules`.
-  - **One PowerShell call answers for both WMI classes.** A launch costs
-    0.5-1.5 s on a locked-down machine and the collection already made one for
-    the CPU name, so `_HARDWARE_QUERY` asks `Win32_Processor` and
-    `Win32_PhysicalMemory` together and the name now comes out of that same
-    payload: the added facts cost no extra process start. It runs on the
+  - **One PowerShell call answers for both WMI classes.** The launch is the
+    expensive part -- measured on one Windows 11 machine, this query takes
+    1.35-1.41 s against 0.35 s for the shorter video-controller one -- and the
+    collection already paid for a launch to read the CPU name, so
+    `_HARDWARE_QUERY` asks `Win32_Processor` and `Win32_PhysicalMemory`
+    together and the name now comes out of that same payload: the added facts
+    cost no extra process start. It runs on the
     benchmark worker thread, never on the Qt thread -- keep it that way. Both
     queries are wrapped in `@(...)` so a single-socket / single-module machine
     still yields JSON arrays, and `_payload_entries` accepts a bare object as
@@ -2963,9 +2965,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **The bandwidth clause says "per channel" and never multiplies.** It is
     `MT/s * 8 bytes / 1000`, i.e. one 64-bit channel; WMI does not say how
     many channels are populated, so a system total would be a guess. The rated
-    speed beside the configured one is the point of the whole label: a kit
-    sold as DDR5-6000 that runs at 4800 because XMP/EXPO was never enabled is
-    the most useful single line for a slow-benchmark diagnosis.
+    speed beside the configured one is what the label exists for: a kit sold
+    as DDR5-6000 that runs at 4800 because XMP/EXPO was never enabled is
+    invisible in the CPU name and in the RAM total, and it is a plausible
+    explanation for a machine benchmarking below a comparable one.
   - **The memory type comes from the SMBIOS table, not from WMI's own.**
     `_SMBIOS_MEMORY_TYPES` transcribes the DMTF "Memory Device -- Type" table
     (structure 17, offset 12h) as implemented by dmidecode's
