@@ -5754,3 +5754,142 @@ the diff, and by mutation.
   change (drop the docstring item, add the crash-arm reset) had to be
   absorbed by the lead: the agent's docstring edit and the lead's code fix
   landed in the same function and were merged by hand.
+
+### Wave 5 (2026-09-05) - the fourth wave on the round-24 fixes
+
+Four read-only breakers (concurrency, reach, boundaries, facts) on
+`3360dd2..7e27aed`, i.e. on the wave-4 fixes themselves. Three of the four
+died on a rate limit part-way and were relaunched fresh with the same brief
+and their predecessors' probe files (the harness cannot message a running
+agent in this session); every finding below was reproduced by running the
+breaker's own probe before anything changed, and the three vendor pages the
+facts lens cites were read here as well. The fixes were dry-run on a
+`git archive` export of HEAD in the scratchpad while the last breaker was
+still reading the repository, and applied to the repository only after it
+had finished.
+
+**Confirmed and fixed**
+
+- *Warm stream, again* (5f889f7). The refresh worker's second round was
+  gated on `is_running`, which is False in exactly the states
+  `close_if_idle` waits for (a helper closing the stream, an open in flight,
+  a superseded open's retirement), so a save's reopen in the gap was refused
+  and the refresh deferred to the next recording stop -- the symptom the
+  wave-4 docstring recorded as fixed. `close_if_idle`'s `_CLOSE_WAIT_S`
+  deadline was taken once at entry, so an own close of 1.2 s against a
+  0.6 s budget left nothing for the wait after it and the log blamed a
+  stack that had finished; each own close re-arms the budget. And the owed
+  refresh was cleared at the end of the worker, so a refusal by the
+  previous worker outlived the next one's success; it is discharged at the
+  start and re-armed by a refusal.
+- *Insert offer, again* (f0f4a77). The painter read
+  `_last_insert_may_have_pasted`, which is per insert attempt: one flush
+  pastes several queued transcripts, so a second paste that succeeded
+  re-armed the Insert of the first, whose keystroke had gone out -- every
+  one of the nine writers routed in wave 4 offered a duplicate paste -- and
+  another transcript's post-paste failure hid the button of a tail that had
+  never reached a window. The offer carries its own flag now. The overlay's
+  Clear wrote Idle without the controller learning of it, so the poll
+  brought the offer back 600 ms later; the poll reset the offer's scroll
+  position and selection every 600 ms; the progress line said "Use Cancel"
+  while the offer held the slot the button lives in; the edit's success
+  confirmation painted plainly; and, pre-existing, the poll painted a
+  download's progress over "Transcribing audio..." when a model was changed
+  mid-transcription.
+- *Drain* (5c010d9). Two Cancels in one drain read "Removed 3 incomplete
+  files" beside "Incomplete files were left in place" -- both true, of
+  different models, which neither sentence named. And "No downloads ran."
+  was painted in the failure colour.
+- *Fun-ASR* (446b689). The wave-4 gate `text or sentence_end` let an empty
+  final with no partial pending, a whitespace-only partial and a flat empty
+  `output.text` reset the frame bound, so each of those floods spun for the
+  whole budget again (1.0-1.4 million receive calls in 3 s); the transcript
+  bound did not count the join's separators (two million one-character
+  finals returned 3,999,999 characters); and `error_message or error_code`
+  let a blank message hide the code the service sent.
+- *Settings* (a731c10). `history_max_items` still read through
+  `_int_or_none`: `True` parsed to a limit of 1, and one dictation at that
+  limit deleted every transcript but the newest. The sibling field had been
+  fixed in wave 4 and this one was not looked at.
+- *Cleanup counts* (c911b55). `cleanup_incomplete_model_download` added
+  the size before the `unlink` and counted the file after it, so a partial
+  another program still held was reported as removed by size and as gone by
+  count -- "Removed 1 incomplete file (0.5 MB)" for 1,000 bytes removed and
+  500,000 left. It returns `left_files` now and the drain and the download
+  script say the file is still there.
+- *Test fake* (097ab62). `FakeOverlay.detail` answered "" before any paint
+  while the real overlay shows its initial text; a test pins the two.
+- *Wording* (5bf29bc). The facts lens measured six claims false: the
+  wave-4 orphan schedule was written as "during a slow close" when `close`
+  never holds the PortAudio guard (the parked open sits behind a slow
+  *open* or the re-enumeration; the probe shows no orphan for the close
+  schedule and one for the open schedule on the pre-fix tree); "about 100
+  GB over the budget" from 111 MB in 2.5 s is 80 GB; the painter's
+  docstring still said "two insert paths" where `ab666db` had corrected
+  AGENTS.md to four raise sites; "two tests of its own" was four; the
+  atexit correction miscounted itself (nine files, not eight; six left,
+  not five); and the Fun-ASR heartbeat aside attributed a `sentence_id`
+  field to a vendor page that does not carry it, paraphrased inside
+  quotation marks, and did not record that the `heartbeat` run-task
+  parameter is documented for Paraformer v2 only and absent from the
+  Fun-ASR page. The two commit messages that carry the miscounts
+  (`62b8ebc`, `ab666db`) cannot be amended; the log records the corrected
+  numbers.
+
+**Refuted, with the evidence**
+
+- I3 (`_offer_painted_is_on_screen`) at every boundary the breaker tried;
+  J4: the 31 HTTP error bodies of the corpus read identically before and
+  after `b7cbbd2`; `_failure_detail` cannot raise on depth alone
+  (`json.dumps` handles 2,000 levels, `json.loads` raises `RecursionError`
+  first at 10,000); a whitespace-only offer is unreachable at HEAD; the
+  painter dropping `compact` in its offer branch changes nothing visible.
+- Every wave-4 measurement re-run by the facts lens matched: 3.014 s /
+  30.002 s / 0.000 s for the Qt-thread stall, True after 2.40 s with no busy
+  log for the own close, 1,380,601 receive calls in 2 s for the no-payload
+  flood, and the warm-stream stress run clean for 60 s (its counters are
+  throughput-dependent and not reproducible, which is now said).
+- The "each added test fails on its parent" claim held for every wave-4
+  commit, with two documented exceptions: `62b8ebc` is a coverage commit
+  whose four cases pass on their parent by design, and `363b3a4`'s tests
+  import names the commit introduces, so it fails at collection and its two
+  observables were checked against the parent source by hand.
+
+**Process notes**
+
+- Six of the breakers' probes could not observe the fix they were written
+  against, by construction: one stubs the progress line it measures, two
+  drive `set_state` or the fake overlay directly instead of the controller's
+  slot, one reimplements the colour rule, and two were written against the
+  old cleanup signature. Each is closed by a test on the real objects
+  instead, and the report says which.
+- A fix dry-run on a `git archive` export: patch scripts take `STT_REPO`,
+  tests run with `PYTHONPATH=<tree>/src` (checked by importing
+  `stt_app.__file__`), and the probes are repointed at the tree. This is
+  what let the fourth breaker keep reading an untouched repository while the
+  first three's findings were already fixed and mutation-tested.
+- The reach/concurrency/drain fixes were one patch script; a splitter cut
+  it into per-unit functions and proved the split byte-identical to the
+  original on a second export before anything was committed.
+- Two test-shape lessons: a test that measures elapsed time after a
+  `join()` measures the join; and a Windows test for a held file needs a
+  real open handle (`open("rb")` blocks `unlink` on Windows only, so it
+  skips elsewhere).
+- A breaker that dies part-way is unstarted work. Its probe files survive,
+  so the relaunch is told to reuse them, and the relaunched facts lens
+  rebuilt its own parent trees rather than trust its predecessor's, whose
+  `trees/p_X` turned out to be the tree *at* X.
+- One of 35 mutants survived the first run: dropping the re-arm after an
+  own close in `close_if_idle`. The test written for it opened during the
+  own close and waited afterwards, which the lazily armed budget covers on
+  its own. The sequence the re-arm exists for is a wait first, then an own
+  close, then a second wait -- and an open in flight at entry cannot
+  produce it, because the bump supersedes that open and it retires its own
+  stream on its own thread. A restart helper's close at entry, a
+  generation-less open after the bump and a third open during the own
+  close do (6b137b9); the mutant is detected now.
+- The harness's `set -e` is not honoured by this tool: a chain ran `git
+  commit` four times on a clean tree after a patch script had failed to
+  parse. Chains are joined with `&&` now. And the tool rewrites backslash
+  escapes inside a heredoc, so a quoted `\n` in a Python patch became a
+  real newline; patch scripts are written as files.

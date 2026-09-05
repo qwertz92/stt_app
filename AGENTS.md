@@ -186,7 +186,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   cases too) and otherwise delegates to `_int_or_none`; integral floats and
   numeric strings keep working. `True` is refused with `False`: `int(True)`
   is a legal count of 1, which would make a boolean in the file look like a
-  setting the user chose.
+  setting the user chose. `history_max_items` reads through the same
+  helper, and there the boolean *was* the destructive value: `True` parsed
+  to a limit of 1, and one dictation at that limit deleted every transcript
+  but the newest (measured: 5 lost from a hand-edited file).
 - **Model selection is unified on the General tab; Local tab is management-only**:
   "what do I use" (engine, model, language, mode) all live in the General tab's
   "Engine && Mode" group box. A single "Model" form row hosts a
@@ -443,19 +446,36 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     loop re-reads `_stream` after each close it performs, so a stream that
     opens *during* the close is retired before it answers True; the gap
     between its answer and the re-enumeration gets one more round in the
-    worker, which closes a warm stream registered there and re-enumerates
-    again, while a recording's stream is left alone and the refresh
-    deferred to its stop. Note what the generation bump refuses and what it
+    worker, which asks `close_if_idle` again and re-enumerates once more,
+    while a recording's stream is left alone and the refresh deferred to
+    its stop. That second round is not gated on `is_running`: a stream is
+    registered while `_stream` is already None in exactly the states
+    `close_if_idle` waits for -- a helper closing it, an open in flight, a
+    superseded open's retirement -- and the gate skipped the round for
+    those (measured: a save's reopen in the gap handed to a restart
+    helper, one refused round, the refresh deferred to the next recording
+    stop, i.e. the symptom the docstring records as fixed). Note what the
+    generation bump refuses and what it
     does not: a restart helper's reopen carries a generation and is refused;
     the settings save's retry and the worker's own reopen carry none and are
     not, which is why the second round exists. The workers queue on a lock
     of their own (`_audio_device_refresh_lock`), so several device
     notifications more than the settle interval apart still run one after
-    the other. `_CLOSE_WAIT_S` bounds `close_if_idle`'s wait for *another
-    thread's* open or close; the closes it performs itself run to completion
-    (measured: a 2.4 s close against a 0.6 s budget answers True after
-    2.41 s, no busy log), and bounding them would mean answering True with a
-    stream still closing.
+    the other. `_CLOSE_WAIT_S` bounds one wait of `close_if_idle` for
+    *another thread's* open or close; the closes it performs itself run to
+    completion (measured: a 2.4 s close against a 0.6 s budget answers True
+    after 2.41 s, no busy log), bounding them would mean answering True
+    with a stream still closing, and each own close re-arms the budget:
+    taken once at entry, a 1.2 s own close against a 0.6 s budget left
+    nothing for the wait after it, so an open in flight that finished
+    0.3 s later was not waited for, the worker deferred the re-enumeration
+    and the log blamed a stack that had finished its close. And a worker
+    discharges the owed refresh (`_pending_audio_device_refresh`) as it
+    starts, its refusals re-arm it: cleared at the end, a refusal by the
+    previous worker outlived the next one's success and the following
+    recording stop paid a close, a re-enumeration and a reopen for a
+    refresh that had already happened -- while clearing at the end would
+    also discharge a device event deferred on the Qt thread during the run.
   - **`close` is terminal** (`_closed`, checked in the gate under the lock).
     The controller drops its reference to the stream it closes and builds a
     fresh one when the feature returns, so an open that passed its gate
@@ -1174,6 +1194,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the drain: the first says nothing, the kept and skipped ones say why the
   files were left alone, and the removal sentence is independent of all of
   them because one drain can remove for one model and keep for another.
+  **And a partial the cleanup could not remove is reported as still
+  there**: `cleanup_incomplete_model_download` added the size before the
+  `unlink` and counted the file after it, so a partial another program
+  still held -- the killed download child in a kernel read, a virus
+  scanner -- was reported as removed by size and as gone by count
+  ("Removed 1 incomplete file (0.5 MB)" for 1,000 bytes removed and
+  500,000 left, and "No incomplete files remained." with the file on the
+  disk). It counts after a successful unlink and returns
+  `IncompleteCleanup(removed_files, removed_bytes, left_files)`;
+  `_CleanupOutcome.left_files` carries the count to the drain, which says
+  "N incomplete files of <model> could not be removed: still in use." and
+  keeps "No incomplete files remained." for a disk with nothing left on
+  it, and `scripts/download_model.py` prints the same.
+  The kept and skipped sentences name their models (`cleanups` is one
+  `(model, outcome)` per entry): two Cancels in one drain, the first killing
+  a download and the second hitting an entry still waiting for the slot,
+  read "Removed 3 incomplete files" beside "Incomplete files were left in
+  place" as a contradiction. "No incomplete files remained." speaks only
+  when nothing else does. And "No downloads ran." is painted in the
+  warning colour like the other Cancel-shaped outcomes, not in the failure
+  colour.
   **A drain that downloaded nothing does not report an empty success**:
   with nothing downloaded, nothing failed and no Cancel of its own, the
   summary fell through to "Downloaded: " naming no model in the success
@@ -1504,12 +1545,37 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   likely in the document already -- and a repaint that read the pending text
   alone upgraded that to an Insert button -- pressing it pasted the
   transcript a second time, measured through the overlay's Insert and
-  through a queued transcript's flush. `_last_insert_may_have_pasted`, which
-  those paths record, decides in the painter as well: the text stays
-  readable and copyable, the button stays hidden, the wording says which of
-  the two it is. A parametrized test drives every writer except
-  `_refuse_recording_start`, which two tests of its own drive, and the poll
-  has one of its own.
+  through a queued transcript's flush. The flag that decides in the painter
+  is the offer's own, `_insert_offer_may_have_pasted`, recorded beside the
+  offer by the paths that create it -- not `_last_insert_may_have_pasted`,
+  which is per insert attempt and which the next insert resets: one flush
+  pastes several queued transcripts, so a second paste that succeeded
+  re-armed the Insert of the first, whose keystroke had gone out (measured:
+  all nine newly routed writers offering a duplicate paste), and a
+  different transcript's post-paste failure hid the button of a tail that
+  had never reached a window. The offer's own re-paste failing after the
+  keystroke is the one insert that sets its flag. The text stays readable
+  and copyable, the button stays hidden, the wording says which of the two
+  it is. **The overlay's Clear retires the offer it dismissed**
+  (`OverlayUI.detail_cleared`, carrying the cleared state's copy text, wired
+  to `on_overlay_detail_cleared`): the overlay's own clear wrote Idle
+  without the controller learning of it, so the offer came straight back --
+  600 ms later from the poll during a preload, and from every later status
+  writer. Only the offer that was on screen is retired; one hidden behind a
+  later Error is kept. **The poll's other three rules**: it leaves a
+  foreground transcription in flight alone (`_overlay_session_active`,
+  which sees the request token after `stop_recording` has dropped the
+  capture -- a model changed in Settings mid-transcription painted the
+  download progress over "Transcribing audio..."); it leaves the offer
+  alone while the user has scrolled or selected it
+  (`OverlayUI.detail_is_being_read` -- `set_state` scrolls an Error to the
+  top and `setText` drops the selection, which the repaint did every
+  600 ms for the whole download); and with an offer pending its line names
+  the cancel *hotkey* rather than a Cancel button the action slot no
+  longer holds (`_preload_abort_hint`; no hotkey, no sentence). The edit's
+  success confirmation goes through the painter like its refusals. A
+  parametrized test drives every writer except `_refuse_recording_start`,
+  which four tests of its own drive, and the poll has tests of its own.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy
@@ -1580,7 +1646,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   so a flood of `result-generated` frames with no payload, a non-object
   payload or an empty non-final sentence spun for the whole thirty-minute
   budget with the bound in place (measured against an instant fake, 1.4
-  million receive calls in 2 s); such a frame is spent like junk. A
+  million receive calls in 2 s); such a frame is spent like junk. The
+  second version gated on `text or sentence_end`, and an empty *final*
+  with no partial pending, a whitespace-only partial and a flat empty
+  `output.text` all passed it -- each changes nothing, and each spun the
+  same way (1.0-1.4 million in 3 s). The gate is "carries text, or ends a
+  sentence that has one": the text is stripped first, an empty final with
+  nothing pending is junk, and one closing a partial is an event. A
   documented heartbeat still resets it however many arrive, and that flood
   is bounded by the deadline alone: it is the server saying it is alive, on
   a parameter this provider asks for, and refusing to count it would fail a
@@ -1593,7 +1665,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   at a fast 200 words per minute and 8 characters per word carries 48,000
   characters, so the cap is forty times the plausible maximum; the count is
   a running total, because a `sum()` per frame is quadratic in exactly the
-  flood it exists for, and the failure carries the recovered-text suffix
+  flood it exists for; it counts the join's separators, because the bound
+  is on the transcript handed back and two million one-character finals
+  returned 3,999,999 characters without them; and the failure carries the
+  recovered-text suffix
   like every other exit. The `task-failed` detail is capped at 300
   characters like every HTTP provider's error body, and a nested error
   object in it is unwrapped through `_http_utils.nested_error_text` rather
@@ -1686,7 +1761,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   mid-dict. `nested_error_text` is the one unwrapping order (`message`,
   `detail`, `status`, `code`) shared by `read_http_error_detail` and
   Fun-ASR's `_failure_detail`, which is reached through a parsed WebSocket
-  frame and never through an `HTTPError`. It is deliberately uncapped: the
+  frame and never through an `HTTPError`. That one takes *both* header
+  fields: `error_message or error_code` let a blank message -- `"   "`, or
+  `{"message": ""}` -- hide the code the service sent (measured: a bare
+  "Fun-ASR task failed." for a header carrying `Throttling.RateQuota`), so
+  the message's text is asked first, the code's second, and the JSON dump
+  of an object with no text field last. It is deliberately uncapped: the
   HTTP readers cap at 300 and Fun-ASR at `_FAILURE_DETAIL_MAX_CHARS`, and a
   helper that capped as well would silently apply the tighter of the two.
   The last resort is `json.dumps(..., ensure_ascii=False)`, for the same
