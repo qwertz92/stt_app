@@ -562,3 +562,110 @@ def test_a_failed_earlier_open_is_retried_on_save_without_a_restart(monkeypatch)
     assert stub.request_restart_calls == 0
     controller.shutdown()
     _ = app
+
+
+class _SlowCloseStream(_FakeStream):
+    """A `_FakeStream` whose close sleeps `close_delay_s` first."""
+
+    close_delay_s = 0.0
+
+    def close(self):
+        time.sleep(_SlowCloseStream.close_delay_s)
+        super().close()
+
+
+def test_a_stream_a_helper_is_closing_in_the_gap_is_waited_for_by_the_second_round(
+    monkeypatch,
+):
+    """The second round asked `is_running` before `close_if_idle`, and a
+    stream is registered while `_stream` is already None in exactly the
+    states `close_if_idle` was written to wait for: a helper closing it
+    outside the lock, an open in flight, a superseded open's retirement. A
+    save's reopen landing in the gap and then handed to a restart helper
+    made the first re-enumeration refuse, the gate skipped the second
+    round, and the refresh was deferred to the next recording stop -- the
+    symptom the docstring records as fixed."""
+    from stt_app import audio_devices
+
+    monkeypatch.setattr(audio_devices, "resolve_input_device", lambda name: None)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _SlowCloseStream)
+    _SlowCloseStream.close_delay_s = 0.0
+    seen: list[tuple[int, bool]] = []
+    live_before = audio_devices.live_stream_count()
+    controller, app = make_controller()
+    controller._settings = replace(controller._settings, keep_microphone_warm=True)
+    controller._sync_warm_microphone_stream()
+    stream = controller._warm_mic_stream
+    assert _wait_until(lambda: stream.is_running)
+
+    def _refresh(logger=None):
+        if not seen:
+            # A save's reopen that passed its gate in the gap, then a
+            # microphone change hands it to a restart helper: registered,
+            # `_stream` None, the helper inside a slow close.
+            assert stream.ensure_started() is True
+            _SlowCloseStream.close_delay_s = 0.3
+            stream.request_restart()
+            assert stream.is_running is False
+        live = audio_devices.live_stream_count()
+        seen.append((live, stream.is_running))
+        return live == live_before
+
+    monkeypatch.setattr(audio_devices, "try_refresh_input_devices", _refresh)
+    try:
+        controller._refresh_audio_devices_worker()
+    finally:
+        _SlowCloseStream.close_delay_s = 0.0
+
+    assert seen == [(live_before + 1, False), (live_before, False)]
+    assert controller._pending_audio_device_refresh is False
+    assert _wait_until(lambda: stream.is_running)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_successful_device_refresh_discharges_an_earlier_refusal(monkeypatch):
+    """A refused worker arms `_pending_audio_device_refresh`; a later worker
+    that re-enumerated successfully left it armed, so the next recording
+    stop closed, re-enumerated and reopened the warm stream for a refresh
+    that had already happened -- on a locked-down stack, the cold-open
+    latency the feature exists to hide, right after a dictation."""
+    controller, app = make_controller()
+    stub = _StubWarmStream()
+    controller._warm_mic_stream = stub
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "try_refresh_input_devices",
+        lambda logger=None: True,
+    )
+    controller._pending_audio_device_refresh = True
+
+    controller._refresh_audio_devices_worker()
+
+    assert controller._pending_audio_device_refresh is False
+    assert stub.ensure_started_calls == 1
+    controller.shutdown()
+    _ = app
+
+
+def test_a_refresh_deferred_during_the_worker_stays_owed(monkeypatch):
+    """The discharge happens as the worker starts, not as it ends: a device
+    event deferred on the Qt thread while this worker runs (a recording
+    started meanwhile) may postdate the worker's enumeration."""
+    controller, app = make_controller()
+    stub = _StubWarmStream()
+    controller._warm_mic_stream = stub
+
+    def _refresh(logger=None):
+        controller._pending_audio_device_refresh = True
+        return True
+
+    monkeypatch.setattr(
+        controller_module.audio_devices, "try_refresh_input_devices", _refresh
+    )
+
+    controller._refresh_audio_devices_worker()
+
+    assert controller._pending_audio_device_refresh is True
+    controller.shutdown()
+    _ = app

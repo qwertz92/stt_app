@@ -1900,6 +1900,16 @@ class DictationController(QtCore.QObject):
         # `try_refresh_input_devices` holds the guard for exactly that, so a
         # warm open arriving during it waits and then opens on the fresh
         # list (`ensure_started` takes the guard before its gate).
+        # This run discharges the refresh an earlier one left owed, because
+        # it is about to perform it; its own refusals below arm the flag
+        # again. Left armed, a refusal by the previous worker outlived this
+        # one's success and the next recording stop closed, re-enumerated
+        # and reopened the warm stream for a refresh that had already
+        # happened. Cleared here and not at the end, so a device event
+        # deferred on the Qt thread while this runs (a recording started
+        # meanwhile) is not discharged by an enumeration that may predate
+        # it.
+        self._pending_audio_device_refresh = False
         warm = self._warm_mic_stream
         if warm is not None and not warm.close_if_idle():
             self._pending_audio_device_refresh = True
@@ -1913,9 +1923,15 @@ class DictationController(QtCore.QObject):
             # by one more round. A recording's stream is left alone and the
             # refresh deferred to its stop, as before: `close_if_idle`
             # refuses while one is attached, and a cold capture is not the
-            # warm stream's to close.
+            # warm stream's to close. Not gated on `is_running`: a stream is
+            # registered while `_stream` is already None in exactly the
+            # states `close_if_idle` waits for -- a helper closing it, an
+            # open in flight, a superseded open's retirement -- and the
+            # gate skipped the round for those (measured: a save's reopen
+            # handed to a restart helper, one refused round, the refresh
+            # deferred to the next recording stop).
             warm = self._warm_mic_stream
-            if warm is not None and warm.is_running and warm.close_if_idle():
+            if warm is not None and warm.close_if_idle():
                 refreshed = audio_devices.try_refresh_input_devices(self._logger)
         if not refreshed:
             self._pending_audio_device_refresh = True

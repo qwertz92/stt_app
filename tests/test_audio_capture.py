@@ -1277,3 +1277,85 @@ def test_start_marks_only_the_repairable_failure_as_repairable(
         "the original wording must survive the wrapping"
     )
     assert not capture.is_recording
+
+
+class _TimedCloseStream:
+    """Opens at once; each close sleeps for the next entry of `close_delays`."""
+
+    close_delays: list = []
+
+    def __init__(self, **kwargs):
+        pass
+
+    def start(self):
+        pass
+
+    def stop(self):
+        pass
+
+    def close(self):
+        delays = _TimedCloseStream.close_delays
+        if delays:
+            time.sleep(delays.pop(0))
+
+
+class _HeldOpenStream(_TimedCloseStream):
+    """Its constructor blocks until `release` is set: an open in flight."""
+
+    release = threading.Event()
+
+    def __init__(self, **kwargs):
+        assert _HeldOpenStream.release.wait(timeout=10)
+        super().__init__(**kwargs)
+
+
+def test_warm_close_if_idle_budgets_the_wait_after_its_own_close(monkeypatch):
+    """`_CLOSE_WAIT_S` bounds the wait for another thread's work, not the
+    closes this call performs itself -- but one absolute deadline taken at
+    entry was spent by the own close first, so an open in flight that would
+    have finished moments after it was not waited for at all: the call
+    answered False, the refresh worker deferred the re-enumeration, and the
+    log blamed a stack that had finished its close. The own close re-arms
+    the budget."""
+    monkeypatch.setattr(WarmMicrophoneStream, "_CLOSE_WAIT_S", 0.6)
+    held = threading.Event()
+
+    def _factory(**kwargs):
+        if held.is_set():
+            return _HeldOpenStream(**kwargs)
+        return _TimedCloseStream(**kwargs)
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    _TimedCloseStream.close_delays = [0.7]
+    _HeldOpenStream.release = threading.Event()
+    live_before = audio_devices.live_stream_count()
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+
+    def _open_during_the_own_close():
+        time.sleep(0.15)
+        held.set()
+        warm.ensure_started()
+
+    def _finish_the_open():
+        time.sleep(1.0)
+        _HeldOpenStream.release.set()
+
+    opener = threading.Thread(target=_open_during_the_own_close, daemon=True)
+    releaser = threading.Thread(target=_finish_the_open, daemon=True)
+    opener.start()
+    releaser.start()
+    started = time.perf_counter()
+    try:
+        answer = warm.close_if_idle()
+        elapsed = time.perf_counter() - started
+    finally:
+        _HeldOpenStream.release.set()
+        opener.join(timeout=5)
+        releaser.join(timeout=5)
+
+    assert answer is True, f"gave up after {elapsed:.2f}s with an open in flight"
+    assert elapsed >= 0.95, "it answered before the open in flight had finished"
+    assert audio_devices.live_stream_count() == live_before
+    assert warm.is_running is False
+    _TimedCloseStream.close_delays = []

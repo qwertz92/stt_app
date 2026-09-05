@@ -467,13 +467,19 @@ class WarmMicrophoneStream:
           or pressed Refresh. Routine rather than exotic: a recording stop
           runs `detach` and then arms exactly this refresh.
 
-        `_CLOSE_WAIT_S` bounds that waiting and nothing else: the closes this
-        call makes itself run synchronously to completion outside it, so a
-        PortAudio stack that takes minutes to close a stream keeps this call
-        for that long and then answers True (measured with a 2.4 s close
-        against a 0.6 s budget: True after 2.41 s, no busy log). Bounding
-        them too would mean returning True with a stream still closing, which
-        is the answer this method exists to avoid.
+        `_CLOSE_WAIT_S` bounds one such wait and nothing else: the closes
+        this call makes itself run synchronously to completion outside the
+        budget, so a PortAudio stack that takes minutes to close a stream
+        keeps this call for that long and then answers True (measured with a
+        2.4 s close against a 0.6 s budget: True after 2.41 s, no busy log).
+        Bounding them too would mean returning True with a stream still
+        closing, which is the answer this method exists to avoid. And each
+        own close re-arms the budget: taken once at entry, a 1.2 s own close
+        against a 0.6 s budget left nothing for the wait that followed, so
+        an open in flight that finished 0.3 s later was not waited for at
+        all -- this answered False, the refresh worker deferred the
+        re-enumeration, and the log blamed a stack that had in fact
+        finished its close.
 
         The generation is bumped *before* the wait, not after it: a restart
         helper that finishes its close while this waits reaches its reopen on
@@ -502,7 +508,10 @@ class WarmMicrophoneStream:
         re-enumeration taking the guard; the caller closes a stream
         registered there and re-enumerates once more.
         """
-        deadline = time.monotonic() + self._CLOSE_WAIT_S
+        # Armed when a wait begins and re-armed after every close this call
+        # performs itself, so the budget bounds one wait for another
+        # thread's work and never the own closes (see the docstring).
+        deadline: float | None = None
         with self._lock:
             if self._consumer is not None:
                 return False
@@ -525,6 +534,8 @@ class WarmMicrophoneStream:
                 if not self._retiring:
                     if not self._starting and not self._closes_in_flight:
                         return True
+                    if deadline is None:
+                        deadline = time.monotonic() + self._CLOSE_WAIT_S
                     remaining = deadline - time.monotonic()
                     if remaining <= 0:
                         if self._logger is not None:
@@ -539,6 +550,7 @@ class WarmMicrophoneStream:
                     self._idle.wait(remaining)
                     continue
             self._close_retiring()
+            deadline = None
 
     def close(self) -> None:
         """Close for good; no open passes the gate afterwards.
