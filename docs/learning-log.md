@@ -5826,14 +5826,18 @@ had finished.
   schedule and one for the open schedule on the pre-fix tree); "about 100
   GB over the budget" from 111 MB in 2.5 s is 80 GB; the painter's
   docstring still said "two insert paths" where `ab666db` had corrected
-  AGENTS.md to four raise sites; "two tests of its own" was four; the
+  AGENTS.md to four raise sites (five, counting the `combined_error`
+  alias; wave 6); "two tests of its own" was four; the
   atexit correction miscounted itself (nine files, not eight; six left,
   not five); and the Fun-ASR heartbeat aside attributed a `sentence_id`
   field to a vendor page that does not carry it, paraphrased inside
   quotation marks, and did not record that the `heartbeat` run-task
   parameter is documented for Paraformer v2 only and absent from the
-  Fun-ASR page. The two commit messages that carry the miscounts
-  (`62b8ebc`, `ab666db`) cannot be amended; the log records the corrected
+  Fun-ASR page -- the last half of which was itself wrong, see wave 6.
+  The commit messages that carry the miscounts (`62b8ebc`, `ab666db`)
+  cannot be amended, nor can `5bf29bc`'s subject, which says six
+  sentences for the five its diff corrects (the sixth, "two tests of its
+  own" -> four, landed in 7efcb4c); the log records the corrected
   numbers.
 
 **Refuted, with the evidence**
@@ -5841,8 +5845,8 @@ had finished.
 - I3 (`_offer_painted_is_on_screen`) at every boundary the breaker tried;
   J4: the 31 HTTP error bodies of the corpus read identically before and
   after `b7cbbd2`; `_failure_detail` cannot raise on depth alone
-  (`json.dumps` handles 2,000 levels, `json.loads` raises `RecursionError`
-  first at 10,000); a whitespace-only offer is unreachable at HEAD; the
+  (`json.dumps` handles 2,000 levels; at 10,000 both raise, `json.loads`
+  first, so such a payload never reaches the helper); a whitespace-only offer is unreachable at HEAD; the
   painter dropping `compact` in its offer branch changes nothing visible.
 - Every wave-4 measurement re-run by the facts lens matched: 3.014 s /
   30.002 s / 0.000 s for the Qt-thread stall, True after 2.40 s with no busy
@@ -5854,6 +5858,14 @@ had finished.
   whose four cases pass on their parent by design, and `363b3a4`'s tests
   import names the commit introduces, so it fails at collection and its two
   observables were checked against the parent source by hand.
+- For wave 5's own commits the claim holds with four exceptions the
+  wave-6 facts lens found and this section had not recorded: one guard
+  test each in `446b689` (an empty final closing a pending partial still
+  resets the bound -- the parent's gate admitted it) and `5f889f7` (a
+  refresh deferred during the worker stays owed -- pre-existing), the
+  own-re-paste test of `f0f4a77` (the parent's per-attempt flag covers
+  that one scenario identically), and `6b137b9`, a test-only commit whose
+  parent already carries the fix.
 
 **Process notes**
 
@@ -5893,3 +5905,146 @@ had finished.
   parse. Chains are joined with `&&` now. And the tool rewrites backslash
   escapes inside a heredoc, so a quoted `\n` in a Python patch became a
   real newline; patch scripts are written as files.
+
+### Wave 6 (2026-09-05) - the fifth wave, on the wave-5 fixes
+
+Four read-only breakers (concurrency, reach, boundaries, facts) on
+`7e27aed..7efcb4c`; all four finished on their first launch. Every finding
+was reproduced by running the breaker's own probe before anything changed,
+and the two vendor pages the facts lens cites were fetched here as well.
+The fixes were dry-run on a `git archive` export while the last two
+breakers were still reading the repository, re-measured there with the
+breakers' own probes repointed at the tree, and applied only after all four
+had finished.
+
+**Confirmed and fixed**
+
+- *Fun-ASR* (1ab1b3d). The frame bound counts consecutive unusable
+  frames and any event resets it: the same partial over and over, two
+  partials alternating, a real final after each thousand junk frames and
+  heartbeats without end all ran to the thirty-minute deadline (0.9-1.3
+  million receive calls in 3 s against an instant fake). The commit that
+  introduced the gate called it "whatever its shape", and the budget's
+  docstring said the heartbeat run was "the one flood it does not bound";
+  it was one of four. `_MAX_FRAMES_PER_REQUEST` (1,000,000, counted on
+  every frame `_recv_event` reads) bounds the total; the instant fake
+  reaches it in 3.5 s, 1,000,002 receive calls. And the transcript cap left out the
+  separator before a pending partial, so a session ending on one handed
+  back the cap plus one (at cap 40: 41).
+- *Partial cleanup* (01adf24). A refused unlink was counted as a
+  file still in use, but a file another program is deleting refuses the
+  unlink with "access denied" and is gone a moment later -- 343 of them
+  "could not be removed" on an empty disk under a racing deleter. A
+  refused unlink is retried once after 10 ms: a held file is refused
+  again, a file being deleted is not found, a transient lock lets the
+  retry remove it, and `exists()` decides what is refused twice. The first
+  version checked `exists()` alone and, run under the breaker's probe on
+  the tree, still counted two of 2,441 inside the delete-pending moment;
+  the retry version measured zero. And `_model_cache_dirs` folds `..`
+  before deduplicating: a Model Dir spelled through the default cache with
+  one listed the same directory twice and counted a held partial as two.
+- *Overlay rest position* (c012ab0). `batched_update` defers the
+  geometry, so `set_state` scrolled to a stale maximum and Qt clamped the
+  value when the range changed under it: a batched Done showed 392 of
+  408 px with its last line hidden and `detail_is_being_read` answered
+  True for nothing the user had done; queue rows appearing did the same
+  (286 of 302). `rangeChanged` re-asserts the rest position until the
+  user scrolls -- `actionTriggered` fires for the wheel, a drag and the
+  keys and never for `setValue`, verified with a probe -- and a paint
+  supersedes the user's scrolling.
+- *Insert offer, third time* (b54a8b6). The offer's own "may have
+  pasted" flag was set on exact equality, and the tray's "Insert
+  transcript again" pastes the whole dictation, of which a streaming
+  tail's offer is the last part: that re-paste failing after its keystroke
+  left the flag False and the next repaint armed Insert for words that
+  had just reached the window (the tail reached the inserter three
+  times). Introduced by `f0f4a77`; its parent read the per-attempt flag
+  and got this one sequence right. A paste whose whitespace-folded text
+  contains the offer's marks it.
+- *Completion tone* (c98f57e). `_play_completion_beep`'s
+  `Thread.start` was unguarded; raised out of the deferred flush's success
+  arm it reported a pasted transcript as not inserted and armed Insert,
+  which pasted it again. Pre-existing, reachable under thread exhaustion.
+- *Preload cancel* (d470380). With an offer pending and no cancel
+  hotkey registered, the progress line dropped its abort sentence while
+  the action slot held Insert: a multi-gigabyte fetch with no way out on
+  screen. The line names the tray's "Cancel current action"
+  (`TRAY_CANCEL_ACTION_LABEL`, shared with the menu). And the preload's
+  cancel ignored the cleanup's `left_files` while the Local tab's drain
+  has reported them since `c911b55`, so "Model preload canceled." was
+  painted over gigabytes a scanner still held; the note is keyed by
+  generation and appended to that line.
+- *Close budget* (f27a5b2). `close_if_idle` re-armed its budget
+  after every pass through the retiring branch, whether or not the call
+  closed anything -- a stream a helper popped first is that helper's
+  close, inside the budget. A second actor handing a stream over every
+  budget-minus-epsilon kept the call from answering (True after 2.59 s
+  against a 0.4 s budget, no busy line; forced schedule, no natural
+  producer at HEAD). `_close_retiring` returns how many it closed and only
+  an own close re-arms. Its docstring's two scenarios that no longer hold
+  at HEAD (the helper's reopen "refused whichever thread wins", the
+  second `close_if_idle` from two device notifications) are corrected.
+- *Owed refresh* (fd1b50a). `_on_audio_device_change_settled`
+  cleared the flag and then called `Thread.start`, which raises when the
+  interpreter cannot create another thread: the refresh was discharged
+  with no worker, the microphone stayed invisible until the next device
+  event, and the exception escaped the Qt slot. Re-armed and logged -- the
+  guard the settings dialog's six sites got in round 24.
+- *Progress poll* (53e7c22). The scrolled-or-selected gate applied
+  only to the offer the painter wrote; with no offer pending -- the
+  ordinary download -- the poll repainted Processing every 600 ms over the
+  user's selection in its own progress line. The gate covers every repaint.
+- *Wording* (this commit). The facts lens refuted eight sentences: the
+  Fun-ASR real-time page does document `heartbeat` and recommends it (two
+  sections, both fetched here); `text_inserter.py` has five raise sites of
+  `TextMayHaveBeenPastedError`, four literal and one through the
+  `combined_error` alias; `5bf29bc`'s subject says six sentences for five
+  bullets, the sixth landed in `7efcb4c`; the pre-fix owed-refresh flag
+  was never "cleared at the end" -- the Qt-thread slot cleared it before
+  spawning the worker, and a worker scheduled while its predecessor still
+  queued on the lock is what lost the refusal; `_canceled_drain_summary`'s
+  docstring said `(model, state)` for `(model, outcome)`; the
+  client-events quotation moved the page's "Important" callout to the end
+  and dropped two sentences without an ellipsis; `scripts/download_model.py`
+  does not print "the same" sentence as the drain; and the depth aside
+  described two different depths. The reach lens found the `f0f4a77`
+  comment and message crediting a tray Edit action that does not exist
+  (the overlay's Edit button is the only caller). Four wave-5 tests pass
+  on their parents as guards, now recorded above.
+
+**Refuted, with the evidence**
+
+- Concurrency: nothing forced made `close_if_idle` answer True with a
+  stream registered, a worker leak a stream, or the flush hand an offer
+  another transcript's flag (all nine two-group orderings); O1 and O4 held
+  under three forced gap states. Reach: N1, N3, N4 (both halves, through
+  the real Clear button), N6 (the named key really aborts), N7 (reachable
+  only through the modal edit dialog), N8 and P1-P4 all held on the real
+  objects. Facts: `close()` never holds the PortAudio guard, 111 MB * 1800
+  / 2.5 = 79.9 GB, "four tests of its own" (the qualifier is what makes it
+  true: nine tests reach `_refuse_recording_start`, four are about the
+  offer), the atexit counts, the server-events quotation, and every wave-5
+  measurement re-run (1.25-1.35 million receive calls in 3 s on the parent
+  tree; `True` -> a limit of one on the parent; 34 of 35 mutants, the
+  survivor detected by `6b137b9`'s test).
+
+**Recorded, not changed** (Known limitations)
+
+- The flush replaces an earlier unpasted offer with a later post-paste
+  one; `WarmMicrophoneStream.close()` does not wait for a helper's close
+  in flight (only `shutdown()` calls it); Copy yields the pending offer
+  after an edit made while one is pending.
+
+**Process notes**
+
+- The probes were repointed at the scratch tree by rewriting one path
+  literal in each lens's `_env.py`, and every fix was re-measured with the
+  breaker's own instrument before it was applied, not only with its test.
+  That is what caught the first cleanup fix.
+- Two probes cannot show their fix by construction: the partial-spin probe
+  stops itself after 3 s, below the point where an instant fake reaches
+  the 1,000,000-frame bound, and the poll probe prints its verdict line
+  unconditionally -- the data lines show the fix, the verdict lines do
+  not. Both are read accordingly rather than "fixed".
+- Ruff's SIM102 caught a nested `if` the poll fix introduced on the tree,
+  before it reached the repository.

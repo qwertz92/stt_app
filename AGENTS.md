@@ -469,13 +469,32 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     taken once at entry, a 1.2 s own close against a 0.6 s budget left
     nothing for the wait after it, so an open in flight that finished
     0.3 s later was not waited for, the worker deferred the re-enumeration
-    and the log blamed a stack that had finished its close. And a worker
-    discharges the owed refresh (`_pending_audio_device_refresh`) as it
-    starts, its refusals re-arm it: cleared at the end, a refusal by the
-    previous worker outlived the next one's success and the following
-    recording stop paid a close, a re-enumeration and a reopen for a
-    refresh that had already happened -- while clearing at the end would
-    also discharge a device event deferred on the Qt thread during the run.
+    and the log blamed a stack that had finished its close. *Own* close:
+    `_close_retiring` returns how many streams the call closed, and a
+    pass in which a helper popped the retired stream first re-arms
+    nothing -- that is the helper's close, another thread's work, inside
+    the budget. Re-armed after every pass, a second actor handing a
+    stream over every budget-minus-epsilon kept the call from answering
+    (forced schedule: True after 2.59 s against a 0.4 s budget, no busy
+    line; no natural producer at HEAD, since the bump refuses every
+    generation-bearing reopen). And a worker discharges the owed refresh
+    (`_pending_audio_device_refresh`) as it starts, its refusals re-arm
+    it. Before this the Qt-thread slot cleared the flag *before* spawning
+    the worker and nothing else touched it, so a worker scheduled while
+    its predecessor still queued on `_audio_device_refresh_lock` found
+    the flag clear, the predecessor then refused and re-armed it, the
+    newer one succeeded and left it armed -- and the following recording
+    stop paid a close, a re-enumeration and a reopen for a refresh that
+    had already happened. (This entry said "cleared at the end of the
+    worker" for one round; nothing ever cleared it there.) Clearing at
+    the end instead would discharge a device event deferred on the Qt
+    thread during the run. **A worker that cannot start leaves the
+    refresh owed**: the slot clears the flag and then calls
+    `Thread.start`, which raises when the interpreter cannot create
+    another thread -- the refresh was discharged with no worker to run
+    it, the microphone stayed invisible until the next device event, and
+    the exception escaped the Qt slot. The flag is re-armed and logged,
+    and the next recording stop retries.
   - **`close` is terminal** (`_closed`, checked in the gate under the lock).
     The controller drops its reference to the stream it closes and builds a
     fresh one when the feature returns, so an open that passed its gate
@@ -1206,7 +1225,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_CleanupOutcome.left_files` carries the count to the drain, which says
   "N incomplete files of <model> could not be removed: still in use." and
   keeps "No incomplete files remained." for a disk with nothing left on
-  it, and `scripts/download_model.py` prints the same.
+  it, and `scripts/download_model.py` appends its own sentence to its
+  cancel line ("N incomplete file(s) could not be removed (still in
+  use).", no model name). **Left means still there**: a file another
+  program is deleting -- a scanner quarantining it, the killed download
+  child tearing down -- refuses the unlink with "access denied" and is
+  gone a moment later, and was counted as still in use (a racing
+  deleter: 343 files "could not be removed" on an empty disk).
+  `_unlink_partial` retries a refused unlink once after 10 ms: a held
+  file is refused again, a file being deleted is not found, a transient
+  lock lets the retry remove it, and `exists()` decides what is refused
+  twice -- alone, `exists()` still counted two of 2,441 inside the
+  delete-pending moment. `_model_cache_dirs` folds `..` before
+  deduplicating: a Model Dir spelled through the default cache with one
+  listed the same directory twice and counted a held partial as two.
+  **The preload road reports the same count**: its cancel arm ignored
+  the triple and painted "Model preload canceled." over gigabytes a
+  scanner still held; `_note_preload_cleanup` records the sentence by
+  generation and `_on_model_preload_done` appends it -- generation-keyed
+  so a retired worker's note cannot describe the current cancel.
   The kept and skipped sentences name their models (`cleanups` is one
   `(model, outcome)` per entry): two Cancels in one drain, the first killing
   a download and the second hitting an entry still waiting for the slot,
@@ -1540,8 +1577,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `OverlayUI.state` and `OverlayUI.detail` -- a result replaces the
   painter's text, an untouched offer matches it. **And the
   offer carries its own action**: the insert paths that fail *after* the
-  paste keystroke went out (four raise sites of `TextMayHaveBeenPastedError`
-  in `text_inserter.py`) deliberately withhold Insert -- the text is most
+  paste keystroke went out (five raise sites of `TextMayHaveBeenPastedError`
+  in `text_inserter.py`: four literal and one through the `combined_error`
+  alias, which a grep for the class name does not find) deliberately
+  withhold Insert -- the text is most
   likely in the document already -- and a repaint that read the pending text
   alone upgraded that to an Insert button -- pressing it pasted the
   transcript a second time, measured through the overlay's Insert and
@@ -1562,7 +1601,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   without the controller learning of it, so the offer came straight back --
   600 ms later from the poll during a preload, and from every later status
   writer. Only the offer that was on screen is retired; one hidden behind a
-  later Error is kept. **The poll's other three rules**: it leaves a
+  later Error is kept. **A paste that carries the offer's words marks it**
+  (`_paste_carried_the_offer`): the offer's own flag was set on exact
+  equality, and the tray's "Insert transcript again" pastes
+  `_last_transcript`, the whole dictation, of which a streaming tail's
+  offer is the last part -- that re-paste failing after its keystroke
+  left the flag False and the next repaint armed Insert for words that
+  had just reached the window (measured: the tail reached the inserter
+  three times; introduced by `f0f4a77`, whose parent read the
+  per-attempt flag and got this one sequence right). Whitespace is
+  folded for the comparison, because the tail is inserted with a leading
+  space. **The poll's other three rules**: it leaves a
   foreground transcription in flight alone (`_overlay_session_active`,
   which sees the request token after `stop_recording` has dropped the
   capture -- a model changed in Settings mid-transcription painted the
@@ -1570,10 +1619,30 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   alone while the user has scrolled or selected it
   (`OverlayUI.detail_is_being_read` -- `set_state` scrolls an Error to the
   top and `setText` drops the selection, which the repaint did every
-  600 ms for the whole download); and with an offer pending its line names
-  the cancel *hotkey* rather than a Cancel button the action slot no
-  longer holds (`_preload_abort_hint`; no hotkey, no sentence). The edit's
-  success confirmation goes through the painter like its refusals. A
+  600 ms for the whole download) -- **and its own progress line too**:
+  gated on the offer alone, the ordinary download's Processing line was
+  still repainted over the user's selection in it every 600 ms (measured
+  on the real overlay: the selection gone after one poll); and with an
+  offer pending its line names the cancel *hotkey* rather than a Cancel
+  button the action slot no longer holds (`_preload_abort_hint`), or,
+  with no hotkey registered, the tray's "Cancel current action"
+  (`TRAY_CANCEL_ACTION_LABEL`, shared with the menu) -- dropping the
+  sentence left a multi-gigabyte fetch with no way out on screen. The
+  overlay Edit button's success confirmation goes through the painter
+  like its refusals (there is no tray Edit action; an earlier version of
+  this entry and the `f0f4a77` message said "the tray's"), which leaves
+  Copy yielding the pending offer rather than the edited text and Edit
+  disabled until the offer is retired -- the offer's semantics, not a
+  defect. **The rest position `detail_is_being_read` compares against is
+  held through a relayout** (`OverlayUI._on_detail_range_changed`):
+  `batched_update` defers the geometry, so `set_state` scrolled to a
+  stale maximum and Qt clamped the value when the range changed under
+  it -- a batched Done showed 392 of 408 px with its last line hidden,
+  queue rows appearing did the same (286 of 302), and the property
+  answered True for nothing the user had done. `rangeChanged` re-asserts
+  the rest position until the user scrolls; `actionTriggered` fires for
+  the wheel, a drag and the keys and never for `setValue` (verified with
+  a probe), and a paint supersedes the user's scrolling. A
   parametrized test drives every writer except `_refuse_recording_start`,
   which four tests of its own drive, and the poll has tests of its own.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
@@ -1653,10 +1722,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   same way (1.0-1.4 million in 3 s). The gate is "carries text, or ends a
   sentence that has one": the text is stripped first, an empty final with
   nothing pending is junk, and one closing a partial is an event. A
-  documented heartbeat still resets it however many arrive, and that flood
-  is bounded by the deadline alone: it is the server saying it is alive, on
-  a parameter this provider asks for, and refusing to count it would fail a
-  long recording on its own keepalive. **The transcript itself is bounded
+  documented heartbeat still resets it however many arrive: it is the
+  server saying it is alive, on a parameter this provider asks for, and
+  refusing to count it would fail a long recording on its own keepalive.
+  **The frames of one request are bounded in total**
+  (`_MAX_FRAMES_PER_REQUEST`, 1,000,000, counted by
+  `_UnusableFrameBudget.received` on every frame `_recv_event` reads):
+  the consecutive count is reset by *any* event, so the same partial
+  repeated, two partials alternating, a real final after each thousand
+  junk frames and heartbeats without end all ran to the thirty-minute
+  deadline with a core and the single transcription worker pinned
+  (measured against an instant fake: 0.9-1.3 million receive calls in
+  3 s) -- "the one flood it does not bound is heartbeats", as this entry
+  and the budget's docstring said for one round, named one of four. A
+  thirty-minute recording at ten results a second plus a heartbeat a
+  second is 20,000 frames; the bound is fifty times that, and an instant
+  fake reaches it in 3.5 s (1,000,002 receive calls). The `task-started`
+  wait and the
+  connection test use budgets of their own, so the total is per budget,
+  i.e. per transcript loop. **The transcript itself is bounded
   (`_MAX_TRANSCRIPT_CHARS`, 2,000,000).** The frame bound cannot cover a
   flood of *usable* finals -- each one is the service saying something --
   so `finalized` grew for the whole budget (measured: 111 MB of heap in
@@ -1667,7 +1751,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   a running total, because a `sum()` per frame is quadratic in exactly the
   flood it exists for; it counts the join's separators, because the bound
   is on the transcript handed back and two million one-character finals
-  returned 3,999,999 characters without them; and the failure carries the
+  returned 3,999,999 characters without them -- including the separator
+  before a pending partial, which the first count left out, so a session
+  ending on a partial handed back the cap plus one (measured with the cap
+  at 40: 20 + 20 returned 41); and the failure carries the
   recovered-text suffix
   like every other exit. The `task-failed` detail is capped at 300
   characters like every HTTP provider's error body, and a nested error
@@ -1691,9 +1778,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   client-events page documents as optional, default false: "true: Keeps
   the connection alive when only silent audio is being sent. false
   (default): Even when silent audio is continuously sent, the connection
-  times out and closes after a period of time. Only Paraformer v2 supports
-  this parameter." The Fun-ASR real-time page lists no `heartbeat` at all,
-  so for `fun-asr-realtime` it is undocumented either way; and this
+  times out and closes after a period of time." -- with, *before* those
+  two sentences on the page, an "Important" callout: "Only Paraformer v2
+  supports this parameter." (This entry once quoted the callout after
+  them inside one pair of quotation marks and dropped "Whether to enable
+  heartbeat packets. Default: false." without an ellipsis.) The Fun-ASR
+  real-time page does mention `heartbeat`, and recommends it, in two
+  sections that name no model: "Set a heartbeat to keep the connection
+  alive: To maintain a long-lived connection with the server, set the
+  heartbeat parameter to true. The connection to the server then stays
+  open even when the audio contains no sound for a long time." and, in
+  its FAQ, "Implement client-side reconnection and enable the heartbeat
+  parameter (heartbeat=true) to prevent the connection from dropping when
+  there is no audio for a long time." -- this entry said for one round
+  that the page "lists no `heartbeat` at all"; both pages were re-read
+  here. And this
   provider's upload is unpaced (a tight `send_binary` loop), so a pause in
   the recording is *sent* in milliseconds whatever its length. Whether the
   service ignores, honours or rejects the parameter is **unverified
@@ -3211,7 +3310,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   thread (winsound is synchronous; only the recording-start beep stays
   deliberately synchronous so the microphone cannot record it). Streaming
   appends are many small pastes and stay silent by design. History-only
-  delivery and failed inserts never beep.
+  delivery and failed inserts never beep. **The tone's `Thread.start` is
+  guarded**: a starved interpreter raises `RuntimeError` there, and raised
+  out of the deferred flush's success arm -- the tone is the last
+  statement of a paste that already landed -- it reported the pasted
+  transcript as not inserted and armed Insert, which pasted it a second
+  time (measured through the flush and the overlay's Insert). Logged and
+  skipped instead.
 - **The tray icon is registered by hand on Windows (`win_tray_icon.py`)**:
   `QSystemTrayIcon`'s menu closed Windows 11's "hidden icons" flyout while
   other apps in the same flyout kept it open. Everything observable at menu
@@ -3671,3 +3776,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   ships through the pure-Python onnx-asr path and Nemotron through ONNX Runtime
   GenAI, so no NeMo/PyTorch stack is needed. See
   `docs/local-asr-model-candidates-2026.md` for rationale.
+- **One insert offer at a time, and a later failure replaces an earlier
+  one.** A deferred flush pastes several queued transcripts; when an
+  earlier one fails before its keystroke (Insert useful) and a later one
+  fails after it (Insert withheld), the offer ends up holding the later
+  text and the earlier one is only in history and the tray notification
+  (the wave-6 concurrency lens's flush matrix). Keeping the insertable
+  one instead would hide the other's "possibly inserted" report;
+  recorded rather than changed.
+- **`WarmMicrophoneStream.close()` does not wait for a helper's close in
+  flight.** It drains `_retiring` and returns, so a stream a helper is
+  still closing stays registered for the length of that close (measured:
+  `close()` returned after 0.000 s with one live stream, which the helper
+  then closed). Its only production caller is `shutdown()`, and the
+  helper finishes on its own; `close_if_idle` is the call that waits.
+- **Copy yields the pending offer after an edit made while one is
+  pending**: the overlay's Edit is enabled for Done only, so the offer
+  has to appear while the edit dialog is open; the confirmation then
+  goes through the offer painter, Copy yields the un-inserted text
+  rather than the edited one, and Edit is disabled until the offer is
+  retired. The offer's semantics; recorded.

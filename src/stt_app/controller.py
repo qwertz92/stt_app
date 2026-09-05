@@ -5526,8 +5526,9 @@ class DictationController(QtCore.QObject):
         tail unrecoverable.
 
         The offer carries its own action. The insert paths that fail *after*
-        the paste keystroke went out -- four raise sites of
-        `TextMayHaveBeenPastedError` in `text_inserter.py` -- deliberately
+        the paste keystroke went out -- five raise sites of
+        `TextMayHaveBeenPastedError` in `text_inserter.py`, four literal and
+        one through the `combined_error` alias -- deliberately
         withhold Insert, because the text is most likely in the document
         already; a repaint that read
         the pending text alone upgraded that to an Insert button, and
@@ -5601,7 +5602,8 @@ class DictationController(QtCore.QObject):
         straight back: the preload progress poll repainted it 600 ms after
         the press, and every later status writer re-offered it. Only the
         offer that was on screen is retired -- one hidden behind a later
-        Error, which the user has not seen, is kept.
+        Error is kept: that Clear was aimed at the Error, not at an offer
+        the user may have seen before it or never.
         """
         if copy_text and copy_text == self._insert_action_text:
             self._retire_insert_offer()
@@ -5974,8 +5976,9 @@ class DictationController(QtCore.QObject):
 
         self._last_history_entry = replace(entry, text=next_text.strip())
         self._last_transcript = next_text.strip()
-        # Not a session result: the tray's confirmation of an edit, painted
-        # plainly, hid a pending offer exactly as the refusals above did.
+        # Not a session result: the overlay Edit button's confirmation
+        # (there is no tray Edit action), painted plainly, hid a pending
+        # offer exactly as the refusals above did.
         self._paint_status_keeping_offer(
             "Done", self._last_transcript, compact=False
         )

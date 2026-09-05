@@ -1623,7 +1623,7 @@ class _LocalModelsMixin:
         A removal and a deliberate keep can both happen in one drain, for two
         different models, so the removal sentence is independent of the ones
         that follow it -- and those name their models (`cleanups` is one
-        `(model, state)` per entry), because two Cancels in one drain, the
+        `(model, outcome)` per entry), because two Cancels in one drain, the
         first killing a download and the second hitting an entry still
         waiting for the slot, read "Removed 3 incomplete files" beside
         "Incomplete files were left in place" as a contradiction. "No

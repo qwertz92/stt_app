@@ -246,7 +246,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         # page as optional, default false ("the connection times out and
         # closes after a period of time" of continuously silent audio) and
         # as supported by Paraformer v2 only; the Fun-ASR real-time page
-        # lists no such parameter. The upload below is unpaced, so a pause
+        # recommends it in two sections that name no model ("set the
+        # heartbeat parameter to true. The connection to the server then
+        # stays open even when the audio contains no sound for a long
+        # time"). The upload below is unpaced, so a pause
         # in the recording is sent in milliseconds; whether the service
         # ignores, honours or rejects the parameter for `fun-asr-realtime`
         # is unverified from here. A rejection would show as a `task-failed`
