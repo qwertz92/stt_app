@@ -6791,3 +6791,34 @@ def test_a_model_switch_logs_the_partials_the_retired_preload_left(
     assert "2 incomplete files could not be removed: still in use." in caplog.text
     controller.shutdown()
     _ = app
+
+
+@pytest.mark.parametrize(
+    ("phase", "action"),
+    [
+        (controller_module._PRELOAD_PHASE_QUEUED, "abort the preload"),
+        (controller_module._PRELOAD_PHASE_LOAD, "abort loading"),
+    ],
+)
+def test_the_queued_and_load_phase_lines_name_the_way_out(monkeypatch, phase, action):
+    """Two of the five progress lines carried no abort sentence. With an
+    Insert offer pending the action slot holds Insert, so during the queued
+    phase (minutes behind another model's load) and the load phase (every
+    preload) the overlay showed neither a Cancel button nor a sentence
+    naming one -- the state d470380 fixed for the download line, on the two
+    lines it did not touch (measured on all five). Cancel reaches both."""
+    controller, app, _overlay, _settings = _preloading_controller(monkeypatch)
+    controller._preload_target_model = "large-v3-turbo"
+    controller._preload_phase = (controller._preload_generation, phase)
+
+    detail = controller._preload_progress_detail()
+    assert detail.endswith(f" Use Cancel to {action}.")
+
+    controller._insert_action_text = " zweiter teil"
+    assert controller._register_all_global_hotkeys()
+    hotkey = controller._settings.cancel_hotkey
+    assert hotkey
+    detail = controller._preload_progress_detail()
+    assert detail.endswith(f" Press {hotkey} to {action}.")
+    controller.shutdown()
+    _ = app

@@ -3588,11 +3588,17 @@ class DictationController(QtCore.QObject):
                 f"{self._preload_abort_hint('abort')}"
             )
         phase = self._current_preload_phase()
+        # Both lines below name the way out like the download lines do:
+        # with an Insert offer pending the action slot holds Insert, so a
+        # line without the sentence left the queued phase (minutes behind
+        # another model's load) and the load phase with neither a Cancel
+        # button nor a word about one on screen.
         if phase == _PRELOAD_PHASE_QUEUED:
             return (
                 f"Waiting for the previous model before preparing "
                 f"'{model_name}'. You can start recording now; transcription "
                 "waits for this model."
+                f"{self._preload_abort_hint('abort the preload')}"
             )
         if phase == _PRELOAD_PHASE_LOAD:
             # Nothing is being fetched any more. The progress bar measures
@@ -3602,6 +3608,7 @@ class DictationController(QtCore.QObject):
             return (
                 f"Loading '{model_name}' into memory. You can start recording "
                 "now; transcription waits for this model."
+                f"{self._preload_abort_hint('abort loading')}"
             )
         downloaded_bytes = estimate_cached_model_bytes(
             model_name,
