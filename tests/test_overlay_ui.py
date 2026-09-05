@@ -2075,3 +2075,84 @@ def test_the_fake_overlay_starts_with_the_real_overlays_detail():
     _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
 
     assert FakeOverlay().detail == OverlayUI().detail
+
+
+_WAVE6_LONG = " ".join(f"wort{i}" for i in range(400))
+
+
+def _shown_offscreen(overlay):
+    from PySide6 import QtCore
+
+    overlay.setAttribute(QtCore.Qt.WA_DontShowOnScreen, True)
+    overlay.show()
+    QtWidgets.QApplication.processEvents()
+
+
+def test_a_done_painted_inside_a_batch_rests_at_the_end_of_its_transcript():
+    """`batched_update` defers the geometry to the end of the block, so
+    `set_state` scrolled to a stale maximum and the range then changed under
+    the value: Qt clamped it to the intermediate maximum and left it there
+    when the range grew back. Measured: value 392 against a maximum of 408,
+    the transcript's last line hidden, and `detail_is_being_read` True for
+    nothing the user had done. The rest position is re-asserted on every
+    range change until the user scrolls."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Idle", "short")
+    QtWidgets.QApplication.processEvents()
+
+    with overlay.batched_update():
+        overlay.set_transcription_queue([])
+        overlay.set_state("Done", _WAVE6_LONG)
+    QtWidgets.QApplication.processEvents()
+
+    scrollbar = overlay._detail_scroll.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+    assert scrollbar.value() == scrollbar.maximum()
+    assert overlay.detail_is_being_read is False
+    overlay.close()
+
+
+def test_the_detail_keeps_its_rest_through_a_relayout_unless_the_user_scrolled():
+    """Queue rows appearing beside a long transcript shrink the detail
+    viewport, and the value that relayout left behind (measured: 286 of
+    302) was nobody's doing. A position the user chose -- `actionTriggered`
+    fires for the wheel, a drag and the keys, never for `setValue` -- is
+    kept through the same relayout, and the next paint supersedes it."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Done", _WAVE6_LONG)
+    QtWidgets.QApplication.processEvents()
+    scrollbar = overlay._detail_scroll.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+    assert scrollbar.value() == scrollbar.maximum()
+    rows = [(1, "job one"), (2, "job two"), (3, "job three")]
+
+    overlay.set_transcription_queue(rows)
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == scrollbar.maximum()
+    assert overlay.detail_is_being_read is False
+    overlay.set_transcription_queue([])
+    QtWidgets.QApplication.processEvents()
+
+    scrollbar.triggerAction(QtWidgets.QAbstractSlider.SliderAction.SliderPageStepSub)
+    chosen = scrollbar.value()
+    assert chosen < scrollbar.maximum()
+    assert overlay.detail_is_being_read is True
+    overlay.set_transcription_queue(rows)
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == chosen, "the user's position was not kept"
+    assert overlay.detail_is_being_read is True
+
+    overlay.set_transcription_queue([])
+    QtWidgets.QApplication.processEvents()
+    overlay.set_state("Done", _WAVE6_LONG + " ende")
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == scrollbar.maximum()
+    overlay.set_transcription_queue(rows)
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == scrollbar.maximum(), "the paint did not supersede the scroll"
+    assert overlay.detail_is_being_read is False
+    overlay.close()

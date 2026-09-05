@@ -425,6 +425,13 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._detail_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
         self._detail_scroll.setWidget(self._detail_label)
+        # `actionTriggered` fires for the wheel, a drag, the arrows and the
+        # keyboard and never for `setValue`: the one signal that tells the
+        # user's scrolling from the range changes a relayout makes.
+        self._detail_user_scrolled = False
+        detail_bar = self._detail_scroll.verticalScrollBar()
+        detail_bar.actionTriggered.connect(self._on_detail_scroll_action)
+        detail_bar.rangeChanged.connect(self._on_detail_range_changed)
 
         self._footer_widget = QtWidgets.QWidget()
         footer = QtWidgets.QHBoxLayout(self._footer_widget)
@@ -825,11 +832,13 @@ class OverlayUI(QtWidgets.QWidget):
         # minimum (the window then refused to shrink to the computed target).
         self._apply_state_stylesheet(state)
         self._update_detail_height()
-        scrollbar = self._detail_scroll.verticalScrollBar()
         # Errors lead with the reason and may be followed by a long transcript
         # preview, so keep the reason in view; every other state shows the end
-        # of the transcript.
-        scrollbar.setValue(0 if state == "Error" else scrollbar.maximum())
+        # of the transcript. A paint supersedes the user's scrolling, and
+        # `_on_detail_range_changed` holds this position through the relayout
+        # that a batch or a queue change makes afterwards.
+        self._detail_user_scrolled = False
+        self._detail_scroll.verticalScrollBar().setValue(self._detail_rest_value())
 
     def _sync_record_button(self, state: str) -> None:
         recording = state == "Listening"
@@ -893,10 +902,39 @@ class OverlayUI(QtWidgets.QWidget):
         repaints the same text periodically -- the preload progress poll
         with an Insert offer pending -- has to ask first: it reset the
         scroll and the selection every 600 ms for the length of a download.
+
+        The rest position is held by `_on_detail_range_changed` through the
+        relayouts that follow a paint, so a value off it is the user's
+        doing -- before that, a batched Done answered True at 392 of 408 px
+        with nobody touching the overlay.
         """
         scrollbar = self._detail_scroll.verticalScrollBar()
-        rest = 0 if self._state == "Error" else scrollbar.maximum()
-        return scrollbar.value() != rest or self._detail_label.hasSelectedText()
+        scrolled = scrollbar.value() != self._detail_rest_value()
+        return scrolled or self._detail_label.hasSelectedText()
+
+    def _detail_rest_value(self) -> int:
+        """Where a paint leaves the detail: an Error at the top, the rest at the end."""
+        scrollbar = self._detail_scroll.verticalScrollBar()
+        return 0 if self._state == "Error" else scrollbar.maximum()
+
+    def _on_detail_scroll_action(self, _action: int) -> None:
+        self._detail_user_scrolled = True
+
+    def _on_detail_range_changed(self, _minimum: int, _maximum: int) -> None:
+        """Hold the rest position through a relayout, unless the user moved.
+
+        `set_state` scrolls to the rest position, and the relayout that can
+        follow -- the geometry a `batched_update` applies at its end, queue
+        rows appearing beside a long transcript -- changes the range after
+        that. Qt clamps the value to an intermediate maximum and leaves it
+        there when the range grows again, so a batched Done showed 392 of
+        408 px of its transcript with the last line hidden, and
+        `detail_is_being_read` answered True for nothing the user had done.
+        """
+        if not self._detail_user_scrolled:
+            self._detail_scroll.verticalScrollBar().setValue(
+                self._detail_rest_value()
+            )
 
     def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
