@@ -1870,11 +1870,22 @@ class DictationController(QtCore.QObject):
             self._pending_audio_device_refresh = True
             return
         self._pending_audio_device_refresh = False
-        threading.Thread(
-            target=self._refresh_audio_devices_worker,
-            name="stt_app_audio_device_refresh",
-            daemon=True,
-        ).start()
+        try:
+            threading.Thread(
+                target=self._refresh_audio_devices_worker,
+                name="stt_app_audio_device_refresh",
+                daemon=True,
+            ).start()
+        except RuntimeError as exc:
+            # A starved interpreter cannot start another thread. Discharged
+            # with no worker to run it, the refresh was simply gone -- a
+            # hot-plugged or newly defaulted microphone stayed invisible
+            # until the next device event -- and the exception escaped the
+            # Qt slot. Owed again, it is retried at the next recording stop.
+            self._pending_audio_device_refresh = True
+            self._logger.warning(
+                "Audio device refresh could not start its worker: %s", exc
+            )
 
     def _refresh_audio_devices_worker(self) -> None:
         """Close the idle warm stream, re-enumerate PortAudio, reopen warm.

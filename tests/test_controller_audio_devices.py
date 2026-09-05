@@ -669,3 +669,30 @@ def test_a_refresh_deferred_during_the_worker_stays_owed(monkeypatch):
     assert controller._pending_audio_device_refresh is True
     controller.shutdown()
     _ = app
+
+
+def test_a_refresh_worker_that_cannot_start_leaves_the_refresh_owed(monkeypatch):
+    """`Thread.start` raises when the interpreter cannot create another
+    thread; the flag was already cleared, so the owed refresh was discharged
+    with no worker to run it and the next recording stop found nothing to
+    resume -- a hot-plugged microphone invisible until the next device
+    event. And the exception escaped the Qt slot, to a stderr a windowed
+    build does not have."""
+    controller, app = make_controller()
+
+    class _RefusingThread:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def start(self):
+            raise RuntimeError("can't start new thread")
+
+    monkeypatch.setattr(controller_module.threading, "Thread", _RefusingThread)
+
+    controller._on_audio_device_change_settled()
+
+    assert controller._pending_audio_device_refresh is True
+    controller._maybe_resume_pending_audio_device_refresh()
+    assert controller._audio_device_change_timer.isActive()
+    controller.shutdown()
+    _ = app
