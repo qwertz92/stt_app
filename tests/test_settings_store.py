@@ -687,6 +687,40 @@ def test_numeric_limits_are_clamped_and_invalid_values_fall_back(tmp_path):
             -10**9,
             DEFAULT_RECORDINGS_MAX_COUNT,
         ),
+        # `int()` truncates toward zero *before* the sign check, so each of
+        # these landed on 0 -- "keep every recording" -- from a value the app
+        # never writes and the spin box cannot produce.
+        (
+            "a negative fraction is not a rounded-down unlimited",
+            -0.5,
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
+        (
+            "a fraction below one is not unlimited either",
+            0.9,
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
+        (
+            "a fraction is garbage whatever it rounds to",
+            1.9,
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
+        ("False is not a retention count", False, DEFAULT_RECORDINGS_MAX_COUNT),
+        (
+            "and True is not the count 1 it would truncate to",
+            True,
+            DEFAULT_RECORDINGS_MAX_COUNT,
+        ),
+        ("NaN falls back rather than defeating the clamp", float("nan"),
+         DEFAULT_RECORDINGS_MAX_COUNT),
+        ("an infinity does too", float("inf"), DEFAULT_RECORDINGS_MAX_COUNT),
+        # The shapes that must keep working: a whole number stored as a JSON
+        # float, and the numeric strings an edited file can contain.
+        ("an integral float is a count", 0.0, RECORDINGS_MAX_COUNT_UNLIMITED),
+        ("an integral float above zero too", 10.0, 10),
+        ("a numeric string is a count", "0", RECORDINGS_MAX_COUNT_UNLIMITED),
+        ("padded whitespace is tolerated", " 0 ", RECORDINGS_MAX_COUNT_UNLIMITED),
+        ("a non-zero numeric string", "7", 7),
     ],
 )
 def test_recordings_max_count_treats_zero_as_unlimited(label, stored, expected):
@@ -696,6 +730,11 @@ def test_recordings_max_count_treats_zero_as_unlimited(label, stored, expected):
     read "unlimited" into a value the spin box cannot even produce and would
     switch pruning off silently, so it falls back to the default like every
     other unusable value in `from_dict`.
+
+    The fractions and the booleans are the same decision reached from the
+    other side: `int()` truncates toward zero and accepts a bool, so `-0.5`,
+    `0.9` and `False` all became 0 and walked around that negative branch
+    entirely.
     """
     settings = AppSettings.from_dict({"recordings_max_count": stored})
 

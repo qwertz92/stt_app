@@ -181,6 +181,28 @@ def _int_or_none(value: Any) -> int | None:
         return None
 
 
+def _exact_int_or_none(value: Any) -> int | None:
+    """`_int_or_none`, but a value that is not exactly an integer is refused.
+
+    `int()` truncates toward zero and accepts a bool, so `-0.5`, `0.9` and
+    `False` all became 0 -- and for `recordings_max_count` 0 is "keep every
+    recording", the one value the negative branch in `from_dict` exists to
+    keep unreachable by accident. Truncating a count is wrong in either
+    direction anyway: nothing in the app writes a fraction there, so a stored
+    one is damage, and reading damage as a deliberate retention setting is
+    what this refuses. `True` is refused with `False`: `int(True)` is a legal
+    count of 1, which would make a boolean in the file look like a setting
+    the user chose.
+    """
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, float) and not value.is_integer():
+        # `is_integer()` answers False for NaN and for either infinity rather
+        # than raising, so this one test covers the non-finite cases as well.
+        return None
+    return _int_or_none(value)
+
+
 @dataclass(slots=True)
 class AppSettings:
     schema_version: int = CURRENT_SCHEMA_VERSION
@@ -389,14 +411,19 @@ class AppSettings:
         ).strip().lower()
         if overlay_corner not in VALID_OVERLAY_CORNERS:
             overlay_corner = DEFAULT_OVERLAY_CORNER
-        try:
-            recordings_max_count = int(
-                merged.get("recordings_max_count", DEFAULT_RECORDINGS_MAX_COUNT)
-            )
-        except (TypeError, ValueError, OverflowError):
+        # `_exact_int_or_none`, not `int()`: truncation toward zero turned
+        # `-0.5`, `0.9` and `False` into 0, which is this field's "keep every
+        # recording" -- the negative branch below refuses a negative count for
+        # exactly that reason and was walked around by anything that truncated
+        # to zero first.
+        recordings_max_count = _exact_int_or_none(
+            merged.get("recordings_max_count", DEFAULT_RECORDINGS_MAX_COUNT)
+        )
+        if recordings_max_count is None:
             recordings_max_count = DEFAULT_RECORDINGS_MAX_COUNT
         # 0 is "keep every recording". No schema bump is needed for it: every
-        # earlier version clamped this field to >= 1 on write, so a stored 0
+        # earlier version clamped this field to >= 1 when reading it and the
+        # spin box could not go below 1, so a stored 0
         # cannot come from an older app. A negative value is garbage rather
         # than a stronger "unlimited" -- reading it that way would switch
         # pruning off silently -- so it lands on the default like every other
