@@ -136,8 +136,12 @@ _RECOVERED_TEXT_MAX_CHARS = 2000
 # 1.37 million receive calls in 0.31 s against an instant fake). The
 # service never sends such frames, so any real flood is a fault.
 _MAX_UNUSABLE_FRAMES = 1000
-# Every frame one budget sees, usable or not -- one budget lives for the
-# transcript loop, i.e. for the request. The bound above is on *consecutive*
+# Every frame one budget sees, usable or not. One `transcribe_batch` builds
+# two budgets, one for the `task-started` wait and one for the transcript
+# loop, and `test_connection` a third; `_recv_event` returns on the first
+# event, so only junk keeps the first and the third looping and the
+# consecutive bound above trips them at 1,001 frames. This total is live in
+# the transcript loop. The bound above is on *consecutive*
 # unusable frames, so a peer that sends the same partial over and over,
 # alternates two of them, sends a real final every thousand junk frames or
 # sends heartbeats without end resets it for ever and ran to the

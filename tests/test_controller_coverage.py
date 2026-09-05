@@ -5954,8 +5954,9 @@ def test_a_status_repaint_keeps_the_pending_insert_offer(repaint, monkeypatch):
         controller.cancel_current_action()
         assert "Canceling model download..." in overlay.states[-1][1]
     elif repaint == "edit_success":
-        # The tray's confirmation of an edit is no more a session result
-        # than its three refusals, which were routed while it was not.
+        # The overlay Edit button's confirmation is no more a session
+        # result than its three refusals, which were routed while it was
+        # not. (There is no tray Edit action.)
         monkeypatch.setattr(
             "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
             staticmethod(lambda parent, text: "korrigierter text"),
