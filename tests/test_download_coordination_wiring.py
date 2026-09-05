@@ -15,6 +15,12 @@ import pytest
 
 from stt_app import model_download_coordinator as coordinator_module
 from stt_app.model_download_coordinator import ACQUIRE_DOWNLOAD
+from stt_app.settings_dialog_local import (
+    _CLEANUP_KEPT,
+    _CLEANUP_RAN,
+    _CLEANUP_SKIPPED,
+    _CleanupOutcome,
+)
 
 
 def _private_slot(monkeypatch, coordinator, *modules):
@@ -369,10 +375,13 @@ def test_cancelling_while_queued_does_not_strand_the_entry(monkeypatch, tmp_path
     coordinator.register_explicit_interest("small", "")
 
     try:
-        status, _detail, _f, _b = _LocalModelsMixin._download_local_model_in_subprocess(
-            dialog, "small", ""
+        status, _detail, cleanup = (
+            _LocalModelsMixin._download_local_model_in_subprocess(dialog, "small", "")
         )
         assert status == "canceled"
+        # It never held the slot, so it may not touch the partial files -- and
+        # the drain must not report the cleanup it skipped as one that ran.
+        assert cleanup == _CleanupOutcome(_CLEANUP_SKIPPED)
         assert dialog._local_model_download_claimed is None, "entry stayed claimed"
         assert coordinator.has_explicit_interest("small", "") is False
     finally:
@@ -393,6 +402,8 @@ def test_a_crashing_download_queue_does_not_wedge_the_tab(monkeypatch):
     dialog._local_model_download_active = None
     dialog._local_model_download_claimed = None
     dialog._local_model_download_worker_running = True
+    # Left by a Cancel this drain consumed nothing of; the arm clears it.
+    dialog._local_model_download_removed_by_cancel = ["stale"]
     coordinator.register_explicit_interest("medium", "")
 
     monkeypatch.setattr(
@@ -411,6 +422,7 @@ def test_a_crashing_download_queue_does_not_wedge_the_tab(monkeypatch):
 
     assert dialog._local_model_download_worker_running is False
     assert dialog._local_model_download_queue == []
+    assert dialog._local_model_download_removed_by_cancel == []
     assert coordinator.has_explicit_interest("medium", "") is False
     assert emitted, "the user must be told the queue stopped"
 
@@ -596,10 +608,10 @@ def test_a_finished_local_tab_download_lets_a_waiter_join(monkeypatch):
     dialog._local_model_download_active = None
     dialog._local_model_download_claimed = ("small", "")
     dialog._local_model_download_cancel_event = threading.Event()
-    dialog._run_download_worker = lambda *_args: ("success", "", 0, 0)
+    dialog._run_download_worker = lambda *_args: ("success", "", _CleanupOutcome())
     coordinator.register_explicit_interest("small", "")
 
-    status, _detail, _f, _b = _LocalModelsMixin._download_local_model_in_subprocess(
+    status, _detail, _cleanup = _LocalModelsMixin._download_local_model_in_subprocess(
         dialog, "small", ""
     )
 
@@ -654,9 +666,11 @@ def test_cancelling_keeps_the_partials_a_parked_waiter_will_resume_from(monkeypa
             return 3, 4096
 
     # Recorded, not left to the real cleanup: with nothing on disk for this
-    # model the real one returns (0, 0) too, so `removed == (0, 0)` alone was
-    # satisfied whether the guard held or not -- a mutation that deleted the
-    # guard outright still passed.
+    # model the real one also removes nothing, so an assertion on the counts
+    # alone was satisfied whether the guard held or not -- a mutation that
+    # deleted the guard outright still passed. The state is asserted too: a
+    # kept set of partials is not the same fact as a disk that held none, and
+    # the drain's closing sentence says which of the two happened.
     monkeypatch.setattr(local_module, "_facade", lambda: _Facade())
 
     def _park():
@@ -674,7 +688,9 @@ def test_cancelling_keeps_the_partials_a_parked_waiter_will_resume_from(monkeypa
         removed = _LocalModelsMixin._cleanup_unless_awaited(dialog, "large-v3", "")
 
         assert cleanups == [], "the waiter's partial files were deleted"
-        assert removed == (0, 0), f"the cancel reported deleting {removed}"
+        assert removed == _CleanupOutcome(_CLEANUP_KEPT), (
+            f"the cancel reported {removed}"
+        )
     finally:
         coordinator.release("large-v3", "", succeeded=False)
         waiter.join(timeout=5)
@@ -743,7 +759,7 @@ def test_cancelling_with_nobody_waiting_still_removes_the_partials():
     finally:
         local_module._facade = original
 
-    assert removed == (3, 4096)
+    assert removed == _CleanupOutcome(_CLEANUP_RAN, 3, 4096)
     assert calls == [("small", "")]
 
 
@@ -846,7 +862,12 @@ def _through_the_slot(name, model_dir, status):
         name, model_dir, explicit=True, interest_already_registered=True
     )
     coordinator.release(name, model_dir, succeeded=status == "success")
-    return (status, "", 0, 0)
+    # A canceled download always ran the cleanup in the real worker; only the
+    # `ModelDownloadCanceled` arm returns without touching the disk.
+    cleanup = (
+        _CleanupOutcome(_CLEANUP_RAN) if status == "canceled" else _CleanupOutcome()
+    )
+    return (status, "", cleanup)
 
 
 def _draining_dialog(monkeypatch):
@@ -877,6 +898,57 @@ def _draining_dialog(monkeypatch):
         lambda *args: emitted.append(args),
     )
     return dialog, emitted
+
+
+def test_a_crashed_drain_drops_the_names_its_cancel_removed(monkeypatch):
+    """`_local_model_download_removed_by_cancel` is drain-scoped and only
+    `_consume_cancel_locked` empties it. The crash arm reset the queue, the
+    active and claimed entries and the running flag, and left the list, so
+    the next drain's first Cancel reported the crashed drain's removed models
+    as its own: drain 2 queued only `medium` and `large-v3`, and its summary
+    named `base` and `small` before them."""
+    from stt_app import settings_dialog_local as local_module
+    from stt_app.model_download_coordinator import ModelDownloadCoordinator
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    _private_slot(monkeypatch, ModelDownloadCoordinator(), local_module)
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+
+    def _download(self, name, model_dir):
+        # Cancel lands while this entry downloads: the entries queued behind
+        # it are removed and recorded for the summary.
+        _LocalModelsMixin._cancel_local_model_downloads(self)
+        if name == "tiny":
+            raise ZeroDivisionError("the download queue crashed")
+        return ("canceled", "", _CleanupOutcome(_CLEANUP_SKIPPED))
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+
+    _LocalModelsMixin._start_local_model_download(dialog, ["tiny", "base", "small"])
+    with pytest.raises(ZeroDivisionError):
+        _LocalModelsMixin._run_local_model_download_queue(dialog, 1)
+    assert dialog._local_model_download_worker_running is False
+
+    # What `_start_local_model_download` does for a fresh worker, minus the
+    # thread: mark it running, clear the event, queue, and drain.
+    dialog._local_model_download_worker_running = True
+    dialog._local_model_download_cancel_event.clear()
+    _LocalModelsMixin._start_local_model_download(dialog, ["medium", "large-v3"])
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 2)
+
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    summary = finished[-1][4]
+    assert "medium" in summary
+    assert "large-v3" in summary
+    assert "base" not in summary, summary
+    assert "small" not in summary, summary
 
 
 def test_a_download_queued_during_a_cancel_drain_still_runs(monkeypatch):
@@ -925,7 +997,7 @@ def test_a_download_queued_while_the_active_one_is_being_canceled_runs_next(
             # this one's process is being terminated.
             _LocalModelsMixin._cancel_local_model_downloads(self)
             _LocalModelsMixin._start_local_model_download(self, ["small"])
-            return ("canceled", "", 0, 0)
+            return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN))
         return _through_the_slot(name, model_dir, "success")
 
     monkeypatch.setattr(
@@ -962,7 +1034,7 @@ def test_a_second_cancel_during_the_drain_still_stops_everything(monkeypatch):
         _LocalModelsMixin._cancel_local_model_downloads(self)
         _LocalModelsMixin._start_local_model_download(self, ["small"])
         _LocalModelsMixin._cancel_local_model_downloads(self)
-        return ("canceled", "", 0, 0)
+        return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN))
 
     monkeypatch.setattr(
         _LocalModelsMixin, "_download_local_model_in_subprocess", _download
@@ -1022,10 +1094,11 @@ def test_a_cancel_after_the_first_model_finished_is_reported_as_a_cancel(
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     assert finished[-1][3] is False
     # The Cancel removed `small` from the queue; the summary says so, where
-    # it used to name only the download a Cancel killed.
+    # it used to name only the download a Cancel killed. No download was
+    # interrupted, so there is nothing to say about incomplete files -- "No
+    # incomplete files remained." was a claim about a disk nobody read.
     assert finished[-1][4] == (
-        "Download canceled. No incomplete files remained. "
-        "Downloaded: medium. Then removed from the queue: small."
+        "Download canceled. Downloaded: medium. Then removed from the queue: small."
     )
     assert dialog._local_model_download_cancel_event.is_set() is False
 
@@ -1047,7 +1120,7 @@ def test_a_cancel_that_kills_the_second_model_names_it_and_keeps_the_cleanup(
             return _through_the_slot(name, model_dir, "success")
         _LocalModelsMixin._cancel_local_model_downloads(self)
         _through_the_slot(name, model_dir, "canceled")
-        return ("canceled", "", 3, 1_500_000)
+        return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN, 3, 1_500_000))
 
     monkeypatch.setattr(
         _LocalModelsMixin, "_download_local_model_in_subprocess", _download
@@ -1081,7 +1154,7 @@ def test_a_cancel_that_kills_a_download_also_names_the_queue_it_emptied(monkeypa
     def _download(self, name, model_dir):
         _LocalModelsMixin._cancel_local_model_downloads(self)
         _through_the_slot(name, model_dir, "canceled")
-        return ("canceled", "", 0, 0)
+        return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN))
 
     monkeypatch.setattr(
         _LocalModelsMixin, "_download_local_model_in_subprocess", _download
@@ -1115,16 +1188,16 @@ def test_work_before_and_after_a_cancel_is_listed_on_its_side_of_it(monkeypatch)
     def _download(self, name, model_dir):
         if name == "tiny":
             _through_the_slot(name, model_dir, "error")
-            return ("error", "disk full", 0, 0)
+            return ("error", "disk full", _CleanupOutcome())
         if name == "medium":
             return _through_the_slot(name, model_dir, "success")
         if name == "small":
             _LocalModelsMixin._cancel_local_model_downloads(self)
             _LocalModelsMixin._start_local_model_download(self, ["large-v3"])
             _through_the_slot(name, model_dir, "canceled")
-            return ("canceled", "", 1, 200_000)
+            return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN, 1, 200_000))
         _through_the_slot(name, model_dir, "error")
-        return ("error", "network error", 0, 0)
+        return ("error", "network error", _CleanupOutcome())
 
     monkeypatch.setattr(
         _LocalModelsMixin, "_download_local_model_in_subprocess", _download
@@ -1166,9 +1239,10 @@ def test_a_cancel_that_only_emptied_the_queue_is_reported_as_one(monkeypatch):
 
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     assert finished[-1][3] is False
+    # Nothing ever started downloading, so the summary says nothing about
+    # incomplete files rather than reporting a cleanup that never ran.
     assert finished[-1][4] == (
-        "Download canceled. No incomplete files remained. "
-        "Removed from the queue: medium, small."
+        "Download canceled. Removed from the queue: medium, small."
     )
 
 
@@ -1194,8 +1268,8 @@ def test_a_download_queued_after_a_queue_only_cancel_is_listed_after_it(
     finished = [e for e in emitted if e[1] == "local_model_download_finished"]
     assert finished[-1][3] is False
     assert finished[-1][4] == (
-        "Download canceled. No incomplete files remained. "
-        "Removed from the queue: medium, small. Then downloaded: tiny."
+        "Download canceled. Removed from the queue: medium, small. "
+        "Then downloaded: tiny."
     )
 
 
@@ -1216,7 +1290,7 @@ def test_two_cancels_in_one_drain_keep_their_order(monkeypatch):
                 self, ["b"] if name == "a" else ["d"]
             )
             _through_the_slot(name, model_dir, "canceled")
-            return ("canceled", "", 0, 0)
+            return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN))
         if name == "b":
             _LocalModelsMixin._start_local_model_download(self, ["c"])
         return _through_the_slot(name, model_dir, "success")
@@ -1237,6 +1311,165 @@ def test_two_cancels_in_one_drain_keep_their_order(monkeypatch):
         "Download canceled. No incomplete files remained. "
         "Canceled: a. Then downloaded: b. Then canceled: c. Then downloaded: d."
     )
+
+
+class _CleanupCoordinator:
+    """A download slot scripted for one entry's cleanup decision.
+
+    The real coordinator cannot produce these states in a drain test: the
+    kept case needs a caller genuinely parked on the slot, which the drain
+    would then block behind, and the skipped case needs `acquire` to raise
+    while the drain holds nothing.
+    """
+
+    def __init__(self, *, waiting: bool = False, cancel_on_acquire: bool = False):
+        self._waiting = waiting
+        self._cancel_on_acquire = cancel_on_acquire
+
+    def acquire(self, name, model_dir, *, explicit, cancel_check=None,
+                interest_already_registered=False):
+        if self._cancel_on_acquire:
+            from stt_app.model_download_coordinator import ModelDownloadCanceled
+
+            raise ModelDownloadCanceled(name)
+        return ACQUIRE_DOWNLOAD
+
+    def release(self, name, model_dir, *, succeeded):
+        pass
+
+    def register_explicit_interest(self, name, model_dir=""):
+        pass
+
+    def drop_explicit_interest(self, name, model_dir=""):
+        pass
+
+    def has_waiting_download(self, name, model_dir=""):
+        return self._waiting
+
+    def has_explicit_interest(self, name, model_dir=""):
+        return False
+
+    def active(self):
+        return None
+
+
+class _CanceledProcess:
+    """A download subprocess the user cancels while it is still running."""
+
+    def __init__(self, cancel_event):
+        self._cancel_event = cancel_event
+        self._polls = 0
+        self.returncode = 1
+
+    def poll(self):
+        self._polls += 1
+        self._cancel_event.set()
+        return None if self._polls < 2 else 1
+
+
+def _drain_one_canceled_download(monkeypatch, coordinator):
+    """Run the real worker for one model that is canceled mid-download."""
+    import stt_app.settings_dialog_local as local_module
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [("large-v3", "")]
+    _private_slot(monkeypatch, coordinator, local_module)
+    cleanups: list[str] = []
+
+    class _Facade:
+        @staticmethod
+        def start_model_download_process(model_name, model_dir):
+            return _CanceledProcess(dialog._local_model_download_cancel_event)
+
+        @staticmethod
+        def cleanup_incomplete_model_download(model_name, model_dir):
+            cleanups.append(model_name)
+            return 4, 3_100_000_000
+
+    monkeypatch.setattr(local_module, "_facade", lambda: _Facade)
+    monkeypatch.setattr(local_module, "model_download_process_error", lambda p: "")
+    monkeypatch.setattr(
+        local_module, "terminate_model_download_process", lambda process: None
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    return finished[-1][3], finished[-1][4], cleanups
+
+
+def test_partials_kept_for_a_waiting_download_are_not_reported_as_absent(
+    monkeypatch,
+):
+    """`_cleanup_unless_awaited` keeps the partial files on purpose when
+    another caller is parked to resume them, and the drain then read its zero
+    as "No incomplete files remained." -- a statement about a disk nobody
+    looked at, and the opposite of what happened to the gigabytes still
+    sitting there."""
+    success, summary, cleanups = _drain_one_canceled_download(
+        monkeypatch, _CleanupCoordinator(waiting=True)
+    )
+
+    assert cleanups == [], "the waiting download's partial files were deleted"
+    assert success is False
+    assert summary == (
+        "Download canceled. Incomplete files were kept: another download is "
+        "waiting to resume them. Canceled: large-v3."
+    )
+
+
+def test_a_cancel_before_the_slot_says_the_download_had_not_started(monkeypatch):
+    """The `ModelDownloadCanceled` arm returns without ever reaching the
+    disk: the entry was still waiting for the download slot. Reported as "No
+    incomplete files remained." that was a cleanup the drain never ran."""
+    success, summary, cleanups = _drain_one_canceled_download(
+        monkeypatch, _CleanupCoordinator(cancel_on_acquire=True)
+    )
+
+    assert cleanups == []
+    assert success is False
+    assert summary == (
+        "Download canceled. Incomplete files were left in place: the canceled "
+        "download had not started yet. Canceled: large-v3."
+    )
+
+
+def test_a_cleanup_that_ran_and_removed_files_still_reports_them(monkeypatch):
+    """The other side of the same change: a cleanup that did run must keep
+    saying what it removed, through the real worker rather than a fake
+    tuple."""
+    success, summary, cleanups = _drain_one_canceled_download(
+        monkeypatch, _CleanupCoordinator()
+    )
+
+    assert cleanups == ["large-v3"]
+    assert success is False
+    assert summary == (
+        "Download canceled. Removed 4 incomplete files (3100.0 MB). "
+        "Canceled: large-v3."
+    )
+
+
+def test_a_drain_that_downloaded_nothing_does_not_report_an_empty_success(
+    monkeypatch,
+):
+    """`_draining_dialog`'s state -- worker running, cancel event set, queue
+    empty -- consumes a Cancel that removed nothing, so the drain falls past
+    the cancel headline with no successes and no failures. That reached the
+    user as "Downloaded: " naming no model, in the success colour. Not
+    reachable through the UI at HEAD; guarded because the report was the
+    worst possible answer for a state nobody can explain."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is False
+    assert finished[-1][4] == "No downloads ran."
 
 
 def test_nothing_is_queued_after_the_dialog_shut_down(monkeypatch):

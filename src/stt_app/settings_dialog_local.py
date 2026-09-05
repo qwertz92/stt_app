@@ -5,6 +5,7 @@ import logging
 import threading
 import time
 from pathlib import Path
+from typing import NamedTuple
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
@@ -116,6 +117,32 @@ _DRAIN_EVENT_LABELS = {
     "canceled": ("Canceled", ", "),
     "removed": ("Removed from the queue", ", "),
 }
+
+# What one queue entry did about its partial `*.incomplete` files.
+_CLEANUP_NONE = "none"  # no cleanup decision arose: nothing was interrupted
+_CLEANUP_RAN = "ran"  # the disk was read; `files` says what came off it
+_CLEANUP_KEPT = "kept"  # another caller is parked to resume the partials
+_CLEANUP_SKIPPED = "skipped"  # cancelled before it ever held the download slot
+
+
+class _CleanupOutcome(NamedTuple):
+    """What one entry's partial-file cleanup did, for the drain's summary.
+
+    A state and not just a count, because "No incomplete files remained." is
+    a statement about a disk somebody read, and three paths reached the drain
+    with zero files having read nothing at all: `_cleanup_unless_awaited`
+    deliberately keeps the partials when another caller is parked to resume
+    them (`_CLEANUP_KEPT`, logged as `local_model_download_partials_kept`);
+    the `ModelDownloadCanceled` arm of `_download_local_model_in_subprocess`
+    never gets that far because the entry was still waiting for the slot
+    (`_CLEANUP_SKIPPED`); and an entry that simply finished, failed or joined
+    another caller's download never had a partial file to consider at all
+    (`_CLEANUP_NONE`, the default, which the summary answers with silence).
+    """
+
+    state: str = _CLEANUP_NONE
+    removed_files: int = 0
+    removed_bytes: int = 0
 
 
 class _LocalModelsMixin:
@@ -1168,6 +1195,10 @@ class _LocalModelsMixin:
             # "still running" guard.
             with self._local_model_download_lock:
                 self._discard_queued_downloads_locked()
+                # Drain-scoped, and only `_consume_cancel_locked` empties it:
+                # left behind, the next drain's first Cancel reported this
+                # drain's removed models as its own.
+                self._local_model_download_removed_by_cancel.clear()
                 self._local_model_download_active = None
                 self._local_model_download_claimed = None
                 self._local_model_download_worker_running = False
@@ -1212,7 +1243,7 @@ class _LocalModelsMixin:
         self,
         model_name: str,
         model_dir: str,
-    ) -> tuple[str, str, int, int]:
+    ) -> tuple[str, str, _CleanupOutcome]:
         # Claim the one process-wide download slot first. The preload path may
         # already be fetching this model because the user selected it and
         # pressed Save; starting a second worker against the same cache
@@ -1244,10 +1275,13 @@ class _LocalModelsMixin:
                     interest_already_registered=True,
                 )
             except ModelDownloadCanceled:
-                return ("canceled", "", 0, 0)
+                # Still parked in `acquire` when the Cancel arrived: this
+                # entry never held the slot, so it may not touch the partial
+                # files and the drain must not report a cleanup it skipped.
+                return ("canceled", "", _CleanupOutcome(_CLEANUP_SKIPPED))
             if outcome == ACQUIRE_JOINED:
                 # The preload path finished this exact model while we waited.
-                return ("success", "", 0, 0)
+                return ("success", "", _CleanupOutcome())
 
             acquired = True
             with self._local_model_download_lock:
@@ -1273,7 +1307,7 @@ class _LocalModelsMixin:
         self,
         model_name: str,
         model_dir: str,
-    ) -> tuple[int, int]:
+    ) -> _CleanupOutcome:
         """Remove the partial files, unless someone is parked to resume them.
 
         The mirror-image guard on the preload path checks
@@ -1282,24 +1316,32 @@ class _LocalModelsMixin:
         registers implicit interest. Without it, cancelling a Local-tab
         download while a preload for the same model waits deleted the bytes
         and the preload restarted the fetch from zero.
+
+        The kept case answers `_CLEANUP_KEPT` rather than a count of zero:
+        the drain cannot tell "the disk held nothing" from "the disk was
+        never read" out of a number, and it used to report both as "No
+        incomplete files remained."
         """
         if model_download_coordinator().has_waiting_download(model_name, model_dir):
             _logger.info(
                 "local_model_download_partials_kept model=%s reason=waiter",
                 model_name,
             )
-            return 0, 0
-        return _facade().cleanup_incomplete_model_download(model_name, model_dir)
+            return _CleanupOutcome(_CLEANUP_KEPT)
+        files, removed_bytes = _facade().cleanup_incomplete_model_download(
+            model_name, model_dir
+        )
+        return _CleanupOutcome(_CLEANUP_RAN, files, removed_bytes)
 
     def _run_download_worker(
         self,
         model_name: str,
         model_dir: str,
-    ) -> tuple[str, str, int, int]:
+    ) -> tuple[str, str, _CleanupOutcome]:
         try:
             process = _facade().start_model_download_process(model_name, model_dir)
         except Exception as exc:
-            return "failed", str(exc), 0, 0
+            return "failed", str(exc), _CleanupOutcome()
 
         with self._local_model_download_lock:
             self._local_model_download_process = process
@@ -1308,22 +1350,20 @@ class _LocalModelsMixin:
                 if self._local_model_download_cancel_event.wait(timeout=0.1):
                     terminate_model_download_process(process)
                     model_download_process_error(process)
-                    removed_files, removed_bytes = self._cleanup_unless_awaited(
+                    return "canceled", "", self._cleanup_unless_awaited(
                         model_name,
                         model_dir,
                     )
-                    return "canceled", "", removed_files, removed_bytes
 
             detail = model_download_process_error(process)
             if process.returncode == 0:
-                return "success", "", 0, 0
+                return "success", "", _CleanupOutcome()
             if self._local_model_download_cancel_event.is_set():
-                removed_files, removed_bytes = self._cleanup_unless_awaited(
+                return "canceled", "", self._cleanup_unless_awaited(
                     model_name,
                     model_dir,
                 )
-                return "canceled", "", removed_files, removed_bytes
-            return "failed", detail or "Download worker failed.", 0, 0
+            return "failed", detail or "Download worker failed.", _CleanupOutcome()
         finally:
             with self._local_model_download_lock:
                 if self._local_model_download_process is process:
@@ -1341,6 +1381,10 @@ class _LocalModelsMixin:
             _logger.exception("Local model download queue crashed")
             with self._local_model_download_lock:
                 self._discard_queued_downloads_locked()
+                # Drain-scoped, and only `_consume_cancel_locked` empties it:
+                # left behind, the next drain's first Cancel reported this
+                # drain's removed models as its own.
+                self._local_model_download_removed_by_cancel.clear()
                 self._local_model_download_active = None
                 self._local_model_download_claimed = None
                 self._local_model_download_worker_running = False
@@ -1386,6 +1430,9 @@ class _LocalModelsMixin:
         canceled = False
         cleaned_files = 0
         cleaned_bytes = 0
+        # What the counts above cannot carry: whether any entry read the disk
+        # at all, and why the ones that did not left their partials alone.
+        cleanup_states: set[str] = set()
         while True:
             with self._local_model_download_lock:
                 if self._local_model_download_cancel_event.is_set():
@@ -1428,11 +1475,12 @@ class _LocalModelsMixin:
                     worker_token,
                     f"Starting '{model_name}'. {queued_count} queued.",
                 )
-            status, detail, removed_files, removed_bytes = (
-                self._download_local_model_in_subprocess(model_name, model_dir)
+            status, detail, cleanup = self._download_local_model_in_subprocess(
+                model_name, model_dir
             )
-            cleaned_files += removed_files
-            cleaned_bytes += removed_bytes
+            cleaned_files += cleanup.removed_files
+            cleaned_bytes += cleanup.removed_bytes
+            cleanup_states.add(cleanup.state)
             if status == "success":
                 successes.append(model_name)
                 events.append(("downloaded", model_name))
@@ -1474,7 +1522,12 @@ class _LocalModelsMixin:
                 "local_model_download_finished",
                 worker_token,
                 False,
-                self._canceled_drain_summary(events, cleaned_files, cleaned_bytes),
+                self._canceled_drain_summary(
+                    events,
+                    cleaned_files,
+                    cleaned_bytes,
+                    cleanup_states=cleanup_states,
+                ),
             )
             return
 
@@ -1500,6 +1553,23 @@ class _LocalModelsMixin:
                 f"Download failed: {' | '.join(failures)}",
             )
             return
+        if not successes:
+            # Nothing downloaded, nothing failed, and no Cancel with anything
+            # of its own to report. Not reachable through the UI at HEAD --
+            # the loop only leaves with an empty `successes` when it never
+            # popped an entry, which means an empty queue, which a live
+            # worker only sees after it has consumed a Cancel -- but the
+            # answer it fell through to was "Downloaded: " naming no model,
+            # in the success colour, which is the worst possible report for a
+            # state nobody can explain.
+            _emit_background_signal(
+                self,
+                "local_model_download_finished",
+                worker_token,
+                False,
+                "No downloads ran.",
+            )
+            return
         _emit_background_signal(
             self,
             "local_model_download_finished",
@@ -1513,6 +1583,8 @@ class _LocalModelsMixin:
         events: list[tuple[str, str]],
         cleaned_files: int,
         cleaned_bytes: int,
+        *,
+        cleanup_states: set[str],
     ) -> str:
         """The Cancel first, then the cleanup, then what happened in order.
 
@@ -1527,6 +1599,22 @@ class _LocalModelsMixin:
         a Cancel killed -- never the queued entries it removed. A timeline
         has neither problem: consecutive events of one kind are grouped, and
         every group after the first starts with "Then".
+
+        The cleanup sentence reports the *state* of the cleanup and not only
+        its file count. "No incomplete files remained." was printed for every
+        zero, and three of those zeros never looked at a disk: partials kept
+        for a parked download to resume, an entry cancelled while it was
+        still waiting for the download slot, and a drain in which no download
+        was interrupted at all (a Cancel that only emptied the queue). The
+        last of those has nothing to say about incomplete files, so it says
+        nothing; the other two say why the files were left alone.
+
+        A removal and a deliberate keep can both happen in one drain, for two
+        different models, so the removal sentence is independent of the one
+        that follows it. The three "not removed" reasons are mutually
+        exclusive by precedence: a keep is the most specific thing that
+        happened, and "No incomplete files remained." is last because it is
+        the only one that claims the disk was read.
         """
         parts = ["Download canceled."]
         if cleaned_files:
@@ -1535,7 +1623,17 @@ class _LocalModelsMixin:
                 f"Removed {cleaned_files} incomplete file"
                 f"{'s' if cleaned_files != 1 else ''} ({cleanup_mb:.1f} MB)."
             )
-        else:
+        if _CLEANUP_KEPT in cleanup_states:
+            parts.append(
+                "Incomplete files were kept: another download is waiting to "
+                "resume them."
+            )
+        elif _CLEANUP_SKIPPED in cleanup_states:
+            parts.append(
+                "Incomplete files were left in place: the canceled download "
+                "had not started yet."
+            )
+        elif not cleaned_files and _CLEANUP_RAN in cleanup_states:
             parts.append("No incomplete files remained.")
         groups: list[tuple[str, list[str]]] = []
         for kind, name in events:
