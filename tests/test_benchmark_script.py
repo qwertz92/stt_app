@@ -1374,3 +1374,78 @@ def test_only_the_atomic_writer_touches_the_csv_target(tmp_path, monkeypatch):
     assert target.read_bytes() == before, (
         "something wrote to the target directly, around the atomic writer"
     )
+
+
+def _planned_by_running(monkeypatch, tmp_path, **kwargs):
+    """The (model, device, compute) sequence `run_benchmark_cases` itself runs.
+
+    Every runtime is stubbed, so nothing is loaded and the only thing measured
+    is which cases the runner iterates and what it announces for each of them.
+    """
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    seen: list[tuple[str, str]] = []
+
+    def _fake_case(**call):
+        seen.append((call["model_name"], call["device"]))
+        return local_benchmark.BenchmarkCase(
+            model=call["model_name"],
+            device=call["device"],
+            compute_type=call.get("compute_type", "onnx-int8"),
+            download_seconds=0.0,
+            load_seconds=0.1,
+            runs=[],
+        )
+
+    monkeypatch.setattr(local_benchmark, "_run_case", _fake_case)
+    monkeypatch.setattr(local_benchmark, "_run_webgpu_case", _fake_case)
+    monkeypatch.setattr(local_benchmark, "_run_onnx_case", _fake_case)
+    progress: list[str] = []
+    cases = local_benchmark.run_benchmark_cases(
+        audio_path=audio_path,
+        progress_callback=progress.append,
+        **kwargs,
+    )
+    return seen, [line for line in progress if line.startswith("[Case ")], cases
+
+
+@pytest.mark.parametrize(
+    ("model_names", "webgpu_devices", "device"),
+    [
+        (["small", "tiny"], "auto", "auto"),
+        (["small"], "all", "cpu"),
+        (["cohere-transcribe-03-2026"], "all", "auto"),
+        (["cohere-transcribe-03-2026", "small"], "gpu,cpu", "auto"),
+        (["nemotron-3.5-asr-streaming-0.6b-int4"], "all", "auto"),
+        (["nemotron-3.5-asr-streaming-0.6b-int4"], "gpu,cpu", "auto"),
+        (["parakeet-tdt-0.6b-v3"], "all", "auto"),
+    ],
+)
+def test_the_planned_cases_are_the_ones_the_runner_measures(
+    monkeypatch, tmp_path, model_names, webgpu_devices, device
+):
+    planned = local_benchmark.planned_benchmark_cases(
+        model_names, webgpu_devices, device, "int8"
+    )
+    seen, progress, cases = _planned_by_running(
+        monkeypatch,
+        tmp_path,
+        model_names=model_names,
+        webgpu_devices=webgpu_devices,
+        device=device,
+        compute_type="int8",
+    )
+
+    assert [(item.model, item.device_target) for item in planned] == seen
+    assert [(case.model, case.device) for case in cases] == seen
+    total = len(planned)
+    assert progress == [
+        f"[Case {index}/{total}] {item.model} "
+        f"({item.device_target}/{item.display_compute_type})"
+        for index, item in enumerate(planned, start=1)
+    ]
+
+
+def test_planning_rejects_an_unsupported_device_target_before_anything_runs():
+    with pytest.raises(ValueError, match="Unsupported ONNX device target"):
+        local_benchmark.planned_benchmark_cases(["small"], "quantum", "auto", "int8")

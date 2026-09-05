@@ -506,6 +506,50 @@ def benchmark_device_targets(
     return targets or [fallback_device]
 
 
+@dataclass(frozen=True)
+class PlannedBenchmarkCase:
+    """One case a benchmark run will measure, before it is measured."""
+
+    model: str
+    device_target: str
+    display_compute_type: str
+
+
+def planned_benchmark_cases(
+    model_names: list[str],
+    webgpu_devices: str | list[str] | tuple[str, ...] | None,
+    device: str,
+    compute_type: str,
+) -> list[PlannedBenchmarkCase]:
+    """The exact sequence of cases `run_benchmark_cases` will iterate.
+
+    The runner iterates this list, so the Run Benchmark window can show the
+    same plan before a run starts and there is one description of what a
+    selection means. Unsupported device targets raise here, which is where
+    `run_benchmark_cases` raised them before -- ahead of the first case.
+    """
+    webgpu_device_targets = normalize_webgpu_benchmark_devices(webgpu_devices)
+    planned: list[PlannedBenchmarkCase] = []
+    for model_name in model_names:
+        runtime = LOCAL_MODEL_RUNTIME.get(model_name, "")
+        display_compute_type = (
+            f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
+            if runtime in {"onnx-webgpu", "onnxruntime-genai", "onnx-asr"}
+            else compute_type
+        )
+        planned.extend(
+            PlannedBenchmarkCase(
+                model=model_name,
+                device_target=device_target,
+                display_compute_type=display_compute_type,
+            )
+            for device_target in benchmark_device_targets(
+                runtime, webgpu_device_targets, device
+            )
+        )
+    return planned
+
+
 def run_benchmark_cases(
     *,
     audio_path: str | Path,
@@ -535,107 +579,91 @@ def run_benchmark_cases(
 
     path = Path(audio_path)
     cases: list[BenchmarkCase] = []
-    webgpu_device_targets = normalize_webgpu_benchmark_devices(webgpu_devices)
-    total_cases = sum(
-        len(
-            benchmark_device_targets(
-                LOCAL_MODEL_RUNTIME.get(model_name, ""),
-                webgpu_device_targets,
-                device,
-            )
-        )
-        for model_name in model_names
+    planned = planned_benchmark_cases(
+        model_names, webgpu_devices, device, compute_type
     )
-    case_index = 0
-    for model_name in model_names:
+    total_cases = len(planned)
+    for case_index, planned_case in enumerate(planned, start=1):
         _raise_if_canceled(cancel_check)
+        model_name = planned_case.model
+        device_target = planned_case.device_target
+        display_compute_type = planned_case.display_compute_type
         runtime = LOCAL_MODEL_RUNTIME.get(model_name, "")
-        device_targets = benchmark_device_targets(
-            runtime, webgpu_device_targets, device
-        )
-        for device_target in device_targets:
-            _raise_if_canceled(cancel_check)
-            case_index += 1
-            display_compute_type = (
-                f"onnx-{LOCAL_ONNX_MODEL_PRECISION.get(model_name, 'q4')}"
-                if runtime in {"onnx-webgpu", "onnxruntime-genai", "onnx-asr"}
-                else compute_type
+        if progress_callback is not None:
+            progress_callback(
+                f"[Case {case_index}/{total_cases}] "
+                f"{model_name} ({device_target}/{display_compute_type})"
             )
-            if progress_callback is not None:
-                progress_callback(
-                    f"[Case {case_index}/{total_cases}] "
-                    f"{model_name} ({device_target}/{display_compute_type})"
-                )
-            try:
-                if runtime == "faster-whisper":
-                    case = _run_case(
-                        audio_path=path,
-                        model_name=model_name,
-                        device=device_target,
-                        compute_type=compute_type,
-                        runs=runs,
-                        beam_size=beam_size,
-                        language=language,
-                        vad_filter=vad_filter,
-                        warmup=warmup,
-                        threads=threads,
-                        model_dir=model_dir,
-                        progress_callback=progress_callback,
-                        cancel_check=cancel_check,
-                    )
-                elif runtime == "onnx-webgpu":
-                    case = _run_webgpu_case(
-                        audio_path=path,
-                        model_name=model_name,
-                        runs=runs,
-                        language=language,
-                        warmup=warmup,
-                        device=device_target,
-                        vad_filter=vad_filter,
-                        model_dir=model_dir,
-                        progress_callback=progress_callback,
-                        cancel_check=cancel_check,
-                    )
-                elif runtime in {"onnxruntime-genai", "onnx-asr"}:
-                    case = _run_onnx_case(
-                        audio_path=path,
-                        model_name=model_name,
-                        runs=runs,
-                        language=language,
-                        warmup=warmup,
-                        device=device_target,
-                        vad_filter=vad_filter,
-                        model_dir=model_dir,
-                        progress_callback=progress_callback,
-                        cancel_check=cancel_check,
-                    )
-                else:
-                    raise ValueError(
-                        f"Benchmark runtime for '{model_name}' is unknown. "
-                        "Restart the app after updating, then refresh the local "
-                        "model inventory."
-                    )
-            except BenchmarkCancelled:
-                raise
-            except TranscriptionCanceled as exc:
-                # A transcriber's own model download hit the cancelled
-                # download slot (an explicit cancel, or shutdown). That ends
-                # the run; recording it as a failed case would leave a
-                # permanent "error" row for something the user stopped.
-                raise BenchmarkCancelled(str(exc) or "Benchmark canceled.") from exc
-            except Exception as exc:
-                case = BenchmarkCase(
-                    model=model_name,
+        try:
+            if runtime == "faster-whisper":
+                case = _run_case(
+                    audio_path=path,
+                    model_name=model_name,
                     device=device_target,
-                    compute_type=display_compute_type,
-                    download_seconds=0.0,
-                    load_seconds=math.nan,
-                    runs=[],
-                    error=str(exc),
+                    compute_type=compute_type,
+                    runs=runs,
+                    beam_size=beam_size,
+                    language=language,
+                    vad_filter=vad_filter,
+                    warmup=warmup,
+                    threads=threads,
+                    model_dir=model_dir,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
                 )
-            cases.append(case)
-            if case_callback is not None:
-                case_callback(case)
+            elif runtime == "onnx-webgpu":
+                case = _run_webgpu_case(
+                    audio_path=path,
+                    model_name=model_name,
+                    runs=runs,
+                    language=language,
+                    warmup=warmup,
+                    device=device_target,
+                    vad_filter=vad_filter,
+                    model_dir=model_dir,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
+            elif runtime in {"onnxruntime-genai", "onnx-asr"}:
+                case = _run_onnx_case(
+                    audio_path=path,
+                    model_name=model_name,
+                    runs=runs,
+                    language=language,
+                    warmup=warmup,
+                    device=device_target,
+                    vad_filter=vad_filter,
+                    model_dir=model_dir,
+                    progress_callback=progress_callback,
+                    cancel_check=cancel_check,
+                )
+            else:
+                raise ValueError(
+                    f"Benchmark runtime for '{model_name}' is unknown. "
+                    "Restart the app after updating, then refresh the local "
+                    "model inventory."
+                )
+        except BenchmarkCancelled:
+            raise
+        except TranscriptionCanceled as exc:
+            # A transcriber's own model download hit the cancelled
+            # download slot (an explicit cancel, or shutdown). That ends
+            # the run; recording it as a failed case would leave a
+            # permanent "error" row for something the user stopped.
+            raise BenchmarkCancelled(str(exc) or "Benchmark canceled.") from exc
+        except Exception as exc:
+            case = BenchmarkCase(
+                model=model_name,
+                device=device_target,
+                compute_type=display_compute_type,
+                download_seconds=0.0,
+                load_seconds=math.nan,
+                runs=[],
+                error=str(exc),
+            )
+        cases.append(case)
+        if case_callback is not None:
+            case_callback(case)
     return cases
 
 
@@ -901,6 +929,7 @@ __all__ = [
     "BenchmarkCancelled",
     "BenchmarkCase",
     "BenchmarkRun",
+    "PlannedBenchmarkCase",
     "_case_from_dict",
     "_format_number",
     "_format_seconds",
@@ -910,5 +939,6 @@ __all__ = [
     "_write_csv",
     "format_benchmark_summary",
     "normalize_webgpu_benchmark_devices",
+    "planned_benchmark_cases",
     "run_benchmark_cases",
 ]
