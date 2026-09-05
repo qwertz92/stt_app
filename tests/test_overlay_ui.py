@@ -2063,3 +2063,15 @@ def test_overlay_clear_reports_the_text_the_cleared_state_offered():
     overlay.set_state("Done", "plain transcript")
     overlay._clear_button.click()
     assert cleared == [" zweiter teil", ""]
+
+
+def test_the_fake_overlay_starts_with_the_real_overlays_detail():
+    """`FakeOverlay.detail` answered "" before any paint while the real
+    overlay already shows the constructor's text, so a controller test
+    comparing the painter's record against the detail could pass on the fake
+    and fail on the real widget."""
+    from conftest import FakeOverlay
+
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+
+    assert FakeOverlay().detail == OverlayUI().detail

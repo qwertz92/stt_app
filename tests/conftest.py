@@ -17,7 +17,11 @@ from pathlib import Path
 import pytest
 from PySide6 import QtCore, QtGui, QtWidgets
 
-from stt_app.config import DEFAULT_CANCEL_HOTKEY, FALLBACK_HOTKEY
+from stt_app.config import (
+    DEFAULT_CANCEL_HOTKEY,
+    FALLBACK_HOTKEY,
+    OVERLAY_INITIAL_DETAIL,
+)
 from stt_app.controller import DictationController
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
@@ -204,8 +208,12 @@ class FakeOverlay:
 
     @property
     def detail(self) -> str:
-        """The detail text last written, like the real overlay."""
-        return self.states[-1][1] if self.states else ""
+        """The detail text last written, like the real overlay.
+
+        Before any write the real overlay already shows the constructor's
+        `OVERLAY_INITIAL_DETAIL`; answering "" here diverged from it.
+        """
+        return self.states[-1][1] if self.states else OVERLAY_INITIAL_DETAIL
 
     def set_transcription_queue(self, items):
         self.queue_updates.append([(int(t), str(label)) for t, label in items])
