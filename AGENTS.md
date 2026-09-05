@@ -460,11 +460,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     The controller drops its reference to the stream it closes and builds a
     fresh one when the feature returns, so an open that passed its gate
     after `close` was a microphone nothing referenced. With the gate behind
-    the guard, an open parked there while `close` ran -- three Settings
-    saves a second apart during a slow close, off/on/off -- opened
-    afterwards, and `shutdown()` found nothing to close (measured:
-    `_warm_mic_stream` None, one stream registered after shutdown, every
-    later re-enumeration refused). The pre-`d5e4f2a` gate claimed
+    the guard, an open parked there behind another thread's hold -- an
+    earlier open still constructing its stream, or the re-enumeration --
+    while `close` ran opened afterwards: three Settings saves a second
+    apart during a slow *open*, off/on/off, and `shutdown()` found nothing
+    to close (measured: `_warm_mic_stream` None, one stream registered
+    after shutdown, every later re-enumeration refused). Not during a slow
+    close, which the first version of this entry said: `close` takes the
+    stream's own lock and never the PortAudio guard, so nothing parks
+    behind it (measured on the pre-fix tree: the same three saves during a
+    3 s close leave no orphan; during a 3 s open they do). The
+    pre-`d5e4f2a` gate claimed
     `_starting` before parking and observed the bump in its `finally`; the
     guard-first gate claims nothing while parked, and the bump refuses only
     a generation-bearing reopen (above).
@@ -1582,7 +1588,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (`_MAX_TRANSCRIPT_CHARS`, 2,000,000).** The frame bound cannot cover a
   flood of *usable* finals -- each one is the service saying something --
   so `finalized` grew for the whole budget (measured: 111 MB of heap in
-  2.5 s, about 100 GB over the budget). A recording that fills the budget
+  2.5 s, about 80 GB over the budget -- not the 100 GB this entry first
+  said, which that pair does not give). A recording that fills the budget
   at a fast 200 words per minute and 8 characters per word carries 48,000
   characters, so the cap is forty times the plausible maximum; the count is
   a running total, because a `sum()` per frame is quadratic in exactly the
@@ -1596,19 +1603,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   or a list there reached `str.strip` and `bool()` before. The receive loop
   also ends when `transcription_shutdown_requested()`. **A `result-generated`
   whose `sentence.heartbeat` is `True` is skipped** (`_is_heartbeat`): the
-  vendor's server-events page documents it as a heartbeat packet that "can
-  be ignored" (`sentence_id` always 0), and this provider asks for
-  heartbeats, so such packets are expected on a long pause; read as a
+  vendor's Paraformer server-events page documents the field as "If true,
+  you can skip this result (heartbeat packet)." and nothing more -- the
+  `sentence_id` this entry once attributed to that page is on neither it
+  nor the Fun-ASR page -- and this provider asks for heartbeats, so such
+  packets are expected on a long pause; read as a
   sentence, one carrying `sentence_end` would close the pending partial
   early and the real final would then be appended a second time. Which
   fields a live heartbeat packet carries is unverified from here; it still
   resets the frame bound, because it is the server saying it is alive.
-  The run-task also asks for the vendor's
-  documented `heartbeat: true` (default false, "the connection times out
-  and closes after a period of continuously silent audio", which a paused
-  dictation uploaded over the realtime protocol is); **unverified against
-  the live service from here** -- the CLOSE-frame handling is what bounds
-  the damage if the parameter is ignored. A duplicate finalized sentence is
+  The run-task also asks for `heartbeat: true`, which the Paraformer
+  client-events page documents as optional, default false: "true: Keeps
+  the connection alive when only silent audio is being sent. false
+  (default): Even when silent audio is continuously sent, the connection
+  times out and closes after a period of time. Only Paraformer v2 supports
+  this parameter." The Fun-ASR real-time page lists no `heartbeat` at all,
+  so for `fun-asr-realtime` it is undocumented either way; and this
+  provider's upload is unpaced (a tight `send_binary` loop), so a pause in
+  the recording is *sent* in milliseconds whatever its length. Whether the
+  service ignores, honours or rejects the parameter is **unverified
+  against the live service from here** -- a rejection would show as a
+  `task-failed` on every request, and the CLOSE-frame handling is what
+  bounds the damage if it is ignored. A duplicate finalized sentence is
   deliberately *not* de-duplicated: nothing shows the service re-delivers
   one, and a user can say the same sentence twice.
 - **One failed AssemblyAI status fetch does not abort the batch wait.** A

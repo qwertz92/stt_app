@@ -129,7 +129,7 @@ _FAILURE_DETAIL_MAX_CHARS = 300
 # fault rather than a dictation. The frame bound above cannot cover a flood of
 # *usable* `result-generated` frames -- each one is the service saying
 # something -- so `finalized` grew for the whole thirty-minute budget
-# (measured: 111 MB of Python heap in 2.5 s, ~100 GB extrapolated over the
+# (measured: 111 MB of Python heap in 2.5 s, ~80 GB extrapolated over the
 # budget). A 30-minute recording cannot legitimately reach this: at a fast
 # 200 words per minute and 8 characters per word it carries under 50,000
 # characters, so the cap is more than forty times what the budget can hold
@@ -217,13 +217,16 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         return FUNASR_LANGUAGE_HINTS.get(self._language_mode, self._language_mode)
 
     def _run_task_message(self, task_id: str, sample_rate: int) -> str:
-        # `heartbeat` is documented on the vendor's client-events page as
-        # default false, with the contract that the connection is then closed
-        # after a period of continuously silent audio. A recording with a
-        # long pause is exactly that, and this provider uploads the whole
-        # recording over the realtime protocol. Unverified against the live
-        # service from here; the CLOSE-frame handling in `_recv_event` is
-        # what bounds the damage if it is ignored.
+        # `heartbeat` is documented on the vendor's Paraformer client-events
+        # page as optional, default false ("the connection times out and
+        # closes after a period of time" of continuously silent audio) and
+        # as supported by Paraformer v2 only; the Fun-ASR real-time page
+        # lists no such parameter. The upload below is unpaced, so a pause
+        # in the recording is sent in milliseconds; whether the service
+        # ignores, honours or rejects the parameter for `fun-asr-realtime`
+        # is unverified from here. A rejection would show as a `task-failed`
+        # on every request; the CLOSE-frame handling in `_recv_event` bounds
+        # the damage if it is ignored.
         parameters: dict = {
             "format": "pcm",
             "sample_rate": int(sample_rate),
@@ -358,8 +361,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
     def _is_heartbeat(message: dict) -> bool:
         """A `result-generated` whose `sentence.heartbeat` is true.
 
-        The vendor's server-events page documents it as "a heartbeat packet
-        [that] can be ignored", with `sentence_id` always 0. This provider
+        The vendor's Paraformer server-events page documents the field as
+        "If true, you can skip this result (heartbeat packet)." and nothing
+        more; no `sentence_id` is on that page or on the Fun-ASR one. This
+        provider
         asks for heartbeats in `run-task`, so such packets are expected
         during a long pause; read as a sentence, one that carries
         `sentence_end` would close the pending partial early and the real

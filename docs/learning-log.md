@@ -5663,10 +5663,13 @@ by running the breaker's own probe before anything was changed.
   own status.
 - `ThreadPoolExecutor` registers its exit handler through
   `threading._register_atexit`, not `atexit.register`, so a grep for the
-  latter finds nothing. Eight files said "atexit hook" or "atexit join";
-  `e8b1456` corrected the three documents and the wave-4 facts review found
-  the other five (two source comments, a docstring, three test comments),
-  which are corrected in the wave-4 wording commit.
+  latter finds nothing. Nine files said "atexit hook" or "atexit join";
+  `e8b1456` corrected three of them (AGENTS.md, this log, and the
+  AssemblyAI provider) and the wave-4 facts review found the other six --
+  seven occurrences: three source comments, one source docstring, one test
+  comment and two test docstrings -- which the wave-4 wording commit
+  corrected. (That commit's message and the first version of this entry
+  counted eight, three and five; the wave-5 facts review re-counted.)
 
 ### Wave 4 (2026-09-05) - the third wave on the round-24 fixes
 

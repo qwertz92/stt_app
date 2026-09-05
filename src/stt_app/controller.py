@@ -5478,9 +5478,11 @@ class DictationController(QtCore.QObject):
         finished preload, a tray copy or "No window to insert into" made the
         tail unrecoverable.
 
-        The offer carries its own action. Two insert paths fail *after* the
-        paste keystroke went out and deliberately withhold Insert, because
-        the text is most likely in the document already; a repaint that read
+        The offer carries its own action. The insert paths that fail *after*
+        the paste keystroke went out -- four raise sites of
+        `TextMayHaveBeenPastedError` in `text_inserter.py` -- deliberately
+        withhold Insert, because the text is most likely in the document
+        already; a repaint that read
         the pending text alone upgraded that to an Insert button, and
         pressing it pasted the transcript a second time (measured through
         the overlay's own Insert and through a queued transcript's flush).
