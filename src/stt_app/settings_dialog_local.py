@@ -118,6 +118,14 @@ _DRAIN_EVENT_LABELS = {
     "removed": ("Removed from the queue", ", "),
 }
 
+
+def _names_phrase(names: list[str]) -> str:
+    """'a', 'a and b', 'a, b and c': several models in one sentence."""
+    if len(names) <= 1:
+        return "".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 # What one queue entry did about its partial `*.incomplete` files.
 _CLEANUP_NONE = "none"  # no cleanup decision arose: nothing was interrupted
 _CLEANUP_RAN = "ran"  # the disk was read; `files` says what came off it
@@ -1431,8 +1439,8 @@ class _LocalModelsMixin:
         cleaned_files = 0
         cleaned_bytes = 0
         # What the counts above cannot carry: whether any entry read the disk
-        # at all, and why the ones that did not left their partials alone.
-        cleanup_states: set[str] = set()
+        # at all, and which models' partials were left alone and why.
+        cleanups: list[tuple[str, str]] = []
         while True:
             with self._local_model_download_lock:
                 if self._local_model_download_cancel_event.is_set():
@@ -1480,7 +1488,7 @@ class _LocalModelsMixin:
             )
             cleaned_files += cleanup.removed_files
             cleaned_bytes += cleanup.removed_bytes
-            cleanup_states.add(cleanup.state)
+            cleanups.append((model_name, cleanup.state))
             if status == "success":
                 successes.append(model_name)
                 events.append(("downloaded", model_name))
@@ -1526,7 +1534,7 @@ class _LocalModelsMixin:
                     events,
                     cleaned_files,
                     cleaned_bytes,
-                    cleanup_states=cleanup_states,
+                    cleanups=cleanups,
                 ),
             )
             return
@@ -1584,7 +1592,7 @@ class _LocalModelsMixin:
         cleaned_files: int,
         cleaned_bytes: int,
         *,
-        cleanup_states: set[str],
+        cleanups: list[tuple[str, str]],
     ) -> str:
         """The Cancel first, then the cleanup, then what happened in order.
 
@@ -1610,11 +1618,14 @@ class _LocalModelsMixin:
         nothing; the other two say why the files were left alone.
 
         A removal and a deliberate keep can both happen in one drain, for two
-        different models, so the removal sentence is independent of the one
-        that follows it. The three "not removed" reasons are mutually
-        exclusive by precedence: a keep is the most specific thing that
-        happened, and "No incomplete files remained." is last because it is
-        the only one that claims the disk was read.
+        different models, so the removal sentence is independent of the ones
+        that follow it -- and those name their models (`cleanups` is one
+        `(model, state)` per entry), because two Cancels in one drain, the
+        first killing a download and the second hitting an entry still
+        waiting for the slot, read "Removed 3 incomplete files" beside
+        "Incomplete files were left in place" as a contradiction. "No
+        incomplete files remained." is the only sentence that claims the
+        disk was read, and it speaks only when nothing else does.
         """
         parts = ["Download canceled."]
         if cleaned_files:
@@ -1623,17 +1634,23 @@ class _LocalModelsMixin:
                 f"Removed {cleaned_files} incomplete file"
                 f"{'s' if cleaned_files != 1 else ''} ({cleanup_mb:.1f} MB)."
             )
-        if _CLEANUP_KEPT in cleanup_states:
+        kept = [name for name, state in cleanups if state == _CLEANUP_KEPT]
+        skipped = [name for name, state in cleanups if state == _CLEANUP_SKIPPED]
+        if kept:
             parts.append(
-                "Incomplete files were kept: another download is waiting to "
-                "resume them."
+                f"Incomplete files of {_names_phrase(kept)} were kept: another "
+                "download is waiting to resume them."
             )
-        elif _CLEANUP_SKIPPED in cleanup_states:
+        if skipped:
+            whose = "their downloads" if len(skipped) > 1 else "its download"
             parts.append(
-                "Incomplete files were left in place: the canceled download "
-                "had not started yet."
+                f"Incomplete files of {_names_phrase(skipped)} were left in "
+                f"place: {whose} had not started yet."
             )
-        elif not cleaned_files and _CLEANUP_RAN in cleanup_states:
+        if (
+            not (kept or skipped or cleaned_files)
+            and any(state == _CLEANUP_RAN for _name, state in cleanups)
+        ):
             parts.append("No incomplete files remained.")
         groups: list[tuple[str, list[str]]] = []
         for kind, name in events:
@@ -1766,7 +1783,9 @@ class _LocalModelsMixin:
         self._local_model_download_bar_shown = False
         if success:
             color = "#1b5e20"
-        elif text.startswith(("Completed with errors", "Download canceled")):
+        elif text.startswith(
+            ("Completed with errors", "Download canceled", "No downloads ran.")
+        ):
             color = "#b26a00"
         else:
             color = "#b71c1c"

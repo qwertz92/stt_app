@@ -802,6 +802,7 @@ def test_the_overlay_never_invents_progress_for_a_queued_preload(
     controller._preload_phase = (7, _PRELOAD_PHASE_DOWNLOAD)
     controller._preload_target_model = "medium"
     controller._settings = AppSettings(model_size="medium")
+    controller._insert_action_text = ""  # nothing pending: "Use Cancel"
 
     if slot_holder is not None:
         coordinator.acquire(slot_holder, "", explicit=False)
@@ -1415,8 +1416,8 @@ def test_partials_kept_for_a_waiting_download_are_not_reported_as_absent(
     assert cleanups == [], "the waiting download's partial files were deleted"
     assert success is False
     assert summary == (
-        "Download canceled. Incomplete files were kept: another download is "
-        "waiting to resume them. Canceled: large-v3."
+        "Download canceled. Incomplete files of large-v3 were kept: another "
+        "download is waiting to resume them. Canceled: large-v3."
     )
 
 
@@ -1431,8 +1432,8 @@ def test_a_cancel_before_the_slot_says_the_download_had_not_started(monkeypatch)
     assert cleanups == []
     assert success is False
     assert summary == (
-        "Download canceled. Incomplete files were left in place: the canceled "
-        "download had not started yet. Canceled: large-v3."
+        "Download canceled. Incomplete files of large-v3 were left in place: "
+        "its download had not started yet. Canceled: large-v3."
     )
 
 
@@ -1489,3 +1490,84 @@ def test_nothing_is_queued_after_the_dialog_shut_down(monkeypatch):
     assert dialog._local_model_download_worker_running is False
     assert model_download_coordinator().has_explicit_interest("small", "") is False
     assert dialog.local_models_action_label.texts == []
+
+
+def test_two_cancels_in_one_drain_name_the_model_each_cleanup_sentence_is_about(
+    monkeypatch,
+):
+    """Two Cancels in one drain: the first killed a download and removed its
+    partials, the second hit an entry still waiting for the slot. Unnamed,
+    the two sentences read as a contradiction -- "Removed 3 incomplete
+    files" beside "Incomplete files were left in place"."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog, emitted = _draining_dialog(monkeypatch)
+    dialog._local_model_download_cancel_event.clear()
+    dialog._local_model_download_queue = [("medium", "")]
+
+    def _download(self, name, model_dir):
+        _LocalModelsMixin._cancel_local_model_downloads(self)
+        if name == "medium":
+            _LocalModelsMixin._start_local_model_download(self, ["large-v3"])
+            _through_the_slot(name, model_dir, "canceled")
+            return ("canceled", "", _CleanupOutcome(_CLEANUP_RAN, 3, 2_400_000))
+        return ("canceled", "", _CleanupOutcome(_CLEANUP_SKIPPED))
+
+    monkeypatch.setattr(
+        _LocalModelsMixin, "_download_local_model_in_subprocess", _download
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_local.terminate_model_download_process",
+        lambda process: None,
+    )
+
+    _LocalModelsMixin._drive_local_model_download_queue(dialog, 1)
+
+    finished = [e for e in emitted if e[1] == "local_model_download_finished"]
+    assert finished[-1][3] is False
+    assert finished[-1][4] == (
+        "Download canceled. Removed 3 incomplete files (2.4 MB). Incomplete "
+        "files of large-v3 were left in place: its download had not started "
+        "yet. Canceled: medium, large-v3."
+    )
+
+
+def test_several_models_left_alone_are_named_together():
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    summary = _LocalModelsMixin._canceled_drain_summary(
+        [("canceled", "a"), ("canceled", "b"), ("canceled", "c")],
+        0,
+        0,
+        cleanups=[
+            ("a", _CLEANUP_SKIPPED),
+            ("b", _CLEANUP_KEPT),
+            ("c", _CLEANUP_SKIPPED),
+        ],
+    )
+
+    assert summary == (
+        "Download canceled. Incomplete files of b were kept: another download "
+        "is waiting to resume them. Incomplete files of a and c were left in "
+        "place: their downloads had not started yet. Canceled: a, b, c."
+    )
+
+
+def test_no_downloads_ran_is_reported_in_the_warning_colour():
+    """"No downloads ran." is a Cancel-shaped outcome, not a failure; the
+    colour rule softened only the two texts it knew and painted it red."""
+    from unittest.mock import MagicMock
+
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = MagicMock()
+    dialog._local_model_download_worker_token = 3
+    dialog._local_model_download_is_running.return_value = False
+
+    _LocalModelsMixin._on_local_model_download_finished(
+        dialog, 3, False, "No downloads ran."
+    )
+
+    dialog._set_local_models_action_text.assert_called_once_with(
+        "No downloads ran.", "#b26a00", allow_growth=True
+    )
