@@ -740,6 +740,34 @@ def _running_warm_stream_with_blocking_close(monkeypatch):
     return warm, opened
 
 
+def test_a_closed_warm_stream_refuses_to_reopen(monkeypatch):
+    """`close` is terminal. The controller drops its reference to the stream
+    it closes (keep_microphone_warm switched off, shutdown) and builds a
+    fresh one when the feature returns, so an open that passes its gate
+    afterwards is a microphone nothing references. The generation bump
+    refuses only a reopen that carries a generation; a settings save's
+    retry and the refresh worker's reopen carry none, and one parked behind
+    the PortAudio guard while `close` ran opened after it -- measured:
+    `_warm_mic_stream` None, one stream still registered after
+    `shutdown()`, every re-enumeration refused for the rest of the session."""
+    live_before = audio_devices.live_stream_count()
+    warm, opened = _running_warm_stream_with_blocking_close(monkeypatch)
+    opened[0].release_close.set()
+    with audio_devices.portaudio_guard():
+        opener = threading.Thread(target=warm.ensure_started, daemon=True)
+        opener.start()
+        time.sleep(0.1)
+        warm.close()
+    opener.join(timeout=5)
+    assert not opener.is_alive()
+
+    assert len(opened) == 1, "a closed stream reopened"
+    assert warm.is_running is False
+    assert audio_devices.live_stream_count() == live_before
+    assert warm.ensure_started() is False
+    assert len(opened) == 1
+
+
 def test_warm_close_if_idle_counts_its_own_closes(monkeypatch):
     """Two `close_if_idle` calls at once -- two device notifications more
     than the settle interval apart, or Settings > Refresh during one. The

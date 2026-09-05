@@ -119,6 +119,13 @@ class WarmMicrophoneStream:
         self._opening_device_key: str | None = None
         self._pending_restart = False
         self._pending_close = False
+        # Set by `close` and never cleared: the controller drops its
+        # reference to a stream it closes and builds a fresh one when the
+        # feature returns, so an open that passed its gate after `close`
+        # would be a microphone nothing references. The generation bump
+        # refuses only a reopen that carries a generation; the settings
+        # save's retry and the refresh worker's reopen carry none.
+        self._closed = False
         # Streams handed off for closing but not yet taken by a closer, and
         # the number a closer is working on right now; `close_if_idle` waits
         # on `_idle` until both are zero and no open is in flight.
@@ -190,19 +197,19 @@ class WarmMicrophoneStream:
         before it (refused) or after it (the bumper sees `_starting`, waits,
         and closes the stream this open produces).
 
-        The PortAudio guard is taken *before* the gate. The device-refresh
-        worker holds that guard across "close the idle stream, re-enumerate"
-        (`_refresh_audio_devices_worker`), so an open arriving meanwhile -- a
-        settings save's retry, a helper's reopen -- waits here and then runs
-        its gate against the bumped generation, instead of passing the gate
-        first and opening a stream beside the one still closing. Measured
-        with the gate outside the guard: `close_if_idle() -> True`,
-        `live_stream_count() -> 1`, `try_refresh_input_devices() -> False`,
-        and the deferred refresh -- a hot-plugged microphone invisible --
-        retried only at the next recording stop. The order also keeps an
-        open that is merely queued for the guard invisible to
-        `close_if_idle`, which would otherwise wait its full budget for an
-        open that cannot proceed until the guard is released.
+        The PortAudio guard is taken *before* the gate. The re-enumeration
+        holds that guard (`try_refresh_input_devices`), so an open arriving
+        during it -- a settings save's retry, a helper's reopen -- waits here
+        and then runs its gate against the bumped generation and the fresh
+        device list, instead of passing the gate first and opening on the
+        list about to be replaced. What the guard is *not* held across is
+        the warm stream's close: the device-refresh worker did that for one
+        round, and a cold recording start takes this same guard on the Qt
+        thread, so the hotkey press froze the UI for the length of a close
+        that nothing bounds (see `_refresh_audio_devices_worker`). An open
+        that is merely queued for the guard has claimed nothing and is
+        invisible to `close_if_idle`; it is `_closed`, checked under the
+        lock, that refuses it once `close` has run.
         """
         stream = None
         opened_key = SYSTEM_DEFAULT_INPUT_DEVICE
@@ -219,6 +226,8 @@ class WarmMicrophoneStream:
         with portaudio_guard():
             with self._lock:
                 if generation is not None and generation != self._generation:
+                    return False
+                if self._closed:
                     return False
                 if self._stream is not None:
                     return True
@@ -437,10 +446,10 @@ class WarmMicrophoneStream:
 
         Used before PortAudio re-enumeration, which must not run while this
         stream is open and must not race a recording that is using it. Only
-        an attached consumer answers False at once; an open or a close in
-        flight is waited for (bounded by `_CLOSE_WAIT_S`), and the stream is
-        then closed here, because the caller reads True as "the registry is
-        clear" and acts on it immediately:
+        an attached consumer answers False at once; *another thread's* open
+        or close in flight is waited for, and the stream is then closed here,
+        because the caller reads True as "the registry is clear" and acts on
+        it immediately:
 
         - An open holds `portaudio_guard()` across construct/start/register,
           so a refresh begun on the strength of a True blocks on that lock,
@@ -457,6 +466,14 @@ class WarmMicrophoneStream:
           defaulted microphone stayed invisible until the user recorded once
           or pressed Refresh. Routine rather than exotic: a recording stop
           runs `detach` and then arms exactly this refresh.
+
+        `_CLOSE_WAIT_S` bounds that waiting and nothing else: the closes this
+        call makes itself run synchronously to completion outside it, so a
+        PortAudio stack that takes minutes to close a stream keeps this call
+        for that long and then answers True (measured with a 2.4 s close
+        against a 0.6 s budget: True after 2.41 s, no busy log). Bounding
+        them too would mean returning True with a stream still closing, which
+        is the answer this method exists to avoid.
 
         The generation is bumped *before* the wait, not after it: a restart
         helper that finishes its close while this waits reaches its reopen on
@@ -478,10 +495,12 @@ class WarmMicrophoneStream:
         settle interval apart, or Settings > Refresh during one -- found
         nothing to wait for and answered True while the first was still
         inside `stream.close()` (measured: `live_stream_count() -> 1`, the
-        re-enumeration refused). What this method cannot do on its own is
-        keep a *new* open out of that window: only the caller holding the
-        PortAudio guard across the close and the re-enumeration does that,
-        because `ensure_started` takes the guard before its gate.
+        re-enumeration refused). The loop re-reads `_stream` after every
+        close it performs, so an open that lands *during* the close -- the
+        guard is free then -- is retired before this answers True. What it
+        cannot cover is the gap between its answer and the caller's
+        re-enumeration taking the guard; the caller closes a stream
+        registered there and re-enumerates once more.
         """
         deadline = time.monotonic() + self._CLOSE_WAIT_S
         with self._lock:
@@ -522,7 +541,16 @@ class WarmMicrophoneStream:
             self._close_retiring()
 
     def close(self) -> None:
+        """Close for good; no open passes the gate afterwards.
+
+        Every caller has dropped its reference by the time this runs, so a
+        later open -- one parked behind the PortAudio guard while this ran,
+        in particular -- would leave a stream registered that nothing can
+        close (measured: one live stream after `shutdown()`, and every
+        re-enumeration refused for the rest of the session).
+        """
         with self._lock:
+            self._closed = True
             self._generation += 1
             stream = self._stream
             self._stream = None
