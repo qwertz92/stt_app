@@ -3523,9 +3523,22 @@ class DictationController(QtCore.QObject):
         reached the window, so pressing it pasted them a third time.
         Compared with the whitespace folded, because the tail is inserted
         with a leading space that the transcript does not carry.
+
+        Carried means the offer is the pasted text or its last words: the
+        overlay's Insert pastes exactly the offer, and the tray's re-paste
+        pastes the dictation it is the tail of. A plain substring test was
+        wider than that -- a queued transcript containing the tail's word
+        ("Milch und Brot" for a tail " und", "Wochenende" for " ende")
+        that failed after its keystroke marked the tail as possibly pasted,
+        and every later repaint hid Insert for words that had reached no
+        window (measured on the real painter). Only `_repaste` asks at all:
+        a foreground or queued insert never carries the offer, so an
+        unrelated transcript that happens to end with its words cannot mark
+        it either.
         """
         offer = " ".join(self._insert_action_text.split())
-        return bool(offer) and offer in " ".join(insertion_text.split())
+        pasted = " ".join(insertion_text.split())
+        return bool(offer) and (pasted == offer or pasted.endswith(" " + offer))
 
     def _preload_abort_hint(self, action: str) -> str:
         """The " Use Cancel to <action>." sentence, or the hotkey, or the tray.
@@ -5662,6 +5675,7 @@ class DictationController(QtCore.QObject):
         show_overlay_error: bool = True,
         target_handle=_UNSET_TARGET,
         target_signature=_UNSET_TARGET,
+        may_carry_offer: bool = False,
     ) -> bool:
         if not text.strip():
             return True
@@ -5723,11 +5737,17 @@ class DictationController(QtCore.QObject):
             # know, or it offers the same words again and they land twice.
             may_have_pasted = isinstance(exc, TextMayHaveBeenPastedError)
             self._last_insert_may_have_pasted = may_have_pasted
-            if may_have_pasted and self._paste_carried_the_offer(insertion_text):
+            if (
+                may_have_pasted
+                and may_carry_offer
+                and self._paste_carried_the_offer(insertion_text)
+            ):
                 # The pending offer's own re-paste, or the tray's re-paste of
                 # the dictation the offer is the tail of: its text is now the
                 # one most likely in the document, whatever a later,
-                # unrelated insert does to the per-attempt flag above.
+                # unrelated insert does to the per-attempt flag above. Only
+                # `_repaste` passes `may_carry_offer`: a queued transcript
+                # that merely contained the tail's word used to mark it here.
                 self._insert_offer_may_have_pasted = True
             if may_have_pasted:
                 # The text is probably already in the document. Offering the
@@ -5887,9 +5907,19 @@ class DictationController(QtCore.QObject):
             restore_focus=True,
             target_handle=target,
             target_signature=signature,
+            may_carry_offer=True,
         ):
-            self._retire_insert_offer()
-            self._overlay.set_state("Done", text)
+            if self._paste_carried_the_offer(text):
+                self._retire_insert_offer()
+                self._overlay.set_state("Done", text)
+            else:
+                # `_last_transcript` has moved on -- a queued streaming job
+                # that failed rescues its partial into it -- so the tray
+                # pasted text the offer is no part of. Retiring the offer
+                # here took the tail's Insert away while the tail had
+                # reached no window (measured: the overlay's Insert then
+                # pasted the unrelated text instead).
+                self._paint_status_keeping_offer("Done", text)
             self._reveal_overlay_result(is_error=False)
             self._play_completion_beep()
         else:

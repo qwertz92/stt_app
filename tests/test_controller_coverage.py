@@ -6562,3 +6562,135 @@ def test_the_progress_poll_leaves_a_progress_line_the_user_is_reading_alone():
     assert overlay.states[-1] == ("Processing", "Downloading model... approx. 45%")
     controller.shutdown()
     _ = app
+
+
+def test_a_queued_transcript_that_contains_the_tails_words_does_not_mark_the_offer():
+    """`_paste_carried_the_offer` was a substring test with no word boundary,
+    asked by every insert. A queued transcript that merely contains the
+    tail's words -- "Milch und Brot" for a tail " und", "Wochenende" for
+    " ende" -- failing after its keystroke marked the tail as possibly
+    pasted, and every later repaint withheld Insert for words that had
+    reached no window (measured on the real painter). The tail is the
+    pasted text or its last words, and only the re-paste roads can carry
+    it at all."""
+    inserter = _SwitchableInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_job(controller)
+    inserter.post_paste = True
+    other = _queued_job(controller, 7, 555)
+    controller._insert_background_transcription(
+        other, "der zweiter teil des films war besser"
+    )
+    inserter.post_paste = False
+    assert controller._insert_action_text == " zweiter teil"
+    assert controller._insert_offer_may_have_pasted is False
+
+    controller.cancel_queued_transcription(99)
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Still not inserted" in detail
+    assert "check the target window" not in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    controller.shutdown()
+    _ = app
+
+
+def test_a_queued_transcript_that_ends_with_the_tails_words_does_not_mark_it_either():
+    """The suffix rule alone would still mark the tail for a queued
+    transcript that happens to end with its words; the mark is reserved
+    for the two roads that paste the offer on purpose, the overlay's
+    Insert and the tray's re-paste."""
+    inserter = _SwitchableInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_job(controller)
+    inserter.post_paste = True
+    other = _queued_job(controller, 7, 555)
+    controller._insert_background_transcription(other, "und dann der zweiter teil")
+    inserter.post_paste = False
+    assert controller._insert_offer_may_have_pasted is False
+
+    controller.cancel_queued_transcription(99)
+
+    assert "Still not inserted" in overlay.states[-1][1]
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    controller.shutdown()
+    _ = app
+
+
+def test_a_re_paste_that_did_not_carry_the_offer_keeps_it_pending():
+    """`_repaste`'s success arm retired the offer unconditionally. A queued
+    streaming job that fails rescues its partial into `_last_transcript`,
+    so the tray's "Insert transcript again" then pastes text the offer is
+    no part of -- and its success took the tail's Insert away while the
+    tail had reached no window (measured: the overlay's Insert then pasted
+    the unrelated text). The offer stays, painted under the Done line."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    controller._last_transcript = "ein voellig anderer diktat text"
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == "ein voellig anderer diktat text"
+    assert controller._insert_action_text == " zweiter teil"
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert detail.startswith("ein voellig anderer diktat text")
+    assert "Still not inserted" in detail
+    assert overlay.state_kwargs[-1]["copy_text"] == " zweiter teil"
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+
+    controller.insert_failed_text()
+
+    assert inserter.calls[-1][0] == " zweiter teil"
+    assert controller._insert_action_text == ""
+    assert overlay.states[-1] == ("Done", " zweiter teil")
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    ("final_text", "tail", "last_transcript"),
+    [
+        (
+            "erster teil zweiter teil",
+            " zweiter teil",
+            "der zweiter teil des films war besser",
+        ),
+        ("erster teil ende", " ende", "Schoenes Wochenende"),
+    ],
+)
+def test_a_re_paste_that_merely_contains_the_tails_letters_does_not_carry_it(
+    final_text, tail, last_transcript
+):
+    """Carried means the offer is the pasted text or its last words. A
+    queued streaming job that fails rescues its partial into
+    `_last_transcript`, so the tray's re-paste can paste a dictation that
+    contains the tail's words in the middle, or a word that merely ends
+    with its letters ("Wochenende" for " ende"). Neither delivers the tail:
+    a success keeps the offer, and a failure after the keystroke does not
+    mark it as possibly pasted."""
+    inserter = FakeTextInserter()
+    controller, app, overlay, _focus = _streaming_session_with_a_pasted_prefix(
+        inserter=inserter
+    )
+    inserter.should_fail = True
+    controller._on_transcription_ready(final_text)
+    assert controller._insert_action_text == tail
+    inserter.should_fail = False
+    controller._last_transcript = last_transcript
+
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == last_transcript
+    assert controller._insert_action_text == tail
+    assert "Still not inserted" in overlay.states[-1][1]
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+
+    _post_paste_failure(inserter)
+    controller.repaste_last_transcript()
+
+    assert controller._insert_offer_may_have_pasted is False
+    assert controller._insert_action_text == tail
+    controller.shutdown()
+    _ = app
