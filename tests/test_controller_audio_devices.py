@@ -1,5 +1,7 @@
 """Controller reactions to audio device changes and warm-stream lifecycle."""
 
+import threading
+import time
 from dataclasses import replace
 
 import pytest
@@ -25,6 +27,10 @@ class _StubWarmStream:
     @property
     def opened_device_key(self):
         return self._opened_device_key
+
+    @property
+    def is_running(self):
+        return self._opened_device_key is not None
 
     def device_state(self):
         return (self.opened_device_key, self.opening_device_key, self.is_opening)
@@ -339,55 +345,200 @@ def test_a_microphone_change_saved_during_the_device_query_restarts_the_open(
     _ = app
 
 
-def test_a_save_during_the_device_refresh_waits_for_the_reenumeration(monkeypatch):
-    """The refresh worker is inside `close_if_idle`'s close when the user
-    presses Save. The save's retry used to open a second stream beside the
-    closing one, and the re-enumeration -- which refuses while any stream is
-    registered -- was refused and deferred to the next recording stop."""
-    import threading
+def _warm_controller_inside_a_blocking_close(monkeypatch, refresh):
+    """A controller whose refresh worker is inside the warm stream's close.
 
+    Returns the controller, the app, the warm stream and the worker thread;
+    the close is released by setting `_FakeStream.block_close`.
+    """
     from stt_app import audio_devices
 
     monkeypatch.setattr(audio_devices, "resolve_input_device", lambda name: None)
     monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _FakeStream)
     _FakeStream.block_close = threading.Event()
     _FakeStream.closing = threading.Event()
+    monkeypatch.setattr(audio_devices, "try_refresh_input_devices", refresh)
+    controller, app = make_controller()
+    controller._settings = replace(controller._settings, keep_microphone_warm=True)
+    controller._sync_warm_microphone_stream()
+    stream = controller._warm_mic_stream
+    assert _wait_until(lambda: stream.is_running)
+    worker = threading.Thread(
+        target=controller._refresh_audio_devices_worker, daemon=True
+    )
+    worker.start()
+    assert _FakeStream.closing.wait(timeout=5)
+    return controller, app, stream, worker
+
+
+def _release_the_close(worker):
+    _FakeStream.block_close.set()
+    worker.join(timeout=5)
+    _FakeStream.block_close = None
+    _FakeStream.closing = None
+
+
+def test_the_device_refresh_closes_the_warm_stream_outside_the_portaudio_guard(
+    monkeypatch,
+):
+    """A cold recording start takes the PortAudio guard on the Qt thread,
+    and a close on a locked-down audio stack is bounded by nothing. Held
+    across the warm stream's close, the guard froze the Qt thread for the
+    whole of it, after the start beep had already played (measured: 3.0 s
+    for a 3 s close, 30.0 s for one that outlasted `_CLOSE_WAIT_S`). Only
+    the re-enumeration needs PortAudio to itself."""
+    from stt_app import audio_devices
+
+    controller, app, stream, worker = _warm_controller_inside_a_blocking_close(
+        monkeypatch, lambda logger=None: True
+    )
+    try:
+        # What a cold `AudioCapture.start` on the Qt thread does first.
+        guard = audio_devices.portaudio_guard()
+        taken = guard.acquire(timeout=0.5)
+        assert taken, "the refresh worker held the PortAudio guard across the close"
+        guard.release()
+    finally:
+        _release_the_close(worker)
+
+    assert controller._pending_audio_device_refresh is False
+    assert _wait_until(lambda: stream.is_running)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_save_during_the_device_refresh_still_lets_the_reenumeration_run(
+    monkeypatch,
+):
+    """The refresh worker is inside the warm stream's close when the user
+    presses Save. The guard is free during a close, so the save's retry
+    opens a second stream beside the closing one instead of queueing behind
+    it -- and `close_if_idle`'s loop, which re-reads `_stream` after every
+    close of its own, retires that stream too before answering True, so
+    the re-enumeration still runs against an empty registry."""
+    from stt_app import audio_devices
+
     seen_live: list[int] = []
     live_before = audio_devices.live_stream_count()
 
     def _refresh(logger=None):
-        seen_live.append(audio_devices.live_stream_count())
-        return True
+        # The real one refuses while any stream is registered.
+        live = audio_devices.live_stream_count()
+        seen_live.append(live)
+        return live == live_before
 
-    monkeypatch.setattr(audio_devices, "try_refresh_input_devices", _refresh)
+    controller, app, stream, worker = _warm_controller_inside_a_blocking_close(
+        monkeypatch, _refresh
+    )
+    # The save, while the close blocks: its retry is not queued behind it.
+    controller._sync_warm_microphone_stream()
+    try:
+        assert _wait_until(
+            lambda: audio_devices.live_stream_count() == live_before + 2
+        ), "the save's open waited for the close"
+        assert _wait_until(lambda: stream.is_running)
+        assert seen_live == [], "the re-enumeration ran before the close finished"
+    finally:
+        _release_the_close(worker)
+
+    assert seen_live == [live_before]
+    assert controller._pending_audio_device_refresh is False
+    assert _wait_until(lambda: stream.is_running)
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stream_registered_before_the_reenumeration_is_closed_by_one_more_round(
+    monkeypatch,
+):
+    """What `close_if_idle` cannot cover is the gap between its answer and
+    the re-enumeration taking the guard: a warm open landing there opens on
+    the stale device list and the re-enumeration is refused. The guard hold
+    used to close that gap at the price of the Qt thread; the worker now
+    closes the stream that slipped in and re-enumerates once more. The
+    refresh stub registers the stream itself before refusing, which is the
+    order the worker observes."""
+    from stt_app import audio_devices
+
+    monkeypatch.setattr(audio_devices, "resolve_input_device", lambda name: None)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _FakeStream)
+    seen_live: list[int] = []
+    live_before = audio_devices.live_stream_count()
     controller, app = make_controller()
     controller._settings = replace(controller._settings, keep_microphone_warm=True)
     controller._sync_warm_microphone_stream()
     stream = controller._warm_mic_stream
     assert _wait_until(lambda: stream.is_running)
 
-    worker = threading.Thread(
-        target=controller._refresh_audio_devices_worker, daemon=True
-    )
-    worker.start()
-    assert _FakeStream.closing.wait(timeout=5)
-    # The save, while the close blocks.
-    controller._sync_warm_microphone_stream()
-    import time
+    def _refresh(logger=None):
+        if not seen_live:
+            # A settings save's retry that passed its gate in the gap.
+            assert stream.ensure_started() is True
+        live = audio_devices.live_stream_count()
+        seen_live.append(live)
+        return live == live_before
 
-    time.sleep(0.2)
-    try:
-        assert seen_live == [], "the re-enumeration ran before the close finished"
-        assert audio_devices.live_stream_count() == live_before + 1
-    finally:
-        _FakeStream.block_close.set()
-        worker.join(timeout=5)
+    monkeypatch.setattr(audio_devices, "try_refresh_input_devices", _refresh)
 
-    assert seen_live == [live_before], "the re-enumeration saw a live stream"
+    controller._refresh_audio_devices_worker()
+
+    assert seen_live == [live_before + 1, live_before]
     assert controller._pending_audio_device_refresh is False
     assert _wait_until(lambda: stream.is_running)
-    _FakeStream.block_close = None
-    _FakeStream.closing = None
+    controller.shutdown()
+    _ = app
+
+
+class _BlockingCloseIfIdleStub(_StubWarmStream):
+    """`close_if_idle` blocks until the test releases it."""
+
+    def __init__(self):
+        super().__init__()
+        self.entered = threading.Event()
+        self.release = threading.Event()
+
+    def close_if_idle(self):
+        self.close_if_idle_calls += 1
+        self.entered.set()
+        assert self.release.wait(timeout=5)
+        return True
+
+
+def test_two_device_refreshes_run_one_after_the_other(monkeypatch):
+    """Several device notifications more than the settle interval apart
+    start a worker each. The PortAudio guard used to serialize them and is
+    no longer held across the close; two workers inside one close would
+    otherwise close what the other has just reopened, so they queue on a
+    lock of their own."""
+    controller, app = make_controller()
+    stub = _BlockingCloseIfIdleStub()
+    controller._warm_mic_stream = stub
+    refresh_calls = []
+    monkeypatch.setattr(
+        controller_module.audio_devices,
+        "try_refresh_input_devices",
+        lambda logger=None: refresh_calls.append(True) or True,
+    )
+    first = threading.Thread(
+        target=controller._refresh_audio_devices_worker, daemon=True
+    )
+    second = threading.Thread(
+        target=controller._refresh_audio_devices_worker, daemon=True
+    )
+    first.start()
+    assert stub.entered.wait(timeout=5)
+    second.start()
+    time.sleep(0.2)
+    try:
+        assert stub.close_if_idle_calls == 1, "the second worker ran beside the first"
+    finally:
+        stub.release.set()
+        first.join(timeout=5)
+        second.join(timeout=5)
+
+    assert stub.close_if_idle_calls == 2
+    assert refresh_calls == [True, True]
+    assert stub.ensure_started_calls == 2
     controller.shutdown()
     _ = app
 

@@ -402,6 +402,7 @@ class DictationController(QtCore.QObject):
         self._warm_mic_stream: WarmMicrophoneStream | None = None
         self._audio_device_listener: AudioDeviceChangeListener | None = None
         self._pending_audio_device_refresh = False
+        self._audio_device_refresh_lock = threading.Lock()
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
         # Remote streaming finalizes get their own worker. `_executor` is
         # deliberately single-threaded so two local models never load at once,
@@ -1869,25 +1870,45 @@ class DictationController(QtCore.QObject):
         re-initialize while any stream is live, so a recording that slips in
         concurrently is never torn down; the refresh is retried later instead.
         """
+        # One at a time. Several device notifications more than the settle
+        # interval apart start one of these each; the PortAudio guard used
+        # to serialize them, and it is deliberately not held across the
+        # close any more (below), so they queue here instead of one closing
+        # what the other has just reopened.
+        with self._audio_device_refresh_lock:
+            self._refresh_audio_devices_serialized()
+
+    def _refresh_audio_devices_serialized(self) -> None:
+        # The warm stream is closed *outside* the PortAudio guard. A cold
+        # recording start takes that guard on the Qt thread, and a close on
+        # a locked-down audio stack is bounded by nothing: held across it,
+        # the guard froze the Qt thread for the whole close, after the start
+        # beep had already played (measured: 3.0 s for a 3 s close, 30.0 s
+        # for one that outlasted `_CLOSE_WAIT_S`, 0.000 s with the close
+        # outside). Closing one stream while another opens is fine; only the
+        # re-enumeration needs PortAudio to itself, and
+        # `try_refresh_input_devices` holds the guard for exactly that, so a
+        # warm open arriving during it waits and then opens on the fresh
+        # list (`ensure_started` takes the guard before its gate).
         warm = self._warm_mic_stream
-        # The guard is held across both steps. Every warm-stream open takes
-        # it before its own gate, so an open arriving meanwhile -- a settings
-        # save's retry, a restart helper's reopen, a second refresh worker --
-        # waits until the re-enumeration is done and then opens against the
-        # fresh device list. Without this a save landing inside the close
-        # opened a stream beside the one closing, `close_if_idle` had
-        # already answered True, the re-enumeration refused, and the refresh
-        # was deferred to the next recording stop (measured: streams
-        # constructed 2, `try_refresh_input_devices() -> False`,
-        # `_pending_audio_device_refresh` True). The same hold serializes
-        # two of these workers, which a hot-plug's several notifications more
-        # than the settle interval apart used to run side by side.
-        with audio_devices.portaudio_guard():
-            if warm is not None and not warm.close_if_idle():
-                self._pending_audio_device_refresh = True
-                return
-            if not audio_devices.try_refresh_input_devices(self._logger):
-                self._pending_audio_device_refresh = True
+        if warm is not None and not warm.close_if_idle():
+            self._pending_audio_device_refresh = True
+            return
+        refreshed = audio_devices.try_refresh_input_devices(self._logger)
+        if not refreshed:
+            # Something registered a stream between the close and the
+            # re-enumeration -- the gap the guard hold used to cover. A warm
+            # open (a settings save's retry landing in that gap; a restart
+            # helper's reopen is refused by the generation bump) is closed
+            # by one more round. A recording's stream is left alone and the
+            # refresh deferred to its stop, as before: `close_if_idle`
+            # refuses while one is attached, and a cold capture is not the
+            # warm stream's to close.
+            warm = self._warm_mic_stream
+            if warm is not None and warm.is_running and warm.close_if_idle():
+                refreshed = audio_devices.try_refresh_input_devices(self._logger)
+        if not refreshed:
+            self._pending_audio_device_refresh = True
         if self._shutdown_started:
             return
         warm = self._warm_mic_stream
