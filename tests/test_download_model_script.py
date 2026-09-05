@@ -48,7 +48,7 @@ def test_cancelling_while_waiting_for_the_slot_deletes_nothing(monkeypatch):
     monkeypatch.setattr(
         module,
         "cleanup_incomplete_model_download",
-        lambda *a, **k: cleaned.append(a) or (0, 0),
+        lambda *a, **k: cleaned.append(a) or (0, 0, 0),
     )
 
     with pytest.raises(SystemExit) as excinfo:
@@ -75,7 +75,7 @@ def test_cancelling_our_own_download_still_cleans_up(monkeypatch):
     monkeypatch.setattr(
         module,
         "cleanup_incomplete_model_download",
-        lambda *a, **k: cleaned.append(a) or (2, 4096),
+        lambda *a, **k: cleaned.append(a) or (2, 4096, 0),
     )
 
     with pytest.raises(SystemExit) as excinfo:
@@ -83,6 +83,32 @@ def test_cancelling_our_own_download_still_cleans_up(monkeypatch):
 
     assert excinfo.value.code == 130
     assert cleaned == [("small", "D:/models")]
+
+
+def test_a_partial_the_cleanup_could_not_remove_is_reported(monkeypatch, capsys):
+    """The script has the same two counts as the Local tab's drain, and said
+    "Removed 1 incomplete file" for a partial that was still on the disk."""
+    module = _load_download_model()
+    download_model = module.download_model
+
+    def _runs_then_interrupted(model_name, model_dir, download, **kwargs):
+        download()
+
+    def _download_interrupted(model_name, model_dir=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(module, "run_coordinated_download", _runs_then_interrupted)
+    monkeypatch.setattr(module, "download_model_snapshot", _download_interrupted)
+    monkeypatch.setattr(
+        module, "cleanup_incomplete_model_download", lambda *a, **k: (1, 1000, 1)
+    )
+
+    with pytest.raises(SystemExit):
+        download_model("small", "D:/models")
+
+    err = capsys.readouterr().err
+    assert "Removed 1 incomplete file (0.0 MB)." in err
+    assert "1 incomplete file could not be removed (still in use)." in err
 
 
 def _certificate_failure() -> Exception:

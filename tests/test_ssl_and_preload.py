@@ -649,12 +649,43 @@ class TestDeleteCachedModel:
             "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
             return_value=[cache_root],
         ):
-            removed_files, removed_bytes = cleanup_incomplete_model_download("small")
+            removed_files, removed_bytes, left_files = cleanup_incomplete_model_download(
+                "small"
+            )
 
         assert removed_files == 1
         assert removed_bytes == len(b"partial")
+        assert left_files == 0
         assert incomplete.exists() is False
         assert complete.read_bytes() == b"complete"
+
+    @pytest.mark.skipif(os.name != "nt", reason="an open handle blocks unlink on Windows")
+    def test_cleanup_reports_a_file_it_could_not_remove_as_still_there(self, tmp_path):
+        """The size was counted before `unlink` and the file after, so a
+        partial another program still held -- the killed download child in
+        a kernel read, a virus scanner -- was reported as removed by size and
+        as gone by count: "Removed 1 incomplete file (0.5 MB)" for 1,000
+        bytes removed and 500,000 left, and "No incomplete files remained."
+        with the file on the disk."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        removable = blobs / "small.incomplete"
+        removable.write_bytes(b"x" * 1000)
+        locked = blobs / "locked.incomplete"
+        locked.write_bytes(b"y" * 500_000)
+
+        with (
+            locked.open("rb"),
+            patch(
+                "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
+                return_value=[blobs.parent],
+            ),
+        ):
+            outcome = cleanup_incomplete_model_download("small")
+
+        assert tuple(outcome) == (1, 1000, 1)
+        assert locked.exists(), "the held file was reported as removed"
+        assert not removable.exists()
 
 
 # ---------------------------------------------------------------------------

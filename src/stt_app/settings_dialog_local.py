@@ -151,6 +151,9 @@ class _CleanupOutcome(NamedTuple):
     state: str = _CLEANUP_NONE
     removed_files: int = 0
     removed_bytes: int = 0
+    # Partials a run could not remove -- held by another program -- which
+    # the drain names rather than reporting the disk as empty.
+    left_files: int = 0
 
 
 class _LocalModelsMixin:
@@ -1336,10 +1339,10 @@ class _LocalModelsMixin:
                 model_name,
             )
             return _CleanupOutcome(_CLEANUP_KEPT)
-        files, removed_bytes = _facade().cleanup_incomplete_model_download(
+        files, removed_bytes, left_files = _facade().cleanup_incomplete_model_download(
             model_name, model_dir
         )
-        return _CleanupOutcome(_CLEANUP_RAN, files, removed_bytes)
+        return _CleanupOutcome(_CLEANUP_RAN, files, removed_bytes, left_files)
 
     def _run_download_worker(
         self,
@@ -1440,7 +1443,7 @@ class _LocalModelsMixin:
         cleaned_bytes = 0
         # What the counts above cannot carry: whether any entry read the disk
         # at all, and which models' partials were left alone and why.
-        cleanups: list[tuple[str, str]] = []
+        cleanups: list[tuple[str, _CleanupOutcome]] = []
         while True:
             with self._local_model_download_lock:
                 if self._local_model_download_cancel_event.is_set():
@@ -1488,7 +1491,7 @@ class _LocalModelsMixin:
             )
             cleaned_files += cleanup.removed_files
             cleaned_bytes += cleanup.removed_bytes
-            cleanups.append((model_name, cleanup.state))
+            cleanups.append((model_name, cleanup))
             if status == "success":
                 successes.append(model_name)
                 events.append(("downloaded", model_name))
@@ -1592,7 +1595,7 @@ class _LocalModelsMixin:
         cleaned_files: int,
         cleaned_bytes: int,
         *,
-        cleanups: list[tuple[str, str]],
+        cleanups: list[tuple[str, _CleanupOutcome]],
     ) -> str:
         """The Cancel first, then the cleanup, then what happened in order.
 
@@ -1634,8 +1637,9 @@ class _LocalModelsMixin:
                 f"Removed {cleaned_files} incomplete file"
                 f"{'s' if cleaned_files != 1 else ''} ({cleanup_mb:.1f} MB)."
             )
-        kept = [name for name, state in cleanups if state == _CLEANUP_KEPT]
-        skipped = [name for name, state in cleanups if state == _CLEANUP_SKIPPED]
+        kept = [name for name, c in cleanups if c.state == _CLEANUP_KEPT]
+        skipped = [name for name, c in cleanups if c.state == _CLEANUP_SKIPPED]
+        left = [(name, c.left_files) for name, c in cleanups if c.left_files]
         if kept:
             parts.append(
                 f"Incomplete files of {_names_phrase(kept)} were kept: another "
@@ -1647,9 +1651,17 @@ class _LocalModelsMixin:
                 f"Incomplete files of {_names_phrase(skipped)} were left in "
                 f"place: {whose} had not started yet."
             )
+        for name, count in left:
+            # A file another program still holds is on the disk whatever the
+            # removal count says; reported as absent, the user went looking
+            # for gigabytes that were still there.
+            parts.append(
+                f"{count} incomplete file{'s' if count != 1 else ''} of {name} "
+                "could not be removed: still in use."
+            )
         if (
-            not (kept or skipped or cleaned_files)
-            and any(state == _CLEANUP_RAN for _name, state in cleanups)
+            not (kept or skipped or left or cleaned_files)
+            and any(c.state == _CLEANUP_RAN for _name, c in cleanups)
         ):
             parts.append("No incomplete files remained.")
         groups: list[tuple[str, list[str]]] = []

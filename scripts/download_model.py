@@ -176,14 +176,20 @@ def download_model(name: str, output_dir: str | None = None) -> str:
                 file=sys.stderr,
             )
             raise SystemExit(130) from None
-        removed_files, removed_bytes = cleanup_incomplete_model_download(
+        removed_files, removed_bytes, left_files = cleanup_incomplete_model_download(
             name,
             output_dir or "",
         )
         removed_mb = removed_bytes / 1_000_000.0
+        left = (
+            f" {left_files} incomplete file{'s' if left_files != 1 else ''} could "
+            "not be removed (still in use)."
+            if left_files
+            else ""
+        )
         print(
             f"\nDownload canceled. Removed {removed_files} incomplete file"
-            f"{'s' if removed_files != 1 else ''} ({removed_mb:.1f} MB).",
+            f"{'s' if removed_files != 1 else ''} ({removed_mb:.1f} MB).{left}",
             file=sys.stderr,
         )
         raise SystemExit(130) from None

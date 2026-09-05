@@ -1740,7 +1740,7 @@ def test_local_tab_can_cancel_active_and_queued_downloads(monkeypatch):
     )
     monkeypatch.setattr(
         "stt_app.settings_dialog.cleanup_incomplete_model_download",
-        lambda _model_name, _model_dir="": (1, 2_000_000),
+        lambda _model_name, _model_dir="": (1, 2_000_000, 0),
     )
 
     dialog = SettingsDialog(

@@ -12,6 +12,7 @@ import wave
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import NamedTuple
 
 from ..config import (
     AUDIO_SAMPLE_RATE,
@@ -271,13 +272,31 @@ def delete_cached_model(model_name: str, model_dir: str = "") -> int:
     return removed
 
 
+class IncompleteCleanup(NamedTuple):
+    """What `cleanup_incomplete_model_download` removed, and what it could not.
+
+    Counted after a successful `unlink`, not around it: the size used to be
+    added before the call and the file after, so a partial another program
+    still held -- the killed download child wedged in a kernel read, a virus
+    scanner -- reported its bytes as removed and itself as gone ("Removed 1
+    incomplete file (0.5 MB)" for 1,000 bytes removed and 500,000 left, and
+    "No incomplete files remained." with the file on the disk). `left_files`
+    is what lets the callers say the file is still there.
+    """
+
+    removed_files: int = 0
+    removed_bytes: int = 0
+    left_files: int = 0
+
+
 def cleanup_incomplete_model_download(
     model_name: str,
     model_dir: str = "",
-) -> tuple[int, int]:
+) -> IncompleteCleanup:
     """Remove unusable partial files left by an interrupted model download."""
     removed_files = 0
     removed_bytes = 0
+    left_files = 0
     for root in _model_cache_dirs(model_name, model_dir):
         if not root.is_dir():
             continue
@@ -293,13 +312,15 @@ def cleanup_incomplete_model_download(
             if not path.is_file():
                 continue
             try:
-                removed_bytes += path.stat().st_size
+                size = path.stat().st_size
                 path.unlink()
-                removed_files += 1
             except FileNotFoundError:
                 continue
             except OSError:
+                left_files += 1
                 continue
+            removed_files += 1
+            removed_bytes += size
 
         try:
             directories = sorted(
@@ -314,7 +335,7 @@ def cleanup_incomplete_model_download(
                 directory.rmdir()
             except OSError:
                 continue
-    return removed_files, removed_bytes
+    return IncompleteCleanup(removed_files, removed_bytes, left_files)
 
 
 def format_model_download_error(model_name: str, exc: Exception) -> str:

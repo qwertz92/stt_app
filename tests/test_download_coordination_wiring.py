@@ -663,7 +663,7 @@ def test_cancelling_keeps_the_partials_a_parked_waiter_will_resume_from(monkeypa
         @staticmethod
         def cleanup_incomplete_model_download(model_name, model_dir):
             cleanups.append((model_name, model_dir))
-            return 3, 4096
+            return 3, 4096, 0
 
     # Recorded, not left to the real cleanup: with nothing on disk for this
     # model the real one also removes nothing, so an assertion on the counts
@@ -748,7 +748,7 @@ def test_cancelling_with_nobody_waiting_still_removes_the_partials():
         @staticmethod
         def cleanup_incomplete_model_download(model_name, model_dir):
             calls.append((model_name, model_dir))
-            return 3, 4096
+            return 3, 4096, 0
 
     import stt_app.settings_dialog_local as local_module
 
@@ -1387,7 +1387,7 @@ def _drain_one_canceled_download(monkeypatch, coordinator):
         @staticmethod
         def cleanup_incomplete_model_download(model_name, model_dir):
             cleanups.append(model_name)
-            return 4, 3_100_000_000
+            return 4, 3_100_000_000, 0
 
     monkeypatch.setattr(local_module, "_facade", lambda: _Facade)
     monkeypatch.setattr(local_module, "model_download_process_error", lambda p: "")
@@ -1540,9 +1540,9 @@ def test_several_models_left_alone_are_named_together():
         0,
         0,
         cleanups=[
-            ("a", _CLEANUP_SKIPPED),
-            ("b", _CLEANUP_KEPT),
-            ("c", _CLEANUP_SKIPPED),
+            ("a", _CleanupOutcome(_CLEANUP_SKIPPED)),
+            ("b", _CleanupOutcome(_CLEANUP_KEPT)),
+            ("c", _CleanupOutcome(_CLEANUP_SKIPPED)),
         ],
     )
 
@@ -1551,6 +1551,65 @@ def test_several_models_left_alone_are_named_together():
         "is waiting to resume them. Incomplete files of a and c were left in "
         "place: their downloads had not started yet. Canceled: a, b, c."
     )
+
+
+def test_a_file_the_cleanup_could_not_remove_is_reported_as_still_there():
+    """"No incomplete files remained." is a statement about the disk, and the
+    file another program still holds is on it whatever the removal count
+    says; reported as absent, the user went looking for gigabytes that were
+    still there."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    summary = _LocalModelsMixin._canceled_drain_summary(
+        [("canceled", "tiny")],
+        0,
+        0,
+        cleanups=[("tiny", _CleanupOutcome(_CLEANUP_RAN, 0, 0, 1))],
+    )
+    assert summary == (
+        "Download canceled. 1 incomplete file of tiny could not be removed: "
+        "still in use. Canceled: tiny."
+    )
+
+    summary = _LocalModelsMixin._canceled_drain_summary(
+        [("canceled", "tiny"), ("canceled", "base")],
+        1,
+        1000,
+        cleanups=[
+            ("tiny", _CleanupOutcome(_CLEANUP_RAN, 1, 1000, 2)),
+            ("base", _CleanupOutcome(_CLEANUP_SKIPPED)),
+        ],
+    )
+    assert summary == (
+        "Download canceled. Removed 1 incomplete file (0.0 MB). Incomplete files "
+        "of base were left in place: its download had not started yet. 2 "
+        "incomplete files of tiny could not be removed: still in use. "
+        "Canceled: tiny, base."
+    )
+
+
+def test_a_held_partial_reaches_the_drain_as_a_left_file():
+    """The count the cleanup reports travels in the outcome; dropped there,
+    the sentence above can never be produced."""
+    from stt_app.settings_dialog_local import _LocalModelsMixin
+
+    dialog = _LocalModelsMixin.__new__(_LocalModelsMixin)
+
+    class _Facade:
+        @staticmethod
+        def cleanup_incomplete_model_download(model_name, model_dir):
+            return 0, 0, 1
+
+    import stt_app.settings_dialog_local as local_module
+
+    original = local_module._facade
+    local_module._facade = lambda: _Facade()
+    try:
+        outcome = _LocalModelsMixin._cleanup_unless_awaited(dialog, "small", "")
+    finally:
+        local_module._facade = original
+
+    assert outcome == _CleanupOutcome(_CLEANUP_RAN, 0, 0, 1)
 
 
 def test_no_downloads_ran_is_reported_in_the_warning_colour():
