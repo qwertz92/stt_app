@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 import threading
 from collections.abc import Callable
 from datetime import datetime
@@ -26,10 +27,12 @@ from .dialog_style import make_label_selectable
 from .local_benchmark import (
     BenchmarkCancelled,
     BenchmarkCase,
+    PlannedBenchmarkCase,
     _format_number,
     _format_seconds,
     format_benchmark_summary,
     normalize_webgpu_benchmark_devices,
+    planned_benchmark_cases,
 )
 from .settings_dialog_helpers import (
     _INLINE_FIELD_BUTTON_SPACING_PX,
@@ -167,6 +170,44 @@ _BENCHMARK_RESULT_NUMBERS: dict[int, Callable[[BenchmarkCase], float]] = {
     6: lambda case: case.avg_rtf,
 }
 _BENCHMARK_SORT_TOOLTIP = "Click to sort; a third click restores the run order."
+
+# The Run Benchmark window's case list: what the current selection will
+# measure, and how far a running benchmark has got through it.
+_BENCHMARK_PLAN_COLUMNS = ("#", "Model", "Device", "Compute", "Status")
+_BENCHMARK_PLAN_STATUS_COLUMN = len(_BENCHMARK_PLAN_COLUMNS) - 1
+_BENCHMARK_PLAN_VISIBLE_ROWS = 6
+_BENCHMARK_PLAN_STATUS_PENDING = "Pending"
+_BENCHMARK_PLAN_STATUS_RUNNING = "Running..."
+_BENCHMARK_PLAN_STATUS_ERROR = "Error"
+_BENCHMARK_PLAN_STATUS_SKIPPED = "Skipped"
+_BENCHMARK_PROGRESS_BAR_WIDTH_PX = 170
+_BENCHMARK_RUN_BUTTON_IDLE_TEXT = "Run Benchmark..."
+_BENCHMARK_RUN_BUTTON_BUSY_TEXT = "Show Progress..."
+# Both captions of the tab's header button. The width for both is reserved
+# once, from `SettingsDialog._reserve_feedback_button_widths`, because only
+# there is the button a polished child of the styled dialog: measured right
+# after its tab is added it still reports the plain application style's
+# width (109 px against the 115 px it renders at), and the reservation
+# would then be too small to hold the wider caption.
+_BENCHMARK_RUN_BUTTON_TEXTS = (
+    _BENCHMARK_RUN_BUTTON_IDLE_TEXT,
+    _BENCHMARK_RUN_BUTTON_BUSY_TEXT,
+)
+# The standard (non-ONNX) device the dialog benchmarks with. One constant so
+# the planned case list cannot describe a different run from the one that
+# `_run_local_benchmark` starts.
+_BENCHMARK_STANDARD_DEVICE = "auto"
+_BENCHMARK_CASE_PROGRESS_PATTERN = re.compile(r"^\[Case (\d+)/(\d+)\]")
+
+
+def _benchmark_progress_case_index(text: str) -> int | None:
+    """The 1-based case index in a `[Case i/N] ...` progress line, if any.
+
+    The runner already announces every case it starts this way, so the case
+    list reads that instead of the run needing a second kind of event.
+    """
+    match = _BENCHMARK_CASE_PROGRESS_PATTERN.match(str(text or ""))
+    return int(match.group(1)) if match is not None else None
 _BENCHMARK_DEVICE_COLUMN_TOOLTIP = (
     "The device actually used by the runtime. Older stored "
     "faster-whisper results may show the configured value 'auto'."
@@ -837,18 +878,33 @@ class _BenchmarkMixin:
         header_row = QtWidgets.QHBoxLayout()
         self._configure_button_row(header_row)
         self.open_benchmark_window_button = QtWidgets.QPushButton(
-            "Run Benchmark..."
+            _BENCHMARK_RUN_BUTTON_IDLE_TEXT
         )
         self.open_benchmark_window_button.clicked.connect(
             self._open_benchmark_window
         )
         header_row.addWidget(self.open_benchmark_window_button)
+        header_button_height = self.open_benchmark_window_button.sizeHint().height()
         self.benchmark_status_label = ElidingLabel("")
         make_label_selectable(self.benchmark_status_label)
-        self.benchmark_status_label.setFixedHeight(
-            self.open_benchmark_window_button.sizeHint().height()
-        )
+        self.benchmark_status_label.setFixedHeight(header_button_height)
         header_row.addWidget(self.benchmark_status_label, 1)
+
+        self.benchmark_progress_bar = QtWidgets.QProgressBar()
+        self.benchmark_progress_bar.setFixedWidth(_BENCHMARK_PROGRESS_BAR_WIDTH_PX)
+        self.benchmark_progress_bar.setFixedHeight(header_button_height)
+        self.benchmark_progress_bar.setTextVisible(True)
+        self.benchmark_progress_bar.setFormat("%v / %m cases")
+        self.benchmark_progress_bar.setToolTip(
+            "Cases finished. Click Show Progress... for the case list."
+        )
+        # The bar only exists while a run does, and the status label beside it
+        # must not widen and re-elide when it appears and disappears.
+        progress_policy = self.benchmark_progress_bar.sizePolicy()
+        progress_policy.setRetainSizeWhenHidden(True)
+        self.benchmark_progress_bar.setSizePolicy(progress_policy)
+        self.benchmark_progress_bar.hide()
+        header_row.addWidget(self.benchmark_progress_bar)
         layout.addLayout(header_row)
 
         self.benchmark_main_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
@@ -1355,6 +1411,8 @@ class _BenchmarkMixin:
         setup_layout.addWidget(self.benchmark_options_box)
         self._set_benchmark_options_visible(False)
 
+        setup_layout.addWidget(self._build_benchmark_plan_box())
+
         benchmark_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(benchmark_actions)
         self.run_benchmark_button = QtWidgets.QPushButton("Run Benchmark")
@@ -1378,6 +1436,165 @@ class _BenchmarkMixin:
         # they belong to was reporting how it had failed.
         self._reserve_dynamic_hint_height(self.benchmark_window_status_label)
         outer_layout.addWidget(self.benchmark_window_status_label)
+
+        self._refresh_benchmark_plan_from_widgets()
+
+    def _build_benchmark_plan_box(self) -> QtWidgets.QGroupBox:
+        """The always-visible case list: what will run, and how far a run got.
+
+        Always visible, never appearing or disappearing, because the Run/Cancel
+        row sits directly under it and a group that comes and goes would move
+        those buttons under the cursor.
+        """
+        cases_box = QtWidgets.QGroupBox("Cases")
+        cases_layout = QtWidgets.QVBoxLayout(cases_box)
+        cases_layout.setContentsMargins(10, 10, 10, 10)
+        cases_layout.setSpacing(6)
+
+        self.benchmark_plan_caption_label = QtWidgets.QLabel("0 cases will run")
+        self.benchmark_plan_caption_label.setWordWrap(False)
+        self._style_note_label(self.benchmark_plan_caption_label)
+        # One reserved line: the caption changes with every selection, and it
+        # sits above the table and the Run/Cancel row.
+        self.benchmark_plan_caption_label.setFixedHeight(
+            self.benchmark_plan_caption_label.sizeHint().height()
+        )
+        cases_layout.addWidget(self.benchmark_plan_caption_label)
+
+        table = QtWidgets.QTableWidget(0, len(_BENCHMARK_PLAN_COLUMNS))
+        self.benchmark_plan_table = table
+        table.setHorizontalHeaderLabels(list(_BENCHMARK_PLAN_COLUMNS))
+        table.setStyleSheet(_BENCHMARK_RESULT_SURFACE_STYLESHEET)
+        table.verticalHeader().setVisible(False)
+        row_height = compact_table_row_height(table)
+        table.verticalHeader().setMinimumSectionSize(row_height)
+        table.verticalHeader().setDefaultSectionSize(row_height)
+        table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
+        table.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        table.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
+        plan_header = table.horizontalHeader()
+        for column in range(_BENCHMARK_PLAN_STATUS_COLUMN):
+            plan_header.setSectionResizeMode(
+                column, QtWidgets.QHeaderView.ResizeToContents
+            )
+        plan_header.setStretchLastSection(True)
+        # A fixed height for six rows: the list scrolls beyond that instead of
+        # pushing the Run/Cancel row down as models are selected.
+        table.setFixedHeight(
+            plan_header.sizeHint().height()
+            + row_height * _BENCHMARK_PLAN_VISIBLE_ROWS
+            + table.frameWidth() * 2
+            + 2
+        )
+        cases_layout.addWidget(table)
+
+        # The three controls the plan is computed from. The model list is also
+        # connected to `_update_benchmark_actions`; these are separate
+        # connections so the plan has exactly one writer of its own.
+        self.benchmark_models_list.itemSelectionChanged.connect(
+            self._refresh_benchmark_plan_from_widgets
+        )
+        self.benchmark_webgpu_device_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_benchmark_plan_from_widgets()
+        )
+        self.benchmark_compute_type_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_benchmark_plan_from_widgets()
+        )
+        return cases_box
+
+    def _planned_benchmark_cases_from_widgets(self) -> list[PlannedBenchmarkCase]:
+        """The cases the current selection would run.
+
+        `normalize_webgpu_benchmark_devices` rejects an unknown ONNX target,
+        but every entry of that combo is a key of
+        `LOCAL_WEBGPU_BENCHMARK_DEVICE_GROUPS`, so this cannot raise into the
+        Qt slots that call it.
+        """
+        return planned_benchmark_cases(
+            self._selected_benchmark_model_names(),
+            str(self.benchmark_webgpu_device_combo.currentData() or "auto"),
+            _BENCHMARK_STANDARD_DEVICE,
+            str(self.benchmark_compute_type_combo.currentData() or "int8"),
+        )
+
+    def _refresh_benchmark_plan_from_widgets(self) -> None:
+        """Redraw the plan from the current selection, unless a run owns it.
+
+        During a run the plan describes the options snapshotted at its start.
+        The three controls are disabled then, but `_refresh_benchmark_model_list`
+        still repopulates the model list when the local inventory changes, and
+        redrawing here would wipe the Running/Done states already on screen.
+        """
+        if not hasattr(self, "benchmark_plan_table"):
+            return
+        if self._active_benchmark_thread is not None:
+            return
+        self._set_benchmark_plan_rows(self._planned_benchmark_cases_from_widgets())
+
+    def _set_benchmark_plan_rows(
+        self,
+        planned: list[PlannedBenchmarkCase],
+    ) -> None:
+        """The single writer of the case list's rows and its caption."""
+        table = self.benchmark_plan_table
+        table.setRowCount(len(planned))
+        for row, planned_case in enumerate(planned):
+            values = [
+                str(row + 1),
+                planned_case.model,
+                planned_case.device_target,
+                planned_case.display_compute_type,
+                _BENCHMARK_PLAN_STATUS_PENDING,
+            ]
+            for column, value in enumerate(values):
+                item = QtWidgets.QTableWidgetItem(value)
+                item.setToolTip(value)
+                table.setItem(row, column, item)
+        count = len(planned)
+        self.benchmark_plan_caption_label.setText(
+            "1 case will run" if count == 1 else f"{count} cases will run"
+        )
+
+    def _mark_benchmark_plan_case(self, index: int, status: str) -> None:
+        """The single writer of one case's Status cell; `index` is 1-based."""
+        row = int(index) - 1
+        table = self.benchmark_plan_table
+        if row < 0 or row >= table.rowCount():
+            return
+        item = table.item(row, _BENCHMARK_PLAN_STATUS_COLUMN)
+        if item is None:
+            item = QtWidgets.QTableWidgetItem()
+            table.setItem(row, _BENCHMARK_PLAN_STATUS_COLUMN, item)
+        item.setText(status)
+        item.setToolTip(status)
+
+    def _skip_unfinished_benchmark_plan_cases(self, finished: int) -> None:
+        """Mark every case past the last finished one as skipped.
+
+        Not only the ones still reading `Pending`: the case that was running
+        when a cancel or a failure landed never delivered a result either, and
+        leaving it at `Running...` would claim work that stopped.
+        """
+        for index in range(
+            int(finished) + 1, self.benchmark_plan_table.rowCount() + 1
+        ):
+            self._mark_benchmark_plan_case(index, _BENCHMARK_PLAN_STATUS_SKIPPED)
+
+    def _set_benchmark_progress(self, done: int, total: int) -> None:
+        """The single writer of the tab's progress bar.
+
+        A total of zero is the idle state: the bar is hidden and its space is
+        kept, so the status label beside it never moves.
+        """
+        bar = self.benchmark_progress_bar
+        total = int(total)
+        if total <= 0:
+            bar.hide()
+            return
+        bar.setMaximum(total)
+        bar.setValue(max(0, min(int(done), total)))
+        bar.show()
 
     def _open_benchmark_window(self) -> None:
         """Show the benchmark window, raising the existing one if already open."""
@@ -1443,6 +1660,9 @@ class _BenchmarkMixin:
                 QtCore.QItemSelectionModel.NoUpdate,
             )
         restore_vertical_scrollbar(self.benchmark_models_list, scroll_value)
+        # The rebuild above runs with the list's signals blocked, so the plan
+        # would otherwise not learn that the selection changed with it.
+        self._refresh_benchmark_plan_from_widgets()
 
         visible_rows = min(max(self.benchmark_models_list.count(), 1), 4)
         self.benchmark_models_list.setMinimumHeight(
@@ -1538,6 +1758,12 @@ class _BenchmarkMixin:
             return
 
         busy = self._active_benchmark_thread is not None
+        # Both captions were reserved at build time, so this swap moves
+        # nothing; both open or raise the same "Run Benchmark" window, which
+        # is where the case list lives.
+        self.open_benchmark_window_button.setText(
+            _BENCHMARK_RUN_BUTTON_BUSY_TEXT if busy else _BENCHMARK_RUN_BUTTON_IDLE_TEXT
+        )
         audio_path = self.benchmark_audio_edit.text().strip()
         has_audio = bool(audio_path) and Path(audio_path).is_file()
         has_models = bool(self._selected_benchmark_model_names())
@@ -1630,7 +1856,7 @@ class _BenchmarkMixin:
             audio_path=str(audio),
             audio_name=audio.name,
             model_names=model_names,
-            device="auto",
+            device=_BENCHMARK_STANDARD_DEVICE,
             compute_type=compute_type,
             webgpu_devices=webgpu_devices,
             runs=run_count,
@@ -1722,6 +1948,16 @@ class _BenchmarkMixin:
         self._current_benchmark_environment = None
         cancel_event = threading.Event()
         self._benchmark_cancel_event = cancel_event
+        # From the values snapshotted above, not from the widgets: this is the
+        # run's own plan and nothing may redraw it while the run owns it.
+        planned = planned_benchmark_cases(
+            model_names,
+            webgpu_devices,
+            _BENCHMARK_STANDARD_DEVICE,
+            compute_type,
+        )
+        self._set_benchmark_plan_rows(planned)
+        self._set_benchmark_progress(0, len(planned))
         self.benchmark_results_panel.show_cases([])
         self.benchmark_results_panel.set_status_text(
             self._benchmark_summary([], status="running", options=options)
@@ -1779,7 +2015,7 @@ class _BenchmarkMixin:
                 cases = _facade().run_benchmark_cases(
                     audio_path=audio_path,
                     model_names=model_names,
-                    device="auto",
+                    device=_BENCHMARK_STANDARD_DEVICE,
                     compute_type=compute_type,
                     runs=run_count,
                     beam_size=beam_size,
@@ -1898,15 +2134,35 @@ class _BenchmarkMixin:
             self.benchmark_results_panel.set_status_text(
                 f"Could not start the benchmark: {exc}"
             )
+            # Nothing will run, so nothing is counted; the plan rows stay as
+            # the selection's Pending list.
+            self._set_benchmark_progress(0, 0)
         self._update_benchmark_actions()
 
     def _on_benchmark_progress(self, text: str) -> None:
         self._set_benchmark_status(text, "#555")
+        case_index = _benchmark_progress_case_index(text)
+        if case_index is not None:
+            self._mark_benchmark_plan_case(
+                case_index, _BENCHMARK_PLAN_STATUS_RUNNING
+            )
 
     def _on_benchmark_case_finished(self, payload: object) -> None:
         if not isinstance(payload, BenchmarkCase):
             return
         self._current_benchmark_cases.append(payload)
+        # The runner delivers cases in plan order, so the nth finished case is
+        # the nth planned row.
+        finished = len(self._current_benchmark_cases)
+        self._mark_benchmark_plan_case(
+            finished,
+            _BENCHMARK_PLAN_STATUS_ERROR
+            if payload.error
+            else f"Done (RTF {_format_number(payload.avg_rtf)})",
+        )
+        self._set_benchmark_progress(
+            finished, self.benchmark_plan_table.rowCount()
+        )
         summary = self._benchmark_summary(
             self._current_benchmark_cases,
             status="running",
@@ -1951,6 +2207,9 @@ class _BenchmarkMixin:
             status = "completed_with_errors"
         self._current_benchmark_cases = cases
         self._current_benchmark_options = options
+        self._set_benchmark_progress(0, 0)
+        if status in {"canceled", "failed"}:
+            self._skip_unfinished_benchmark_plan_cases(len(cases))
         history_error = ""
 
         if cases and options is not None:

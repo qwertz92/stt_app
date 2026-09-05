@@ -47,7 +47,11 @@ from .model_download_progress import ModelDownloadSpeedTracker
 from .provider_connection_test_store import ProviderConnectionTestStore
 from .secret_store import SecretStore
 from .settings_dialog_audio import _AudioTabMixin
-from .settings_dialog_benchmark import BenchmarkResultsWindow, _BenchmarkMixin
+from .settings_dialog_benchmark import (
+    _BENCHMARK_RUN_BUTTON_TEXTS,
+    BenchmarkResultsWindow,
+    _BenchmarkMixin,
+)
 from .settings_dialog_general import _GeneralTabMixin
 from .settings_dialog_helpers import (
     _COMPACT_LIST_ITEM_STYLESHEET,
@@ -453,6 +457,10 @@ class SettingsDialog(
         for button, texts in (
             (getattr(self, "history_copy_button", None), ("Copy selected", "Copied")),
             (getattr(self, "import_copy_button", None), ("Copy result", "Copied")),
+            (
+                getattr(self, "open_benchmark_window_button", None),
+                _BENCHMARK_RUN_BUTTON_TEXTS,
+            ),
         ):
             if isinstance(button, QtWidgets.QPushButton):
                 reserve_button_width_for_texts(button, texts)
