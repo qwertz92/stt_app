@@ -6694,3 +6694,100 @@ def test_a_re_paste_that_merely_contains_the_tails_letters_does_not_carry_it(
     assert controller._insert_action_text == tail
     controller.shutdown()
     _ = app
+
+
+def _download_leaving_held_partials(controller, monkeypatch, *, explicit_cancel):
+    """Run `_download_model_for_preload` into a cancel whose cleanup could
+    not remove two partials. `explicit_cancel` is the hotkey/tray road; the
+    other road is the Settings save that cancels the generation."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+
+    class _Process:
+        returncode = None
+
+        def poll(self):
+            return None
+
+        def communicate(self):
+            return "", ""
+
+    def _start(model_name, model_dir=""):
+        if explicit_cancel:
+            controller._preload_cancel_requested = True
+        else:
+            controller._cancel_preload_generation(controller._preload_generation)
+        return _Process()
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.find_cached_models",
+        lambda _model_dir="": [],
+    )
+    monkeypatch.setattr("stt_app.controller.start_model_download_process", _start)
+    monkeypatch.setattr(
+        "stt_app.controller.terminate_model_download_process", lambda process: None
+    )
+    from stt_app.transcriber.local_faster_whisper import IncompleteCleanup
+
+    monkeypatch.setattr(
+        "stt_app.transcriber.local_faster_whisper.cleanup_incomplete_model_download",
+        lambda model_name, model_dir="": IncompleteCleanup(0, 0, 2),
+    )
+    with pytest.raises(RuntimeError, match="Model download canceled"):
+        controller._download_model_for_preload(settings)
+    return controller._preload_generation
+
+
+def test_a_settings_save_that_leaves_local_names_the_partials_a_scanner_holds(
+    monkeypatch,
+):
+    """`_on_model_preload_done` has two arms that tell the user the preload
+    was canceled, and only the explicit-cancel arm appended the note. The
+    other is what a Settings save that switches to a remote engine reaches:
+    it cancels the running generation without bumping it and without
+    `_preload_cancel_requested`, so the worker's "Model download canceled."
+    arrived through the failure arm and the held partials went unmentioned
+    (measured on both roads, one flag apart)."""
+    controller, app = _make_controller()
+    overlay = controller._overlay
+    generation = _download_leaving_held_partials(
+        controller, monkeypatch, explicit_cancel=False
+    )
+    assert controller._preload_cancel_requested is False
+
+    controller._on_model_preload_done(generation, False, "Model download canceled.")
+
+    assert overlay.states[-1] == (
+        "Done",
+        "Model download canceled. 2 incomplete files could not be removed: still in use.",
+    )
+    assert controller._preload_cleanup_notes == {}
+    controller.shutdown()
+    _ = app
+
+
+def test_a_model_switch_logs_the_partials_the_retired_preload_left(
+    monkeypatch, caplog
+):
+    """A different local model chosen in Settings retires the generation, so
+    its completion is stale and paints nothing -- the new preload's progress
+    line owns the overlay. The count was popped and discarded with it; it is
+    logged now, so a scanner holding gigabytes of partials is on record."""
+    controller, app = _make_controller()
+    overlay = controller._overlay
+    generation = _download_leaving_held_partials(
+        controller, monkeypatch, explicit_cancel=False
+    )
+    with controller._preload_result_lock:
+        controller._preload_generation += 1
+    painted = len(overlay.states)
+
+    with caplog.at_level(logging.WARNING, logger="test.controller"):
+        controller._on_model_preload_done(
+            generation, False, "Model download canceled."
+        )
+
+    assert len(overlay.states) == painted
+    assert controller._preload_cleanup_notes == {}
+    assert "2 incomplete files could not be removed: still in use." in caplog.text
+    controller.shutdown()
+    _ = app

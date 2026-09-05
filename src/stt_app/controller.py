@@ -3868,6 +3868,15 @@ class DictationController(QtCore.QObject):
                     generation,
                     self._preload_generation,
                 )
+                if cleanup_note:
+                    # The model was switched while it downloaded, and the
+                    # new preload's progress line owns the overlay: the
+                    # partials a scanner still holds are logged, not painted.
+                    self._logger.warning(
+                        "Retired model preload generation=%s left partials:%s",
+                        generation,
+                        cleanup_note,
+                    )
                 return
             # Nothing is downloading or loading any more. Leaving the last
             # phase behind made `_current_preload_phase()` keep answering
@@ -3905,8 +3914,14 @@ class DictationController(QtCore.QObject):
         else:
             self._logger.warning("Model preload failed: %s", message)
             if "canceled" in message.lower():
+                # A Settings save that leaves the local engine cancels the
+                # running generation without bumping it and without
+                # `_preload_cancel_requested`, so the worker's "Model
+                # download canceled." arrives here. It carries the cleanup's
+                # count like the explicit-cancel arm above; measured painted
+                # without it on that road while a scanner held the partials.
                 if not session_active:
-                    self._paint_status_keeping_offer("Done", message)
+                    self._paint_status_keeping_offer("Done", message + cleanup_note)
                     QtCore.QTimer.singleShot(1200, self.show_idle_status)
             else:
                 if session_active:
