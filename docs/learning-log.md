@@ -5667,3 +5667,87 @@ by running the breaker's own probe before anything was changed.
   `e8b1456` corrected the three documents and the wave-4 facts review found
   the other five (two source comments, a docstring, three test comments),
   which are corrected in the wave-4 wording commit.
+
+### Wave 4 (2026-09-05) - the third wave on the round-24 fixes
+
+Four read-only breakers (concurrency, reach, boundaries, facts) on
+`aff5fc4..3360dd2`, i.e. on the wave-3 fixes themselves; every finding below
+was reproduced by running the breaker's own probe before anything changed.
+The implementation of the boundaries bundle was delegated to an Opus 5 agent
+and verified here test-first (git-archive proof against HEAD), by review of
+the diff, and by mutation.
+
+**Confirmed and fixed**
+
+- *The wave-3 warm-stream fix introduced two defects, and this wave closed
+  both* (`90ff0d5`, `c5b3e7a`). Holding the PortAudio guard across the warm
+  stream's close froze the Qt thread for the length of a close that nothing
+  bounds -- 3.0 s for a 3 s close, 30.0 s past `_CLOSE_WAIT_S`, after the
+  start beep had played -- because a cold recording start takes that guard
+  on the Qt thread; the close now runs outside the guard, the gap it covered
+  gets one more round, and the workers serialize on a lock of their own.
+  And the guard-first gate let an open parked behind the guard reopen a
+  stream after `close` had run: `_warm_mic_stream` None, one stream still
+  registered after `shutdown()`, every later re-enumeration refused. `close`
+  is terminal now.
+- *Insert offer* (`911e0cc`): nine status writers still painted plainly over
+  the offer -- a queue row's X, Clear queue, the preload's start line, the
+  cancel hotkey during a preload, the tray's copy notices, three Edit
+  refusals, the Retry refusal -- and the preload progress poll, guarding
+  Done/Error results, froze on the offer's Error for the whole download.
+- *Fun-ASR* (`b7cbbd2`): a `result-generated` with nothing in it reset the
+  frame bound (1.4 million receive calls in 2 s); a flood of usable finals
+  grew the transcript without bound (111 MB in 2.5 s); a nested
+  `error_message` object was `str()`-ed.
+- *Retention parse* (`0ea09e9`): `int()` truncation turned `-0.5`, `0.9`
+  and `False` into "keep every recording".
+- *Drain summary* (`363b3a4`): "No incomplete files remained." for three
+  zeros that never read a disk; an empty "Downloaded: " success; the crash
+  arm leaving `_local_model_download_removed_by_cancel` for the next drain.
+- *Wording* (`ab666db`, `62b8ebc`): five sentences that described code not
+  at HEAD, and a repaint test that the AGENTS entry credited with more
+  coverage than it had.
+
+**Refuted, with the evidence**
+
+- "The Local-tab label clips a long summary with no tooltip": the probe set
+  the label's text directly. `_set_local_models_action_text` always sets
+  the tooltip and lets a terminal message grow.
+- "`_last_insert_may_have_pasted` is not reset for a whitespace insert":
+  the early return is not an insert, and resetting there would re-arm an
+  Insert button for a paste that may already have landed. The claim's
+  wording was wrong, not the code.
+- Deadlocks in the warm stream: a five-actor stress run (opener, recorder,
+  restarter, refresher, closer; 47,226 opens, 6,322 idle closes) found no
+  hang and no contract violation, and the lock order is always guard then
+  stream lock.
+- The `_pending_restart` clear in `close_if_idle` before its second consumer
+  check: no reachable schedule, because the flag needs an attached consumer
+  or an open in flight and the first check excludes both.
+
+**Process notes**
+
+- The verification loop is real in the uncomfortable direction: the two
+  most serious findings of this wave were introduced by the previous
+  wave's fix, and neither the wave-3 tests nor the full suite caught them.
+  A fix is a change and re-enters the loop; this is why.
+- `Path.write_text` on Windows writes CRLF. A patch helper goes through
+  bytes; three files were rewritten to CRLF this wave and converted back
+  before committing (`.gitattributes` would have normalized them, but a
+  diff of every line is not a diff anyone can review).
+- A shell chain that gated on `tail -1` committed a red test: the patch's
+  anchor occurred twice and its assertion failed, the heredoc's failure did
+  not stop the chain, and `tail` hid pytest's exit code. Caught before the
+  push and amended. Gate on the exit code of pytest itself, never on a
+  pipeline.
+- Reversing a patch by swapping old and new is only safe when every anchor
+  is unique *after* the patch: a replacement with count 2 became count 3
+  once applied (the painter already had one identical call), the reversal
+  stopped half-way, and the file had to be repaired by context.
+- The mutation harness's failure filter matches any line containing
+  "failed", parametrize ids included. Every DETECTED was read for a
+  `FAILED ...` line and each `-k` selector checked with `--collect-only`.
+- The harness cannot message a running subagent in this session. A scope
+  change (drop the docstring item, add the crash-arm reset) had to be
+  absorbed by the lead: the agent's docstring edit and the lead's code fix
+  landed in the same function and were merged by hand.

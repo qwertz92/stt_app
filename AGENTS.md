@@ -177,6 +177,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   garbage, and reading "unlimited" into garbage would switch pruning off
   silently. Note what the old clamp did with 0: `max(1, int(keep_count or 1))`
   made it "keep exactly one", the most destructive value in the range.
+  **`int()` truncates toward zero before the sign check**, which walked
+  around that negative branch entirely: `-0.5`, `0.9` and `False` in
+  `settings.json` all became 0 -- "keep every recording" -- from values the
+  app never writes and the spin box cannot produce. `_exact_int_or_none`
+  refuses a bool, refuses a non-integral float (`is_integer()` answers
+  False for NaN and both infinities, so one test covers the non-finite
+  cases too) and otherwise delegates to `_int_or_none`; integral floats and
+  numeric strings keep working. `True` is refused with `False`: `int(True)`
+  is a legal count of 1, which would make a boolean in the file look like a
+  setting the user chose.
 - **Model selection is unified on the General tab; Local tab is management-only**:
   "what do I use" (engine, model, language, mode) all live in the General tab's
   "Engine && Mode" group box. A single "Model" form row hosts a
@@ -419,18 +429,45 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **A warm-stream open queues behind the device refresh, and `close_if_idle`
   counts its own closes.** Four things the second wave on the round-24 fixes
   measured, each closed at the place the invariant lives:
-  - **`ensure_started` takes the PortAudio guard before its gate**, and
-    `_refresh_audio_devices_worker` holds that guard across `close_if_idle`
-    and `try_refresh_input_devices`. An open arriving meanwhile -- a settings
-    save's retry, a helper's reopen, a second refresh worker -- waits, then
-    runs its gate against the bumped generation and opens on the fresh device
-    list. With the gate outside the guard it passed first and opened a stream
-    beside the one still closing: `close_if_idle() -> True`,
-    `live_stream_count() -> 1`, the re-enumeration refused and deferred to the
-    next recording stop, i.e. the hot-plugged microphone invisible until the
-    user recorded once. The same hold serializes two workers, which several
-    device notifications more than the settle interval apart used to run
-    side by side.
+  - **`ensure_started` takes the PortAudio guard before its gate**, so an
+    open arriving during the re-enumeration -- which holds the guard inside
+    `try_refresh_input_devices` -- waits and then opens on the fresh device
+    list. With the gate outside the guard it passed first and opened on the
+    list about to be replaced. **The refresh worker does not hold the guard
+    across the close.** It did for one round (`d5e4f2a`), and that froze
+    the Qt thread: a cold recording start takes the guard on the Qt thread,
+    a close on a locked-down stack is bounded by nothing, and the hotkey
+    press played the start beep and then hung the whole UI for the length
+    of the close (measured: 3.0 s for a 3 s close, 30.0 s for one past
+    `_CLOSE_WAIT_S`, 0.000 s with the close outside). `close_if_idle`'s own
+    loop re-reads `_stream` after each close it performs, so a stream that
+    opens *during* the close is retired before it answers True; the gap
+    between its answer and the re-enumeration gets one more round in the
+    worker, which closes a warm stream registered there and re-enumerates
+    again, while a recording's stream is left alone and the refresh
+    deferred to its stop. Note what the generation bump refuses and what it
+    does not: a restart helper's reopen carries a generation and is refused;
+    the settings save's retry and the worker's own reopen carry none and are
+    not, which is why the second round exists. The workers queue on a lock
+    of their own (`_audio_device_refresh_lock`), so several device
+    notifications more than the settle interval apart still run one after
+    the other. `_CLOSE_WAIT_S` bounds `close_if_idle`'s wait for *another
+    thread's* open or close; the closes it performs itself run to completion
+    (measured: a 2.4 s close against a 0.6 s budget answers True after
+    2.41 s, no busy log), and bounding them would mean answering True with a
+    stream still closing.
+  - **`close` is terminal** (`_closed`, checked in the gate under the lock).
+    The controller drops its reference to the stream it closes and builds a
+    fresh one when the feature returns, so an open that passed its gate
+    after `close` was a microphone nothing referenced. With the gate behind
+    the guard, an open parked there while `close` ran -- three Settings
+    saves a second apart during a slow close, off/on/off -- opened
+    afterwards, and `shutdown()` found nothing to close (measured:
+    `_warm_mic_stream` None, one stream registered after shutdown, every
+    later re-enumeration refused). The pre-`d5e4f2a` gate claimed
+    `_starting` before parking and observed the bump in its `finally`; the
+    guard-first gate claims nothing while parked, and the bump refuses only
+    a generation-bearing reopen (above).
   - **`close_if_idle` closes through `_close_retiring`**, inside
     `_closes_in_flight`, and answers True only once nothing is in flight
     *after* its own closes. Closed outside the accounting, a second
@@ -1118,7 +1155,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   refuses after
   `_shutdown_started`: the worker exits when the queue is empty, so an entry
   queued during shutdown would have started a fresh download from the
-  `aboutToQuit` handler's own drain. Progress and its rolling transfer rate are approximate
+  `aboutToQuit` handler's own drain. **The drain's cleanup sentence reports
+  a state, not a file count.** "No incomplete files remained." is a
+  statement about a disk somebody read, and three zeros reached it having
+  read nothing: `_cleanup_unless_awaited` keeps the partials on purpose when
+  another caller is parked to resume them; the `ModelDownloadCanceled` arm
+  of `_download_local_model_in_subprocess` never gets to the disk because
+  the entry was still waiting for the slot; and a Cancel that only emptied
+  the queue, or one after a download that simply finished, interrupted
+  nothing at all. `_CleanupOutcome` carries `_CLEANUP_NONE` / `_CLEANUP_RAN`
+  / `_CLEANUP_KEPT` / `_CLEANUP_SKIPPED` through `_run_download_worker` to
+  the drain: the first says nothing, the kept and skipped ones say why the
+  files were left alone, and the removal sentence is independent of all of
+  them because one drain can remove for one model and keep for another.
+  **A drain that downloaded nothing does not report an empty success**:
+  with nothing downloaded, nothing failed and no Cancel of its own, the
+  summary fell through to "Downloaded: " naming no model in the success
+  colour; not reachable through the UI at HEAD, but it now says "No
+  downloads ran." with success False. **And the crash arm clears
+  `_local_model_download_removed_by_cancel`** along with the four fields it
+  already reset: only `_consume_cancel_locked` empties that list, so the
+  next drain's first Cancel reported the crashed drain's removed models as
+  its own (drain 2 queued `medium` and `large-v3`; its summary named `base`
+  and `small` before them). Progress and its rolling transfer rate are approximate
   because they are derived from cache growth and the estimated total sizes in
   `MODEL_ESTIMATED_SIZE_MB`.
 - **Error text must be selectable**: Qt hands a `QMessageBox` only
@@ -1414,11 +1473,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `copy_text` is the stripped transcript, the same value Insert reads.
   **Every status writer that is not a session result paints through
   `_paint_status_keeping_offer`**: the idle line and the hotkey-error lines
-  of `show_idle_status`, "Nothing to cancel." and "Transcription canceled.",
-  the preload's four end-of-preload lines, the re-paste refusals and the
-  refusal above. Fixing the refusal alone left every one of the others
-  hiding the button while the text stayed pending -- a save, a resume, a
-  Cancel press, a finished preload, "No window to insert into". **And the
+  of `show_idle_status`, "Nothing to cancel." and the three "Transcription
+  canceled." writers (the cancel hotkey, a queue row's X, Clear queue), the
+  preload's start line, progress line, "Canceling model download..." and
+  four end-of-preload lines, the tray's copy notices
+  (`show_overlay_notice`), the three Edit refusals, the Retry refusal, the
+  re-paste refusals and the refusal above. Fixing the refusal alone left
+  every one of the others hiding the button while the text stayed pending
+  -- a save, a resume, a Cancel press, a finished preload, "No window to
+  insert into" -- and the first painter round covered five of them and
+  left nine, which the wave-4 reach review found. The writers that stay
+  plain are session states: "Streaming transcript is still finalizing" and
+  "Retrying transcription..." describe a session that owns the overlay, and
+  a recording start clears the offer anyway. **The preload progress poll
+  repaints the painter's own Error and no other**: the poll skips a Done or
+  Error result on screen, the offer is an Error, so with an offer pending
+  it froze the progress line for the whole download. The painter records
+  `(state, detail)` in `_offer_painted`, and the poll compares that with
+  `OverlayUI.state` and `OverlayUI.detail` -- a result replaces the
+  painter's text, an untouched offer matches it. **And the
   offer carries its own action**: the insert paths that fail *after* the
   paste keystroke went out (four raise sites of `TextMayHaveBeenPastedError`
   in `text_inserter.py`) deliberately withhold Insert -- the text is most
@@ -1429,7 +1502,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   those paths record, decides in the painter as well: the text stays
   readable and copyable, the button stays hidden, the wording says which of
   the two it is. A parametrized test drives every writer except
-  `_refuse_recording_start`, which two tests of its own drive.
+  `_refuse_recording_start`, which two tests of its own drive, and the poll
+  has one of its own.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
   parameter for batch/import requests. `universal-3-5-pro` is sent alone when
   selected; never silently add `universal-2` as a fallback. Legacy
@@ -1495,8 +1569,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   classification, it consumed the frame that would have reset it: exactly
   `_MAX_UNUSABLE_FRAMES` junk frames followed by a real `task-finished`
   reported the transcription as "1001 frames in a row that were not events"
-  (measured). The `task-failed` detail is capped at 300 characters like
-  every HTTP provider's error body. Fields are typed
+  (measured). **A `result-generated` resets the bound only when it carried
+  something.** The reset ran on the header name, before `_sentence_from`,
+  so a flood of `result-generated` frames with no payload, a non-object
+  payload or an empty non-final sentence spun for the whole thirty-minute
+  budget with the bound in place (measured against an instant fake, 1.4
+  million receive calls in 2 s); such a frame is spent like junk. A
+  documented heartbeat still resets it however many arrive, and that flood
+  is bounded by the deadline alone: it is the server saying it is alive, on
+  a parameter this provider asks for, and refusing to count it would fail a
+  long recording on its own keepalive. **The transcript itself is bounded
+  (`_MAX_TRANSCRIPT_CHARS`, 2,000,000).** The frame bound cannot cover a
+  flood of *usable* finals -- each one is the service saying something --
+  so `finalized` grew for the whole budget (measured: 111 MB of heap in
+  2.5 s, about 100 GB over the budget). A recording that fills the budget
+  at a fast 200 words per minute and 8 characters per word carries 48,000
+  characters, so the cap is forty times the plausible maximum; the count is
+  a running total, because a `sum()` per frame is quadratic in exactly the
+  flood it exists for, and the failure carries the recovered-text suffix
+  like every other exit. The `task-failed` detail is capped at 300
+  characters like every HTTP provider's error body, and a nested error
+  object in it is unwrapped through `_http_utils.nested_error_text` rather
+  than `str()`-ed (see the nested-error entry). Fields are typed
   before they are trusted: a `text` that is not a string is "", and
   `sentence_end` is a sentence end only when it is `True`, because a number
   or a list there reached `str.strip` and `bool()` before. The receive loop
@@ -1569,7 +1663,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   number or a list falls back to the JSON text as well, which reads better
   than one field. It is also **not idempotent** -- the body is a stream, a
   second call on the same `HTTPError` returns the status phrase -- and every
-  call site calls it exactly once; do not add a second read.
+  call site calls it exactly once; do not add a second read. **The rule is
+  not HTTP-only, and Fun-ASR broke it**: a `task-failed` header whose
+  `error_message` is `{"message": "quota exceeded", "request_id": "abc"}`
+  reached the user as Python dict syntax with the request id in it, capped
+  mid-dict. `nested_error_text` is the one unwrapping order (`message`,
+  `detail`, `status`, `code`) shared by `read_http_error_detail` and
+  Fun-ASR's `_failure_detail`, which is reached through a parsed WebSocket
+  frame and never through an `HTTPError`. It is deliberately uncapped: the
+  HTTP readers cap at 300 and Fun-ASR at `_FAILURE_DETAIL_MAX_CHARS`, and a
+  helper that capped as well would silently apply the tighter of the two.
+  The last resort is `json.dumps(..., ensure_ascii=False)`, for the same
+  reason the HTTP reader falls back to the body text.
 - **A provider error message is never built from `HTTPError.reason`.** That is
   only the status phrase -- "Bad Request" -- and it drops the one part that
   says what to change: OpenAI's "Invalid file format", ElevenLabs' quota text,
