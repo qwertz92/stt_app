@@ -241,6 +241,10 @@ class OverlayUI(QtWidgets.QWidget):
     language_changed = QtCore.Signal(str)
     queue_cancel_requested = QtCore.Signal(int)
     queue_clear_requested = QtCore.Signal()
+    # The Clear button was pressed; carries the text the cleared state
+    # offered for copying, so the controller can retire a pending Insert
+    # offer that was on screen -- and only that one.
+    detail_cleared = QtCore.Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -879,6 +883,20 @@ class OverlayUI(QtWidgets.QWidget):
     def detail(self) -> str:
         """The detail text last passed to `set_state`."""
         return self._detail
+
+    @property
+    def detail_is_being_read(self) -> bool:
+        """True while the detail is scrolled off its rest position or selected.
+
+        `set_state` scrolls an Error back to the top (every other state to
+        the bottom) and `setText` drops any selection, so a writer that
+        repaints the same text periodically -- the preload progress poll
+        with an Insert offer pending -- has to ask first: it reset the
+        scroll and the selection every 600 ms for the length of a download.
+        """
+        scrollbar = self._detail_scroll.verticalScrollBar()
+        rest = 0 if self._state == "Error" else scrollbar.maximum()
+        return scrollbar.value() != rest or self._detail_label.hasSelectedText()
 
     def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
@@ -1901,8 +1919,13 @@ class OverlayUI(QtWidgets.QWidget):
     def clear_detail_text(self) -> None:
         if not self._detail_label.text().strip():
             return
+        cleared_copy_text = self._copy_text or ""
         self.set_state("Idle", self._idle_default_detail, compact=True)
         self.ensure_compact_size()
+        # After the clear, so a controller that looks sees Idle. It used to
+        # learn nothing: a pending Insert offer dismissed here came back
+        # with the next status paint, 600 ms later during a preload.
+        self.detail_cleared.emit(cleared_copy_text)
         # Deferred, and therefore no longer about the state it was clearing: a
         # queued transcription delivering inside that one event-loop turn puts
         # a transcript on screen, and an unconditional `ensure_compact_size`

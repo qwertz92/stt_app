@@ -79,6 +79,7 @@ class FakeController:
         self.audio_device_refresh_calls = 0
         self.repaste_calls = 0
         self.insert_failed_calls = 0
+        self.detail_cleared_calls: list[str] = []
         self.credentials_invalidated = 0
         self.credentials_providers: list[str] = []
         self.note_foreground_calls = 0
@@ -98,6 +99,9 @@ class FakeController:
 
     def insert_failed_text(self):
         self.insert_failed_calls += 1
+
+    def on_overlay_detail_cleared(self, copy_text):
+        self.detail_cleared_calls.append(copy_text)
 
     def edit_last_transcript(self, overlay):
         pass
@@ -1072,6 +1076,20 @@ class _OverlaySignals(QtCore.QObject):
     language_changed = QtCore.Signal(str)
     queue_cancel_requested = QtCore.Signal(int)
     queue_clear_requested = QtCore.Signal()
+    detail_cleared = QtCore.Signal(str)
+
+
+def test_the_overlay_clear_reaches_the_controller_with_the_cleared_offer():
+    """The overlay's Clear retires the Insert offer it dismissed, which needs
+    the controller to hear of it: pinned by emitting the signal."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = _OverlaySignals()
+    controller = FakeController()
+
+    main_module._connect_overlay_actions(overlay, controller, lambda: None)
+    overlay.detail_cleared.emit(" zweiter teil")
+
+    assert controller.detail_cleared_calls == [" zweiter teil"]
 
 
 def test_the_overlay_insert_action_reaches_the_failed_text_slot_not_the_tray_re_paste():

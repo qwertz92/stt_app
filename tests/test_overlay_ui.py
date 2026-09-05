@@ -2012,3 +2012,54 @@ def test_the_overlay_reports_the_state_it_is_showing():
         app.processEvents()
         assert overlay.state == state
     overlay.hide()
+
+
+def test_overlay_reports_when_its_detail_is_scrolled_or_selected():
+    """`set_state` scrolls an Error to the top and drops any selection; a
+    writer that repaints the same Error periodically has to ask first."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    overlay.set_state("Error", "reason\n\n" + "wort " * 900)
+    assert overlay.detail_is_being_read is False
+    scrollbar = overlay._detail_scroll.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+
+    scrollbar.setValue(scrollbar.maximum())
+    assert overlay.detail_is_being_read is True
+    scrollbar.setValue(0)
+    assert overlay.detail_is_being_read is False
+
+    overlay._detail_label.setSelection(0, 6)
+    assert overlay.detail_is_being_read is True
+    overlay.set_state("Error", "another reason")
+    assert overlay.detail_is_being_read is False
+
+    # Every other state rests at the bottom.
+    overlay.set_state("Done", "wort " * 900)
+    assert overlay.detail_is_being_read is False
+    overlay._detail_scroll.verticalScrollBar().setValue(0)
+    assert overlay.detail_is_being_read is True
+
+
+def test_overlay_clear_reports_the_text_the_cleared_state_offered():
+    """Clear used to write Idle without telling anyone, so a pending Insert
+    offer dismissed with it came back on the next status paint. The signal
+    carries the cleared state's copy text, which is what the offer is."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    cleared = []
+    overlay.detail_cleared.connect(cleared.append)
+    overlay.set_state(
+        "Error",
+        "reason\n\nStill not inserted:\n zweiter teil",
+        copy_text=" zweiter teil",
+        error_action=OVERLAY_ERROR_ACTION_INSERT,
+    )
+
+    overlay._clear_button.click()
+
+    assert cleared == [" zweiter teil"]
+    assert overlay.state == "Idle"
+    overlay.set_state("Done", "plain transcript")
+    overlay._clear_button.click()
+    assert cleared == [" zweiter teil", ""]

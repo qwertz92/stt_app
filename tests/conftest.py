@@ -190,6 +190,8 @@ class FakeOverlay:
         self.reveal_calls = 0
         self.reveal_durations = []
         self.queue_updates = []
+        # Mirrors `OverlayUI.detail_is_being_read`; a test sets it.
+        self.detail_is_being_read = False
 
     def set_state(self, state, detail="", **kwargs):
         self.states.append((state, detail))

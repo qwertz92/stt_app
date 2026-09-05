@@ -81,6 +81,7 @@ def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
     overlay.cancel_requested.connect(controller.cancel_current_action)
     overlay.queue_cancel_requested.connect(controller.cancel_queued_transcription)
     overlay.queue_clear_requested.connect(controller.clear_transcription_queue)
+    overlay.detail_cleared.connect(controller.on_overlay_detail_cleared)
     overlay.opacity_changed.connect(controller.set_overlay_opacity_percent)
     overlay.always_on_top_changed.connect(controller.set_overlay_always_on_top)
     overlay.language_changed.connect(controller.set_language_mode)

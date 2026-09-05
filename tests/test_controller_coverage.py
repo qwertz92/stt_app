@@ -5836,6 +5836,7 @@ def test_a_resume_that_changes_the_registration_keeps_the_insert_offer():
         "edit_update_failed",
         "retry_refusal",
         "cancel_preload",
+        "edit_success",
     ],
 )
 def test_a_status_repaint_keeps_the_pending_insert_offer(repaint, monkeypatch):
@@ -5952,6 +5953,17 @@ def test_a_status_repaint_keeps_the_pending_insert_offer(repaint, monkeypatch):
         _stage_a_running_preload(controller)
         controller.cancel_current_action()
         assert "Canceling model download..." in overlay.states[-1][1]
+    elif repaint == "edit_success":
+        # The tray's confirmation of an edit is no more a session result
+        # than its three refusals, which were routed while it was not.
+        monkeypatch.setattr(
+            "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+            staticmethod(lambda parent, text: "korrigierter text"),
+        )
+        assert controller._last_history_entry is not None
+        controller._history_store.update_entry_text = lambda entry, text: 1
+        assert controller.edit_last_transcript(None) is True
+        assert overlay.states[-1][1].startswith("korrigierter text")
 
     state, detail = overlay.states[-1]
     assert state == "Error"
@@ -6137,4 +6149,274 @@ def test_the_overlay_insert_after_a_background_failure_pastes_what_is_displayed(
         assert inserter.calls[-1][0] == "der transkript"
     finally:
         controller.shutdown()
+    _ = app
+
+
+class _PostPasteFailsFor(FakeTextInserter):
+    """Fails after the paste keystroke for one text, succeeds for the rest."""
+
+    def __init__(self, fail_for):
+        super().__init__()
+        self.fail_for = fail_for
+
+    def insert_text_with_options(
+        self, text, target_hwnd=None, paste_mode="auto", restore_clipboard=True
+    ):
+        from stt_app.text_inserter import TextMayHaveBeenPastedError
+
+        self.calls.append((text, target_hwnd, paste_mode))
+        if text == self.fail_for:
+            raise TextMayHaveBeenPastedError(
+                "Text was pasted but the clipboard restore failed."
+            )
+        return True
+
+
+class _SwitchableInserter(FakeTextInserter):
+    """`should_fail` fails before the paste keystroke, `post_paste` after it."""
+
+    post_paste = False
+
+    def insert_text_with_options(
+        self, text, target_hwnd=None, paste_mode="auto", restore_clipboard=True
+    ):
+        from stt_app.text_inserter import (
+            TextInsertionError,
+            TextMayHaveBeenPastedError,
+        )
+
+        self.calls.append((text, target_hwnd, paste_mode))
+        if self.post_paste:
+            raise TextMayHaveBeenPastedError(
+                "Text was pasted but the clipboard restore failed."
+            )
+        if self.should_fail:
+            raise TextInsertionError("failed insert")
+        return True
+
+
+def _queued_job(controller, token, handle):
+    return controller_module._TranscriptionJob(
+        token=token,
+        engine="local",
+        model="parakeet-tdt-0.6b-v3",
+        mode="batch",
+        settings=controller.settings,
+        target_handle=handle,
+        target_signature=None,
+    )
+
+
+def test_a_later_paste_in_the_same_flush_does_not_re_arm_a_withheld_offer():
+    """`_last_insert_may_have_pasted` is per insert attempt; the offer outlives
+    it. One flush pastes two queued transcripts into two windows: the first
+    fails after its paste keystroke (offer recorded, Insert withheld), the
+    second succeeds and resets the flag -- and every status writer then
+    offered an Insert that pasted the first transcript a second time
+    (measured through nine writers). The offer carries its own flag."""
+    inserter = _PostPasteFailsFor("Der erste Absatz.")
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(
+                hotkey=FALLBACK_HOTKEY,
+                keep_transcript_in_clipboard=False,
+                model_size="parakeet-tdt-0.6b-v3",
+            )
+        ),
+        overlay=overlay,
+        text_inserter=inserter,
+        window_focus_helper=FakeWindowFocusHelper(),
+    )
+    first = _queued_job(controller, 1, 111)
+    second = _queued_job(controller, 2, 222)
+    controller._jobs[1] = first
+    controller._jobs[2] = second
+    controller._deferred_background_results = [
+        (first, "Der erste Absatz."),
+        (second, "Der zweite Absatz."),
+    ]
+
+    controller._flush_deferred_background_results()
+
+    assert [call[0] for call in inserter.calls] == [
+        "Der erste Absatz.",
+        "Der zweite Absatz.",
+    ]
+    assert controller._insert_action_text == "Der erste Absatz."
+    assert controller._last_insert_may_have_pasted is False
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+
+    controller.show_overlay_notice("Last transcript copied to clipboard.")
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "check the target window" in detail
+    assert "Still not inserted" not in detail
+    assert "Der erste Absatz." in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    controller.shutdown()
+    _ = app
+
+
+def test_another_transcripts_post_paste_failure_leaves_a_pending_offer_its_button():
+    """The mirror image. The offer is a streaming tail that never reached a
+    window (Insert offered). While a queued job still owns the overlay, a
+    different queued transcript fails after its paste keystroke: the
+    background report returns early without touching the offer, but the
+    per-attempt flag is now True -- and the next status writer called the
+    tail "possibly inserted already" and hid the only button that pastes it
+    without the prefix."""
+    inserter = _SwitchableInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_job(controller)
+    assert controller._overlay_session_active()
+    inserter.post_paste = True
+    other = _queued_job(controller, 7, 555)
+    inserted, claimed = controller._insert_background_transcription(
+        other, "ein anderer text"
+    )
+    inserter.post_paste = False
+    assert (inserted, claimed) == (False, False)
+    assert controller._insert_action_text == " zweiter teil"
+    assert controller._last_insert_may_have_pasted is True
+
+    controller.cancel_queued_transcription(99)
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Still not inserted" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+    controller.shutdown()
+    _ = app
+
+
+def test_the_offers_own_re_paste_failing_after_the_keystroke_withholds_insert():
+    """The one insert that does change the offer's flag is a re-paste of the
+    offer itself: the text most likely in the document now is the offer's."""
+    inserter = _SwitchableInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    inserter.post_paste = True
+
+    controller.insert_failed_text()
+    inserter.post_paste = False
+    controller.show_overlay_notice("Last transcript copied to clipboard.")
+
+    detail = overlay.states[-1][1]
+    assert "check the target window" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    controller.shutdown()
+    _ = app
+
+
+def test_the_progress_line_names_the_cancel_hotkey_while_the_offer_holds_the_slot():
+    """With an Insert offer pending the progress line is painted as an Error
+    whose action slot holds Insert (or a disabled Cancel), so "Use Cancel to
+    abort download." named a button that was not on screen for the length of
+    a multi-gigabyte fetch. The cancel hotkey still reaches the preload;
+    without one nothing on the overlay does, and the sentence is dropped."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    assert controller._register_all_global_hotkeys()
+    _stage_a_running_preload(controller)
+    hotkey = controller._settings.cancel_hotkey
+    assert hotkey
+    # The preload's start line: the poll repaints only the painter's own
+    # Error, and here it repaints it with the real progress detail.
+    controller._paint_status_keeping_offer("Processing", "Loading selected model...")
+
+    controller._on_preload_progress_poll()
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert "Use Cancel" not in detail
+    assert f"Press {hotkey} to abort download." in detail
+    assert "Still not inserted" in detail
+
+    controller._settings = replace(controller._settings, cancel_hotkey="")
+    controller._on_preload_progress_poll()
+    detail = overlay.states[-1][1]
+    assert "abort" not in detail
+    assert "waits for this model.\n\nStill not inserted" in detail
+
+    controller._retire_insert_offer()
+    overlay.set_state("Processing", "Loading selected model...")
+    controller._on_preload_progress_poll()
+    assert overlay.states[-1][1].endswith("Use Cancel to abort download.")
+    controller.shutdown()
+    _ = app
+
+
+def test_the_progress_poll_leaves_an_offer_the_user_is_reading_alone():
+    """`set_state` scrolls an Error back to the top and `setText` drops the
+    selection, so the poll's 600 ms repaint of the offer made reading or
+    selecting the pending transcript impossible for the length of the
+    download (measured on the real overlay: scrolled to 134, back to 0;
+    a selection, gone). Scrolled or selected, the offer is left alone."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_preload(controller)
+    controller._preload_progress_detail = lambda: "Downloading model... approx. 45%"
+    controller._paint_status_keeping_offer("Processing", "Loading selected model...")
+    painted = len(overlay.states)
+
+    overlay.detail_is_being_read = True
+    controller._on_preload_progress_poll()
+    assert len(overlay.states) == painted
+
+    overlay.detail_is_being_read = False
+    controller._on_preload_progress_poll()
+    assert len(overlay.states) == painted + 1
+    assert overlay.states[-1][1].startswith("Downloading model... approx. 45%")
+    controller.shutdown()
+    _ = app
+
+
+def test_clearing_the_offer_from_the_overlay_dismisses_it():
+    """The overlay's Clear wrote Idle without the controller learning of it,
+    so the dismissed offer came straight back: repainted by the poll 600 ms
+    later during a preload, and re-offered by every later status writer."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_preload(controller)
+    controller._preload_progress_detail = lambda: "Downloading model... approx. 45%"
+    controller._paint_status_keeping_offer("Processing", "Loading selected model...")
+
+    # A Clear on a different Error leaves an offer the user has not seen.
+    controller.on_overlay_detail_cleared("some other transcript")
+    assert controller._insert_action_text == " zweiter teil"
+
+    # What `OverlayUI.clear_detail_text` does, then what it reports.
+    overlay.set_state("Idle", "Press Ctrl+Alt+Space to dictate.")
+    controller.on_overlay_detail_cleared(" zweiter teil")
+
+    assert controller._insert_action_text == ""
+    controller._on_preload_progress_poll()
+    assert overlay.states[-1] == ("Processing", "Downloading model... approx. 45%")
+    controller.show_overlay_notice("Last transcript copied to clipboard.")
+    assert "Still not inserted" not in overlay.states[-1][1]
+    assert "error_action" not in overlay.state_kwargs[-1]
+    controller.shutdown()
+    _ = app
+
+
+def test_the_progress_poll_leaves_a_transcription_in_flight_alone():
+    """Changing the model in Settings while a dictation is still transcribing
+    starts a preload beside the running job. After `stop_recording` there is
+    no capture and no stream, only the request token, and the poll painted
+    the download progress over "Transcribing audio..." -- with an offer
+    pending, as a red Error."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_preload(controller)
+    _stage_a_running_job(controller)
+    overlay.set_state("Processing", "Transcribing audio...")
+    controller._preload_progress_detail = lambda: "Downloading model... approx. 45%"
+
+    controller._on_preload_progress_poll()
+
+    assert overlay.states[-1] == ("Processing", "Transcribing audio...")
+    controller.shutdown()
     _ = app
