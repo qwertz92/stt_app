@@ -6420,3 +6420,27 @@ def test_the_progress_poll_leaves_a_transcription_in_flight_alone():
     assert overlay.states[-1] == ("Processing", "Transcribing audio...")
     controller.shutdown()
     _ = app
+
+
+def test_the_trays_re_paste_of_the_whole_dictation_marks_the_tail_offer():
+    """The offer is the streaming tail; the tray's "Insert transcript again"
+    pastes the whole dictation, which carries it. Equality was the test, so
+    that re-paste failing after its keystroke left the offer's own flag
+    False and the next repaint armed Insert for words that had just gone out
+    (measured: the tail reached the inserter three times)."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    assert controller._last_transcript == "erster teil zweiter teil"
+
+    _post_paste_failure(inserter)
+    controller.repaste_last_transcript()
+
+    assert inserter.calls[-1][0] == "erster teil zweiter teil"
+    assert controller._insert_offer_may_have_pasted is True
+    controller.show_overlay_notice("Last transcript copied to clipboard.")
+    detail = overlay.states[-1][1]
+    assert "check the target window" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_NONE
+    controller.shutdown()
+    _ = app

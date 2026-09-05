@@ -3489,6 +3489,21 @@ class DictationController(QtCore.QObject):
         else:
             self._preload_progress_timer.stop()
 
+    def _paste_carried_the_offer(self, insertion_text: str) -> bool:
+        """Did this paste carry the pending offer's words?
+
+        Equality was the test, and the tray's "Insert transcript again"
+        pastes `_last_transcript`, the whole dictation -- of which a
+        streaming tail's offer is the last part. Measured: the tail's
+        insert failed before the keystroke, the tray's re-paste failed after
+        it, and the next repaint armed Insert for words that had just
+        reached the window, so pressing it pasted them a third time.
+        Compared with the whitespace folded, because the tail is inserted
+        with a leading space that the transcript does not carry.
+        """
+        offer = " ".join(self._insert_action_text.split())
+        return bool(offer) and offer in " ".join(insertion_text.split())
+
     def _preload_abort_hint(self, action: str) -> str:
         """The " Use Cancel to <action>." sentence, or the hotkey, or nothing.
 
@@ -5674,10 +5689,11 @@ class DictationController(QtCore.QObject):
             # know, or it offers the same words again and they land twice.
             may_have_pasted = isinstance(exc, TextMayHaveBeenPastedError)
             self._last_insert_may_have_pasted = may_have_pasted
-            if may_have_pasted and insertion_text == self._insert_action_text:
-                # The pending offer's own re-paste: its text is now the one
-                # most likely in the document, whatever a later, unrelated
-                # insert does to the per-attempt flag above.
+            if may_have_pasted and self._paste_carried_the_offer(insertion_text):
+                # The pending offer's own re-paste, or the tray's re-paste of
+                # the dictation the offer is the tail of: its text is now the
+                # one most likely in the document, whatever a later,
+                # unrelated insert does to the per-attempt flag above.
                 self._insert_offer_may_have_pasted = True
             if may_have_pasted:
                 # The text is probably already in the document. Offering the
