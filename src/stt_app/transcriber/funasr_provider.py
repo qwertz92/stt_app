@@ -71,7 +71,8 @@ class _UnusableFrameBudget:
     Spent only on a frame that has been *classified* as unusable -- by
     `_recv_event` for what is not a JSON object, by the transcript loop for
     an object that is not one of its events and for a `result-generated`
-    that carries neither text nor a sentence end. Spent on every frame
+    that changes nothing: no text, and no pending partial for an empty final
+    to close. Spent on every frame
     before classification, it consumed the frame that would have reset it:
     exactly `_MAX_UNUSABLE_FRAMES` junk frames followed by a real
     `task-finished` reported the transcription as "1001 frames in a row that
@@ -398,29 +399,45 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         return "", False
 
     @staticmethod
-    def _failure_detail(value: object) -> str:
+    def _failure_detail(error_message: object, error_code: object) -> str:
         """What the service said, unwrapped from the shape it said it in.
 
         `str()` of a nested error object hands the user Python dict syntax
         with the request id in it, capped mid-dict -- the shape
         `read_http_error_detail` already refuses for the HTTP providers, so
         its unwrapping order is shared rather than copied
-        (`nested_error_text`). A JSON dump is the last resort for an object
-        with no text field, for the same reason the HTTP reader falls back to
-        the body text; it cannot raise, because everything reaching here came
-        out of `json.loads` in `_recv_event`.
+        (`nested_error_text`). The message's text comes first, then the
+        code's, then a JSON dump of whichever of the two is an object with no
+        text field, for the same reason the HTTP reader falls back to the
+        body text. The code is asked before the dump, and both fields are
+        asked rather than `error_message or error_code`: that let a blank
+        message -- `"   "`, or `{"message": ""}` -- hide the one diagnostic
+        the service sent (measured: "Fun-ASR task failed." for a header
+        carrying `Throttling.RateQuota`). It cannot raise, because everything
+        reaching here came out of `json.loads` in `_recv_event`.
         """
-        if value is None:
-            return ""
-        if isinstance(value, str):
-            return value.strip()
-        return nested_error_text(value) or json.dumps(value, ensure_ascii=False)
+
+        def text_of(value: object) -> str:
+            if isinstance(value, str):
+                return value.strip()
+            return nested_error_text(value)
+
+        detail = text_of(error_message) or text_of(error_code)
+        if detail:
+            return detail
+        for value in (error_message, error_code):
+            if value is None or isinstance(value, str):
+                continue
+            if isinstance(value, (dict, list)) and not value:
+                continue
+            return json.dumps(value, ensure_ascii=False)
+        return ""
 
     def _fail_message(self, message: dict) -> str:
         header = message.get("header")
         if isinstance(header, dict):
             detail = self._failure_detail(
-                header.get("error_message") or header.get("error_code")
+                header.get("error_message"), header.get("error_code")
             )
             if detail:
                 return (
@@ -534,7 +551,8 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         budget.reset()
                         continue
                     text, sentence_end = self._sentence_from(message)
-                    if not (text or sentence_end):
+                    text = text.strip()
+                    if not text and not (sentence_end and current):
                         # A `result-generated` with no payload, a payload that
                         # is not an object, or an empty non-final sentence:
                         # the header names an event and the frame carries
@@ -543,7 +561,11 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         # frame was inspected, so a flood of these spun for
                         # the whole thirty-minute budget with the bound in
                         # place (measured: 1.4 million receive calls in 2 s
-                        # against an instant fake).
+                        # against an instant fake) -- and gated on `text or
+                        # sentence_end` it still spun for an empty final with
+                        # no partial pending, a whitespace-only partial and an
+                        # empty flat `output.text` (1.0-1.4 million in 3 s),
+                        # none of which changes anything below.
                         budget.spend()
                         continue
                     # An event that carried something: the run of frames that
@@ -561,6 +583,12 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         # 'Hallo', empty final, task-finished -> ''.
                         final_text = text or current
                         if final_text:
+                            if finalized:
+                                # The join's separator: the bound is on the
+                                # transcript handed back, and two million
+                                # one-character sentences returned twice the
+                                # cap with the separators uncounted.
+                                finalized_chars += 1
                             finalized.append(final_text)
                             finalized_chars += len(final_text)
                         current = ""

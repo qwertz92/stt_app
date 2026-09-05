@@ -790,13 +790,40 @@ class TestFunAsrUnusableFrames:
 
     @pytest.mark.parametrize(
         "frame",
-        [b"\x00\x01", "[1, 2]", "42", "not json"],
-        ids=["binary", "json-list", "json-number", "not-json"],
+        [
+            b"\x00\x01",
+            "[1, 2]",
+            "42",
+            "not json",
+            _event("result-generated"),
+            _event("result-generated", "", True),
+            _event("result-generated", "   ", False),
+            json.dumps(
+                {
+                    "header": {"event": "result-generated", "task_id": "t"},
+                    "payload": {"output": {"text": ""}},
+                }
+            ),
+        ],
+        ids=[
+            "binary",
+            "json-list",
+            "json-number",
+            "not-json",
+            "no-payload",
+            "empty-final-nothing-pending",
+            "whitespace-partial",
+            "flat-empty-text",
+        ],
     )
     def test_every_kind_of_unusable_frame_is_counted(self, frame):
         """Each of the reader's three skip arms spends the budget, and the
         transcript loop's own skip does too: a flood of any one kind fails
-        one frame past the bound and succeeds at the bound."""
+        one frame past the bound and succeeds at the bound. The last three
+        passed a gate of `text or sentence_end` -- an empty final with no
+        partial pending, a whitespace-only partial, an empty flat text --
+        and each spun for the whole budget (measured: 1.0-1.4 million
+        receive calls in 3 s against an instant fake)."""
         from stt_app.transcriber import funasr_provider as provider
 
         limit = provider._MAX_UNUSABLE_FRAMES
@@ -1067,3 +1094,124 @@ class TestFunAsrRunTask:
 
         run = json.loads(ws.sent_text[0])
         assert run["payload"]["parameters"]["heartbeat"] is True
+
+
+class TestFunAsrWave5Boundaries:
+    def test_an_empty_final_that_closes_a_pending_partial_still_resets_the_bound(self):
+        """The frame that changes state -- a final with no text closing the
+        partial before it -- is an event; only one that changes nothing is
+        spent. Gating on `text` alone would spend it and fail a session
+        whose junk happened to surround such a final."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        limit = provider._MAX_UNUSABLE_FRAMES
+        events = [
+            _event("task-started"),
+            *(["not json"] * limit),
+            _event("result-generated", "hallo", False),
+            *(["not json"] * limit),
+            _event("result-generated", "", True),
+            *(["not json"] * limit),
+            _event("task-finished"),
+        ]
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=FakeWS(events)):
+            assert t.transcribe_batch(_wav_bytes()) == "hallo"
+
+    def test_the_transcript_bound_counts_the_separators_it_returns(self, monkeypatch):
+        """Two million one-character sentences came back as 3,999,999
+        characters: the join's separators were not in the running total, so
+        the transcript handed back was twice the cap."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "_MAX_TRANSCRIPT_CHARS", 40)
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        exactly = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "a" * 20, True),
+                _event("result-generated", "b" * 19, True),
+                _event("task-finished"),
+            ]
+        )
+        with patch.object(FunAsrTranscriber, "_connect", return_value=exactly):
+            assert t.transcribe_batch(_wav_bytes()) == "a" * 20 + " " + "b" * 19
+
+        one_over = FakeWS(
+            [
+                _event("task-started"),
+                _event("result-generated", "a" * 20, True),
+                _event("result-generated", "b" * 20, True),
+                _event("task-finished"),
+            ]
+        )
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=one_over),
+            pytest.raises(TranscriptionError, match="more transcript text"),
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+    @pytest.mark.parametrize(
+        ("error_message", "error_code", "expected"),
+        [
+            ("   ", "Throttling.RateQuota", "Fun-ASR task failed: Throttling.RateQuota"),
+            ("\n", "Throttling.RateQuota", "Fun-ASR task failed: Throttling.RateQuota"),
+            (
+                {"message": ""},
+                "Throttling.RateQuota",
+                "Fun-ASR task failed: Throttling.RateQuota",
+            ),
+            (
+                {"message": "   "},
+                "Throttling.RateQuota",
+                "Fun-ASR task failed: Throttling.RateQuota",
+            ),
+            (
+                "quota exceeded",
+                "Throttling.RateQuota",
+                "Fun-ASR task failed: quota exceeded",
+            ),
+            (
+                {"request_id": "abc"},
+                "Throttling.RateQuota",
+                "Fun-ASR task failed: Throttling.RateQuota",
+            ),
+            (
+                {"request_id": "abc"},
+                "",
+                'Fun-ASR task failed: {"request_id": "abc"}',
+            ),
+            ("", 429, "Fun-ASR task failed: 429"),
+            ("   ", "   ", "Fun-ASR task failed."),
+            ({}, None, "Fun-ASR task failed."),
+            (None, None, "Fun-ASR task failed."),
+        ],
+        ids=[
+            "blank-message",
+            "newline-message",
+            "object-with-empty-message",
+            "object-with-blank-message",
+            "message-wins-over-code",
+            "code-wins-over-object-without-text",
+            "object-dumped-when-nothing-else",
+            "numeric-code",
+            "both-blank",
+            "empty-object",
+            "neither",
+        ],
+    )
+    def test_a_blank_message_does_not_hide_the_error_code(
+        self, error_message, error_code, expected
+    ):
+        """`error_message or error_code` let a blank message -- "   ", or
+        `{"message": ""}` -- hide the one diagnostic the service sent
+        (measured: "Fun-ASR task failed." for a header carrying
+        `Throttling.RateQuota`)."""
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        header: dict = {"event": "task-failed", "task_id": "t"}
+        if error_message is not None:
+            header["error_message"] = error_message
+        if error_code is not None:
+            header["error_code"] = error_code
+
+        assert t._fail_message({"header": header}) == expected
