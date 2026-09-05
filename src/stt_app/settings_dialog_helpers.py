@@ -356,6 +356,16 @@ _COMPACT_LIST_ROW_EXTRA_PX = 4
 _COMPACT_TABLE_ROW_EXTRA_PX = 4
 
 
+def compact_table_row_height(widget: QtWidgets.QTableWidget) -> int:
+    """Row height of the dialog's compact tables.
+
+    A free function rather than a `SettingsDialog` method: the benchmark
+    results panel uses it too and is a plain widget, embedded both in the
+    dialog and in a window of its own.
+    """
+    return max(widget.fontMetrics().height() + _COMPACT_TABLE_ROW_EXTRA_PX, 18)
+
+
 _LOCAL_MODEL_AUTO_REFRESH_DELAY_MS = 150
 
 

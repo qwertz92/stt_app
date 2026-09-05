@@ -53,7 +53,6 @@ from .settings_dialog_helpers import (
     _ACTION_ROW_SPACING_PX,
     _COMPACT_LIST_ITEM_STYLESHEET,
     _COMPACT_LIST_ROW_EXTRA_PX,
-    _COMPACT_TABLE_ROW_EXTRA_PX,
     _DEFAULT_SETTINGS_DIALOG_SIZE,
     _DIALOG_SCREEN_MARGIN,
     _FIELD_HINT_MIN_WIDTH_PX,
@@ -667,10 +666,6 @@ class SettingsDialog(
         item: QtWidgets.QListWidgetItem,
     ) -> None:
         item.setSizeHint(cls._compact_list_item_size(widget))
-
-    @staticmethod
-    def _compact_table_row_height(widget: QtWidgets.QTableWidget) -> int:
-        return max(widget.fontMetrics().height() + _COMPACT_TABLE_ROW_EXTRA_PX, 18)
 
     @staticmethod
     def _minimum_list_height_for_rows(

@@ -2277,7 +2277,13 @@ def test_benchmark_tab_hosts_history_and_results_directly():
     assert splitter.childrenCollapsible() is False
     assert splitter.count() == 2
     assert splitter.indexOf(dialog.benchmark_history_list.parentWidget()) == 0
-    assert splitter.indexOf(dialog.benchmark_results_splitter.parentWidget()) == 1
+    # The results box holds a `BenchmarkResultsPanel`, which owns the splitter
+    # between the table and the details view, so the box is the panel's parent.
+    assert splitter.indexOf(dialog.benchmark_results_panel.parentWidget()) == 1
+    assert (
+        dialog.benchmark_results_splitter.parentWidget()
+        is dialog.benchmark_results_panel
+    )
     assert dialog.benchmark_history_list.minimumHeight() >= 90
 
     note_bottom = dialog.benchmark_history_note_label.mapTo(

@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 
 from PySide6 import QtCore, QtWidgets
+from test_benchmark_transcript_ui import _entry, _run
 from test_settings_dialog_connection import (
     _FakeLogger,
     _FakeSecretStore,
@@ -12,6 +13,7 @@ from test_settings_dialog_connection import (
 
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
+from stt_app.settings_dialog_benchmark import BenchmarkResultsPanel
 from stt_app.settings_store import AppSettings
 
 _RESULT_HEADERS = [
@@ -246,4 +248,64 @@ def test_every_results_column_says_how_sorting_works():
         assert "a third click restores the run order" in tooltip, column
     # The Resolved Device explanation is kept, not replaced.
     assert "runtime" in table.horizontalHeaderItem(2).toolTip()
+    _ = app
+
+
+def test_the_results_panel_shows_a_stored_run_on_its_own():
+    """The panel is the whole Results view, usable outside the settings tab."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = BenchmarkResultsPanel()
+    entry = _entry([_run(1, "hello world"), _run(2, "hello world")])
+
+    panel.show_entry(entry)
+
+    assert panel.results_table.rowCount() == 1
+    assert panel.results_table.item(0, 0).text() == "1"
+    assert panel.results_table.item(0, 1).text() == "small"
+    assert panel.details_view.toPlainText() == entry.summary
+    assert panel.details_view.transcripts_table.rowCount() == 2
+    assert panel.splitter.widget(0) is panel.results_table
+    assert panel.splitter.widget(1) is panel.details_view
+
+    panel.set_status_text("Running benchmark...")
+
+    assert panel.details_view.toPlainText() == "Running benchmark..."
+    assert panel.details_view.transcripts_table.rowCount() == 0
+
+    panel.show_live("live summary", list(entry.cases))
+
+    assert panel.results_table.rowCount() == 1
+    assert panel.details_view.toPlainText() == "live summary"
+
+    panel.clear()
+
+    assert panel.results_table.rowCount() == 0
+    assert panel.details_view.toPlainText() == ""
+    _ = app
+
+
+def test_a_cleared_panel_does_not_bring_the_result_back_on_the_next_sort():
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    panel = BenchmarkResultsPanel()
+    panel.show_cases(_mixed_cases())
+
+    panel.clear()
+    panel.results_table.horizontalHeader().sectionClicked.emit(1)
+
+    assert panel.results_table.rowCount() == 0
+    _ = app
+
+
+def test_the_benchmark_tab_addresses_the_panels_own_widgets():
+    dialog, app = _dialog()
+
+    panel = dialog.benchmark_results_panel
+    assert isinstance(panel, BenchmarkResultsPanel)
+    assert dialog.benchmark_results_table is panel.results_table
+    assert dialog.benchmark_summary_text is panel.details_view
+    assert dialog.benchmark_results_splitter is panel.splitter
+    assert (
+        dialog.benchmark_transcripts_table is panel.details_view.transcripts_table
+    )
+    assert dialog.benchmark_transcript_text is panel.details_view.transcript_text
     _ = app

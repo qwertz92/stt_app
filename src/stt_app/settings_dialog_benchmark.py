@@ -38,6 +38,7 @@ from .settings_dialog_helpers import (
     _emit_background_signal,
     _WheelPassthroughComboBox,
     _WheelPassthroughSpinBox,
+    compact_table_row_height,
 )
 from .ui_feedback import restore_vertical_scrollbar
 
@@ -565,6 +566,167 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
             )
 
 
+class BenchmarkResultsPanel(QtWidgets.QWidget):
+    """The Results view: the sortable case table over the details tabs.
+
+    The Benchmark tab embeds one instance and keeps its old widget attribute
+    names as aliases to this panel's widgets; ``BenchmarkResultsWindow`` puts
+    another instance in a top-level window so two stored runs can be read side
+    by side. Everything that fills the table lives here and nowhere else, so
+    the tab and a pop-out cannot drift apart.
+    """
+
+    def __init__(self, parent: QtWidgets.QWidget | None = None) -> None:
+        super().__init__(parent)
+        # The cases currently shown, always in run order; the sort state only
+        # decides how they are laid out, so it survives a live run appending a
+        # case and a history entry being loaded.
+        self._benchmark_results_cases: list[BenchmarkCase] = []
+        self._benchmark_results_sort: tuple[int, QtCore.Qt.SortOrder] | None = None
+
+        # Expanding, because the group box that hosts the panel in the tab
+        # gives its extra height to whichever child asks for it -- the splitter
+        # did before the panel wrapped it, and a Preferred wrapper would have
+        # kept the results area at its minimum.
+        self.setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding,
+            QtWidgets.QSizePolicy.Expanding,
+        )
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        self._splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
+        self._splitter.setChildrenCollapsible(False)
+
+        self._results_table = QtWidgets.QTableWidget(
+            0, len(_BENCHMARK_RESULT_COLUMNS)
+        )
+        self._results_table.setMinimumHeight(110)
+        self._results_table.setHorizontalHeaderLabels(
+            list(_BENCHMARK_RESULT_COLUMNS)
+        )
+        for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
+            header_item = self._results_table.horizontalHeaderItem(column)
+            if header_item is None:
+                continue
+            tooltip = _BENCHMARK_SORT_TOOLTIP
+            if column == _BENCHMARK_RESULT_DEVICE_COLUMN:
+                tooltip = f"{_BENCHMARK_DEVICE_COLUMN_TOOLTIP}\n\n{tooltip}"
+            header_item.setToolTip(tooltip)
+        self._results_table.setStyleSheet(_BENCHMARK_RESULT_SURFACE_STYLESHEET)
+        self._results_table.verticalHeader().setVisible(False)
+        row_height = compact_table_row_height(self._results_table)
+        self._results_table.verticalHeader().setMinimumSectionSize(row_height)
+        self._results_table.verticalHeader().setDefaultSectionSize(row_height)
+        self._results_table.setEditTriggers(
+            QtWidgets.QAbstractItemView.NoEditTriggers
+        )
+        self._results_table.setSelectionMode(
+            QtWidgets.QAbstractItemView.NoSelection
+        )
+        self._results_table.setHorizontalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        self._results_table.setVerticalScrollMode(
+            QtWidgets.QAbstractItemView.ScrollPerPixel
+        )
+        results_header = self._results_table.horizontalHeader()
+        results_header.setStretchLastSection(True)
+        results_header.setSectionResizeMode(
+            _BENCHMARK_RESULT_RUN_ORDER_COLUMN,
+            QtWidgets.QHeaderView.ResizeToContents,
+        )
+        results_header.setSectionsClickable(True)
+        # Switched on once and left on: `setSortIndicatorShown(False)` shrinks
+        # every ResizeToContents column by the space the arrow would need
+        # (measured on the `#` column: 43 -> 32 px), so toggling it per state
+        # would move the table on every third click. The "no sort" state uses
+        # section -1 instead, which paints no arrow at all.
+        results_header.setSortIndicatorShown(True)
+        results_header.sectionClicked.connect(self._on_header_clicked)
+        self._apply_sort_indicator()
+        self._splitter.addWidget(self._results_table)
+
+        self._details_view = _BenchmarkDetailsView()
+        self._details_view.setMinimumHeight(220)
+        self._splitter.addWidget(self._details_view)
+        self._splitter.setSizes([130, 260])
+        layout.addWidget(self._splitter)
+
+    @property
+    def results_table(self) -> QtWidgets.QTableWidget:
+        return self._results_table
+
+    @property
+    def details_view(self) -> _BenchmarkDetailsView:
+        return self._details_view
+
+    @property
+    def splitter(self) -> QtWidgets.QSplitter:
+        return self._splitter
+
+    def show_entry(self, entry: BenchmarkHistoryEntry) -> None:
+        """Show a stored run: its cases plus its full context and transcripts."""
+        self.show_cases(entry.cases)
+        self._details_view.set_entry(entry)
+
+    def show_live(self, summary: str, cases: list[BenchmarkCase]) -> None:
+        """Show the cases a running benchmark has finished so far."""
+        self.show_cases(cases)
+        self._details_view.set_live_results(summary, cases)
+
+    def show_cases(self, cases: list[BenchmarkCase]) -> None:
+        """Fill the table only, keeping whatever sort the reader chose."""
+        self._benchmark_results_cases = list(cases)
+        self._render()
+
+    def clear(self) -> None:
+        self.show_cases([])
+        self._details_view.clear()
+
+    def set_status_text(self, text: str) -> None:
+        """Show an interim line where a complete entry would go."""
+        self._details_view.setPlainText(str(text))
+
+    def _render(self) -> None:
+        cases = self._benchmark_results_cases
+        table = self._results_table
+        table.setRowCount(len(cases))
+        order = _benchmark_result_order(cases, self._benchmark_results_sort)
+        for row, index in enumerate(order):
+            case = cases[index]
+            for column, value in enumerate(
+                _benchmark_result_row_values(index, case)
+            ):
+                item = QtWidgets.QTableWidgetItem(value)
+                if column == _BENCHMARK_RESULT_STATUS_COLUMN:
+                    detail = case.error or case.runtime_details
+                    if detail:
+                        item.setToolTip(detail)
+                table.setItem(row, column, item)
+
+    def _on_header_clicked(self, column: int) -> None:
+        self._benchmark_results_sort = _next_benchmark_sort_state(
+            self._benchmark_results_sort,
+            int(column),
+        )
+        self._apply_sort_indicator()
+        self._render()
+
+    def _apply_sort_indicator(self) -> None:
+        header = self._results_table.horizontalHeader()
+        if self._benchmark_results_sort is None:
+            # Verified on PySide6 6.11.1: section -1 keeps
+            # `isSortIndicatorShown()` True but paints no arrow on any column,
+            # which is what the run-order state needs -- see the comment where
+            # the flag is switched on.
+            header.setSortIndicator(-1, QtCore.Qt.AscendingOrder)
+            return
+        column, order = self._benchmark_results_sort
+        header.setSortIndicator(column, order)
+
+
 def _facade():
     """Return the settings_dialog facade module.
 
@@ -722,81 +884,18 @@ class _BenchmarkMixin:
         results_layout = QtWidgets.QVBoxLayout(results_box)
         results_layout.setContentsMargins(10, 10, 10, 10)
         results_layout.setSpacing(6)
-        self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
-        self.benchmark_results_splitter.setChildrenCollapsible(False)
-        # The cases the table currently shows, always in run order; the sort
-        # state only decides how they are laid out, so it survives a live run
-        # appending a case and a history entry being loaded.
-        self._benchmark_results_cases: list[BenchmarkCase] = []
-        self._benchmark_results_sort: tuple[int, QtCore.Qt.SortOrder] | None = None
-        self.benchmark_results_table = QtWidgets.QTableWidget(
-            0, len(_BENCHMARK_RESULT_COLUMNS)
-        )
-        self.benchmark_results_table.setMinimumHeight(110)
-        self.benchmark_results_table.setHorizontalHeaderLabels(
-            list(_BENCHMARK_RESULT_COLUMNS)
-        )
-        for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
-            header_item = self.benchmark_results_table.horizontalHeaderItem(column)
-            if header_item is None:
-                continue
-            tooltip = _BENCHMARK_SORT_TOOLTIP
-            if column == _BENCHMARK_RESULT_DEVICE_COLUMN:
-                tooltip = f"{_BENCHMARK_DEVICE_COLUMN_TOOLTIP}\n\n{tooltip}"
-            header_item.setToolTip(tooltip)
-        self.benchmark_results_table.setStyleSheet(
-            _BENCHMARK_RESULT_SURFACE_STYLESHEET
-        )
-        self.benchmark_results_table.verticalHeader().setVisible(False)
-        benchmark_row_height = self._compact_table_row_height(
-            self.benchmark_results_table
-        )
-        self.benchmark_results_table.verticalHeader().setMinimumSectionSize(
-            benchmark_row_height
-        )
-        self.benchmark_results_table.verticalHeader().setDefaultSectionSize(
-            benchmark_row_height
-        )
-        self.benchmark_results_table.setEditTriggers(
-            QtWidgets.QAbstractItemView.NoEditTriggers
-        )
-        self.benchmark_results_table.setSelectionMode(
-            QtWidgets.QAbstractItemView.NoSelection
-        )
-        self.benchmark_results_table.setHorizontalScrollMode(
-            QtWidgets.QAbstractItemView.ScrollPerPixel
-        )
-        self.benchmark_results_table.setVerticalScrollMode(
-            QtWidgets.QAbstractItemView.ScrollPerPixel
-        )
-        results_header = self.benchmark_results_table.horizontalHeader()
-        results_header.setStretchLastSection(True)
-        results_header.setSectionResizeMode(
-            _BENCHMARK_RESULT_RUN_ORDER_COLUMN,
-            QtWidgets.QHeaderView.ResizeToContents,
-        )
-        results_header.setSectionsClickable(True)
-        # Switched on once and left on: `setSortIndicatorShown(False)` shrinks
-        # every ResizeToContents column by the space the arrow would need
-        # (measured on the `#` column: 43 -> 32 px), so toggling it per state
-        # would move the table on every third click. The "no sort" state uses
-        # section -1 instead, which paints no arrow at all.
-        results_header.setSortIndicatorShown(True)
-        results_header.sectionClicked.connect(
-            self._on_benchmark_results_header_clicked
-        )
-        self._apply_benchmark_results_sort_indicator()
-        self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
-
-        self.benchmark_summary_text = _BenchmarkDetailsView()
+        self.benchmark_results_panel = BenchmarkResultsPanel()
+        # Aliases, not copies: every seam that addressed these widgets before
+        # the panel existed -- the rest of this mixin and the tests -- keeps
+        # working, and there is still exactly one of each widget.
+        self.benchmark_results_splitter = self.benchmark_results_panel.splitter
+        self.benchmark_results_table = self.benchmark_results_panel.results_table
+        self.benchmark_summary_text = self.benchmark_results_panel.details_view
         self.benchmark_transcripts_table = (
             self.benchmark_summary_text.transcripts_table
         )
         self.benchmark_transcript_text = self.benchmark_summary_text.transcript_text
-        self.benchmark_summary_text.setMinimumHeight(220)
-        self.benchmark_results_splitter.addWidget(self.benchmark_summary_text)
-        self.benchmark_results_splitter.setSizes([130, 260])
-        results_layout.addWidget(self.benchmark_results_splitter)
+        results_layout.addWidget(self.benchmark_results_panel)
 
         results_actions = QtWidgets.QHBoxLayout()
         self._configure_button_row(results_actions)
@@ -1370,55 +1469,16 @@ class _BenchmarkMixin:
         self._current_benchmark_entry = None
         self._current_benchmark_options = None
         self._current_benchmark_environment = None
-        # Through the populate path, not `setRowCount(0)`: the stored cases are
-        # what a later header click re-renders from, so clearing only the rows
-        # would bring the cleared result back on the next sort.
-        self._populate_benchmark_results([])
-        self.benchmark_summary_text.clear()
+        # Through the panel, not `setRowCount(0)`: the cases it holds are what
+        # a later header click re-renders from, so clearing only the rows would
+        # bring the cleared result back on the next sort.
+        self.benchmark_results_panel.clear()
         self._set_benchmark_status("", "#555")
         self._update_benchmark_actions()
 
     def _populate_benchmark_results(self, cases: list[BenchmarkCase]) -> None:
-        self._benchmark_results_cases = list(cases)
-        self._render_benchmark_results()
-
-    def _render_benchmark_results(self) -> None:
-        """Lay the stored cases out under the current sort state."""
-        cases = self._benchmark_results_cases
-        table = self.benchmark_results_table
-        table.setRowCount(len(cases))
-        order = _benchmark_result_order(cases, self._benchmark_results_sort)
-        for row, index in enumerate(order):
-            case = cases[index]
-            for column, value in enumerate(
-                _benchmark_result_row_values(index, case)
-            ):
-                item = QtWidgets.QTableWidgetItem(value)
-                if column == _BENCHMARK_RESULT_STATUS_COLUMN:
-                    detail = case.error or case.runtime_details
-                    if detail:
-                        item.setToolTip(detail)
-                table.setItem(row, column, item)
-
-    def _on_benchmark_results_header_clicked(self, column: int) -> None:
-        self._benchmark_results_sort = _next_benchmark_sort_state(
-            self._benchmark_results_sort,
-            int(column),
-        )
-        self._apply_benchmark_results_sort_indicator()
-        self._render_benchmark_results()
-
-    def _apply_benchmark_results_sort_indicator(self) -> None:
-        header = self.benchmark_results_table.horizontalHeader()
-        if self._benchmark_results_sort is None:
-            # Verified on PySide6 6.11.1: section -1 keeps
-            # `isSortIndicatorShown()` True but paints no arrow on any column,
-            # which is what the run-order state needs -- see the comment where
-            # the flag is switched on.
-            header.setSortIndicator(-1, QtCore.Qt.AscendingOrder)
-            return
-        column, order = self._benchmark_results_sort
-        header.setSortIndicator(column, order)
+        """Fill the tab's results table; the panel owns how that is done."""
+        self.benchmark_results_panel.show_cases(cases)
 
     def _benchmark_summary(
         self,
@@ -1552,8 +1612,8 @@ class _BenchmarkMixin:
         self._current_benchmark_environment = None
         cancel_event = threading.Event()
         self._benchmark_cancel_event = cancel_event
-        self._populate_benchmark_results([])
-        self.benchmark_summary_text.setPlainText(
+        self.benchmark_results_panel.show_cases([])
+        self.benchmark_results_panel.set_status_text(
             self._benchmark_summary([], status="running", options=options)
         )
         self._update_benchmark_actions()
@@ -1725,7 +1785,7 @@ class _BenchmarkMixin:
             # Overview's Status row -- so Details went on reading "running"
             # for a benchmark that never began, contradicting the status line
             # right next to it.
-            self.benchmark_summary_text.setPlainText(
+            self.benchmark_results_panel.set_status_text(
                 f"Could not start the benchmark: {exc}"
             )
         self._update_benchmark_actions()
@@ -1737,12 +1797,11 @@ class _BenchmarkMixin:
         if not isinstance(payload, BenchmarkCase):
             return
         self._current_benchmark_cases.append(payload)
-        self._populate_benchmark_results(self._current_benchmark_cases)
         summary = self._benchmark_summary(
             self._current_benchmark_cases,
             status="running",
         )
-        self.benchmark_summary_text.set_live_results(
+        self.benchmark_results_panel.show_live(
             summary,
             self._current_benchmark_cases,
         )
@@ -1782,7 +1841,6 @@ class _BenchmarkMixin:
             status = "completed_with_errors"
         self._current_benchmark_cases = cases
         self._current_benchmark_options = options
-        self._populate_benchmark_results(cases)
         history_error = ""
 
         if cases and options is not None:
@@ -1794,7 +1852,7 @@ class _BenchmarkMixin:
                 environment=self._current_benchmark_environment,
             )
             self._current_benchmark_entry = entry
-            self.benchmark_summary_text.set_entry(entry)
+            self.benchmark_results_panel.show_entry(entry)
             try:
                 self._benchmark_history_store.add_entry(entry)
             except Exception as exc:
@@ -1804,7 +1862,8 @@ class _BenchmarkMixin:
                 self._refresh_benchmark_history_list(select_entry=entry)
         else:
             self._current_benchmark_entry = None
-            self.benchmark_summary_text.setPlainText(text)
+            self.benchmark_results_panel.show_cases(cases)
+            self.benchmark_results_panel.set_status_text(text)
             self._refresh_benchmark_history_list()
 
         if history_error:
@@ -1946,8 +2005,7 @@ class _BenchmarkMixin:
         self._current_benchmark_options = entry.options
         self._current_benchmark_environment = entry.environment
         self._current_benchmark_cases = list(entry.cases)
-        self._populate_benchmark_results(entry.cases)
-        self.benchmark_summary_text.set_entry(entry)
+        self.benchmark_results_panel.show_entry(entry)
         self._set_benchmark_status("Loaded benchmark history entry.", "#555")
         self._expand_benchmark_results_area()
         self._update_benchmark_actions()
