@@ -1431,3 +1431,63 @@ def test_warm_close_if_idle_re_arms_the_budget_after_a_wait_then_an_own_close(mo
     assert audio_devices.live_stream_count() == live_before
     assert warm.is_running is False
     _TimedCloseStream.close_delays = []
+
+
+def test_warm_close_if_idle_does_not_re_arm_for_a_close_a_helper_took_first(monkeypatch):
+    """The re-arm ran after every pass through the retiring branch, whether
+    or not this call closed anything -- and a stream a helper popped in the
+    gap between the branch and `_close_retiring` is that helper's close,
+    another thread's work, which the one budget is meant to bound. Each such
+    pass granted a fresh budget, so a second actor handing a stream over
+    every budget-minus-epsilon kept the call from ever answering (measured:
+    True after 2.59 s against a 0.4 s budget, no busy line). The re-arm
+    follows an own close only, and the hand-overs run the budget out.
+
+    Forced schedule: `_close_retiring` is wrapped so a helper thread runs the
+    real one first and the call's own real one then finds nothing."""
+    monkeypatch.setattr(WarmMicrophoneStream, "_CLOSE_WAIT_S", 0.4)
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _TimedCloseStream)
+    _TimedCloseStream.close_delays = []
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    real_close_retiring = warm._close_retiring
+    helpers: list = []
+
+    def _a_helper_gets_there_first():
+        helper = threading.Thread(target=real_close_retiring, daemon=True)
+        helper.start()
+        helpers.append(helper)
+        assert _wait_until(lambda: not warm._retiring), "the helper did not take the stream"
+        return real_close_retiring()
+
+    monkeypatch.setattr(warm, "_close_retiring", _a_helper_gets_there_first)
+    stop = threading.Event()
+
+    def _hand_streams_over():
+        for _ in range(8):
+            if stop.wait(0.3):
+                return
+            with warm._idle:
+                warm._retiring.append(_TimedCloseStream())
+                warm._idle.notify_all()
+
+    # A close in flight at entry, so the call waits and arms its budget.
+    with warm._idle:
+        warm._closes_in_flight += 1
+    producer = threading.Thread(target=_hand_streams_over, daemon=True)
+    producer.start()
+    started = time.perf_counter()
+    try:
+        answer = warm.close_if_idle()
+        elapsed = time.perf_counter() - started
+    finally:
+        stop.set()
+        with warm._idle:
+            warm._closes_in_flight -= 1
+            warm._idle.notify_all()
+        producer.join(timeout=5)
+        for helper in helpers:
+            helper.join(timeout=5)
+
+    assert answer is False, f"answered True after {elapsed:.2f}s with hand-overs every 0.3 s"
+    assert elapsed < 1.0, f"the hand-overs re-armed the budget: {elapsed:.2f}s"
+    assert len(helpers) >= 1, "no hand-over reached the retiring branch"

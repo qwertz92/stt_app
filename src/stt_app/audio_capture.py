@@ -487,7 +487,11 @@ class WarmMicrophoneStream:
         the lock first (measured: the helper reopened, this method then waited
         for that open and closed the new stream, and the test timed out
         inside the second close). Bumped first, the helper's reopen is
-        refused whichever thread wins (see `ensure_started`). A wait that
+        refused whichever thread wins (see `ensure_started`) -- and a
+        restart requested between the bump and the loop reopens with the
+        bumped generation, which the loop then finds and closes before
+        answering (forced schedule: the helper's reopen returned True, no
+        stream registered at the answer). A wait that
         runs out answers False and logs; the caller then defers the refresh
         as it does for an attached consumer -- and because the bump already
         cancelled the helper's reopen, the stream stays closed until that
@@ -497,11 +501,13 @@ class WarmMicrophoneStream:
         Its own closes go through `_close_retiring`, i.e. are counted in
         `_closes_in_flight`, and it answers True only once nothing is in
         flight *after* they are done. Closed outside the accounting, a
-        second `close_if_idle` -- two device notifications more than the
-        settle interval apart, or Settings > Refresh during one -- found
-        nothing to wait for and answered True while the first was still
-        inside `stream.close()` (measured: `live_stream_count() -> 1`, the
-        re-enumeration refused). The loop re-reads `_stream` after every
+        second `close_if_idle` found nothing to wait for and answered True
+        while the first was still inside `stream.close()` (measured:
+        `live_stream_count() -> 1`, the re-enumeration refused). The
+        controller cannot produce that pair any more -- its two routes
+        serialize on `_audio_device_refresh_lock` -- but a helper thread's
+        `_close_retiring` has the same shape. The loop re-reads `_stream`
+        after every
         close it performs, so an open that lands *during* the close -- the
         guard is free then -- is retired before this answers True. What it
         cannot cover is the gap between its answer and the caller's
@@ -509,8 +515,10 @@ class WarmMicrophoneStream:
         registered there and re-enumerates once more.
         """
         # Armed when a wait begins and re-armed after every close this call
-        # performs itself, so the budget bounds one wait for another
-        # thread's work and never the own closes (see the docstring).
+        # performs itself -- not after a pass in which a helper took the
+        # retired stream first, which is another thread's work and inside
+        # the budget -- so the budget bounds one wait for another thread's
+        # work and never the own closes (see the docstring).
         deadline: float | None = None
         with self._lock:
             if self._consumer is not None:
@@ -549,8 +557,8 @@ class WarmMicrophoneStream:
                         return False
                     self._idle.wait(remaining)
                     continue
-            self._close_retiring()
-            deadline = None
+            if self._close_retiring():
+                deadline = None
 
     def close(self) -> None:
         """Close for good; no open passes the gate afterwards.
@@ -578,19 +586,23 @@ class WarmMicrophoneStream:
         self._close_retiring()
         self.ensure_started(generation=generation)
 
-    def _close_retiring(self) -> None:
+    def _close_retiring(self) -> int:
         """Close every retired stream, one at a time, outside the lock.
 
         Whoever gets to a retired stream first closes it -- a helper, `close`,
         or `close_if_idle` -- and `close_if_idle` waits for the ones a helper
-        has already taken, which is what `_closes_in_flight` counts.
+        has already taken, which is what `_closes_in_flight` counts. Returns
+        how many this call closed: `close_if_idle` re-arms its budget after
+        an own close and not after a pass in which a helper got there first.
         """
+        closed = 0
         while True:
             with self._lock:
                 if not self._retiring:
-                    return
+                    return closed
                 stream = self._retiring.pop(0)
                 self._closes_in_flight += 1
+                closed += 1
             try:
                 _close_input_stream(
                     stream,
