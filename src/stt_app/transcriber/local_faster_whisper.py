@@ -5,6 +5,7 @@ import logging
 import os
 import queue
 import shutil
+import stat
 import tempfile
 import threading
 import time
@@ -150,15 +151,18 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     for base_dir in search_dirs:
         # `Path` equality does not fold `..`, so a Model Dir spelled through
         # the default cache with one listed the same directory twice, and a
-        # held partial in it was counted as two files left.
+        # held partial in it was counted as two files left. Nor does it fold
+        # an 8.3 short name onto the long spelling (`AVERYL~1` beside
+        # `a very long name`): the property wanted is "the same directory
+        # on disk", which `realpath` answers for a directory that exists and
+        # leaves a missing one as spelled. The returned paths keep the
+        # spelling the user gave.
         base = Path(os.path.normpath(base_dir))
-        hf_style = base / folder_name
-        flat = base / repo_basename
-        for path in (hf_style, flat):
-            if path in seen:
-                continue
-            seen.add(path)
-            dirs.append(path)
+        key = Path(os.path.realpath(base))
+        if key in seen:
+            continue
+        seen.add(key)
+        dirs.extend((base / folder_name, base / repo_basename))
     return dirs
 
 
@@ -300,6 +304,20 @@ _PARTIAL_LEFT = "left"
 _PARTIAL_RETRY_DELAY_S = 0.01
 
 
+def _clear_read_only(path: Path) -> None:
+    """Give a read-only file its write bit back, best-effort."""
+    try:
+        mode = path.stat().st_mode
+    except OSError:
+        return
+    if mode & stat.S_IWRITE:
+        return
+    try:
+        path.chmod(mode | stat.S_IWRITE)
+    except OSError:
+        pass
+
+
 def _unlink_partial(path: Path) -> str:
     """Remove one partial file; say whether it was removed, gone, or left.
 
@@ -321,6 +339,12 @@ def _unlink_partial(path: Path) -> str:
         return _PARTIAL_GONE
     except OSError:
         pass
+    # A read-only partial is refused for good and is not "in use": a backup
+    # tool restored it, or a copy carried the attribute over. The resume
+    # could not append to it either, so it is as unusable as any other
+    # partial, and clearing the attribute lets the retry decide (measured:
+    # reported as "still in use" on every cleanup with nothing holding it).
+    _clear_read_only(path)
     time.sleep(_PARTIAL_RETRY_DELAY_S)
     try:
         path.unlink()

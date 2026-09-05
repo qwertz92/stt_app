@@ -4,6 +4,7 @@ model preloading, and API validation."""
 from __future__ import annotations
 
 import os
+import stat
 import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -609,6 +610,20 @@ class TestEstimateCachedModelBytes:
         assert size == 1_000
 
 
+def _short_path_name(path):
+    """The 8.3 spelling Windows keeps for `path`, or the path itself."""
+    import ctypes
+    from ctypes import wintypes
+
+    get_short = ctypes.windll.kernel32.GetShortPathNameW
+    get_short.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    get_short.restype = wintypes.DWORD
+    buffer = ctypes.create_unicode_buffer(1024)
+    if not get_short(str(path), buffer, 1024):
+        return str(path)
+    return buffer.value
+
+
 class TestDeleteCachedModel:
     def _make_hf_cache(self, root: Path, repo_id: str) -> Path:
         folder_name = f"models--{repo_id.replace('/', '--')}"
@@ -766,6 +781,54 @@ class TestDeleteCachedModel:
 
         with locked.open("rb"):
             outcome = cleanup_incomplete_model_download("small", spelled)
+
+        assert tuple(outcome) == (0, 0, 1)
+
+    def test_a_read_only_partial_is_removed_rather_than_called_in_use(self, tmp_path):
+        """A read-only attribute -- a backup tool restored the partial, a
+        copy carried it over -- refuses the unlink for good, and the file
+        was reported as "still in use" on every cleanup while nothing held
+        it. It is as unusable as any partial (the resume could not append
+        to it either), so the attribute is cleared and the retry removes
+        it, counted with its size."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        partial = blobs / "small.incomplete"
+        partial.write_bytes(b"x" * 1000)
+        os.chmod(partial, stat.S_IREAD)
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
+            return_value=[blobs.parent],
+        ):
+            outcome = cleanup_incomplete_model_download("small")
+
+        assert tuple(outcome) == (1, 1000, 0)
+        assert not partial.exists()
+
+    @pytest.mark.skipif(os.name != "nt", reason="8.3 short names are a Windows spelling")
+    def test_a_model_dir_spelled_as_a_short_name_counts_a_held_partial_once(
+        self, tmp_path, monkeypatch
+    ):
+        """`normpath` is lexical: `AVERYL~1` and `a very long directory name`
+        name one directory on disk and were two search roots, so one held
+        partial was reported as two files still in use -- the observable
+        01adf24 fixed for `..`, reached through a spelling no lexical
+        normaliser folds."""
+        hub = tmp_path / "a very long directory name for eight dot three"
+        blobs = hub / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        short = _short_path_name(hub)
+        if short.lower() == str(hub).lower():
+            pytest.skip("8.3 short names are disabled on this volume")
+        locked = blobs / "locked.incomplete"
+        locked.write_bytes(b"y" * 10)
+        monkeypatch.setattr(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            lambda: str(hub),
+        )
+
+        with locked.open("rb"):
+            outcome = cleanup_incomplete_model_download("small", short)
 
         assert tuple(outcome) == (0, 0, 1)
 
