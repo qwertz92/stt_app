@@ -1359,3 +1359,75 @@ def test_warm_close_if_idle_budgets_the_wait_after_its_own_close(monkeypatch):
     assert audio_devices.live_stream_count() == live_before
     assert warm.is_running is False
     _TimedCloseStream.close_delays = []
+
+
+def test_warm_close_if_idle_re_arms_the_budget_after_a_wait_then_an_own_close(monkeypatch):
+    """The budget is armed when the first wait starts, so an own close that
+    comes *before* any wait is covered by that alone (the test above). Armed
+    once and never again, a wait, then an own close longer than the budget,
+    then a second open in flight gave up at once: the second wait found the
+    deadline the first wait had armed already spent by the close in between,
+    answered False and logged busy for a stack that had finished. Each own
+    close re-arms it, so the second open is waited for and closed.
+
+    The sequence: a restart helper is closing the first stream when
+    `close_if_idle` enters (the wait that arms the budget); a generation-less
+    open -- the settings save's retry -- lands after the bump and publishes a
+    stream, which `close_if_idle` retires and closes itself for 0.7 s against
+    a 0.6 s budget; a third open starts during that close and finishes after
+    it. An open in flight *at entry* would not do: the bump supersedes it and
+    it retires its own stream on its own thread, which is another thread's
+    close and rightly bounded by one budget."""
+    monkeypatch.setattr(WarmMicrophoneStream, "_CLOSE_WAIT_S", 0.6)
+    third_open = threading.Event()
+    opens: list = []
+
+    def _factory(**kwargs):
+        opens.append(kwargs)
+        if len(opens) == 3:
+            assert third_open.wait(timeout=10)
+        return _TimedCloseStream(**kwargs)
+
+    monkeypatch.setattr("stt_app.audio_capture.sd.InputStream", _factory)
+    # the helper's close of the first stream, then the own close of the second
+    _TimedCloseStream.close_delays = [0.4, 0.7]
+    live_before = audio_devices.live_stream_count()
+    warm = WarmMicrophoneStream(sample_rate=16000, channels=1)
+    assert warm.ensure_started() is True
+    warm.request_restart()
+    assert _wait_until(lambda: warm._closes_in_flight == 1), "no close in flight"
+
+    def _open_after_the_bump():
+        time.sleep(0.1)
+        warm.ensure_started()
+
+    def _open_during_the_own_close():
+        time.sleep(0.5)
+        warm.ensure_started()
+
+    def _finish_the_third_open():
+        time.sleep(1.3)
+        third_open.set()
+
+    threads = [
+        threading.Thread(target=_open_after_the_bump, daemon=True),
+        threading.Thread(target=_open_during_the_own_close, daemon=True),
+        threading.Thread(target=_finish_the_third_open, daemon=True),
+    ]
+    for thread in threads:
+        thread.start()
+    started = time.perf_counter()
+    try:
+        answer = warm.close_if_idle()
+        elapsed = time.perf_counter() - started
+    finally:
+        third_open.set()
+        for thread in threads:
+            thread.join(timeout=5)
+
+    assert len(opens) == 3, f"expected three opens, saw {len(opens)}"
+    assert answer is True, f"gave up after {elapsed:.2f}s with the third open in flight"
+    assert elapsed >= 1.25, "it answered before the third open had finished"
+    assert audio_devices.live_stream_count() == live_before
+    assert warm.is_running is False
+    _TimedCloseStream.close_delays = []
