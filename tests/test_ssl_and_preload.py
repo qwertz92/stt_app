@@ -687,6 +687,88 @@ class TestDeleteCachedModel:
         assert locked.exists(), "the held file was reported as removed"
         assert not removable.exists()
 
+    def test_a_partial_another_program_is_deleting_is_not_reported_as_left(
+        self, tmp_path, monkeypatch
+    ):
+        """A file being deleted by another program -- a virus scanner
+        quarantining it, the killed download child tearing down -- refuses
+        the unlink with "access denied" (WinError 5) and is gone a moment
+        later, and was counted as still in use: measured with a racing
+        deleter, 343 files "could not be removed" on an empty disk. Only
+        a file that is still there is left: refused twice and gone, it is
+        the other program's delete that landed."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        partial = blobs / "small.incomplete"
+        partial.write_bytes(b"x" * 1000)
+
+        def _deleted_under_our_feet(self, missing_ok=False):
+            if self.exists():
+                os.remove(self)
+            raise PermissionError(13, "Access is denied")
+
+        monkeypatch.setattr(Path, "unlink", _deleted_under_our_feet)
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
+            return_value=[blobs.parent],
+        ):
+            outcome = cleanup_incomplete_model_download("small")
+
+        assert tuple(outcome) == (0, 0, 0)
+        assert not partial.exists()
+
+    def test_a_partial_refused_once_is_removed_by_the_retry(self, tmp_path, monkeypatch):
+        """A lock that was only transient -- the download child's handle
+        closing as it dies -- refuses the first unlink and not the second;
+        the retry removes the file and counts it as removed, with its size."""
+        blobs = tmp_path / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        partial = blobs / "small.incomplete"
+        partial.write_bytes(b"x" * 1000)
+        real_unlink = Path.unlink
+        refusals: list = []
+
+        def _refuse_once(self, missing_ok=False):
+            if not refusals:
+                refusals.append(self)
+                raise PermissionError(32, "The process cannot access the file")
+            real_unlink(self, missing_ok=missing_ok)
+
+        monkeypatch.setattr(Path, "unlink", _refuse_once)
+        with patch(
+            "stt_app.transcriber.local_faster_whisper._model_cache_dirs",
+            return_value=[blobs.parent],
+        ):
+            outcome = cleanup_incomplete_model_download("small")
+
+        assert tuple(outcome) == (1, 1000, 0)
+        assert refusals == [partial]
+        assert not partial.exists()
+
+    @pytest.mark.skipif(os.name != "nt", reason="an open handle blocks unlink on Windows")
+    def test_a_model_dir_spelled_through_the_cache_counts_a_held_partial_once(
+        self, tmp_path, monkeypatch
+    ):
+        """`_model_cache_dirs` dedupes by `Path` equality, which does not
+        fold `..`: a Model Dir written as `<cache>/x/../hub` beside the
+        default cache `<cache>/hub` listed the same directory twice, and
+        one held partial was reported as two files still in use."""
+        hub = tmp_path / "hub"
+        blobs = hub / "models--Systran--faster-whisper-small" / "blobs"
+        blobs.mkdir(parents=True)
+        locked = blobs / "locked.incomplete"
+        locked.write_bytes(b"y" * 10)
+        monkeypatch.setattr(
+            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            lambda: str(hub),
+        )
+        spelled = str(tmp_path / "elsewhere" / ".." / "hub")
+
+        with locked.open("rb"):
+            outcome = cleanup_incomplete_model_download("small", spelled)
+
+        assert tuple(outcome) == (0, 0, 1)
+
 
 # ---------------------------------------------------------------------------
 # Preload model

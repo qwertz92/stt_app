@@ -148,7 +148,10 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     seen: set[Path] = set()
     dirs: list[Path] = []
     for base_dir in search_dirs:
-        base = Path(base_dir)
+        # `Path` equality does not fold `..`, so a Model Dir spelled through
+        # the default cache with one listed the same directory twice, and a
+        # held partial in it was counted as two files left.
+        base = Path(os.path.normpath(base_dir))
         hf_style = base / folder_name
         flat = base / repo_basename
         for path in (hf_style, flat):
@@ -289,6 +292,45 @@ class IncompleteCleanup(NamedTuple):
     left_files: int = 0
 
 
+_PARTIAL_REMOVED = "removed"
+_PARTIAL_GONE = "gone"
+_PARTIAL_LEFT = "left"
+# Long enough for a delete another program has under way to finish; a held
+# file is refused again after it either way.
+_PARTIAL_RETRY_DELAY_S = 0.01
+
+
+def _unlink_partial(path: Path) -> str:
+    """Remove one partial file; say whether it was removed, gone, or left.
+
+    A refused unlink means "held by another program" only while the file
+    stays on the disk. Windows refuses the unlink with ERROR_ACCESS_DENIED
+    while another program is deleting the same file -- a scanner
+    quarantining it, the killed download child tearing down -- and the file
+    is gone a moment later; counted as left, that was 343 files "could not
+    be removed: still in use" on an empty disk (measured with a racing
+    deleter), and `exists()` alone still answered True for a few of them
+    inside that moment. One retry after a short pause tells the cases
+    apart: a held file is refused again, a file being deleted is not found,
+    and a lock that was only transient lets the retry remove it.
+    """
+    try:
+        path.unlink()
+        return _PARTIAL_REMOVED
+    except FileNotFoundError:
+        return _PARTIAL_GONE
+    except OSError:
+        pass
+    time.sleep(_PARTIAL_RETRY_DELAY_S)
+    try:
+        path.unlink()
+        return _PARTIAL_REMOVED
+    except FileNotFoundError:
+        return _PARTIAL_GONE
+    except OSError:
+        return _PARTIAL_LEFT if path.exists() else _PARTIAL_GONE
+
+
 def cleanup_incomplete_model_download(
     model_name: str,
     model_dir: str = "",
@@ -313,14 +355,14 @@ def cleanup_incomplete_model_download(
                 continue
             try:
                 size = path.stat().st_size
-                path.unlink()
-            except FileNotFoundError:
-                continue
             except OSError:
-                left_files += 1
                 continue
-            removed_files += 1
-            removed_bytes += size
+            outcome = _unlink_partial(path)
+            if outcome == _PARTIAL_REMOVED:
+                removed_files += 1
+                removed_bytes += size
+            elif outcome == _PARTIAL_LEFT:
+                left_files += 1
 
         try:
             directories = sorted(
