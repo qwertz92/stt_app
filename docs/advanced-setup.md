@@ -546,6 +546,15 @@ canceled run. **Export** is optional: it writes the loaded history entry to CSV,
 XLSX, or Markdown for sharing or further analysis; it is not required to keep
 the result in the app.
 
+The **Run Benchmark** window lists every case the current selection will measure
+before anything starts: one row per model, device target, and compute type,
+numbered in the order they run. Each row changes to *Running...* and then to its
+measured status; after a cancel or a failure everything that never delivered a
+result reads *Skipped*. While a run is active the Benchmark tab shows a progress
+bar next to its status line, and the button beside it changes from
+**Run Benchmark...** to **Show Progress...**, which brings the running window
+back without stopping the run.
+
 Benchmark History is a real column-based table rather than a text summary. Load
 an entry and open the **Transcripts** result tab to compare the complete output
 from every model, device target, and measured run. Selecting a row shows the
@@ -556,6 +565,14 @@ each model/device case with its first measured run:
 - **Differs from run 1** means at least one character differs; review the two
   rows to decide whether the variation is meaningful.
 - **Not stored (legacy)** identifies history saved by an older app version.
+
+Click a column header in the results table to sort by that column: the first
+click sorts ascending, the second descending, and the third restores the run
+order, which the leading **#** column names for every case. Cases without a
+measurement stay at the bottom in both directions. **Open in Window** opens the
+selected run in a window of its own, so two runs can be read side by side;
+several such windows can be open at once and each sorts independently. They
+close with the Settings dialog, and with the history entry they show.
 
 Local decoding is normally deterministic for a fixed model, runtime, device,
 audio file, and decoding configuration, but exact repeatability is not a safe

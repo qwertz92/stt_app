@@ -818,6 +818,105 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   containers moved. Completed and partial canceled runs are saved to Benchmark
   History automatically; Export only creates a shareable file. New
   faster-whisper results store CTranslate2's resolved device instead of `auto`.
+- **The benchmark Results view is one widget, used in the tab and in pop-out
+  windows.** `BenchmarkResultsPanel` owns the results table, the
+  `_BenchmarkDetailsView` and the splitter between them, plus the row height,
+  stylesheet and header configuration; the Benchmark tab embeds one instance
+  and keeps `benchmark_results_table`, `benchmark_summary_text`,
+  `benchmark_transcripts_table`, `benchmark_transcript_text` and
+  `benchmark_results_splitter` as **aliases to the panel's widgets**, so every
+  existing seam still addresses the same object and no widget exists twice.
+  `_populate_benchmark_results` stays a mixin method and delegates.
+  Consequences to keep intact:
+  - **The results box is the panel's parent**, not the splitter's, so a test
+    that walks up from `benchmark_results_splitter` reaches the panel and has
+    to go one level further for the group box in the main splitter.
+  - **The panel is Expanding.** The group box hands its extra height to
+    whichever child asks for it, which the bare splitter did; a Preferred
+    wrapper pinned the results area to its minimum.
+  - `compact_table_row_height` and `configure_button_row` moved from
+    `SettingsDialog` to `settings_dialog_helpers` because the panel and the
+    results window need them and are not dialogs;
+    `SettingsDialog._configure_button_row` is that same function, so all
+    16 `self._configure_button_row(...)` call sites are unchanged.
+- **Results sorting is three-state and hand-written.** Clicking a column header
+  sorts ascending, then descending, then restores the run order, which the
+  leading `#` column names for every case. `QTableWidget.setSortingEnabled` is
+  deliberately not used: its sort mutates the rows and cannot restore the run
+  order, and a proxy model is not an option either because the table is a
+  `QTableWidget` that tests read through `item(row, col)`. Four properties:
+  - **The stored cases are always in run order**; the sort state only decides
+    the layout, so a live run appending a case and a loaded history entry both
+    keep the reader's ordering, and only the third click resets it. Anything
+    that empties the table therefore goes through the panel rather than
+    `setRowCount(0)`, or the cleared result comes back on the next click.
+  - **`sorted` is stable, so ties keep the run order** with no extra key.
+  - **The three measured columns keep the rows with no measurement last in
+    both directions.** `reverse=True` would pull them to the front, so the
+    descending pass negates the finite value instead and leaves the non-finite
+    group's rank where the ascending pass put it.
+  - **The sort indicator stays switched on and the run-order state uses
+    section -1**, which paints no arrow (verified on PySide6 6.11.1: the
+    grabbed header image is identical to the never-sorted one).
+    `setSortIndicatorShown(False)` re-measures every `ResizeToContents` column
+    by the width the arrow would need -- measured on the `#` column, 43 -> 32 px
+    -- so toggling it would move the table on every third click.
+- **A stored run can be opened in a window of its own.** `Open in Window` in
+  the Results and History action rows opens a `BenchmarkResultsWindow`: a
+  non-modal `Qt.Window` parented to the settings dialog, holding one
+  `BenchmarkResultsPanel` plus Export.../Close. Several can be open at once so
+  runs can be read side by side, and each sorts independently. Rules:
+  - **One entry, one window**, keyed by `BenchmarkHistoryEntry.identity_key()`
+    in `_benchmark_result_windows`; reopening raises the window it already has.
+  - **`finished` drops the key and only then schedules the deletion**, so the
+    registry can never hold a dead wrapper. Hiding emits no `finished`, which
+    is what lets a hidden window be raised again.
+  - **`_hide_benchmark_window` hides every results window too.** They are
+    `Qt.Window` children like `benchmark_window`, so every dismissal path of
+    the settings dialog has to hide them explicitly.
+  - **Deleting an entry closes its window and clearing the history closes all
+    of them**: the entry behind such a window is gone and could not be
+    reopened from History.
+  - **Both buttons stay enabled while a benchmark runs**, unlike their
+    neighbours: a pop-out reads its stored entry and never touches
+    `_current_benchmark_cases`, which is what the Load/Export/Delete actions
+    are disabled for. Export goes through an injected callback into the
+    dialog's own export flow rather than a second copy of it.
+- **`planned_benchmark_cases` is the single source of the case sequence.**
+  `run_benchmark_cases` iterates the list it returns, so the emitted
+  `[Case i/N]` texts, the case total and the displayed compute type have one
+  description. The Run Benchmark window's always-visible "Cases" table asks the
+  same function what the current selection would measure, and reads the
+  runner's own `[Case i/N]` progress line to mark a case `Running...` -- there
+  is no second kind of event. Load-bearing details:
+  - **The table is fixed at six rows and never appears or disappears.** The
+    Run/Cancel row sits directly under it, and a group that came and went, or a
+    height that followed the selection, would move those buttons under the
+    cursor.
+  - **A run's plan comes from the options snapshotted at its start.** The three
+    controls are disabled during a run, but `_refresh_benchmark_model_list`
+    still repopulates the model list when the inventory changes, and redrawing
+    then would wipe the Running/Done states on screen. The refresh-from-widgets
+    path returns early while `_active_benchmark_thread` is set, and is called
+    from the list rebuild because that rebuild blocks the list's signals.
+  - **After a cancel or a failure every case past the last finished one reads
+    `Skipped`**, the one that was `Running...` included: it delivered no result
+    either, and leaving it as running would claim work that had stopped.
+  - **The tab's progress bar keeps its space while hidden**
+    (`setRetainSizeWhenHidden(True)`, fixed width and a height taken from the
+    header button like the status label's), so the status label beside it
+    never moves or re-elides when a run starts and ends. A total of zero is its
+    hidden state, and `_set_benchmark_progress` is its only writer, as
+    `_set_benchmark_plan_rows` / `_mark_benchmark_plan_case` are the plan's and
+    `_set_benchmark_status` remains the two status labels'.
+    `_clear_benchmark_results` must not touch the plan: that describes the run
+    setup, not the loaded result.
+  - **The header button's two captions are reserved once, from
+    `_reserve_feedback_button_widths`.** Measured any earlier -- even right
+    after its tab is added -- the button is not yet a polished child of the
+    styled dialog and reports 109 px against the 115 px it renders at, so the
+    reservation would be too small and the caption swap would move the button
+    and the status label beside it.
 - **Settings dialog persists for the app lifetime**: closing Settings hides the
   existing dialog instead of deleting it. The dialog owns background model
   downloads, benchmark work, imports, scans, and connection/update checks, so
