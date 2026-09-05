@@ -522,9 +522,23 @@ step before its measured cases begin.
 
 Benchmark system details include the app/source revision, GPU driver, Python and
 Node ONNX Runtime versions, ORT GenAI provider capability, and detected CUDA
-driver/toolkit versions. Nemotron currently uses DirectML or CPU, not CUDA. If
-a newly added model is incorrectly reported as an invalid faster-whisper model,
-restart the app so the updated runtime catalog is loaded.
+driver/toolkit versions. On Windows they also include the CPU's physical core
+count, its nominal clock and its L2/L3 cache sizes, plus the installed memory
+modules with their capacity, type, rated speed and the speed they are actually
+running at -- with two caveats: the clock is the base frequency Windows reports
+and never the turbo ceiling, and the memory bandwidth is a theoretical figure
+for one 64-bit channel, because Windows does not report how many channels are
+populated. These matter because at batch size 1 an autoregressive decoder
+(Whisper's text decoder, Granite's LLM decoder) re-reads its whole weight set
+for every token it generates and is therefore bounded by memory bandwidth,
+while the encoders are bounded by compute -- so two machines with the same CPU
+name and the same amount of RAM can differ in either, and a kit running below
+its rated speed because XMP/EXPO was never enabled shows up here rather than
+staying invisible. All of it is best-effort: if the query fails, times out, or
+the machine is not Windows, those fields stay empty. Nemotron currently uses
+DirectML or CPU, not CUDA. If a newly added model is incorrectly reported as an
+invalid faster-whisper model, restart the app so the updated runtime catalog is
+loaded.
 
 The Settings benchmark window saves every run that produces at least one result
 to **Benchmark History** automatically, including partial results from a

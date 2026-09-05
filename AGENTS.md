@@ -2930,6 +2930,77 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Settings, history exports, and the CLI benchmark do not drift. ONNX benchmark
   cases also persist concise runtime fallback details so a CPU result explains
   why WebGPU or DirectML was rejected.
+- **Benchmark environment records clock, cache and memory-module facts**: the
+  CPU name, the logical core count and the total RAM say nothing about how
+  fast that memory or that CPU is, and at batch size 1 the autoregressive
+  decoders (Whisper's text decoder, Granite's LLM decoder) re-read their whole
+  weight set for every generated token, so they are bounded by memory
+  bandwidth while the encoders are bounded by compute -- two machines with the
+  same CPU name and the same 32 GB can differ in either. `BenchmarkEnvironment`
+  therefore also carries `physical_cores`, `cpu_clock`, `cpu_cache` and
+  `memory_modules`.
+  - **One PowerShell call answers for both WMI classes.** A launch costs
+    0.5-1.5 s on a locked-down machine and the collection already made one for
+    the CPU name, so `_HARDWARE_QUERY` asks `Win32_Processor` and
+    `Win32_PhysicalMemory` together and the name now comes out of that same
+    payload: the added facts cost no extra process start. It runs on the
+    benchmark worker thread, never on the Qt thread -- keep it that way. Both
+    queries are wrapped in `@(...)` so a single-socket / single-module machine
+    still yields JSON arrays, and `_payload_entries` accepts a bare object as
+    well because `ConvertTo-Json` of older PowerShell unwraps a one-element
+    array.
+  - **Every value is best-effort and empty on failure.** A 6 s timeout, a
+    non-zero exit, output that will not parse, or any non-Windows machine
+    leaves all four fields at their defaults, and the CPU name falls back to
+    `platform.processor()` and `/proc/cpuinfo` exactly as before. The four
+    fields default to empty in the dataclass and are read tolerantly in
+    `from_dict`, so every history entry written before this change still
+    loads.
+  - **"Nominal" is in the clock label because turbo is not in the number.**
+    `MaxClockSpeed` is the base frequency Windows reports and WMI exposes no
+    boost ceiling, so calling it "max" in the UI would claim a limit the part
+    does not have.
+  - **The bandwidth clause says "per channel" and never multiplies.** It is
+    `MT/s * 8 bytes / 1000`, i.e. one 64-bit channel; WMI does not say how
+    many channels are populated, so a system total would be a guess. The rated
+    speed beside the configured one is the point of the whole label: a kit
+    sold as DDR5-6000 that runs at 4800 because XMP/EXPO was never enabled is
+    the most useful single line for a slow-benchmark diagnosis.
+  - **The memory type comes from the SMBIOS table, not from WMI's own.**
+    `_SMBIOS_MEMORY_TYPES` transcribes the DMTF "Memory Device -- Type" table
+    (structure 17, offset 12h) as implemented by dmidecode's
+    `dmi_memory_device_type` and by smbios-lib, which is what
+    `SMBIOSMemoryType` reports verbatim: DDR is 18, DDR2 19, DDR2 FB-DIMM 20.
+    The `Win32_PhysicalMemory.MemoryType` enumeration is a *different* table
+    where DDR is 20 and DDR2 21, and the two agree only from DDR3 (24)
+    upwards, so reading one with the other's numbers mislabels exactly the
+    pre-DDR3 machines. An unrecognised code reads as "RAM" rather than as a
+    guessed generation.
+  - **Cache sizes are MiB written as "MB"**, the way every OS tool writes a
+    cache size, and are deliberately neither `_format_bytes` (whose 1024
+    ladder keeps one decimal, for byte totals) nor the decimal megabytes of
+    `MODEL_ESTIMATED_SIZE_MB`. Clock and cache describe one processor package;
+    only `physical_cores` sums over sockets, because two identical sockets do
+    not share one cache.
+  - **The export columns are inserted, so later positions shift.** The three
+    CPU columns go after `environment_logical_cpus` and
+    `environment_memory_modules` after `environment_memory`, in both
+    `benchmark_history._export_headers` and `local_benchmark._write_csv`. That
+    keeps each new column beside the fact it belongs to, and it moves every
+    column after `environment_logical_cpus` four places right: in the history
+    CSV `environment_memory` goes from index 19 to 22, `environment_node` from
+    22 to 26 and `row_type` from 23 to 27, with the same shift from
+    `environment_memory` onwards in the CLI CSV. A reader that addresses
+    columns by header name is unaffected; one that hard-codes an index is not,
+    and no claim of positional stability holds here. `_write_csv`'s
+    `fieldnames` list must be kept in step with `_environment_csv_values` --
+    `csv.DictWriter` raises on a key the field list does not name.
+  - **An unknown count renders as "" and never as 0.** `summary_details()`
+    passes both core counts through `or ""` and the two export helpers do the
+    same, because two of the four consumers of `summary_details()`
+    (`_BenchmarkDetailsView.set_entry`, `format_benchmark_summary`) drop a
+    value only when it is empty and would print a bare "0" for a machine whose
+    count could not be read.
 - **Benchmark runs out-of-process**: the Settings benchmark loads
   faster-whisper/ONNX models back-to-back; model loading does not release the
   Python GIL reliably, so running it in a background *thread* still froze the Qt
