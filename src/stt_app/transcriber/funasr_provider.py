@@ -78,15 +78,29 @@ class _UnusableFrameBudget:
     `task-finished` reported the transcription as "1001 frames in a row that
     were not events" (measured).
 
-    The one flood it does not bound is a run of documented heartbeat
-    packets, which are the service saying it is alive and are therefore
-    counted as events however many arrive; only the deadline bounds those.
+    What the consecutive count cannot see is a flood of frames that each
+    count as an event: documented heartbeat packets (the service saying it
+    is alive, counted as events however many arrive), the same partial
+    repeated, or a real event every thousand junk frames. `received`
+    bounds those by the total this budget has seen
+    (`_MAX_FRAMES_PER_REQUEST`), a number no transcription reaches; before
+    it only the deadline did, i.e. thirty minutes of a pinned core.
     """
 
-    __slots__ = ("count",)
+    __slots__ = ("count", "frames")
 
     def __init__(self) -> None:
         self.count = 0
+        self.frames = 0
+
+    def received(self) -> None:
+        """Count a frame of any kind: the bound on the request as a whole."""
+        self.frames += 1
+        if self.frames > _MAX_FRAMES_PER_REQUEST:
+            raise _FunAsrInterrupted(
+                f"Fun-ASR sent more than {_MAX_FRAMES_PER_REQUEST:,} frames in "
+                "one request."
+            )
 
     def spend(self) -> None:
         self.count += 1
@@ -122,6 +136,17 @@ _RECOVERED_TEXT_MAX_CHARS = 2000
 # 1.37 million receive calls in 0.31 s against an instant fake). The
 # service never sends such frames, so any real flood is a fault.
 _MAX_UNUSABLE_FRAMES = 1000
+# Every frame one budget sees, usable or not -- one budget lives for the
+# transcript loop, i.e. for the request. The bound above is on *consecutive*
+# unusable frames, so a peer that sends the same partial over and over,
+# alternates two of them, sends a real final every thousand junk frames or
+# sends heartbeats without end resets it for ever and ran to the
+# thirty-minute deadline (measured against an instant fake: 0.9-1.3 million
+# receive calls in 3 s, i.e. a core and the single transcription worker
+# pinned for the whole budget). A thirty-minute recording at ten results a
+# second plus a heartbeat a second is 20,000 frames; fifty times that in one
+# request is not a service transcribing.
+_MAX_FRAMES_PER_REQUEST = 1_000_000
 # A vendor's `task-failed` message reaches the overlay; the HTTP providers cap
 # an error body at 300 characters for the same reason (`_http_utils`).
 _FAILURE_DETAIL_MAX_CHARS = 300
@@ -326,6 +351,7 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 )
             ws.settimeout(min(remaining, self._request_timeout_s))
             message = ws.recv()
+            budget.received()
             if isinstance(message, (bytes, bytearray)):
                 budget.spend()
                 continue
@@ -364,9 +390,8 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
         The vendor's Paraformer server-events page documents the field as
         "If true, you can skip this result (heartbeat packet)." and nothing
         more; no `sentence_id` is on that page or on the Fun-ASR one. This
-        provider
-        asks for heartbeats in `run-task`, so such packets are expected
-        during a long pause; read as a sentence, one that carries
+        provider asks for heartbeats in `run-task`, so such packets are
+        expected during a long pause; read as a sentence, one that carries
         `sentence_end` would close the pending partial early and the real
         final would then be appended a second time. Typed before trusted,
         like `sentence_end`: only a boolean `True` counts.
@@ -549,8 +574,9 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         # The server saying it is alive: an event, so the run
                         # of frames that were not is over, and carried no
                         # further (see `_is_heartbeat`). A heartbeat flood is
-                        # therefore bounded by the deadline alone, which is
-                        # deliberate -- refusing to count a keepalive would
+                        # therefore bounded only by the request's frame
+                        # total and the deadline, which is deliberate --
+                        # refusing to count a keepalive would
                         # fail a long recording on the very parameter this
                         # provider asks the service for.
                         budget.reset()
@@ -601,7 +627,11 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         # Neither empty nor a final -- the gate above admitted
                         # it, so this is a partial with text.
                         current = text
-                    if finalized_chars + len(current) > _MAX_TRANSCRIPT_CHARS:
+                    # The join at the end separates a pending partial from
+                    # the finals before it too; uncounted, a session ending
+                    # on a partial handed back one character over the cap.
+                    pending = len(current) + (1 if current and finalized else 0)
+                    if finalized_chars + pending > _MAX_TRANSCRIPT_CHARS:
                         raise TranscriptionError(
                             "Fun-ASR sent more transcript text than a "
                             "recording can hold "

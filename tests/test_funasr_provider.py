@@ -943,7 +943,8 @@ class TestFunAsrUnusableFrames:
         """A heartbeat is the server saying it is alive, so it counts as an
         event however many arrive: this provider asks for heartbeats, and a
         long pause in a long recording is exactly when a run of them is
-        expected. Only the deadline bounds them."""
+        expected. Only the request's frame total and the deadline bound
+        them."""
         from stt_app.transcriber import funasr_provider as provider
 
         heartbeat = json.dumps({
@@ -1215,3 +1216,99 @@ class TestFunAsrWave5Boundaries:
             header["error_code"] = error_code
 
         assert t._fail_message({"header": header}) == expected
+
+
+class TestFunAsrWave6Boundaries:
+    @staticmethod
+    def _transcribe(events):
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=FakeWS(events)):
+            return t.transcribe_batch(_wav_bytes())
+
+    @staticmethod
+    def _heartbeat():
+        return json.dumps({
+            "header": {"event": "result-generated", "task_id": "t"},
+            "payload": {"output": {"sentence": {"heartbeat": True}}},
+        })
+
+    @pytest.mark.parametrize(
+        "shape",
+        [
+            "the same partial over and over",
+            "two partials alternating",
+            "a real final every thousand junk frames",
+            "heartbeats without end",
+        ],
+    )
+    def test_a_flood_of_event_bearing_frames_is_bounded_in_total(self, monkeypatch, shape):
+        """The frame bound counts *consecutive* unusable frames, so every
+        frame that counts as an event resets it: the same partial repeated,
+        two partials alternating, a real final after each thousand junk
+        frames and heartbeats without end all ran to the thirty-minute
+        deadline with a core and the single transcription worker pinned
+        (measured against an instant fake: 0.9-1.3 million receive calls in
+        3 s). The frames one request receives are bounded on their own."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "_MAX_FRAMES_PER_REQUEST", 5000)
+        partial = _event("result-generated", "abc", False)
+        block = {
+            "the same partial over and over": [partial],
+            "two partials alternating": [
+                partial,
+                _event("result-generated", "abd", False),
+            ],
+            "a real final every thousand junk frames": [
+                *(["not json"] * provider._MAX_UNUSABLE_FRAMES),
+                _event("result-generated", "x", True),
+            ],
+            "heartbeats without end": [self._heartbeat()],
+        }[shape]
+        repeats = 5000 // len(block) + 2
+        events = [_event("task-started"), *(block * repeats), _event("task-finished")]
+
+        with pytest.raises(TranscriptionError, match="more than 5,000 frames"):
+            self._transcribe(events)
+
+    def test_the_frame_total_allows_exactly_the_bound(self, monkeypatch):
+        """The transcript loop's budget counts the frames after
+        `task-started`: 49 partials and the `task-finished` are 50 frames,
+        which a bound of 50 admits; one more partial trips it, and the
+        failure names the partial received so far."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "_MAX_FRAMES_PER_REQUEST", 50)
+        partial = _event("result-generated", "abc", False)
+        events = [_event("task-started"), *([partial] * 49), _event("task-finished")]
+        assert self._transcribe(events) == "abc"
+
+        events = [_event("task-started"), *([partial] * 50), _event("task-finished")]
+        with pytest.raises(TranscriptionError, match="more than 50 frames") as excinfo:
+            self._transcribe(events)
+        assert "abc" in str(excinfo.value), "the partial received so far is not named"
+
+    def test_the_separator_before_a_trailing_partial_is_counted(self, monkeypatch):
+        """The join at the end separates a pending partial from the finals
+        before it too. Counted for finals only, a session ending on a
+        partial handed back one character over the cap -- the bound is on
+        the transcript returned, and it was not."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "_MAX_TRANSCRIPT_CHARS", 40)
+        exactly = [
+            _event("task-started"),
+            _event("result-generated", "a" * 20, True),
+            _event("result-generated", "b" * 19, False),
+            _event("task-finished"),
+        ]
+        assert self._transcribe(exactly) == "a" * 20 + " " + "b" * 19
+
+        one_over = [
+            _event("task-started"),
+            _event("result-generated", "a" * 20, True),
+            _event("result-generated", "b" * 20, False),
+            _event("task-finished"),
+        ]
+        with pytest.raises(TranscriptionError, match="more transcript text"):
+            self._transcribe(one_over)
