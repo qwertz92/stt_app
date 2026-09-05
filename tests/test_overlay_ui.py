@@ -2156,3 +2156,77 @@ def test_the_detail_keeps_its_rest_through_a_relayout_unless_the_user_scrolled()
     assert scrollbar.value() == scrollbar.maximum(), "the paint did not supersede the scroll"
     assert overlay.detail_is_being_read is False
     overlay.close()
+
+
+def test_scrolling_back_to_the_rest_position_hands_the_hold_back():
+    """`_detail_user_scrolled` was a one-way latch: set by the first action,
+    cleared only by the next paint. A user who paged up to read and scrolled
+    back to the bottom had restored the rest position but disarmed the hold,
+    so the next relayout clamped the value exactly as before c012ab0
+    (measured: 286 of 302 with the user back at the bottom), and because
+    `detail_is_being_read` then answered True the preload poll -- the one
+    writer that would have painted -- stayed away for the rest of the
+    download."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Done", _WAVE6_LONG)
+    QtWidgets.QApplication.processEvents()
+    scrollbar = overlay._detail_scroll.verticalScrollBar()
+    assert scrollbar.maximum() > 0
+    rows = [(1, "job one"), (2, "job two"), (3, "job three")]
+
+    scrollbar.triggerAction(QtWidgets.QAbstractSlider.SliderAction.SliderPageStepSub)
+    assert overlay.detail_is_being_read is True
+    scrollbar.triggerAction(QtWidgets.QAbstractSlider.SliderAction.SliderToMaximum)
+    assert scrollbar.value() == scrollbar.maximum()
+    assert overlay.detail_is_being_read is False
+
+    overlay.set_transcription_queue(rows)
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == scrollbar.maximum(), "the hold was not handed back"
+    assert overlay.detail_is_being_read is False
+    overlay.set_transcription_queue([])
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == scrollbar.maximum()
+    assert overlay.detail_is_being_read is False
+    overlay.close()
+
+
+def test_the_users_own_position_survives_a_queue_relayout():
+    """A position above the intermediate maximum was clamped by the queue
+    rows appearing and left there when they went away: a real drag to 312
+    of 408 came back at 286. And while the rows were shown the clamp put
+    the value onto the rest position, so `detail_is_being_read` answered
+    False for a user still reading. The user's value is re-asserted on
+    every range change, bounded by the range, and the flag says they chose
+    one."""
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    overlay = OverlayUI()
+    _shown_offscreen(overlay)
+    overlay.set_state("Done", _WAVE6_LONG)
+    QtWidgets.QApplication.processEvents()
+    scrollbar = overlay._detail_scroll.verticalScrollBar()
+    whole = scrollbar.maximum()
+    rows = [(1, "job one"), (2, "job two"), (3, "job three")]
+    overlay.set_transcription_queue(rows)
+    QtWidgets.QApplication.processEvents()
+    shrunk = scrollbar.maximum()
+    overlay.set_transcription_queue([])
+    QtWidgets.QApplication.processEvents()
+    assert 0 < shrunk < whole == scrollbar.maximum()
+
+    scrollbar.triggerAction(QtWidgets.QAbstractSlider.SliderAction.SliderSingleStepSub)
+    chosen = scrollbar.value()
+    assert shrunk < chosen < whole, "one step must land above the shrunk range"
+    assert overlay.detail_is_being_read is True
+
+    overlay.set_transcription_queue(rows)
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == scrollbar.maximum(), "as much as the range allows"
+    assert overlay.detail_is_being_read is True, "the user is still reading"
+    overlay.set_transcription_queue([])
+    QtWidgets.QApplication.processEvents()
+    assert scrollbar.value() == chosen, "the user's position was not restored"
+    assert overlay.detail_is_being_read is True
+    overlay.close()

@@ -425,10 +425,13 @@ class OverlayUI(QtWidgets.QWidget):
         self._detail_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
         self._detail_scroll.setFocusPolicy(QtCore.Qt.NoFocus)
         self._detail_scroll.setWidget(self._detail_label)
-        # `actionTriggered` fires for the wheel, a drag, the arrows and the
-        # keyboard and never for `setValue`: the one signal that tells the
-        # user's scrolling from the range changes a relayout makes.
+        # `actionTriggered` fires for the wheel, a drag, a click on the
+        # track and the keys, and never for `setValue`: the one signal that
+        # tells the user's scrolling from the range changes a relayout
+        # makes. (This overlay's stylesheet removes the scrollbar's step
+        # buttons, so there are no arrows to click.)
         self._detail_user_scrolled = False
+        self._detail_user_value = 0
         detail_bar = self._detail_scroll.verticalScrollBar()
         detail_bar.actionTriggered.connect(self._on_detail_scroll_action)
         detail_bar.rangeChanged.connect(self._on_detail_range_changed)
@@ -906,10 +909,21 @@ class OverlayUI(QtWidgets.QWidget):
         The rest position is held by `_on_detail_range_changed` through the
         relayouts that follow a paint, so a value off it is the user's
         doing -- before that, a batched Done answered True at 392 of 408 px
-        with nobody touching the overlay.
+        with nobody touching the overlay. The user's own position is held
+        the same way, and `_detail_user_scrolled` is what says they chose
+        one: a queue relayout can clamp that position onto the rest
+        position for as long as the rows are shown (measured: 296 of 296
+        with the user one step up), and the poll must not take that moment
+        to paint over what they are reading. Scrolling back to the rest
+        position hands the hold back; a one-way latch here left the poll
+        blocked for the rest of a download after the user had returned to
+        the bottom.
         """
         scrollbar = self._detail_scroll.verticalScrollBar()
-        scrolled = scrollbar.value() != self._detail_rest_value()
+        scrolled = (
+            self._detail_user_scrolled
+            or scrollbar.value() != self._detail_rest_value()
+        )
         return scrolled or self._detail_label.hasSelectedText()
 
     def _detail_rest_value(self) -> int:
@@ -918,10 +932,24 @@ class OverlayUI(QtWidgets.QWidget):
         return 0 if self._state == "Error" else scrollbar.maximum()
 
     def _on_detail_scroll_action(self, _action: int) -> None:
-        self._detail_user_scrolled = True
+        """Record where the user put the detail, or that they put it back.
 
-    def _on_detail_range_changed(self, _minimum: int, _maximum: int) -> None:
-        """Hold the rest position through a relayout, unless the user moved.
+        `actionTriggered` is emitted with `sliderPosition()` already at the
+        position the action chose and `value()` not yet updated, so this is
+        the moment to read it. Set once and cleared only by the next paint,
+        the flag disarmed the hold for good after the first scroll: back at
+        the bottom, the next relayout clamped the value exactly as before
+        c012ab0 (measured: 286 of 302 with the user at the rest position),
+        and because `detail_is_being_read` then answered True the preload
+        poll, the one writer that would have painted, stayed away for the
+        rest of the download.
+        """
+        position = self._detail_scroll.verticalScrollBar().sliderPosition()
+        self._detail_user_value = position
+        self._detail_user_scrolled = position != self._detail_rest_value()
+
+    def _on_detail_range_changed(self, _minimum: int, maximum: int) -> None:
+        """Hold the rest position, or the user's, through a relayout.
 
         `set_state` scrolls to the rest position, and the relayout that can
         follow -- the geometry a `batched_update` applies at its end, queue
@@ -930,11 +958,15 @@ class OverlayUI(QtWidgets.QWidget):
         there when the range grows again, so a batched Done showed 392 of
         408 px of its transcript with the last line hidden, and
         `detail_is_being_read` answered True for nothing the user had done.
+        The user's own position gets the same treatment, bounded by the
+        range: a drag to 312 of 408 was clamped to 302 by the queue rows
+        appearing and left at 286 when they went away.
         """
-        if not self._detail_user_scrolled:
-            self._detail_scroll.verticalScrollBar().setValue(
-                self._detail_rest_value()
-            )
+        scrollbar = self._detail_scroll.verticalScrollBar()
+        if self._detail_user_scrolled:
+            scrollbar.setValue(min(self._detail_user_value, maximum))
+        else:
+            scrollbar.setValue(self._detail_rest_value())
 
     def _apply_state_stylesheet(self, state: str) -> None:
         bg = OVERLAY_STATE_COLORS.get(state, OVERLAY_STATE_COLORS["Idle"])
