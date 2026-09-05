@@ -84,6 +84,86 @@ def test_benchmark_csv_writer_neutralizes_spreadsheet_formulas(tmp_path):
     assert row["error"] == "'=1+1"
 
 
+def _csv_case(module):
+    return module.BenchmarkCase(
+        model="small",
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=0.5,
+        runs=[],
+    )
+
+
+def test_the_cli_csv_carries_the_hardware_facts(tmp_path):
+    """`--csv-out` writes the same environment columns the history export does."""
+    module = _load_benchmark_module()
+    memory_modules = (
+        "2 x 16 GB DDR5-6000, running at 6000 MT/s (48.0 GB/s per channel, theoretical)"
+    )
+    environment = local_benchmark.BenchmarkEnvironment(
+        cpu="AMD Ryzen",
+        logical_cpus=12,
+        physical_cores=6,
+        cpu_clock="4.70 GHz nominal",
+        cpu_cache="L2 6 MB, L3 32 MB",
+        memory="32.0 GB",
+        memory_modules=memory_modules,
+    )
+    out_path = tmp_path / "bench.csv"
+
+    module._write_csv(out_path, [_csv_case(module)], environment=environment)
+
+    text = out_path.read_text(encoding="utf-8")
+    header = next(iter(csv.reader(text.splitlines())))
+    row = next(csv.DictReader(text.splitlines()))
+    assert header[:9] == [
+        "environment_os",
+        "environment_python",
+        "environment_cpu",
+        "environment_logical_cpus",
+        "environment_physical_cores",
+        "environment_cpu_clock",
+        "environment_cpu_cache",
+        "environment_memory",
+        "environment_memory_modules",
+    ]
+    assert row["environment_physical_cores"] == "6"
+    assert row["environment_cpu_clock"] == "4.70 GHz nominal"
+    assert row["environment_cpu_cache"] == "L2 6 MB, L3 32 MB"
+    assert row["environment_memory_modules"] == memory_modules
+
+
+def test_the_cli_csv_leaves_the_hardware_columns_empty_without_an_environment(
+    tmp_path,
+):
+    module = _load_benchmark_module()
+    out_path = tmp_path / "bench.csv"
+
+    module._write_csv(out_path, [_csv_case(module)])
+
+    row = next(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
+    assert row["environment_physical_cores"] == ""
+    assert row["environment_cpu_clock"] == ""
+    assert row["environment_cpu_cache"] == ""
+    assert row["environment_memory_modules"] == ""
+
+
+def test_the_cli_csv_leaves_an_unknown_core_count_empty(tmp_path):
+    """A collector that could not read the count must not write a bare 0."""
+    module = _load_benchmark_module()
+    out_path = tmp_path / "bench.csv"
+
+    module._write_csv(
+        out_path,
+        [_csv_case(module)],
+        environment=local_benchmark.BenchmarkEnvironment(cpu="AMD Ryzen"),
+    )
+
+    row = next(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
+    assert row["environment_physical_cores"] == ""
+
+
 def test_successful_cases_filters_errors():
     module = _load_benchmark_module()
     ok_case = module.BenchmarkCase(

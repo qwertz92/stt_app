@@ -19,6 +19,10 @@ from stt_app.benchmark_history import (
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.persistence import backup_path
 
+_MEMORY_MODULES = (
+    "2 x 16 GB DDR5-6000, running at 6000 MT/s (48.0 GB/s per channel, theoretical)"
+)
+
 
 def _entry() -> BenchmarkHistoryEntry:
     case = BenchmarkCase(
@@ -67,7 +71,11 @@ def _entry() -> BenchmarkHistoryEntry:
             python="CPython 3.12 64bit",
             cpu="AMD Ryzen",
             logical_cpus=12,
+            physical_cores=6,
+            cpu_clock="4.70 GHz nominal",
+            cpu_cache="L2 6 MB, L3 32 MB",
             memory="32.0 GB",
+            memory_modules=_MEMORY_MODULES,
             gpus=["Intel Arc A750"],
             frameworks={"faster-whisper": "1.2.1", "CTranslate2": "4.6.0"},
             node="v22.0.0",
@@ -148,7 +156,11 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "environment_python",
         "environment_cpu",
         "environment_logical_cpus",
+        "environment_physical_cores",
+        "environment_cpu_clock",
+        "environment_cpu_cache",
         "environment_memory",
+        "environment_memory_modules",
         "environment_gpus",
         "environment_frameworks",
         "environment_node",
@@ -176,18 +188,22 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
         "error",
     ]
     assert rows[1][1:4] == ["completed", "C:/sample.wav", "sample.wav"]
-    assert rows[1][15:23] == [
+    assert rows[1][15:27] == [
         "Windows 11",
         "CPython 3.12 64bit",
         "AMD Ryzen",
         "12",
+        "6",
+        "4.70 GHz nominal",
+        "L2 6 MB, L3 32 MB",
         "32.0 GB",
+        _MEMORY_MODULES,
         "Intel Arc A750",
         "faster-whisper 1.2.1, CTranslate2 4.6.0",
         "v22.0.0",
     ]
-    assert rows[1][23:28] == ["run", "small", "auto", "int8", "1"]
-    assert rows[1][33] == "hello world"
+    assert rows[1][27:32] == ["run", "small", "auto", "int8", "1"]
+    assert rows[1][37] == "hello world"
 
     with zipfile.ZipFile(xlsx_path) as archive:
         names = set(archive.namelist())
@@ -204,6 +220,48 @@ def test_benchmark_export_writes_matching_csv_xlsx_and_markdown(tmp_path):
     assert "## Result Rows" in markdown
     assert "| created_at | benchmark_status | audio_path |" in markdown
     assert "hello world" in markdown
+
+
+def test_the_export_names_the_hardware_facts_in_their_own_columns(tmp_path):
+    csv_path = tmp_path / "benchmark.csv"
+
+    export_benchmark_entry(csv_path, _entry())
+
+    row = next(csv.DictReader(csv_path.read_text(encoding="utf-8").splitlines()))
+    assert row["environment_physical_cores"] == "6"
+    assert row["environment_cpu_clock"] == "4.70 GHz nominal"
+    assert row["environment_cpu_cache"] == "L2 6 MB, L3 32 MB"
+    assert row["environment_memory_modules"] == _MEMORY_MODULES
+
+
+def test_a_history_entry_written_before_the_hardware_facts_exports_empty_cells(
+    tmp_path,
+):
+    """`%APPDATA%` holds runs recorded by older builds; they must still export."""
+    entry = _entry()
+    entry.environment = BenchmarkEnvironment.from_dict(
+        {
+            "os": "Windows 11",
+            "python": "CPython 3.12 64bit",
+            "cpu": "AMD Ryzen",
+            "logical_cpus": 12,
+            "memory": "32.0 GB",
+            "gpus": ["Intel Arc A750"],
+            "frameworks": {"faster-whisper": "1.2.1"},
+            "node": "v22.0.0",
+        }
+    )
+    csv_path = tmp_path / "benchmark.csv"
+
+    export_benchmark_entry(csv_path, entry)
+
+    row = next(csv.DictReader(csv_path.read_text(encoding="utf-8").splitlines()))
+    assert row["environment_physical_cores"] == ""
+    assert row["environment_cpu_clock"] == ""
+    assert row["environment_cpu_cache"] == ""
+    assert row["environment_memory_modules"] == ""
+    assert row["environment_logical_cpus"] == "12"
+    assert row["environment_memory"] == "32.0 GB"
 
 
 def test_benchmark_history_loads_legacy_runs_without_transcripts(tmp_path):
