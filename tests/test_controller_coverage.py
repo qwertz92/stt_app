@@ -5643,6 +5643,35 @@ def _refuse_a_start(controller):
     assert controller._audio_capture is None, "the start was not refused"
 
 
+def _stage_a_running_job(controller):
+    """A queued batch transcription is the foreground job, so the overlay
+    queue has a row whose X and the Clear button both reach the cancel
+    writers."""
+    job = controller_module._TranscriptionJob(
+        token=99,
+        engine="local",
+        model="parakeet-tdt-0.6b-v3",
+        mode="batch",
+        settings=controller.settings,
+        target_handle=123,
+        target_signature=None,
+    )
+    controller._jobs[99] = job
+    controller._active_request_token = 99
+
+
+class _RunningPreload:
+    def done(self):
+        return False
+
+    def cancel(self):
+        return True
+
+
+def _stage_a_running_preload(controller):
+    controller._preload_future = _RunningPreload()
+
+
 def test_a_refusal_does_not_re_arm_an_insert_the_paste_may_have_delivered():
     """The paste keystroke went out and only the clipboard restore failed:
     the overlay said "most likely inserted; check the target window" and
@@ -5798,9 +5827,18 @@ def test_a_resume_that_changes_the_registration_keeps_the_insert_offer():
         "preload_failed_canceled",
         "preload_failed",
         "no_window_to_insert_into",
+        "queue_row_cancel",
+        "clear_queue",
+        "preload_start",
+        "copy_notice",
+        "edit_no_transcript",
+        "edit_no_history_entry",
+        "edit_update_failed",
+        "retry_refusal",
+        "cancel_preload",
     ],
 )
-def test_a_status_repaint_keeps_the_pending_insert_offer(repaint):
+def test_a_status_repaint_keeps_the_pending_insert_offer(repaint, monkeypatch):
     """Every status writer that is not a session result keeps the offer on
     screen: the idle line after a save (and the hotkey-error line it paints
     instead when a registration failed), "Nothing to cancel.", each of the
@@ -5867,6 +5905,53 @@ def test_a_status_repaint_keeps_the_pending_insert_offer(repaint):
         controller._window_focus_helper.current_focus = None
         controller._window_focus_helper.current_caret = None
         controller.insert_failed_text()
+    elif repaint == "queue_row_cancel":
+        _stage_a_running_job(controller)
+        controller.cancel_queued_transcription(controller._active_request_token)
+        assert "Transcription canceled." in overlay.states[-1][1]
+    elif repaint == "clear_queue":
+        _stage_a_running_job(controller)
+        controller.clear_transcription_queue()
+        assert "Transcription canceled." in overlay.states[-1][1]
+    elif repaint == "preload_start":
+        # A save that changes the model starts a preload, whose first line
+        # is painted before any worker runs.
+        store = controller._settings_store
+        store._settings = replace(store._settings, model_size="medium")
+        controller.on_settings_changed()
+        assert "Loading selected model..." in overlay.states[-1][1]
+    elif repaint == "copy_notice":
+        controller.show_overlay_notice("Last transcript copied to clipboard.")
+        assert "Last transcript copied to clipboard." in overlay.states[-1][1]
+    elif repaint == "edit_no_transcript":
+        controller._last_transcript = ""
+        assert controller.edit_last_transcript(None) is False
+        assert "No transcript available to edit." in overlay.states[-1][1]
+    elif repaint == "edit_no_history_entry":
+        monkeypatch.setattr(
+            "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+            staticmethod(lambda parent, text: "edited"),
+        )
+        controller._last_history_entry = None
+        assert controller.edit_last_transcript(None) is False
+        assert "No saved history entry" in overlay.states[-1][1]
+    elif repaint == "edit_update_failed":
+        monkeypatch.setattr(
+            "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+            staticmethod(lambda parent, text: "edited"),
+        )
+        controller._last_history_entry = object()
+        controller._history_store.update_entry_text = lambda entry, text: 0
+        assert controller.edit_last_transcript(None) is False
+        assert "could not be updated" in overlay.states[-1][1]
+    elif repaint == "retry_refusal":
+        controller._last_failed_wav_bytes = None
+        assert controller.retry_last_transcription() is False
+        assert "No failed transcription to retry." in overlay.states[-1][1]
+    elif repaint == "cancel_preload":
+        _stage_a_running_preload(controller)
+        controller.cancel_current_action()
+        assert "Canceling model download..." in overlay.states[-1][1]
 
     state, detail = overlay.states[-1]
     assert state == "Error"
@@ -5896,6 +5981,34 @@ def test_a_status_repaint_with_nothing_pending_is_unchanged():
     assert "error_action" not in overlay.state_kwargs[-1]
     controller.cancel_current_action()
     assert overlay.states[-1] == ("Done", "Nothing to cancel.")
+    controller.shutdown()
+    _ = app
+
+
+def test_the_preload_progress_repaints_the_offer_and_leaves_a_result_alone():
+    """The progress poll skips a Done or Error result on screen, and the
+    offer is an Error: painted behind that guard, a pending insert froze
+    the progress line for the whole download. The poll repaints only the
+    Error the painter itself wrote, progress first and the offer after it,
+    and a failed transcription's Error stays as it is."""
+    inserter = FakeTextInserter()
+    controller, app, overlay = _failed_tail_offer(inserter)
+    _stage_a_running_preload(controller)
+    controller._preload_progress_detail = lambda: "Downloading model... approx. 45%"
+    controller._paint_status_keeping_offer("Processing", "Loading selected model...")
+
+    controller._on_preload_progress_poll()
+
+    state, detail = overlay.states[-1]
+    assert state == "Error"
+    assert detail.startswith("Downloading model... approx. 45%")
+    assert "Still not inserted" in detail
+    assert " zweiter teil" in detail
+    assert overlay.state_kwargs[-1]["error_action"] == OVERLAY_ERROR_ACTION_INSERT
+
+    overlay.set_state("Error", "Transcription failed: boom")
+    controller._on_preload_progress_poll()
+    assert overlay.states[-1] == ("Error", "Transcription failed: boom")
     controller.shutdown()
     _ = app
 

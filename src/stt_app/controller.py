@@ -462,6 +462,11 @@ class DictationController(QtCore.QObject):
         # two paths that paint an Error carrying `OVERLAY_ERROR_ACTION_INSERT`,
         # cleared by a successful re-paste and by the next recording start.
         self._insert_action_text: str = ""
+        # `(state, detail)` the offer painter wrote last, None once a plain
+        # status replaced it. The preload progress poll compares it with
+        # what the overlay shows, to tell the painter's own Error from a
+        # result it must not repaint.
+        self._offer_painted: tuple[str, str] | None = None
         self._last_history_entry: TranscriptHistoryEntry | None = None
         self._last_failed_wav_bytes: bytes = b""
         self._last_transcribe_settings: AppSettings | None = None
@@ -2895,7 +2900,7 @@ class DictationController(QtCore.QObject):
             # Unless the flush above just reported a transcript that could not
             # be pasted: that Error carries the text and the Insert action, and
             # this line would replace both with three words.
-            self._overlay.set_state("Done", "Transcription canceled.")
+            self._paint_status_keeping_offer("Done", "Transcription canceled.")
 
     def clear_transcription_queue(self) -> None:
         """Cancel every queued/running transcription.
@@ -2924,7 +2929,7 @@ class DictationController(QtCore.QObject):
         if had_foreground and not self._new_recording_active():
             # The foreground transcription was canceled; reflect it in the
             # main overlay area instead of leaving a stale "Processing".
-            self._overlay.set_state("Done", "Transcription canceled.")
+            self._paint_status_keeping_offer("Done", "Transcription canceled.")
 
     def _apply_concurrent_mode_to_active_job(self) -> None:
         """Apply the configured mode to the in-flight transcription when a new
@@ -3409,7 +3414,7 @@ class DictationController(QtCore.QObject):
             # minutes. Claiming the download phase there printed a frozen
             # "Downloading ... approx. 100%" for a model nothing was fetching.
             self._preload_phase = (generation, _PRELOAD_PHASE_QUEUED)
-        self._overlay.set_state("Processing", "Loading selected model...")
+        self._paint_status_keeping_offer("Processing", "Loading selected model...")
         self._preload_target_model = settings.model_size
         try:
             from .transcriber.local_faster_whisper import estimate_cached_model_bytes
@@ -3546,14 +3551,20 @@ class DictationController(QtCore.QObject):
         # changes the model in Settings while one is still in flight) replaced
         # both with "Loading model...". `_overlay_session_active` cannot see
         # this: a delivered result has already cleared its request token.
-        if self._overlay.state in {"Done", "Error"}:
+        # The one Error it does repaint is the offer the painter itself
+        # wrote -- an insert still pending while a preload runs -- which
+        # otherwise froze the progress line for the whole download.
+        if (
+            self._overlay.state in {"Done", "Error"}
+            and not self._offer_painted_is_on_screen()
+        ):
             return
 
         try:
             detail = self._preload_progress_detail()
         except Exception:
             detail = "Loading model..."
-        self._overlay.set_state("Processing", detail, compact=False)
+        self._paint_status_keeping_offer("Processing", detail, compact=False)
 
     def _preload_model_worker(
         self,
@@ -5401,7 +5412,9 @@ class DictationController(QtCore.QObject):
         """
         self._paint_status_keeping_offer("Error", detail)
 
-    def _paint_status_keeping_offer(self, state: str, detail: str) -> None:
+    def _paint_status_keeping_offer(
+        self, state: str, detail: str, *, compact: bool | None = None
+    ) -> None:
         """Write a status that is not a session result, keeping the offer.
 
         `_insert_action_text` is the text of an insert that failed, and the
@@ -5411,10 +5424,13 @@ class DictationController(QtCore.QObject):
         which for a streaming tail lands on top of the prefix already in the
         document). Every status writer that is not itself a result therefore
         goes through here: the idle line, the hotkey notices, "Nothing to
-        cancel.", the preload's ready/failed line, and the re-paste refusals.
-        Each of them used to paint plainly and hide the button while the text
-        stayed pending, so a save, a resume, a Cancel press, a finished
-        preload or "No window to insert into" made the tail unrecoverable.
+        cancel." and "Transcription canceled.", the preload's start,
+        progress, cancel and ready/failed lines, the tray's copy notices,
+        the Edit and Retry refusals, and the re-paste refusals. Each of
+        them used to paint plainly and hide the button while the text stayed
+        pending, so a save, a resume, a Cancel press, a queue row's X, a
+        finished preload, a tray copy or "No window to insert into" made the
+        tail unrecoverable.
 
         The offer carries its own action. Two insert paths fail *after* the
         paste keystroke went out and deliberately withhold Insert, because
@@ -5428,22 +5444,44 @@ class DictationController(QtCore.QObject):
         """
         pending = self._insert_action_text
         if not pending:
-            self._overlay.set_state(state, detail)
+            self._offer_painted = None
+            if compact is None:
+                self._overlay.set_state(state, detail)
+            else:
+                self._overlay.set_state(state, detail, compact=compact)
             return
         if self._last_insert_may_have_pasted:
+            painted = (
+                f"{detail}\n\nPossibly inserted already -- check the target "
+                f"window before inserting it again:\n{pending}"
+            )
             self._overlay.set_state(
                 "Error",
-                f"{detail}\n\nPossibly inserted already -- check the target "
-                f"window before inserting it again:\n{pending}",
+                painted,
                 copy_text=pending,
                 error_action=OVERLAY_ERROR_ACTION_NONE,
             )
-            return
-        self._overlay.set_state(
-            "Error",
-            f"{detail}\n\nStill not inserted:\n{pending}",
-            copy_text=pending,
-            error_action=OVERLAY_ERROR_ACTION_INSERT,
+        else:
+            painted = f"{detail}\n\nStill not inserted:\n{pending}"
+            self._overlay.set_state(
+                "Error",
+                painted,
+                copy_text=pending,
+                error_action=OVERLAY_ERROR_ACTION_INSERT,
+            )
+        self._offer_painted = ("Error", painted)
+
+    def _offer_painted_is_on_screen(self) -> bool:
+        """True while the overlay still shows the painter's own last offer.
+
+        The preload progress poll must not repaint a Done or Error result,
+        and the offer is an Error, so the poll has to tell the two apart: a
+        result replaces the painter's text, an untouched offer matches it.
+        """
+        painted = self._offer_painted
+        return painted is not None and painted == (
+            self._overlay.state,
+            self._overlay.detail,
         )
 
     def _capture_target_signature(
@@ -5734,7 +5772,7 @@ class DictationController(QtCore.QObject):
         """
         if self._overlay_session_active():
             return
-        self._overlay.set_state("Done", str(message))
+        self._paint_status_keeping_offer("Done", str(message))
         self._reveal_overlay_result(is_error=False)
         QtCore.QTimer.singleShot(OVERLAY_NOTICE_MS, self.show_idle_status)
 
@@ -5778,7 +5816,9 @@ class DictationController(QtCore.QObject):
     def edit_last_transcript(self, parent=None) -> bool:
         current_text = self._last_transcript.strip()
         if not current_text:
-            self._overlay.set_state("Error", "No transcript available to edit.")
+            self._paint_status_keeping_offer(
+                "Error", "No transcript available to edit."
+            )
             return False
 
         from .transcript_edit_dialog import TranscriptEditDialog
@@ -5789,7 +5829,7 @@ class DictationController(QtCore.QObject):
 
         entry = self._last_history_entry
         if entry is None:
-            self._overlay.set_state(
+            self._paint_status_keeping_offer(
                 "Error",
                 "No saved history entry is available for this transcript.",
             )
@@ -5797,7 +5837,7 @@ class DictationController(QtCore.QObject):
 
         updated = self._history_store.update_entry_text(entry, next_text)
         if updated <= 0:
-            self._overlay.set_state(
+            self._paint_status_keeping_offer(
                 "Error",
                 "The saved history entry could not be updated.",
             )
@@ -5812,7 +5852,9 @@ class DictationController(QtCore.QObject):
 
     def retry_last_transcription(self) -> bool:
         if not self._last_failed_wav_bytes:
-            self._overlay.set_state("Error", "No failed transcription to retry.")
+            self._paint_status_keeping_offer(
+                "Error", "No failed transcription to retry."
+            )
             return False
         settings = replace(self._settings)
         # Stop any still-running transcription before retrying; if it finishes
@@ -6154,7 +6196,7 @@ class DictationController(QtCore.QObject):
         self._preload_cancel_requested = True
         self._cancel_preload_generation(self._preload_generation)
         self._terminate_preload_download_process()
-        self._overlay.set_state("Processing", "Canceling model download...")
+        self._paint_status_keeping_offer("Processing", "Canceling model download...")
         return True
 
     def _set_preload_download_process(

@@ -200,6 +200,11 @@ class FakeOverlay:
         """What the real overlay reports: the state name last written."""
         return self.states[-1][0] if self.states else "Idle"
 
+    @property
+    def detail(self) -> str:
+        """The detail text last written, like the real overlay."""
+        return self.states[-1][1] if self.states else ""
+
     def set_transcription_queue(self, items):
         self.queue_updates.append([(int(t), str(label)) for t, label in items])
 
