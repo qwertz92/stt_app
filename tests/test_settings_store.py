@@ -1317,3 +1317,26 @@ def test_a_load_that_cannot_rewrite_still_returns_the_settings(tmp_path, monkeyp
     assert settings.hotkey == "Ctrl+Alt+D"
     assert settings.engine == "groq"
     assert path.read_bytes() == before, "the refused write changed the file anyway"
+
+
+@pytest.mark.parametrize(
+    ("label", "stored", "expected"),
+    [
+        ("True is not the limit 1 it truncated to", True, DEFAULT_HISTORY_MAX_ITEMS),
+        ("False is not unlimited", False, DEFAULT_HISTORY_MAX_ITEMS),
+        ("a fraction is garbage whatever it rounds to", 1.9, DEFAULT_HISTORY_MAX_ITEMS),
+        ("a fraction below one is not unlimited", 0.9, DEFAULT_HISTORY_MAX_ITEMS),
+        ("a negative fraction is not unlimited", -0.5, DEFAULT_HISTORY_MAX_ITEMS),
+        ("NaN is garbage", float("nan"), DEFAULT_HISTORY_MAX_ITEMS),
+        ("an integral float is a limit", 0.0, 0),
+        ("a numeric string is a limit", "7", 7),
+    ],
+)
+def test_history_max_items_refuses_what_int_would_have_truncated(label, stored, expected):
+    """The sibling of `recordings_max_count`, and here the boolean was the
+    destructive value: `True` parsed to a limit of 1, and one dictation at
+    that limit deleted every transcript but the newest (measured: 5 lost
+    from a hand-edited file)."""
+    settings = AppSettings.from_dict({"history_max_items": stored})
+
+    assert settings.history_max_items == expected, label

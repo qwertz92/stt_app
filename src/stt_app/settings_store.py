@@ -192,7 +192,9 @@ def _exact_int_or_none(value: Any) -> int | None:
     one is damage, and reading damage as a deliberate retention setting is
     what this refuses. `True` is refused with `False`: `int(True)` is a legal
     count of 1, which would make a boolean in the file look like a setting
-    the user chose.
+    the user chose. `history_max_items` reads through it for the same
+    reason, and there the boolean was the destructive value: a limit of 1
+    deletes every transcript but the newest at the next dictation.
     """
     if isinstance(value, bool):
         return None
@@ -437,7 +439,11 @@ class AppSettings:
             "history_max_items",
             DEFAULT_HISTORY_MAX_ITEMS,
         )
-        parsed_history_max_items = _int_or_none(raw_history_max_items)
+        # `_exact_int_or_none` like `recordings_max_count`: `True` parsed to a
+        # limit of 1 here, and one dictation at that limit deleted every
+        # transcript but the newest (measured: 5 lost from a hand-edited
+        # file).
+        parsed_history_max_items = _exact_int_or_none(raw_history_max_items)
         if parsed_history_max_items is None:
             history_max_items = DEFAULT_HISTORY_MAX_ITEMS
         else:
