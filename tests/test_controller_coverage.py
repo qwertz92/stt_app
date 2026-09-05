@@ -6537,3 +6537,28 @@ def test_a_canceled_preload_names_the_partials_it_could_not_remove(monkeypatch):
     assert controller._preload_cleanup_notes == {}
     controller.shutdown()
     _ = app
+
+
+def test_the_progress_poll_leaves_a_progress_line_the_user_is_reading_alone():
+    """The gate applied only to the offer the painter wrote; with no offer
+    pending -- the ordinary download -- the poll painted Processing every
+    600 ms over the user's own selection in its progress line (measured on
+    the real overlay: the selection gone after one poll)."""
+    controller, app = _make_controller()
+    overlay = controller._overlay
+    _stage_a_running_preload(controller)
+    controller._preload_progress_detail = lambda: "Downloading model... approx. 45%"
+    controller._paint_status_keeping_offer(
+        "Processing", "Downloading model... approx. 44%", compact=False
+    )
+    painted = len(overlay.states)
+
+    overlay.detail_is_being_read = True
+    controller._on_preload_progress_poll()
+    assert len(overlay.states) == painted
+
+    overlay.detail_is_being_read = False
+    controller._on_preload_progress_poll()
+    assert overlay.states[-1] == ("Processing", "Downloading model... approx. 45%")
+    controller.shutdown()
+    _ = app

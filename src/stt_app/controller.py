@@ -3634,17 +3634,20 @@ class DictationController(QtCore.QObject):
         # The one Error it does repaint is the offer the painter itself
         # wrote -- an insert still pending while a preload runs -- which
         # otherwise froze the progress line for the whole download.
-        if self._overlay.state in {"Done", "Error"}:
-            if not self._offer_painted_is_on_screen():
-                return
-            # The offer is the pending transcript, which the user may be
-            # reading: `set_state` scrolls an Error back to the top and
-            # `setText` drops any selection, so repainting every 600 ms
-            # made both impossible for the length of the download. While
-            # the detail is scrolled or selected the progress line is off
-            # screen or under the selection anyway.
-            if self._overlay.detail_is_being_read:
-                return
+        if (
+            self._overlay.state in {"Done", "Error"}
+            and not self._offer_painted_is_on_screen()
+        ):
+            return
+        # What is on screen may be under the user's hands: `set_state`
+        # scrolls back to the rest position and `setText` drops any
+        # selection, so repainting every 600 ms made reading or selecting
+        # the pending transcript beside an offer impossible for the length
+        # of the download -- and, gated on the offer alone, the progress
+        # line itself was still repainted over whatever the user had
+        # selected in it. Scrolled or selected, the detail is left alone.
+        if self._overlay.detail_is_being_read:
+            return
 
         try:
             detail = self._preload_progress_detail()
