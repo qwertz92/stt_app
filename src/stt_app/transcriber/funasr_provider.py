@@ -39,7 +39,11 @@ from ..config import (
 )
 from ..ssl_utils import create_ssl_context
 from ..ssl_utils import is_ssl_error as _is_ssl_error
-from ._http_utils import format_ssl_error_message, normalize_transcript_text
+from ._http_utils import (
+    format_ssl_error_message,
+    nested_error_text,
+    normalize_transcript_text,
+)
 from .base import (
     AudioInput,
     ITranscriber,
@@ -66,11 +70,16 @@ class _UnusableFrameBudget:
 
     Spent only on a frame that has been *classified* as unusable -- by
     `_recv_event` for what is not a JSON object, by the transcript loop for
-    an object that is not one of its events. Spent on every frame before
-    classification, it consumed the frame that would have reset it: exactly
-    `_MAX_UNUSABLE_FRAMES` junk frames followed by a real `task-finished`
-    reported the transcription as "1001 frames in a row that were not
-    events" (measured).
+    an object that is not one of its events and for a `result-generated`
+    that carries neither text nor a sentence end. Spent on every frame
+    before classification, it consumed the frame that would have reset it:
+    exactly `_MAX_UNUSABLE_FRAMES` junk frames followed by a real
+    `task-finished` reported the transcription as "1001 frames in a row that
+    were not events" (measured).
+
+    The one flood it does not bound is a run of documented heartbeat
+    packets, which are the service saying it is alive and are therefore
+    counted as events however many arrive; only the deadline bounds those.
     """
 
     __slots__ = ("count",)
@@ -115,6 +124,16 @@ _MAX_UNUSABLE_FRAMES = 1000
 # A vendor's `task-failed` message reaches the overlay; the HTTP providers cap
 # an error body at 300 characters for the same reason (`_http_utils`).
 _FAILURE_DETAIL_MAX_CHARS = 300
+# How much finalized transcript one request may accumulate before it is a
+# fault rather than a dictation. The frame bound above cannot cover a flood of
+# *usable* `result-generated` frames -- each one is the service saying
+# something -- so `finalized` grew for the whole thirty-minute budget
+# (measured: 111 MB of Python heap in 2.5 s, ~100 GB extrapolated over the
+# budget). A 30-minute recording cannot legitimately reach this: at a fast
+# 200 words per minute and 8 characters per word it carries under 50,000
+# characters, so the cap is more than forty times what the budget can hold
+# and only a peer that is broken or hostile can trip it.
+_MAX_TRANSCRIPT_CHARS = 2_000_000
 
 
 class FunAsrTranscriber(ProgressReporter, ITranscriber):
@@ -378,14 +397,35 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             return str(output["text"]), True
         return "", False
 
+    @staticmethod
+    def _failure_detail(value: object) -> str:
+        """What the service said, unwrapped from the shape it said it in.
+
+        `str()` of a nested error object hands the user Python dict syntax
+        with the request id in it, capped mid-dict -- the shape
+        `read_http_error_detail` already refuses for the HTTP providers, so
+        its unwrapping order is shared rather than copied
+        (`nested_error_text`). A JSON dump is the last resort for an object
+        with no text field, for the same reason the HTTP reader falls back to
+        the body text; it cannot raise, because everything reaching here came
+        out of `json.loads` in `_recv_event`.
+        """
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value.strip()
+        return nested_error_text(value) or json.dumps(value, ensure_ascii=False)
+
     def _fail_message(self, message: dict) -> str:
         header = message.get("header")
         if isinstance(header, dict):
-            detail = header.get("error_message") or header.get("error_code")
+            detail = self._failure_detail(
+                header.get("error_message") or header.get("error_code")
+            )
             if detail:
                 return (
                     "Fun-ASR task failed: "
-                    f"{str(detail)[:_FAILURE_DETAIL_MAX_CHARS]}"
+                    f"{detail[:_FAILURE_DETAIL_MAX_CHARS]}"
                 )
         return "Fun-ASR task failed."
 
@@ -472,6 +512,10 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
 
     def _collect_transcript(self, ws, deadline: float) -> str:
         finalized: list[str] = []
+        # Kept as a running total rather than summed per frame: summing the
+        # list on every sentence is quadratic in the number of sentences,
+        # which is exactly what the flood this bound exists for produces.
+        finalized_chars = 0
         current = ""
         budget = _UnusableFrameBudget()
         try:
@@ -479,16 +523,33 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                 message = self._recv_event(ws, deadline, budget)
                 event = self._event_name(message)
                 if event == "result-generated":
-                    # An event: the run of frames that were not is over. The
-                    # two terminal events below end the loop, so nothing
-                    # reads a reset made for them.
-                    budget.reset()
                     if self._is_heartbeat(message):
-                        # Counted as an event for the frame bound above (the
-                        # server is alive), carried no further: see
-                        # `_is_heartbeat`.
+                        # The server saying it is alive: an event, so the run
+                        # of frames that were not is over, and carried no
+                        # further (see `_is_heartbeat`). A heartbeat flood is
+                        # therefore bounded by the deadline alone, which is
+                        # deliberate -- refusing to count a keepalive would
+                        # fail a long recording on the very parameter this
+                        # provider asks the service for.
+                        budget.reset()
                         continue
                     text, sentence_end = self._sentence_from(message)
+                    if not (text or sentence_end):
+                        # A `result-generated` with no payload, a payload that
+                        # is not an object, or an empty non-final sentence:
+                        # the header names an event and the frame carries
+                        # nothing, so it is spent like the junk below. The
+                        # reset used to run on the header alone, before the
+                        # frame was inspected, so a flood of these spun for
+                        # the whole thirty-minute budget with the bound in
+                        # place (measured: 1.4 million receive calls in 2 s
+                        # against an instant fake).
+                        budget.spend()
+                        continue
+                    # An event that carried something: the run of frames that
+                    # were not is over. The two terminal events below end the
+                    # loop, so nothing reads a reset made for them.
+                    budget.reset()
                     if sentence_end:
                         # A final carries the whole sentence and replaces the
                         # partials that led up to it. A final with *no* text
@@ -501,9 +562,19 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
                         final_text = text or current
                         if final_text:
                             finalized.append(final_text)
+                            finalized_chars += len(final_text)
                         current = ""
-                    elif text:
+                    else:
+                        # Neither empty nor a final -- the gate above admitted
+                        # it, so this is a partial with text.
                         current = text
+                    if finalized_chars + len(current) > _MAX_TRANSCRIPT_CHARS:
+                        raise TranscriptionError(
+                            "Fun-ASR sent more transcript text than a "
+                            "recording can hold "
+                            f"({_MAX_TRANSCRIPT_CHARS:,} characters)."
+                            + self._recovered_suffix(finalized, current)
+                        )
                 elif event == "task-finished":
                     break
                 elif event == "task-failed":

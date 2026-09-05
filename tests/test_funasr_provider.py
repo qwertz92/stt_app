@@ -472,6 +472,71 @@ class TestFunAsrFailureMessage:
         assert "Fun-ASR task failed: " + "x" * provider._FAILURE_DETAIL_MAX_CHARS in message
         assert "x" * (provider._FAILURE_DETAIL_MAX_CHARS + 1) not in message
 
+    def test_a_nested_error_object_is_unwrapped_not_stringified(self):
+        """`str()` of the object hands the user Python dict syntax with the
+        request id in it, capped mid-dict -- the shape the HTTP providers
+        already refuse. The unwrapping order is shared with
+        `read_http_error_detail` (`nested_error_text`), so the two cannot
+        drift."""
+        ws = FakeWS([
+            json.dumps({
+                "header": {
+                    "event": "task-failed",
+                    "task_id": "t",
+                    "error_message": {
+                        "code": "Throttling",
+                        "message": "quota exceeded",
+                        "request_id": "abc",
+                    },
+                },
+            }),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        message = str(excinfo.value)
+        assert message == "Fun-ASR task failed: quota exceeded"
+        assert "{" not in message
+        assert "request_id" not in message
+
+    def test_an_error_object_with_no_text_field_is_shown_as_json(self):
+        """The last resort is the JSON text, as it is for an HTTP body:
+        `str()` would print `{'trace': ['a', 'b']}`, which is Python and not
+        what the service sent."""
+        ws = FakeWS([
+            json.dumps({
+                "header": {
+                    "event": "task-failed",
+                    "task_id": "t",
+                    "error_message": {"trace": ["a", "b"]},
+                },
+            }),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        assert str(excinfo.value) == (
+            'Fun-ASR task failed: {"trace": ["a", "b"]}'
+        )
+
+    def test_a_plain_string_error_message_is_unchanged(self):
+        ws = FakeWS([_event("task-failed", error_message="bad request")])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+        assert str(excinfo.value) == "Fun-ASR task failed: bad request"
+
 
 class TestFunAsrFieldTypes:
     """`bool("false")` is True and `str(None)` is "None": JSON values are
@@ -765,6 +830,110 @@ class TestFunAsrUnusableFrames:
             t.transcribe_batch(_wav_bytes())
         assert f"{provider._MAX_UNUSABLE_FRAMES + 1} frames" in str(excinfo.value)
 
+    @pytest.mark.parametrize(
+        "frame",
+        [
+            json.dumps({"header": {"event": "result-generated", "task_id": "t"}}),
+            json.dumps({
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": 7,
+            }),
+            json.dumps({
+                "header": {"event": "result-generated", "task_id": "t"},
+                "payload": {"output": {"sentence": {"text": "",
+                                                    "sentence_end": False}}},
+            }),
+        ],
+        ids=["no-payload", "payload-not-an-object", "empty-partial"],
+    )
+    def test_a_result_generated_that_carries_nothing_is_counted(self, frame):
+        """`budget.reset()` ran for every `result-generated` before the frame
+        was inspected, so a flood of them that carried no text and closed no
+        sentence spun for the whole thirty-minute budget with the bound in
+        place -- measured against an instant fake: 1.4 million receive calls
+        in 2 s. Such a frame is now spent like any other frame that is not an
+        event."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        limit = provider._MAX_UNUSABLE_FRAMES
+        at_the_bound = [
+            _event("task-started"),
+            _event("result-generated", "so far", True),
+            *([frame] * limit),
+            _event("task-finished"),
+        ]
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(
+            FunAsrTranscriber, "_connect", return_value=FakeWS(at_the_bound)
+        ):
+            assert t.transcribe_batch(_wav_bytes()) == "so far"
+
+        past_the_bound = [
+            _event("task-started"),
+            _event("result-generated", "so far", True),
+            *([frame] * (limit + 1)),
+            _event("task-finished"),
+        ]
+        ws = FakeWS(past_the_bound)
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        message = str(excinfo.value)
+        assert f"{limit + 1} frames" in message
+        assert "so far" in message, "the text already received was discarded"
+
+    def test_an_empty_result_generated_does_not_reset_the_bound(self):
+        """The same hole as the empty-object case, reached through a header
+        that names a real event: one of these after every thousand junk
+        frames restarted the count forever."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        junk = ["not json"] * provider._MAX_UNUSABLE_FRAMES
+        empty = json.dumps({"header": {"event": "result-generated", "task_id": "t"}})
+        ws = FakeWS([
+            _event("task-started"),
+            *junk,
+            empty,
+            *junk,
+            empty,
+            *junk,
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        assert "frames" in str(excinfo.value)
+        # It tripped inside the second block, not after all three.
+        assert len(ws._events) > 0
+
+    def test_a_heartbeat_flood_is_deliberately_not_bounded(self):
+        """A heartbeat is the server saying it is alive, so it counts as an
+        event however many arrive: this provider asks for heartbeats, and a
+        long pause in a long recording is exactly when a run of them is
+        expected. Only the deadline bounds them."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        heartbeat = json.dumps({
+            "header": {"event": "result-generated", "task_id": "t"},
+            "payload": {"output": {"sentence": {"heartbeat": True,
+                                                "sentence_id": 0}}},
+        })
+        ws = FakeWS([
+            _event("task-started"),
+            *([heartbeat] * (provider._MAX_UNUSABLE_FRAMES * 2 + 1)),
+            _event("result-generated", "endlich", True),
+            _event("task-finished"),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with patch.object(FunAsrTranscriber, "_connect", return_value=ws):
+            assert t.transcribe_batch(_wav_bytes()) == "endlich"
+
     def test_a_shutdown_ends_the_receive_loop(self):
         from stt_app.transcriber.base import (
             request_transcription_shutdown,
@@ -817,6 +986,72 @@ class TestFunAsrUnusableFrames:
             pytest.raises(TranscriptionError, match="did not finish"),
         ):
             t.transcribe_batch(_wav_bytes())
+
+
+class TestFunAsrTranscriptSize:
+    """The frame bound cannot cover a flood of *usable* frames: each one is
+    the service saying something, so it legitimately resets the count. The
+    accumulated text therefore needs a bound of its own -- measured with an
+    instant fake, 111 MB of Python heap in 2.5 s and ~100 GB extrapolated
+    over the thirty-minute budget."""
+
+    def test_a_flood_of_finalized_sentences_fails_instead_of_growing(
+        self, monkeypatch
+    ):
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "_MAX_TRANSCRIPT_CHARS", 40)
+        sentence = _event("result-generated", "zehnzeichen", True)
+        ws = FakeWS([
+            _event("task-started"),
+            *([sentence] * 100),
+            _event("task-finished"),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError) as excinfo,
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+        message = str(excinfo.value)
+        assert "more transcript text than a recording can hold" in message
+        # The text it did receive is named, like every other failure here.
+        assert "zehnzeichen" in message
+        # It stopped at the bound instead of reading all hundred frames.
+        assert len(ws._events) > 90, message
+
+    def test_one_enormous_partial_is_bounded_too(self, monkeypatch):
+        """The cap is on the accumulated characters, not on the sentence
+        count, so a single frame carrying megabytes trips it as well."""
+        from stt_app.transcriber import funasr_provider as provider
+
+        monkeypatch.setattr(provider, "_MAX_TRANSCRIPT_CHARS", 40)
+        ws = FakeWS([
+            _event("task-started"),
+            _event("result-generated", "w" * 200, False),
+            _event("task-finished"),
+        ])
+        t = FunAsrTranscriber(api_key="sk", language_mode="en")
+        with (
+            patch.object(FunAsrTranscriber, "_connect", return_value=ws),
+            pytest.raises(TranscriptionError, match="more transcript text"),
+        ):
+            t.transcribe_batch(_wav_bytes())
+
+    def test_a_normal_dictation_is_nowhere_near_the_bound(self):
+        """The derivation of the constant, in executable form: a recording
+        that fills the whole budget at a fast 200 words per minute and 8
+        characters per word carries 48,000 characters. Lowering the cap
+        towards that number would start truncating real dictation, which is
+        a far worse failure than the memory growth it is there to stop."""
+        from stt_app.config import FUNASR_BATCH_MAX_WAIT_S
+        from stt_app.transcriber import funasr_provider as provider
+
+        longest_plausible = FUNASR_BATCH_MAX_WAIT_S / 60 * 200 * 8
+        cap = provider._MAX_TRANSCRIPT_CHARS
+
+        assert cap >= 40 * longest_plausible
 
 
 class TestFunAsrRunTask:

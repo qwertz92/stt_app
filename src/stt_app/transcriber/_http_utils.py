@@ -108,6 +108,30 @@ def normalize_transcript_text(value: object) -> str:
 _MAX_ERROR_BODY_BYTES = 64 * 1024
 
 
+def nested_error_text(value: object) -> str:
+    """The human-readable text inside a provider's nested error object, or "".
+
+    `str()` of such an object hands the user Python dict syntax with the
+    request id in it, capped mid-dict, so every provider that can receive one
+    unwraps it instead -- the HTTP readers below through
+    `read_http_error_detail`, Fun-ASR through its own `task-failed` header,
+    which is a parsed WebSocket frame and never passes through an
+    `HTTPError`. The order is the one the HTTP shapes need and is shared
+    rather than copied so the two cannot drift.
+
+    Uncapped on purpose: each caller applies its own cap (300 characters for
+    the HTTP providers, `_FAILURE_DETAIL_MAX_CHARS` for Fun-ASR), and a
+    helper that capped as well would silently apply the tighter of the two.
+    """
+    if not isinstance(value, dict):
+        return ""
+    for key in ("message", "detail", "status", "code"):
+        inner = value.get(key)
+        if isinstance(inner, str) and inner.strip():
+            return inner.strip()
+    return ""
+
+
 def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
     """Return what the provider actually said, or "" when it said nothing.
 
@@ -140,9 +164,9 @@ def read_http_error_detail(exc: urllib.error.HTTPError) -> str:
         for key in ("error", "message", "detail", "err_msg"):
             value = parsed.get(key)
             if isinstance(value, dict):
-                for inner in ("message", "detail", "status", "code"):
-                    if isinstance(value.get(inner), str) and value[inner].strip():
-                        return value[inner].strip()[:300]
+                unwrapped = nested_error_text(value)
+                if unwrapped:
+                    return unwrapped[:300]
                 continue
             if isinstance(value, str) and value.strip():
                 return value.strip()[:300]
