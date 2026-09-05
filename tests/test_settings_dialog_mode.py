@@ -1903,8 +1903,10 @@ def test_benchmark_tab_runs_for_installed_models(monkeypatch, tmp_path):
     dialog._run_local_benchmark()
 
     assert dialog.benchmark_results_table.rowCount() == 1
-    assert dialog.benchmark_results_table.item(0, 0).text() == "small"
-    assert dialog.benchmark_results_table.item(0, 1).text() == "auto"
+    # Column 0 is the run order; model and resolved device follow it.
+    assert dialog.benchmark_results_table.item(0, 0).text() == "1"
+    assert dialog.benchmark_results_table.item(0, 1).text() == "small"
+    assert dialog.benchmark_results_table.item(0, 2).text() == "auto"
     assert captured_kwargs["webgpu_devices"] == ["auto"]
     assert dialog.benchmark_summary_text.toPlainText().startswith("Benchmark summary:")
     assert "Benchmark details:" in dialog.benchmark_summary_text.toPlainText()
@@ -2694,7 +2696,8 @@ def test_benchmark_history_double_click_loads_entry(tmp_path):
     app.processEvents()
 
     assert dialog.benchmark_results_table.rowCount() == 1
-    assert dialog.benchmark_results_table.item(0, 0).text() == "small"
+    # Column 0 is the run order; the model name moved one column right.
+    assert dialog.benchmark_results_table.item(0, 1).text() == "small"
     assert dialog.benchmark_summary_text.toPlainText() == entry.summary
     main_sizes = dialog.benchmark_main_splitter.sizes()
     assert main_sizes[1] > main_sizes[0]

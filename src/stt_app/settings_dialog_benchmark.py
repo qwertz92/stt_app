@@ -2,7 +2,9 @@
 from __future__ import annotations
 
 import logging
+import math
 import threading
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 
@@ -139,6 +141,98 @@ _BENCHMARK_DETAILS_STYLESHEET = f"""
 """
 
 _BENCHMARK_DETAILS_PAGE_MARGIN_PX = 6
+
+_BENCHMARK_RESULT_COLUMNS = (
+    "#",
+    "Model",
+    "Resolved Device",
+    "Compute",
+    "Load",
+    "Avg",
+    "RTF",
+    "Status",
+)
+_BENCHMARK_RESULT_RUN_ORDER_COLUMN = 0
+_BENCHMARK_RESULT_DEVICE_COLUMN = 2
+_BENCHMARK_RESULT_STATUS_COLUMN = len(_BENCHMARK_RESULT_COLUMNS) - 1
+# The three columns that show a measured number, and the value behind each of
+# them. A case that produced no measurement renders "-" here.
+_BENCHMARK_RESULT_NUMBERS: dict[int, Callable[[BenchmarkCase], float]] = {
+    4: lambda case: case.load_seconds,
+    5: lambda case: case.avg_seconds,
+    6: lambda case: case.avg_rtf,
+}
+_BENCHMARK_SORT_TOOLTIP = "Click to sort; a third click restores the run order."
+_BENCHMARK_DEVICE_COLUMN_TOOLTIP = (
+    "The device actually used by the runtime. Older stored "
+    "faster-whisper results may show the configured value 'auto'."
+)
+
+
+def _benchmark_result_row_values(index: int, case: BenchmarkCase) -> list[str]:
+    """The displayed cells of one results row, `index` being its run order."""
+    return [
+        str(index + 1),
+        case.model,
+        case.device,
+        case.compute_type,
+        _format_seconds(case.load_seconds),
+        _format_seconds(case.avg_seconds),
+        _format_number(case.avg_rtf),
+        "OK" if case.error is None else "Error",
+    ]
+
+
+def _benchmark_result_order(
+    cases: list[BenchmarkCase],
+    sort_state: tuple[int, QtCore.Qt.SortOrder] | None,
+) -> list[int]:
+    """Run-order indexes of `cases`, in the order the table must show them.
+
+    `sorted` is stable and the input is the run order, so ties keep it.
+
+    The numeric columns must not use `reverse=True`: that would pull the rows
+    with no measurement (`-`, an error case or an unfinished one) to the
+    front, and those belong last whichever direction the user asked for. Their
+    descending pass negates the finite value instead, which leaves the
+    non-finite group's rank where the ascending pass put it.
+    """
+    order = list(range(len(cases)))
+    if sort_state is None:
+        return order
+    column, direction = sort_state
+    descending = direction == QtCore.Qt.DescendingOrder
+    number_of = _BENCHMARK_RESULT_NUMBERS.get(column)
+    if number_of is not None:
+
+        def numeric_key(index: int) -> tuple[int, float]:
+            value = number_of(cases[index])
+            if not math.isfinite(value):
+                return (1, 0.0)
+            return (0, -value if descending else value)
+
+        return sorted(order, key=numeric_key)
+    if column == _BENCHMARK_RESULT_RUN_ORDER_COLUMN:
+        return sorted(order, reverse=descending)
+    return sorted(
+        order,
+        key=lambda index: _benchmark_result_row_values(index, cases[index])[
+            column
+        ].casefold(),
+        reverse=descending,
+    )
+
+
+def _next_benchmark_sort_state(
+    current: tuple[int, QtCore.Qt.SortOrder] | None,
+    column: int,
+) -> tuple[int, QtCore.Qt.SortOrder] | None:
+    """Three states per column: ascending, descending, back to the run order."""
+    if current is None or current[0] != column:
+        return (column, QtCore.Qt.AscendingOrder)
+    if current[1] == QtCore.Qt.AscendingOrder:
+        return (column, QtCore.Qt.DescendingOrder)
+    return None
 
 
 def _details_page(content: QtWidgets.QWidget) -> QtWidgets.QWidget:
@@ -630,25 +724,26 @@ class _BenchmarkMixin:
         results_layout.setSpacing(6)
         self.benchmark_results_splitter = QtWidgets.QSplitter(QtCore.Qt.Vertical)
         self.benchmark_results_splitter.setChildrenCollapsible(False)
-        self.benchmark_results_table = QtWidgets.QTableWidget(0, 7)
+        # The cases the table currently shows, always in run order; the sort
+        # state only decides how they are laid out, so it survives a live run
+        # appending a case and a history entry being loaded.
+        self._benchmark_results_cases: list[BenchmarkCase] = []
+        self._benchmark_results_sort: tuple[int, QtCore.Qt.SortOrder] | None = None
+        self.benchmark_results_table = QtWidgets.QTableWidget(
+            0, len(_BENCHMARK_RESULT_COLUMNS)
+        )
         self.benchmark_results_table.setMinimumHeight(110)
         self.benchmark_results_table.setHorizontalHeaderLabels(
-            [
-                "Model",
-                "Resolved Device",
-                "Compute",
-                "Load",
-                "Avg",
-                "RTF",
-                "Status",
-            ]
+            list(_BENCHMARK_RESULT_COLUMNS)
         )
-        device_header = self.benchmark_results_table.horizontalHeaderItem(1)
-        if device_header is not None:
-            device_header.setToolTip(
-                "The device actually used by the runtime. Older stored "
-                "faster-whisper results may show the configured value 'auto'."
-            )
+        for column in range(len(_BENCHMARK_RESULT_COLUMNS)):
+            header_item = self.benchmark_results_table.horizontalHeaderItem(column)
+            if header_item is None:
+                continue
+            tooltip = _BENCHMARK_SORT_TOOLTIP
+            if column == _BENCHMARK_RESULT_DEVICE_COLUMN:
+                tooltip = f"{_BENCHMARK_DEVICE_COLUMN_TOOLTIP}\n\n{tooltip}"
+            header_item.setToolTip(tooltip)
         self.benchmark_results_table.setStyleSheet(
             _BENCHMARK_RESULT_SURFACE_STYLESHEET
         )
@@ -674,7 +769,23 @@ class _BenchmarkMixin:
         self.benchmark_results_table.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel
         )
-        self.benchmark_results_table.horizontalHeader().setStretchLastSection(True)
+        results_header = self.benchmark_results_table.horizontalHeader()
+        results_header.setStretchLastSection(True)
+        results_header.setSectionResizeMode(
+            _BENCHMARK_RESULT_RUN_ORDER_COLUMN,
+            QtWidgets.QHeaderView.ResizeToContents,
+        )
+        results_header.setSectionsClickable(True)
+        # Switched on once and left on: `setSortIndicatorShown(False)` shrinks
+        # every ResizeToContents column by the space the arrow would need
+        # (measured on the `#` column: 43 -> 32 px), so toggling it per state
+        # would move the table on every third click. The "no sort" state uses
+        # section -1 instead, which paints no arrow at all.
+        results_header.setSortIndicatorShown(True)
+        results_header.sectionClicked.connect(
+            self._on_benchmark_results_header_clicked
+        )
+        self._apply_benchmark_results_sort_indicator()
         self.benchmark_results_splitter.addWidget(self.benchmark_results_table)
 
         self.benchmark_summary_text = _BenchmarkDetailsView()
@@ -1259,31 +1370,55 @@ class _BenchmarkMixin:
         self._current_benchmark_entry = None
         self._current_benchmark_options = None
         self._current_benchmark_environment = None
-        self.benchmark_results_table.setRowCount(0)
+        # Through the populate path, not `setRowCount(0)`: the stored cases are
+        # what a later header click re-renders from, so clearing only the rows
+        # would bring the cleared result back on the next sort.
+        self._populate_benchmark_results([])
         self.benchmark_summary_text.clear()
         self._set_benchmark_status("", "#555")
         self._update_benchmark_actions()
 
     def _populate_benchmark_results(self, cases: list[BenchmarkCase]) -> None:
-        self.benchmark_results_table.setRowCount(len(cases))
-        for row, case in enumerate(cases):
-            status = "OK" if case.error is None else "Error"
-            values = [
-                case.model,
-                case.device,
-                case.compute_type,
-                _format_seconds(case.load_seconds),
-                _format_seconds(case.avg_seconds),
-                _format_number(case.avg_rtf),
-                status,
-            ]
-            for column, value in enumerate(values):
+        self._benchmark_results_cases = list(cases)
+        self._render_benchmark_results()
+
+    def _render_benchmark_results(self) -> None:
+        """Lay the stored cases out under the current sort state."""
+        cases = self._benchmark_results_cases
+        table = self.benchmark_results_table
+        table.setRowCount(len(cases))
+        order = _benchmark_result_order(cases, self._benchmark_results_sort)
+        for row, index in enumerate(order):
+            case = cases[index]
+            for column, value in enumerate(
+                _benchmark_result_row_values(index, case)
+            ):
                 item = QtWidgets.QTableWidgetItem(value)
-                if column == len(values) - 1:
+                if column == _BENCHMARK_RESULT_STATUS_COLUMN:
                     detail = case.error or case.runtime_details
                     if detail:
                         item.setToolTip(detail)
-                self.benchmark_results_table.setItem(row, column, item)
+                table.setItem(row, column, item)
+
+    def _on_benchmark_results_header_clicked(self, column: int) -> None:
+        self._benchmark_results_sort = _next_benchmark_sort_state(
+            self._benchmark_results_sort,
+            int(column),
+        )
+        self._apply_benchmark_results_sort_indicator()
+        self._render_benchmark_results()
+
+    def _apply_benchmark_results_sort_indicator(self) -> None:
+        header = self.benchmark_results_table.horizontalHeader()
+        if self._benchmark_results_sort is None:
+            # Verified on PySide6 6.11.1: section -1 keeps
+            # `isSortIndicatorShown()` True but paints no arrow on any column,
+            # which is what the run-order state needs -- see the comment where
+            # the flag is switched on.
+            header.setSortIndicator(-1, QtCore.Qt.AscendingOrder)
+            return
+        column, order = self._benchmark_results_sort
+        header.setSortIndicator(column, order)
 
     def _benchmark_summary(
         self,
@@ -1417,7 +1552,7 @@ class _BenchmarkMixin:
         self._current_benchmark_environment = None
         cancel_event = threading.Event()
         self._benchmark_cancel_event = cancel_event
-        self.benchmark_results_table.setRowCount(0)
+        self._populate_benchmark_results([])
         self.benchmark_summary_text.setPlainText(
             self._benchmark_summary([], status="running", options=options)
         )
