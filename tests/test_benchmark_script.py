@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import math
 import queue
 import subprocess
 import sys
@@ -1451,3 +1452,44 @@ def test_the_planned_cases_are_the_ones_the_runner_measures(
 def test_planning_rejects_an_unsupported_device_target_before_anything_runs():
     with pytest.raises(ValueError, match="Unsupported ONNX device target"):
         local_benchmark.planned_benchmark_cases(["small"], "quantum", "auto", "int8")
+
+
+def _case_with_rtf(model: str, rtf: float) -> local_benchmark.BenchmarkCase:
+    return local_benchmark.BenchmarkCase(
+        model=model,
+        device="cpu",
+        compute_type="int8",
+        download_seconds=0.0,
+        load_seconds=1.0,
+        runs=[
+            local_benchmark.BenchmarkRun(
+                run_index=1,
+                seconds=rtf * 2,
+                audio_duration_seconds=2.0,
+                real_time_factor=rtf,
+                transcript_chars=0,
+                transcript_words=0,
+                detected_language="",
+                language_probability=math.nan,
+                transcript="",
+            )
+        ],
+    )
+
+
+def test_the_summary_names_the_best_among_measured_cases_only():
+    """`min` over a NaN depends on the order the cases come in -- NaN compares
+    False both ways, so the first case wins whatever its number -- and a
+    stored run whose numbers were null has NaN there."""
+    unmeasured = _case_with_rtf("alpha", math.nan)
+    measured = _case_with_rtf("beta", 0.5)
+
+    summary = local_benchmark.format_benchmark_summary([unmeasured, measured])
+
+    assert "Fastest average latency: beta on cpu (1.00s)" in summary
+    assert "Best real-time factor: beta on cpu (0.500)" in summary
+
+    alone = local_benchmark.format_benchmark_summary([unmeasured])
+
+    assert "Fastest average latency" not in alone
+    assert "Best real-time factor" not in alone

@@ -796,15 +796,19 @@ def format_benchmark_summary(
                 )
 
     successful = _successful_cases(cases)
-    if successful:
-        fastest = min(successful, key=lambda case: case.avg_seconds)
-        best_rtf = min(successful, key=lambda case: case.avg_rtf)
+    fastest = _best_case(successful, lambda case: case.avg_seconds)
+    best_rtf = _best_case(successful, lambda case: case.avg_rtf)
+    if fastest is not None or best_rtf is not None:
+        lines.append("")
+    if fastest is not None:
+        lines.append(
+            "Fastest average latency: "
+            f"{fastest.model} on {fastest.device} "
+            f"({_format_seconds(fastest.avg_seconds)})"
+        )
+    if best_rtf is not None:
         lines.extend(
             [
-                "",
-                "Fastest average latency: "
-                f"{fastest.model} on {fastest.device} "
-                f"({_format_seconds(fastest.avg_seconds)})",
                 "Best real-time factor: "
                 f"{best_rtf.model} on {best_rtf.device} "
                 f"({_format_number(best_rtf.avg_rtf)})",
@@ -812,6 +816,21 @@ def format_benchmark_summary(
             ]
         )
     return "\n".join(lines)
+
+
+def _best_case(
+    cases: list[BenchmarkCase], key: Callable[[BenchmarkCase], float]
+) -> BenchmarkCase | None:
+    """The case with the smallest measured `key`, or None when none has one.
+
+    `min` over a NaN depends on the order the cases come in -- NaN compares
+    False both ways, so the first case wins whatever its number -- and a
+    stored run whose numbers were null has NaN there.
+    """
+    measured = [case for case in cases if math.isfinite(key(case))]
+    if not measured:
+        return None
+    return min(measured, key=key)
 
 
 def _write_csv(

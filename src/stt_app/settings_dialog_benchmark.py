@@ -2326,8 +2326,11 @@ class _BenchmarkMixin:
             successful = [
                 case for case in entry.cases if case.error is None and case.runs
             ]
+            # Over the measured factors only: `min` over a NaN keeps whichever
+            # case comes first, so a run whose first case had no numbers read
+            # "-" while its second had measured one.
             best_rtf = min(
-                (case.avg_rtf for case in successful),
+                (case.avg_rtf for case in successful if math.isfinite(case.avg_rtf)),
                 default=float("nan"),
             )
             actual_runs = sum(len(case.runs) for case in entry.cases)

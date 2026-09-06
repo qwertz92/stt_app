@@ -850,3 +850,20 @@ def test_a_stored_case_whose_error_is_a_number_still_renders(tmp_path):
     status = dialog.benchmark_results_table.item(0, _BENCHMARK_RESULT_STATUS_COLUMN)
     assert status.toolTip() == "42"
     _ = app
+
+
+def test_the_history_list_rates_a_run_by_its_measured_cases(tmp_path):
+    """`min` over a NaN depends on the order the cases come in: a stored run
+    whose first case had no numbers read "-" in the Best RTF column while
+    its second case had measured 0.500."""
+    template = _stored_entry("template")
+    entry = BenchmarkHistoryEntry.new(
+        status="completed",
+        summary="two cases",
+        options=template.options,
+        cases=[_measured_case("alpha", math.nan), _measured_case("beta", 0.5)],
+    )
+    dialog, app = _history_dialog(tmp_path, [entry])
+
+    assert dialog.benchmark_history_list.item(0, 4).text() == "0.500"
+    _ = app
