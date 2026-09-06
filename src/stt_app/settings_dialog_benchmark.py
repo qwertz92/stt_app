@@ -415,6 +415,9 @@ class _BenchmarkDetailsView(QtWidgets.QTabWidget):
     @staticmethod
     def _configure_table(table: QtWidgets.QTableWidget) -> None:
         table.verticalHeader().setVisible(False)
+        # Tab moves on: cell-by-cell navigation trapped the keyboard in
+        # every benchmark table (see the history table below).
+        table.setTabKeyNavigation(False)
         table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
         table.setAlternatingRowColors(True)
         table.setWordWrap(False)
@@ -662,6 +665,7 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
             0, len(_BENCHMARK_RESULT_COLUMNS)
         )
         self._results_table.setMinimumHeight(110)
+        self._results_table.setTabKeyNavigation(False)
         self._results_table.setHorizontalHeaderLabels(
             list(_BENCHMARK_RESULT_COLUMNS)
         )
@@ -957,6 +961,10 @@ class _BenchmarkMixin:
             ["Recorded", "Audio", "Models", "Runs", "Best RTF", "Status"]
         )
         self.benchmark_history_list.setMinimumHeight(90)
+        # Tab leaves the table: with cell-by-cell navigation a keyboard user
+        # who had selected a row with the arrows could not reach the five
+        # buttons that selection enables (26 Tab presses, all inside).
+        self.benchmark_history_list.setTabKeyNavigation(False)
         self.benchmark_history_list.setEditTriggers(
             QtWidgets.QAbstractItemView.NoEditTriggers
         )
@@ -1485,6 +1493,7 @@ class _BenchmarkMixin:
         table.verticalHeader().setMinimumSectionSize(row_height)
         table.verticalHeader().setDefaultSectionSize(row_height)
         table.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
+        table.setTabKeyNavigation(False)
         table.setSelectionMode(QtWidgets.QAbstractItemView.NoSelection)
         table.setHorizontalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)
         table.setVerticalScrollMode(QtWidgets.QAbstractItemView.ScrollPerPixel)

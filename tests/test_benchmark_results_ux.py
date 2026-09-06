@@ -904,3 +904,35 @@ def test_a_failed_export_replaces_the_previous_exports_status(monkeypatch, tmp_p
     ]
     assert dialog.benchmark_status_label.text().startswith("Export failed")
     _ = app
+
+
+def test_tab_leaves_the_benchmark_tables():
+    """`tabKeyNavigation` cycles a table's cells forever, so a keyboard user
+    who had selected a History row with the arrows could not reach the five
+    buttons that selection enables (measured: 26 Tab presses, all inside the
+    table), and Tab off "Clear History" was trapped in the Results table."""
+    dialog, app = _dialog()
+    dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+    dialog.show()
+    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    app.processEvents()
+    tables = [
+        dialog.benchmark_history_list,
+        dialog.benchmark_results_table,
+        dialog.benchmark_transcripts_table,
+        dialog.benchmark_plan_table,
+    ]
+    assert [table.tabKeyNavigation() for table in tables] == [False] * 4
+
+    table = dialog.benchmark_history_list
+    table.setFocus()
+    app.processEvents()
+    assert dialog.focusWidget() is table
+
+    QtTest.QTest.keyClick(table, QtCore.Qt.Key_Tab)
+    app.processEvents()
+
+    assert dialog.focusWidget() is not table
+    dialog.hide()
+    _ = app
