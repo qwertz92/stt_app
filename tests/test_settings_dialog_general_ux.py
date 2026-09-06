@@ -505,8 +505,8 @@ def test_bottom_status_does_not_move_the_save_and_close_buttons(
     """The bottom status text must never move the Save/Close buttons.
 
     Their row also holds a status label whose text ranges from empty to a full
-    failure message; the stretch in front of it is what keeps the buttons
-    anchored, so guard that it stays there.
+    failure message; the label takes the leftover space with a width policy
+    the layout ignores, so guard that a message never pushes the buttons.
     """
     dialog.show()
     QtWidgets.QApplication.processEvents()
@@ -663,4 +663,38 @@ def test_the_local_download_bar_appearing_moves_nothing(dialog) -> None:
 
     bar.setVisible(False)
     assert geometry() == hidden, "finishing a download moved the controls"
+    dialog.hide()
+
+
+def test_a_long_bottom_status_is_elided_and_widens_nothing(
+    dialog: SettingsDialog,
+) -> None:
+    """A failed save's status is the whole exception message. As a plain
+    label it was clipped with no ellipsis and raised the dialog's minimum
+    hint to the text's width for the seconds it showed -- 1360 px for a
+    172-character `WinError 5` -- which the width pin then captured for the
+    life of the app."""
+    dialog.show()
+    QtWidgets.QApplication.processEvents()
+    before = dialog.minimumSizeHint().width()
+    message = "Failed to save settings: " + "a very long failure reason " * 16
+
+    dialog._set_bottom_status(message, "#b71c1c")
+    QtWidgets.QApplication.processEvents()
+
+    label = dialog._save_status_label
+    shown = QtWidgets.QLabel.text(label)
+    assert label.text() == message
+    assert shown != message
+    assert shown.endswith("\u2026")
+    assert label.toolTip() == message
+    assert dialog.minimumSizeHint().width() == before
+    assert label.geometry().right() < dialog._save_button.geometry().left()
+
+    # And a short message is shown whole: the label takes the row's leftover
+    # space, which an `Ignored` width policy alone would not get it.
+    dialog._set_bottom_status("Settings saved")
+    QtWidgets.QApplication.processEvents()
+    assert QtWidgets.QLabel.text(label) == "Settings saved"
+    dialog._set_bottom_status("")
     dialog.hide()

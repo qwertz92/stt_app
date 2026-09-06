@@ -66,6 +66,7 @@ from .settings_dialog_helpers import (
     _PROVIDER_STATUS_BADGE_HORIZONTAL_PADDING_PX,
     _PROVIDER_STATUS_BADGE_TEXTS,
     _REMOTE_PROVIDER_LABEL_EXTRA_PX,
+    ElidingLabel,
     _app_hotkey_to_qt_hotkey_text,
     _emit_background_signal,
     _hotkey_token_set,
@@ -424,7 +425,14 @@ class SettingsDialog(
         save_button.clicked.connect(self._save)
         close_button.clicked.connect(self.reject)
 
-        self._save_status_label = QtWidgets.QLabel()
+        # Elided, never clipped or grown: a failed save writes its whole
+        # exception message here, which as a plain label raised the dialog's
+        # own minimum hint to the text's width -- 1360 px for a 172-character
+        # `WinError 5` -- for the seconds it showed.
+        self._save_status_label = ElidingLabel()
+        self._save_status_label.setAlignment(
+            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
+        )
         make_label_selectable(self._save_status_label)
         self._save_status_label.setStyleSheet("color: #2e7d32; font-weight: bold;")
         self._save_status_timer = QtCore.QTimer(self)
@@ -436,8 +444,10 @@ class SettingsDialog(
         self._configure_button_row(buttons)
         buttons.addWidget(self.copy_diag_button)
         buttons.addWidget(self.check_updates_button)
-        buttons.addStretch(1)
-        buttons.addWidget(self._save_status_label)
+        # The status label takes the space a stretch used to hold: right-
+        # aligned, its text still ends beside Save, and a width policy the
+        # layout ignores means no message can widen the row.
+        buttons.addWidget(self._save_status_label, 1)
         buttons.addWidget(save_button)
         buttons.addWidget(close_button)
 
@@ -453,8 +463,8 @@ class SettingsDialog(
         self._save_status_label.setStyleSheet(
             f"color: {color}; font-weight: bold;"
         )
+        # The label's own `setText` carries the whole message into its tooltip.
         self._save_status_label.setText(text)
-        self._save_status_label.setToolTip(text)
 
     def _reserve_feedback_button_widths(self) -> None:
         for button, texts in (
