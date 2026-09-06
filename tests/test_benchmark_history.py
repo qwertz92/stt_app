@@ -601,3 +601,34 @@ def test_a_carriage_return_never_splits_a_markdown_table_row(tmp_path):
     assert "erste zeile<br>zweite \\| zeile<br>dritte" in body, (
         "a pipe in the transcript was not escaped, so it opened a column"
     )
+
+
+def test_a_null_or_missing_run_number_reads_as_no_measurement(tmp_path):
+    """A hand-edited `null` raised TypeError in every reader of the run --
+    `avg_rtf` summed it, the list formatted it -- and the first of them was
+    inside `SettingsDialog.__init__`."""
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(
+        json.dumps(
+            _one_entry_payload(
+                {
+                    "real_time_factor": None,
+                    "transcript_chars": None,
+                    "detected_language": None,
+                    "language_probability": "fast",
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    entries = BenchmarkHistoryStore(path=path).recent_entries(20)
+
+    run = entries[0].cases[0].runs[0]
+    assert math.isnan(run.real_time_factor)
+    assert math.isnan(run.language_probability)
+    assert run.transcript_chars == 0
+    assert run.detected_language == ""
+    assert run.transcript == "hallo"
+    assert math.isnan(entries[0].cases[0].avg_rtf)
+    assert not list(tmp_path.glob("*.corrupt.*"))

@@ -160,8 +160,39 @@ def _run_from_dict(data: dict[str, Any]) -> BenchmarkRun:
     backup recovery never ran and `SettingsDialog.__init__` -- which
     calls `recent_entries` with no guard -- could not build at all.
     """
-    fields = {f.name for f in dataclasses.fields(BenchmarkRun)}
-    return BenchmarkRun(**{k: v for k, v in data.items() if k in fields})
+    return BenchmarkRun(
+        **{
+            field.name: _coerce_run_field(field.type, data.get(field.name))
+            for field in dataclasses.fields(BenchmarkRun)
+        }
+    )
+
+
+_RUN_FIELD_EMPTY: dict[str, Any] = {"float": math.nan, "int": 0, "str": ""}
+
+
+def _coerce_run_field(annotation: object, value: Any) -> Any:
+    """A `null`, a missing key or a value of another type becomes the field's
+    empty value: NaN, 0 or "".
+
+    Every reader of a run assumed its declared types -- `avg_rtf` summed the
+    factor, the history list formatted it -- and a hand-edited `null` raised
+    `TypeError` in the first of them, which for the settings dialog is its
+    own constructor. `field.type` is the annotation's text under
+    `from __future__ import annotations`.
+    """
+    kind = annotation if isinstance(annotation, str) else getattr(annotation, "__name__", "")
+    if isinstance(value, bool):
+        return _RUN_FIELD_EMPTY.get(kind, value)
+    if kind == "float":
+        return float(value) if isinstance(value, (int, float)) else math.nan
+    if kind == "int":
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+        return value if isinstance(value, int) else 0
+    if kind == "str":
+        return value if isinstance(value, str) else ""
+    return value
 
 
 def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:

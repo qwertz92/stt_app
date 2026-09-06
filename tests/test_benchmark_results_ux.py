@@ -19,6 +19,7 @@ from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_benchmark import (
     BenchmarkResultsPanel,
     BenchmarkResultsWindow,
+    _benchmark_created_label,
 )
 from stt_app.settings_store import AppSettings
 
@@ -664,3 +665,11 @@ def test_a_deselected_history_row_offers_no_actions(tmp_path):
     assert dialog.open_benchmark_history_window_button.isEnabled() is False
     assert dialog.delete_benchmark_history_button.isEnabled() is False
     _ = app
+
+
+def test_a_created_stamp_the_local_clock_cannot_place_is_shown_as_is():
+    """`astimezone` raises OSError at the ends of the datetime range, and a
+    hand-edited stamp there kept the dialog from being built."""
+    stamp = "0001-01-01T00:00:00+00:00"
+
+    assert _benchmark_created_label(stamp) == stamp

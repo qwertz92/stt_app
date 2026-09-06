@@ -466,3 +466,17 @@ def test_summary_details_hides_an_unknown_physical_core_count():
 
     assert details["Physical CPU cores"] == ""
     assert details["Logical CPU cores"] == ""
+
+
+def test_hardware_facts_take_a_null_cpu_name_as_no_name():
+    """A `Name` WMI could not read arrived as JSON null and was recorded
+    as the string 'None'."""
+    payload = {
+        "cpu": [{**_REAL_PAYLOAD["cpu"][0], "Name": None}],
+        "memory": _REAL_PAYLOAD["memory"],
+    }
+
+    facts = benchmark_environment._hardware_facts_from_payload(payload)
+
+    assert facts.cpu == ""
+    assert facts.physical_cores == 6

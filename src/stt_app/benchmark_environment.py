@@ -238,8 +238,12 @@ def _hardware_facts_from_payload(payload: object) -> _HardwareFacts:
     processors = _payload_entries(payload.get("cpu"))
     modules = _payload_entries(payload.get("memory"))
     first = processors[0] if processors else {}
+    name = first.get("Name")
     return _HardwareFacts(
-        cpu=" ".join(str(first.get("Name", "")).split()),
+        # A `Name` WMI could not read is JSON null, and `str()` of that is
+        # the word 'None'; no name is the honest value and the caller falls
+        # back to `platform.processor()` for it.
+        cpu=" ".join(name.split()) if isinstance(name, str) else "",
         physical_cores=sum(
             max(_safe_int(entry.get("NumberOfCores"), default=0), 0)
             for entry in processors

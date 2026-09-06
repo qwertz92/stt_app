@@ -313,7 +313,10 @@ def _benchmark_created_label(value: str) -> str:
         if parsed.tzinfo is not None:
             parsed = parsed.astimezone()
         return parsed.strftime("%Y-%m-%d %H:%M")
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OSError, OverflowError):
+        # `astimezone` raises OSError (Windows) or OverflowError at the ends
+        # of the datetime range; a hand-edited stamp there is shown as is
+        # rather than keeping the dialog from being built.
         return str(value or "-")
 
 
