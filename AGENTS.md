@@ -912,32 +912,81 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   drew (model, device target, compute type) in `_benchmark_plan_sequence`,
   and `_refresh_benchmark_plan_from_widgets` skips an equal plan. Note what
   that key is not: the statuses, which are the thing being kept.
-- **A cancel hands over the cases the worker already reported.**
+- **A cancel ends the child first and then reads its output to the end.**
   `_stream_benchmark_process` broke out on the cancel check without looking
   at the queue again, so a case the reader thread had already queued was
   discarded although the child had measured it, and the case list labelled
-  it Skipped. The cancel branch drains the queued case events through the
-  same callback first (`_deliver_reported_cases`: `get_nowait` only, stops
-  at EOF) and still raises `BenchmarkCancelled`.
+  it Skipped. The first fix drained the queue with `get_nowait`, which
+  closed only half of it: a case the child had *written* but the reader had
+  not queued yet was still lost -- 58-63% of the time at the coincident
+  instant over 400 trials on a real pipe, and end to end a `large-v3` case
+  of 61 s read Skipped with its RTF gone. The cancel branch now calls
+  `_terminate_process_tree` first, so the pipe closes and the reader
+  reaches EOF once every line the child wrote is queued, then
+  `_deliver_reported_cases` reads to that EOF (bounded by
+  `_CANCEL_DRAIN_SECONDS` for a handle that outlives the kill; the `finally`
+  arm's second terminate is a no-op on a dead child). Two more rules of
+  that drain: **an error event met on the way wins over the cancel** -- the
+  run had already failed when the user pressed Cancel, and the first fix
+  walked past the event, so the dialog showed a clean cancel, stored the run
+  as canceled and put the worker's reason nowhere; `RuntimeError` is raised
+  before `BenchmarkCancelled` at the end of the stream. And **a `case`
+  event without a case is logged and skipped** (`_case_from_event`,
+  `benchmark_case_event_malformed`): `item.get("case") or {}` handed a
+  number to the parser, which died on `.get` and took every case the child
+  reported after it with it. The case a child finishes *after* the kill is
+  gone by design; that is what the cancel is for.
 - **The settings dialog's minimum width is pinned to the widest tab it has
-  shown.** The explicit 520 px minimum predates the Benchmark tab's third
-  History action button, which took that tab's minimum to 611 px, and
-  between the two every caption in that row was clipped. Two Qt facts
-  decide where the pin runs: `QTabWidget.minimumSizeHint` follows the
-  current page only (every other page is a scroll area reporting almost
-  nothing, so the dialog answers 581 px -- the tab bar -- on every tab but
-  Benchmark), and the Benchmark page reports 555 px until it has been
-  painted on screen and 585 afterwards, because its group boxes hold
-  splitters and a splitter counts visible children only. So
-  `_pin_content_minimum_width` cannot run at construction; it runs 0 ms
-  after every show and every tab switch and only ever raises the minimum.
-  Both roads are needed: a tab made current while the dialog is hidden
-  measures the unpainted page. Consequence: a dialog dragged narrower than
-  611 px on another tab widens to 611 when the Benchmark tab is opened --
-  once, as part of a tab switch the user made, which beats the clipped
-  captions. The test bounds the measured need to 640 px so a later widget
-  cannot raise it unnoticed (one label once took the layout's minimum to
-  1109 px).
+  shown -- measured on the tab widget alone, and never past the screen.**
+  The explicit 520 px minimum predates the Benchmark tab's third History
+  action button, which took that tab's minimum to 611 px; at 520 every
+  caption in that row was clipped, and the last one clears only at 611.
+  Two Qt facts decide where the pin runs. `QTabWidget.minimumSizeHint` is the widest of *all* its pages
+  whichever is current (measured: a bare tab widget with 100 and 700 px
+  pages answers 706 on either), so the 581 the dialog answers before the
+  Benchmark tab has been painted is that page's unpainted 555 plus the tab
+  widget's frame and the root margins, and every other page's 72 px never
+  counts -- this entry said "the tab bar" and "follows the current page
+  only" for one round, and both were wrong. And the Benchmark page reports
+  555 px until it has been painted on screen and 585 afterwards -- two
+  stale caches, not the splitters. The two action rows' `QBoxLayout`
+  minimums were computed before their buttons were polished, 6 px per
+  button short (the Results row 306 -> 324 with three buttons, the History
+  row 511 -> 541 with five), and `QLayout::invalidate()` alone refreshes
+  them with the dialog still hidden; the page layout's `QWidgetItem` for
+  each splitter caches the old 535 until the splitter's own
+  `updateGeometry()`, and a splitter has no layout of its own, so that
+  arrives only through the `LayoutRequest` Qt posts to a *visible* parent
+  -- which is why the show moves the number. "A splitter counts visible
+  children only" was this entry's guess for one round: it does, and none
+  is ever hidden here (measured `isHidden()` False in both states). So
+  `_pin_content_minimum_width` cannot run at construction; it
+  runs 0 ms after every show and every tab switch and only ever raises the
+  minimum. Both roads are needed: a tab made current while the dialog is
+  hidden measures the unpainted page. Three properties, each wrong once:
+  - **It measures `self.tabs.minimumSizeHint()` plus the root layout's
+    margins, never the dialog's own hint.** The root layout also holds the
+    bottom status line, whose text after a failed save is the whole
+    exception message, and the first version read the dialog's hint while
+    such a message showed: a tab switch or a close-and-reopen inside the
+    three seconds the message stays pinned its width for the life of the
+    app -- 3077 px for a real failed save on a 2560 px screen, 1360 for a
+    172-character `WinError 5` -- with the message long gone and no way to
+    drag the dialog back. (That line is an `ElidingLabel` as well now; see
+    the status-line entry.) The engine line is the other root-level label;
+    a test sets a 400-character text on both and expects the pin unmoved.
+  - **It stops at `_available_dialog_size().width()`.** A minimum the
+    screen cannot host puts Save and Close past its edge with no way back
+    short of restarting the app, and `setMinimumWidth` holds whatever
+    `_apply_initial_dialog_size` fitted before it.
+  - **The 640 px budget the test bounds the need with is a 9 pt number.**
+    Windows' "Text size" raises the application font without the DPI:
+    measured 720 px at 11.25 pt, 813 at 13.5, 917 at 15.75 and 1025 at 18,
+    so off the 9 pt font the test skips and names the need it measured.
+  Consequence kept: a dialog dragged narrower than 611 px on another tab
+  widens to 611 when the Benchmark tab is opened -- once, as part of a tab
+  switch the user made, which beats the clipped captions (one label once
+  took the layout's minimum to 1109 px, which is what the budget is for).
 - **The Benchmark tab's status label and progress bar take their height
   from the button as it renders.** The build measured
   `open_benchmark_window_button.sizeHint()` before it was a polished child
@@ -954,8 +1003,72 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   places: a `Win32_Processor.Name` WMI could not read arrives as JSON null,
   and `str()` of that recorded the CPU as the word None (a non-string name
   is no name, and the caller falls back to `platform.processor()`); and
-  `_benchmark_created_label` catches the `OSError`/`OverflowError` that
-  `astimezone` raises at the ends of the datetime range.
+  `_benchmark_created_label` catches the `OSError` that `astimezone`
+  raises for every stamp the C library's `localtime` refuses -- on this
+  Windows machine everything before 1970 and past 3001, about eight
+  thousand of the ten thousand representable years, not "the ends of the
+  range" as this entry said for one round -- and the `OverflowError`
+  CPython raises when the epoch seconds do not fit `time_t`; the split is
+  `time_t` width, not the operating system. Four more
+  shapes the first version let through, each one line of JSON: **`float()`
+  of an int past the double range raises `OverflowError`** rather than
+  answering inf, so a 401-digit `seconds` escaped the reader again -- the
+  float branch answers NaN for it, and an int field past a signed 64-bit
+  integer (`_INT_FIELD_LIMIT`) is 0, because a count that size is not a
+  count; a test pins that every `BenchmarkRun` annotation has an entry in
+  `_RUN_FIELD_EMPTY`, since a field of a fourth type would be handed through
+  untouched. **A case's `error` is text or nothing** (`_error_text`): the
+  results table hands it to a tooltip, which takes a string only, so a
+  hand-edited `42` raised `TypeError` inside `show_entry` -- Load Selected
+  and Open in Window alike; a non-text value keeps the case failed as its
+  text, an empty one is no error. **The XLSX writer puts a number a `<v>`
+  cannot hold in as text** (`_fits_a_numeric_cell`): `math.isfinite` itself
+  raises `OverflowError` for such an int, and a hand-edited core count of
+  that size died the export (the atomic writer had kept the previous file).
+  And **the fastest case and the best real-time factor are taken over
+  measured cases only** (`_best_case`, and the history list's Best RTF
+  column): `min` over a NaN keeps whichever case comes first, so a stored
+  run whose first case had no numbers read "-" while its second had
+  measured 0.500.
+- **One wrong value in `benchmark_history.json` costs that value, never
+  the file.** Three readers, each fixed once. `raw.get("model_names", [])`
+  defaults a missing key only, so a `null` there, in `webgpu_devices` or in
+  an entry's `cases` raised `TypeError`, which `_load_from_path` answered by
+  quarantining the file -- every recorded run gone from the app for one
+  hand-edited value, and for good, because the backup holds the same entry
+  and every later open re-fails the same way (measured: three good runs, 0
+  rows, a `.corrupt.*` beside the `.bak`); `_text_items` reads a list and
+  nothing else, and an entry whose `cases` is not a list is dropped like one
+  with none. `int(inf)` raises `OverflowError`, which neither the int reader
+  nor that backstop caught, so `1e400` -- valid JSON syntax -- in
+  `environment.logical_cpus`, `physical_cores`, `options.runs`, `beam_size`
+  or `threads` left `SettingsDialog.__init__` through the tray's slot, and
+  Settings could never be opened again with nothing saying why; `safe_int`
+  lives once, in `benchmark_environment`, catches it, and the two core
+  counts are clamped at 0 because -1 exported as a measured count. And
+  every text field outside `BenchmarkRun` read `str(raw.get(...))`, which
+  renders a `null` as the word None and a container as its Python repr, in
+  the History list's Recorded and Status cells and the results table's
+  Model column; `text_or_empty` is the one rule for all of them, the run
+  reader's `str` branch included.
+- **A failed export says so on the status line.** The `except` arm showed
+  the warning box and returned, so after dismissing "Export failed" the
+  Benchmark tab still read "Benchmark exported to ..." naming the previous
+  export's file.
+- **The benchmark tables do not take Tab.** `tabKeyNavigation` cycles a
+  table's cells forever, so a keyboard user who had selected a History row
+  with the arrows could not reach the five buttons that selection enables
+  (measured: 26 Tab presses, all inside the table), and Tab off "Clear
+  History" was trapped in the Results table. All five benchmark tables set
+  it off, and Tab moves to the next widget.
+- **A run that measured nothing says so, and claims no save.**
+  `_on_benchmark_finished` skips the history write for an empty case list
+  and painted "Benchmark finished and saved to history." over a store it
+  had never written (measured: the line painted, 0 entries, no file). The
+  state is reachable through the slot alone -- the Run Benchmark window
+  cannot select no model, and a model the runner refuses yields an error
+  case, not none -- and the line now reads "Benchmark finished with no
+  cases. Nothing was saved."
 - **`planned_benchmark_cases` is the single source of the case sequence.**
   `run_benchmark_cases` iterates the list it returns, so the emitted
   `[Case i/N]` texts, the case total and the displayed compute type have one
@@ -1003,7 +1116,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   operation's snapshotted controls and busy state stay intact. Application
   shutdown calls `SettingsDialog.shutdown()` before controller shutdown so
   active model-download and benchmark child-process work is canceled and given
-  a bounded cleanup window.
+  a bounded cleanup window -- and then delivers the events posted to the
+  dialog (`QCoreApplication.sendPostedEvents(self)`, on the main thread
+  only): `shutdown()` runs from `aboutToQuit`, after `exec()` has returned,
+  so the queued signals through which the joined benchmark worker hands over
+  its cases and its outcome had no loop left to deliver them, and a run
+  cancelled by quitting saved nothing (measured: 0 history entries) while
+  the dialog still believed it active. What the join did not see -- a
+  worker still running after its 2.5 s -- is still not saved.
 - **General/Audio-tab field hints have explicit visual ownership**: a control
   and its descriptive hint use `_field_with_hint` with a 2 px internal gap;
   these forms use a 10 px row gap before the next setting. Changing model/language
@@ -1199,7 +1319,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   policy `Ignored` horizontally so the layout never widens for it, elided to
   whatever width it is given and re-elided on resize, `text()` still returning
   the full string so callers and tests read what was set, and the whole
-  message in the tooltip.
+  message in the tooltip. **The dialog's own bottom status line is the
+  fourth**: a failed save writes its whole exception message there, a plain
+  label reported that message's width as its minimum hint, and the
+  minimum-width pin read that hint (above). It is an `ElidingLabel` that
+  takes the button row's leftover space with a stretch factor of 1 -- with
+  the `addStretch(1)` it replaced still in the row, an `Ignored` width
+  policy gets nothing and the text vanishes -- right-aligned so a short
+  message still ends beside Save.
 - **A widget that appears mid-interaction keeps its space while hidden.**
   The Local tab's download progress bar appears the instant a download starts,
   and without `retainSizeWhenHidden` its 28 px left the layout: pressing
@@ -3113,19 +3240,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   therefore also carries `physical_cores`, `cpu_clock`, `cpu_cache` and
   `memory_modules`.
   - **One PowerShell call answers for both WMI classes.** The CIM query is
-    the expensive part, not the launch -- measured on one Windows 11 machine,
-    a bare `powershell` launch takes 0.13-0.16 s, the shorter video-controller
-    query 0.34-0.38 s and this whole query 1.40-1.60 s -- so
+    the expensive part, not the launch -- measured on one Windows 11 machine
+    in two sessions, a bare `powershell` launch takes 0.12-0.16 s, the
+    shorter video-controller query 0.29-0.42 s and this whole query
+    1.35-1.60 s -- so
     `_HARDWARE_QUERY` asks `Win32_Processor` and `Win32_PhysicalMemory`
     together, the CPU name comes out of that same payload instead of the
-    query of its own it used to be (1.34-1.39 s), and the memory question
-    costs about 0.04 s on top. (This entry said "the launch is the expensive
+    query of its own it used to be (1.32-1.40 s), and the memory question
+    costs 0.00-0.04 s on top (the second session's seven runs put it within
+    the noise). (This entry said "the launch is the expensive
     part" for one round; its own pair of numbers refutes that, since a
     launch-dominated cost would make the two queries roughly equal.) It runs
     on the benchmark worker thread, never on the Qt thread -- keep it that
     way. Both queries are wrapped in `@(...)` so a single-socket /
-    single-module machine still yields JSON arrays: the pipeline enumerates
-    a one-element array before `ConvertTo-Json` sees it. `_payload_entries`
+    single-module machine still yields JSON arrays: without the wrapper a
+    single CIM object is a bare object, not a one-element array (measured
+    on 5.1 and 7.6.5). What keeps that array from being enumerated on its
+    way to `ConvertTo-Json` is the hashtable property it sits in, not the
+    wrapper -- `@(1) | ConvertTo-Json` prints `1` -- which this entry had
+    the other way round for one round. `_payload_entries`
     accepts a bare object as well, for a query edited to drop the wrapper
     and for shells older than this machine can run; neither PowerShell 5.1
     nor 7.6 unwraps a one-element array that sits in a hashtable property
@@ -4212,12 +4345,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   second with the same status and summary open one pop-out. A benchmark
   run takes longer than a second; recorded.
 - **The benchmark environment is collected before the first cancel check**
-  (about 2.3 s of PowerShell on this machine), so a cancel pressed at once
-  is honoured only after it, and a shutdown joins the worker for up to
-  2.5 s. Recorded.
-- **A pop-out's Export runs a modal file dialog on the Qt thread**, so a
-  run finishing meanwhile paints its completion status after the dialog
-  closes; the status is not lost, only late. Recorded.
+  (1.8-3.9 s of PowerShell over eleven runs in three sessions on this
+  machine, median 2.2 s), so a cancel pressed at once is honoured only
+  after it, and a shutdown joins the worker for up to 2.5 s -- shorter
+  than the query in about half of those runs; a worker the join outlasts
+  saves nothing, one it ends is saved as canceled. Recorded.
 - **Two spellings of one incomplete-file directory are not folded.**
   `_model_cache_dirs` dedupes by `realpath`, which does not fold the
   `\\?\` prefix, so a Model Dir spelled that way beside its plain spelling
@@ -4227,7 +4359,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   attribute.** `_unlink_partial` clears the bit before its retry, and a
   retry refused for another reason leaves the file writable. The next
   cleanup or resume treats it like any other partial; recorded.
-- **A benchmark that finishes with no case at all reports a saved run.**
-  Every selected model refused before its first case (an empty model list
-  cannot reach the button), and the completion line still says the run was
-  saved to History, which it was, with no cases. Recorded.
+- **A Run Benchmark window or pop-out the user minimised comes back with
+  the settings dialog.** They are `Qt.Window` children owned by the dialog;
+  Windows minimises them with their owner and restores them with it, so a
+  pop-out minimised on its own, followed by a minimise and restore of the
+  dialog, is back on screen (measured through the window manager). The
+  owner relation is what keeps them above the dialog; recorded.
+- **A model that leaves the inventory during a run resets the plan at the
+  next Run Benchmark click.** `_refresh_benchmark_plan_from_widgets` returns
+  before it records the sequence while a run owns the plan, so a scan that
+  removed a selected model mid-run leaves the stored sequence and the
+  widgets apart; the run finishes with its Done/Skipped states intact, and
+  the first reopen afterwards redraws the new, shorter plan to Pending with
+  nobody having changed a selection. The plan describes what the current
+  selection would run, and the run's own results are in the Results table
+  and in History; recorded.
+- **`benchmark_history.json` holds `NaN` where a number is unknown.** The
+  reader answers NaN for a null, a string or a boolean in a numeric field
+  and `json.dumps` writes that back as the literal `NaN`, which RFC 8259
+  does not allow; Python's own parser reads it, another tool's may not.
+  The file is the app's, not an export; recorded.
+- **The benchmark worker's stdout is read to its end after a cancel, within
+  `_CANCEL_DRAIN_SECONDS`.** A grandchild that inherited the pipe and
+  outlives the kill of the process tree keeps it open, and the drain then
+  returns on its bound with whatever had arrived. `taskkill /T` reaches
+  the tree the worker spawned; recorded.

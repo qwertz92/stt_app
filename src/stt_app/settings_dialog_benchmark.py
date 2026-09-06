@@ -314,9 +314,11 @@ def _benchmark_created_label(value: str) -> str:
             parsed = parsed.astimezone()
         return parsed.strftime("%Y-%m-%d %H:%M")
     except (TypeError, ValueError, OSError, OverflowError):
-        # `astimezone` raises OSError (Windows) or OverflowError at the ends
-        # of the datetime range; a hand-edited stamp there is shown as is
-        # rather than keeping the dialog from being built.
+        # `astimezone` raises OSError for any stamp the C library's
+        # `localtime` refuses (on Windows everything before 1970 and past
+        # 3001) and OverflowError when the epoch seconds do not fit
+        # `time_t`; a hand-edited stamp there is shown as is rather than
+        # keeping the dialog from being built.
         return str(value or "-")
 
 

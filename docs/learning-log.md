@@ -6368,7 +6368,8 @@ relaunched from its on-disk outputs; its findings are the next round's.
   still read 581, because the Benchmark page reports 555 px until it has
   been painted on screen and 585 afterwards (its group boxes hold
   splitters, which count visible children only). The pin now runs 0 ms
-  after every show and every tab switch and only ever raises.
+  after every show and every tab switch and only ever raises. (Wave 9
+  refuted both Qt mechanisms named here; see its facts paragraph.)
 - *Layout L2.* The Benchmark tab's status label and progress bar were
   pinned to the button's unpolished 26 px against the 34 it renders at.
 - *Boundaries F2, F5, F6.* A null WMI `Name` recorded the CPU as the word
@@ -6381,7 +6382,7 @@ relaunched from its on-disk outputs; its findings are the next round's.
 recorded as shrinking the `#` column 43 -> 32 px; the shipped table measures
 56 -> 32 (layout and facts lenses independently, at HEAD and at the
 introducing commit `d4cd3d0`). The facts breaker found where 43 came from:
-the same table with the panel's stylesheet removed, or a bare
+the same table with its own stylesheet removed, or a bare
 `QTableWidget` with the same header labels, measures 43 -> 32 -- the
 `QHeaderView::section` padding is the whole difference, so the quoted
 number was taken on a table that is not the one shipped. And wave 7's
@@ -6430,7 +6431,8 @@ has no producer at HEAD; M1-M4 and boundaries F3, F4 and H1 are recorded
 under Known limitations with their mechanisms.
 
 **The mutation round.** Twelve mutants, one per fix plus a second on the
-plan sequence and three on the boundaries fixes: eleven detected on the
+plan sequence, two more on the boundaries fixes and a second on the
+minimum-width pin (it never raises): eleven detected on the
 first run. The survivor was the tab-switch pin of L1 -- the test switched
 tabs before the show-time pin had fired, so both roads measured the same
 thing. The test now lets the show-time pin fire on the first tab before it
@@ -6442,3 +6444,186 @@ Both detected now.
 **CI.** The runner fixes of the morning (`5a7410c`, `61ec425`, `be7351d`)
 produced the first green `Quality` run since 2026-07-21 (34026893045);
 this wave's commits are checked by the runs they trigger.
+
+### Wave 9 (2026-09-07) - the eighth wave, on the wave-8 fixes
+
+**Range.** `be7351d..68154f5`: the ten wave-8 commits (the minimise guard,
+the pop-out registry, the selection-based History actions, the plan
+sequence, the cancel drain, the declared-type reader, the minimum-width
+pin, the header row heights, the empty logical-count cell, the docs).
+Five breakers with the same five lenses; the facts and reach breakers died
+at the session's rate limit before reporting and were relaunched from
+their on-disk probes and outputs, which the relaunched runs re-ran and
+reported as their own.
+
+**The wave-8 fixes broke two things, and the loop caught both.**
+
+- *Layout F1 / concurrency F1 / boundaries F4.* The minimum-width pin
+  (`d11e1f2`) read the dialog's own `minimumSizeHint`, and the dialog's
+  root layout holds the bottom status line -- a plain `QLabel` whose text
+  after a failed save is the whole exception message. Measured with a real
+  failed save (a 468-character `PermissionError` on the settings file):
+  the dialog's hint went to 3077 px on a 2560 px screen, and a tab switch
+  or a close-and-reopen inside the three seconds the message showed pinned
+  that width for the life of the app; a 172-character `WinError 5` pinned
+  1360, a 53-character one 667. The message cleared, the minimum stayed,
+  `resize()` could not bring it back, and on a 1366 px laptop Save and
+  Close would have sat past the screen edge until a restart. Fixed twice
+  over: the pin measures `self.tabs.minimumSizeHint()` plus the root
+  margins and stops at `_available_dialog_size()`, and the bottom status
+  is an `ElidingLabel` taking the row's leftover space with a stretch
+  factor of 1 (an `Ignored` policy beside the `addStretch(1)` it replaced
+  gets nothing -- the mutation round showed the text vanishing). The 640 px
+  budget in the test was a 9 pt number: 720 at 11.25 pt, 813 at 13.5, 1025
+  at 18 (Windows' "Text size", which raises the font without the DPI); the
+  test now skips off 9 pt and names what it measured.
+- *Boundaries F1 / concurrency probe.* `_coerce_run_field` (`4f1c32f`)
+  called `float()` on any int, and `float(10**400)` raises `OverflowError`
+  instead of answering inf -- so the reader that was added to survive a
+  hand-edited `null` died on a hand-edited 401-digit number, in the
+  history reader and in the cancel drain, taking every case after the
+  poisoned one with it. NaN for the float, 0 for an int past 64 bits, and
+  a test that every `BenchmarkRun` annotation has an entry in the table.
+
+**Confirmed and fixed besides.**
+
+- *Boundaries F2.* A case's `error` reached `QTableWidgetItem.setToolTip`
+  as whatever the file held; `42` raised `TypeError` inside `show_entry`,
+  which is Load Selected and Open in Window alike. `_error_text`.
+- *Boundaries F3.* `_cell_xml` called `math.isfinite` on an int past the
+  double range, which raises; a hand-edited core count of that size ended
+  the XLSX export (the atomic writer had kept the previous file). Such a
+  number goes in as text.
+- *Boundaries F5.* `min()` over NaN keeps whichever case comes first: a
+  stored run whose first case had no numbers read "-" in the Best RTF
+  column and named the wrong case as fastest in the summary. `_best_case`
+  and a finite-only column.
+- *Boundaries F6.* `item.get("case") or {}` handed a number to the case
+  parser, which died on `.get`; a malformed case event is logged and
+  skipped.
+- *Concurrency F2.* The wave-8 drain read the queue only, so a case the
+  child had written but the reader thread had not queued yet was still
+  lost: 58-63% of the time at the coincident instant over 400 trials on a
+  real pipe, and end to end a `large-v3` case of 61 s read Skipped with its
+  RTF gone. The cancel ends the child first, then reads to EOF (bounded by
+  `_CANCEL_DRAIN_SECONDS`); the test pins the order through the elapsed
+  time, since a drain without the kill waits out its whole bound.
+- *Concurrency F3.* An error event queued before the cancel was walked
+  past: the dialog showed a clean cancel, stored the run as canceled, and
+  the worker's reason was nowhere. The error is raised before the cancel.
+- *Concurrency F5.* `shutdown()` runs from `aboutToQuit`, after `exec()`
+  returned; the worker it cancels hands its cases and outcome to queued
+  signals no loop delivers, so a run cancelled by quitting saved nothing
+  (measured: 0 history entries). `sendPostedEvents(self)` after the join.
+  Pre-existing, not from the wave-8 range.
+- *Dead code.* `_entries_from_payload` unwrapped an `{"entries": [...]}`
+  object that no version of the store ever wrote and that the loader's
+  `expected_type=list` could never pass it. Removed.
+
+**Recorded rather than changed.** Layout F3 / reach: a pop-out or the Run
+Benchmark window the user minimised comes back with the dialog (owned
+windows follow their owner's minimise and restore); concurrency F4: a
+scan that removes a selected model mid-run leaves the stored plan
+sequence and the widgets apart, and the first reopen after the run
+redraws the shorter plan to Pending with nobody having changed a
+selection; boundaries: `benchmark_history.json` holds the literal `NaN`
+where a number is unknown, which is not RFC 8259 JSON. All under Known
+limitations.
+
+**Refuted.** Concurrency's `p4b_deletelater.py` reported a superseded
+pop-out as still alive: a probe artifact -- bare `processEvents()` outside
+a running loop does not deliver `DeferredDelete`, and under the real
+`exec()` the window dies on the next pass. Reach's `out_b2.txt` showed a
+cancel that never settled; its sibling `out_b2b.txt` settled, and the
+difference was the probe, not a road.
+
+**The sentences.** The wave-8 minimum-width entry explained its numbers
+wrongly twice in one paragraph: `QTabWidget.minimumSizeHint` is the widest
+of all pages whichever is current (a bare tab widget with 100 and 700 px
+pages answers 706 on either), so the 581 was the unpainted Benchmark page
+plus frame and margins and never "the tab bar"; and the page's 555 -> 585
+is not a splitter counting visible children but two stale layout caches,
+which the facts paragraph below takes apart. Both corrected in the entry;
+the commit message of `d11e1f2` keeps the wrong sentences, as commit
+messages do.
+
+**The relaunched reach lens, on the wave-8 fixes.** Three defects, all
+from a hand-edited `benchmark_history.json` and each reaching
+`SettingsDialog.__init__`, which has no guard. `1e400` -- valid JSON
+syntax, read as `inf` -- in `environment.logical_cpus`, `physical_cores`,
+`options.runs`, `beam_size` or `threads` raised `OverflowError` from
+`int(inf)` past `_safe_int` and past the loader's backstop (measured:
+`SettingsDialog()` unbuildable, so Settings could never be opened again
+and nothing said why). A `null` where `model_names`, `webgpu_devices` or
+an entry's `cases` belongs raised `TypeError`, which the loader answered by
+quarantining the file -- every recorded run gone, and for good, because
+the backup holds the same entry (measured: three good runs, 0 rows, a
+`.corrupt.*` beside the `.bak`). A `null` in a text field rendered as the
+word None in the History list's Recorded and Status cells and the results
+table's Model column (562 mutations of one file: no crash, "None" on
+screen). One reader now: `safe_int` in `benchmark_environment` catches the
+overflow, `_text_items` reads a list and nothing else, `text_or_empty` is
+the rule for every text field, and the two core counts are clamped at 0.
+Two more: a failed export left "Benchmark exported to ..." naming the
+previous export's file on the status line after the warning was dismissed;
+and `tabKeyNavigation` trapped Tab inside every benchmark table (26 presses
+inside the History table, none reaching the five buttons a selection
+enables). A methodology note it earned: its predecessor's `out_b2.txt` (a
+cancel that "never settled") was a probe artifact -- tight `QTest.qWait`
+pumping on the main thread distorts a worker thread's subprocess timing by
+an order of magnitude (the environment query 2.13 s bare against over 60 s
+while pumping) -- and the real-exec replay settled in 1.69 s. And the
+environment collection measured 2.4-3.9 s over its five runs, against
+1.8-2.2 s for the facts lens's three and the lead's three, so the 2.5 s
+shutdown join is shorter than the query in about half the runs; the
+Known-limitations bullet carries the spread.
+
+**The relaunched facts lens, on the wave-8 record.** Fifty-nine sentences
+checked: every number in the minimum-width, header-row, export-column,
+coercion and tray entries confirmed exactly, all nine wave-8 fix commits'
+tests shown to fail on their parents, and all twelve wave-8 mutants
+replayed as detected. Refuted, and corrected in AGENTS.md, in two comments
+and in the wave-8 record above: (1) "`QTabWidget.minimumSizeHint` follows
+the current page only" and "581 -- the tab bar" -- the hint is the widest
+of all pages, 581 is the Benchmark page's unpainted 555 plus the 6 px
+`CT_TabWidget` frame plus 20 px of root margins, and once that page has
+been painted every tab answers 611 (`f05`, `f12`, `f36`); (2) the page's
+555 -> 585 is not a splitter counting visible children -- none is ever
+hidden -- but two stale caches: the two action rows' `QBoxLayout` minimums
+were computed before their buttons were polished and
+`QLayout::invalidate()` alone refreshes them with the dialog still hidden
+(`f30`: 511 -> 541), and the page layout's `QWidgetItem` for each splitter
+caches 535 until the splitter's own `updateGeometry()`, which only a
+`LayoutRequest` Qt posts to a visible parent triggers (`f31`, `f32`); (3)
+the Known-limitations bullet on a run with no case was wrong in both
+halves -- the history arm skips an empty case list, so nothing was saved
+while the line said "saved to history" (`f25`: the line painted, 0
+entries, no file), and refused models yield error cases, not none -- fixed
+in the completion line; (4) "a pop-out's Export paints the completion
+status after the dialog closes" -- a modal runs a nested `QEventLoop`,
+which delivers the queued `benchmark_finished` at once (`f35`: emitted at
+0.300 s, slot at 0.301 s, dialog closed at 0.9 s), bullet removed; (5)
+"`astimezone` raises at the ends of the datetime range" -- on this Windows
+machine it raises `OSError` for every stamp before 1970 and past 3001
+(`f20`), and the OSError/OverflowError split is `time_t` width, not the
+operating system; (6) the `@(...)` explanation contradicted itself -- the
+wrapper collects a single CIM object into an array, and the hashtable
+property is what keeps the array from being enumerated on its way to
+`ConvertTo-Json` (`@(1) | ConvertTo-Json` prints `1` with the wrapper;
+`f15` on 5.1 and 7.6.5); (7) the PowerShell timings, every one of seven
+runs below the stated ranges (launch 0.122-0.135 s, whole query
+1.346-1.382 s, the memory question within the noise), now given as the
+union of both sessions; (8) the wave-8 record's "the panel's stylesheet"
+(the panel has none; the 43 px comes from the table's own) and its mutant
+arithmetic (the composition sentence added to eleven for a file of twelve)
+-- both corrected in place; and "between the two every caption in that row
+was clipped" holds at 520-540 px, with one caption still clipped at 610.
+Not checked: the sort indicator's "no arrow painted" image comparison, the
+1109 px label anecdote, and the native Windows file dialog for (4), which
+was reasoned from Qt's dialog-thread design rather than measured.
+
+**The lead's own repair.** The provisional sentence "so it is the rows'
+spacing, resolved through the style" -- written for the min-width entry
+before the facts lens reported -- was itself wrong: the rows' spacing is
+explicit and unchanged, and the growth is the stale caches above. It never
+reached the repository.

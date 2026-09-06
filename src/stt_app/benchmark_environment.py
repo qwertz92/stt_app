@@ -271,11 +271,12 @@ def _payload_entries(value: object) -> list[dict[str, Any]]:
     """Accept the array the query builds and the bare object it would yield
     without its `@(...)` wrapper.
 
-    The pipeline enumerates a one-element array before `ConvertTo-Json` sees
-    it, which is what the wrapper prevents; a one-element array that sits in
-    a hashtable property is unwrapped by neither PowerShell 5.1 nor 7.6
-    (measured). The tolerance is for a query edited to drop the wrapper and
-    for shells older than this machine can run.
+    Without the wrapper a single CIM object is a bare object, not a
+    one-element array; with it the array survives because it sits in a
+    hashtable property -- a bare `@(1)` on the pipeline is still enumerated
+    -- and neither PowerShell 5.1 nor 7.6 unwraps it there (measured). The
+    tolerance is for a query edited to drop the wrapper and for shells older
+    than this machine can run.
     """
     if isinstance(value, dict):
         return [value]
