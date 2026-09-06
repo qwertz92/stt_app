@@ -942,9 +942,10 @@ def _environment_csv_values(
         "environment_os": environment.os,
         "environment_python": environment.python,
         "environment_cpu": environment.cpu,
-        "environment_logical_cpus": environment.logical_cpus,
-        # An unknown core count leaves the cell empty rather than writing a
-        # bare 0, which a reader would take for a measured value.
+        # An unknown count leaves the cell empty rather than writing a bare 0,
+        # which a reader would take for a measured value. `logical_cpus` is
+        # `os.cpu_count() or 0`, so its 0 is the same unknown.
+        "environment_logical_cpus": environment.logical_cpus or "",
         "environment_physical_cores": environment.physical_cores or "",
         "environment_cpu_clock": environment.cpu_clock,
         "environment_cpu_cache": environment.cpu_cache,

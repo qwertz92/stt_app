@@ -532,9 +532,11 @@ populated. These matter because at batch size 1 an autoregressive decoder
 (Whisper's text decoder, Granite's LLM decoder) re-reads its whole weight set
 for every token it generates and is therefore bounded by memory bandwidth,
 while the encoders are bounded by compute -- so two machines with the same CPU
-name and the same amount of RAM can differ in either, and a kit running below
-its rated speed because XMP/EXPO was never enabled shows up here rather than
-staying invisible. All of it is best-effort: if the query fails, times out, or
+name and the same amount of RAM can differ in either. A kit running below its
+rated speed because XMP/EXPO was never enabled does not show up here, though:
+with the profile off the BIOS reports the JEDEC speed as the maximum capable
+speed as well, so rated and configured agree (measured on a DDR5-6000 kit
+running at 4800). All of it is best-effort: if the query fails, times out, or
 the machine is not Windows, those fields stay empty. Nemotron currently uses
 DirectML or CPU, not CUDA. If a newly added model is incorrectly reported as an
 invalid faster-whisper model, restart the app so the updated runtime catalog is

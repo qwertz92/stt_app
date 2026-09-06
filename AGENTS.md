@@ -3039,18 +3039,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   same CPU name and the same 32 GB can differ in either. `BenchmarkEnvironment`
   therefore also carries `physical_cores`, `cpu_clock`, `cpu_cache` and
   `memory_modules`.
-  - **One PowerShell call answers for both WMI classes.** The launch is the
-    expensive part -- measured on one Windows 11 machine, this query takes
-    1.35-1.41 s against 0.35 s for the shorter video-controller one -- and the
-    collection already paid for a launch to read the CPU name, so
+  - **One PowerShell call answers for both WMI classes.** The CIM query is
+    the expensive part, not the launch -- measured on one Windows 11 machine,
+    a bare `powershell` launch takes 0.13-0.16 s, the shorter video-controller
+    query 0.34-0.38 s and this whole query 1.40-1.60 s -- so
     `_HARDWARE_QUERY` asks `Win32_Processor` and `Win32_PhysicalMemory`
-    together and the name now comes out of that same payload: the added facts
-    cost no extra process start. It runs on the
-    benchmark worker thread, never on the Qt thread -- keep it that way. Both
-    queries are wrapped in `@(...)` so a single-socket / single-module machine
-    still yields JSON arrays, and `_payload_entries` accepts a bare object as
-    well because `ConvertTo-Json` of older PowerShell unwraps a one-element
-    array.
+    together, the CPU name comes out of that same payload instead of the
+    query of its own it used to be (1.34-1.39 s), and the memory question
+    costs about 0.04 s on top. (This entry said "the launch is the expensive
+    part" for one round; its own pair of numbers refutes that, since a
+    launch-dominated cost would make the two queries roughly equal.) It runs
+    on the benchmark worker thread, never on the Qt thread -- keep it that
+    way. Both queries are wrapped in `@(...)` so a single-socket /
+    single-module machine still yields JSON arrays: the pipeline enumerates
+    a one-element array before `ConvertTo-Json` sees it. `_payload_entries`
+    accepts a bare object as well, for a query edited to drop the wrapper
+    and for shells older than this machine can run; neither PowerShell 5.1
+    nor 7.6 unwraps a one-element array that sits in a hashtable property
+    (measured), which this entry attributed to "older PowerShell" for one
+    round.
   - **Every value is best-effort and empty on failure.** A 6 s timeout, a
     non-zero exit, output that will not parse, or any non-Windows machine
     leaves all four fields at their defaults, and the CPU name falls back to
@@ -3065,10 +3072,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   - **The bandwidth clause says "per channel" and never multiplies.** It is
     `MT/s * 8 bytes / 1000`, i.e. one 64-bit channel; WMI does not say how
     many channels are populated, so a system total would be a guess. The rated
-    speed beside the configured one is what the label exists for: a kit sold
-    as DDR5-6000 that runs at 4800 because XMP/EXPO was never enabled is
-    invisible in the CPU name and in the RAM total, and it is a plausible
-    explanation for a machine benchmarking below a comparable one.
+    speed beside the configured one was meant to show a kit sold as DDR5-6000
+    that runs at 4800 because XMP/EXPO was never enabled, and on the one
+    machine measured -- which is exactly that case, a G.Skill F5-6000 kit at
+    4800 -- it cannot: with the profile off the BIOS fills SMBIOS `Speed`
+    (offset 15h, "maximum capable speed" per DSP0134) with the JEDEC profile
+    as well, so both fields read 4800 and the label reads like a DDR5-4800
+    kit's. The "rated N MT/s, running at M MT/s" clause has no known
+    producer; it stays because it costs nothing and a BIOS reporting the
+    profile's rating as the maximum would make it fire. The part number
+    (`F5-6000J3636F16G`) is what tells the kits apart and is not collected.
+    Microsoft's own page documents `Win32_PhysicalMemory.Speed` in
+    nanoseconds; the SMBIOS field it mirrors is MT/s and the measured 4800
+    is MT/s, so the code is right and the page is not.
   - **The memory type comes from the SMBIOS table, not from WMI's own.**
     `_SMBIOS_MEMORY_TYPES` transcribes the DMTF "Memory Device -- Type" table
     (structure 17, offset 12h) as implemented by dmidecode's
@@ -3089,21 +3105,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     CPU columns go after `environment_logical_cpus` and
     `environment_memory_modules` after `environment_memory`, in both
     `benchmark_history._export_headers` and `local_benchmark._write_csv`. That
-    keeps each new column beside the fact it belongs to, and it moves every
-    column after `environment_logical_cpus` four places right: in the history
-    CSV `environment_memory` goes from index 19 to 22, `environment_node` from
-    22 to 26 and `row_type` from 23 to 27, with the same shift from
-    `environment_memory` onwards in the CLI CSV. A reader that addresses
+    keeps each new column beside the fact it belongs to, and it moves the
+    columns after `environment_logical_cpus` three or four places right: in
+    the history CSV `environment_memory` goes from index 19 to 22 (three,
+    since `environment_memory_modules` is inserted after it),
+    `environment_node` from 22 to 26 and `row_type` from 23 to 27, with the
+    same shift from `environment_memory` onwards in the CLI CSV. A reader that addresses
     columns by header name is unaffected; one that hard-codes an index is not,
     and no claim of positional stability holds here. `_write_csv`'s
     `fieldnames` list must be kept in step with `_environment_csv_values` --
     `csv.DictWriter` raises on a key the field list does not name.
   - **An unknown count renders as "" and never as 0.** `summary_details()`
     passes both core counts through `or ""` and the two export helpers do the
-    same, because two of the four consumers of `summary_details()`
-    (`_BenchmarkDetailsView.set_entry`, `format_benchmark_summary`) drop a
-    value only when it is empty and would print a bare "0" for a machine whose
-    count could not be read.
+    same, because three of the four consumers of `summary_details()`
+    (`_BenchmarkDetailsView.set_entry`, `format_benchmark_summary`,
+    `benchmark_history._context_rows`) drop a value only when it is empty and
+    would print a bare "0" for a machine whose count could not be read; only
+    the CLI's `_print_environment` drops a 0 itself. `logical_cpus` is
+    `os.cpu_count() or 0`, so its 0 is the same unknown -- and for one round
+    the two export helpers passed only `physical_cores` through `or ""` and
+    wrote the logical count's 0 as a measured value.
 - **Benchmark runs out-of-process**: the Settings benchmark loads
   faster-whisper/ONNX models back-to-back; model loading does not release the
   Python GIL reliably, so running it in a background *thread* still froze the Qt

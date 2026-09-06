@@ -156,7 +156,9 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
         # `a very long name`): the property wanted is "the same directory
         # on disk", which `realpath` answers for a directory that exists and
         # leaves a missing one as spelled. The returned paths keep the
-        # spelling the user gave.
+        # spelling the user gave apart from what `normpath` folds (a trailing
+        # separator, forward slashes, `..`); an 8.3 name and a `\\?\` prefix
+        # survive.
         base = Path(os.path.normpath(base_dir))
         key = Path(os.path.realpath(base))
         if key in seen:

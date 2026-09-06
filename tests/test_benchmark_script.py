@@ -162,6 +162,8 @@ def test_the_cli_csv_leaves_an_unknown_core_count_empty(tmp_path):
 
     row = next(csv.DictReader(out_path.read_text(encoding="utf-8").splitlines()))
     assert row["environment_physical_cores"] == ""
+    # `logical_cpus` is `os.cpu_count() or 0`: its 0 is the same unknown.
+    assert row["environment_logical_cpus"] == ""
 
 
 def test_successful_cases_filters_errors():

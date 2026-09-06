@@ -632,3 +632,20 @@ def test_a_null_or_missing_run_number_reads_as_no_measurement(tmp_path):
     assert run.transcript == "hallo"
     assert math.isnan(entries[0].cases[0].avg_rtf)
     assert not list(tmp_path.glob("*.corrupt.*"))
+
+
+def test_the_history_export_leaves_an_unknown_logical_count_empty(tmp_path):
+    """`logical_cpus` is `os.cpu_count() or 0`, so its 0 is the same unknown
+    as an unread physical count -- and the cell was written as a bare 0,
+    which a reader takes for a measured value."""
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(_one_entry_payload()), encoding="utf-8")
+    entry = BenchmarkHistoryStore(path=path).recent_entries(1)[0]
+    entry.environment = BenchmarkEnvironment(cpu="AMD Ryzen")
+    csv_path = tmp_path / "benchmark.csv"
+
+    export_benchmark_entry(csv_path, entry)
+
+    row = next(csv.DictReader(csv_path.read_text(encoding="utf-8").splitlines()))
+    assert row["environment_logical_cpus"] == ""
+    assert row["environment_physical_cores"] == ""

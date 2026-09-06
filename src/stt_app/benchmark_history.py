@@ -523,9 +523,10 @@ def _environment_export_values(environment: BenchmarkEnvironment) -> list[Any]:
         environment.os,
         environment.python,
         environment.cpu,
-        environment.logical_cpus,
-        # An unknown core count leaves the cell empty rather than writing a
-        # bare 0, which a reader would take for a measured value.
+        # An unknown count leaves the cell empty rather than writing a bare 0,
+        # which a reader would take for a measured value. `logical_cpus` is
+        # `os.cpu_count() or 0`, so its 0 is the same unknown.
+        environment.logical_cpus or "",
         environment.physical_cores or "",
         environment.cpu_clock,
         environment.cpu_cache,

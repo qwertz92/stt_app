@@ -57,10 +57,13 @@ class BenchmarkEnvironment:
         )
 
     def summary_details(self) -> dict[str, Any]:
-        # `or ""` on the two core counts is load-bearing: two of the four
-        # consumers of this mapping drop a value only when it is "" (or a
-        # falsy container), and an int 0 passes both filters and renders as a
-        # bare "0" for a machine whose core count could not be read.
+        # `or ""` on the two core counts is load-bearing: three of the four
+        # consumers of this mapping (`_BenchmarkDetailsView.set_entry`,
+        # `format_benchmark_summary`, `benchmark_history._context_rows`) drop
+        # a value only when it is "" (or a falsy container), and an int 0
+        # passes their filters and renders as a bare "0" for a machine whose
+        # core count could not be read. Only the CLI's `_print_environment`
+        # drops a 0 itself.
         return {
             "OS": self.os,
             "Python": self.python,
@@ -158,13 +161,14 @@ def _cpu_label(detected: str = "") -> str:
     return "Unknown CPU"
 
 
-# One PowerShell process answers for both WMI classes. A launch is the
-# expensive part of this collection -- measured on one Windows 11 machine, this
-# whole query takes 1.35-1.41 s while the shorter video-controller query takes
-# 0.35 s -- so the CPU name, which used to be a query of its own, now comes out
-# of this payload and the added facts cost no extra process start.
-# `@(...)` keeps a single-socket / single-module machine from collapsing to a
-# bare object, which the parser nevertheless still accepts.
+# One PowerShell process answers for both WMI classes. The CIM query is the
+# expensive part of this collection, not the launch: measured on one Windows
+# 11 machine, a bare `powershell` launch takes 0.13-0.16 s, the shorter
+# video-controller query 0.34-0.38 s and this whole query 1.40-1.60 s. So the
+# CPU name, which used to be a query of its own (1.34-1.39 s), comes out of
+# this payload, and the added memory question costs about 0.04 s on top of it
+# rather than a second query. `@(...)` keeps a single-socket / single-module
+# machine from collapsing to a bare object, which the parser still accepts.
 _HARDWARE_QUERY = (
     "@{ cpu = @(Get-CimInstance Win32_Processor | Select-Object Name, "
     "MaxClockSpeed, NumberOfCores, NumberOfLogicalProcessors, L2CacheSize, "
@@ -261,7 +265,15 @@ def _hardware_facts_from_payload(payload: object) -> _HardwareFacts:
 
 
 def _payload_entries(value: object) -> list[dict[str, Any]]:
-    """`ConvertTo-Json` in older PowerShell unwraps a one-element array."""
+    """Accept the array the query builds and the bare object it would yield
+    without its `@(...)` wrapper.
+
+    The pipeline enumerates a one-element array before `ConvertTo-Json` sees
+    it, which is what the wrapper prevents; a one-element array that sits in
+    a hashtable property is unwrapped by neither PowerShell 5.1 nor 7.6
+    (measured). The tolerance is for a query edited to drop the wrapper and
+    for shells older than this machine can run.
+    """
     if isinstance(value, dict):
         return [value]
     if isinstance(value, list):
@@ -300,10 +312,15 @@ def _cpu_cache_label(l2_kb: int, l3_kb: int) -> str:
 def _memory_modules_label(modules: list[dict[str, Any]]) -> str:
     """Describe the installed modules, grouped by everything that matters.
 
-    The rated speed beside the configured one is what this label exists for:
-    a kit sold as DDR5-6000 that runs at 4800 because XMP/EXPO was never
-    enabled is invisible in the CPU name and in the RAM total, and it is a
-    plausible explanation for a machine benchmarking below a comparable one.
+    The rated speed beside the configured one is meant to show a kit running
+    below its rating, and on the one machine measured it cannot: with
+    XMP/EXPO off the BIOS fills SMBIOS `Speed` (offset 15h, "maximum capable
+    speed") with the JEDEC profile as well, so a G.Skill F5-6000 kit at 4800
+    reports 4800/4800 and reads exactly like a DDR5-4800 kit. The "rated N
+    MT/s, running at M MT/s" clause therefore has no known producer; it
+    stays because a BIOS that reports the profile's rating as the maximum
+    would make it fire and it costs nothing. The part number is what would
+    tell the two kits apart, and it is not collected.
     """
     groups: dict[tuple[int, int, int, int], int] = {}
     for module in modules:
