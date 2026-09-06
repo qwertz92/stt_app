@@ -4,6 +4,8 @@ import io
 import json
 import queue
 import subprocess
+import threading
+from pathlib import Path
 
 import pytest
 
@@ -367,3 +369,73 @@ def test_run_benchmark_cases_raises_when_canceled_immediately():
             model_names=["future-local-model"],
             cancel_check=lambda: True,
         )
+
+
+def test_a_cancel_hands_over_the_cases_the_child_already_reported(monkeypatch):
+    """A finished case is a measurement; discarded, the plan called it Skipped.
+
+    The reader thread had queued the case before the cancel was seen, and
+    the loop broke on the cancel without looking at the queue again.
+    """
+    pumped = threading.Event()
+    case_payload = {
+        "model": "small",
+        "device": "cpu",
+        "compute_type": "int8",
+        "download_seconds": 0.0,
+        "load_seconds": 0.2,
+        "runs": [
+            {
+                "run_index": 1,
+                "seconds": 1.0,
+                "audio_duration_seconds": 24.0,
+                "real_time_factor": 0.043,
+                "transcript_chars": 5,
+                "transcript_words": 1,
+                "detected_language": "de",
+                "language_probability": 0.9,
+                "transcript": "hallo",
+            }
+        ],
+        "error": None,
+        "runtime_details": "",
+    }
+    case_line = benchmark_process.BENCHMARK_EVENT_PREFIX + json.dumps(
+        {"event": "case", "case": case_payload}
+    )
+
+    def stdout_lines():
+        yield case_line + "\n"
+        # Resumed only once the reader has queued the line above.
+        pumped.set()
+
+    class FakeProcess:
+        pid = 4242
+        stdout = stdout_lines()
+        stderr = iter(())
+
+        def poll(self):
+            return 0
+
+        def wait(self, timeout=None):
+            return 0
+
+    monkeypatch.setattr(
+        benchmark_process, "start_benchmark_process", lambda _path: FakeProcess()
+    )
+    delivered: list[BenchmarkCase] = []
+
+    def canceled() -> bool:
+        assert pumped.wait(5.0), "the reader never queued the case"
+        return True
+
+    with pytest.raises(BenchmarkCancelled):
+        benchmark_process._stream_benchmark_process(
+            Path("unused-options.json"),
+            progress_callback=None,
+            case_callback=delivered.append,
+            cancel_check=canceled,
+        )
+
+    assert [case.model for case in delivered] == ["small"]
+    assert delivered[0].runs[0].real_time_factor == 0.043

@@ -124,6 +124,10 @@ def _stream_benchmark_process(
         while True:
             if cancel_check is not None and cancel_check():
                 canceled = True
+                # The reader may have queued cases the child finished before
+                # the cancel; breaking without them threw away measurements
+                # that exist, and the case list then labelled them Skipped.
+                _deliver_reported_cases(events, cases, case_callback)
                 break
             try:
                 item = events.get(timeout=_EVENT_POLL_SECONDS)
@@ -169,6 +173,26 @@ def _stream_benchmark_process(
             f"streaming {len(cases)} completed case(s)."
         )
     return cases
+
+
+def _deliver_reported_cases(
+    events: queue.Queue[Any],
+    cases: list[BenchmarkCase],
+    case_callback: Callable[[BenchmarkCase], None] | None,
+) -> None:
+    """Hand over every finished case already in the queue, without waiting."""
+    while True:
+        try:
+            item = events.get_nowait()
+        except queue.Empty:
+            return
+        if item is _EOF:
+            return
+        if isinstance(item, dict) and item.get("event") == "case":
+            case = _case_from_dict(item.get("case") or {})
+            cases.append(case)
+            if case_callback is not None:
+                case_callback(case)
 
 
 def _pump_events(stream, events: queue.Queue[Any]) -> None:
