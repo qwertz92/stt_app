@@ -473,19 +473,29 @@ class SettingsDialog(
         """Never let the dialog be dragged narrower than the widest tab shown.
 
         The explicit minimum (520 px) predates the Benchmark tab's third
-        History action button, which took that tab's minimum to 611 px, and
-        between the two every caption in that row was clipped.
-        `minimumSizeHint` follows the current page only, and the Benchmark
-        page reports its full width only once it has been painted on screen
-        (its group boxes hold splitters, which count visible children only),
-        so this runs after every show and every tab switch, and it only ever
-        raises the minimum. A test bounds the result so a later widget
-        cannot raise it unnoticed.
+        History action button, which took that tab's minimum to 611 px; at
+        520 every caption in that row was clipped. The tab
+        widget's hint is the widest of all its pages, and the Benchmark page
+        reports its full width only once it has been painted on screen
+        (see AGENTS.md for the numbers), so this runs after every show and
+        every tab switch, and it only ever raises the minimum.
+
+        It measures the tab widget, not the dialog: the root layout also
+        holds the bottom status line, whose text after a failed save is the
+        whole exception message, and reading the dialog's own hint while
+        such a message showed pinned 3077 px for the life of the app. And
+        it stops at the screen -- a minimum the screen cannot host puts
+        Save and Close past its edge with no way back. A test bounds the
+        result so a later widget cannot raise it unnoticed.
         """
+        needed = self.tabs.minimumSizeHint().width()
         root_layout = self.layout()
         if root_layout is not None:
-            root_layout.invalidate()
-        needed = self.minimumSizeHint().width()
+            margins = root_layout.contentsMargins()
+            needed += margins.left() + margins.right()
+        available = self._available_dialog_size().width()
+        if available > 0:
+            needed = min(needed, available)
         if needed > self.minimumWidth():
             self.setMinimumWidth(needed)
 
