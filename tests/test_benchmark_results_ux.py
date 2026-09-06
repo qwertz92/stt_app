@@ -735,3 +735,25 @@ def test_a_dialog_opened_on_the_benchmark_tab_is_pinned_by_the_show():
     assert dialog.minimumWidth() >= needed
     dialog.hide()
     _ = app
+
+
+def test_the_benchmark_header_row_widgets_share_the_buttons_rendered_height():
+    """The row's label and bar were pinned to the button's unpolished height.
+
+    Measured before the button was a child of the styled dialog it reported
+    26 px; polished, its QSS box makes it 34, so the label and the bar sat
+    8 px short beside it.
+    """
+    dialog, app = _dialog()
+    dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+    dialog.show()
+    app.processEvents()
+    rendered = dialog.open_benchmark_window_button.sizeHint().height()
+
+    assert rendered > 0
+    assert dialog.benchmark_status_label.minimumHeight() == rendered
+    assert dialog.benchmark_status_label.maximumHeight() == rendered
+    assert dialog.benchmark_progress_bar.minimumHeight() == rendered
+    assert dialog.benchmark_progress_bar.maximumHeight() == rendered
+    dialog.hide()
+    _ = app

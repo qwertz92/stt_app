@@ -1605,6 +1605,23 @@ class _BenchmarkMixin:
         ):
             self._mark_benchmark_plan_case(index, _BENCHMARK_PLAN_STATUS_SKIPPED)
 
+    def _pin_benchmark_header_row_height(self) -> None:
+        """Match the status label and the bar to the button as it renders.
+
+        The three share one row. The build measured the button before it was
+        a polished child of the styled dialog, where its QSS box (min-height
+        plus padding) is not applied yet: 26 px against the 34 it renders at,
+        so the label and the bar sat 8 px short beside it. Called from
+        `SettingsDialog._reserve_feedback_button_widths`, the place that
+        already re-measures this button for the same reason.
+        """
+        button = getattr(self, "open_benchmark_window_button", None)
+        if button is None:
+            return
+        height = button.sizeHint().height()
+        self.benchmark_status_label.setFixedHeight(height)
+        self.benchmark_progress_bar.setFixedHeight(height)
+
     def _set_benchmark_progress(self, done: int, total: int) -> None:
         """The single writer of the tab's progress bar.
 

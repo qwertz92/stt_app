@@ -467,6 +467,7 @@ class SettingsDialog(
         ):
             if isinstance(button, QtWidgets.QPushButton):
                 reserve_button_width_for_texts(button, texts)
+        self._pin_benchmark_header_row_height()
 
     def _pin_content_minimum_width(self) -> None:
         """Never let the dialog be dragged narrower than the widest tab shown.
