@@ -825,8 +825,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and keeps `benchmark_results_table`, `benchmark_summary_text`,
   `benchmark_transcripts_table`, `benchmark_transcript_text` and
   `benchmark_results_splitter` as **aliases to the panel's widgets**, so every
-  existing seam still addresses the same object and no widget exists twice.
-  `_populate_benchmark_results` stays a mixin method and delegates.
+  existing seam still addresses the same object and no widget exists twice;
+  the mixin's old `_populate_benchmark_results` is gone, because a method
+  whose only body is a call the panel already exposes is dead code.
   Consequences to keep intact:
   - **The results box is the panel's parent**, not the splitter's, so a test
     that walks up from `benchmark_results_splitter` reaches the panel and has

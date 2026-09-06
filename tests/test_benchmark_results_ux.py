@@ -99,7 +99,7 @@ def test_the_results_table_leads_with_the_run_order_of_every_case():
     dialog, app = _dialog()
     table = dialog.benchmark_results_table
 
-    dialog._populate_benchmark_results(_mixed_cases())
+    dialog.benchmark_results_panel.show_cases(_mixed_cases())
 
     assert table.columnCount() == len(_RESULT_HEADERS)
     assert [
@@ -119,7 +119,7 @@ def test_three_clicks_on_rtf_sort_up_then_down_then_back_to_the_run_order():
     dialog, app = _dialog()
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
-    dialog._populate_benchmark_results(_mixed_cases())
+    dialog.benchmark_results_panel.show_cases(_mixed_cases())
     rtf_column = _RESULT_HEADERS.index("RTF")
 
     header.sectionClicked.emit(rtf_column)
@@ -152,7 +152,7 @@ def test_sorting_by_model_ignores_case():
     dialog, app = _dialog()
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
-    dialog._populate_benchmark_results(_mixed_cases())
+    dialog.benchmark_results_panel.show_cases(_mixed_cases())
     model_column = _RESULT_HEADERS.index("Model")
 
     header.sectionClicked.emit(model_column)
@@ -169,7 +169,7 @@ def test_ties_keep_the_order_the_cases_were_measured_in():
     dialog, app = _dialog()
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
-    dialog._populate_benchmark_results(
+    dialog.benchmark_results_panel.show_cases(
         [
             _measured_case("first", 0.2),
             _measured_case("second", 0.2),
@@ -190,23 +190,23 @@ def test_ties_keep_the_order_the_cases_were_measured_in():
 
 
 def test_a_case_finishing_mid_run_keeps_the_order_the_user_chose():
-    """`_populate_benchmark_results` runs once per finished case."""
+    """A finished case re-renders the table through `show_cases`."""
     dialog, app = _dialog()
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
     live: list[BenchmarkCase] = [_measured_case("beta", 0.5)]
-    dialog._populate_benchmark_results(list(live))
+    dialog.benchmark_results_panel.show_cases(list(live))
     rtf_column = _RESULT_HEADERS.index("RTF")
     header.sectionClicked.emit(rtf_column)
     header.sectionClicked.emit(rtf_column)
 
     live.append(_measured_case("Alpha", 0.1))
-    dialog._populate_benchmark_results(list(live))
+    dialog.benchmark_results_panel.show_cases(list(live))
 
     assert _column(table, rtf_column) == ["0.500", "0.100"]
 
     live.append(_measured_case("Delta", 0.9))
-    dialog._populate_benchmark_results(list(live))
+    dialog.benchmark_results_panel.show_cases(list(live))
 
     assert _column(table, rtf_column) == ["0.900", "0.500", "0.100"]
     assert _column(table, 0) == ["3", "1", "2"]
@@ -220,7 +220,7 @@ def test_clicking_the_results_header_moves_nothing():
     app.processEvents()
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
-    dialog._populate_benchmark_results(_mixed_cases())
+    dialog.benchmark_results_panel.show_cases(_mixed_cases())
     app.processEvents()
 
     def _geometry() -> dict[str, object]:

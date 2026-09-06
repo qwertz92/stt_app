@@ -208,6 +208,8 @@ def _benchmark_progress_case_index(text: str) -> int | None:
     """
     match = _BENCHMARK_CASE_PROGRESS_PATTERN.match(str(text or ""))
     return int(match.group(1)) if match is not None else None
+
+
 _BENCHMARK_DEVICE_COLUMN_TOOLTIP = (
     "The device actually used by the runtime. Older stored "
     "faster-whisper results may show the configured value 'auto'."
@@ -1811,10 +1813,6 @@ class _BenchmarkMixin:
         self.benchmark_results_panel.clear()
         self._set_benchmark_status("", "#555")
         self._update_benchmark_actions()
-
-    def _populate_benchmark_results(self, cases: list[BenchmarkCase]) -> None:
-        """Fill the tab's results table; the panel owns how that is done."""
-        self.benchmark_results_panel.show_cases(cases)
 
     def _benchmark_summary(
         self,
