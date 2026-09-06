@@ -6326,3 +6326,119 @@ has ever been opened here) and add `workflow_dispatch`; a ruleset that
 blocks force-push and deletion of `main` protects against the owner's own
 mistakes and a leaked token, since outsiders cannot push anyway. Both wait
 for the owner's decision.
+
+### Wave 8 (2026-09-06) - the seventh wave, on the benchmark feature
+
+**Range.** `6822434..90e49ae`: the benchmark Results/History rework
+(pop-out windows, three-state sorting, the plan table, the progress bar,
+the environment facts) plus the wave-7 fixes. Five breakers, each with a
+lens: concurrency, reach, boundaries, facts and layout. The facts breaker
+died on the session's rate limit while writing its report and was
+relaunched from its on-disk outputs; its findings are the next round's.
+
+**Confirmed and fixed (eight commits, one per fix, each test-first on a
+`git archive` of `be7351d` and then mutation-checked).**
+
+- *Reach F1.* Minimising the settings dialog hid the Run Benchmark window
+  and every pop-out for good: Qt sends a hideEvent for a minimise too, and
+  the dialog's hideEvent treated it as a dismissal. Measured inside that
+  hideEvent: `isMinimized()=True, isVisible()=True, spontaneous=True` for a
+  minimise, `isVisible()=False` for a `hide()` while minimised, so the two
+  are separable by exactly that pair.
+- *Reach F2 / concurrency F1 / boundaries F1.* `QDialog.close()` on a
+  hidden pop-out emits no `finished` (the close event rejects only while
+  visible), so Delete Selected and Clear History left the key and the
+  window in the registry for the life of the app. The closer forgets the
+  key itself now.
+- *Reach F3.* The History action row read `currentRow()`, which a
+  Ctrl+click deselection leaves in place. It reads the selection.
+- *Reach F5 / concurrency F2.* Reopening the Run Benchmark window, and an
+  inventory scan landing after a run, both redrew the plan to Pending and
+  wiped a finished run's Done/Skipped states. The plan is redrawn only when
+  its case sequence changes.
+- *Concurrency F3.* A cancel broke out of the worker's event loop without
+  draining the queue, discarding a case the child had already reported.
+  The cancel branch drains queued case events first.
+- *Layout L1.* Open in Window took the Benchmark tab's minimum to 611 px
+  while the dialog's explicit minimum stayed 520, so a dialog narrower than
+  611 clipped the History captions. Three versions of the fix, each
+  measured: a construction-time pin read 581 (the tab bar), because
+  `QTabWidget.minimumSizeHint` follows the current page only and every
+  page but Benchmark is a scroll area; a page-loop pin at construction
+  still read 581, because the Benchmark page reports 555 px until it has
+  been painted on screen and 585 afterwards (its group boxes hold
+  splitters, which count visible children only). The pin now runs 0 ms
+  after every show and every tab switch and only ever raises.
+- *Layout L2.* The Benchmark tab's status label and progress bar were
+  pinned to the button's unpolished 26 px against the 34 it renders at.
+- *Boundaries F2, F5, F6.* A null WMI `Name` recorded the CPU as the word
+  None; a null number in a stored run raised `TypeError` in every reader
+  and kept the settings dialog from being built; a created stamp at the
+  ends of the datetime range raised `OSError` there too. Each from a
+  hand-edited or damaged file, each now read as its empty value.
+
+**Corrected in the documentation.** `setSortIndicatorShown(False)` was
+recorded as shrinking the `#` column 43 -> 32 px; the shipped table measures
+56 -> 32 (layout and facts lenses independently, at HEAD and at the
+introducing commit `d4cd3d0`). The facts breaker found where 43 came from:
+the same table with the panel's stylesheet removed, or a bare
+`QTableWidget` with the same header labels, measures 43 -> 32 -- the
+`QHeaderView::section` padding is the whole difference, so the quoted
+number was taken on a table that is not the one shipped. And wave 7's
+claim A1 in the breaker brief
+described the queued road wrongly: a queued transcript's post-paste failure
+*replaces* a pending offer, which is the documented "one offer at a time"
+limitation, not a second offer beside it.
+
+**The facts lens, reported after the fixes above were written.** One
+code defect: `logical_cpus` is `os.cpu_count() or 0`, so its 0 means
+"could not be read", and both export helpers wrote that 0 as a measured
+value while passing only `physical_cores` through `or ""` (measured through
+the written files: history export cell `0`, CLI CSV cell `'0'`). Fixed with
+a test on each export. Five explanations refuted by measurement and
+corrected in the comments and in AGENTS.md: "the launch is the expensive
+part" (a bare launch is 0.13-0.16 s of a 1.4 s query, about 10 %; the
+entry's own two timings refute it, since a launch-dominated cost would make
+the two queries roughly equal); the XMP/EXPO rationale for the rated-vs-
+configured memory clause, refuted on the very machine that produced the
+numbers -- a G.Skill DDR5-6000 kit at 4800 reports SMBIOS `Speed` 4800 as
+well, so the clause has no known producer; "four places right" for the
+export columns, three for `environment_memory` since the modules column is
+inserted after it (every individual index in the entry was right); the
+"older PowerShell unwraps a one-element array" reason for the bare-object
+tolerance, which neither 5.1 nor 7.6 does for a hashtable property -- the
+real producer is dropping the `@()` wrapper; and "two of the four
+consumers" of `summary_details()`, which are three. Checked and right: the
+SMBIOS type table against DSP0134 3.8.0 and dmidecode, the WMI units
+(Microsoft's own page documents `Win32_PhysicalMemory.Speed` in
+nanoseconds; the SMBIOS field is MT/s and the code is right), the column
+indices, the "109 against 115 px" reservation, the sixteen
+`_configure_button_row` call sites. Unverified and labelled so: whether
+JEDEC's DDR5 sub-channel makes "per channel" the wrong word, and the
+"decoders are memory-bandwidth bound" characterisation in the advanced
+setup notes. A process fact for this log: "each commit's added tests fail
+on its parent" has two counterexamples in the range -- `1d70960` adds
+assertions to an existing test that already passed, and `d4cd3d0`'s
+`test_clicking_the_results_header_moves_nothing` passes on its parent
+because there a click sorts nothing.
+
+**Refuted or recorded rather than changed.** Layout L4 (a header click at
+a non-row-aligned offset snaps the table by at most one row) did not
+reproduce; L5 (button widths) is inherent to the captions; concurrency H1
+(a grandchild holding the environment query's stdout past its 6 s budget)
+has no producer at HEAD; M1-M4 and boundaries F3, F4 and H1 are recorded
+under Known limitations with their mechanisms.
+
+**The mutation round.** Twelve mutants, one per fix plus a second on the
+plan sequence and three on the boundaries fixes: eleven detected on the
+first run. The survivor was the tab-switch pin of L1 -- the test switched
+tabs before the show-time pin had fired, so both roads measured the same
+thing. The test now lets the show-time pin fire on the first tab before it
+switches, which detects that mutant; the mirror-image mutant (no pin on
+show) then survived until a second test opened the dialog with the
+Benchmark tab already current, which is the case that road exists for.
+Both detected now.
+
+**CI.** The runner fixes of the morning (`5a7410c`, `61ec425`, `be7351d`)
+produced the first green `Quality` run since 2026-07-21 (34026893045);
+this wave's commits are checked by the runs they trigger.

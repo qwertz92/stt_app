@@ -699,7 +699,7 @@ class BenchmarkResultsPanel(QtWidgets.QWidget):
         results_header.setSectionsClickable(True)
         # Switched on once and left on: `setSortIndicatorShown(False)` shrinks
         # every ResizeToContents column by the space the arrow would need
-        # (measured on the `#` column: 43 -> 32 px), so toggling it per state
+        # (measured on the `#` column: 56 -> 32 px), so toggling it per state
         # would move the table on every third click. The "no sort" state uses
         # section -1 instead, which paints no arrow at all.
         results_header.setSortIndicatorShown(True)

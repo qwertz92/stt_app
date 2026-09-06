@@ -860,7 +860,7 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     section -1**, which paints no arrow (verified on PySide6 6.11.1: the
     grabbed header image is identical to the never-sorted one).
     `setSortIndicatorShown(False)` re-measures every `ResizeToContents` column
-    by the width the arrow would need -- measured on the `#` column, 43 -> 32 px
+    by the width the arrow would need -- measured on the `#` column, 56 -> 32 px
     -- so toggling it would move the table on every third click.
 - **A stored run can be opened in a window of its own.** `Open in Window` in
   the Results and History action rows opens a `BenchmarkResultsWindow`: a
@@ -883,6 +883,79 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     `_current_benchmark_cases`, which is what the Load/Export/Delete actions
     are disabled for. Export goes through an injected callback into the
     dialog's own export flow rather than a second copy of it.
+  - **A hidden pop-out is forgotten by the caller that closes it.**
+    `QDialog.close()` runs `reject()` -- and so emits `finished` -- only
+    while the window is visible, and a pop-out hidden with the settings
+    dialog closes silently: Delete Selected and Clear History left its key
+    and the window in the registry for the life of the app.
+    `_close_benchmark_results_window` forgets the key itself after the
+    close; for a visible window `finished` has already done it and the
+    forget is a no-op the second time.
+  - **The action row reads the selection, not `currentRow()`.** A
+    Ctrl+click on the selected row of the SingleSelection history table
+    deselects it and leaves it current, so Open in Window and Delete
+    Selected stayed enabled for a row nothing showed as selected.
+- **A minimise of the settings dialog is not a dismissal.** Qt sends a
+  hideEvent for it too (`QWidget::event` on the WindowStateChange), and the
+  dialog's hideEvent hid the Run Benchmark window and every pop-out there
+  exactly as on a Close; nothing re-showed them on the restore, so
+  minimising Settings once took them off screen for the rest of the
+  session. Inside that hideEvent the dialog is still visible and already
+  minimised, which no dismissal is -- `hide()` on a minimised dialog reads
+  `isVisible()` False there -- so exactly that state skips the hide. The
+  `Qt.Window` children follow the OS minimise on their own.
+- **The case list is redrawn only when the plan changes.** The list rebuild
+  in `_refresh_benchmark_model_list` runs when the Run Benchmark window is
+  reopened and when an inventory scan lands after a run, and its refresh
+  redrew every row to Pending, wiping the Done and Skipped states of a run
+  that had just ended. `_set_benchmark_plan_rows` records the sequence it
+  drew (model, device target, compute type) in `_benchmark_plan_sequence`,
+  and `_refresh_benchmark_plan_from_widgets` skips an equal plan. Note what
+  that key is not: the statuses, which are the thing being kept.
+- **A cancel hands over the cases the worker already reported.**
+  `_stream_benchmark_process` broke out on the cancel check without looking
+  at the queue again, so a case the reader thread had already queued was
+  discarded although the child had measured it, and the case list labelled
+  it Skipped. The cancel branch drains the queued case events through the
+  same callback first (`_deliver_reported_cases`: `get_nowait` only, stops
+  at EOF) and still raises `BenchmarkCancelled`.
+- **The settings dialog's minimum width is pinned to the widest tab it has
+  shown.** The explicit 520 px minimum predates the Benchmark tab's third
+  History action button, which took that tab's minimum to 611 px, and
+  between the two every caption in that row was clipped. Two Qt facts
+  decide where the pin runs: `QTabWidget.minimumSizeHint` follows the
+  current page only (every other page is a scroll area reporting almost
+  nothing, so the dialog answers 581 px -- the tab bar -- on every tab but
+  Benchmark), and the Benchmark page reports 555 px until it has been
+  painted on screen and 585 afterwards, because its group boxes hold
+  splitters and a splitter counts visible children only. So
+  `_pin_content_minimum_width` cannot run at construction; it runs 0 ms
+  after every show and every tab switch and only ever raises the minimum.
+  Both roads are needed: a tab made current while the dialog is hidden
+  measures the unpainted page. Consequence: a dialog dragged narrower than
+  611 px on another tab widens to 611 when the Benchmark tab is opened --
+  once, as part of a tab switch the user made, which beats the clipped
+  captions. The test bounds the measured need to 640 px so a later widget
+  cannot raise it unnoticed (one label once took the layout's minimum to
+  1109 px).
+- **The Benchmark tab's status label and progress bar take their height
+  from the button as it renders.** The build measured
+  `open_benchmark_window_button.sizeHint()` before it was a polished child
+  of the styled dialog, where its QSS box (min-height plus padding) is not
+  applied yet: 26 px against the 34 it renders at, so both sat 8 px short
+  beside it. `_pin_benchmark_header_row_height` re-pins them from
+  `_reserve_feedback_button_widths`, the place that already re-measures
+  that button for the same reason.
+- **A stored benchmark run is read by declared type.** `_run_from_dict`
+  coerces every `BenchmarkRun` field to its annotation with NaN, 0 or "" as
+  the empty value: a hand-edited `null` raised `TypeError` in every reader
+  (`avg_rtf` summed it, the history list formatted it) and the first of
+  them sits in `SettingsDialog.__init__`. The same class in two more
+  places: a `Win32_Processor.Name` WMI could not read arrives as JSON null,
+  and `str()` of that recorded the CPU as the word None (a non-string name
+  is no name, and the caller falls back to `platform.processor()`); and
+  `_benchmark_created_label` catches the `OSError`/`OverflowError` that
+  `astimezone` raises at the ends of the datetime range.
 - **`planned_benchmark_cases` is the single source of the case sequence.**
   `run_benchmark_cases` iterates the list it returns, so the emitted
   `[Case i/N]` texts, the case total and the displayed compute type have one
@@ -4128,3 +4201,33 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   goes through the offer painter, Copy yields the un-inserted text
   rather than the edited one, and Edit is disabled until the offer is
   retired. The offer's semantics; recorded.
+- **The benchmark worker's 6 s environment query can be outlived by a
+  grandchild.** `subprocess.run(timeout=6)` kills the PowerShell it
+  started, but a process that PowerShell spawned and that still holds the
+  stdout pipe keeps the read open past the budget. `Get-CimInstance` does
+  not spawn one, so nothing at HEAD reaches it; recorded (wave 8).
+- **Two benchmark runs saved within one second share an identity.**
+  `BenchmarkHistoryEntry.identity_key()` is `(created_at, status, summary)`
+  and `created_at` has second resolution, so two runs finished in the same
+  second with the same status and summary open one pop-out. A benchmark
+  run takes longer than a second; recorded.
+- **The benchmark environment is collected before the first cancel check**
+  (about 2.3 s of PowerShell on this machine), so a cancel pressed at once
+  is honoured only after it, and a shutdown joins the worker for up to
+  2.5 s. Recorded.
+- **A pop-out's Export runs a modal file dialog on the Qt thread**, so a
+  run finishing meanwhile paints its completion status after the dialog
+  closes; the status is not lost, only late. Recorded.
+- **Two spellings of one incomplete-file directory are not folded.**
+  `_model_cache_dirs` dedupes by `realpath`, which does not fold the
+  `\\?\` prefix, so a Model Dir spelled that way beside its plain spelling
+  lists the directory twice and counts a held partial as two. Nothing in
+  the app writes such a path; recorded.
+- **A read-only partial the cleanup then cannot remove has lost its
+  attribute.** `_unlink_partial` clears the bit before its retry, and a
+  retry refused for another reason leaves the file writable. The next
+  cleanup or resume treats it like any other partial; recorded.
+- **A benchmark that finishes with no case at all reports a saved run.**
+  Every selected model refused before its first case (an empty model list
+  cannot reach the button), and the completion line still says the run was
+  saved to History, which it was, with no cases. Recorded.
