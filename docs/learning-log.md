@@ -6283,6 +6283,21 @@ and after, measured here at the minimum height too); and the re-elide test
 asked a 1400 px dialog to show a message that needs 940 px, where the
 widest dialog the runner grants (1028) gives the label 681 px.
 
+**An eleventh, from the benchmark feature.** The run on the benchmark push
+(`90e49ae`) failed `test_clicking_the_results_header_moves_nothing` as
+well: the last section 132 -> 120 px on the first click of column 0, table
+110 px high, four 20 px rows under a 33 px header. Reproduced here at
+860x700 (`scratchpad/ci-fix/probe_header_click_small_screen.py`): the rows
+do not fit, the vertical scrollbar is not yet visible one event-loop pass
+after the fill, the first click's repopulation is when Qt shows it, and the
+stretch column loses the scrollbar's 12 px then; with twenty passes before
+the first click the scrollbar is already there and every click leaves all
+eight sections unchanged. Not a click defect: a scrollbar that the rows
+require would have appeared on the next pass with no click at all. The
+test now settles the table before its snapshot and measures at 860x700, so
+the scrollbar case is checked on every machine rather than only where the
+dialog is short.
+
 **What changed.** Test-side only. The helper writes `-interval`; the
 controller test uses `FakeCapture`; the resize tests ask
 `screen().availableGeometry()` first, assert the size the window has, and

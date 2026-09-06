@@ -3941,7 +3941,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   "long ago" writes `-interval`, never 0. The runs cost nothing -- Actions
   minutes are free for public repositories -- which is why a red gate was
   ignored rather than fixed. Whether the runner is now green is verified by
-  the next run itself, not by anything here.
+  the next run itself, not by anything here. **An eleventh arrived with the
+  benchmark feature**: the header-click test snapshotted the results table
+  one event-loop pass after filling it, and on the runner's 749 px dialog
+  that table is 110 px for four 20 px rows under a 33 px header -- Qt shows
+  the vertical scrollbar on a later pass, the stretch column gives up its
+  12 px then, and the first click was blamed (measured here at 860x700:
+  132 -> 120 with one pass, unchanged across every click after twenty). A
+  test that snapshots a table's geometry settles it first
+  (`_settle_table`: `QTest.qWait` plus a stability loop) and measures at a
+  size where the rows do not fit, so the scrollbar case is part of what it
+  checks on every machine.
 
 ## Known limitations
 

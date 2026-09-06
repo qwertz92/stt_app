@@ -4,7 +4,7 @@ from __future__ import annotations
 import math
 import threading
 
-from PySide6 import QtCore, QtWidgets
+from PySide6 import QtCore, QtTest, QtWidgets
 from test_benchmark_transcript_ui import _entry, _run
 from test_settings_dialog_connection import (
     _FakeLogger,
@@ -213,15 +213,49 @@ def test_a_case_finishing_mid_run_keeps_the_order_the_user_chose():
     _ = app
 
 
+def _settle_table(app: QtWidgets.QApplication, table: QtWidgets.QTableWidget) -> None:
+    """Pump until the table's scrollbars and section widths stop changing.
+
+    When the rows do not fit, Qt shows the vertical scrollbar on a later
+    event-loop pass than the one that added the rows, and the stretch column
+    gives up the scrollbar's width at that moment. A geometry snapshot taken
+    before it blames whatever happens next.
+    """
+    header = table.horizontalHeader()
+    QtTest.QTest.qWait(100)
+    previous: tuple[object, ...] | None = None
+    for _ in range(50):
+        app.processEvents()
+        state = (
+            table.verticalScrollBar().isVisible(),
+            table.horizontalScrollBar().isVisible(),
+            tuple(header.sectionSize(column) for column in range(table.columnCount())),
+        )
+        if state == previous:
+            return
+        previous = state
+
+
 def test_clicking_the_results_header_moves_nothing():
     dialog, app = _dialog()
     dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
     dialog.show()
     app.processEvents()
+    # A dialog the 1024x768 CI runner can grant, and one that leaves the
+    # results table 110 px: four 20 px rows under a 33 px header do not fit,
+    # so the vertical scrollbar is part of the geometry under test. Measured
+    # at this size: with one event-loop pass before the snapshot the first
+    # click read as the stretch column losing 12 px (132 -> 120); settled
+    # first, every click leaves all of it unchanged.
+    dialog.resize(860, 700)
+    app.processEvents()
     table = dialog.benchmark_results_table
     header = table.horizontalHeader()
     dialog.benchmark_results_panel.show_cases(_mixed_cases())
-    app.processEvents()
+    _settle_table(app, table)
+    assert table.verticalScrollBar().isVisible(), (
+        "the rows fit, so the scrollbar case this test exists for is not measured"
+    )
 
     def _geometry() -> dict[str, object]:
         return {
