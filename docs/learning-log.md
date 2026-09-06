@@ -6298,6 +6298,17 @@ test now settles the table before its snapshot and measures at 860x700, so
 the scrollbar case is checked on every machine rather than only where the
 dialog is short.
 
+**A twelfth, a flake.** The run on the first fix (`5a7410c`, run
+34026331715) came back with two failures: the header-click test above and
+`test_node_wav_and_protocol_parsers_reject_malformed_bounds`, whose `node`
+subprocess was killed at its 10 s bound (the `returncode: 1` in the
+traceback is the kill, not an error exit). The same probe passed on the two
+runs before and takes 0.05 s here; the runner module imports
+`@huggingface/transformers` lazily, so the import cannot be what took the
+time. A fresh VM's first Node start being scanned is the plausible cause
+and is unverified. The bound is a minute now, because a test's subprocess
+timeout guards against a hang and says nothing about speed.
+
 **What changed.** Test-side only. The helper writes `-interval`; the
 controller test uses `FakeCapture`; the resize tests ask
 `screen().availableGeometry()` first, assert the size the window has, and

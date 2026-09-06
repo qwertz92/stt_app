@@ -3951,7 +3951,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   test that snapshots a table's geometry settles it first
   (`_settle_table`: `QTest.qWait` plus a stability loop) and measures at a
   size where the rows do not fit, so the scrollbar case is part of what it
-  checks on every machine.
+  checks on every machine. And a twelfth was a flake rather than an
+  assumption: the Node parser probe in `test_local_webgpu_asr.py` gave
+  `node` 10 s and the first run after the fix (34026331715) killed it at
+  the bound, on a VM where the same probe had passed twice before and takes
+  0.05 s here. A subprocess timeout in a test is a bound against a hang,
+  not a speed claim; it is a minute now.
 
 ## Known limitations
 

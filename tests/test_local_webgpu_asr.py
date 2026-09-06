@@ -998,7 +998,10 @@ def test_node_wav_and_protocol_parsers_reject_malformed_bounds(tmp_path):
         check=True,
         capture_output=True,
         text=True,
-        timeout=10,
+        # A bound against a hang, not a speed claim: the probe takes 0.05 s on
+        # a desktop, and 10 s ran out once on a fresh CI VM whose first Node
+        # start of the session was still being scanned (run 34026331715).
+        timeout=60,
     )
     result = json.loads(completed.stdout)
 
