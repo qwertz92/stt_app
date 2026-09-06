@@ -260,14 +260,14 @@ def test_a_model_list_refresh_during_a_run_does_not_redraw_the_plan(tmp_path):
 
     assert _statuses(dialog) == ["Done (RTF 0.043)", "Pending"]
 
-    # Once the run is over the same refresh does redraw it. The rebuild keeps
-    # the previous selection, so the newly available model is not in the plan
-    # until it is selected.
+    # Once the run is over the same refresh still leaves it alone: the
+    # rebuild keeps the previous selection, so the plan it describes has not
+    # changed, and the newly available model is not in it until selected.
     dialog._active_benchmark_thread = None
     dialog._refresh_benchmark_model_list(cached=["small", "tiny", "base"])
     app.processEvents()
 
-    assert _statuses(dialog) == ["Pending", "Pending"]
+    assert _statuses(dialog) == ["Done (RTF 0.043)", "Pending"]
     assert [row[1] for row in _plan(dialog)] == ["small", "tiny"]
 
     dialog.benchmark_models_list.selectAll()
@@ -448,4 +448,55 @@ def test_a_run_that_cannot_start_leaves_nothing_counting(monkeypatch, tmp_path):
     assert dialog.benchmark_progress_bar.isVisible() is False
     assert _statuses(dialog) == ["Pending", "Pending"]
     assert "Could not start the benchmark" in dialog.benchmark_status_label.text()
+    _ = app
+
+
+def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
+    """The header button rebuilds the model list, which used to redraw the plan.
+
+    So did an inventory scan landing after the run. Both wiped the Done and
+    Skipped states of a run that had just ended, although the plan they
+    redrew was the one already on screen; only a changed plan redraws.
+    """
+    dialog, app = _dialog(tmp_path, ["small", "tiny"])
+    dialog._current_benchmark_options = _options(["small", "tiny"])
+    dialog._set_benchmark_plan_rows(
+        dialog._planned_benchmark_cases_from_widgets()
+    )
+    dialog._set_benchmark_progress(0, 2)
+    dialog._current_benchmark_cases = []
+    dialog._on_benchmark_progress("[Case 1/2] small (auto/int8)")
+    dialog._on_benchmark_case_finished(_case("small", "cpu"))
+    dialog._on_benchmark_finished(
+        True,
+        "Benchmark summary:\ncanceled",
+        {
+            "cases": [_case("small", "cpu")],
+            "options": _options(["small", "tiny"]),
+            "status": "canceled",
+        },
+    )
+    app.processEvents()
+    assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
+
+    # The inventory the reopen's list rebuild reads, as the app has it.
+    dialog._cached_local_models = ["small", "tiny"]
+    dialog._cached_local_models_dir = dialog.model_dir_edit.text().strip()
+    dialog._cached_local_models_available = True
+    dialog._open_benchmark_window()
+    app.processEvents()
+
+    assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
+
+    dialog._refresh_benchmark_model_list(cached=["small", "tiny", "base"])
+    app.processEvents()
+
+    assert _statuses(dialog) == ["Done (RTF 0.043)", "Skipped"]
+
+    # A changed selection is a new plan and does redraw.
+    dialog.benchmark_models_list.selectAll()
+    app.processEvents()
+
+    assert _statuses(dialog) == ["Pending", "Pending", "Pending"]
+    dialog.benchmark_window.hide()
     _ = app

@@ -297,6 +297,16 @@ def _details_page(content: QtWidgets.QWidget) -> QtWidgets.QWidget:
     return page
 
 
+def _benchmark_plan_sequence(
+    planned: list[PlannedBenchmarkCase],
+) -> tuple[tuple[str, str, str], ...]:
+    """What identifies a plan: its cases in order, not their statuses."""
+    return tuple(
+        (case.model, case.device_target, case.display_compute_type)
+        for case in planned
+    )
+
+
 def _benchmark_created_label(value: str) -> str:
     try:
         parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
@@ -1527,18 +1537,27 @@ class _BenchmarkMixin:
         The three controls are disabled then, but `_refresh_benchmark_model_list`
         still repopulates the model list when the local inventory changes, and
         redrawing here would wipe the Running/Done states already on screen.
+
+        And only a plan that differs is redrawn: the same list rebuild runs
+        when the Run Benchmark window is reopened and when an inventory scan
+        lands after the run, and both wiped a finished run's Done and Skipped
+        states for a plan that was already on screen.
         """
         if not hasattr(self, "benchmark_plan_table"):
             return
         if self._active_benchmark_thread is not None:
             return
-        self._set_benchmark_plan_rows(self._planned_benchmark_cases_from_widgets())
+        planned = self._planned_benchmark_cases_from_widgets()
+        if _benchmark_plan_sequence(planned) == self._benchmark_plan_sequence:
+            return
+        self._set_benchmark_plan_rows(planned)
 
     def _set_benchmark_plan_rows(
         self,
         planned: list[PlannedBenchmarkCase],
     ) -> None:
         """The single writer of the case list's rows and its caption."""
+        self._benchmark_plan_sequence = _benchmark_plan_sequence(planned)
         table = self.benchmark_plan_table
         table.setRowCount(len(planned))
         for row, planned_case in enumerate(planned):
