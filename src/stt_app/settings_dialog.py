@@ -926,6 +926,15 @@ class SettingsDialog(
             if callable(join):
                 join(timeout=2.5)
 
+        # A benchmark the join above ended handed its cases and its outcome
+        # to queued signals. This runs from `aboutToQuit`, after `exec()`
+        # has returned, so no loop would ever deliver them: the partial run
+        # was never saved and the dialog still believed the run was active
+        # (measured: 0 history entries). Deliver what is posted to this
+        # dialog now, on the thread that owns it.
+        if threading.current_thread() is threading.main_thread():
+            QtCore.QCoreApplication.sendPostedEvents(self)
+
     def _prewarm_settings_tabs(
         self,
         indexes: tuple[int | None, ...],

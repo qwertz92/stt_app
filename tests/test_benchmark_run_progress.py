@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import threading
+import time
 
 from PySide6 import QtWidgets
 from test_settings_dialog_connection import (
@@ -10,8 +11,9 @@ from test_settings_dialog_connection import (
     _FakeSettingsStore,
 )
 
+from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import BenchmarkHistoryStore, BenchmarkOptions
-from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
+from stt_app.local_benchmark import BenchmarkCancelled, BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_store import AppSettings
 
@@ -499,4 +501,43 @@ def test_reopening_the_run_window_keeps_a_finished_runs_case_states(tmp_path):
 
     assert _statuses(dialog) == ["Pending", "Pending", "Pending"]
     dialog.benchmark_window.hide()
+    _ = app
+
+
+def test_quitting_during_a_run_still_saves_what_it_measured(monkeypatch, tmp_path):
+    """`shutdown()` runs from `aboutToQuit`, after `exec()` has returned. The
+    worker it cancels hands its cases and its outcome to queued signals that
+    no loop is left to deliver, so the partial run was never saved (measured:
+    0 history entries) and the dialog still believed the run was active."""
+    reached = threading.Event()
+
+    def _fake_run(**kwargs):
+        kwargs["case_callback"](_case("small", "cpu"))
+        reached.set()
+        while not kwargs["cancel_check"]():
+            time.sleep(0.005)
+        raise BenchmarkCancelled("Benchmark canceled.")
+
+    monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", _fake_run)
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_benchmark.collect_benchmark_environment",
+        lambda: BenchmarkEnvironment.from_dict(None),
+    )
+    dialog, app = _dialog(tmp_path, ["small"])
+    audio_path = tmp_path / "sample.wav"
+    audio_path.write_bytes(b"RIFF")
+    dialog._set_benchmark_audio_path(str(audio_path))
+
+    dialog._run_local_benchmark()
+    assert reached.wait(5.0), "the run never started"
+
+    # No event-loop pass after this, exactly as at `aboutToQuit`.
+    dialog.shutdown()
+
+    assert dialog._active_benchmark_thread is None
+    entries = dialog._benchmark_history_store.recent_entries(5)
+    assert [
+        (entry.status, [case.model for case in entry.cases]) for entry in entries
+    ] == [("canceled", ["small"])]
+    assert _statuses(dialog) == ["Done (RTF 0.043)"]
     _ = app
