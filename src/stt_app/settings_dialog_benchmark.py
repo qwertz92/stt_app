@@ -2528,6 +2528,9 @@ class _BenchmarkMixin:
         try:
             export_benchmark_entry(output_path, entry)
         except Exception as exc:
+            # The status line as well: it went on naming the previous
+            # export's file after the user had dismissed this failure.
+            self._set_benchmark_status(f"Export failed: {exc}", "#b71c1c")
             QtWidgets.QMessageBox.warning(
                 self,
                 "Export failed",

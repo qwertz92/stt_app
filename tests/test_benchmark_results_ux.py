@@ -867,3 +867,40 @@ def test_the_history_list_rates_a_run_by_its_measured_cases(tmp_path):
 
     assert dialog.benchmark_history_list.item(0, 4).text() == "0.500"
     _ = app
+
+
+def test_a_failed_export_replaces_the_previous_exports_status(monkeypatch, tmp_path):
+    """The `except` arm showed the warning box and returned, so after
+    dismissing "Export failed" the tab still read "Benchmark exported to
+    ..." naming the previous export's file."""
+    dialog, app = _history_dialog(tmp_path, [_stored_entry("first run")])
+    entry = dialog._benchmark_history_store.recent_entries(1)[0]
+    target = tmp_path / "ok.csv"
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getSaveFileName",
+        staticmethod(lambda *_a, **_k: (str(target), "CSV files (*.csv)")),
+    )
+    warnings: list[str] = []
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "warning",
+        staticmethod(lambda _parent, _title, text, *_a, **_k: warnings.append(text)),
+    )
+
+    dialog._export_benchmark_entry(entry)
+    assert dialog.benchmark_status_label.text() == f"Benchmark exported to {target}."
+
+    def _refuse(*_a, **_k):
+        raise RuntimeError("int too large to convert to float")
+
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_benchmark.export_benchmark_entry", _refuse
+    )
+    dialog._export_benchmark_entry(entry)
+
+    assert warnings == [
+        "Failed to export benchmark results: int too large to convert to float"
+    ]
+    assert dialog.benchmark_status_label.text().startswith("Export failed")
+    _ = app
