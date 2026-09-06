@@ -850,10 +850,18 @@ def test_retranscribe_dialog_is_resizable(tmp_path):
     app.processEvents()
 
     assert dialog.minimumSize() != dialog.maximumSize()
-    dialog.resize(900, 800)
+    # A size the screen can grant: the window manager clamps a top-level
+    # window to the available area, and a fixed 900x800 came back as 900x749
+    # on the 1024x768 CI runner although the dialog was resizable.
+    available = dialog.screen().availableGeometry()
+    target = QtCore.QSize(
+        min(900, available.width() - 80), min(800, available.height() - 80)
+    )
+    assert target != dialog.size()
+    dialog.resize(target)
     app.processEvents()
 
-    assert dialog.size() == QtCore.QSize(900, 800)
+    assert dialog.size() == target
 
 
 def test_retranscribe_dialog_preselects_the_entry_engine_and_model(tmp_path):

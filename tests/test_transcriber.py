@@ -1335,7 +1335,14 @@ def _push_and_wait(transcriber, chunk, timeout=5.0):
 
 
 def _emit_partial_now(transcriber):
-    transcriber._stream_session.result.last_partial_at = 0.0
+    # `_maybe_emit_partial` decodes once `time.monotonic() - last_partial_at`
+    # reaches the 3600 s interval. Zero is not "long ago": the monotonic clock
+    # counts from boot, so on a machine up for less than an hour -- every
+    # fresh CI runner -- zero left the interval unreached, nothing was
+    # decoded, and five tests failed with an empty transcript on every run
+    # while passing on a desktop with days of uptime.
+    result = transcriber._stream_session.result
+    result.last_partial_at = -transcriber.stream_partial_interval_s
     transcriber._maybe_emit_partial()
 
 

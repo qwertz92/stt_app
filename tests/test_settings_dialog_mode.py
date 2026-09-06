@@ -2937,6 +2937,13 @@ def test_clear_benchmark_results_preserves_current_dialog_size():
         initial_size.height() + 140,
     )
     dialog.resize(expanded_size)
+    app.processEvents()
+    # What the screen granted, not what was asked for: the window manager
+    # clamps a top-level window to the available area (1028x749 for this
+    # request on the 1024x768 CI runner), and the property under test is that
+    # clearing keeps the size the dialog has.
+    sized = dialog.size()
+    assert sized != initial_size
     dialog.benchmark_results_table.setRowCount(1)
     for column in range(dialog.benchmark_results_table.columnCount()):
         dialog.benchmark_results_table.setItem(
@@ -2950,7 +2957,7 @@ def test_clear_benchmark_results_preserves_current_dialog_size():
     dialog._clear_benchmark_results()
     app.processEvents()
 
-    assert dialog.size() == expanded_size
+    assert dialog.size() == sized
     assert dialog.benchmark_results_table.rowCount() == 0
     assert dialog.benchmark_summary_text.toPlainText() == ""
     assert dialog.benchmark_status_label.text() == ""
@@ -3602,6 +3609,18 @@ def test_local_models_box_grows_when_dialog_is_resized(monkeypatch):
 
     initial_box_height = dialog.local_models_box.height()
     initial_list_height = dialog.local_models_list.height()
+
+    # The box grows with the dialog's height, so the screen must have room
+    # above the frame. On the 1024x768 CI runner the dialog already sits at
+    # the clamped 749 px, a taller size is refused, and the box could not
+    # grow whatever the layout did (measured: 513 px before and after).
+    available = dialog.screen().availableGeometry()
+    room = available.height() - dialog.frameGeometry().height()
+    if room < 40:
+        pytest.skip(
+            f"the screen leaves {room} px above the dialog, so a taller "
+            "dialog cannot be granted here"
+        )
 
     dialog.resize(dialog.width() + 120, dialog.height() + 220)
     app.processEvents()

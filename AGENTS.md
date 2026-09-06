@@ -3920,6 +3920,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   before the result exists; on 2026-09-04 four green per-file runs and one
   such chain pushed a red suite. Gate the push on the printed
   `N passed` line, never on the exit code of a pipeline ending in `tail`.
+- **The CI runner is a fresh VM: under an hour of uptime, no microphone,
+  a 1024x768 screen.** `quality.yml` runs the suite on `windows-latest`
+  with a real desktop (not offscreen, for the pixel-exact tests), where
+  `time.monotonic()` reads minutes because it counts from boot, no audio
+  device exists, and the window manager grants a top-level window at most
+  about 1028x749. Ten tests assumed the developer's desktop and failed on
+  every one of the 135 runs from 2026-07-21 to 2026-09-06 while passing
+  here: five drove a partial with `last_partial_at = 0.0`, which reaches
+  the 3600 s interval only after an hour of uptime (reproduced here with
+  `time.monotonic` shifted to read 100 s: `AssertionError('')`); one
+  opened the real microphone before the handshake it was testing; four
+  asked for dialog sizes the screen cannot grant -- `QSize(900, 800)`, a
+  1400 px width for a 940 px message, 220 px more on a dialog already at
+  the clamp -- or compared against the requested size instead of the
+  granted one. Rules: a test that resizes a window asks
+  `screen().availableGeometry()` first, asserts the size the window HAS,
+  and skips with the measured room when the screen cannot host the change;
+  a controller test that records uses `FakeCapture`; a helper that means
+  "long ago" writes `-interval`, never 0. The runs cost nothing -- Actions
+  minutes are free for public repositories -- which is why a red gate was
+  ignored rather than fixed. Whether the runner is now green is verified by
+  the next run itself, not by anything here.
 
 ## Known limitations
 

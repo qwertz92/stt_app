@@ -6238,3 +6238,65 @@ property wanted is "the same directory on disk".
 - The breakers' final reports exist only as messages; they were copied
   out of the session transcript before the docs were written, so the
   numbers above are quoted from the reports rather than from memory.
+
+### CI on `windows-latest` (2026-09-06) - the gate that was red for 47 days
+
+A read-only audit of the GitHub side (collaborators, branch protection,
+rulesets, all 219 workflow runs, the failed-job logs, the billing pages)
+answered four questions the owner had, and one of the answers was a
+defect in this repository.
+
+**The facts.** The repository is public with exactly one collaborator, the
+owner, and no branch protection or ruleset on `main`; read access does not
+include push, so nobody else can push anywhere (GitHub's own page:
+"Collaborators on a personal repository can pull (read) the contents of the
+repository and push (write) changes to the repository"). One push is one
+workflow run at the tip commit, whatever the commit count: the ten-commit
+push of 2026-09-05 (`7efcb4c..6822434`) produced one run, for `6822434`,
+and none for the nine commits under it. Actions minutes are free for public
+repositories on standard runners, so `quality.yml`'s 201 runs cost nothing;
+the monthly quota the owner ran out of in July and August was consumed by
+the seven private repositories that carry workflows. And `Quality` had not
+been green since 2026-07-21: 135 runs, 107 failures, 28 cancelled by the
+`cancel-in-progress` concurrency group, zero successes -- none of them a
+quota block or an infrastructure failure, every one the same ten tests on
+the `python-quality` job (`ruff` and the JavaScript audit passed).
+
+**The ten, reproduced.** The runner is a fresh VM: `time.monotonic()`
+counts from boot and reads minutes, there is no audio device, and the
+window manager grants a top-level window at most about 1028x749 on a
+1024x768 screen. Shifting `time.monotonic` to read 100 s on this desktop
+(`scratchpad/ci-fix/probe_ci_failures.py`) fails
+`test_a_decode_slower_than_the_window_keeps_the_earlier_transcript` with
+`AssertionError('')`, the runner's exact failure, and the real clock passes
+it: `_emit_partial_now` set `last_partial_at = 0.0` and
+`_maybe_emit_partial` needs `now - 0.0 >= 3600`, which a desktop with days
+of uptime satisfies and a runner never does. Five streaming-window tests
+share that helper. The controller's streaming transcriber-error test built
+a real `AudioCapture`, and the microphone opens before the handshake it
+fails, so the runner reported "Windows reports no microphone at all". The
+four dialog tests: `QSize(900, 800)` came back as 900x749; 1040x812 came
+back as 1028x749 and was compared against the request, not the grant; the
+Local tab's dialog sits at its 806 px minimum hint, which the screen
+already clamps to 749, so 220 px more changed nothing (box 513 px before
+and after, measured here at the minimum height too); and the re-elide test
+asked a 1400 px dialog to show a message that needs 940 px, where the
+widest dialog the runner grants (1028) gives the label 681 px.
+
+**What changed.** Test-side only. The helper writes `-interval`; the
+controller test uses `FakeCapture`; the resize tests ask
+`screen().availableGeometry()` first, assert the size the window has, and
+the Local-tab test skips with the measured room when the screen leaves
+fewer than 40 px above the frame; the re-elide test uses a message that
+needs about 565 px and a 1000 px dialog (label 653 px), while the 940 px
+message stays for the tooltip and two-line reservation tests that need it
+to wrap. **Not verified here:** that the runner is green now. The screen
+clamp cannot be simulated on this desktop; the next push runs the gate,
+and it is free.
+
+**Recommendation given, not applied.** Keep `quality.yml` on every push
+(it costs nothing and is the only CI this project runs -- no pull request
+has ever been opened here) and add `workflow_dispatch`; a ruleset that
+blocks force-push and deletion of `main` protects against the owner's own
+mistakes and a leaked token, since outsiders cannot push anyway. Both wait
+for the owner's decision.

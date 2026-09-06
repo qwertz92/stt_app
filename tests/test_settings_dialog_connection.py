@@ -741,6 +741,15 @@ _LONG_BENCHMARK_FAILURE = (
     "the ONNX Runtime session could not be created on this machine. "
     "Cases already measured were saved."
 )
+# Short enough to be shown whole by the tab's status label at a 1000 px
+# dialog (the label is then 653 px wide; this needs about 565 px), long
+# enough to be elided at 600 px (253 px). The long message above needs
+# 940 px, which only a dialog wider than the 1024x768 CI runner's screen
+# can give it.
+_MEDIUM_BENCHMARK_FAILURE = (
+    "The benchmark stopped early: small failed to load on this machine. "
+    "Cases already measured were saved."
+)
 
 
 def _benchmark_dialog():
@@ -788,20 +797,20 @@ def test_the_benchmark_status_re_elides_when_the_dialog_is_resized():
     other width."""
     dialog, app = _benchmark_dialog()
     label = dialog.benchmark_status_label
-    dialog._set_benchmark_status(_LONG_BENCHMARK_FAILURE, "#b71c1c")
+    dialog._set_benchmark_status(_MEDIUM_BENCHMARK_FAILURE, "#b71c1c")
 
-    dialog.resize(600, 880)
+    dialog.resize(600, 700)
     for _ in range(15):
         app.processEvents()
     narrow = QtWidgets.QLabel.text(label)
 
-    dialog.resize(1400, 880)
+    dialog.resize(1000, 700)
     for _ in range(15):
         app.processEvents()
     wide = QtWidgets.QLabel.text(label)
 
     assert len(narrow) < len(wide)
-    assert wide == _LONG_BENCHMARK_FAILURE, "a label wide enough must show it all"
+    assert wide == _MEDIUM_BENCHMARK_FAILURE, "a label wide enough must show it all"
     dialog.hide()
 
 

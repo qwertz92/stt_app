@@ -721,6 +721,10 @@ def test_start_streaming_transcriber_error_shows_overlay_error(monkeypatch):
         model_size="small",
     )
     overlay = FakeOverlay()
+    # The microphone opens before the handshake this test fails, so with the
+    # real capture a runner without an audio device reported "Windows reports
+    # no microphone at all" and the transcriber's error was never reached.
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
 
     def fail_transcriber(_s, **kw):
         t = FakeStreamingTranscriber()
