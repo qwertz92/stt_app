@@ -476,11 +476,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     the budget. Re-armed after every pass, a second actor handing a
     stream over every budget-minus-epsilon kept the call from answering
     (forced schedule: True after 2.59 s against a 0.4 s budget, no busy
-    line; no natural producer at HEAD, since the bump refuses every
-    generation-bearing reopen). And a worker discharges the owed refresh
+    line). The bump refuses only a reopen carrying a generation captured
+    *before* it: a `request_restart` issued after the bump reopens with
+    the bumped generation, this call retires and closes that stream
+    itself, and an own close re-arms the budget -- so the half in which
+    this call closes the handed-over stream is still unbounded (forced
+    schedule, wave 7: 25 restarts 0.1 s apart against a 0.4 s budget
+    answered True after 3.14 s, no busy line). Its producers are a
+    microphone change saved in Settings and a system resume, both
+    serialized on `_audio_device_refresh_lock`, so one restart costs one
+    extra open and close on the refresh worker thread, off Qt; recorded
+    under Known limitations rather than closed. (This entry said "no
+    natural producer at HEAD, since the bump refuses every
+    generation-bearing reopen" for one round; the docstring three lines
+    below it already said the opposite.) And a worker discharges the owed
+    refresh
     (`_pending_audio_device_refresh`) as it starts, its refusals re-arm
     it. Before this the Qt-thread slot cleared the flag *before* spawning
-    the worker and nothing else touched it, so a worker scheduled while
+    the worker and nothing cleared it when the worker finished (three
+    sites arm it and `_maybe_resume_pending_audio_device_refresh` clears
+    it as well; this entry said "nothing else touched it" for one round),
+    so a worker scheduled while
     its predecessor still queued on `_audio_device_refresh_lock` found
     the flag clear, the predecessor then refused and re-armed it, the
     newer one succeeded and left it armed -- and the following recording
@@ -1231,19 +1247,50 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   program is deleting -- a scanner quarantining it, the killed download
   child tearing down -- refuses the unlink with "access denied" and is
   gone a moment later, and was counted as still in use (a racing
-  deleter: 343 files "could not be removed" on an empty disk).
+  deleter: 343 files "could not be removed" on an empty disk -- a
+  run-dependent count; the wave-7 facts lens measured 162 with the same
+  probe).
   `_unlink_partial` retries a refused unlink once after 10 ms: a held
   file is refused again, a file being deleted is not found, a transient
   lock lets the retry remove it, and `exists()` decides what is refused
   twice -- alone, `exists()` still counted two of 2,441 inside the
-  delete-pending moment. `_model_cache_dirs` folds `..` before
-  deduplicating: a Model Dir spelled through the default cache with one
-  listed the same directory twice and counted a held partial as two.
+  delete-pending moment (0, 1 and 2 in three later runs of that build).
+  **A read-only partial is not "in use"**: the unlink is refused for
+  good -- a backup tool restored it, a copy carried the attribute over
+  -- and it was reported as still in use on every cleanup while nothing
+  held it; `_unlink_partial` clears the attribute before its retry,
+  because the resume could not append to it either. `_model_cache_dirs`
+  dedupes its search roots by `realpath`: `normpath` folds `..`, so a
+  Model Dir spelled through the default cache with one no longer lists
+  the same directory twice, but it is lexical and does not fold an 8.3
+  short name (`AVERYL~1` beside `a very long name`), which listed one
+  directory twice again and counted a held partial as two; the returned
+  paths keep the user's spelling, and a missing directory stays as
+  spelled. Three properties of the retry, measured by the wave-7
+  concurrency lens and recorded rather than changed: `removed_bytes`
+  credits the size read before the first attempt, now across a 10 ms
+  window rather than a stat-to-unlink gap; the 10 ms is paid serially
+  per refused file (50 held partials: 0.53 s) on the queue worker, the
+  preload worker or the script, never on the Qt thread; and two cleanups
+  running over one tree at once over-count `removed_files` (84 of 4,000
+  at HEAD, 1,170 before 01adf24), because Windows accepts a second delete
+  of a file whose delete is in flight.
   **The preload road reports the same count**: its cancel arm ignored
   the triple and painted "Model preload canceled." over gigabytes a
   scanner still held; `_note_preload_cleanup` records the sentence by
-  generation and `_on_model_preload_done` appends it -- generation-keyed
-  so a retired worker's note cannot describe the current cancel.
+  generation and `_on_model_preload_done` appends it on both arms that
+  tell the user the preload was canceled -- the explicit cancel (hotkey,
+  tray) and a Settings save that leaves the local engine, which cancels
+  the generation without bumping it and without
+  `_preload_cancel_requested`, so its "Model download canceled." arrived
+  through the failure arm and dropped the note (measured on both roads,
+  one flag apart). A model switched while it downloads retires the
+  generation; that completion paints nothing, because the new preload's
+  progress line owns the overlay, and the count is logged as a warning
+  instead of discarded; shutdown returns before either. Generation-keyed
+  so a retired worker's note cannot describe the current cancel. (This
+  entry said "the preload road" for one round while one of its four
+  roads reported the count.)
   The kept and skipped sentences name their models (`cleanups` is one
   `(model, outcome)` per entry): two Cancels in one drain, the first killing
   a download and the second hitting an entry still waiting for the slot,
@@ -1611,7 +1658,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   three times; introduced by `f0f4a77`, whose parent read the
   per-attempt flag and got this one sequence right). Whitespace is
   folded for the comparison, because the tail is inserted with a leading
-  space. **The poll's other three rules**: it leaves a
+  space. Carried means the pasted text is the offer or ends with it at a
+  word boundary, and only `_repaste` asks (`may_carry_offer`): the
+  substring test that first replaced equality was asked by every insert,
+  so a queued transcript that merely contained the tail's word ("Milch
+  und Brot" for " und", "Wochenende" for " ende") and failed after its
+  keystroke marked the tail, and every later repaint hid Insert for
+  words that had reached no window (four of six one-word tails on the
+  real painter). And the re-paste's success arm retired the offer
+  unconditionally: `_last_transcript` moves on when a failed queued
+  streaming job rescues its partial, so the tray's re-paste of unrelated
+  text took the tail's Insert away while the tail had reached no window;
+  an offer the paste did not carry stays pending under the Done line.
+  **The poll's other three rules**: it leaves a
   foreground transcription in flight alone (`_overlay_session_active`,
   which sees the request token after `stop_recording` has dropped the
   capture -- a model changed in Settings mid-transcription painted the
@@ -1627,10 +1686,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   button the action slot no longer holds (`_preload_abort_hint`), or,
   with no hotkey registered, the tray's "Cancel current action"
   (`TRAY_CANCEL_ACTION_LABEL`, shared with the menu) -- dropping the
-  sentence left a multi-gigabyte fetch with no way out on screen. The
+  sentence left a multi-gigabyte fetch with no way out on screen. All
+  five progress lines carry it: the queued line and the load line did
+  not, so behind another model's load, and on every preload's load
+  phase, the overlay showed neither the button nor a word about the
+  hotkey or the tray. The
   overlay Edit button's success confirmation goes through the painter
-  like its refusals (there is no tray Edit action; an earlier version of
-  this entry and the `f0f4a77` message said "the tray's"), which leaves
+  like its refusals (there is no tray Edit action; two comments
+  `f0f4a77` added said "the tray's", one of them left in `tests/` until
+  wave 7 -- neither its message nor any revision of this entry did,
+  which this entry claimed for one round), which leaves
   Copy yielding the pending offer rather than the edited text and Edit
   disabled until the offer is retired -- the offer's semantics, not a
   defect. **The rest position `detail_is_being_read` compares against is
@@ -1640,9 +1705,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   it -- a batched Done showed 392 of 408 px with its last line hidden,
   queue rows appearing did the same (286 of 302), and the property
   answered True for nothing the user had done. `rangeChanged` re-asserts
-  the rest position until the user scrolls; `actionTriggered` fires for
-  the wheel, a drag and the keys and never for `setValue` (verified with
-  a probe), and a paint supersedes the user's scrolling. A
+  the rest position, or the position the user chose, bounded by the
+  range; `actionTriggered` fires for the wheel, a drag, a click on the
+  track and the keys and never for `setValue` (verified with probes on
+  the real overlay; the stylesheet removes the scrollbar's arrow
+  buttons), the handler reads `sliderPosition()` there, and scrolling
+  back to the rest position hands the hold back. A one-way flag did
+  not: back at the bottom, the next relayout clamped the value as
+  before (286 of 302) and, because `detail_is_being_read` then answered
+  True, the preload poll -- the one writer that would have painted --
+  stayed away for the rest of the download. A drag above the
+  intermediate maximum was clamped by the queue rows and left there (312
+  of 408 came back at 286); and while the rows clamp the user's value
+  onto the rest position, `detail_is_being_read` reads the flag, so the
+  poll does not paint over a user still reading. A paint supersedes the
+  user's scrolling. A
   parametrized test drives every writer except `_refuse_recording_start`,
   which four tests of its own drive, and the poll has tests of its own.
 - **AssemblyAI pre-recorded model selection**: use the current `speech_models`
@@ -1732,12 +1809,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   repeated, two partials alternating, a real final after each thousand
   junk frames and heartbeats without end all ran to the thirty-minute
   deadline with a core and the single transcription worker pinned
-  (measured against an instant fake: 0.9-1.3 million receive calls in
+  (measured against an instant fake: 0.9-1.4 million receive calls in
   3 s) -- "the one flood it does not bound is heartbeats", as this entry
   and the budget's docstring said for one round, named one of four. A
   thirty-minute recording at ten results a second plus a heartbeat a
   second is 20,000 frames; the bound is fifty times that, and an instant
-  fake reaches it in 3.5 s (1,000,002 receive calls). The `task-started`
+  fake reaches it in 2.2-3.5 s depending on the machine (1,000,002
+  receive calls, exact). The `task-started`
   wait and the
   connection test use budgets of their own, so the total is per budget,
   i.e. per transcript loop. **The transcript itself is bounded
@@ -3783,7 +3861,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   text and the earlier one is only in history and the tray notification
   (the wave-6 concurrency lens's flush matrix). Keeping the insertable
   one instead would hide the other's "possibly inserted" report;
-  recorded rather than changed.
+  recorded rather than changed. The tray's re-paste of the whole
+  dictation failing *before* its keystroke is the same shape from the
+  other side: it replaces a streaming tail's offer with the whole
+  dictation, whose Insert then pastes the prefix the live stream already
+  put in the document a second time (the wave-7 reach lens).
+- **`close_if_idle` is bounded only against another thread's hand-over,
+  not against its own closes.** Its generation bump refuses a reopen
+  carrying a generation captured before it; a `request_restart` issued
+  after the bump reopens with the bumped generation, the call retires and
+  closes that stream itself, and each own close re-arms the budget
+  (forced schedule: 25 restarts 0.1 s apart against a 0.4 s budget
+  answered True after 3.14 s). The producers -- a microphone change saved
+  in Settings, a system resume -- serialize on
+  `_audio_device_refresh_lock`, so a restart costs one extra open and
+  close on the refresh worker, off Qt. Recorded rather than closed: the
+  bound would have to refuse a restart's reopen for the length of the
+  call, and every reshaping of that lock has cost a round.
+- **The `Thread.start` guards catch `RuntimeError` only.** The two
+  guards of `fd1b50a`/`c98f57e` (and the settings dialog's six) name the
+  exception a starved interpreter raises; `_thread.start_new_thread` can
+  raise `MemoryError` as well, and that escapes exactly as before the
+  guards (the wave-7 boundaries lens). A process that cannot allocate a
+  thread stack is past what a guard can recover; recorded.
 - **`WarmMicrophoneStream.close()` does not wait for a helper's close in
   flight.** It drains `_retiring` and returns, so a stream a helper is
   still closing stays registered for the length of that close (measured:

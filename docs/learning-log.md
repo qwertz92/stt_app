@@ -6008,8 +6008,10 @@ had finished.
   and dropped two sentences without an ellipsis; `scripts/download_model.py`
   does not print "the same" sentence as the drain; and the depth aside
   described two different depths. The reach lens found the `f0f4a77`
-  comment and message crediting a tray Edit action that does not exist
-  (the overlay's Edit button is the only caller). Four wave-5 tests pass
+  comments crediting a tray Edit action that does not exist (the
+  overlay's Edit button is the only caller; this line said "comment and
+  message" until wave 7 -- the message never did, and the second comment
+  stayed in `tests/` until wave 7 as well). Four wave-5 tests pass
   on their parents as guards, now recorded above.
 
 **Refuted, with the evidence**
@@ -6048,3 +6050,191 @@ had finished.
   not. Both are read accordingly rather than "fixed".
 - Ruff's SIM102 caught a nested `if` the poll fix introduced on the tree,
   before it reached the repository.
+
+### Wave 7 (2026-09-06) - the sixth wave, on the wave-6 fixes
+
+Four read-only breakers (concurrency, reach, boundaries, facts) on
+`7efcb4c..6822434`. The first launch lost two of them to the five-hour
+rate limit before they had written anything; all four were relaunched
+fresh with the same brief and finished. Every finding was reproduced with
+the breaker's own probe before anything changed; the fixes were written
+test-first on a `git archive` export, re-measured there with the probes
+repointed at the tree, applied to the repository, and mutation-verified
+(15 of 15 mutants detected, `scratchpad/wave7/lead/mutate_wave7.py`).
+
+**Confirmed and fixed**
+
+- *Insert offer, fourth time* (c27a76e). `_paste_carried_the_offer` was
+  a substring test with no word boundary, asked by every insert: a
+  queued transcript that merely contained the tail's word ("Milch und
+  Brot" for a tail " und", "Wochenende" for " ende") failing after its
+  keystroke marked the tail as possibly pasted, and every later repaint
+  hid Insert for words that had reached no window -- four of six
+  one-word tails on the real painter (boundaries B1, reach F3). Carried
+  now means the pasted text is the offer or ends with it at a word
+  boundary, and only `_repaste` asks (`may_carry_offer`). The re-paste's
+  success arm retired the offer unconditionally as well (reach F2):
+  `_last_transcript` moves on when a failed queued streaming job rescues
+  its partial, so the tray's re-paste of unrelated text took the tail's
+  Insert away while the tail had reached no window, and the overlay's
+  Insert then pasted the unrelated text. An offer the paste did not
+  carry stays pending under the Done line.
+- *Overlay detail hold* (fc518a5). `_detail_user_scrolled` was a one-way
+  latch cleared only by the next paint (boundaries B2, reach F6 as a
+  hypothesis): a user who paged up and scrolled back to the bottom had
+  restored the rest position but disarmed the hold, so the next queue
+  relayout clamped the value exactly as before c012ab0 (286 of 302), and
+  because `detail_is_being_read` then answered True the preload poll --
+  the one writer that would have painted -- stayed away for the rest of
+  the download. The action handler reads `sliderPosition()` and clears
+  the flag at the rest position. A real drag above the intermediate
+  maximum was clamped by the rows and left there (312 of 408 came back
+  at 286; reach F5), and while the rows clamp the user's value onto the
+  rest position the property answered False for a user still reading
+  (concurrency F6): the range handler re-asserts the user's value
+  bounded by the range, and the property reads the flag.
+- *Preload cancel note* (dd2a41b). `d470380` appended the "N incomplete
+  files could not be removed" sentence on the explicit-cancel arm only;
+  a Settings save that leaves the local engine cancels the generation
+  without bumping it and without `_preload_cancel_requested`, so its
+  "Model download canceled." went through the failure arm and dropped
+  the note, one flag apart from the road that kept it (boundaries B3,
+  reach F1, concurrency F2). A model switched while it downloads retires
+  the generation; that completion paints nothing and now logs the count
+  as a warning instead of discarding it.
+- *Preload phase lines* (d3b4121). Two of the five progress lines carried
+  no abort sentence, and with an Insert offer pending the action slot
+  holds Insert: minutes behind another model's load, and on every
+  preload's load phase, the overlay showed neither a Cancel button nor a
+  word about the hotkey or the tray (reach F4). Both go through
+  `_preload_abort_hint`.
+- *Partial cleanup* (c866c20). A read-only partial was reported as "still
+  in use" on every cleanup while nothing held it (boundaries B4): the
+  unlink is refused for good, and the write bit is given back before the
+  retry. And `normpath` is lexical: `AVERYL~1` beside the long spelling
+  listed one directory twice and counted a held partial as two
+  (boundaries B5), the observable 01adf24 fixed for `..` reached through
+  a spelling no lexical normaliser folds; the dedupe key is `realpath`.
+- *Two comments* (d7f4a6c). The Fun-ASR frame budget's comment said one
+  budget lives for the request; one `transcribe_batch` builds two and
+  the connection test a third, and only the transcript loop's carries
+  the total -- the first budget is capped by `_MAX_UNUSABLE_FRAMES` at
+  1,001 frames, so the real per-request ceiling is about 1,001,002
+  (boundaries B8, facts F5). And the second `f0f4a77` comment still
+  called the overlay Edit button's confirmation "the tray's" (facts F2).
+
+**Defects the wave-6 fixes introduced or left, found here.** Two were
+introduced by wave 6 -- b54a8b6's substring widening and c012ab0's
+one-way latch -- and two were left by it: d470380 reported the count on
+one of four cancel roads, and 01adf24 chose a lexical dedupe where the
+property wanted is "the same directory on disk".
+
+**Refuted, with the evidence**
+
+- Boundaries: T1 exact (1,000,002 receive calls; 49/50 frames after
+  `task-started` OK, 51 raises), T2 (a request completes after 10 frames
+  at bound 5, one budget each side of `task-started`), T3 (20 shapes at
+  cap 40, none returns more than the cap), U1 (seven edges; 277 of about
+  4,000 racing unlinks raise `PermissionError` and the retry turns them
+  into `gone`), U2 (Windows itself folds `..` lexically through a real
+  junction; UNC and `\\?\` spellings), W2, X1 (24 offer-by-hotkey
+  combinations; the tray label has one source), X3, Y2.
+- Reach: X1 on the real tray menu (the named entry exists, is enabled,
+  and really aborts the download), X3 on the real overlay (a selection
+  survives a poll, a scrolled offer stays put), W2 on all three call
+  sites against the `b54a8b6` tree, U1's drain and script sentences on a
+  real disk, V1's "never for `setValue`" over every routine overlay
+  operation, Z4's flush matrix. A wheel event sent to the label scrolls
+  nothing because `sendEvent` skips propagation -- the probe's delivery,
+  not the overlay.
+- Concurrency: Y1 (False after 0.41 s with the busy line; the wave-5
+  shape True after 1.30 s; a helper popping the retired stream first is
+  the normal case, 59 of 60 rounds; 200 rounds without a True-with-a-
+  live-stream), Y2 (five schedules), X3 ("a foreground result landing
+  between the checks" is unreachable: the poll and the ready slot are
+  both Qt-thread and `transcription_ready` is a queued connection), V1
+  re-entrancy (max nesting 1 under a hostile `rangeChanged` listener;
+  `set_state` from inside the handler runs six nested paints without a
+  `RecursionError`), U1 (80 runs under a racing `rmtree` and a racing
+  per-file deleter, `left_files` 0 throughout; the killed download child
+  road never even reaches the retry).
+- Facts: both vendor quotations verbatim and the callout order exact,
+  zero `sentence_id` on the three pages; 392/408 and 286/302 exact on the
+  parent tree; the tail reaching the inserter three times on the parent
+  and twice at HEAD, and twice on the grandparent, so "introduced by
+  f0f4a77" holds; the close budget 2.61 s -> 0.36 s; every added test of
+  the range fails on its parent (six of the nine commits with tests
+  measured, c012ab0's two assertions proved false on the parent by an
+  offscreen probe); the five raise sites, `(model, outcome)`, the
+  script's own sentence, the six-versus-five bullets of `5bf29bc`, the
+  JSON depths, "four tests of its own", and every arithmetic line.
+
+**Recorded, not changed**
+
+- `close_if_idle` is bounded only against another thread's hand-over
+  (concurrency F1, facts F3): a `request_restart` issued after the bump
+  reopens with the bumped generation, and each own close re-arms the
+  budget -- 25 restarts 0.1 s apart against a 0.4 s budget answered True
+  after 3.14 s. Its producers serialize on `_audio_device_refresh_lock`;
+  a Known limitation now, and the AGENTS parenthetical that denied a
+  producer is corrected.
+- Two concurrent cleaners over-count `removed_files` (84 of 4,000 at
+  HEAD, 1,170 before 01adf24; concurrency F3); `removed_bytes` credits
+  the pre-attempt size across the 10 ms window (F4); the 10 ms is paid
+  serially per refused file, off Qt (F5). The tray's re-paste of the
+  whole dictation failing before its keystroke replaces a streaming
+  tail's offer (reach, secondary). The `Thread.start` guards catch
+  `RuntimeError` and not `MemoryError` (boundaries B6). The Fun-ASR cap
+  counts the raw length before whitespace collapses, the safe direction
+  (B7). A whitespace-only `_insert_action_text` would take the offer
+  branch in the painter and fold to empty in the predicate; no writer
+  can produce one (X1).
+- Hypotheses nobody could reproduce: a root whose `rglob` raises is
+  skipped and reports "No incomplete files remained." with files on the
+  disk (B9; 320-character paths did not raise here); `Path.exists()`
+  re-raising an EACCES stat out of `_unlink_partial` (H1; 2,265 racing
+  samples, none raised, and Windows 11 deletes with POSIX semantics).
+
+**Corrections to earlier entries** (the facts lens)
+
+- The `f0f4a77` message never said "the tray's", and no revision of the
+  AGENTS entry did; two comments in the diff did, and one of them was
+  still in `tests/` -- fixed above, in AGENTS.md and in the wave-6 entry.
+- "Nothing else touched" the owed-refresh flag: three sites arm it and
+  the resume path clears it; the load-bearing half (nothing cleared it
+  at the end of the worker) holds.
+- Measurement drift, not error: the heartbeat flood measured 1,437,064
+  receive calls in 3 s here, above the "0.9-1.3 million" range (the
+  same partial 1,292,501, alternating 1,283,423); the production bound
+  is reached in 2.22 s on this machine against the 3.47 s recorded (the
+  count, 1,000,002, is exact); "343 files" measured 162 with the same
+  probe, and "two of 2,441" measured 0, 1 and 2 over three runs of an
+  `exists()`-only build. Run-dependent counts are now marked as such.
+- The wave-6 process note that the partial-spin probe "cannot show its
+  fix by construction" is machine-specific: here the 1,000,000-frame
+  bound is reached at 2.3 s, inside its 3 s window, so it does; its
+  verdict text ("ran to my stop signal") is still wrong for a run the
+  provider stopped at exactly 1,000,001 frames.
+- "The arrows" in the overlay comment named a control this overlay does
+  not have (the stylesheet zeroes the step buttons); it says "a click on
+  the track" now, and the drag and the keys, which the earlier probe had
+  not covered, were verified on the real overlay this time.
+
+**Process notes**
+
+- Planning the mutants showed that the queued-transcript tests could not
+  tell the suffix rule from the substring rule once the `may_carry_offer`
+  gate was in place -- the gate alone made them pass -- so a re-paste
+  test with the tail's words in the middle of `_last_transcript`, and
+  inside a compound word, was added before the run.
+- Three probes carry verdict strings written for the defect and read
+  wrong on the fixed tree: `probe_w1c_success_arm_v2.py` prints
+  "<-- retired" beside an offer that is still pending,
+  `c4b_model_change_cancel.py` says the arm "does NOT append" under a
+  line that now carries the note, and `c6b_poll_gate_scroll.py` puts the
+  user "back at rest" with `setValue`, which is not a gesture and cannot
+  hand the hold back. The data lines show the fix; the verdict lines do
+  not.
+- The breakers' final reports exist only as messages; they were copied
+  out of the session transcript before the docs were written, so the
+  numbers above are quoted from the reports rather than from memory.
