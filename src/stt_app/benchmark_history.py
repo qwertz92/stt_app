@@ -232,8 +232,9 @@ class BenchmarkHistoryStore:
 
     @staticmethod
     def _entries_from_payload(payload: Any) -> list[BenchmarkHistoryEntry]:
-        if isinstance(payload, dict):
-            payload = payload.get("entries", None)
+        # A list and nothing else: the store has written one since it was
+        # created, and `_load_from_path` admits only a list. An object was
+        # unwrapped here for a format no version ever wrote.
         if not isinstance(payload, list):
             raise ValueError("Expected a JSON array of benchmark entries.")
 
