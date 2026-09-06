@@ -2319,10 +2319,14 @@ class _BenchmarkMixin:
     def _selected_benchmark_history_entry(self) -> BenchmarkHistoryEntry | None:
         if not hasattr(self, "benchmark_history_list"):
             return None
-        row = self.benchmark_history_list.currentRow()
-        if row < 0:
+        # The selection, not `currentRow()`: a Ctrl+click on the selected
+        # row of this SingleSelection table deselects it and leaves it
+        # current, and the action row then offered Open in Window and
+        # Delete Selected for a row nothing showed as selected.
+        selected = self.benchmark_history_list.selectionModel().selectedRows()
+        if not selected:
             return None
-        item = self.benchmark_history_list.item(row, 0)
+        item = self.benchmark_history_list.item(selected[0].row(), 0)
         if item is None:
             return None
         entry = item.data(QtCore.Qt.UserRole)

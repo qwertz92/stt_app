@@ -497,8 +497,8 @@ def test_a_stored_run_can_be_opened_in_a_window_while_a_benchmark_runs(tmp_path)
     assert dialog.open_benchmark_results_window_button.isEnabled() is True
 
     dialog._active_benchmark_thread = None
-    # `_selected_benchmark_history_entry` reads the current cell, which
-    # `clearSelection()` leaves in place.
+    # `_selected_benchmark_history_entry` reads the selection; an invalid
+    # current cell clears it along with the current row.
     dialog.benchmark_history_list.setCurrentCell(-1, -1)
     dialog._current_benchmark_entry = None
     dialog._update_benchmark_actions()
@@ -639,4 +639,28 @@ def test_clearing_the_history_drops_hidden_windows_too(monkeypatch, tmp_path):
     app.processEvents()
 
     assert dialog._benchmark_result_windows == {}
+    _ = app
+
+
+def test_a_deselected_history_row_offers_no_actions(tmp_path):
+    """A Ctrl+click on the selected row deselects it and leaves it current.
+
+    The action row read `currentRow()`, so Open in Window and Delete
+    Selected stayed enabled and acted on a row nothing showed as selected.
+    """
+    entry = _stored_entry("deselected run")
+    dialog, app = _history_dialog(tmp_path, [entry])
+    table = dialog.benchmark_history_list
+    table.setCurrentRow(0)
+    dialog._update_benchmark_history_actions()
+    assert dialog.open_benchmark_history_window_button.isEnabled() is True
+    assert dialog.delete_benchmark_history_button.isEnabled() is True
+
+    table.selectionModel().clearSelection()
+    dialog._update_benchmark_history_actions()
+
+    assert table.currentRow() == 0
+    assert dialog._selected_benchmark_history_entry() is None
+    assert dialog.open_benchmark_history_window_button.isEnabled() is False
+    assert dialog.delete_benchmark_history_button.isEnabled() is False
     _ = app
