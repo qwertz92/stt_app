@@ -2312,6 +2312,15 @@ class _BenchmarkMixin:
                 "See the summary for details.",
                 "#b26a00",
             )
+        elif not cases:
+            # The history arm above skips an empty case list, and this line
+            # claimed a save that had not happened. Reachable through this
+            # slot alone: the window cannot select no model, and a model the
+            # runner refuses yields an error case, not none.
+            self._set_benchmark_status(
+                "Benchmark finished with no cases. Nothing was saved.",
+                "#b26a00",
+            )
         else:
             self._set_benchmark_status(
                 "Benchmark finished and saved to history.",

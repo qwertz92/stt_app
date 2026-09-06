@@ -541,3 +541,25 @@ def test_quitting_during_a_run_still_saves_what_it_measured(monkeypatch, tmp_pat
     ] == [("canceled", ["small"])]
     assert _statuses(dialog) == ["Done (RTF 0.043)"]
     _ = app
+
+
+def test_a_run_that_measured_nothing_does_not_claim_a_save(tmp_path):
+    """The history arm skips an empty case list, and the completion line
+    still said "finished and saved to history" over a store that had never
+    been written (measured: the line painted, 0 entries, no file)."""
+    dialog, app = _dialog(tmp_path, ["small"])
+    dialog._current_benchmark_cases = []
+
+    dialog._on_benchmark_finished(
+        True,
+        "Benchmark summary:\n",
+        {"cases": [], "options": _options(["small"]), "status": "completed"},
+    )
+    app.processEvents()
+
+    assert (
+        dialog.benchmark_status_label.text()
+        == "Benchmark finished with no cases. Nothing was saved."
+    )
+    assert dialog._benchmark_history_store.recent_entries(20) == []
+    _ = app
