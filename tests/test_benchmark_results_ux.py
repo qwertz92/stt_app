@@ -4,6 +4,7 @@ from __future__ import annotations
 import math
 import threading
 
+import pytest
 from PySide6 import QtCore, QtTest, QtWidgets
 from test_benchmark_transcript_ui import _entry, _run
 from test_settings_dialog_connection import (
@@ -544,4 +545,46 @@ def test_open_in_window_sits_in_both_action_rows():
     ]
     assert dialog.open_benchmark_results_window_button.text() == "Open in Window"
     assert dialog.open_benchmark_history_window_button.text() == "Open in Window"
+    _ = app
+
+
+def test_minimising_the_settings_dialog_keeps_the_benchmark_windows(tmp_path):
+    """Qt sends a hideEvent for a minimise too, and a minimise is no dismissal.
+
+    The Run Benchmark window and every pop-out were hidden there exactly as
+    on a Close, and nothing re-showed them on the restore: minimising
+    Settings once took them off screen for the rest of the session.
+    """
+    entry = _stored_entry("minimised run")
+    dialog, app = _history_dialog(tmp_path, [entry])
+    dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+    dialog.show()
+    dialog._open_benchmark_window()
+    dialog._open_benchmark_results_window(entry)
+    app.processEvents()
+    popout = dialog._benchmark_result_windows[entry.identity_key()]
+    assert dialog.benchmark_window.isVisible() and popout.isVisible()
+
+    dialog.showMinimized()
+    for _ in range(10):
+        app.processEvents()
+    if not dialog.isMinimized():
+        pytest.skip("the window manager did not minimise the dialog")
+
+    assert dialog.benchmark_window.isVisible() is True
+    assert popout.isVisible() is True
+
+    dialog.showNormal()
+    for _ in range(10):
+        app.processEvents()
+
+    assert dialog.benchmark_window.isVisible() is True
+    assert popout.isVisible() is True
+
+    # A dismissal still takes both with it.
+    dialog.reject()
+    app.processEvents()
+
+    assert dialog.benchmark_window.isVisible() is False
+    assert popout.isVisible() is False
     _ = app

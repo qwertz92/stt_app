@@ -988,7 +988,14 @@ class SettingsDialog(
         # QDialog.reject()/done() hide the dialog without sending closeEvent.
         # The benchmark window has Qt.Window and therefore must be hidden
         # explicitly for every dismissal path, including the Close button.
-        self._hide_benchmark_window()
+        # A minimise is not a dismissal, and Qt sends a hideEvent for it as
+        # well (`QWidget::event` on the WindowStateChange): the dialog is
+        # then still visible and already minimised, which no dismissal is --
+        # `hide()` on a minimised dialog reads `isVisible()` False here. The
+        # `Qt.Window` children follow the OS minimise on their own and come
+        # back with the restore; hidden here, nothing brought them back.
+        if not (self.isMinimized() and self.isVisible()):
+            self._hide_benchmark_window()
         super().hideEvent(event)
 
     def closeEvent(self, event: QtGui.QCloseEvent) -> None:
