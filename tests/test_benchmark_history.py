@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import csv
 import dataclasses
 import json
@@ -727,3 +728,90 @@ def test_a_count_a_spreadsheet_cannot_hold_is_exported_as_text(tmp_path):
     ET.fromstring(sheet)
     assert str(huge) in sheet
     assert f"<v>{huge}</v>" not in sheet
+
+
+@pytest.mark.parametrize(
+    ("section", "name", "expected"),
+    [
+        ("environment", "logical_cpus", 0),
+        ("environment", "physical_cores", 0),
+        ("options", "runs", 1),
+        ("options", "beam_size", 5),
+        ("options", "threads", 0),
+    ],
+)
+def test_a_number_int_cannot_hold_reads_as_the_fields_default(
+    tmp_path, section, name, expected
+):
+    """`1e400` is valid JSON syntax, `json.loads` answers `inf`, and `int(inf)`
+    raises OverflowError -- which neither the int reader nor the loader's
+    backstop caught, so it left `SettingsDialog.__init__`; escaping the
+    tray's slot in a windowed build, Settings could never be opened again
+    and nothing said why."""
+    payload = _one_entry_payload()
+    payload[0][section][name] = "__INF__"
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload).replace('"__INF__"', "1e400"), encoding="utf-8")
+
+    entries = BenchmarkHistoryStore(path=path).recent_entries(20)
+
+    assert len(entries) == 1
+    assert getattr(getattr(entries[0], section), name) == expected
+    assert not list(tmp_path.glob("*.corrupt.*"))
+
+
+def test_a_null_where_a_list_belongs_costs_that_value_not_the_file(tmp_path):
+    """`raw.get("model_names", [])` defaults a missing key only: a `null`
+    raised TypeError, and the loader answered by quarantining the file --
+    every recorded run gone from the app for one hand-edited value, and for
+    good, because the backup holds the same entry and every later open
+    re-fails the same way."""
+    payload = [copy.deepcopy(_one_entry_payload()[0]) for _ in range(3)]
+    payload[1]["options"]["model_names"] = None
+    payload[1]["options"]["webgpu_devices"] = True
+    payload[2]["cases"] = None
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    entries = BenchmarkHistoryStore(path=path).recent_entries(20)
+
+    # The entry with no cases has nothing to show; the other two are intact,
+    # newest first.
+    assert len(entries) == 2
+    assert entries[1].options.model_names == ["tiny"]
+    assert entries[0].options.model_names == []
+    assert entries[0].options.webgpu_devices == []
+    assert not list(tmp_path.glob("*.corrupt.*"))
+
+
+def test_a_null_in_a_text_field_reads_as_empty_text(tmp_path):
+    """`str(raw.get(...))` rendered a `null` as the word None and a container
+    as its Python repr -- in the History list's Recorded and Status cells and
+    the results table's Model column."""
+    payload = _one_entry_payload()
+    payload[0]["created_at"] = None
+    payload[0]["status"] = None
+    payload[0]["summary"] = ["x"]
+    payload[0]["options"]["audio_name"] = None
+    payload[0]["cases"][0]["model"] = None
+    payload[0]["cases"][0]["device"] = {"a": 1}
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    entry = BenchmarkHistoryStore(path=path).recent_entries(1)[0]
+
+    assert (entry.created_at, entry.status, entry.summary) == ("", "", "")
+    assert entry.options.audio_name == ""
+    assert (entry.cases[0].model, entry.cases[0].device) == ("", "")
+
+
+def test_a_negative_core_count_reads_as_unknown(tmp_path):
+    """A count below zero is not a count; exported as -1 it read as measured."""
+    payload = _one_entry_payload()
+    payload[0]["environment"] = {"logical_cpus": -1, "physical_cores": -4}
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    environment = BenchmarkHistoryStore(path=path).recent_entries(1)[0].environment
+
+    assert (environment.logical_cpus, environment.physical_cores) == (0, 0)

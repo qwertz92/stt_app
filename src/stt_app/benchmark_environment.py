@@ -37,8 +37,11 @@ class BenchmarkEnvironment:
             os=str(raw.get("os", "")),
             python=str(raw.get("python", "")),
             cpu=str(raw.get("cpu", "")),
-            logical_cpus=_safe_int(raw.get("logical_cpus"), default=0),
-            physical_cores=_safe_int(raw.get("physical_cores"), default=0),
+            # Clamped at zero, the "unknown" the exports leave empty: a
+            # negative count is not a count, and exported as -1 it read as
+            # measured.
+            logical_cpus=max(0, safe_int(raw.get("logical_cpus"), default=0)),
+            physical_cores=max(0, safe_int(raw.get("physical_cores"), default=0)),
             cpu_clock=str(raw.get("cpu_clock", "")),
             cpu_cache=str(raw.get("cpu_cache", "")),
             memory=str(raw.get("memory", "")),
@@ -249,16 +252,16 @@ def _hardware_facts_from_payload(payload: object) -> _HardwareFacts:
         # back to `platform.processor()` for it.
         cpu=" ".join(name.split()) if isinstance(name, str) else "",
         physical_cores=sum(
-            max(_safe_int(entry.get("NumberOfCores"), default=0), 0)
+            max(safe_int(entry.get("NumberOfCores"), default=0), 0)
             for entry in processors
         ),
-        cpu_clock=_cpu_clock_label(_safe_int(first.get("MaxClockSpeed"), default=0)),
+        cpu_clock=_cpu_clock_label(safe_int(first.get("MaxClockSpeed"), default=0)),
         # Clock and cache describe one processor package. Two identical
         # sockets each have this much cache, and summing them would claim a
         # single shared cache that does not exist; only the core count adds up.
         cpu_cache=_cpu_cache_label(
-            _safe_int(first.get("L2CacheSize"), default=0),
-            _safe_int(first.get("L3CacheSize"), default=0),
+            safe_int(first.get("L2CacheSize"), default=0),
+            safe_int(first.get("L3CacheSize"), default=0),
         ),
         memory_modules=_memory_modules_label(modules),
     )
@@ -327,10 +330,10 @@ def _memory_modules_label(modules: list[dict[str, Any]]) -> str:
         if not isinstance(module, dict):
             continue
         key = (
-            max(_safe_int(module.get("Capacity"), default=0), 0),
-            _safe_int(module.get("SMBIOSMemoryType"), default=0),
-            max(_safe_int(module.get("Speed"), default=0), 0),
-            max(_safe_int(module.get("ConfiguredClockSpeed"), default=0), 0),
+            max(safe_int(module.get("Capacity"), default=0), 0),
+            safe_int(module.get("SMBIOSMemoryType"), default=0),
+            max(safe_int(module.get("Speed"), default=0), 0),
+            max(safe_int(module.get("ConfiguredClockSpeed"), default=0), 0),
         )
         capacity, type_code, rated, configured = key
         if (
@@ -638,10 +641,16 @@ def _format_bytes(value: int) -> str:
     return f"{size:.1f} {units[index]}"
 
 
-def _safe_int(value: Any, *, default: int) -> int:
+def safe_int(value: Any, *, default: int) -> int:
+    """`int()` of anything JSON can carry, or the default.
+
+    OverflowError as well: `1e400` is valid JSON syntax, `json.loads` answers
+    `inf`, and `int(inf)` raises it -- past this function and past the
+    history loader's backstop, out of `SettingsDialog.__init__`.
+    """
     try:
         return int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
 
 

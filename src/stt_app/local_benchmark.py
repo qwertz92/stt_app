@@ -175,6 +175,16 @@ _RUN_FIELD_EMPTY: dict[str, Any] = {"float": math.nan, "int": 0, "str": ""}
 _INT_FIELD_LIMIT = 2**63 - 1
 
 
+def text_or_empty(value: Any) -> str:
+    """A text field is text or nothing.
+
+    `str()` of a JSON null is the word None and of a container its Python
+    repr, and both reached the History list's Recorded and Status cells and
+    the results table's Model column from a hand-edited file.
+    """
+    return value if isinstance(value, str) else ""
+
+
 def _coerce_run_field(annotation: object, value: Any) -> Any:
     """A `null`, a missing key or a value of another type becomes the field's
     empty value: NaN, 0 or "".
@@ -202,7 +212,7 @@ def _coerce_run_field(annotation: object, value: Any) -> Any:
             return value
         return 0
     if kind == "str":
-        return value if isinstance(value, str) else ""
+        return text_or_empty(value)
     return value
 
 
@@ -227,14 +237,14 @@ def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
         if isinstance(entry, dict)
     ]
     return BenchmarkCase(
-        model=str(data.get("model", "")),
-        device=str(data.get("device", "")),
-        compute_type=str(data.get("compute_type", "")),
+        model=text_or_empty(data.get("model")),
+        device=text_or_empty(data.get("device")),
+        compute_type=text_or_empty(data.get("compute_type")),
         download_seconds=_safe_float(data.get("download_seconds"), default=0.0),
         load_seconds=_safe_float(data.get("load_seconds"), default=math.nan),
         runs=runs,
         error=_error_text(data.get("error")),
-        runtime_details=str(data.get("runtime_details", "")),
+        runtime_details=text_or_empty(data.get("runtime_details")),
     )
 
 

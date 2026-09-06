@@ -12,9 +12,9 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 from .app_paths import benchmark_history_path
-from .benchmark_environment import BenchmarkEnvironment
+from .benchmark_environment import BenchmarkEnvironment, safe_int
 from .csv_safety import export_safe_text, spreadsheet_safe_cell
-from .local_benchmark import BenchmarkCase, _case_from_dict
+from .local_benchmark import BenchmarkCase, _case_from_dict, text_or_empty
 from .persistence import (
     atomic_write_bytes,
     atomic_write_json,
@@ -48,24 +48,20 @@ class BenchmarkOptions:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> BenchmarkOptions:
-        model_names = raw.get("model_names", [])
-        webgpu_devices = raw.get("webgpu_devices", [])
         return cls(
-            audio_path=str(raw.get("audio_path", "")),
-            audio_name=str(raw.get("audio_name", "")),
-            model_names=[str(item) for item in model_names if str(item).strip()],
-            device=str(raw.get("device", "auto") or "auto"),
-            compute_type=str(raw.get("compute_type", "int8") or "int8"),
-            webgpu_devices=[
-                str(item) for item in webgpu_devices if str(item).strip()
-            ],
-            runs=_safe_int(raw.get("runs"), default=1),
-            beam_size=_safe_int(raw.get("beam_size"), default=5),
-            language=str(raw.get("language", "auto") or "auto"),
+            audio_path=text_or_empty(raw.get("audio_path")),
+            audio_name=text_or_empty(raw.get("audio_name")),
+            model_names=_text_items(raw.get("model_names")),
+            device=text_or_empty(raw.get("device")) or "auto",
+            compute_type=text_or_empty(raw.get("compute_type")) or "int8",
+            webgpu_devices=_text_items(raw.get("webgpu_devices")),
+            runs=safe_int(raw.get("runs"), default=1),
+            beam_size=safe_int(raw.get("beam_size"), default=5),
+            language=text_or_empty(raw.get("language")) or "auto",
             vad_filter=parse_json_bool(raw.get("vad_filter")),
             warmup=parse_json_bool(raw.get("warmup")),
-            threads=_safe_int(raw.get("threads"), default=0),
-            model_dir=str(raw.get("model_dir", "")),
+            threads=safe_int(raw.get("threads"), default=0),
+            model_dir=text_or_empty(raw.get("model_dir")),
         )
 
     def summary_details(self, *, status: str = "") -> dict[str, Any]:
@@ -102,10 +98,10 @@ class BenchmarkHistoryEntry:
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> BenchmarkHistoryEntry:
-        cases_payload = raw.get("cases", [])
+        cases_payload = raw.get("cases")
         cases = [
             _case_from_dict(item)
-            for item in cases_payload
+            for item in (cases_payload if isinstance(cases_payload, list) else [])
             if isinstance(item, dict)
         ]
         options_payload = raw.get("options", {})
@@ -114,9 +110,9 @@ class BenchmarkHistoryEntry:
         )
         environment_payload = raw.get("environment", {})
         return cls(
-            created_at=str(raw.get("created_at", "")),
-            status=str(raw.get("status", "")),
-            summary=str(raw.get("summary", "")),
+            created_at=text_or_empty(raw.get("created_at")),
+            status=text_or_empty(raw.get("status")),
+            summary=text_or_empty(raw.get("summary")),
             options=options,
             cases=cases,
             environment=BenchmarkEnvironment.from_dict(
@@ -281,7 +277,7 @@ class BenchmarkHistoryStore:
             return []
         try:
             entries = cls._entries_from_payload(payload)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             # TypeError as well as ValueError: a payload whose shape is
             # wrong rather than whose text is (`runs` a number, a run
             # carrying a field this build does not declare) raised past
@@ -664,17 +660,21 @@ def _workbook_rels_xml() -> str:
 </Relationships>"""
 
 
-def _safe_int(value: Any, *, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
+def _text_items(value: Any) -> list[str]:
+    """The non-blank items of a JSON array as text, and nothing for anything
+    else. A `null` where the list belongs raised `TypeError`, which the loader
+    answered by quarantining the whole file -- every recorded run gone from
+    the app for one hand-edited value, and for good, because the backup
+    holds the same entry and every later open re-fails the same way."""
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if str(item).strip()]
 
 
 def _normalize_limit(value: int) -> int:
     try:
         keep = int(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 1
     if keep < 0:
         return 0
