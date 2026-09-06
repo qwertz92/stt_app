@@ -5,6 +5,7 @@ import json
 import queue
 import subprocess
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -439,3 +440,156 @@ def test_a_cancel_hands_over_the_cases_the_child_already_reported(monkeypatch):
 
     assert [case.model for case in delivered] == ["small"]
     assert delivered[0].runs[0].real_time_factor == 0.043
+
+
+def _fake_child(lines, *, exit_code: int | None = 0):
+    """A child whose stdout is the generator given; `poll()` says it is gone."""
+
+    class FakeProcess:
+        pid = 4242
+        stdout = lines
+        stderr = iter(())
+
+        def poll(self):
+            return exit_code
+
+        def wait(self, timeout=None):
+            return exit_code
+
+    return FakeProcess()
+
+
+def _case_event_line(model: str, payload=None) -> str:
+    case_payload = {
+        "model": model,
+        "device": "cpu",
+        "compute_type": "int8",
+        "download_seconds": 0.0,
+        "load_seconds": 0.2,
+        "runs": [
+            {
+                "run_index": 1,
+                "seconds": 1.0,
+                "audio_duration_seconds": 24.0,
+                "real_time_factor": 0.043,
+                "transcript_chars": 5,
+                "transcript_words": 1,
+                "detected_language": "de",
+                "language_probability": 0.9,
+                "transcript": "hallo",
+            }
+        ],
+        "error": None,
+        "runtime_details": "",
+    }
+    return benchmark_process.BENCHMARK_EVENT_PREFIX + json.dumps(
+        {"event": "case", "case": case_payload if payload is None else payload}
+    )
+
+
+def test_a_cancel_reads_a_case_the_child_wrote_in_the_same_instant(monkeypatch):
+    """The child had written the case, the reader thread had not queued it
+    yet, and the drain read only the queue: at the coincident instant the
+    measurement was lost more often than not (58-63% over 400 trials) and
+    the plan called the case Skipped. The cancel ends the child first, so
+    its stdout closes, and reads to that end.
+    """
+    cancel_seen = threading.Event()
+    terminated = threading.Event()
+
+    def stdout_lines():
+        # The line reaches the reader only after the cancel check has said yes.
+        assert cancel_seen.wait(5.0), "the cancel check never ran"
+        yield _case_event_line("small") + "\n"
+        # The pipe closes only once the child is gone.
+        terminated.wait(5.0)
+
+    monkeypatch.setattr(
+        benchmark_process,
+        "start_benchmark_process",
+        lambda _path: _fake_child(stdout_lines(), exit_code=None),
+    )
+    monkeypatch.setattr(
+        benchmark_process,
+        "_terminate_process_tree",
+        lambda _process: terminated.set(),
+    )
+    delivered: list[BenchmarkCase] = []
+
+    def canceled() -> bool:
+        cancel_seen.set()
+        return True
+
+    started = time.monotonic()
+    with pytest.raises(BenchmarkCancelled):
+        benchmark_process._stream_benchmark_process(
+            Path("unused-options.json"),
+            progress_callback=None,
+            case_callback=delivered.append,
+            cancel_check=canceled,
+        )
+    elapsed = time.monotonic() - started
+
+    assert [case.model for case in delivered] == ["small"]
+    assert terminated.is_set()
+    # Ended first, then read to the end: without the kill the drain waits
+    # out its whole bound for an EOF that never comes.
+    assert elapsed < 1.0, elapsed
+
+
+def test_an_error_the_child_reported_before_the_cancel_is_what_is_raised(
+    monkeypatch,
+):
+    """The run had already failed when the user pressed Cancel; the drain
+    walked past the error event and the dialog showed a clean cancel with
+    the worker's reason nowhere on screen and the run stored as canceled."""
+    error_line = benchmark_process.BENCHMARK_EVENT_PREFIX + json.dumps(
+        {"event": "error", "message": "ONNX Runtime could not create a session"}
+    )
+
+    def stdout_lines():
+        yield _case_event_line("small") + "\n"
+        yield error_line + "\n"
+
+    monkeypatch.setattr(
+        benchmark_process,
+        "start_benchmark_process",
+        lambda _path: _fake_child(stdout_lines()),
+    )
+    delivered: list[BenchmarkCase] = []
+
+    with pytest.raises(RuntimeError, match="ONNX Runtime could not create"):
+        benchmark_process._stream_benchmark_process(
+            Path("unused-options.json"),
+            progress_callback=None,
+            case_callback=delivered.append,
+            cancel_check=lambda: True,
+        )
+
+    assert [case.model for case in delivered] == ["small"]
+
+
+def test_a_case_event_without_a_case_is_skipped_not_fatal(monkeypatch, caplog):
+    """`item.get("case") or {}` handed a number to the parser, which died on
+    `.get` -- and every case the child reported after it with it."""
+
+    def stdout_lines():
+        yield _case_event_line("odd", payload=5) + "\n"
+        yield _case_event_line("small") + "\n"
+
+    monkeypatch.setattr(
+        benchmark_process,
+        "start_benchmark_process",
+        lambda _path: _fake_child(stdout_lines()),
+    )
+
+    with caplog.at_level("WARNING", logger="stt_app.benchmark_process"):
+        cases = benchmark_process._stream_benchmark_process(
+            Path("unused-options.json"),
+            progress_callback=None,
+            case_callback=None,
+            cancel_check=None,
+        )
+
+    assert [case.model for case in cases] == ["small"]
+    assert "benchmark_case_event_malformed" in caplog.text

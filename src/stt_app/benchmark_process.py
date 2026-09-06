@@ -9,14 +9,17 @@ loading/inference never runs in the GUI process) while leaving the settings
 dialog code and its test seam unchanged: the facade re-exports this
 ``run_benchmark_cases`` under the same name the tests patch.
 
-Cancellation terminates the child process tree; cases completed before the
-cancel are already streamed to the caller and preserved, and a
-``BenchmarkCancelled`` is raised to match the pure function's contract.
+Cancellation terminates the child process tree and then reads its output to
+the end, so every case the child had written is streamed to the caller and
+preserved; a ``BenchmarkCancelled`` is raised to match the pure function's
+contract, unless the child had already reported an error, which is raised
+instead.
 """
 from __future__ import annotations
 
 import collections
 import json
+import logging
 import os
 import queue
 import signal
@@ -24,6 +27,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -35,6 +39,12 @@ BENCHMARK_WORKER_ARG = "--local-benchmark-worker"
 
 _EVENT_POLL_SECONDS = 0.15
 _STDERR_TAIL_LINES = 50
+# How long a cancel waits for the ended child's output to reach its end. The
+# reader hits EOF as soon as every handle to the pipe is closed, which the
+# kill of the process tree does; the bound is for a handle that outlives it.
+_CANCEL_DRAIN_SECONDS = 2.0
+
+_LOGGER = logging.getLogger(__name__)
 
 
 class _Eof:
@@ -124,10 +134,21 @@ def _stream_benchmark_process(
         while True:
             if cancel_check is not None and cancel_check():
                 canceled = True
-                # The reader may have queued cases the child finished before
-                # the cancel; breaking without them threw away measurements
-                # that exist, and the case list then labelled them Skipped.
-                _deliver_reported_cases(events, cases, case_callback)
+                # End the child first, then read to the end of its output:
+                # a case it had written before the cancel was lost whenever
+                # the reader thread had not queued it yet -- 58-63% of the
+                # time at the coincident instant -- and the case list then
+                # labelled a measurement that existed Skipped. The kill
+                # closes the pipe, so the reader reaches EOF once every
+                # line the child wrote is queued.
+                _terminate_process_tree(process)
+                reported_error = _deliver_reported_cases(
+                    events,
+                    cases,
+                    case_callback,
+                    deadline=time.monotonic() + _CANCEL_DRAIN_SECONDS,
+                )
+                error_message = error_message or reported_error
                 break
             try:
                 item = events.get(timeout=_EVENT_POLL_SECONDS)
@@ -141,7 +162,9 @@ def _stream_benchmark_process(
                 if progress_callback is not None:
                     progress_callback(str(item.get("text", "")))
             elif event == "case":
-                case = _case_from_dict(item.get("case") or {})
+                case = _case_from_event(item)
+                if case is None:
+                    continue
                 cases.append(case)
                 if case_callback is not None:
                     case_callback(case)
@@ -160,10 +183,12 @@ def _stream_benchmark_process(
         stdout_reader.join(timeout=1.0)
         stderr_reader.join(timeout=1.0)
 
-    if canceled:
-        raise BenchmarkCancelled("Benchmark canceled.")
+    # The error first: a run that had failed before the user pressed Cancel
+    # is a failed run, and the reason is what the user has to see.
     if error_message:
         raise RuntimeError(error_message)
+    if canceled:
+        raise BenchmarkCancelled("Benchmark canceled.")
     return_code = process.poll()
     if return_code not in (0, None):
         tail = "\n".join(stderr_tail).strip()
@@ -175,24 +200,57 @@ def _stream_benchmark_process(
     return cases
 
 
+def _case_from_event(item: dict[str, Any]) -> BenchmarkCase | None:
+    """The case an event carries, or None for an event that carries none.
+
+    `item.get("case") or {}` handed whatever was there to the parser, which
+    died on the first `.get` -- taking every case the child reported after
+    it with it.
+    """
+    payload = item.get("case")
+    if isinstance(payload, dict):
+        return _case_from_dict(payload)
+    _LOGGER.warning(
+        "benchmark_case_event_malformed payload_type=%s", type(payload).__name__
+    )
+    return None
+
+
 def _deliver_reported_cases(
     events: queue.Queue[Any],
     cases: list[BenchmarkCase],
     case_callback: Callable[[BenchmarkCase], None] | None,
-) -> None:
-    """Hand over every finished case already in the queue, without waiting."""
+    *,
+    deadline: float,
+) -> str | None:
+    """Hand over every case the child reported, up to its EOF or the deadline.
+
+    Returns the message of an error event met on the way: the run had
+    failed before the cancel, and that failure is what the caller raises.
+    """
+    error_message: str | None = None
     while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return error_message
         try:
-            item = events.get_nowait()
+            item = events.get(timeout=remaining)
         except queue.Empty:
-            return
+            return error_message
         if item is _EOF:
-            return
-        if isinstance(item, dict) and item.get("event") == "case":
-            case = _case_from_dict(item.get("case") or {})
+            return error_message
+        if not isinstance(item, dict):
+            continue
+        event = item.get("event")
+        if event == "case":
+            case = _case_from_event(item)
+            if case is None:
+                continue
             cases.append(case)
             if case_callback is not None:
                 case_callback(case)
+        elif event == "error" and error_message is None:
+            error_message = str(item.get("message", "")) or "Benchmark failed."
 
 
 def _pump_events(stream, events: queue.Queue[Any]) -> None:
