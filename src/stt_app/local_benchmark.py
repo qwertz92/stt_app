@@ -169,6 +169,10 @@ def _run_from_dict(data: dict[str, Any]) -> BenchmarkRun:
 
 
 _RUN_FIELD_EMPTY: dict[str, Any] = {"float": math.nan, "int": 0, "str": ""}
+# A count past a signed 64-bit integer is not a count -- and `float()` of an
+# int past the double range raises OverflowError rather than answering inf,
+# which a 401-digit `seconds` in a hand-edited file turned into a crash.
+_INT_FIELD_LIMIT = 2**63 - 1
 
 
 def _coerce_run_field(annotation: object, value: Any) -> Any:
@@ -185,14 +189,34 @@ def _coerce_run_field(annotation: object, value: Any) -> Any:
     if isinstance(value, bool):
         return _RUN_FIELD_EMPTY.get(kind, value)
     if kind == "float":
-        return float(value) if isinstance(value, (int, float)) else math.nan
+        if not isinstance(value, (int, float)):
+            return math.nan
+        try:
+            return float(value)
+        except OverflowError:
+            return math.nan
     if kind == "int":
         if isinstance(value, float) and value.is_integer():
-            return int(value)
-        return value if isinstance(value, int) else 0
+            value = int(value)
+        if isinstance(value, int) and abs(value) <= _INT_FIELD_LIMIT:
+            return value
+        return 0
     if kind == "str":
         return value if isinstance(value, str) else ""
     return value
+
+
+def _error_text(value: Any) -> str | None:
+    """A case's error is text or nothing.
+
+    The results table hands it to a tooltip, which takes a string only, so
+    a hand-edited number raised TypeError while the stored run was being
+    shown. A non-text value keeps the case failed, as its text; an empty
+    value is no error.
+    """
+    if value is None or value is False or value == "":
+        return None
+    return value if isinstance(value, str) else str(value)
 
 
 def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
@@ -209,7 +233,7 @@ def _case_from_dict(data: dict[str, Any]) -> BenchmarkCase:
         download_seconds=_safe_float(data.get("download_seconds"), default=0.0),
         load_seconds=_safe_float(data.get("load_seconds"), default=math.nan),
         runs=runs,
-        error=data.get("error"),
+        error=_error_text(data.get("error")),
         runtime_details=str(data.get("runtime_details", "")),
     )
 

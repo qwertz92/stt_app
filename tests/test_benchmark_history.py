@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import dataclasses
 import json
 import math
 import xml.etree.ElementTree as ET
@@ -16,7 +17,7 @@ from stt_app.benchmark_history import (
     BenchmarkOptions,
     export_benchmark_entry,
 )
-from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
+from stt_app.local_benchmark import _RUN_FIELD_EMPTY, BenchmarkCase, BenchmarkRun
 from stt_app.persistence import backup_path
 
 _MEMORY_MODULES = (
@@ -649,3 +650,80 @@ def test_the_history_export_leaves_an_unknown_logical_count_empty(tmp_path):
     row = next(csv.DictReader(csv_path.read_text(encoding="utf-8").splitlines()))
     assert row["environment_logical_cpus"] == ""
     assert row["environment_physical_cores"] == ""
+
+
+def test_a_number_a_float_cannot_hold_reads_as_no_measurement(tmp_path):
+    """`float()` of a 401-digit integer raises OverflowError instead of
+    answering inf, and the reader let it escape -- past the drain of a
+    cancelled benchmark and past `SettingsDialog.__init__`. A count that
+    size is not a count either."""
+    huge = 10**400
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(
+        json.dumps(
+            _one_entry_payload(
+                {
+                    "seconds": huge,
+                    "real_time_factor": -huge,
+                    "transcript_chars": huge,
+                    "run_index": 2**63,
+                }
+            )
+        ),
+        encoding="utf-8",
+    )
+
+    entries = BenchmarkHistoryStore(path=path).recent_entries(20)
+
+    run = entries[0].cases[0].runs[0]
+    assert math.isnan(run.seconds)
+    assert math.isnan(run.real_time_factor)
+    assert run.transcript_chars == 0
+    assert run.run_index == 0
+    assert not list(tmp_path.glob("*.corrupt.*"))
+
+
+def test_every_run_field_has_a_declared_empty_value():
+    """The coercion is keyed by annotation; a field of a fourth type would be
+    handed through untouched, which is the TypeError all over again."""
+    for field in dataclasses.fields(BenchmarkRun):
+        assert field.type in _RUN_FIELD_EMPTY, field.name
+
+
+def test_a_case_error_that_is_not_text_is_read_as_text(tmp_path):
+    """The results table hands `error` to a tooltip, which takes a string
+    only: a hand-edited number raised TypeError while the stored run was
+    being shown. A non-text value keeps the case failed, as its text; an
+    empty value is no error."""
+    payload = _one_entry_payload()
+    failed = payload[0]["cases"][0]
+    failed["error"] = 42
+    payload[0]["cases"].append({**failed, "model": "base", "error": ""})
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    cases = BenchmarkHistoryStore(path=path).recent_entries(1)[0].cases
+
+    assert cases[0].error == "42"
+    assert cases[1].error is None
+
+
+def test_a_count_a_spreadsheet_cannot_hold_is_exported_as_text(tmp_path):
+    """`math.isfinite` raises OverflowError for an int past the double range,
+    so the XLSX export died on a hand-edited core count; a `<v>` holds a
+    double, and such a number goes in as text."""
+    huge = 10**400
+    payload = _one_entry_payload()
+    payload[0]["environment"] = {"logical_cpus": huge}
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    entry = BenchmarkHistoryStore(path=path).recent_entries(1)[0]
+    xlsx_path = tmp_path / "benchmark.xlsx"
+
+    export_benchmark_entry(xlsx_path, entry)
+
+    with zipfile.ZipFile(xlsx_path) as archive:
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    ET.fromstring(sheet)
+    assert str(huge) in sheet
+    assert f"<v>{huge}</v>" not in sheet

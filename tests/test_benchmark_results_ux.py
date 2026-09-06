@@ -1,6 +1,7 @@
 """Benchmark results: run-order column, three-state sorting, no layout jump."""
 from __future__ import annotations
 
+import json
 import math
 import threading
 
@@ -17,6 +18,7 @@ from stt_app.benchmark_history import BenchmarkHistoryEntry, BenchmarkHistorySto
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_benchmark import (
+    _BENCHMARK_RESULT_STATUS_COLUMN,
     BenchmarkResultsPanel,
     BenchmarkResultsWindow,
     _benchmark_created_label,
@@ -828,4 +830,23 @@ def test_the_pin_stops_at_the_screen(monkeypatch):
     assert dialog.minimumSizeHint().width() > 580
     assert dialog.minimumWidth() == 580
     dialog.hide()
+    _ = app
+
+
+def test_a_stored_case_whose_error_is_a_number_still_renders(tmp_path):
+    """The results table hands a case's `error` to a tooltip, which takes a
+    string only; a hand-edited number raised TypeError inside `show_entry`,
+    which is Load Selected and Open in Window alike. The reader keeps such
+    a value as its text."""
+    dialog, app = _history_dialog(tmp_path, [_stored_entry("first run")])
+    path = tmp_path / "benchmark_history.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    payload[0]["cases"][0]["error"] = 42
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    entry = BenchmarkHistoryStore(path=path).recent_entries(1)[0]
+
+    dialog.benchmark_results_panel.show_entry(entry)
+
+    status = dialog.benchmark_results_table.item(0, _BENCHMARK_RESULT_STATUS_COLUMN)
+    assert status.toolTip() == "42"
     _ = app

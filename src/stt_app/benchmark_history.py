@@ -588,14 +588,19 @@ def _worksheet_xml(rows: list[list[Any]]) -> str:
     )
 
 
+def _fits_a_numeric_cell(value: int | float) -> bool:
+    """A `<v>` holds a double: NaN, an infinity and an int past the double
+    range go in as text -- and `math.isfinite` itself raises for the int."""
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def _cell_xml(reference: str, value: Any) -> str:
     if isinstance(value, bool):
         text = "TRUE" if value else "FALSE"
-    elif (
-        isinstance(value, (int, float))
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-    ):
+    elif isinstance(value, (int, float)) and _fits_a_numeric_cell(value):
         return f'<c r="{reference}"><v>{value}</v></c>'
     else:
         text = _display_value(value)
