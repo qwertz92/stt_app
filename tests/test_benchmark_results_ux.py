@@ -673,3 +673,65 @@ def test_a_created_stamp_the_local_clock_cannot_place_is_shown_as_is():
     stamp = "0001-01-01T00:00:00+00:00"
 
     assert _benchmark_created_label(stamp) == stamp
+
+
+def test_the_dialog_cannot_be_dragged_narrower_than_its_widest_tab():
+    """The explicit 520 px minimum predates the third History action button.
+
+    Between 520 px and the 611 px the Benchmark tab needs, every caption in
+    that row was clipped -- and `minimumSizeHint` reports that width only
+    with the tab current and painted, so the pin follows the tab switch. The
+    budget keeps a later widget from raising the minimum unnoticed: one
+    label once took the layout's minimum to 1109 px.
+    """
+    dialog, app = _dialog()
+    dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+    dialog.show()
+    # Let the pin the show schedules fire on the first tab, so the one the
+    # tab switch schedules is what the assertions below depend on.
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+    needed = dialog.minimumSizeHint().width()
+
+    assert 520 < needed <= 640, needed
+    assert dialog.minimumWidth() >= needed
+
+    dialog.tabs.setCurrentIndex(0)
+    dialog.resize(520, dialog.height())
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+
+    assert dialog.width() == dialog.minimumWidth()
+    row = _button_row_of(dialog.open_benchmark_history_window_button)
+    assert len(row) >= 3
+    for widget in row:
+        assert widget.width() >= widget.sizeHint().width(), widget
+    dialog.hide()
+    _ = app
+
+
+def test_a_dialog_opened_on_the_benchmark_tab_is_pinned_by_the_show():
+    """A tab made current while the dialog is hidden pins nothing usable:
+    the page reports its full width only once painted. The show has to
+    measure again, or the minimum stays the tab bar's until the next tab
+    switch."""
+    dialog, app = _dialog()
+    dialog.tabs.setCurrentIndex(dialog._benchmark_tab_index)
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+    hidden_minimum = dialog.minimumWidth()
+
+    dialog.setAttribute(QtCore.Qt.WA_ShowWithoutActivating, True)
+    dialog.show()
+    QtTest.QTest.qWait(50)
+    app.processEvents()
+    needed = dialog.minimumSizeHint().width()
+
+    assert needed > hidden_minimum
+    assert dialog.minimumWidth() >= needed
+    dialog.hide()
+    _ = app

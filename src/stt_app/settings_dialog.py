@@ -468,6 +468,26 @@ class SettingsDialog(
             if isinstance(button, QtWidgets.QPushButton):
                 reserve_button_width_for_texts(button, texts)
 
+    def _pin_content_minimum_width(self) -> None:
+        """Never let the dialog be dragged narrower than the widest tab shown.
+
+        The explicit minimum (520 px) predates the Benchmark tab's third
+        History action button, which took that tab's minimum to 611 px, and
+        between the two every caption in that row was clipped.
+        `minimumSizeHint` follows the current page only, and the Benchmark
+        page reports its full width only once it has been painted on screen
+        (its group boxes hold splitters, which count visible children only),
+        so this runs after every show and every tab switch, and it only ever
+        raises the minimum. A test bounds the result so a later widget
+        cannot raise it unnoticed.
+        """
+        root_layout = self.layout()
+        if root_layout is not None:
+            root_layout.invalidate()
+        needed = self.minimumSizeHint().width()
+        if needed > self.minimumWidth():
+            self.setMinimumWidth(needed)
+
     def _restore_default_dialog_size(self) -> None:
         target_size = self._refresh_default_dialog_size()
         self.resize(target_size)
@@ -955,6 +975,7 @@ class SettingsDialog(
         started_at = time.perf_counter()
         super().showEvent(event)
         self._apply_initial_dialog_size()
+        self._schedule_owned_callback(0, self._pin_content_minimum_width)
         self._log_settings_timing("show_event", started_at)
         if not self._settings_perf_logged_first_show:
             self._settings_perf_logged_first_show = True
@@ -1009,6 +1030,7 @@ class SettingsDialog(
         started_at = time.perf_counter()
         tab_name = self.tabs.tabText(_index) if 0 <= _index < self.tabs.count() else "-"
         first_visit = _index not in self._settings_perf_painted_tabs
+        self._schedule_owned_callback(0, self._pin_content_minimum_width)
         self._log_settings_timing(
             "tab_change",
             started_at,
