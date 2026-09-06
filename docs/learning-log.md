@@ -6627,3 +6627,15 @@ spacing, resolved through the style" -- written for the min-width entry
 before the facts lens reported -- was itself wrong: the rows' spacing is
 explicit and unchanged, and the growth is the stale caches above. It never
 reached the repository.
+
+**The commits and the mutation round.** Twelve commits, one per unit:
+`ab19063` (the pin), `625d952` (the eliding status line), `4250a22` (the
+overflow-safe run reader), `69562d5` (the finite best case), `a31d3a6`
+(the cancel drain), `6cf8cbd` (the shutdown delivery), `2c43939` (the dead
+branch), `7a669d6` (the tolerant history readers), `6f904d3` (the export
+status), `6fec8b1` (Tab), `5de7ed2` (the empty run) and this record
+(`182c520`, amended by the commit adding this paragraph). Twenty-three
+mutants, at least one per fix, all detected on the first run. Before
+anything was committed the eleven unit scripts and the three docs scripts
+were replayed on a fresh export of `68154f5`, which reproduced the working
+tree byte for byte.
