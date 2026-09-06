@@ -2429,13 +2429,21 @@ class _BenchmarkMixin:
 
     def _close_benchmark_results_window(self, key: tuple[str, str, str]) -> None:
         window = self._benchmark_result_windows.get(key)
-        if window is not None:
-            window.close()
+        if window is None:
+            return
+        # `QDialog.close()` runs `reject()` -- and so emits `finished` -- only
+        # while the window is visible. A pop-out hidden with the settings
+        # dialog closes silently, which left its key and the window in the
+        # registry for the life of the app. The entry is dropped here either
+        # way; for a visible window `finished` has already done it, and
+        # `_forget_benchmark_results_window` is a no-op the second time.
+        window.close()
+        self._forget_benchmark_results_window(key)
 
     def _close_all_benchmark_results_windows(self) -> None:
-        # Over a copy: closing emits `finished`, which removes the key.
-        for window in list(self._benchmark_result_windows.values()):
-            window.close()
+        # Over a copy: closing removes the key.
+        for key in list(self._benchmark_result_windows):
+            self._close_benchmark_results_window(key)
 
     def _export_current_benchmark_results(self) -> None:
         if self._current_benchmark_entry is None:

@@ -588,3 +588,55 @@ def test_minimising_the_settings_dialog_keeps_the_benchmark_windows(tmp_path):
     assert dialog.benchmark_window.isVisible() is False
     assert popout.isVisible() is False
     _ = app
+
+
+def test_deleting_an_entry_whose_window_is_hidden_drops_it_from_the_registry(
+    monkeypatch, tmp_path
+):
+    """`QDialog.close()` rejects -- and so emits `finished` -- only while visible.
+
+    A pop-out hidden with the settings dialog closed silently, so the key
+    and the window stayed in the registry for the life of the app.
+    """
+    entry = _stored_entry("hidden run")
+    dialog, app = _history_dialog(tmp_path, [entry])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *_a, **_k: QtWidgets.QMessageBox.Yes),
+    )
+    dialog.benchmark_history_list.setCurrentRow(0)
+    dialog._open_benchmark_results_window(entry)
+    app.processEvents()
+    dialog._hide_benchmark_window()
+    window = dialog._benchmark_result_windows[entry.identity_key()]
+    assert window.isVisible() is False
+
+    dialog._delete_selected_benchmark_history()
+    app.processEvents()
+
+    assert dialog._benchmark_result_windows == {}
+    _ = app
+
+
+def test_clearing_the_history_drops_hidden_windows_too(monkeypatch, tmp_path):
+    first = _stored_entry("first run")
+    second = _stored_entry("second run")
+    second.summary = "Benchmark summary:\nthe other run"
+    dialog, app = _history_dialog(tmp_path, [first, second])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *_a, **_k: QtWidgets.QMessageBox.Yes),
+    )
+    dialog._open_benchmark_results_window(first)
+    dialog._open_benchmark_results_window(second)
+    app.processEvents()
+    dialog._hide_benchmark_window()
+    assert len(dialog._benchmark_result_windows) == 2
+
+    dialog._clear_benchmark_history()
+    app.processEvents()
+
+    assert dialog._benchmark_result_windows == {}
+    _ = app
