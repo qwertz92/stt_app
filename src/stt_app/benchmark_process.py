@@ -32,6 +32,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from .benchmark_environment import text_or_empty
 from .benchmark_worker import BENCHMARK_EVENT_PREFIX
 from .local_benchmark import BenchmarkCancelled, BenchmarkCase, _case_from_dict
 
@@ -171,7 +172,7 @@ def _stream_benchmark_process(
             elif event == "canceled":
                 canceled = True
             elif event == "error":
-                error_message = str(item.get("message", "")) or "Benchmark failed."
+                error_message = text_or_empty(item.get("message")) or "Benchmark failed."
     finally:
         if stream_finished:
             try:
@@ -250,7 +251,7 @@ def _deliver_reported_cases(
             if case_callback is not None:
                 case_callback(case)
         elif event == "error" and error_message is None:
-            error_message = str(item.get("message", "")) or "Benchmark failed."
+            error_message = text_or_empty(item.get("message")) or "Benchmark failed."
 
 
 def _pump_events(stream, events: queue.Queue[Any]) -> None:

@@ -593,3 +593,33 @@ def test_a_case_event_without_a_case_is_skipped_not_fatal(monkeypatch, caplog):
 
     assert [case.model for case in cases] == ["small"]
     assert "benchmark_case_event_malformed" in caplog.text
+
+
+@pytest.mark.parametrize("canceled", [False, True])
+def test_an_error_event_without_a_message_reads_as_the_fallback(
+    monkeypatch, canceled
+):
+    """`str(None)` is the word None, a non-empty string, so the
+    `or "Benchmark failed."` behind it never fell through for a null
+    message: the user would have read a RuntimeError saying "None". Both
+    readers -- the main loop and the cancel drain -- had the same shape."""
+    error_line = benchmark_process.BENCHMARK_EVENT_PREFIX + json.dumps(
+        {"event": "error", "message": None}
+    )
+
+    def stdout_lines():
+        yield error_line + "\n"
+
+    monkeypatch.setattr(
+        benchmark_process,
+        "start_benchmark_process",
+        lambda _path: _fake_child(stdout_lines()),
+    )
+
+    with pytest.raises(RuntimeError, match=r"^Benchmark failed\.$"):
+        benchmark_process._stream_benchmark_process(
+            Path("unused-options.json"),
+            progress_callback=None,
+            case_callback=None,
+            cancel_check=lambda: canceled,
+        )
