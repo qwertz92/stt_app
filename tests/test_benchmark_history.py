@@ -857,3 +857,20 @@ def test_an_int_a_double_cannot_hold_exactly_is_exported_as_text(tmp_path):
     assert str(inexact) in sheet
     assert f"<v>{inexact}</v>" not in sheet
     assert f"<v>{exact}</v>" in sheet
+
+
+@pytest.mark.parametrize("cap", [math.nan, math.inf, None, True, "many"])
+def test_a_cap_that_is_not_a_number_keeps_the_file_whole(tmp_path, cap):
+    """`_normalize_limit` fell back to 1, and `add_entry` truncates the
+    stored file to the cap: a `max_items` of NaN, None or `True` (`int(True)`
+    is 1) deleted every run but the newest (measured: 5 -> 1). No caller
+    passes one today; the default cap keeps the file whole if one ever does,
+    and the same fallback keeps `recent_entries` from showing one row."""
+    store = BenchmarkHistoryStore(path=tmp_path / "benchmark_history.json")
+    for _ in range(5):
+        store.add_entry(_entry())
+
+    store.add_entry(_entry(), max_items=cap)
+
+    assert len(store.load()) == 6
+    assert len(store.recent_entries(cap)) == 6

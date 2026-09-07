@@ -677,10 +677,19 @@ def _text_items(value: Any) -> list[str]:
 
 
 def _normalize_limit(value: int) -> int:
+    """The cap as an int, or the default cap for anything that is not one.
+
+    The fallback used to be 1, and `add_entry` truncates the stored file to
+    the cap: a `max_items` of NaN, None or `True` (`int(True)` is 1) would
+    have deleted every run but the newest. No caller passes one today; the
+    default keeps the file whole if one ever does.
+    """
+    if isinstance(value, bool):
+        return MAX_BENCHMARK_HISTORY_ITEMS
     try:
         keep = int(value)
     except (TypeError, ValueError, OverflowError):
-        return 1
+        return MAX_BENCHMARK_HISTORY_ITEMS
     if keep < 0:
         return 0
     return keep
