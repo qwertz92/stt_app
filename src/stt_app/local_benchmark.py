@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .benchmark_environment import BenchmarkEnvironment
+from .benchmark_environment import BenchmarkEnvironment, text_or_empty
 from .config import (
     CANARY_MODEL_SIZE,
     LOCAL_MODEL_RUNTIME,
@@ -53,6 +53,11 @@ def _audio_duration_seconds(path: Path) -> float | None:
 
 
 def _safe_float(value: Any, default: float = math.nan) -> float:
+    # A boolean is refused like `safe_int` and `_coerce_run_field` refuse it:
+    # `float(True)` is 1.0, and a `download_seconds: true` read as a download
+    # of 1.00 s that nobody measured.
+    if isinstance(value, bool):
+        return default
     try:
         return float(value)
     except Exception:
@@ -173,16 +178,6 @@ _RUN_FIELD_EMPTY: dict[str, Any] = {"float": math.nan, "int": 0, "str": ""}
 # int past the double range raises OverflowError rather than answering inf,
 # which a 401-digit `seconds` in a hand-edited file turned into a crash.
 _INT_FIELD_LIMIT = 2**63 - 1
-
-
-def text_or_empty(value: Any) -> str:
-    """A text field is text or nothing.
-
-    `str()` of a JSON null is the word None and of a container its Python
-    repr, and both reached the History list's Recorded and Status cells and
-    the results table's Model column from a hand-edited file.
-    """
-    return value if isinstance(value, str) else ""
 
 
 def _coerce_run_field(annotation: object, value: Any) -> Any:

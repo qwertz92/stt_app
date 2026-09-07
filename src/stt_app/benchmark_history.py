@@ -12,9 +12,9 @@ from typing import Any
 from xml.sax.saxutils import escape
 
 from .app_paths import benchmark_history_path
-from .benchmark_environment import BenchmarkEnvironment, safe_int
+from .benchmark_environment import BenchmarkEnvironment, safe_int, text_or_empty
 from .csv_safety import export_safe_text, spreadsheet_safe_cell
-from .local_benchmark import BenchmarkCase, _case_from_dict, text_or_empty
+from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
     atomic_write_bytes,
     atomic_write_json,

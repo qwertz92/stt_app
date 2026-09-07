@@ -815,3 +815,22 @@ def test_a_negative_core_count_reads_as_unknown(tmp_path):
     environment = BenchmarkHistoryStore(path=path).recent_entries(1)[0].environment
 
     assert (environment.logical_cpus, environment.physical_cores) == (0, 0)
+
+
+def test_a_boolean_where_a_number_belongs_reads_as_the_default(tmp_path):
+    """`beam_size: true` read as a beam of 1 and `download_seconds: true` as a
+    download of 1.00 s: `int(True)` and `float(True)` are legal numbers, so
+    the boolean looked like a value somebody measured, while the run reader
+    already refused the same shape."""
+    payload = _one_entry_payload()
+    payload[0]["options"].update({"runs": True, "beam_size": True, "threads": False})
+    payload[0]["cases"][0].update({"download_seconds": True, "load_seconds": True})
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    entry = BenchmarkHistoryStore(path=path).recent_entries(1)[0]
+
+    options = entry.options
+    assert (options.runs, options.beam_size, options.threads) == (1, 5, 0)
+    assert entry.cases[0].download_seconds == 0.0
+    assert math.isnan(entry.cases[0].load_seconds)

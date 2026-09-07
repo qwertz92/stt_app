@@ -480,3 +480,35 @@ def test_hardware_facts_take_a_null_cpu_name_as_no_name():
 
     assert facts.cpu == ""
     assert facts.physical_cores == 6
+
+
+def test_a_null_or_container_in_an_environment_text_field_reads_as_empty_text():
+    """`str(raw.get(...))` rendered a null as the word None and a container as
+    its Python repr, and the Details overview and every export carried it."""
+    environment = BenchmarkEnvironment.from_dict(
+        {
+            "os": None,
+            "python": ["3.12"],
+            "cpu": {"name": "x"},
+            "cpu_clock": 4.7,
+            "gpus": [None, 1, True, "Arc A750", " "],
+            "frameworks": {None: None, "ct2": ["4.8"], "onnx": "1.24", "": "x"},
+            "node": False,
+        }
+    )
+
+    assert (environment.os, environment.python, environment.cpu) == ("", "", "")
+    assert (environment.cpu_clock, environment.node) == ("", "")
+    assert environment.gpus == ["Arc A750"]
+    assert environment.frameworks == {"onnx": "1.24"}
+
+
+def test_a_boolean_is_not_a_count():
+    """`int(True)` is 1, a legal count, so a `true` in the file read as a
+    measured value -- while the run reader refused the same shape."""
+    assert benchmark_environment.safe_int(True, default=0) == 0
+    assert benchmark_environment.safe_int(False, default=7) == 7
+    environment = BenchmarkEnvironment.from_dict(
+        {"logical_cpus": True, "physical_cores": True}
+    )
+    assert (environment.logical_cpus, environment.physical_cores) == (0, 0)

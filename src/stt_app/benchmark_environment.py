@@ -31,32 +31,35 @@ class BenchmarkEnvironment:
     def from_dict(cls, raw: dict[str, Any] | None) -> BenchmarkEnvironment:
         if not isinstance(raw, dict):
             return cls()
-        gpus = raw.get("gpus", [])
-        frameworks = raw.get("frameworks", {})
+        gpus = raw.get("gpus")
+        frameworks = raw.get("frameworks")
         return cls(
-            os=str(raw.get("os", "")),
-            python=str(raw.get("python", "")),
-            cpu=str(raw.get("cpu", "")),
+            os=text_or_empty(raw.get("os")),
+            python=text_or_empty(raw.get("python")),
+            cpu=text_or_empty(raw.get("cpu")),
             # Clamped at zero, the "unknown" the exports leave empty: a
             # negative count is not a count, and exported as -1 it read as
             # measured.
             logical_cpus=max(0, safe_int(raw.get("logical_cpus"), default=0)),
             physical_cores=max(0, safe_int(raw.get("physical_cores"), default=0)),
-            cpu_clock=str(raw.get("cpu_clock", "")),
-            cpu_cache=str(raw.get("cpu_cache", "")),
-            memory=str(raw.get("memory", "")),
-            memory_modules=str(raw.get("memory_modules", "")),
-            gpus=[str(item) for item in gpus if str(item).strip()]
+            cpu_clock=text_or_empty(raw.get("cpu_clock")),
+            cpu_cache=text_or_empty(raw.get("cpu_cache")),
+            memory=text_or_empty(raw.get("memory")),
+            memory_modules=text_or_empty(raw.get("memory_modules")),
+            gpus=[item for item in gpus if isinstance(item, str) and item.strip()]
             if isinstance(gpus, list)
             else [],
             frameworks={
-                str(key): str(value)
+                key: value
                 for key, value in frameworks.items()
-                if str(key).strip() and str(value).strip()
+                if isinstance(key, str)
+                and isinstance(value, str)
+                and key.strip()
+                and value.strip()
             }
             if isinstance(frameworks, dict)
             else {},
-            node=str(raw.get("node", "")),
+            node=text_or_empty(raw.get("node")),
         )
 
     def summary_details(self) -> dict[str, Any]:
@@ -647,12 +650,28 @@ def safe_int(value: Any, *, default: int) -> int:
 
     OverflowError as well: `1e400` is valid JSON syntax, `json.loads` answers
     `inf`, and `int(inf)` raises it -- past this function and past the
-    history loader's backstop, out of `SettingsDialog.__init__`.
+    history loader's backstop, out of `SettingsDialog.__init__`. A boolean
+    is refused too: `int(True)` is a legal count of 1, which made a `true`
+    in the file look like a number somebody measured, while the run reader
+    (`_coerce_run_field`) already refused the same shape.
     """
+    if isinstance(value, bool):
+        return default
     try:
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return default
+
+
+def text_or_empty(value: Any) -> str:
+    """A text field is text or nothing.
+
+    `str()` of a JSON null is the word None and of a container its Python
+    repr, and both reached the History list's Recorded and Status cells, the
+    results table's Model column and every environment line of the Details
+    overview and the exports from a hand-edited file.
+    """
+    return value if isinstance(value, str) else ""
 
 
 __all__ = [
