@@ -357,6 +357,17 @@ def benchmark_command(options_path: Path, env: dict[str, str]) -> list[str]:
 def _terminate_process_tree(process: subprocess.Popen[str] | None) -> None:
     if process is None or process.poll() is not None:
         return
+    _kill_process_tree(process)
+    if process.poll() is None:
+        # Every arm of the kill swallows its failure, so a child that
+        # outlives all of them -- a kill a policy refused, a process an EDR
+        # holds -- was invisible: the cancel reported a clean stop over a
+        # worker still running.
+        _LOGGER.warning("benchmark_worker_survived_termination pid=%s", process.pid)
+
+
+def _kill_process_tree(process: subprocess.Popen[str]) -> None:
+    """Every road to ending the child, each failure swallowed on the way."""
     if os.name == "nt":
         try:
             subprocess.run(

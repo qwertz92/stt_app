@@ -676,3 +676,29 @@ def test_the_first_error_the_child_reports_is_the_one_raised(
 
     assert "benchmark_error_event_after_the_first" in caplog.text
     assert "SECOND: model missing" in caplog.text
+
+
+def test_a_child_that_survives_the_kill_is_logged(monkeypatch, caplog):
+    """Every arm of `_terminate_process_tree` swallows its failure, so a
+    child that outlived all of them -- a kill a policy refused, a process an
+    EDR holds -- was invisible: the cancel reported a clean stop over a
+    worker still running (forced with a kill that ends nothing)."""
+    process = _FakeProcess([])
+
+    def _refused():
+        raise PermissionError("access denied")
+
+    process.terminate = _refused
+    process.kill = _refused
+    monkeypatch.setattr(
+        benchmark_process.subprocess,
+        "run",
+        lambda command, **kwargs: subprocess.CompletedProcess(command, 1),
+    )
+
+    with caplog.at_level("WARNING", logger="stt_app.benchmark_process"):
+        benchmark_process._terminate_process_tree(process)
+
+    assert process.poll() is None
+    assert "benchmark_worker_survived_termination" in caplog.text
+    assert "pid=1234" in caplog.text
