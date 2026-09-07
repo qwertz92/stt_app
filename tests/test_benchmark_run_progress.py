@@ -563,3 +563,50 @@ def test_a_run_that_measured_nothing_does_not_claim_a_save(tmp_path):
     )
     assert dialog._benchmark_history_store.recent_entries(20) == []
     _ = app
+
+
+def test_a_dropped_case_event_does_not_shift_the_done_marks(tmp_path):
+    """A case event the parent could not read is logged and skipped, and
+    the runner's own numbering moves on -- but the Done mark counted
+    deliveries, so the next result landed on the dropped case's row: Done
+    with another model's numbers, while the model that was measured read
+    Skipped at the end."""
+    models = ["tiny", "base", "small"]
+    dialog, app = _dialog(tmp_path, models)
+    dialog._current_benchmark_options = _options(models)
+    dialog._set_benchmark_plan_rows(
+        dialog._planned_benchmark_cases_from_widgets()
+    )
+    dialog._set_benchmark_progress(0, 3)
+    dialog._current_benchmark_cases = []
+    dialog._on_benchmark_progress("[Case 1/3] tiny (auto/int8)")
+    dialog._on_benchmark_case_finished(_case("tiny", "cpu"))
+    dialog._on_benchmark_progress("[Case 2/3] base (auto/int8)")
+    # base's case event was malformed: the parent logged it and moved on.
+    dialog._on_benchmark_progress("[Case 3/3] small (auto/int8)")
+    dialog._on_benchmark_case_finished(_case("small", "cpu"))
+
+    assert _statuses(dialog) == [
+        "Done (RTF 0.043)",
+        "Running...",
+        "Done (RTF 0.043)",
+    ]
+    assert dialog.benchmark_progress_bar.value() == 2
+
+    dialog._on_benchmark_finished(
+        True,
+        "Benchmark summary:\ncompleted",
+        {
+            "cases": [_case("tiny", "cpu"), _case("small", "cpu")],
+            "options": _options(models),
+            "status": "completed",
+        },
+    )
+    app.processEvents()
+
+    assert _statuses(dialog) == [
+        "Done (RTF 0.043)",
+        "Skipped",
+        "Done (RTF 0.043)",
+    ]
+    _ = app

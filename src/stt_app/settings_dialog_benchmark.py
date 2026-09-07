@@ -1572,6 +1572,7 @@ class _BenchmarkMixin:
     ) -> None:
         """The single writer of the case list's rows and its caption."""
         self._benchmark_plan_sequence = _benchmark_plan_sequence(planned)
+        self._benchmark_plan_running_index = None
         table = self.benchmark_plan_table
         table.setRowCount(len(planned))
         for row, planned_case in enumerate(planned):
@@ -1604,17 +1605,27 @@ class _BenchmarkMixin:
         item.setText(status)
         item.setToolTip(status)
 
-    def _skip_unfinished_benchmark_plan_cases(self, finished: int) -> None:
-        """Mark every case past the last finished one as skipped.
+    def _skip_unfinished_benchmark_plan_cases(self) -> None:
+        """Mark every case that never delivered a result as skipped.
 
-        Not only the ones still reading `Pending`: the case that was running
-        when a cancel or a failure landed never delivered a result either, and
-        leaving it at `Running...` would claim work that stopped.
+        Every row still reading `Pending` or `Running...`: the case that was
+        running when a cancel or a failure landed delivered no result either,
+        and a row whose case event the parent could not read stayed at
+        `Running...` while the runner moved on. Counting rows past the last
+        delivered case instead marked the model measured after such a row
+        Skipped.
         """
-        for index in range(
-            int(finished) + 1, self.benchmark_plan_table.rowCount() + 1
-        ):
-            self._mark_benchmark_plan_case(index, _BENCHMARK_PLAN_STATUS_SKIPPED)
+        table = self.benchmark_plan_table
+        for row in range(table.rowCount()):
+            item = table.item(row, _BENCHMARK_PLAN_STATUS_COLUMN)
+            status = item.text() if item is not None else ""
+            if status in (
+                _BENCHMARK_PLAN_STATUS_PENDING,
+                _BENCHMARK_PLAN_STATUS_RUNNING,
+            ):
+                self._mark_benchmark_plan_case(
+                    row + 1, _BENCHMARK_PLAN_STATUS_SKIPPED
+                )
 
     def _pin_benchmark_header_row_height(self) -> None:
         """Match the status label and the bar to the button as it renders.
@@ -2191,6 +2202,7 @@ class _BenchmarkMixin:
         self._set_benchmark_status(text, "#555")
         case_index = _benchmark_progress_case_index(text)
         if case_index is not None:
+            self._benchmark_plan_running_index = case_index
             self._mark_benchmark_plan_case(
                 case_index, _BENCHMARK_PLAN_STATUS_RUNNING
             )
@@ -2199,11 +2211,14 @@ class _BenchmarkMixin:
         if not isinstance(payload, BenchmarkCase):
             return
         self._current_benchmark_cases.append(payload)
-        # The runner delivers cases in plan order, so the nth finished case is
-        # the nth planned row.
         finished = len(self._current_benchmark_cases)
+        # The row is the case the runner announced last, not the nth
+        # delivered: a case event the parent could not read is logged and
+        # skipped, and counting deliveries then put the next result on the
+        # dropped case's row -- Done with another model's numbers, while the
+        # model that was measured read Skipped at the end.
         self._mark_benchmark_plan_case(
-            finished,
+            self._benchmark_plan_running_index or finished,
             _BENCHMARK_PLAN_STATUS_ERROR
             if payload.error
             else f"Done (RTF {_format_number(payload.avg_rtf)})",
@@ -2256,8 +2271,7 @@ class _BenchmarkMixin:
         self._current_benchmark_cases = cases
         self._current_benchmark_options = options
         self._set_benchmark_progress(0, 0)
-        if status in {"canceled", "failed"}:
-            self._skip_unfinished_benchmark_plan_cases(len(cases))
+        self._skip_unfinished_benchmark_plan_cases()
         history_error = ""
 
         if cases and options is not None:

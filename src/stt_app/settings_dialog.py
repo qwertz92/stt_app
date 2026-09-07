@@ -251,6 +251,9 @@ class SettingsDialog(
         # The plan the case list shows, as `_benchmark_plan_sequence` reads
         # it; None until the list has been drawn once.
         self._benchmark_plan_sequence: tuple[tuple[str, str, str], ...] | None = None
+        # The case the runner announced last (its `[Case i/N]` line): the
+        # row a finished case is marked on.
+        self._benchmark_plan_running_index: int | None = None
         self._remote_model_values: dict[str, str] = {
             "groq": self._loaded_settings.groq_model,
             "openai": self._loaded_settings.openai_model,
