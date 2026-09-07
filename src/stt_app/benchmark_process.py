@@ -10,10 +10,12 @@ dialog code and its test seam unchanged: the facade re-exports this
 ``run_benchmark_cases`` under the same name the tests patch.
 
 Cancellation terminates the child process tree and then reads its output to
-the end, so every case the child had written is streamed to the caller and
-preserved; a ``BenchmarkCancelled`` is raised to match the pure function's
-contract, unless the child had already reported an error, which is raised
-instead.
+the end, bounded by ``_CANCEL_DRAIN_SECONDS``, so every case the child had
+written before the kill ended it is streamed to the caller and preserved; a
+child that survives every arm of the kill is logged, and what it writes
+after the bound is lost. A ``BenchmarkCancelled`` is raised to match the
+pure function's contract, unless the child had already reported an error,
+which is raised instead.
 """
 from __future__ import annotations
 

@@ -895,6 +895,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     Ctrl+click on the selected row of the SingleSelection history table
     deselects it and leaves it current, so Open in Window and Delete
     Selected stayed enabled for a row nothing showed as selected.
+  - **A delete or clear that finds nothing refreshes the list.** The store
+    re-reads the file for either action, and a file another program damaged
+    while Settings was open is quarantined on that read -- so the store was
+    empty while the table kept its rows for the rest of the session, under
+    a line saying only that the entry was not found (measured by the
+    wave-10 reach lens). Both early returns refresh the list and the action
+    row first.
 - **A minimise of the settings dialog is not a dismissal.** Qt sends a
   hideEvent for it too (`QWidget::event` on the WindowStateChange), and the
   dialog's hideEvent hid the Run Benchmark window and every pop-out there
@@ -935,7 +942,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `benchmark_case_event_malformed`): `item.get("case") or {}` handed a
   number to the parser, which died on `.get` and took every case the child
   reported after it with it. The case a child finishes *after* the kill is
-  gone by design; that is what the cancel is for.
+  gone by design; that is what the cancel is for. Two more of its readers:
+  **an error event without a message reads as the fallback text** --
+  `str(None)` is the word None, a non-empty string, so the `or "Benchmark
+  failed."` behind it never fell through, in the main loop and in the
+  drain alike (`text_or_empty` at both). And **the drain reads what is
+  already queued before it looks at the clock**: with the deadline checked
+  first, a deadline already past discarded a case and the EOF sitting in
+  the queue, which cost nothing to read; unreachable through the real call
+  site, where the deadline is set the statement before, and closed because
+  the function's contract is every case the child reported.
+  **The first error the child reports is the one raised, on both roads**:
+  the main loop kept the last error event and the drain the first, so the
+  message for one input depended on whether a cancel had landed before the
+  second event, and neither logged the one it dropped
+  (`_error_message_to_keep`, `benchmark_error_event_after_the_first`). The
+  worker emits one error event and exits, so two is not a shape it
+  produces; closed because two branches of one function disagreed. And **a
+  child that survives every arm of the kill is logged**
+  (`benchmark_worker_survived_termination`): each arm of
+  `_terminate_process_tree` swallows its failure, so a kill a policy refused
+  reported a clean cancel over a worker still running. The reader threads
+  are daemon threads and end with the pipe; what the child computes after
+  that is gone by design.
 - **The settings dialog's minimum width is pinned to the widest tab it has
   shown -- measured on the tab widget alone, and never past the screen.**
   The explicit 520 px minimum predates the Benchmark tab's third History
@@ -1005,11 +1034,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   is no name, and the caller falls back to `platform.processor()`); and
   `_benchmark_created_label` catches the `OSError` that `astimezone`
   raises for every stamp the C library's `localtime` refuses -- on this
-  Windows machine everything before 1970 and past 3001, about eight
-  thousand of the ten thousand representable years, not "the ends of the
-  range" as this entry said for one round -- and the `OverflowError`
-  CPython raises when the epoch seconds do not fit `time_t`; the split is
-  `time_t` width, not the operating system. Four more
+  Windows machine everything before 1970 and from 19 January 3001 on
+  (epoch second 32,536,800,000), about nine thousand of the ten thousand
+  representable years (measured: 8968 of 9999 refused at a mid-year
+  instant), not "the ends of the range" as this entry said for one round
+  and not "past 3001, about eight thousand" as it said for another -- and
+  the `OverflowError` CPython raises when the epoch seconds do not fit
+  `time_t`; the split is `time_t` width, not the operating system, and
+  with a 64-bit `time_t` every representable datetime fits, so that arm
+  is unreachable on this build. Four more
   shapes the first version let through, each one line of JSON: **`float()`
   of an int past the double range raises `OverflowError`** rather than
   answering inf, so a 401-digit `seconds` escaped the reader again -- the
@@ -1025,6 +1058,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   cannot hold in as text** (`_fits_a_numeric_cell`): `math.isfinite` itself
   raises `OverflowError` for such an int, and a hand-edited core count of
   that size died the export (the atomic writer had kept the previous file).
+  An int past 2**53 goes in as text as well: a `<v>` is a double, which
+  keeps only every second integer past that, so a spreadsheet read
+  9007199254740993 from a number cell as ...992.
   And **the fastest case and the best real-time factor are taken over
   measured cases only** (`_best_case`, and the history list's Best RTF
   column): `min` over a NaN keeps whichever case comes first, so a stored
@@ -1050,11 +1086,31 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   renders a `null` as the word None and a container as its Python repr, in
   the History list's Recorded and Status cells and the results table's
   Model column; `text_or_empty` is the one rule for all of them, the run
-  reader's `str` branch included.
+  reader's `str` branch included. **The environment's own text fields were
+  a fourth reader** of the same shape (`os`, `python`, `cpu`, the clock,
+  cache, memory and Node strings, the GPU list and the framework map),
+  rendering a null as None and a list as its repr in the Details overview
+  and every export; they read through `text_or_empty` too, which lives
+  beside `safe_int` in `benchmark_environment` -- the leaf module, so
+  `local_benchmark` and `benchmark_history` import it without a cycle.
+  **And a boolean is not a number in any of the three numeric readers**:
+  `int(True)` is 1 and `float(True)` 1.0, so `beam_size: true` read as a
+  beam of 1, `logical_cpus: true` as one core and `download_seconds: true`
+  as a download of 1.00 s that nobody measured, while `_coerce_run_field`
+  refused the same shape in a run's fields; `safe_int` and `_safe_float`
+  refuse it now. **A history cap that is not a number keeps the default
+  cap**: `_normalize_limit` fell back to 1, and `add_entry` truncates the
+  stored file to the cap, so a `max_items` of NaN, None or `True` would
+  have deleted every run but the newest (measured: 5 -> 1); no caller
+  passes one today, closed because the fallback was the destructive value.
 - **A failed export says so on the status line.** The `except` arm showed
   the warning box and returned, so after dismissing "Export failed" the
   Benchmark tab still read "Benchmark exported to ..." naming the previous
-  export's file.
+  export's file. While a benchmark runs (a pop-out's Export stays enabled),
+  the run's next progress line replaces it within a poll interval
+  (measured: 63 ms), and the warning box -- its text selectable, as every
+  message box's is -- is the failure's report there; the status line is
+  the run's while one runs.
 - **The benchmark tables do not take Tab.** `tabKeyNavigation` cycles a
   table's cells forever, so a keyboard user who had selected a History row
   with the arrows could not reach the five buttons that selection enables
@@ -1086,9 +1142,17 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     then would wipe the Running/Done states on screen. The refresh-from-widgets
     path returns early while `_active_benchmark_thread` is set, and is called
     from the list rebuild because that rebuild blocks the list's signals.
-  - **After a cancel or a failure every case past the last finished one reads
-    `Skipped`**, the one that was `Running...` included: it delivered no result
-    either, and leaving it as running would claim work that had stopped.
+  - **At the end of every run each row that never delivered a result reads
+    `Skipped`**, the one that was `Running...` when a cancel or a failure
+    landed included: it delivered no result either, and leaving it as running
+    would claim work that had stopped. And **a finished case is marked on the
+    row the runner announced** (its `[Case i/N]` line, kept in
+    `_benchmark_plan_running_index`), not on the nth delivered row: a case
+    event the parent cannot read is logged and skipped while the runner's
+    numbering moves on, so counting deliveries put the next result on the
+    dropped case's row -- Done with another model's numbers -- and the skip
+    pass, counting rows past the delivered cases, marked the model that was
+    measured Skipped.
   - **The tab's progress bar keeps its space while hidden**
     (`setRetainSizeWhenHidden(True)`, fixed width and a height taken from the
     header button like the status label's), so the status label beside it
@@ -1124,6 +1188,19 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   cancelled by quitting saved nothing (measured: 0 history entries) while
   the dialog still believed it active. What the join did not see -- a
   worker still running after its 2.5 s -- is still not saved.
+  **And that delivery starts nothing and shows nothing.** `sendPostedEvents`
+  hands over every slot posted to the dialog, not the benchmark's alone. A
+  finished download's slot refreshes the inventory, and the scan that asked
+  for started a worker thread and a child process from `aboutToQuit`, with
+  nothing left to join either (measured: the scan subprocess launched after
+  `shutdown()` had returned); and the update check's slot -- its thread is
+  not one the join covers -- ends in a modal `QMessageBox.exec()`, which held
+  `aboutToQuit` until the box was closed (measured: 0.42 s with a timer
+  closing it; for a user, the quit waits on a dialog about updates).
+  `_request_local_model_scan` refuses after `_shutdown_started`, as
+  `_start_local_model_download` already did, and `_on_update_check_finished`
+  shows no dialog then. Both roads were opened by the delivery itself
+  (`6cf8cbd`, wave 9).
 - **General/Audio-tab field hints have explicit visual ownership**: a control
   and its descriptive hint use `_field_with_hint` with a 2 px internal gap;
   these forms use a 10 px row gap before the next setting. Changing model/language
@@ -1326,7 +1403,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   takes the button row's leftover space with a stretch factor of 1 -- with
   the `addStretch(1)` it replaced still in the row, an `Ignored` width
   policy gets nothing and the text vanishes -- right-aligned so a short
-  message still ends beside Save.
+  message still ends beside Save. **And it is one line whatever the text
+  holds**: `ElidingLabel` elides the single-line form of its text
+  (whitespace runs folded to one space), because a failed save's exception
+  message can span several lines, and shown as such the label grew taller
+  than the 34 px Save and Close buttons and moved both up -- 7 px at three
+  lines and 8 px more per line after (measured on the shown dialog).
+  `text()` and the tooltip keep the message as written. **And copying it
+  yields the message as written**: `QLabel` copies from its own text
+  control, which holds the elided text, so Ctrl+C on a failed save's
+  message gave its first 37 characters and an ellipsis (measured) while the
+  tooltip holding the rest cannot be copied. `ElidingLabel` handles Ctrl+C
+  and its own context menu's Copy through `copy_message`: the whole painted
+  text, or no selection, copies the message as written, and a part of it
+  copies as selected.
 - **A widget that appears mid-interaction keeps its space while hidden.**
   The Local tab's download progress bar appears the instant a download starts,
   and without `retainSizeWhenHidden` its 28 px left the layout: pressing
@@ -4142,6 +4232,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Any future process-global state that a controller's `shutdown()` sets needs
   the same treatment, and the full suite is the only run that can show the
   leak: per-file runs were green while the suite had 26 failures.
+- A fourth, `_no_benchmark_worker_outlives_its_test`, fails a test that
+  leaves the dialog's benchmark worker thread (`stt_app_local_benchmark`)
+  running, after waiting for it so the next test starts clean. The worker
+  collects the environment first -- 2-4 s of PowerShell -- and only then
+  calls the facade's `run_benchmark_cases`: whichever fake the test running
+  by then has installed, or the real process launcher when none is. A
+  Canary-refusal test stubbed the options builder with a recorder and let
+  the run start on a real thread; measured once in a run of 415 tests, that
+  worker fed a later file's fake three extra entries, and in every other
+  run it launched a real benchmark worker child through the facade. The
+  test patches an immediate thread, the facade function and the
+  environment query now, as the other run-starting tests do.
 - **Read the suite's count before anything that publishes.** A shell chain
   that commits and pushes after a background suite has *started* publishes
   before the result exists; on 2026-09-04 four green per-file runs and one
@@ -4383,4 +4485,6 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_CANCEL_DRAIN_SECONDS`.** A grandchild that inherited the pipe and
   outlives the kill of the process tree keeps it open, and the drain then
   returns on its bound with whatever had arrived. `taskkill /T` reaches
-  the tree the worker spawned; recorded.
+  the tree the worker spawned; recorded. A child that survives every arm
+  of the kill itself is logged (`benchmark_worker_survived_termination`)
+  and left running; recorded.

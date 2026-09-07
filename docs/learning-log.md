@@ -6639,3 +6639,225 @@ mutants, at least one per fix, all detected on the first run. Before
 anything was committed the eleven unit scripts and the three docs scripts
 were replayed on a fresh export of `68154f5`, which reproduced the working
 tree byte for byte.
+
+
+### Wave 10 (2026-09-07) - the ninth wave, on the wave-9 fixes
+
+**Range.** `68154f5..45f78a1`: the eleven wave-9 fixes (the pin, the
+eliding status line, the run reader, the finite best case, the cancel
+drain, the shutdown delivery, the dead branch, the tolerant history
+readers, the export status, Tab, the empty run) and the two docs commits.
+Five breakers, one per lens, started as Opus 5 -- and all five died at the
+usage limit after writing their probes (concurrency had run three of
+them). They were relaunched as Sonnet 5 in two batches (boundaries,
+concurrency, facts; then reach and layout), each starting from its
+predecessor's on-disk scripts, told that nothing the predecessor concluded
+exists and to read every inherited probe critically before running it.
+The smaller model for the breakers is a deliberate trade: the lead
+reproduces every finding with the breaker's own probe before a fix, so a
+breaker's job is to find and demonstrate, and five Opus agents in parallel
+are what exhausted the limit twice. The first batch came back with seven,
+six and two findings; one inherited probe (concurrency's `p5`) was refuted
+by its successor, whose "failing" export had started succeeding on the
+second run because `atomic_write_bytes` creates missing parents.
+
+**The wave-9 fixes broke two things, and the loop caught both.** (1) The
+shutdown delivery (`6cf8cbd`): `sendPostedEvents(self)` hands over every
+slot posted to the dialog, not the benchmark's alone. A finished
+download's slot refreshes the inventory, and the scan that asked for
+started a worker thread and a child process from `aboutToQuit` with
+nothing left to join either (`p1`: the scan subprocess launched 0.000 s
+after `shutdown()` had returned, on a thread `shutdown()` never joins);
+and the update check's slot -- its thread is not one the join covers --
+ends in a modal `QMessageBox.exec()`, which held `aboutToQuit` until the
+box was closed (`p2`: 0.42 s inside `shutdown()` with a timer closing it;
+for a user, the quit waits on a dialog about updates). Fixed by
+`_request_local_model_scan` refusing after `_shutdown_started`, as
+`_start_local_model_download` already did, and `_on_update_check_finished`
+showing no dialog then; two tests post each slot from a worker thread and
+call `shutdown()`. (2) The cancel drain's tolerance for a malformed case
+event (`a31d3a6`): the parent logs and skips it while the runner's own
+`[Case i/N]` numbering moves on, and the case list marked the nth
+delivered case on the nth row -- so the next result landed on the dropped
+case's row, Done with another model's numbers, and the skip pass, counting
+rows past the delivered cases, marked the model that was measured Skipped
+(`p9`, on the real dialog with real queued signals: `base` never measured
+and reading Done, `small` measured third and reading Skipped). Fixed by
+marking a finished case on the row the runner announced
+(`_benchmark_plan_running_index`) and by the skip pass reading each row's
+status instead of counting. The probe's control run showed the ordering
+itself holds: the defect was indexing, not delivery order.
+
+**Confirmed and fixed besides.** Boundaries, seven findings, six units:
+the `ElidingLabel` showed a multi-line message on as many lines, and the
+Save and Close buttons beside it moved up 7 px at three lines and 8 px per
+line after (the row has no stretch factor and a 16 px line against 34 px
+buttons) -- it elides the single-line form now, with the message as
+written in `text()` and the tooltip; `BenchmarkEnvironment.from_dict`
+`str()`-ed its text fields, so a null read as the word None and a list as
+its repr in the Details overview and every export -- they read through
+`text_or_empty`, which moved beside `safe_int` into `benchmark_environment`
+(the leaf module; the reverse import would cycle); `safe_int(True)` was 1
+and `_safe_float(True)` 1.0 while `_coerce_run_field` refused a bool, so
+`beam_size: true` read as a beam of 1 and `download_seconds: true` as
+1.00 s -- both refuse a bool now; a worker error event with a null message
+read "None" at both sites, because `str(None)` is a non-empty string the
+`or "Benchmark failed."` behind it never saw; `_fits_a_numeric_cell` put
+an int between 2**53 and 2**63 into a number cell, which a double reads as
+its neighbour (9007199254740993 -> ...992) -- text past 2**53; and
+`_normalize_limit` fell back to 1, so a `max_items` of NaN, None or
+`True` would have truncated the stored history to one run (measured: 5 ->
+1; no caller passes one, closed because the fallback was the destructive
+value). Concurrency, two more: two error events resolved to the first in
+the drain and the last in the main loop, with neither logging the one it
+dropped (`p8`, both roads on the real entry point) -- the first wins on
+both now and a later one is logged; and a child that survives every arm of
+the kill was invisible, each arm swallowing its failure (`p7`, a kill
+stubbed to end nothing: the child, both reader threads and its late case
+outlived the call) -- logged as `benchmark_worker_survived_termination`,
+with the child's survival itself recorded under Known limitations.
+
+**Refuted or recorded rather than changed.** Concurrency's `p6`: an export
+from a pop-out that fails while a benchmark runs shows "Export failed" on
+the tab's status line for 63 ms before the run's next progress line
+replaces it. The warning box is the failure's report there -- its text is
+selectable, as every message box's is -- and the status line belongs to
+the run while one runs; the entry says so now, and nothing changed.
+Boundaries' seventh finding, the drain checking its deadline before
+reading what was already queued, is unreachable through the real call
+site (the deadline is set the statement before) and was closed anyway,
+because the function's contract is every case the child reported. Held
+up under the concurrency lens: `shutdown()` twice (a 0.000 s no-op), from
+a worker thread (no crash observed; formally undefined, not proven safe),
+25 threads writing one history file through 25 store instances with a
+reader polling throughout (25 of 25 recovered, no torn read), a primary
+truncated mid-object (recovered from the backup, which was not
+quarantined), and 210 tab switches without an event-loop pass (427 pending
+0 ms pins, every one fired, the minimum width converging to 611 px with no
+timer left behind).
+
+**The facts lens.** Confirmed by measurement: the 581 = 555 + 6 + 20
+arithmetic and every tab answering 611 once the Benchmark page has been
+painted; the bare tab widget's 706; the two stale caches, this time cited
+against Qt 6.11.1's own source (`QWidgetItemV2::updateCacheIfNecessary` in
+`qlayoutitem.cpp`, the visibility gate in
+`QWidgetPrivate::updateGeometry_helper` that applies only to a parent
+without a layout of its own -- the splitter's case, since `qsplitter.cpp`
+installs none -- and `QSplitter::refresh` ->
+`recalc(true)` -> `updateGeometry()`); the font sweep 720 / 813 / 917 /
+1025; `@(1) | ConvertTo-Json` printing `1` on 5.1 and 7.6.5 with the
+hashtable property keeping the array; every one of the ten test-bearing
+fix commits' added tests failing on its parent (the parent extracted with
+`git archive`, the test file overlaid and verified with `git hash-object`;
+`2c43939` adds no test because it removes a branch nothing can reach); and
+the twenty-three wave-9 mutants replayed on an extracted HEAD tree with a
+passing baseline before each, all detected. Refuted: "about eight thousand
+of the ten thousand representable years" -- 8968 of 9999 are refused at a
+mid-year instant, which is nine thousand, and the boundary is not "past
+3001" but 19 January 3001 08:00 UTC (epoch second 32,536,800,000: the
+second before is accepted, that one refused), so February to December 3001
+are refused too; the lead re-measured both before correcting the entry.
+Three provenance gaps, recorded here rather than in the entries: the
+byte-for-byte replay of the wave-9 scripts on a fresh export holds through
+`182c520` and diverges at `45f78a1`, whose commit-list paragraph was added
+by hand and never mirrored into the saved text file -- this record is
+generated from files on disk in every part, the commit-list paragraph
+included; three of the eleven environment-query timings exist only in the
+wave-9 facts report and not on disk (eight recovered, 1.76-3.88 s, the
+stated range and median consistent with them but not recomputable); and
+the "26 Tab presses" count was not pinned independently (the trap itself
+was: with a row current, thirty presses stayed inside the table). And a
+scratch-only slip: the lead's claims file said wave 9 added five
+Known-limitations bullets where it added four and rewrote one; the commit
+message's "recorded ... under Known limitations" holds.
+
+**The lead's own imprecision.** The claims file described the eliding
+label's fix as "the label's `minimumSizeHint().width()` does not change";
+the test and the entry measure the dialog's hint, which is what the pin
+reads. Scratch only; nothing in the repository said it.
+
+**The layout lens.** Nothing moved. The Save/Close row is identical across
+single-line messages of 0, 1, 20, 100 and 430 characters at the minimum
+width and at 900 px, and the three literal captions ("Settings saved",
+"API keys saved", "No settings changes") render whole at both; the width
+pin against the parent, same script on both trees: `68154f5` grows to
+3553 px on a 460-character status, resizes the window with it and keeps
+the minimum after the message clears, HEAD stays at 611; a sweep of 3734
+geometry, visibility, text and minimum-size facts across all seven tabs,
+the Run Benchmark window and a pop-out differs from `68154f5` in one key,
+the status label itself (a near-empty plain label pushed right by the
+stretch against the eliding label taking the leftover space), which is
+exactly what A2 changed; the results table with a 401-digit run and a
+401-character model name across eight columns and three sort states each:
+0 moves in 24 operations; and every one of the five benchmark tables
+hands Tab on with an empty geometry diff, the fifth (`overview_table`)
+covered by a probe the inherited set lacked. Two refutations of wording,
+neither a code change: the claims file's "the label's
+`minimumSizeHint().width()` does not change" -- measured 6 -> 198 px,
+plateauing at the label's own width minus its margins -- while the layout
+ignores that value through the `Ignored` policy, which is the guarantee
+the entry states; and a message with embedded newlines moving the row
+(five lines: Save at y=1123 instead of 1146, identical on the parent) --
+boundaries' first finding, closed by unit 1, which also turns the
+Benchmark tab's three-line stderr tail, clipped at the label's pinned
+34 px, into one elided line with the whole text in the tooltip.
+
+**The reach lens.** Confirmed on the real widgets: Tab leaving every one
+of the five benchmark tables in the tab, in the Run Benchmark window with
+Run Options collapsed and expanded (11- and 18-widget cycles reaching the
+Run button and never the disabled Cancel) and in a pop-out; the export
+status through a genuine refusal fired from a pop-out's Export (a
+read-only destination -- the inherited probe's "failing" export had been
+succeeding, because `atomic_write_bytes` creates missing parents) and the
+recovery after it; the history readers through six hostile files opened
+from the tray's prepared-hidden state, shown, loaded, opened in a window
+and then damaged on disk while open, with the exact fallback numbers
+(0 / 0 / 1 / 5 / 0) read at the store and in the Overview table and no
+type-hostile file quarantined; the empty run through the real button,
+thread and queued signal ("Benchmark finished with no cases. Nothing was
+saved.", the warning colour, no file written); and the width pin on this
+machine's two monitors and at the four simulated text sizes (720 / 813 /
+917 / 1025, the documented numbers exactly), `_available_dialog_size()`
+re-resolving after a move to the second screen. Two findings, both closed
+here: copying the elided status line -- the failed save's message, the one
+text worth pasting into a bug report -- gave its first 37 characters and
+an ellipsis, while the tooltip holding the rest cannot be copied (`QLabel`
+copies from its own text control); `ElidingLabel` now handles Ctrl+C and
+its own context menu's Copy through `copy_message`, which puts the message
+as written on the clipboard and a partial selection as selected. And a
+delete or a clear that found nothing in the store returned before the
+list refresh: the store re-reads the file for either, a file damaged on
+disk while Settings is open is quarantined on that read, and the table
+kept its rows for the rest of the session under "Selected benchmark entry
+was not found." -- both early returns refresh the list now. The lens
+caught a defect in an inherited probe itself: `setSelection` past the
+text's end clears the selection, so "Ctrl+C copies nothing" was the
+probe's doing. Recorded, not changed: after an empty run the Overview
+reads "Status: Completed" beside "Nothing was saved"; and logical focus
+can sit on a hidden Details page's table after an explicit `setFocus`,
+which no sequence of ordinary actions produces (hypothesis). The plan row
+of an empty run staying Pending is closed by unit 10's end-of-run pass
+(it reads Skipped), and its escalation of the multi-line message -- 199
+newlines moving Save by 255 px while the dialog's outer height stays at
+1190 -- is boundaries' first finding, closed by unit 1.
+
+**The lead's own verification run found a fourth thing.** The nine touched
+test files run together (415 tests) failed once in
+`test_starting_a_run_arms_the_case_list_and_the_progress_bar`: its `seen`
+list held six entries, the first three recorded with the plan still
+Pending. The producer was a test two files earlier:
+`test_benchmarking_canary_with_auto_language_is_refused_before_the_run`
+stubs the options builder with a recorder and lets the run start on a real
+thread, and the dialog's worker collects the environment first -- 2-4 s of
+PowerShell -- and only then calls the facade's `run_benchmark_cases`, i.e.
+whichever fake the test running by then has installed, or the real process
+launcher when none is. So every full-suite run so far launched a real
+benchmark worker child through the facade from that test, and this once
+the timing landed on a later file's fake instead. Not reproducible on
+demand (the pair of files ran green three times, on the tree and on
+`45f78a1`), which is what the timing says. Closed by a conftest fixture
+that waits for a leaked `stt_app_local_benchmark` thread and fails the
+test that left it, and by the Canary test patching an immediate thread,
+the facade function and the environment query as the other run-starting
+tests do; the detector's before/after is the proof, since the fix is in a
+test.
