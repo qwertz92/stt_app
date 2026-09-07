@@ -60,7 +60,9 @@ class ElidingLabel(QtWidgets.QLabel):
 
     `text()` keeps returning the full string, so callers and tests read what was
     set rather than what happened to fit, and the whole message stays readable
-    in the tooltip.
+    in the tooltip. Copying goes through `copy_message`, which puts the
+    message as written on the clipboard: `QLabel` copies from its own text
+    control, which holds the elided text.
     """
 
     def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
@@ -79,6 +81,48 @@ class ElidingLabel(QtWidgets.QLabel):
 
     def text(self) -> str:
         return self._full_text
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event.matches(QtGui.QKeySequence.Copy):
+            self.copy_message()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def contextMenuEvent(self, event: QtGui.QContextMenuEvent) -> None:
+        menu = self._context_menu()
+        menu.exec(event.globalPos())
+        menu.deleteLater()
+
+    def _context_menu(self) -> QtWidgets.QMenu:
+        """`QLabel`'s own menu copies through its text control, which holds
+        the elided text; this one copies through `copy_message`."""
+        menu = QtWidgets.QMenu(self)
+        copy_action = menu.addAction("Copy")
+        copy_action.setEnabled(bool(self._full_text))
+        copy_action.triggered.connect(self.copy_message)
+        select_all = menu.addAction("Select All")
+        select_all.setEnabled(bool(self._full_text))
+        select_all.triggered.connect(self._select_all)
+        return menu
+
+    def _select_all(self) -> None:
+        self.setSelection(0, len(QtWidgets.QLabel.text(self)))
+
+    def copy_message(self) -> None:
+        """Put the selected part, or the whole message, on the clipboard.
+
+        `QLabel` copies from its own text control, which holds the elided
+        text: a failed save's message, the one text worth pasting into a bug
+        report, came back as its first 37 characters and an ellipsis, and
+        the tooltip that holds the rest cannot be copied. A part of the
+        painted text copies as selected; the whole of it, or no selection,
+        copies the message as written.
+        """
+        selected = self.selectedText()
+        painted = QtWidgets.QLabel.text(self)
+        text = selected if selected and selected != painted else self._full_text
+        QtGui.QGuiApplication.clipboard().setText(text)
 
     def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
         super().resizeEvent(event)

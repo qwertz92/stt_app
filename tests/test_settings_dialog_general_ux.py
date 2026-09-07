@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import pytest
-from PySide6 import QtCore, QtTest, QtWidgets
+from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from stt_app.config import (
     DEFAULT_RECORDINGS_MAX_COUNT,
     RECORDINGS_MAX_COUNT_CEILING,
     RECORDINGS_MAX_COUNT_UNLIMITED,
 )
+from stt_app.dialog_style import make_label_selectable
 from stt_app.settings_dialog import SettingsDialog
+from stt_app.settings_dialog_helpers import ElidingLabel
 from stt_app.settings_store import AppSettings, SettingsStore
 
 
@@ -713,3 +715,45 @@ def test_a_long_bottom_status_is_elided_and_widens_nothing(
     assert QtWidgets.QLabel.text(label) == "Settings saved"
     dialog._set_bottom_status("")
     dialog.hide()
+
+
+def test_copying_an_elided_status_yields_the_message_as_written(monkeypatch):
+    """`QLabel` copies from its own text control, which holds the elided
+    text: a failed save's message -- the one text worth pasting into a bug
+    report -- came back as its first 37 characters and an ellipsis
+    (measured), and the tooltip that holds the rest cannot be copied."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    copied: list[str] = []
+
+    class _Clipboard:
+        def setText(self, text: str) -> None:
+            copied.append(text)
+
+    monkeypatch.setattr(QtGui.QGuiApplication, "clipboard", lambda: _Clipboard())
+    label = ElidingLabel()
+    make_label_selectable(label)
+    label.resize(200, 20)
+    message = "Failed to save settings: " + "a very long failure reason " * 16
+    label.setText(message)
+    shown = QtWidgets.QLabel.text(label)
+    assert shown != message
+    assert shown.endswith("\u2026")
+
+    # Ctrl+C with nothing selected, and with the whole painted text selected.
+    QtTest.QTest.keyClick(label, QtCore.Qt.Key_C, QtCore.Qt.ControlModifier)
+    label.setSelection(0, len(shown))
+    QtTest.QTest.keyClick(label, QtCore.Qt.Key_C, QtCore.Qt.ControlModifier)
+    assert copied == [message, message]
+
+    # A part of the painted text copies as selected.
+    label.setSelection(0, 6)
+    QtTest.QTest.keyClick(label, QtCore.Qt.Key_C, QtCore.Qt.ControlModifier)
+    assert copied[-1] == "Failed"
+
+    # The label's own context menu takes the same road.
+    label.setSelection(0, len(shown))
+    menu = label._context_menu()
+    [copy_action] = [action for action in menu.actions() if action.text() == "Copy"]
+    copy_action.trigger()
+    assert copied[-1] == message
+    _ = app
