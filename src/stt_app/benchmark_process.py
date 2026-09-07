@@ -172,7 +172,7 @@ def _stream_benchmark_process(
             elif event == "canceled":
                 canceled = True
             elif event == "error":
-                error_message = text_or_empty(item.get("message")) or "Benchmark failed."
+                error_message = _error_message_to_keep(item, error_message)
     finally:
         if stream_finished:
             try:
@@ -256,8 +256,25 @@ def _deliver_reported_cases(
             cases.append(case)
             if case_callback is not None:
                 case_callback(case)
-        elif event == "error" and error_message is None:
-            error_message = text_or_empty(item.get("message")) or "Benchmark failed."
+        elif event == "error":
+            error_message = _error_message_to_keep(item, error_message)
+
+
+def _error_message_to_keep(item: dict[str, Any], kept: str | None) -> str:
+    """The message of an error event, unless one is kept already.
+
+    The first error the child reports is the one that explains the run; a
+    later one is logged and dropped. The main loop kept the last and the
+    cancel drain the first, so the message the user saw for one input
+    depended on whether a cancel had landed before the second event.
+    """
+    message = text_or_empty(item.get("message")) or "Benchmark failed."
+    if kept is None:
+        return message
+    _LOGGER.warning(
+        "benchmark_error_event_after_the_first kept=%r dropped=%r", kept, message
+    )
+    return kept
 
 
 def _pump_events(stream, events: queue.Queue[Any]) -> None:

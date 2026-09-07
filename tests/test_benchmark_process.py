@@ -642,3 +642,37 @@ def test_the_drain_reads_what_is_already_queued_before_it_looks_at_the_clock():
     assert [case.model for case in cases] == ["small"]
     assert [case.model for case in delivered] == ["small"]
     assert events.empty()
+
+
+@pytest.mark.parametrize("canceled", [False, True], ids=["main loop", "drain"])
+def test_the_first_error_the_child_reports_is_the_one_raised(
+    monkeypatch, caplog, canceled
+):
+    """The main loop kept the last error event and the cancel drain the
+    first, so which message the user saw for one input depended on whether
+    a cancel had landed before the second event -- and neither logged the
+    one it dropped."""
+
+    def stdout_lines():
+        yield _event_line({"event": "error", "message": "FIRST: disk full"})
+        yield _event_line({"event": "error", "message": "SECOND: model missing"})
+
+    monkeypatch.setattr(
+        benchmark_process,
+        "start_benchmark_process",
+        lambda _path: _fake_child(stdout_lines()),
+    )
+
+    with (
+        caplog.at_level("WARNING", logger="stt_app.benchmark_process"),
+        pytest.raises(RuntimeError, match=r"^FIRST: disk full$"),
+    ):
+        benchmark_process._stream_benchmark_process(
+            Path("unused-options.json"),
+            progress_callback=None,
+            case_callback=None,
+            cancel_check=(lambda: True) if canceled else None,
+        )
+
+    assert "benchmark_error_event_after_the_first" in caplog.text
+    assert "SECOND: model missing" in caplog.text
