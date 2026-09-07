@@ -11,6 +11,7 @@ from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 import stt_app.settings_dialog as settings_dialog_module
 from stt_app.app_paths import debug_audio_path
+from stt_app.benchmark_environment import BenchmarkEnvironment
 from stt_app.benchmark_history import (
     BenchmarkHistoryEntry,
     BenchmarkHistoryStore,
@@ -4401,7 +4402,9 @@ def test_a_single_waiting_download_shows_no_place_number():
     _ = app
 
 
-def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(tmp_path):
+def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(
+    monkeypatch, tmp_path
+):
     """Canary would translate instead of transcribing, so Auto must be refused.
 
     The runner already rejects this per model, but only once that model's turn
@@ -4420,6 +4423,15 @@ def test_benchmarking_canary_with_auto_language_is_refused_before_the_run(tmp_pa
     dialog._selected_benchmark_model_names = lambda: ["small", CANARY_MODEL_SIZE]
     started: list[bool] = []
     dialog._benchmark_options_from_widgets = lambda **_kw: started.append(True)
+    # The run the second call starts must stay inside this test: on a real
+    # thread it outlived the test and, after the environment query, called
+    # whatever `run_benchmark_cases` a later test had installed.
+    monkeypatch.setattr("stt_app.settings_dialog.threading.Thread", _ImmediateThread)
+    monkeypatch.setattr("stt_app.settings_dialog.run_benchmark_cases", lambda **_kw: [])
+    monkeypatch.setattr(
+        "stt_app.settings_dialog_benchmark.collect_benchmark_environment",
+        lambda: BenchmarkEnvironment.from_dict(None),
+    )
     dialog.benchmark_language_combo.setCurrentIndex(
         dialog.benchmark_language_combo.findData("auto")
     )

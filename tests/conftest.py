@@ -12,6 +12,7 @@ import logging
 import os
 import shutil
 import tempfile
+import threading
 from pathlib import Path
 
 import pytest
@@ -687,3 +688,30 @@ def _reset_the_transcription_shutdown_flag():
     reset_transcription_shutdown_for_tests()
     yield
     reset_transcription_shutdown_for_tests()
+
+
+@pytest.fixture(autouse=True)
+def _no_benchmark_worker_outlives_its_test():
+    """The dialog's benchmark worker (`stt_app_local_benchmark`) collects the
+    environment first -- 2-4 s of PowerShell -- and only then calls the
+    facade's `run_benchmark_cases`: whichever fake the test running by then
+    has installed, or the real process launcher when none is. A test that
+    left one running therefore drove a later file's fake: measured once in
+    a run of 415 tests, a Canary-refusal test's worker fed
+    `test_starting_a_run_arms_the_case_list_and_the_progress_bar` three
+    extra entries, and in every other run it launched a real benchmark
+    worker child through the facade. The wait lets the leaked worker end
+    before the next test starts; the test that leaked it fails either way."""
+    yield
+    leaked = [
+        thread
+        for thread in threading.enumerate()
+        if thread.name == "stt_app_local_benchmark" and thread.is_alive()
+    ]
+    for thread in leaked:
+        thread.join(timeout=8.0)
+    assert not leaked, (
+        "the test left the benchmark worker thread running; patch "
+        "`stt_app.settings_dialog.threading.Thread` with an immediate thread "
+        "or wait for `_active_benchmark_thread` before returning"
+    )
