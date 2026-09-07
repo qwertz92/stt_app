@@ -585,13 +585,18 @@ def _worksheet_xml(rows: list[list[Any]]) -> str:
     )
 
 
+_EXACT_DOUBLE_INT_LIMIT = 2**53
+
+
 def _fits_a_numeric_cell(value: int | float) -> bool:
-    """A `<v>` holds a double: NaN, an infinity and an int past the double
-    range go in as text -- and `math.isfinite` itself raises for the int."""
-    try:
-        return math.isfinite(value)
-    except OverflowError:
-        return False
+    """A `<v>` holds a double: NaN, an infinity and an int a double cannot
+    hold exactly go in as text. Past 2**53 a double keeps only every second
+    integer, so a spreadsheet read 9007199254740993 from a number cell as
+    ...992 -- and `math.isfinite` itself raises for an int past the double
+    range, which the magnitude test answers before it is asked."""
+    if isinstance(value, int):
+        return abs(value) <= _EXACT_DOUBLE_INT_LIMIT
+    return math.isfinite(value)
 
 
 def _cell_xml(reference: str, value: Any) -> str:

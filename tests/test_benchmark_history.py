@@ -834,3 +834,26 @@ def test_a_boolean_where_a_number_belongs_reads_as_the_default(tmp_path):
     assert (options.runs, options.beam_size, options.threads) == (1, 5, 0)
     assert entry.cases[0].download_seconds == 0.0
     assert math.isnan(entry.cases[0].load_seconds)
+
+
+def test_an_int_a_double_cannot_hold_exactly_is_exported_as_text(tmp_path):
+    """A `<v>` holds a double, which keeps only every second integer past
+    2**53: a spreadsheet read 9007199254740993 from a number cell as
+    ...992. Such a count goes in as text; 2**53 itself is still a number."""
+    inexact = 2**53 + 1
+    exact = 2**53
+    payload = _one_entry_payload()
+    payload[0]["environment"] = {"logical_cpus": inexact, "physical_cores": exact}
+    path = tmp_path / "benchmark_history.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    entry = BenchmarkHistoryStore(path=path).recent_entries(1)[0]
+    xlsx_path = tmp_path / "benchmark.xlsx"
+
+    export_benchmark_entry(xlsx_path, entry)
+
+    with zipfile.ZipFile(xlsx_path) as archive:
+        sheet = archive.read("xl/worksheets/sheet1.xml").decode("utf-8")
+    ET.fromstring(sheet)
+    assert str(inexact) in sheet
+    assert f"<v>{inexact}</v>" not in sheet
+    assert f"<v>{exact}</v>" in sheet
