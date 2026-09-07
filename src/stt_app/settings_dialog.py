@@ -1143,6 +1143,11 @@ class SettingsDialog(
     def _on_update_check_finished(self, result: object) -> None:
         self._active_update_check_thread = None
         self.check_updates_button.setEnabled(True)
+        if self._shutdown_started:
+            # Delivered by `shutdown()`'s own `sendPostedEvents`: the app is
+            # quitting, and the modal box below held `aboutToQuit` until
+            # the user closed a dialog about updates.
+            return
         if not isinstance(result, UpdateCheckResult):
             result = UpdateCheckResult(
                 current_version="",

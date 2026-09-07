@@ -784,6 +784,12 @@ class _LocalModelsMixin:
         self._schedule_deferred_local_model_refresh(delay_ms=delay_ms, force=True)
 
     def _request_local_model_scan(self, *, force: bool = False) -> None:
+        if getattr(self, "_shutdown_started", False):
+            # Reached through `shutdown()`'s own `sendPostedEvents`: a
+            # finished download refreshes the inventory, and the scan that
+            # asked for started a worker thread and a child process from
+            # `aboutToQuit`, with nothing left to join either.
+            return
         request_started_at = time.perf_counter()
         model_dir = self.model_dir_edit.text().strip() if hasattr(self, "model_dir_edit") else ""
         if (

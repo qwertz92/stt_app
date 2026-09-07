@@ -5029,3 +5029,118 @@ def test_a_failed_limit_write_does_not_tell_the_controller_it_succeeded(monkeypa
     )
     dialog.deleteLater()
     _ = app
+
+
+def _dialog_with_its_scan_settled(monkeypatch, scanned: list[str]):
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    monkeypatch.setattr(
+        "stt_app.settings_dialog._scan_cached_models",
+        lambda model_dir: scanned.append(model_dir) or [],
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    deadline = time.monotonic() + 10.0
+    while (
+        dialog._active_local_model_scan_thread is not None
+        and time.monotonic() < deadline
+    ):
+        app.processEvents()
+        time.sleep(0.01)
+    assert dialog._active_local_model_scan_thread is None
+    return dialog, app
+
+
+def _post_from_a_worker(dialog, emit) -> threading.Thread:
+    """Emit a dialog signal from another thread, so the slot is posted and
+    nothing has delivered it yet -- exactly the state at `aboutToQuit`."""
+    emitted = threading.Event()
+
+    def _worker() -> None:
+        emit()
+        emitted.set()
+
+    thread = threading.Thread(target=_worker, daemon=True)
+    thread.start()
+    assert emitted.wait(5.0)
+    thread.join(5.0)
+    return thread
+
+
+def test_shutdown_delivers_a_finished_download_without_starting_a_scan(
+    monkeypatch,
+):
+    """`sendPostedEvents` in `shutdown()` delivers the download queue's
+    finished signal, whose slot refreshes the inventory -- and the scan that
+    asked for started a worker thread and a child process from `aboutToQuit`,
+    with nothing left to join either (measured: the scan subprocess launched
+    after `shutdown()` had returned)."""
+    scanned: list[str] = []
+    dialog, app = _dialog_with_its_scan_settled(monkeypatch, scanned)
+    scanned.clear()
+    token = dialog._local_model_download_worker_token
+    dialog._active_local_model_download_thread = _post_from_a_worker(
+        dialog,
+        lambda: dialog.local_model_download_finished.emit(
+            token, True, "Downloaded: small"
+        ),
+    )
+
+    # No event-loop pass: the slot is still posted, exactly as at `aboutToQuit`.
+    dialog.shutdown()
+
+    # The slot ran (it clears the worker), and asked for no scan.
+    assert dialog._active_local_model_download_thread is None
+    assert dialog._active_local_model_scan_thread is None
+    assert dialog._local_model_scan_pending is False
+    assert scanned == []
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        UpdateCheckResult(
+            current_version="0.4.0",
+            latest_version="0.5.0",
+            latest_tag="v0.5.0",
+            update_available=True,
+            release_url="https://github.com/qwertz92/stt_app/releases/tag/v0.5.0",
+        ),
+        UpdateCheckResult(
+            current_version="0.4.0",
+            error="Update check failed: proxy refused the connection.",
+        ),
+    ],
+    ids=["update available", "check failed"],
+)
+def test_shutdown_delivers_an_update_result_without_a_dialog(monkeypatch, result):
+    """The update-check thread is not one `shutdown()` joins, so its posted
+    slot was delivered by `sendPostedEvents` -- and it ends in a modal
+    `QMessageBox.exec()`, which held `aboutToQuit` until the box was closed
+    (measured: 0.42 s inside `shutdown()` with a timer closing it; for a user
+    the quit waits on a dialog about updates)."""
+    shown: list[str] = []
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.show_update_available_dialog",
+        lambda result, *, parent=None: shown.append("available"),
+    )
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.show_update_status_dialog",
+        lambda **kwargs: shown.append("status"),
+    )
+    dialog, app = _dialog_with_its_scan_settled(monkeypatch, [])
+    dialog.check_updates_button.setEnabled(False)
+    dialog._active_update_check_thread = _post_from_a_worker(
+        dialog, lambda: dialog.update_check_finished.emit(result)
+    )
+
+    dialog.shutdown()
+
+    # The slot ran (it clears the worker and re-enables the button).
+    assert dialog._active_update_check_thread is None
+    assert dialog.check_updates_button.isEnabled() is True
+    assert shown == []
+    _ = app
