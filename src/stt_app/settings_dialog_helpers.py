@@ -53,6 +53,11 @@ class ElidingLabel(QtWidgets.QLabel):
     appeared. Word wrap is not the answer for a label that shares a fixed-height
     row with a button, because growing it moves the button.
 
+    It is one line whatever the text holds: a failed save's exception message
+    can span several lines, and shown as such the bottom status label grew
+    taller than the Save and Close buttons beside it and moved them up --
+    7 px at three lines, 8 px more per line after (measured).
+
     `text()` keeps returning the full string, so callers and tests read what was
     set rather than what happened to fit, and the whole message stays readable
     in the tooltip.
@@ -80,14 +85,15 @@ class ElidingLabel(QtWidgets.QLabel):
         self._apply_elide()
 
     def _apply_elide(self) -> None:
+        single_line = " ".join(self._full_text.split())
         margins = self.contentsMargins()
         available = self.width() - margins.left() - margins.right()
-        if available <= 0 or not self._full_text:
-            super().setText(self._full_text)
+        if available <= 0 or not single_line:
+            super().setText(single_line)
             return
         super().setText(
             self.fontMetrics().elidedText(
-                self._full_text, QtCore.Qt.ElideRight, available
+                single_line, QtCore.Qt.ElideRight, available
             )
         )
 

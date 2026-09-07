@@ -511,22 +511,37 @@ def test_bottom_status_does_not_move_the_save_and_close_buttons(
     dialog.show()
     QtWidgets.QApplication.processEvents()
     save_button = dialog._save_button
-    idle_position = save_button.pos().x()
+    idle_position = save_button.pos()
 
     dialog._set_bottom_status("Settings saved")
     QtWidgets.QApplication.processEvents()
-    assert save_button.pos().x() == idle_position
+    assert save_button.pos() == idle_position
 
     dialog._set_bottom_status(
         "Failed to save settings: " + ("a very long failure reason " * 8),
         "#b71c1c",
     )
     QtWidgets.QApplication.processEvents()
-    assert save_button.pos().x() == idle_position
+    assert save_button.pos() == idle_position
+
+    # A multi-line exception message: the label stays one line, or the row
+    # grows past the 34 px buttons and both move up (measured before the
+    # fix: 7 px at three lines and 8 px more per line after).
+    label = dialog._save_status_label
+    one_line_height = label.height()
+    for lines in (3, 6):
+        dialog._set_bottom_status(
+            "\n".join(f"line {index} of a failed save" for index in range(lines)),
+            "#b71c1c",
+        )
+        QtWidgets.QApplication.processEvents()
+        assert save_button.pos() == idle_position
+        assert label.height() == one_line_height
+        assert "\n" not in QtWidgets.QLabel.text(label)
 
     dialog._set_bottom_status("")
     QtWidgets.QApplication.processEvents()
-    assert save_button.pos().x() == idle_position
+    assert save_button.pos() == idle_position
     dialog.hide()
 
 
