@@ -2591,6 +2591,12 @@ class _BenchmarkMixin:
             return
         removed = self._benchmark_history_store.delete_entry(entry)
         if removed <= 0:
+            # The store re-read the file for the delete and found no such
+            # entry -- hand-edited, or damaged by another program while
+            # Settings was open and quarantined on that read. The list shows
+            # what the store holds now, not the rows of before.
+            self._refresh_benchmark_history_list()
+            self._update_benchmark_actions()
             self._set_benchmark_status("Selected benchmark entry was not found.", "#b71c1c")
             return
         # The entry is gone, so a window still showing it would outlive the run
@@ -2606,6 +2612,10 @@ class _BenchmarkMixin:
 
     def _clear_benchmark_history(self) -> None:
         if self._benchmark_history_store.count() <= 0:
+            # Nothing to clear as the store reads the file now; the table may
+            # still show the rows of a file quarantined on that read.
+            self._refresh_benchmark_history_list()
+            self._update_benchmark_actions()
             return
         answer = QtWidgets.QMessageBox.question(
             self,

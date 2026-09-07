@@ -16,6 +16,7 @@ from test_settings_dialog_connection import (
 
 from stt_app.benchmark_history import BenchmarkHistoryEntry, BenchmarkHistoryStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
+from stt_app.persistence import backup_path
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_benchmark import (
     _BENCHMARK_RESULT_STATUS_COLUMN,
@@ -935,4 +936,53 @@ def test_tab_leaves_the_benchmark_tables():
 
     assert dialog.focusWidget() is not table
     dialog.hide()
+    _ = app
+
+
+def _damage_the_history_file(dialog) -> None:
+    """A file another program damaged while Settings is open, its backup
+    with it (a sync client mirrors both). The store quarantines the pair on
+    its next read and then holds nothing."""
+    path = dialog._benchmark_history_store._path
+    for damaged in (path, backup_path(path)):
+        damaged.write_text("{not json", encoding="utf-8")
+
+
+def test_a_delete_that_finds_nothing_refreshes_the_list(monkeypatch, tmp_path):
+    """The store re-reads the file for the delete, and a damaged file is
+    quarantined on that read -- so the store was empty while the table kept
+    its rows for the rest of the session, under a line saying only that the
+    entry was not found."""
+    dialog, app = _history_dialog(tmp_path, [_stored_entry("damaged run")])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *_a, **_k: QtWidgets.QMessageBox.Yes),
+    )
+    dialog.benchmark_history_list.setCurrentRow(0)
+    assert dialog.benchmark_history_list.rowCount() == 1
+    _damage_the_history_file(dialog)
+
+    dialog._delete_selected_benchmark_history()
+    app.processEvents()
+
+    assert dialog.benchmark_history_list.rowCount() == 0
+    assert (
+        dialog.benchmark_status_label.text()
+        == "Selected benchmark entry was not found."
+    )
+    _ = app
+
+
+def test_a_clear_that_finds_nothing_refreshes_the_list(tmp_path):
+    """Same road through Clear History: the store counted nothing and the
+    action returned before the refresh."""
+    dialog, app = _history_dialog(tmp_path, [_stored_entry("damaged run")])
+    assert dialog.benchmark_history_list.rowCount() == 1
+    _damage_the_history_file(dialog)
+
+    dialog._clear_benchmark_history()
+    app.processEvents()
+
+    assert dialog.benchmark_history_list.rowCount() == 0
     _ = app
