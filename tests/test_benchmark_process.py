@@ -623,3 +623,22 @@ def test_an_error_event_without_a_message_reads_as_the_fallback(
             case_callback=None,
             cancel_check=lambda: canceled,
         )
+
+
+def test_the_drain_reads_what_is_already_queued_before_it_looks_at_the_clock():
+    """With the clock checked first, a deadline already past discarded a case
+    and the EOF sitting in the queue, which cost nothing to read."""
+    events: queue.Queue = queue.Queue()
+    events.put({"event": "case", "case": _case_payload()})
+    events.put(benchmark_process._EOF)
+    cases: list[BenchmarkCase] = []
+    delivered: list[BenchmarkCase] = []
+
+    result = benchmark_process._deliver_reported_cases(
+        events, cases, delivered.append, deadline=time.monotonic() - 1.0
+    )
+
+    assert result is None
+    assert [case.model for case in cases] == ["small"]
+    assert [case.model for case in delivered] == ["small"]
+    assert events.empty()

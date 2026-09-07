@@ -231,13 +231,19 @@ def _deliver_reported_cases(
     """
     error_message: str | None = None
     while True:
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            return error_message
+        # What is already queued costs nothing to read: with the clock
+        # checked first, a deadline that had passed discarded a case and
+        # the EOF sitting in the queue.
         try:
-            item = events.get(timeout=remaining)
+            item = events.get_nowait()
         except queue.Empty:
-            return error_message
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                return error_message
+            try:
+                item = events.get(timeout=remaining)
+            except queue.Empty:
+                return error_message
         if item is _EOF:
             return error_message
         if not isinstance(item, dict):
