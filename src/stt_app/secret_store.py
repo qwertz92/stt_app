@@ -160,6 +160,45 @@ class KeyringSecretStore:
             return None
         return str(value)
 
+    def _refuse_a_fallback_the_keyring_would_shadow(
+        self, provider: str, api_key: str, cause: BaseException
+    ) -> None:
+        """Refuse the fallback write while the keyring still answers an old key.
+
+        `get_api_key` and `get_api_key_source` read the keyring before the
+        fallback file, so a fallback copy written after a refused keyring write
+        is never read while the keyring still holds a value: the save reported
+        success, every request kept using the previous key, and the new one sat
+        unused in plaintext -- also after the keyring recovered, because nothing
+        reconciles the two. Raising instead leaves the old key active, which the
+        settings dialog's existing failure path reports while keeping the typed
+        value.
+
+        Two answers proceed to the fallback write. `None` means nothing in the
+        keyring can shadow the new key -- and `_get_keyring_value` also answers
+        `None` for a read that raised, which is exactly what every other reader
+        does with it, so the fallback copy is the value they will all return.
+        The new key itself means the write landed before the backend raised.
+
+        Every name `get_api_key` reads is asked, in its order: the legacy
+        service names shadow the fallback file exactly as the primary one does,
+        and a keyring that refuses writes also refuses the migration that a
+        successful read would otherwise perform, so a key living only under a
+        legacy name stays there and keeps being returned first.
+        """
+        stored = None
+        for service_name in (self._service_name, *self._legacy_service_names):
+            stored = self._get_keyring_value(service_name, provider)
+            if stored is not None:
+                break
+        if stored is None or stored == api_key:
+            return
+        raise RuntimeError(
+            f"The keyring refused the new {provider} API key and still holds "
+            "the previous one, which every read returns first, so nothing was "
+            "changed."
+        ) from cause
+
     def set_api_key(self, provider: str, api_key: str) -> None:
         try:
             self._keyring.set_password(self._service_name, provider, api_key)
@@ -168,9 +207,10 @@ class KeyringSecretStore:
                     self._keyring.delete_password(legacy_name, provider)
                 except Exception:
                     pass
-        except Exception:
+        except Exception as exc:
             if not self._insecure_fallback_enabled:
                 raise
+            self._refuse_a_fallback_the_keyring_would_shadow(provider, api_key, exc)
         else:
             # Keyring write succeeded: remove stale insecure fallback copy.
             # A failure here must NOT fall through to the insecure write below;

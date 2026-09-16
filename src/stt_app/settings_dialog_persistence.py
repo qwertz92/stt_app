@@ -453,9 +453,21 @@ class _PersistenceMixin:
     def _show_key_storage_result(self, errors: list[str], changed: bool) -> None:
         if errors:
             self.key_storage_status_label.setStyleSheet("color: #b71c1c;")
+            # The store's fallback flag was applied from this checkbox before
+            # the writes ran (`_apply_secret_store_options`), so the checkbox
+            # says whether the fallback was already on. With it on, the errors
+            # are the ones the fallback cannot absorb -- a keyring that still
+            # holds the previous key, a damaged fallback file -- and advising
+            # to enable it named a switch that was already set.
+            advice = (
+                "The insecure fallback is already enabled; each key's detail "
+                "says what happened. "
+                if self.insecure_key_storage_checkbox.isChecked()
+                else "Enable insecure fallback storage or retry. "
+            )
             self.key_storage_status_label.setText(
                 "Could not store some API keys in Credential Manager. "
-                "Enable insecure fallback storage or retry. "
+                + advice
                 + " | ".join(errors)
             )
             return

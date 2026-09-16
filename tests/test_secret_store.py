@@ -40,6 +40,32 @@ class FailingKeyringBackend:
         raise FileNotFoundError("backend unavailable")
 
 
+class SwitchableKeyringBackend(FakeKeyringBackend):
+    """A keyring whose reads and writes can be made to fail independently.
+
+    `FailingKeyringBackend` fails both at once, which is the machine with no
+    usable credential store at all. The case that needs the two apart is a
+    keyring that is present and readable while a write is refused -- a locked
+    vault, a policy, a transient backend error -- because then the old value
+    is still there to be read after the new one was not stored.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.read_fails = False
+        self.write_fails = False
+
+    def set_password(self, service_name, username, password):
+        if self.write_fails:
+            raise OSError("the credential vault refused the write")
+        super().set_password(service_name, username, password)
+
+    def get_password(self, service_name, username):
+        if self.read_fails:
+            raise OSError("the credential vault refused the read")
+        return super().get_password(service_name, username)
+
+
 def test_keyring_secret_store_set_get_delete():
     backend = FakeKeyringBackend()
     store = KeyringSecretStore(keyring_backend=backend, service_name="stt-app-test")
@@ -124,6 +150,160 @@ def test_insecure_fallback_stores_and_reads_key(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="Could not confirm deletion"):
         store.delete_api_key("groq")
     assert store.get_api_key("groq") is None
+
+
+def test_a_refused_keyring_write_over_an_existing_key_is_not_reported_as_saved(
+    tmp_path, monkeypatch
+):
+    """A key stored where nothing ever reads it is worse than a failed save.
+
+    `get_api_key` reads the keyring before the fallback file, so a fallback
+    copy written after a refused keyring write is never read while the keyring
+    still answers: the dialog reported the new key as saved, every request
+    kept using the old one, and the new one sat unused in plaintext -- also
+    after the keyring recovered, because nothing reconciles the two.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = SwitchableKeyringBackend()
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+    store.set_api_key("openai", "sk-old")
+    backend.write_fails = True
+
+    with pytest.raises(RuntimeError, match="openai"):
+        store.set_api_key("openai", "sk-new")
+
+    assert backend.get_password("stt-app-test", "openai") == "sk-old"
+    assert store.get_api_key("openai") == "sk-old"
+    assert store.get_api_key_source("openai") == "keyring"
+    plaintext = (
+        store._insecure_path.read_text(encoding="utf-8")
+        if store._insecure_path.exists()
+        else ""
+    )
+    assert "sk-new" not in plaintext
+
+
+def test_a_key_under_a_legacy_service_name_shadows_the_fallback_too(
+    tmp_path, monkeypatch
+):
+    """`get_api_key` reads the legacy names before the fallback file as well.
+
+    An install upgraded from the old service name whose migration write never
+    succeeded holds its key there only. A keyring that refuses the new write
+    refuses the migration too, so that key keeps being returned first, and a
+    fallback copy written behind it would be the same silent failure as one
+    written behind the primary name.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = SwitchableKeyringBackend()
+    backend.set_password("stt-app-legacy", "openai", "sk-old")
+    backend.write_fails = True
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=("stt-app-legacy",),
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    with pytest.raises(RuntimeError, match="openai"):
+        store.set_api_key("openai", "sk-new")
+
+    assert store.get_api_key("openai") == "sk-old"
+    assert store.get_api_key_source("openai") == "legacy-keyring"
+    plaintext = (
+        store._insecure_path.read_text(encoding="utf-8")
+        if store._insecure_path.exists()
+        else ""
+    )
+    assert "sk-new" not in plaintext
+
+
+def test_a_keyring_write_that_raised_after_it_landed_still_writes_the_fallback(
+    tmp_path, monkeypatch
+):
+    """The refusal must not fire when the keyring holds the new value itself.
+
+    A backend can raise after the value has landed. The keyring then answers
+    the key the user just typed, so nothing shadows it and reporting a failure
+    would be wrong.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+
+    class _StoresThenRaises(SwitchableKeyringBackend):
+        def set_password(self, service_name, username, password):
+            FakeKeyringBackend.set_password(self, service_name, username, password)
+            raise OSError("the credential vault reported a failure after writing")
+
+    backend = _StoresThenRaises()
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    store.set_api_key("openai", "sk-new")
+
+    assert store.get_api_key("openai") == "sk-new"
+    assert store.get_api_key_source("openai") == "keyring"
+    assert "sk-new" in store._insecure_path.read_text(encoding="utf-8")
+
+
+def test_a_refused_write_with_an_empty_keyring_still_reaches_the_fallback(
+    tmp_path, monkeypatch
+):
+    """The case the fallback exists for: a keyring that stores nothing.
+
+    Nothing shadows the new key, so the fallback copy is what every read
+    answers and the save really did store the key the user typed.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = SwitchableKeyringBackend()
+    backend.write_fails = True
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    store.set_api_key("groq", "gsk-new")
+
+    assert store.get_api_key("groq") == "gsk-new"
+    assert store.get_api_key_source("groq") == "insecure"
+
+
+def test_a_keyring_whose_read_also_fails_cannot_shadow_the_fallback(
+    tmp_path, monkeypatch
+):
+    """A read that raises is no evidence of an old key, so the save proceeds.
+
+    Every reader treats a raising keyring read as "nothing stored" and falls
+    through to the fallback file, so the new key does become the active one.
+    Refusing here would block every save on the machine the fallback exists
+    for -- the one whose keyring cannot be reached at all.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = SwitchableKeyringBackend()
+    backend.set_password("stt-app-test", "openai", "sk-old")
+    backend.read_fails = True
+    backend.write_fails = True
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    store.set_api_key("openai", "sk-new")
+
+    assert store.get_api_key("openai") == "sk-new"
+    assert store.get_api_key_source("openai") == "insecure"
 
 
 def test_delete_api_key_also_removes_insecure_copy_when_fallback_disabled(

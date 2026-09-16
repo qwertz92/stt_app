@@ -1610,6 +1610,35 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `RuntimeError` naming the path instead of overwriting. The stale-copy
   cleanup after a successful keyring write stays tolerant on purpose --
   failing there would undo a save that already succeeded.
+- **A refused keyring write over a key the keyring still holds is refused,
+  never spilled into the fallback** (F11 of the 2026-09-12 review).
+  `set_api_key` fell through to the insecure fallback file whenever
+  `keyring.set_password` raised and the fallback was enabled -- also for a
+  keyring that reads fine and only refuses writes (a locked vault, a
+  policy, a transient backend error). `get_api_key` and
+  `get_api_key_source` read the keyring before the file, so the new key B
+  sat unused in plaintext while every request kept using the old key A,
+  the dialog said "API key storage updated", the Remote tab said
+  "keyring", and nothing reconciled the two when the keyring recovered
+  (measured with a backend whose read and write fail independently: no
+  exception, keyring A, fallback B, `get_api_key -> A`).
+  `_refuse_a_fallback_the_keyring_would_shadow` re-reads the keyring after
+  a refused write -- the primary service name and then each legacy name,
+  in the order `get_api_key` reads them, because a legacy-only key shadows
+  the file exactly as the primary does and a keyring that refuses writes
+  also refuses the migration a successful read would perform -- and raises
+  `RuntimeError` naming the provider without writing anything while the
+  keyring still answers a value that is neither `None` nor the new key.
+  Three answers proceed to the fallback write as before: `None` (nothing
+  can shadow the copy), the new key itself (the write landed before the
+  backend raised), and a read that raises (no evidence of an old key, and
+  every reader treats it as nothing stored, so the copy is what they will
+  all return -- refusing here would block every save on the machine the
+  fallback exists for). The read precedence is unchanged: the keyring
+  stays authoritative, and `delete_api_key` is untouched. The settings
+  dialog's failure arm keeps the typed value and appends the message to
+  the key-storage status line; that line's generic advice no longer says
+  "Enable insecure fallback storage" when the checkbox is already on.
 - **Update checks**: update discovery uses GitHub Releases directly through
   `update_checker.py`; no custom domain or update server is required. The app
   schedules one asynchronous check after startup and shows a tray notification

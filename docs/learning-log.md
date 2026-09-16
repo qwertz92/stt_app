@@ -7068,3 +7068,35 @@ assertion. One thing it deliberately left open, recorded in the AGENTS.md
 entry: `cbSize` is not compared with the chunk's real size, because the
 22 bytes that are read are present either way and Windows accepts such
 files. The fixtures are synthetic; no real recorder's file was decoded.
+
+**F11 -- an API key change reported as saved while the old key stayed
+active.** Group D's probe drove `KeyringSecretStore` with a backend whose
+read works and whose write raises, the fallback enabled: no exception,
+keyring A, fallback file B, `get_api_key -> A`, source `keyring`, and the
+same after the keyring recovered. The existing `FailingKeyringBackend`
+fails read and write together -- the machine with no credential store at
+all -- so no test had ever split the two. The lead's design: re-read the
+keyring after the refused write and raise without writing the fallback
+while it still holds a different key. The implementer (unit `small`)
+wrote four tests first: the refusal failed on the untouched tree with
+`DID NOT RAISE`, and three boundary tests -- a write that raised after it
+landed, a first key into an empty keyring, a keyring whose read also
+fails -- pass on the baseline by construction and earn their place
+through its negative control, where removing the `stored is None` arm
+fails ten tests, seven of them existing ones, because every
+`FailingKeyringBackend` test then raises instead of writing the fallback.
+It kept the re-read to the primary service name and reported the gap in
+its notes with the concrete sequence: a key living only under a legacy
+service name -- an upgraded install whose migration write never
+succeeded -- is read before the fallback file too, so the refusal missed
+it and the save was reported. The lead widened the re-read to every name
+`get_api_key` consults (one more test, `DID NOT RAISE` on the unwidened
+code), because the condition of the finding, a keyring that refuses
+writes, is the same one that makes the legacy migration fail and the
+legacy key permanent. The dialog files were not run by the implementer;
+it read the failure arm (the provider is left out of `changed`, the field
+is not cleared, the message reaches the status line), and the lead ran the
+two dialog files that exercise that line
+(`tests/test_settings_dialog_connection.py`,
+`tests/test_settings_dialog_mode.py`) after correcting its generic advice,
+which told the user to enable a fallback the refusal only happens with.
