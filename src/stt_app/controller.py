@@ -5585,12 +5585,32 @@ class DictationController(QtCore.QObject):
         that handles a failing `_build_audio_capture` returns without
         `_reset_streaming_state` -- so a token can be current while no session
         is running, and that is the case the activity test still answers.
+
+        A failure of the live session that arrives after the stop is the
+        finalize worker's to report. The stop does not retire the session's
+        callback -- the provider keeps it wired until its own `stop_stream()`
+        takes the lock, and before that the worker is still queued or still
+        joining the flush -- so a socket that died in that window passed both
+        gates here, and `_on_transcription_failed` painted Error, marked the
+        recording failed and reset the session under the worker. The worker's
+        `stop_stream()` then delivered its transcript as a second, competing
+        success (Done painted over Error, both marks on one recording), or its
+        own failure as a second Error. Every provider's `stop_stream()`
+        answers a dead socket with the text it has or, having none, with the
+        failure it recorded, so the worker's terminal signal already carries
+        this failure exactly once.
         """
         if self._shutdown_started:
             return
         if token is not self._stream_session_token:
             self._logger.info(
                 "Ignoring a streaming runtime failure from a retired session: %s",
+                error_text,
+            )
+            return
+        if self._stream_finalize_pending:
+            self._logger.info(
+                "stream_runtime_failed_after_stop: the finalize reports it: %s",
                 error_text,
             )
             return

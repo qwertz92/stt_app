@@ -3115,6 +3115,8 @@ class _HandshakeRecorder(FakeStreamingTranscriber):
         release_stop=None,
         connect_error=None,
         push_error=None,
+        hold_first_push=None,
+        stop_error=None,
     ):
         super().__init__()
         self._release_connect = release_connect
@@ -3122,9 +3124,15 @@ class _HandshakeRecorder(FakeStreamingTranscriber):
         self._release_stop = release_stop
         self._connect_error = connect_error
         self._push_error = push_error
+        self._hold_first_push = hold_first_push
+        self._stop_error = stop_error
         self.pushed: list[bytes] = []
 
     def start_stream(self, on_partial=None, on_error=None):
+        # Registered before the wait, as a real provider registers its
+        # callbacks under its lock before it connects.
+        self.on_partial = on_partial
+        self.on_error = on_error
         self._connect_entered.set()
         assert self._release_connect.wait(timeout=30), "connect was never released"
         if self._connect_error is not None:
@@ -3135,6 +3143,12 @@ class _HandshakeRecorder(FakeStreamingTranscriber):
         if self._push_error is not None:
             raise self._push_error
         self.pushed.append(bytes(chunk))
+        if self._hold_first_push is not None and len(self.pushed) == 1:
+            # A sender that stopped draining: the push waits its whole
+            # budget, and the budget here is the test's release.
+            assert self._hold_first_push.wait(timeout=30), (
+                "the held push was never released"
+            )
 
     def stop_stream(self):
         self.stopped = True
@@ -3146,11 +3160,21 @@ class _HandshakeRecorder(FakeStreamingTranscriber):
             raise TranscriptionError("Streaming session is not active")
         if self._release_stop is not None:
             assert self._release_stop.wait(timeout=30), "stop was never released"
+        if self._stop_error is not None:
+            # A provider whose socket died with no text to hand back
+            # raises the failure it recorded (Deepgram and AssemblyAI both).
+            raise self._stop_error
         return " ".join(f"word{chunk[0]}" for chunk in self.pushed)
 
 
 def _streaming_controller_with_a_blocked_handshake(
-    monkeypatch, *, release_stop=None, connect_error=None, push_error=None
+    monkeypatch,
+    *,
+    release_stop=None,
+    connect_error=None,
+    push_error=None,
+    hold_first_push=None,
+    stop_error=None,
 ):
     """One live streaming session whose provider is still connecting."""
     settings = AppSettings(
@@ -3171,6 +3195,8 @@ def _streaming_controller_with_a_blocked_handshake(
             release_stop=release_stop,
             connect_error=connect_error,
             push_error=push_error,
+            hold_first_push=hold_first_push,
+            stop_error=stop_error,
         )
         made.append(transcriber)
         return transcriber
@@ -3638,6 +3664,100 @@ def test_a_flush_that_fails_after_a_stop_is_reported_once_and_ends_the_session(
         assert controller._active_request_token is None
     finally:
         release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize(
+    "stop_error",
+    [
+        pytest.param(None, id="the provider still hands back its text"),
+        pytest.param(
+            TranscriptionError("Deepgram streaming failed: the socket died"),
+            id="the provider raises the failure it recorded",
+        ),
+    ],
+)
+def test_a_runtime_failure_during_a_pending_finalize_is_the_finalizes_to_report(
+    monkeypatch, stop_error
+):
+    """The socket died after the stop, while the finalize worker owned it.
+
+    A live session's `on_error` is not retired by the stop: the provider
+    keeps the callback wired until its own `stop_stream()` takes the lock,
+    and before that the finalize worker is still queued or still joining
+    the flush. The runtime failure then passed both of
+    `_on_stream_runtime_failed`'s gates -- the token is the live session's
+    and `_streaming_recording` is True until the result is delivered --
+    and `_on_transcription_failed` painted Error, marked the recording
+    failed and reset the session under the worker. The worker's own
+    `stop_stream()` then delivered its transcript as a second, competing
+    success (Done painted over Error, both marks on one recording) or its
+    own failure as a second Error. The finalize is the one reporter: every
+    provider's `stop_stream()` answers a dead socket with the text it has
+    or, having none, with the failure it recorded.
+    """
+    release_stop = threading.Event()
+    (
+        controller,
+        app,
+        overlay,
+        recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, release_stop=release_stop, stop_error=stop_error
+    )
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    try:
+        release_connect.set()
+        assert _pump_until(app, lambda: len(transcriber.pushed) == 4), (
+            "the buffered audio never reached the provider"
+        )
+        controller.stop_recording()
+        assert _pump_until(app, lambda: transcriber.stopped), (
+            "the finalize never reached stop_stream()"
+        )
+        assert controller._stream_finalize_pending is True
+
+        # The provider's own callback, fired while its stop is in flight.
+        transcriber.on_error("the socket died")
+
+        assert (overlay.state, overlay.detail) == (
+            "Processing",
+            "Finalizing streaming transcript...",
+        ), overlay.states
+        assert recordings.failed == []
+        assert controller._stream_finalize_pending is True
+        assert controller._streaming_recording is True
+
+        release_stop.set()
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the finalize never finished"
+        )
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        errors = [detail for state, detail in overlay.states if state == "Error"]
+        if stop_error is None:
+            assert errors == [], errors
+            assert delivered == [(1, "word1 word2 word3 word4")]
+            assert overlay.state == "Done"
+            assert recordings.failed == []
+            assert recordings.completed == 1
+        else:
+            assert len(errors) == 1, errors
+            assert errors[0].startswith(str(stop_error)), errors[0]
+            assert delivered == []
+            assert recordings.failed == [str(stop_error)]
+            assert recordings.saved and recordings.completed == 0
+        assert controller._streaming_recording is False
+        assert controller._active_request_token is None
+    finally:
+        release_connect.set()
+        release_stop.set()
         controller.shutdown()
     _ = app
 
