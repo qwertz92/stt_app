@@ -642,7 +642,16 @@ class _HistoryTabMixin:
         next_text = TranscriptEditDialog.get_text(self, current_text)
         if next_text is None or next_text == current_text:
             return
-        updated = self._history_store.update_entry_text(entry, next_text)
+        try:
+            updated = self._history_store.update_entry_text(entry, next_text)
+        except Exception as exc:
+            # A store that could not read its file refuses to write it
+            # (`persistence.StoreUnavailableError`). Unguarded that escaped
+            # into the Qt slot, whose traceback goes to a stderr a windowed
+            # build does not have, so the button did nothing at all. This tab
+            # reports through its own status label rather than a popup.
+            self._set_history_status(str(exc), error=True)
+            return
         if updated <= 0:
             self._set_history_status(
                 "Selected history entry was not found.", error=True
@@ -670,7 +679,13 @@ class _HistoryTabMixin:
         )
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        removed = self._history_store.delete_entries(entries)
+        try:
+            removed = self._history_store.delete_entries(entries)
+        except Exception as exc:
+            # See `_edit_selected_history`: the confirmation was given and
+            # nothing was deleted.
+            self._set_history_status(str(exc), error=True)
+            return
         if removed <= 0:
             self._set_history_status(
                 "Selected history entries were not found.", error=True

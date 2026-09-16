@@ -209,10 +209,19 @@ def run_history_import(
                 active_limit = 0
                 set_limit_widget(0)
 
-    imported_count = history_store.append_entries(
-        entries_to_append,
-        max_items=active_limit,
-    )
+    try:
+        imported_count = history_store.append_entries(
+            entries_to_append,
+            max_items=active_limit,
+        )
+    except Exception as exc:
+        # The one site where the old behaviour destroyed data rather than only
+        # misreporting: the append read a history it could not open as empty
+        # and wrote the imported entries over the intact file. The store
+        # refuses now (`persistence.StoreUnavailableError`), and the refusal is
+        # reported in the same box as an unreadable import file above.
+        QtWidgets.QMessageBox.warning(parent, "Import failed", str(exc))
+        return
     on_imported(imported_count, active_limit)
 
 
@@ -244,5 +253,13 @@ def run_history_clear(
     if answer != QtWidgets.QMessageBox.Yes:
         return
 
-    history_store.clear()
+    try:
+        history_store.clear()
+    except Exception as exc:
+        # `count()` above answers 0 for a history with no readable copy, so
+        # this used to be out of reach -- but a locked primary beside a
+        # readable backup answers the backup's count, and the clear is then
+        # reached and refused.
+        QtWidgets.QMessageBox.warning(parent, "Clear failed", str(exc))
+        return
     on_cleared()

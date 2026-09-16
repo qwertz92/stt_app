@@ -6309,7 +6309,19 @@ class DictationController(QtCore.QObject):
         if next_text is None or next_text == current_text:
             return False
 
-        updated = self._history_store.update_entry_text(entry, next_text)
+        try:
+            updated = self._history_store.update_entry_text(entry, next_text)
+        except Exception as exc:
+            # A store that could not read its file refuses to write it
+            # (`persistence.StoreUnavailableError`), and that refusal arrives
+            # here on the Qt thread. Unguarded it escaped into the slot, whose
+            # traceback goes to a stderr a windowed build does not have: the
+            # Edit button did nothing at all, twice in a row, with no way to
+            # tell a refusal from a broken button. Painted like the two
+            # refusals above, so a pending insert offer survives it.
+            self._logger.exception("Failed to save the edited transcript")
+            self._paint_status_keeping_offer("Error", str(exc))
+            return False
         if updated <= 0:
             self._paint_status_keeping_offer(
                 "Error",

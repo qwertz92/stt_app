@@ -89,12 +89,16 @@ from .config import (
 )
 from .hotkey import parse_hotkey
 from .persistence import (
+    SOURCE_BACKUP_PRIMARY_UNREADABLE,
+    SOURCE_UNREADABLE,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
     lock_for_path,
+    note_unreadable_store,
     parse_json_bool,
     quarantine_corrupt_file,
+    refuse_to_overwrite_unreadable,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -716,6 +720,26 @@ class SettingsStore:
                 self._path,
                 expected_type=dict,
             )
+            # The backup answered and the primary is there, unopened.
+            # The rewrite below is skipped rather than attempted and refused:
+            # `save` probes the file and raises `StoreUnavailableError` for
+            # exactly this state, so every load logged "Could not rewrite" for
+            # a rewrite that was never going to be made, and the settings
+            # themselves are answered from the backup.
+            primary_unreadable = source == SOURCE_BACKUP_PRIMARY_UNREADABLE
+            if primary_unreadable:
+                note_unreadable_store(self._path)
+            if source == SOURCE_UNREADABLE:
+                # The file is there and could not be opened. Defaults are
+                # returned so the app still starts, but nothing is moved and
+                # nothing is written: quarantining would rename the user's
+                # settings out from under the name the next load reads, and
+                # the missing-both branch above would save these defaults
+                # over them. `save` refuses for as long as the file cannot
+                # be read, which is what stops the dialog writing this
+                # default set plus its edits back.
+                note_unreadable_store(self._path)
+                return AppSettings()
             if payload is None:
                 quarantine_corrupt_file(self._path, include_backup=True)
                 return AppSettings()
@@ -739,8 +763,9 @@ class SettingsStore:
             # existed: every single `load()` rewrote `settings.json` *and*
             # refreshed its `.bak` -- on the Qt thread, and destroying the one
             # older copy a backup exists to be.
-            if source == "backup" or raw != self._payload_for_save(
-                settings, unknown
+            if not primary_unreadable and (
+                source == "backup"
+                or raw != self._payload_for_save(settings, unknown)
             ):
                 # Guarded: the settings are already parsed and correct.
                 # This write only persists the normalisation, so letting it
@@ -798,6 +823,15 @@ class SettingsStore:
         extra: dict[str, object] | None = None,
     ) -> None:
         with self._lock:
+            # Before anything is written: a `settings.json` that is there and
+            # cannot be opened must not be replaced. Every save writes the
+            # whole file, and the dialog builds it by merging its edits onto
+            # a fresh `load()` -- which answers defaults when it could not
+            # read the file, so the save would put defaults plus those edits
+            # over every hotkey, device and provider choice in it. The guard
+            # is here rather than in `load` because the overlay opacity
+            # slider and pin button save through stores that never loaded.
+            refuse_to_overwrite_unreadable(self._path)
             # Every other caller passes nothing, and used to drop the unknown
             # keys `load` had just gone to the trouble of preserving -- so
             # they survived exactly until the first Settings save, or until

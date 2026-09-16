@@ -9,11 +9,15 @@ from typing import Any
 from .app_paths import local_model_inventory_path
 from .config import VALID_MODEL_SIZES
 from .persistence import (
+    SOURCE_BACKUP_PRIMARY_UNREADABLE,
+    SOURCE_UNREADABLE,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
     lock_for_path,
+    note_unreadable_store,
     quarantine_corrupt_file,
+    store_unavailable_error,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -94,6 +98,9 @@ class LocalModelInventoryStore:
         self._path = path or local_model_inventory_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = lock_for_path(self._path)
+        # Whether the last `_load_state()` reached the file; see
+        # `TranscriptHistoryStore.__init__` for why the flag is safe.
+        self._last_read_unreadable = False
 
     @property
     def path(self) -> Path:
@@ -112,7 +119,9 @@ class LocalModelInventoryStore:
 
     def save_cached_models(self, model_dir: str, cached_models: list[str]) -> None:
         with self._lock:
-            state = self._load_state() or LocalModelInventoryState()
+            state = self._load_state()
+            self._refuse_when_unreadable()
+            state = state or LocalModelInventoryState()
             key = _normalize_model_dir(model_dir)
             state.entries[key] = LocalModelInventoryEntry(
                 cached_models=_normalize_cached_models(cached_models),
@@ -123,6 +132,7 @@ class LocalModelInventoryStore:
     def clear_cached_models(self, model_dir: str = "") -> None:
         with self._lock:
             state = self._load_state()
+            self._refuse_when_unreadable()
             if state is None:
                 return
             key = _normalize_model_dir(model_dir)
@@ -130,20 +140,51 @@ class LocalModelInventoryStore:
                 return
             self._save_state(state)
 
+    def _refuse_when_unreadable(self) -> None:
+        """Stop a read-modify-write whose read never reached the file.
+
+        See `persistence.StoreUnavailableError`. Losing this file costs a
+        rescan rather than data, but the write would still put one directory
+        entry where every remembered directory was.
+        """
+        if self._last_read_unreadable:
+            raise store_unavailable_error(self._path)
+
     def _load_state(self) -> LocalModelInventoryState | None:
+        self._last_read_unreadable = False
         # Both, for consistency with the other stores. This one is only
         # a cache, so the cost of losing it is a rescan rather than data.
         if not self._path.exists() and not backup_path(self._path).exists():
             return None
 
         payload, source = load_json_with_backup(self._path, expected_type=dict)
+        # The backup answered and the primary is there, unopened. Its content
+        # is unknown, so the recovery below must not run: the quarantine would
+        # rename the primary out from under the name the next load reads and
+        # the republish would put the backup over it, and nothing here can
+        # tell which of the two copies is the newer one. The data is answered
+        # from the backup in memory, and the unreadable flag keeps every
+        # read-modify-write off the file until it can be read again.
+        primary_unreadable = source == SOURCE_BACKUP_PRIMARY_UNREADABLE
+        if primary_unreadable:
+            self._last_read_unreadable = True
+            note_unreadable_store(self._path)
+        if source == SOURCE_UNREADABLE:
+            # The file is there and could not be opened; quarantining it
+            # would rename an intact inventory out from under the name the
+            # next load reads.
+            self._last_read_unreadable = True
+            note_unreadable_store(self._path)
+            return None
         if payload is None:
             quarantine_corrupt_file(self._path, include_backup=True)
             return None
 
         raw = dict(payload)
         state = LocalModelInventoryState.from_dict(raw)
-        if source == "backup" or raw != state.to_dict():
+        if not primary_unreadable and (
+            source == "backup" or raw != state.to_dict()
+        ):
             # Guarded: the state is already in hand. This write is a
             # convenience -- a republish after a backup recovery, or
             # persisting the normalised shape -- and letting it escape

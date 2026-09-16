@@ -7244,3 +7244,30 @@ but the SDK is installed -- `assemblyai/streaming/v3/client.py` of 0.64.33
 builds an unbounded `queue.Queue()` -- so ignoring the budget there is right,
 and the docstring now says why. The seventeen provider and controller files:
 1072 passed.
+
+**F10 -- a store held by another program was read as empty and written back.**
+`load_json_with_backup` answered "missing" for a read that raised `OSError`,
+the same word it uses for a file that is not there, so every store loaded its
+empty default and the next read-modify-write put that default plus one entry
+over the user's data; the transcript history quarantined both files first. The
+Opus implementer measured it: five entries, both files held open, one appended
+dictation, and the five survived only as `.corrupt.*` copies. Its patch gave
+the loader a third answer, `SOURCE_UNREADABLE`, every store a
+`_last_read_unreadable` flag whose read-modify-write paths raise
+`StoreUnavailableError` (an `OSError`, so the existing disk guards catch it),
+`SettingsStore.save` a probe of its own because the dialog merges onto a fresh
+load and the overlay saves without one, and `mark_completed` a refusal in
+place of the orphaned-audio fallback that deleted a recording asked to be
+kept. The lead's review of its caller table sent it a second round: the Qt
+call sites that let the refusal escape into a slot (it found and guarded ten,
+three beyond the list, two of them reachable only through the third item),
+`export_to_file` refusing so an unreadable history no longer replaces the
+user's previous export with `[]`, and a primary that exists but cannot be
+opened beside a backup that parses being answered from the backup and never
+quarantined or republished (`SOURCE_BACKUP_PRIMARY_UNREADABLE`), because the
+two copies were never compared. It measured on the way that PySide6 prints a
+slot's exception to stderr and returns, which in a windowed build is a button
+that does nothing. The lead applied both patches onto the streaming commits
+without conflict, ran the store and controller batch (966 passed) and, one Qt
+process at a time, the two dialog files carrying the four tests the workspace
+could not run (201 passed).

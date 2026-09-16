@@ -13,6 +13,7 @@ import os
 import shutil
 import tempfile
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -731,3 +732,43 @@ def _no_benchmark_worker_outlives_its_test():
         "`stt_app.settings_dialog.threading.Thread` with an immediate thread "
         "or wait for `_active_benchmark_thread` before returning"
     )
+
+
+@pytest.fixture
+def files_no_read_gets_past():
+    """Make named files raise `PermissionError` when they are opened.
+
+    The fault an antivirus scan, a backup tool or a sync client produces: the
+    file is there, `stat` answers, and `CreateFile` fails while the other
+    program holds the handle. Patched on `Path.open` rather than on
+    `Path.read_text`, because the latter opens through the former (`pathlib`
+    3.12: `with self.open(mode='r', ...) as f`), so one fault covers both
+    `persistence.load_json_with_backup` and the readability probe
+    `SettingsStore.save` runs before it writes.
+
+    Used by the store, controller and dialog tests, which all need the same
+    fault at different layers::
+
+        with files_no_read_gets_past(path, backup_path(path)):
+            ...
+    """
+
+    @contextmanager
+    def fault(*paths: Path):
+        targets = set(paths)
+        real_open = Path.open
+
+        def refuse_to_open(self, *args, **kwargs):
+            if self in targets:
+                raise PermissionError(
+                    13, "Permission denied (simulated antivirus/sync lock)", str(self)
+                )
+            return real_open(self, *args, **kwargs)
+
+        Path.open = refuse_to_open  # type: ignore[method-assign]
+        try:
+            yield
+        finally:
+            Path.open = real_open  # type: ignore[method-assign]
+
+    return fault

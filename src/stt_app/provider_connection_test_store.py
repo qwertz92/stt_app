@@ -9,12 +9,16 @@ from typing import Any
 from .app_paths import provider_connection_tests_path
 from .config import VALID_ENGINES
 from .persistence import (
+    SOURCE_BACKUP_PRIMARY_UNREADABLE,
+    SOURCE_UNREADABLE,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
     lock_for_path,
+    note_unreadable_store,
     parse_json_bool,
     quarantine_corrupt_file,
+    store_unavailable_error,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -59,17 +63,48 @@ class ProviderConnectionTestStore:
         self._path = path or provider_connection_tests_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = lock_for_path(self._path)
+        # Whether the last `load_all()` reached the file; see
+        # `TranscriptHistoryStore.__init__` for why the flag is safe.
+        self._last_read_unreadable = False
 
     @property
     def path(self) -> Path:
         return self._path
 
+    def _refuse_when_unreadable(self) -> None:
+        """Stop a read-modify-write whose read never reached the file.
+
+        See `persistence.StoreUnavailableError`: `_save` writes the whole
+        result set, so one recorded test would replace every other one.
+        """
+        if self._last_read_unreadable:
+            raise store_unavailable_error(self._path)
+
     def load_all(self) -> dict[str, ProviderConnectionTestResult]:
         with self._lock:
+            self._last_read_unreadable = False
             payload, source = load_json_with_backup(
                 self._path,
                 expected_type=dict,
             )
+            # The backup answered and the primary is there, unopened. Its content
+            # is unknown, so the recovery below must not run: the quarantine would
+            # rename the primary out from under the name the next load reads and
+            # the republish would put the backup over it, and nothing here can
+            # tell which of the two copies is the newer one. The data is answered
+            # from the backup in memory, and the unreadable flag keeps every
+            # read-modify-write off the file until it can be read again.
+            primary_unreadable = source == SOURCE_BACKUP_PRIMARY_UNREADABLE
+            if primary_unreadable:
+                self._last_read_unreadable = True
+                note_unreadable_store(self._path)
+            if source == SOURCE_UNREADABLE:
+                # The file is there and could not be opened; quarantining it
+                # would rename intact results out from under the name the
+                # next load reads.
+                self._last_read_unreadable = True
+                note_unreadable_store(self._path)
+                return {}
             if payload is None:
                 # ``load_json_with_backup`` collapses "file absent" and "file
                 # present but unparseable" into the same ``None`` return. All
@@ -89,9 +124,12 @@ class ProviderConnectionTestStore:
                 # backup, and both loads afterwards returned nothing. The two
                 # history stores already quarantine just the file at fault; the
                 # source is what tells them apart when the backup is the one
-                # that parsed.
+                # that parsed. Asked as "did this come from the primary",
+                # so a payload the backup supplied while the primary could not
+                # be opened moves the backup aside as well -- an unreadable
+                # primary is the one file that may never be renamed here.
                 quarantine_corrupt_file(
-                    backup_path(self._path) if source == "backup" else self._path
+                    self._path if source == "primary" else backup_path(self._path)
                 )
                 return {}
 
@@ -130,6 +168,7 @@ class ProviderConnectionTestStore:
             return
         with self._lock:
             results = self.load_all()
+            self._refuse_when_unreadable()
             results[normalized_provider] = ProviderConnectionTestResult(
                 checked_at=checked_at or _utc_now(),
                 ok=bool(ok),
@@ -143,6 +182,7 @@ class ProviderConnectionTestStore:
             return
         with self._lock:
             results = self.load_all()
+            self._refuse_when_unreadable()
             if results.pop(normalized_provider, None) is None:
                 return
             self._save(results)

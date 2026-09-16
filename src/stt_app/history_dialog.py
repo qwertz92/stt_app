@@ -644,7 +644,18 @@ class HistoryDialog(QtWidgets.QDialog):
         next_text = TranscriptEditDialog.get_text(self, entry.text)
         if next_text is None or next_text == entry.text:
             return
-        updated = self._history_store.update_entry_text(entry, next_text)
+        try:
+            updated = self._history_store.update_entry_text(entry, next_text)
+        except Exception as exc:
+            # A store that could not read its file refuses to write it
+            # (`persistence.StoreUnavailableError`). Unguarded that escaped
+            # into the Qt slot, whose traceback goes to a stderr a windowed
+            # build does not have, so the button did nothing at all. Reported
+            # in the box this dialog already reports a failed save in, with
+            # the refusal's own wording -- it names the file and says to try
+            # again in a moment.
+            QtWidgets.QMessageBox.warning(self, "Edit failed", str(exc))
+            return
         if updated <= 0:
             QtWidgets.QMessageBox.information(
                 self,
@@ -725,7 +736,13 @@ class HistoryDialog(QtWidgets.QDialog):
         )
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        removed = self._history_store.delete_entries(entries)
+        try:
+            removed = self._history_store.delete_entries(entries)
+        except Exception as exc:
+            # See `_edit_selected`: the confirmation was given, nothing was
+            # deleted, and without this the list simply kept its rows.
+            QtWidgets.QMessageBox.warning(self, "Delete failed", str(exc))
+            return
         if removed <= 0:
             QtWidgets.QMessageBox.information(
                 self,
@@ -769,7 +786,18 @@ class HistoryDialog(QtWidgets.QDialog):
             return
 
         if next_limit > 0:
-            self._history_store.apply_max_items(next_limit)
+            try:
+                self._history_store.apply_max_items(next_limit)
+            except Exception as exc:
+                # The limit itself was persisted by `_persist_limit` above and
+                # the trim behind it was not, so the spin box keeps the new
+                # value -- the setting really is stored -- and the count label
+                # keeps the number it showed, which is still the truth. Only
+                # the deletion did not happen, which is what the box says.
+                QtWidgets.QMessageBox.warning(
+                    self, "History not trimmed", str(exc)
+                )
+                return
             current_count = min(current_count, next_limit)
             next_visible = _visible_history_count(current_count, next_limit)
 

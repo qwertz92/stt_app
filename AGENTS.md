@@ -1618,6 +1618,63 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   republishes the primary, so a second loss cannot take the data.
   `tests/test_store_backup_recovery.py` holds all three properties for all
   five stores.
+- **A store file that cannot be opened is neither damage nor empty, and is
+  never written over** (2026-09-16, F10 of the external review). Every
+  store is read-modify-write, and `load_json_with_backup` answered
+  "missing" for a read that raised `OSError` exactly as for a file that is
+  not there -- so a primary held by an antivirus scan, a backup tool or a
+  sync client loaded as the empty default, the next write put that default
+  plus one entry over the user's data, and the transcript history
+  quarantined both files first (measured: five entries, both files held
+  open, one appended dictation, the five survived only as `.corrupt.*`
+  copies). Three rules:
+  - **The loader separates three states.** `"missing"` is no candidate
+    at all, or candidates that opened and were unusable -- nothing saved
+    yet, or damage, answered by starting empty and quarantining.
+    `SOURCE_UNREADABLE` is a candidate that is there and whose read
+    raised: its content is unknown, so nothing is moved and nothing is
+    written; the store logs `store_unreadable path=` once per load and
+    answers its empty default in memory (`SettingsStore.load` returns
+    defaults so the app starts, and no longer reaches the branch that
+    saves them). `SOURCE_BACKUP_PRIMARY_UNREADABLE` is the backup parsing
+    beside a primary that raised: the backup's data is answered, and the
+    republish and the transcript history's quarantine are skipped, because
+    the two copies were never compared and the primary moved aside may be
+    the newer one. A non-UTF-8 read stays damage.
+  - **Every read-modify-write refuses while the last read never reached
+    the file** (`_last_read_unreadable`, written by `load()` and read by
+    `_refuse_when_unreadable()` under the store's path lock, which every
+    such method holds across the two), raising
+    `persistence.StoreUnavailableError` -- an `OSError` subclass, so every
+    caller already guarding a failing disk catches it unchanged -- whose
+    text names the file and says to try again in a moment.
+    `SettingsStore.save` probes the file itself
+    (`refuse_to_overwrite_unreadable`): the dialog merges its edits onto a
+    fresh `load()`, and the overlay's opacity slider and pin button save
+    through stores that never loaded. `TranscriptHistoryStore.export_to_file`
+    refuses after its load, because the destination is a file the user
+    picked, routinely a previous export, and an unreadable history
+    replaced it with `[]` under "Exported 0 entries".
+    `LastRecordingStore.mark_completed` no longer falls back to the
+    orphaned-audio state, whose `keep_after_success` is False and which
+    deleted a recording the state file had asked to keep.
+  - **Ten Qt call sites report the refusal through the presentation they
+    already use** -- the controller's `_paint_status_keeping_offer`, the
+    History dialog's warning box, the Settings History tab's status label,
+    the Benchmark tab's status line, the import and clear boxes of
+    `history_ui_actions` -- with `str(exc)` verbatim. PySide6 does not
+    propagate an exception from a slot invoked from C++: it prints the
+    traceback to stderr and returns, and a windowed build has no stderr,
+    so an unguarded refusal was a button that did nothing, twice in a row.
+    The two `clear()` sites became reachable only with the first rule's
+    third state, because a locked primary beside a readable backup now
+    answers a non-zero count; any UI action that asks a store `count()`
+    and then writes has that shape.
+  `tests/test_store_backup_recovery.py` drives all six stores through the
+  shared `files_no_read_gets_past` fixture (`Path.open` raising
+  `PermissionError` for the named files; `exists()` is a `stat` and is
+  deliberately not patched). A real antivirus, backup or sync lock was not
+  measured.
 - **Deleting a store's primary means deleting its backup, in that order.**
   The recovery above is exactly what makes a half-deletion permanent:
   `LastRecordingStore.clear()` unlinked the state file and left the `.bak`,

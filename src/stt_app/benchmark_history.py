@@ -16,13 +16,17 @@ from .benchmark_environment import BenchmarkEnvironment, safe_int, text_or_empty
 from .csv_safety import export_safe_text, spreadsheet_safe_cell
 from .local_benchmark import BenchmarkCase, _case_from_dict
 from .persistence import (
+    SOURCE_BACKUP_PRIMARY_UNREADABLE,
+    SOURCE_UNREADABLE,
     atomic_write_bytes,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
     lock_for_path,
+    note_unreadable_store,
     parse_json_bool,
     quarantine_corrupt_file,
+    store_unavailable_error,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -159,6 +163,9 @@ class BenchmarkHistoryStore:
         self._path = path or benchmark_history_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = lock_for_path(self._path)
+        # Whether the last `load()` through this instance reached the file;
+        # see `TranscriptHistoryStore.__init__` for why the flag is safe.
+        self._last_read_unreadable = False
 
     @property
     def path(self) -> Path:
@@ -166,7 +173,17 @@ class BenchmarkHistoryStore:
 
     def load(self) -> list[BenchmarkHistoryEntry]:
         with self._lock:
-            return self._load_from_path(self._path)
+            entries, self._last_read_unreadable = self._load_from_path(self._path)
+            return entries
+
+    def _refuse_when_unreadable(self) -> None:
+        """Stop a read-modify-write whose read never reached the file.
+
+        See `persistence.StoreUnavailableError`: the alternative is writing
+        the empty default over every recorded run.
+        """
+        if self._last_read_unreadable:
+            raise store_unavailable_error(self._path)
 
     def count(self) -> int:
         return len(self.load())
@@ -189,6 +206,7 @@ class BenchmarkHistoryStore:
     ) -> None:
         with self._lock:
             entries = self.load()
+            self._refuse_when_unreadable()
             entries.append(entry)
             keep = _normalize_limit(max_items)
             if keep > 0 and len(entries) > keep:
@@ -204,6 +222,7 @@ class BenchmarkHistoryStore:
     def delete_entry(self, entry: BenchmarkHistoryEntry) -> int:
         with self._lock:
             entries = self.load()
+            self._refuse_when_unreadable()
             target_key = entry.identity_key()
             index = next(
                 (
@@ -222,6 +241,7 @@ class BenchmarkHistoryStore:
     def clear(self) -> int:
         with self._lock:
             removed = self.count()
+            self._refuse_when_unreadable()
             if removed:
                 self.save([])
             return removed
@@ -260,11 +280,19 @@ class BenchmarkHistoryStore:
         return any(isinstance(item, dict) for item in payload)
 
     @classmethod
-    def _load_from_path(cls, path: Path) -> list[BenchmarkHistoryEntry]:
+    def _load_from_path(
+        cls,
+        path: Path,
+    ) -> tuple[list[BenchmarkHistoryEntry], bool]:
+        """The stored runs, and whether the read never reached the file.
+
+        The second half is what `load()` records for `_refuse_when_unreadable`;
+        an empty list means "no runs" only when it is `False`.
+        """
         # Both: a deleted primary leaves the `.bak` as the only copy of
         # every recorded run, and the next saved run would overwrite it.
         if not path.exists() and not backup_path(path).exists():
-            return []
+            return [], False
         # See `TranscriptHistoryStore._payload_is_usable`: a primary that is a
         # list but holds no readable run is external damage, and without this
         # the intact backup was never opened and the next saved run overwrote
@@ -272,12 +300,32 @@ class BenchmarkHistoryStore:
         payload, source = load_json_with_backup(
             path, expected_type=list, is_usable=cls._payload_is_usable
         )
+        # The backup answered and the primary is there, unopened. Its content
+        # is unknown, so the recovery below must not run: the quarantine would
+        # rename the primary out from under the name the next load reads and
+        # the republish would put the backup over it, and nothing here can
+        # tell which of the two copies is the newer one. The data is answered
+        # from the backup in memory, and the unreadable flag keeps every
+        # read-modify-write off the file until it can be read again.
+        primary_unreadable = source == SOURCE_BACKUP_PRIMARY_UNREADABLE
+        if primary_unreadable:
+            note_unreadable_store(path)
+        if source == SOURCE_UNREADABLE:
+            # The file is there and could not be opened. Quarantining it would
+            # rename intact runs out from under the name the next load reads,
+            # so nothing is moved and nothing is written.
+            note_unreadable_store(path)
+            return [], True
         if payload is None:
             quarantine_corrupt_file(path, include_backup=True)
-            return []
+            return [], False
         try:
             entries = cls._entries_from_payload(payload)
         except (TypeError, ValueError, OverflowError):
+            if primary_unreadable:
+                # See above: the payload came from the backup, and the primary
+                # is the one file that may not be moved aside here.
+                return [], True
             # TypeError as well as ValueError: a payload whose shape is
             # wrong rather than whose text is (`runs` a number, a run
             # carrying a field this build does not declare) raised past
@@ -286,7 +334,7 @@ class BenchmarkHistoryStore:
             # it. The parser drops unknown fields now, so this is the
             # backstop rather than the common path.
             quarantine_corrupt_file(path)
-            return []
+            return [], False
         if source == "backup":
             # A republish is a convenience: the entries are already in hand,
             # recovered from the backup. Letting its write escape threw them
@@ -302,7 +350,7 @@ class BenchmarkHistoryStore:
                 _LOGGER.exception(
                     "Could not republish %s from its backup", path
                 )
-        return entries
+        return entries, primary_unreadable
 
 
 def export_benchmark_entry(path: Path, entry: BenchmarkHistoryEntry) -> None:

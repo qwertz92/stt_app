@@ -12,11 +12,15 @@ from typing import Any
 
 from .app_paths import transcript_history_path
 from .persistence import (
+    SOURCE_BACKUP_PRIMARY_UNREADABLE,
+    SOURCE_UNREADABLE,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
     lock_for_path,
+    note_unreadable_store,
     quarantine_corrupt_file,
+    store_unavailable_error,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -111,6 +115,12 @@ class TranscriptHistoryStore:
         self._path = path or transcript_history_path()
         self._path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = lock_for_path(self._path)
+        # Whether the last `load()` through this instance reached the file.
+        # Written only by `load()` and read only by `_refuse_when_unreadable`,
+        # both under `self._lock`, and every read-modify-write below holds
+        # that lock across the two -- so the flag always describes the read
+        # the write is about to act on.
+        self._last_read_unreadable = False
 
     @property
     def path(self) -> Path:
@@ -127,7 +137,17 @@ class TranscriptHistoryStore:
 
     def load(self) -> list[TranscriptHistoryEntry]:
         with self._lock:
-            return self._load_from_path(self._path)
+            entries, self._last_read_unreadable = self._load_from_path(self._path)
+            return entries
+
+    def _refuse_when_unreadable(self) -> None:
+        """Stop a read-modify-write whose read never reached the file.
+
+        See `persistence.StoreUnavailableError`: the alternative is writing
+        the empty default over every transcript the file holds.
+        """
+        if self._last_read_unreadable:
+            raise store_unavailable_error(self._path)
 
     def count(self) -> int:
         return len(self.load())
@@ -156,6 +176,7 @@ class TranscriptHistoryStore:
             return 0
         with self._lock:
             current = self.load()
+            self._refuse_when_unreadable()
             merged = self._trim_entries(current + incoming, max_items=max_items)
             self.save(merged)
         return len(incoming)
@@ -163,6 +184,7 @@ class TranscriptHistoryStore:
     def apply_max_items(self, max_items: int) -> int:
         with self._lock:
             entries = self.load()
+            self._refuse_when_unreadable()
             trimmed = self._trim_entries(entries, max_items=max_items)
             removed = len(entries) - len(trimmed)
             if removed > 0:
@@ -172,6 +194,7 @@ class TranscriptHistoryStore:
     def clear(self) -> int:
         with self._lock:
             removed = self.count()
+            self._refuse_when_unreadable()
             if removed:
                 self.save([])
             return removed
@@ -184,6 +207,7 @@ class TranscriptHistoryStore:
             return 0
         with self._lock:
             current = self.load()
+            self._refuse_when_unreadable()
             removed = 0
             for entry in entries:
                 try:
@@ -211,6 +235,7 @@ class TranscriptHistoryStore:
             return 0
         with self._lock:
             current = self.load()
+            self._refuse_when_unreadable()
             try:
                 index = current.index(original)
             except ValueError:
@@ -241,7 +266,15 @@ class TranscriptHistoryStore:
 
     def export_to_file(self, path: Path) -> int:
         path.parent.mkdir(parents=True, exist_ok=True)
-        entries = self.load()
+        with self._lock:
+            # The destination is a file the user picked in a Save dialog, and
+            # routinely a previous export. Reading the history as empty here
+            # loses no transcript, but it replaces that file with `[]` and
+            # reports "Exported 0 entries" -- a successful-looking export that
+            # destroyed the copy it was supposed to duplicate. The refusal
+            # reaches `run_history_export`'s existing "Export failed" box.
+            entries = self.load()
+            self._refuse_when_unreadable()
         payload = [asdict(item) for item in entries]
         atomic_write_json(path, payload, ensure_ascii=True, keep_backup=False)
         return len(entries)
@@ -325,7 +358,15 @@ class TranscriptHistoryStore:
             return False
 
     @classmethod
-    def _load_from_path(cls, path: Path) -> list[TranscriptHistoryEntry]:
+    def _load_from_path(
+        cls,
+        path: Path,
+    ) -> tuple[list[TranscriptHistoryEntry], bool]:
+        """The stored entries, and whether the read never reached the file.
+
+        The second half is what `load()` records for `_refuse_when_unreadable`;
+        an empty list means "no transcripts" only when it is `False`.
+        """
         # Both, not just the primary. An external deletion of
         # `transcript_history.json` -- a sync tool, an antivirus quarantine, a
         # user tidying `%APPDATA%` -- left the `.bak` holding every transcript
@@ -333,7 +374,7 @@ class TranscriptHistoryStore:
         # next dictation then saved that empty list over the backup too:
         # measured, five entries became one.
         if not path.exists() and not backup_path(path).exists():
-            return []
+            return [], False
         # `expected_type=list` alone was too weak: any JSON list satisfied it,
         # so a primary rewritten as `["a", 1, null]` or as dicts with no `text`
         # key counted as the good copy, the intact backup was never opened, and
@@ -343,14 +384,33 @@ class TranscriptHistoryStore:
         payload, source = load_json_with_backup(
             path, expected_type=list, is_usable=cls._payload_is_usable
         )
+        # The backup answered and the primary is there, unopened. Its content
+        # is unknown, so the recovery below must not run: the quarantine would
+        # rename the primary out from under the name the next load reads and
+        # the republish would put the backup over it, and nothing here can
+        # tell which of the two copies is the newer one. The data is answered
+        # from the backup in memory, and the unreadable flag keeps every
+        # read-modify-write off the file until it can be read again.
+        primary_unreadable = source == SOURCE_BACKUP_PRIMARY_UNREADABLE
+        if primary_unreadable:
+            note_unreadable_store(path)
+        if source == SOURCE_UNREADABLE:
+            # The file is there and could not be opened. Quarantining it would
+            # rename intact transcripts out from under the name the next load
+            # reads, so nothing is moved and nothing is written; the refusal
+            # in `_refuse_when_unreadable` keeps the next dictation from
+            # saving an empty history over it.
+            note_unreadable_store(path)
+            return [], True
         if payload is None:
             quarantine_corrupt_file(path, include_backup=True)
-            return []
+            return [], False
         try:
             entries = cls._entries_from_payload(payload)
         except ValueError:
-            quarantine_corrupt_file(path)
-            return []
+            if not primary_unreadable:
+                quarantine_corrupt_file(path)
+            return [], primary_unreadable
         if source == "backup":
             # Whatever is in the primary lost to the backup, so it is unusable
             # by definition; keep it under a `.corrupt.` name instead of having
@@ -371,7 +431,7 @@ class TranscriptHistoryStore:
                 _LOGGER.exception(
                     "Could not republish %s from its backup", path
                 )
-        return entries
+        return entries, primary_unreadable
 
 
 def select_newest_entries(

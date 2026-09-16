@@ -2589,7 +2589,16 @@ class _BenchmarkMixin:
         )
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        removed = self._benchmark_history_store.delete_entry(entry)
+        try:
+            removed = self._benchmark_history_store.delete_entry(entry)
+        except Exception as exc:
+            # A store that could not read its file refuses to write it
+            # (`persistence.StoreUnavailableError`); the rows on screen came
+            # from an earlier load, so the action is reachable while another
+            # program holds the file. Reported on the status line this tab
+            # already reports a not-found entry on.
+            self._set_benchmark_status(str(exc), "#b71c1c")
+            return
         if removed <= 0:
             # The store re-read the file for the delete and found no such
             # entry -- hand-edited, or damaged by another program while
@@ -2626,7 +2635,15 @@ class _BenchmarkMixin:
         )
         if answer != QtWidgets.QMessageBox.Yes:
             return
-        self._benchmark_history_store.clear()
+        try:
+            self._benchmark_history_store.clear()
+        except Exception as exc:
+            # The count above answers 0 for a store with no readable copy, so
+            # this used to be out of reach -- but a locked primary beside a
+            # readable backup answers the backup's count, and the clear is
+            # then reached and refused.
+            self._set_benchmark_status(str(exc), "#b71c1c")
+            return
         self._current_benchmark_entry = None
         self._close_all_benchmark_results_windows()
         self._refresh_benchmark_history_list()

@@ -986,3 +986,63 @@ def test_a_clear_that_finds_nothing_refreshes_the_list(tmp_path):
 
     assert dialog.benchmark_history_list.rowCount() == 0
     _ = app
+
+
+def test_a_delete_is_refused_while_the_history_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """A store that cannot read its file refuses to write it.
+
+    The rows on screen came from an earlier load, so the action is reachable
+    while another program holds the file. `delete_entry` raises
+    `StoreUnavailableError` there rather than writing what it could not read;
+    unguarded that escapes into the Qt slot, and the traceback goes to a
+    stderr a windowed build does not have.
+    """
+    dialog, app = _history_dialog(tmp_path, [_stored_entry("a stored run")])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *_a, **_k: QtWidgets.QMessageBox.Yes),
+    )
+    dialog.benchmark_history_list.setCurrentRow(0)
+    path = dialog._benchmark_history_store._path
+
+    with files_no_read_gets_past(path, backup_path(path)):
+        dialog._delete_selected_benchmark_history()
+    app.processEvents()
+
+    status = dialog.benchmark_status_label.text()
+    assert "could not be read" in status
+    assert "benchmark_history.json" in status
+    assert dialog._benchmark_history_store.count() == 1
+    _ = app
+
+
+def test_a_clear_is_refused_while_only_the_primary_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The count comes from the backup, so the flow reaches the write.
+
+    `_clear_benchmark_history` asks `count()` first and returns early on 0,
+    which is what a store with no readable copy answers -- but a locked
+    primary beside a readable backup answers the backup's count, so the
+    confirmation is shown and the clear is reached.
+    """
+    dialog, app = _history_dialog(tmp_path, [_stored_entry("a stored run")])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        staticmethod(lambda *_a, **_k: QtWidgets.QMessageBox.Yes),
+    )
+    path = dialog._benchmark_history_store._path
+
+    with files_no_read_gets_past(path):
+        dialog._clear_benchmark_history()
+    app.processEvents()
+
+    status = dialog.benchmark_status_label.text()
+    assert "could not be read" in status
+    assert dialog._benchmark_history_store.count() == 1
+    assert not sorted(tmp_path.glob("*.corrupt.*"))
+    _ = app

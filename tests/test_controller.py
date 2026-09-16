@@ -38,6 +38,7 @@ from stt_app.config import (
 )
 from stt_app.controller import DictationController
 from stt_app.last_recording_store import LastRecordingStore
+from stt_app.persistence import backup_path
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -3242,3 +3243,36 @@ def test_shutdown_tolerates_an_inserter_that_cannot_flush():
     raising.shutdown()
     assert raising._shutdown_started is True
     _ = app
+
+
+def test_an_edit_is_refused_on_the_overlay_when_history_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The store refuses rather than writing an empty history back.
+
+    That refusal reaches `edit_last_transcript` as a `StoreUnavailableError`
+    on the Qt thread, where nothing caught it: the overlay Edit button did
+    nothing at all and a windowed build printed the traceback nowhere. It is
+    painted like the three refusals above it, so the pending-insert offer
+    survives and the message names the file.
+    """
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    overlay = FakeOverlay()
+    controller, _app = make_controller(history_store=history_store, overlay=overlay)
+    _patch_edit_dialog(monkeypatch, lambda parent, text: "edited transcript")
+    try:
+        controller._on_transcription_ready("transcript A.")
+
+        with files_no_read_gets_past(
+            history_store.path, backup_path(history_store.path)
+        ):
+            assert controller.edit_last_transcript(None) is False
+
+        state, detail = overlay.states[-1]
+        assert state == "Error"
+        assert "could not be read" in detail
+        assert "history.json" in detail
+        # Nothing was written, so the edit is still there to be made again.
+        assert [entry.text for entry in history_store.load()] == ["transcript A."]
+    finally:
+        controller.shutdown()

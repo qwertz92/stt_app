@@ -6,6 +6,7 @@ import pytest
 from PySide6 import QtCore, QtGui, QtTest, QtWidgets
 
 from stt_app.history_dialog import HistoryDialog
+from stt_app.persistence import backup_path
 from stt_app.settings_store import AppSettings, SettingsStore
 from stt_app.transcript_history import TranscriptHistoryEntry, TranscriptHistoryStore
 
@@ -691,4 +692,211 @@ def test_import_only_free_slots_keeps_the_newest_entries(monkeypatch, tmp_path):
     assert imported == {"month-5", "month-6"}, (
         f"the oldest entries were imported instead of the newest: {sorted(imported)}"
     )
+    _ = app
+
+
+# -- A store that refuses reaches the user, not a dead button -----------------
+#
+# `StoreUnavailableError` is raised on the Qt thread by every read-modify-write
+# path of the history store. Unguarded it escapes into the slot, where a
+# windowed build prints the traceback nowhere: the button does nothing at all,
+# twice in a row, and the user has no way to tell a refusal from a bug. Each of
+# these drives one call site through the widget the user actually presses.
+
+
+def _record_message_boxes(monkeypatch) -> list[tuple[str, str]]:
+    """Collect `(title, text)` of every warning box instead of showing one.
+
+    `tests/conftest.py` blocks the `QMessageBox` statics outright -- an
+    unstubbed modal hangs a run rather than failing it -- so a test that drives
+    a reporting path has to patch the static and read what it was handed.
+    """
+    shown: list[tuple[str, str]] = []
+
+    def record(_parent, title, text, *_args, **_kwargs):
+        shown.append((str(title), str(text)))
+        return QtWidgets.QMessageBox.Ok
+
+    monkeypatch.setattr(QtWidgets.QMessageBox, "warning", record)
+    return shown
+
+
+def _answer_yes(monkeypatch) -> None:
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *_args, **_kwargs: QtWidgets.QMessageBox.Yes,
+    )
+
+
+def test_an_edit_is_refused_when_the_history_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The edit is refused, and the transcript it would have replaced stays."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    monkeypatch.setattr(
+        "stt_app.history_dialog.TranscriptEditDialog.get_text",
+        lambda *_args, **_kwargs: "alpha edited",
+    )
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._table.selectRow(0)
+    shown = _record_message_boxes(monkeypatch)
+
+    with files_no_read_gets_past(history_store.path, backup_path(history_store.path)):
+        dialog._edit_button.click()
+
+    assert [title for title, _text in shown] == ["Edit failed"]
+    assert "could not be read" in shown[0][1]
+    assert "history.json" in shown[0][1]
+    assert [entry.text for entry in history_store.load()] == ["alpha"]
+    _ = app
+
+
+def test_a_delete_is_refused_when_the_history_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The confirmation was given, the entries are still there, and it says so.
+
+    Without the guard the user confirms a deletion, nothing happens, and the
+    list still shows both rows -- indistinguishable from a broken button.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    _answer_yes(monkeypatch)
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    dialog._table.selectRow(0)
+    shown = _record_message_boxes(monkeypatch)
+
+    with files_no_read_gets_past(history_store.path, backup_path(history_store.path)):
+        dialog._delete_button.click()
+
+    assert [title for title, _text in shown] == ["Delete failed"]
+    assert "could not be read" in shown[0][1]
+    assert history_store.count() == 2
+    _ = app
+
+
+def test_a_lowered_limit_reports_a_history_it_cannot_trim(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The limit is saved and the trim is not, so both have to be reported.
+
+    `_persist_limit` writes `settings.json`, which is readable here; the trim
+    that follows it reads the history and refuses. The spin box keeps the new
+    limit because the setting really was stored -- only the deletion behind it
+    did not happen.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta"), _entry("gamma")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    shown = _record_message_boxes(monkeypatch)
+
+    with files_no_read_gets_past(history_store.path, backup_path(history_store.path)):
+        dialog._max_items_spin.setValue(1)
+
+    assert [title for title, _text in shown] == ["History not trimmed"]
+    assert "could not be read" in shown[0][1]
+    assert settings_store.load().history_max_items == 1
+    assert history_store.count() == 3
+    _ = app
+
+
+def test_an_import_is_refused_when_the_history_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The import file is readable and the history is not, so nothing is written.
+
+    This is the site where the old behaviour destroyed data rather than only
+    misreporting: `append_entries` read the locked history as empty and wrote
+    the imported entries over the intact file.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("old-1"), _entry("old-2")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    import_file = tmp_path / "import.json"
+    import_file.write_text(
+        json.dumps(
+            [
+                {
+                    "created_at": "2026-03-03T00:00:00+00:00",
+                    "text": "new-1",
+                    "engine": "local",
+                    "model": "small",
+                    "mode": "batch",
+                }
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        QtWidgets.QFileDialog,
+        "getOpenFileName",
+        lambda *_args, **_kwargs: (str(import_file), "JSON files (*.json)"),
+    )
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    shown = _record_message_boxes(monkeypatch)
+
+    with files_no_read_gets_past(history_store.path, backup_path(history_store.path)):
+        dialog._import_history()
+
+    assert [title for title, _text in shown] == ["Import failed"]
+    assert "could not be read" in shown[0][1]
+    assert [entry.text for entry in history_store.load()] == ["old-1", "old-2"]
+    _ = app
+
+
+def test_a_clear_is_refused_while_only_the_primary_cannot_be_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The count comes from the backup, so the flow reaches the write.
+
+    `run_history_clear` asks `count()` first and returns early on 0, which is
+    what a store with no readable copy answers -- but a locked primary beside a
+    readable backup answers the backup's count, so the confirmation is shown
+    and the clear is reached. Nothing may be deleted there: the store cannot
+    read the file it would be deleting.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_entry("alpha"), _entry("beta")])
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(AppSettings(history_max_items=20))
+    _answer_yes(monkeypatch)
+    dialog = HistoryDialog(
+        history_store=history_store,
+        settings_store=settings_store,
+    )
+    shown = _record_message_boxes(monkeypatch)
+
+    with files_no_read_gets_past(history_store.path):
+        dialog._clear_button.click()
+
+    assert [title for title, _text in shown] == ["Clear failed"]
+    assert "could not be read" in shown[0][1]
+    assert history_store.count() == 2
+    assert not sorted(tmp_path.glob("*.corrupt.*"))
     _ = app

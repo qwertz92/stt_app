@@ -20,6 +20,7 @@ from stt_app.benchmark_history import (
 from stt_app.config import CANARY_MODEL_SIZE, LOCAL_BATCH_ONLY_MODELS
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.local_benchmark import BenchmarkCase, BenchmarkRun
+from stt_app.persistence import backup_path
 from stt_app.settings_dialog import SettingsDialog
 from stt_app.settings_dialog_helpers import local_model_short_label
 from stt_app.settings_store import CURRENT_SCHEMA_VERSION, AppSettings
@@ -1038,6 +1039,73 @@ def test_settings_history_edit_updates_item_without_rebuilding_others(
     assert dialog.history_list.item(0).isSelected() is True
     assert dialog.history_detail.toPlainText() == "second edited"
     assert dialog.history_list.item(1) is first_item
+    _ = app
+
+
+def test_settings_history_edit_reports_a_store_it_cannot_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """The refusal reaches the tab's own status label, not a popup.
+
+    `update_entry_text` raises `StoreUnavailableError` rather than writing the
+    empty default over the transcripts. Unguarded that escapes into the Qt
+    slot, where the traceback goes to a stderr a windowed build does not have:
+    the Edit button simply does nothing.
+    """
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("first")])
+    monkeypatch.setattr(
+        "stt_app.settings_dialog.TranscriptEditDialog.get_text",
+        lambda *_args, **_kwargs: "first edited",
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    dialog.history_list.item(0).setSelected(True)
+
+    with files_no_read_gets_past(history_store.path, backup_path(history_store.path)):
+        dialog._edit_selected_history()
+
+    status = dialog.history_status_label.text()
+    assert "could not be read" in status
+    assert "history.json" in status
+    assert [entry.text for entry in history_store.load()] == ["first"]
+    _ = app
+
+
+def test_settings_history_delete_reports_a_store_it_cannot_read(
+    monkeypatch, tmp_path, files_no_read_gets_past
+):
+    """Same road through Delete selected, and the entries are still there."""
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    history_store = TranscriptHistoryStore(path=tmp_path / "history.json")
+    history_store.save([_history_entry("first"), _history_entry("second")])
+    monkeypatch.setattr(
+        QtWidgets.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QtWidgets.QMessageBox.Yes,
+    )
+    dialog = SettingsDialog(
+        settings_store=_FakeSettingsStore(AppSettings()),
+        secret_store=_FakeSecretStore(),
+        app_logger=_FakeLogger(),
+    )
+    dialog._history_store = history_store
+    dialog._refresh_history_list()
+    dialog.history_list.item(0).setSelected(True)
+
+    with files_no_read_gets_past(history_store.path, backup_path(history_store.path)):
+        dialog._delete_selected_history()
+
+    status = dialog.history_status_label.text()
+    assert "could not be read" in status
+    assert "history.json" in status
+    assert history_store.count() == 2
     _ = app
 
 

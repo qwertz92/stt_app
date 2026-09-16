@@ -9,12 +9,16 @@ from uuid import uuid4
 
 from .app_paths import debug_audio_path, last_recording_state_path
 from .persistence import (
+    SOURCE_BACKUP_PRIMARY_UNREADABLE,
+    SOURCE_UNREADABLE,
     atomic_write_bytes,
     atomic_write_json,
     backup_path,
     load_json_with_backup,
     lock_for_path,
+    note_unreadable_store,
     quarantine_corrupt_file,
+    store_unavailable_error,
 )
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,6 +96,9 @@ class LastRecordingStore:
         self._audio_path.parent.mkdir(parents=True, exist_ok=True)
         self._state_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = lock_for_path(self._state_path)
+        # Whether the last `load()` through this instance reached the state
+        # file; see `TranscriptHistoryStore.__init__` for why the flag is safe.
+        self._last_read_unreadable = False
 
     @property
     def audio_path(self) -> Path:
@@ -103,6 +110,7 @@ class LastRecordingStore:
 
     def load(self) -> LastRecordingState | None:
         with self._lock:
+            self._last_read_unreadable = False
             # Both: the backup carries the recovery state that makes
             # Retry work after a crash, which is when the primary is most
             # likely to be missing.
@@ -115,6 +123,28 @@ class LastRecordingStore:
                 self._state_path,
                 expected_type=dict,
             )
+            # The backup answered and the primary is there, unopened. Its content
+            # is unknown, so the recovery below must not run: the quarantine would
+            # rename the primary out from under the name the next load reads and
+            # the republish would put the backup over it, and nothing here can
+            # tell which of the two copies is the newer one. The data is answered
+            # from the backup in memory, and the unreadable flag keeps every
+            # read-modify-write off the file until it can be read again.
+            if source == SOURCE_BACKUP_PRIMARY_UNREADABLE:
+                self._last_read_unreadable = True
+                note_unreadable_store(self._state_path)
+            if source == SOURCE_UNREADABLE:
+                # The state file is there and could not be opened, so what it
+                # records about this recording -- `keep_after_success` above
+                # all -- is unknown. Quarantining would rename that state out
+                # from under the name the next load reads. The orphaned-audio
+                # state below keeps Retry working, and the refusal in
+                # `_refuse_when_unreadable` keeps every `mark_*` from writing
+                # over the file: without it `mark_completed` read the orphan
+                # state, found `keep_after_success` False and deleted the WAV.
+                self._last_read_unreadable = True
+                note_unreadable_store(self._state_path)
+                return self._orphaned_audio_state()
             if payload is None:
                 quarantine_corrupt_file(self._state_path, include_backup=True)
                 return self._orphaned_audio_state()
@@ -139,6 +169,16 @@ class LastRecordingStore:
                         self._state_path,
                     )
             return state
+
+    def _refuse_when_unreadable(self) -> None:
+        """Stop a read-modify-write whose read never reached the state file.
+
+        See `persistence.StoreUnavailableError`. `save_recording` is not one
+        of these: it replaces the recording and its state wholesale, so it
+        needs nothing from the file it overwrites.
+        """
+        if self._last_read_unreadable:
+            raise store_unavailable_error(self._state_path)
 
     def save_recording(
         self,
@@ -167,6 +207,7 @@ class LastRecordingStore:
             return None
         with self._lock:
             state = self.load()
+            self._refuse_when_unreadable()
             if state is None or not self._audio_path.is_file():
                 return None
             if not state.recording_id:
@@ -194,6 +235,7 @@ class LastRecordingStore:
     ) -> bool:
         with self._lock:
             state = self.load()
+            self._refuse_when_unreadable()
             if state is None:
                 if expected_recording_id is not None or not self._audio_path.is_file():
                     return False
@@ -225,6 +267,7 @@ class LastRecordingStore:
     ) -> bool:
         with self._lock:
             state = self.load()
+            self._refuse_when_unreadable()
             if state is None or (
                 expected_recording_id is not None
                 and state.recording_id != expected_recording_id
@@ -243,6 +286,7 @@ class LastRecordingStore:
     ) -> bool:
         with self._lock:
             state = self.load()
+            self._refuse_when_unreadable()
             if state is None or (
                 expected_recording_id is not None
                 and state.recording_id != expected_recording_id
@@ -260,6 +304,7 @@ class LastRecordingStore:
     ) -> bool:
         with self._lock:
             state = self.load()
+            self._refuse_when_unreadable()
             if state is None or (
                 expected_recording_id is not None
                 and state.recording_id != expected_recording_id
@@ -354,6 +399,13 @@ class LastRecordingStore:
         with self._lock:
             if expected_recording_id is not None:
                 state = self.load()
+                # The identity check is the only read this method makes, so
+                # it is the only branch with a read to refuse. Called without
+                # an expected id it reads nothing and deletes rather than
+                # rewrites; `mark_completed` is the one caller in `src/` and
+                # it always passes the id it just read, having refused above
+                # if that read did not reach the file.
+                self._refuse_when_unreadable()
                 if state is None or state.recording_id != expected_recording_id:
                     return False
             try:
