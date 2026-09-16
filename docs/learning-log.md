@@ -7271,3 +7271,26 @@ that does nothing. The lead applied both patches onto the streaming commits
 without conflict, ran the store and controller batch (966 passed) and, one Qt
 process at a time, the two dialog files carrying the four tests the workspace
 could not run (201 passed).
+
+**The commits and the mutation round.** Eight commits after the two pushed
+ones, one per unit: `47bc304` (F08, an extensible WAV decoded by its
+SubFormat), `a11ddab` (F11, a refused keyring write over a held key is
+refused), `7640563` (F13, one default Hugging Face cache directory), `c52ea82`
+(F12, every copyable clipboard format captured and restored), `b556b08` (F03,
+a stop no longer retires the stream it finalizes), `86cd4ae` (F04, a retired
+session's runtime failure is ignored), `fb28f4c` (F09, the preconnect flush
+may wait for Deepgram's queue), `467788f` (F10, an unreadable store file is
+never written over), and this record. Mutants, run by the lead against the
+real tree with a restore in a `finally`: F08 5 of 5 detected, F11 5 of 6 (the
+survivor changes only which exception's wording reaches the user with the
+fallback disabled), F13 4 of 4, F12 11 of 11, F03 8 of 10 (the two survivors
+remove the generation guards on the recorded connect failure, which no
+reachable state distinguishes: the record is cleared at every handshake start
+and every session reset, and no handshake can start while a finalize is
+pending), F04 6 of 6, F09 4 of 5 (the survivor drops the `_stream_error`
+record of a timed put that ran out of budget, which nothing reads because the
+finalize aborts the stream on that road), F10 10 of 10 -- 53 of 57. One runner
+failure on the way: the restore's `write_bytes` raised `OSError 22` once on
+Windows and left the mutant in the tree, caught by the `git status` that
+follows every run. The full suite on `467788f`, 16 September: 2804 passed, 1
+skipped in 155.26 s.
