@@ -396,6 +396,7 @@ class FakeLastRecordingStore:
         self.path = Path(path)
         self.saved: list[tuple[bytes, bool]] = []
         self.transcribing: list[tuple[str, str, str]] = []
+        self.transcribing_ids: list[str | None] = []
         self.failed: list[str] = []
         self.failed_ids: list[str | None] = []
         self.canceled: list[str] = []
@@ -409,8 +410,11 @@ class FakeLastRecordingStore:
         self._available = bool(wav_bytes)
         return
 
-    def mark_transcribing(self, *, engine: str, model: str, mode: str) -> None:
+    def mark_transcribing(
+        self, *, engine: str, model: str, mode: str, expected_recording_id=None
+    ) -> None:
         self.transcribing.append((engine, model, mode))
+        self.transcribing_ids.append(expected_recording_id)
 
     def mark_failed(self, error: str, *, expected_recording_id=None) -> None:
         self.failed.append(str(error))

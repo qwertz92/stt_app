@@ -2220,6 +2220,171 @@ def test_the_queue_rows_x_on_an_older_row_is_keyed_to_that_jobs_recording(
     _ = app
 
 
+class _StoreThatAssignsIds(_StoreWithIds):
+    """Hands back a fresh id for every recording it saves, as the real store
+    does, or refuses the write."""
+
+    def __init__(self, recording_id: str, *, save_raises: bool = False):
+        super().__init__(recording_id)
+        self.save_raises = save_raises
+        self.saves = 0
+
+    def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
+        if self.save_raises:
+            raise OSError("disk full")
+        super().save_recording(wav_bytes, keep_after_success=keep_after_success)
+        self.saves += 1
+        self.recording_id = f"saved-{self.saves}"
+        return SimpleNamespace(recording_id=self.recording_id)
+
+
+def test_the_retry_keys_every_mark_by_the_failed_recordings_own_id():
+    """The retry transcribes W's bytes and marks W's slot, never the slot's
+    current holder: the id is taken from the failed job when its audio is
+    retained, handed to the retry's job, and keys the transcribing and
+    completion marks."""
+    store = _StoreWithIds("rec-W")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    captured = []
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda token, wav, _snapshot, job=None: captured.append((token, wav))
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._active_request_token = 3
+    controller._store_request_audio(3, b"wav-W", settings)
+
+    controller._on_transcription_failed("model exploded", request_token=3)
+
+    assert store.failed_ids == ["rec-W"]
+    assert controller._last_failed_wav_bytes == b"wav-W"
+    assert controller._last_failed_recording_id == "rec-W"
+
+    # A newer recording holds the store's slot when Retry is pressed.
+    store.recording_id = "rec-A"
+
+    assert controller.retry_last_transcription() is True
+
+    retry_token = controller._active_request_token
+    retry_job = controller._jobs[retry_token]
+    assert captured == [(retry_token, b"wav-W")]
+    assert retry_job.source_recording_id == "rec-W"
+    assert retry_job.marks_last_recording is True
+    assert store.transcribing_ids == ["rec-W"]
+
+    controller._on_transcription_ready("retried", request_token=retry_token)
+
+    assert store.completed_ids == ["rec-W"]
+    assert controller._last_failed_wav_bytes == b""
+    assert controller._last_failed_recording_id == ""
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("road", ["completed", "failed", "canceled"])
+@pytest.mark.parametrize(
+    ("retained_id", "expected_ids"),
+    [
+        pytest.param("rec-W", ["rec-W"], id="the failed recording's own id"),
+        pytest.param("", [], id="an identity the store never received"),
+    ],
+)
+def test_the_retry_jobs_marks_follow_the_retained_identity(
+    road, retained_id, expected_ids
+):
+    """A retry marks the recording whose bytes it transcribes, keyed by the
+    identity retained with them, and marks nothing when that identity is
+    unknown: the store's slot then holds someone else's recording, which an
+    unconditional write would relabel or delete."""
+    store = _StoreWithIds("rec-A")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    controller._last_failed_wav_bytes = b"retained"
+    controller._last_failed_recording_id = retained_id
+
+    assert controller.retry_last_transcription() is True
+
+    token = controller._active_request_token
+    job = controller._jobs[token]
+    assert job.source_recording_id == retained_id
+    assert job.marks_last_recording is bool(retained_id)
+    assert store.transcribing_ids == expected_ids
+    if road == "completed":
+        controller._on_transcription_ready("retried", request_token=token)
+        assert store.completed_ids == expected_ids
+    elif road == "failed":
+        controller._on_transcription_failed("boom", request_token=token)
+        assert store.failed_ids == expected_ids
+    else:
+        controller.cancel_current_action()
+        assert store.canceled_ids == expected_ids
+    assert store.transcribing_ids == expected_ids
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_the_watchdog_abort_retains_the_stalled_recordings_own_id(
+    monkeypatch, persisted
+):
+    """Late bytes kept by the first-callback watchdog carry the id the store
+    handed back for them, and no id when that write failed: the slot then
+    still holds the previous recording."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+    )
+    controller.start_recording()
+    FakeCapture.instances[-1]._wav_bytes = b"late audio"
+
+    controller._on_audio_callback_watchdog_timeout()
+
+    assert controller._last_failed_wav_bytes == b"late audio"
+    assert controller._last_failed_recording_id == ("saved-1" if persisted else "")
+    assert store.recording_id == ("saved-1" if persisted else "rec-previous")
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_a_stream_runtime_failure_retains_the_sessions_own_id(
+    monkeypatch, persisted
+):
+    """The audio a dying stream runtime keeps for Retry carries the id the
+    teardown's persist handed back, and no id when that write failed."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small"
+    )
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    transcriber = FakeStreamingTranscriber(push_raises=RuntimeError("push failed"))
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+    )
+    controller.start_recording()
+
+    FakeCapture.instances[-1].chunk_callback(b"data")
+
+    assert transcriber.aborted is True
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    assert controller._last_failed_recording_id == ("saved-1" if persisted else "")
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
     inserter = FakeTextInserter()

@@ -2978,13 +2978,25 @@ def test_a_coalesced_insert_failure_offers_no_single_entry_to_edit(
 
 def test_the_completion_mark_carries_the_job_recording_id_or_none():
     """An empty id means "unknown" and must not be handed to the store as a
-    compare-and-set value the store can never match."""
+    compare-and-set value the store can never match; a job transcribing
+    bytes the store never received marks nothing at all."""
     store = FakeLastRecordingStore()
     controller, _app = make_controller(last_recording_store=store)
     try:
-        controller._mark_last_recording_completed("rec-a")
-        controller._mark_last_recording_completed("")
+        settings = controller._settings
+        known = controller._register_transcription_job(1, settings, "batch")
+        known.source_recording_id = "rec-a"
+        unknown = controller._register_transcription_job(2, settings, "batch")
+        unknown.source_recording_id = ""
+        retained = controller._register_transcription_job(3, settings, "batch")
+        retained.source_recording_id = ""
+        retained.marks_last_recording = False
+
+        controller._mark_last_recording_completed(known)
+        controller._mark_last_recording_completed(unknown)
         controller._mark_last_recording_completed(None)
+        controller._mark_last_recording_completed(retained)
+
         assert store.completed_ids == ["rec-a", None, None]
     finally:
         controller.shutdown()
@@ -3507,6 +3519,135 @@ def test_a_re_paste_during_a_transcription_in_flight_is_refused_through_the_tray
         assert len(inserter.calls) == len(pasted) + 1, inserter.calls
         assert overlay.states[-1] == ("Done", "the new transcript.")
         assert len(tray) == 1, tray
+    finally:
+        release.set()
+        controller.shutdown()
+    _ = app
+
+
+class _FailHoldSucceedTranscriber:
+    """Call 1 fails at once, call 2 blocks until released, call 3 succeeds."""
+
+    def __init__(self, release, entered):
+        self._release = release
+        self._entered = entered
+        self.calls = 0
+
+    def transcribe_batch(self, _audio_source):
+        self.calls += 1
+        if self.calls == 1:
+            raise RuntimeError("W failed")
+        if self.calls == 2:
+            self._entered.set()
+            self._release.wait(timeout=8.0)
+            return "transcript A."
+        return "retry of W succeeded."
+
+    def set_cancel_check(self, _check):
+        return None
+
+    def set_language_mode(self, _mode):
+        return None
+
+    def set_progress_callback(self, _callback):
+        return None
+
+    def close(self):
+        return None
+
+
+def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_store(
+    monkeypatch, tmp_path
+):
+    """The retry of a failed recording W carries W's own identity.
+
+    `retry_last_transcription` resubmits W's retained bytes, and the job
+    used to take its recording id from the store's slot at registration --
+    the newest recording A, whose transcription the retry first stops. The
+    retry's unkeyed transcribing mark then relabelled A's slot, and its
+    completion, keyed by A's id, matched and deleted A's audio and state
+    (`keep_after_success` off) although A never completed under its own
+    name (the wave-14 concurrency lens, on the real store).
+    """
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    recordings = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    release = threading.Event()
+    entered = threading.Event()
+    _ScriptedCapture.instances = []
+    _ScriptedCapture.queue = [_sine_wav(0.30), _sine_wav(0.30)]
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _ScriptedCapture)
+    transcriber = _FailHoldSucceedTranscriber(release, entered)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+        concurrent_transcription_mode=CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+    )
+    assert settings.save_last_wav is False
+    overlay = FakeOverlay()
+    controller, app = make_controller(
+        settings_store=FakeSettingsStore(settings),
+        history_store=history_store,
+        last_recording_store=recordings,
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+    )
+    try:
+        # W fails at once and is retained for Retry under its own id.
+        controller.toggle_recording()
+        controller.toggle_recording()
+        _pump_until(app, lambda: bool(controller._last_failed_wav_bytes))
+        w_state = recordings.load()
+        assert w_state is not None and w_state.status == "failed"
+        w_id = w_state.recording_id
+        assert controller._last_failed_recording_id == w_id
+
+        # A, a newer recording, is transcribing when Retry is pressed.
+        controller.toggle_recording()
+        controller.toggle_recording()
+        assert entered.wait(timeout=8.0), "A's worker never started"
+        token_a = controller._active_request_token
+        a_state = recordings.load()
+        assert a_state is not None and a_state.status == "transcribing"
+        a_id = a_state.recording_id
+        assert a_id != w_id
+
+        assert controller.retry_last_transcription() is True
+
+        token_retry = controller._active_request_token
+        assert token_retry != token_a
+        retry_job = controller._jobs[token_retry]
+        assert retry_job.source_recording_id == w_id
+        # The retry's stop marked A canceled; the retry's own transcribing
+        # mark, keyed by W, left that alone.
+        after_retry = recordings.load()
+        assert after_retry is not None
+        assert (after_retry.recording_id, after_retry.status) == (a_id, "canceled")
+
+        release.set()
+        _pump_until(
+            app,
+            lambda: token_a not in controller._jobs
+            and token_retry not in controller._jobs,
+        )
+
+        assert transcriber.calls == 3
+        assert overlay.states[-1] == ("Done", "retry of W succeeded.")
+        final_state = recordings.load()
+        assert final_state is not None
+        assert (final_state.recording_id, final_state.status) == (a_id, "canceled")
+        assert recordings.audio_path.is_file()
+        assert recordings.has_recoverable_recording() is True
+        assert [entry.text for entry in history_store.load()] == [
+            "transcript A.",
+            "retry of W succeeded.",
+        ]
     finally:
         release.set()
         controller.shutdown()

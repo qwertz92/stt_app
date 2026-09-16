@@ -161,6 +161,12 @@ class _TranscriptionJob:
     target_signature: FocusSignature | None
     created_at: datetime = field(default_factory=datetime.now)
     source_recording_id: str = ""
+    # False for a job transcribing bytes the managed store never received (a
+    # retry whose retained identity is unknown): its terminal marks leave the
+    # store alone, because the slot holds someone else's recording and the
+    # unconditional write an empty id otherwise means would relabel or
+    # delete it.
+    marks_last_recording: bool = True
     source_audio_path: str = ""
     future: object | None = None
     # The provider handshake thread, when this job finalizes a stream that may
@@ -492,6 +498,16 @@ class DictationController(QtCore.QObject):
         self._offer_painted: tuple[str, str] | None = None
         self._last_history_entry: TranscriptHistoryEntry | None = None
         self._last_failed_wav_bytes: bytes = b""
+        # The managed recording those bytes are, as the store knows it: the
+        # failed job's own id, or the id `save_recording` handed back when
+        # the abort roads persisted them; "" when that write failed and the
+        # store's slot holds someone else's recording. A retry hands it to
+        # its job, so its marks never touch the slot's current holder.
+        self._last_failed_recording_id: str = ""
+        # The id the store handed back on the last `_persist_last_recording_audio`
+        # call, "" when nothing was written. Read by the two abort roads that
+        # retain the bytes they just persisted for Retry.
+        self._last_persisted_recording_id: str = ""
         self._last_transcribe_settings: AppSettings | None = None
         self._active_batch_settings: AppSettings | None = None
         self._streaming_recording = False
@@ -1855,7 +1871,9 @@ class DictationController(QtCore.QObject):
         # them automatically from the timeout path.
         wav_bytes, _ = self._stop_active_capture(persist_audio=False)
         self._last_failed_wav_bytes = bytes(wav_bytes)
+        self._last_failed_recording_id = ""
         if wav_bytes and self._persist_last_recording_audio(wav_bytes):
+            self._last_failed_recording_id = self._last_persisted_recording_id
             try:
                 self._last_recording_store.mark_failed(detail)
             except Exception:
@@ -2405,13 +2423,17 @@ class DictationController(QtCore.QObject):
         return self._last_recording_store.selectable_path(archived_dir)
 
     def _persist_last_recording_audio(self, wav_bytes: bytes) -> bool:
+        self._last_persisted_recording_id = ""
         if not wav_bytes:
             return False
         try:
-            self._last_recording_store.save_recording(
+            state = self._last_recording_store.save_recording(
                 wav_bytes,
                 keep_after_success=self._settings.save_last_wav,
             )
+            self._last_persisted_recording_id = str(
+                getattr(state, "recording_id", "") or ""
+            ).strip()
             return True
         except Exception:
             self._logger.exception("Failed to persist last recording audio")
@@ -2905,10 +2927,7 @@ class DictationController(QtCore.QObject):
         self._last_transcript = text
         self._last_history_entry = entry
 
-    def _mark_last_recording_completed(
-        self,
-        expected_recording_id: str | None = None,
-    ) -> None:
+    def _mark_last_recording_completed(self, job: _TranscriptionJob | None) -> None:
         """Complete the last recording only while it is still the job's own.
 
         A job records the managed recording's id when it is registered. An
@@ -2918,21 +2937,69 @@ class DictationController(QtCore.QObject):
         `keep_after_success` off deletes the audio the gate had just
         promised to keep. An empty id means unknown
         (`_current_last_recording_id` answers "" for no state) and keeps the
-        unconditional write: the store could never match "".
+        unconditional write: the store could never match "". A job that
+        transcribes bytes the store never received marks nothing
+        (`marks_last_recording`); no job at all is the unconditional write.
         """
+        if job is not None and not job.marks_last_recording:
+            return
+        expected = job.source_recording_id if job is not None else None
         try:
             self._last_recording_store.mark_completed(
-                expected_recording_id=expected_recording_id or None
+                expected_recording_id=expected or None
             )
         except Exception:
             self._logger.exception("Failed to finalize last recording state")
 
-    def _promote_request_audio_for_retry(self, request_token: int) -> bool:
+    def _mark_last_recording_transcribing(
+        self, job: _TranscriptionJob, settings: AppSettings
+    ) -> None:
+        """Mark the job's own recording transcribing, keyed like every other
+        mark. Unkeyed, a retry of an older failure relabelled the newest
+        recording's slot -- the one its stop had just marked canceled -- as
+        transcribing (the wave-14 concurrency lens)."""
+        if not job.marks_last_recording:
+            return
+        try:
+            self._last_recording_store.mark_transcribing(
+                engine=settings.engine,
+                model=self._selected_model_name(settings),
+                mode=settings.mode,
+                expected_recording_id=job.source_recording_id or None,
+            )
+        except Exception:
+            self._logger.exception("Failed to mark last recording as transcribing")
+
+    def _mark_last_recording_failed(
+        self, job: _TranscriptionJob | None, error_text: str
+    ) -> None:
+        """Guarded like the completion mark: an older job failing after a
+        newer recording was stored must not relabel that recording."""
+        if job is not None and not job.marks_last_recording:
+            return
+        expected = job.source_recording_id if job is not None else None
+        try:
+            self._last_recording_store.mark_failed(
+                error_text,
+                expected_recording_id=expected or None,
+            )
+        except Exception:
+            self._logger.exception("Failed to persist last recording failure state")
+
+    def _promote_request_audio_for_retry(
+        self, request_token: int, job: _TranscriptionJob | None
+    ) -> bool:
         payload = self._request_audio_by_token.pop(request_token, None)
         if payload is None:
             return False
         wav_bytes, _settings = payload
         self._last_failed_wav_bytes = wav_bytes
+        # The identity a retry of these bytes carries: the failed job's own
+        # recording, recorded when it was registered -- never the store's
+        # slot at retry time, which a newer recording may hold by then.
+        self._last_failed_recording_id = (
+            job.source_recording_id if job is not None else ""
+        )
         return True
 
     def _drop_request_audio(self, request_token: int) -> None:
@@ -2986,13 +3053,25 @@ class DictationController(QtCore.QObject):
         mode: str,
         *,
         source_audio_path: str = "",
+        source_recording_id: str | None = None,
     ) -> _TranscriptionJob:
         """Track a submitted transcription for the queue and target insertion.
 
         The current target window/signature are snapshotted now so the result
         can later be inserted into the window that was focused for this
         recording, even after a newer recording reused the shared target state.
+
+        The job's recording is the store's slot (`source_recording_id` None):
+        the recording roads persist their audio the statement before they
+        submit, so the slot is theirs. A retry names the recording whose
+        bytes it resubmits instead, and "" there means the store never
+        received them -- such a job marks nothing.
         """
+        marks_last_recording = True
+        if source_recording_id is None:
+            source_recording_id = self._current_last_recording_id()
+        else:
+            marks_last_recording = bool(source_recording_id)
         job = _TranscriptionJob(
             token=request_token,
             engine=settings.engine,
@@ -3001,7 +3080,8 @@ class DictationController(QtCore.QObject):
             settings=replace(settings),
             target_handle=self._target_window_handle,
             target_signature=self._target_focus_signature,
-            source_recording_id=self._current_last_recording_id(),
+            source_recording_id=source_recording_id,
+            marks_last_recording=marks_last_recording,
             source_audio_path=str(source_audio_path or "").strip(),
         )
         self._jobs[request_token] = job
@@ -3100,8 +3180,11 @@ class DictationController(QtCore.QObject):
         job's own recording id like the completion and failure marks, so the
         X on an older row never relabels the newest recording; a job whose id
         is unknown is marked only while it is the foreground one, which is
-        what the hotkey always did.
+        what the hotkey always did. A job transcribing bytes the store never
+        received marks nothing (`marks_last_recording`).
         """
+        if not job.marks_last_recording:
+            return
         expected = job.source_recording_id or None
         if expected is None and not foreground:
             return
@@ -3278,6 +3361,7 @@ class DictationController(QtCore.QObject):
         settings: AppSettings,
         *,
         source_audio_path: str = "",
+        source_recording_id: str | None = None,
     ) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
@@ -3288,6 +3372,7 @@ class DictationController(QtCore.QObject):
             settings,
             "batch",
             source_audio_path=source_audio_path,
+            source_recording_id=source_recording_id,
         )
         self._logger.info(
             "transcription_submitted token=%s mode=batch engine=%s model=%s "
@@ -3298,14 +3383,7 @@ class DictationController(QtCore.QObject):
             len(wav_bytes),
             job.source_recording_id or "n/a",
         )
-        try:
-            self._last_recording_store.mark_transcribing(
-                engine=settings.engine,
-                model=self._selected_model_name(settings),
-                mode=settings.mode,
-            )
-        except Exception:
-            self._logger.exception("Failed to mark last recording as transcribing")
+        self._mark_last_recording_transcribing(job, settings)
         try:
             job.future = self._executor.submit(
                 self._transcribe_worker,
@@ -4890,7 +4968,6 @@ class DictationController(QtCore.QObject):
         job: _TranscriptionJob | None = None
         if request_token is not None:
             job = self._jobs.get(request_token)
-        job_recording_id = job.source_recording_id if job is not None else None
         session_mode = job.mode if job is not None else self._active_session_mode
         if not text.strip() and session_mode != "streaming":
             self._on_transcription_failed(
@@ -4914,6 +4991,7 @@ class DictationController(QtCore.QObject):
             self._active_request_token = None
             self._drop_request_audio(request_token)
             self._last_failed_wav_bytes = b""
+            self._last_failed_recording_id = ""
 
         self._finish_transcription_job(request_token)
         # A foreground result is about to claim the overlay. A deferred insert
@@ -4984,7 +5062,7 @@ class DictationController(QtCore.QObject):
             self._last_transcript = text
 
         if not text.strip():
-            self._mark_last_recording_completed(job_recording_id)
+            self._mark_last_recording_completed(job)
             self._overlay.set_state("Done", "No speech detected.")
             self._reveal_overlay_result(is_error=False)
             self._last_transcribe_settings = None
@@ -5013,7 +5091,7 @@ class DictationController(QtCore.QObject):
                 target_signature=target_signature,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed(job_recording_id)
+                self._mark_last_recording_completed(job)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -5026,7 +5104,7 @@ class DictationController(QtCore.QObject):
                 target_signature=target_signature,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed(job_recording_id)
+                self._mark_last_recording_completed(job)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -5039,7 +5117,7 @@ class DictationController(QtCore.QObject):
         self._reveal_overlay_result(is_error=False)
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
-        self._mark_last_recording_completed(job_recording_id)
+        self._mark_last_recording_completed(job)
         self._last_transcribe_settings = None
         self._reset_streaming_state()
 
@@ -5457,7 +5535,7 @@ class DictationController(QtCore.QObject):
                 # pass silently: an unreported failure looks exactly like a
                 # recording that was simply never transcribed.
                 retry_available = self._promote_request_audio_for_retry(
-                    request_token
+                    request_token, job
                 )
                 self._report_background_failure(job, error_text, retry_available)
                 # The same guarded clear both sibling terminal handlers do.
@@ -5478,9 +5556,10 @@ class DictationController(QtCore.QObject):
                 self._flush_deferred_background_results()
                 return
             self._active_request_token = None
-            preserved_audio = self._promote_request_audio_for_retry(request_token)
+            preserved_audio = self._promote_request_audio_for_retry(request_token, job)
             if not preserved_audio:
                 self._last_failed_wav_bytes = b""
+                self._last_failed_recording_id = ""
 
         self._finish_transcription_job(request_token)
         self._focus_poll_timer.stop()
@@ -5530,6 +5609,9 @@ class DictationController(QtCore.QObject):
             )
             if wav_bytes:
                 self._last_failed_wav_bytes = bytes(wav_bytes)
+                # Persisted by the teardown just above; "" when that write
+                # failed, and a retry of these bytes then marks nothing.
+                self._last_failed_recording_id = self._last_persisted_recording_id
                 preserved_audio = True
         self._streaming_recording = False
         self._active_stream_transcriber = None
@@ -5556,17 +5638,7 @@ class DictationController(QtCore.QObject):
         # stream/capture teardown above so a deferred result is not left
         # pending behind a capture that was just removed.
         self._flush_deferred_background_results()
-        try:
-            # Guarded like the completion mark: an older job failing after a
-            # newer recording was stored must not relabel that recording.
-            self._last_recording_store.mark_failed(
-                error_text,
-                expected_recording_id=(
-                    (job.source_recording_id or None) if job is not None else None
-                ),
-            )
-        except Exception:
-            self._logger.exception("Failed to persist last recording failure state")
+        self._mark_last_recording_failed(job, error_text)
         self._overlay.set_state(
             "Error",
             f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}"
@@ -6510,7 +6582,15 @@ class DictationController(QtCore.QObject):
             "Processing",
             "Retrying transcription with current settings...",
         )
-        self._submit_batch_transcription(self._last_failed_wav_bytes, settings)
+        # The retry names the recording whose bytes it resubmits. Registered
+        # from the store's slot, the job took the newest recording's id --
+        # the one the stop above had just marked canceled -- and its
+        # completion then deleted that recording's audio and state.
+        self._submit_batch_transcription(
+            self._last_failed_wav_bytes,
+            settings,
+            source_recording_id=self._last_failed_recording_id,
+        )
         return True
 
     def recent_transcriptions(self, limit: int | None = None):
