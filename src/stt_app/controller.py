@@ -6224,7 +6224,10 @@ class DictationController(QtCore.QObject):
         path (paste-mode and clipboard semantics from settings, modifier
         release wait in the inserter), but targets the current focus instead
         of a recording snapshot. Blocked while a recording is active so the
-        paste cannot interfere with a capture or live streaming inserts.
+        paste cannot interfere with a capture or live streaming inserts, and
+        while a foreground transcription is in flight, whose result owns the
+        overlay and pastes itself; both refusals reach the tray, since a
+        session owns the overlay then.
         """
         self._repaste(self._last_transcript)
 
@@ -6259,6 +6262,19 @@ class DictationController(QtCore.QObject):
                 "transcript again."
             )
             return
+        if self._active_request_token is not None:
+            # A foreground transcription in flight: the microphone is closed,
+            # so a paste interferes with nothing, but its result owns the
+            # overlay and pastes itself, and `_last_transcript` is still the
+            # previous dictation. Let through, "Done" with that older text
+            # replaced "Processing" for a job that had not finished, and a
+            # paste that failed painted "Error" over it through the
+            # inserter's own handler (the wave-13 reach lens).
+            self.show_overlay_error(
+                "Wait for the current transcription to finish before inserting "
+                "the last transcript again."
+            )
+            return
         # Resolve the target instead of pasting at whatever holds the
         # foreground. This action's main entry point is the tray menu, and the
         # notification-icon contract requires `SetForegroundWindow` on our own
@@ -6279,11 +6295,14 @@ class DictationController(QtCore.QObject):
         signature = self._current_focus_signature()
         target = signature[0] if signature else None
         if not target:
+            # `show_overlay_error` reveals the overlay itself on its paint
+            # road and must not on its tray road; a second reveal here
+            # restarted the timer and, during a session, brought a
+            # "Listening" overlay to the front for an error the tray carried.
             self.show_overlay_error(
                 "No window to insert into. Click into the window you want the "
                 "transcript in, then try again."
             )
-            self._reveal_overlay_result(is_error=True)
             return
         if self._insert_text_at_target(
             text,

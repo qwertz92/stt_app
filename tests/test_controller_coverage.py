@@ -6922,6 +6922,7 @@ def test_repaste_refuses_when_no_foreign_window_is_known():
     )
     controller._last_transcript = "hello again"
     before = list(inserter.calls)
+    revealed = overlay.reveal_calls
 
     controller.repaste_last_transcript()
 
@@ -6929,6 +6930,10 @@ def test_repaste_refuses_when_no_foreign_window_is_known():
     state, detail = overlay.states[-1]
     assert state == "Error"
     assert "No window to insert into" in detail
+    # `show_overlay_error` reveals the overlay itself; a second reveal from
+    # the refusal restarted its timer here and, during a session, brought a
+    # "Listening" overlay to the front for an error the tray carried.
+    assert overlay.reveal_calls == revealed + 1, "the refusal revealed twice"
     controller.shutdown()
     _ = app
 

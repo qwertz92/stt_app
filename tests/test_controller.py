@@ -3437,3 +3437,77 @@ def test_an_overlay_error_during_a_transcription_in_flight_goes_to_the_tray(
     finally:
         release.set()
         controller.shutdown()
+
+
+def test_a_re_paste_during_a_transcription_in_flight_is_refused_through_the_tray(
+    monkeypatch, tmp_path
+):
+    """The tray's "Insert transcript again" while a batch result is pending.
+
+    `_repaste` refused a recording and a stream, not a transcription in
+    flight: "Processing" -- the microphone already closed, the result not
+    yet delivered -- passed its guard, the previous dictation was pasted
+    into whatever held the focus, and "Done" with that older text replaced
+    "Processing" for a job that had not finished; a paste that failed there
+    painted "Error" over it through the inserter's own handler (the wave-13
+    reach lens). The refusal takes the tray road like the other two, and
+    the same call pastes as before once the result is on screen.
+    """
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(
+        AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            model_size="small",
+            keep_transcript_in_clipboard=False,
+        )
+    )
+    release = threading.Event()
+    entered = threading.Event()
+    _ScriptedCapture.instances = []
+    _ScriptedCapture.queue = [_sine_wav(0.30)]
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _ScriptedCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _HeldTranscriber(
+            "the new transcript.", release, entered
+        ),
+    )
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = make_controller(
+        settings_store=settings_store, overlay=overlay, text_inserter=inserter
+    )
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    controller._last_transcript = "the previous transcript."
+    try:
+        controller.toggle_recording()
+        controller.toggle_recording()
+        assert entered.wait(timeout=8.0), "the worker never started"
+        assert overlay.state == "Processing", overlay.states
+        painted = list(overlay.states)
+        pasted = list(inserter.calls)
+
+        controller.repaste_last_transcript()
+
+        assert inserter.calls == pasted, "it pasted during a transcription in flight"
+        assert overlay.states == painted, overlay.states[len(painted) :]
+        assert tray == [
+            "Wait for the current transcription to finish before inserting "
+            "the last transcript again."
+        ]
+
+        release.set()
+        _pump_until(app, lambda: overlay.state == "Done")
+        assert overlay.state == "Done", overlay.states
+        pasted = list(inserter.calls)
+
+        controller.repaste_last_transcript()
+
+        assert len(inserter.calls) == len(pasted) + 1, inserter.calls
+        assert overlay.states[-1] == ("Done", "the new transcript.")
+        assert len(tray) == 1, tray
+    finally:
+        release.set()
+        controller.shutdown()
+    _ = app
