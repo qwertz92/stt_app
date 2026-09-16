@@ -7674,3 +7674,101 @@ restored; the shared stop marking nothing, the key dropped, an unknown id
 marked for a background job, foreground never, the hotkey's no-job mark
 removed. The full suite on `4627127`, 16 September: 2828 passed, 1 skipped in
 160.18 s.
+
+### Wave 14 (2026-09-16) - the thirteenth wave, on the wave-13 fixes
+
+**Range.** `92c5c50..1a7990e`: the two wave-13 fixes and their record. Three
+Sonnet breakers -- reach, concurrency, facts -- each on its own export of
+`1a7990e`, against 16 written claims (Y1.1-Y1.6, Y2.1-Y2.6, D.1-D.4), told
+nothing of what was changed or why. Every claim of the range held. The reach
+lens drove Y1 from the tray action, the hotkey slot and the overlay's Insert
+through every state the controller can be in, and Y2 through every cancel road
+against the real `LastRecordingStore` on a temp dir -- 18 probes, all passing
+on the export, ten shipped tests re-run beside them -- and reported one
+observation already in the wave-13 record: the recovery prompt's text is the
+same for "canceled" and "transcribing", since `main` reads the status for
+"failed" alone. The facts lens verified every number of the Wave 13 section
+and the three AGENTS.md changes against the files, the commits and the probe
+outputs, re-ran the second unit's tests on an export of `8979883` (4 failed, 4
+passed) and of `1a7990e` (8 passed) for "four of their eight cases failing
+before the fix", and found nothing to correct.
+
+**The concurrency lens: a retry inherits the newest recording.** Y2 held under
+second actors -- a cancel racing the job's own completion and failure marks in
+both orders, the X on an older row while the newest recording is saved, Clear
+queue over several jobs, the concurrent-mode cancel at a new recording start,
+`cancel_current_action` twice on a job with no id, the re-paste in the same
+event-loop pass as the result's arrival -- ten probes on the real store. Two
+of them found a defect outside the range, reproduced by the lead with the
+breaker's own probe on the real tree and on an export of `92c5c50`, so it
+predates the range: `retry_last_transcription` resubmits
+`_last_failed_wav_bytes`, the bytes of a failed recording W, and
+`_register_transcription_job` stamped the job with
+`_current_last_recording_id()`, the store's slot at that moment. With a newer
+recording A still transcribing when Retry is pressed -- the retry stops it
+first, marking A canceled through the wave-13 road -- the retry's job carried
+A's id; `_submit_batch_transcription`'s `mark_transcribing`, the one mark
+still unkeyed, relabelled A's slot transcribing over that cancel; and when the
+retry completed in the foreground, `mark_completed(expected_recording_id=A)`
+matched and `clear()` deleted A's WAV and state (`keep_after_success` off),
+although A had never completed under its own name -- its text reaches history
+only because its cancelled worker still finishes. Measured:
+`retry_job.source_recording_id == a_id`, the state file gone, A's WAV gone,
+both transcripts in history. Reachable from the tray's "Retry transcription"
+and the overlay's Retry; P2, data loss.
+
+**The fix (`7a4d054`).** The identity is retained beside the bytes:
+`_last_failed_recording_id` is the failed job's own id when
+`_promote_request_audio_for_retry` keeps its audio (the promotion takes the
+job), and the id `save_recording` handed back --
+`_persist_last_recording_audio` records it as `_last_persisted_recording_id`
+-- when the watchdog abort or a dying stream runtime persists what it keeps;
+"" when that write failed. The retry passes it to
+`_submit_batch_transcription`, which hands it to `_register_transcription_job`
+as an explicit `source_recording_id`; the recording roads pass nothing and
+keep reading the slot, which is theirs because they persist the statement
+before. A retained identity of "" makes a job that marks nothing
+(`marks_last_recording`): the store never received those bytes, so the slot
+holds someone else's recording, and the unconditional write an empty id means
+on the recording roads -- kept there, documented in the F05/F06 entry and
+pinned by every controller test whose fake store answers no id -- is exactly
+the relabel and the delete. The transcribing mark is keyed like the
+completion, failure and cancel marks, through
+`_mark_last_recording_transcribing` beside a `_mark_last_recording_failed`,
+and `_mark_last_recording_completed` takes the job, so the flag has one reader
+per mark. A fresh uuid for the unknown case was considered and rejected: it
+would key every mark to an id the store can never hold -- the same effect --
+but print an id in `transcription_submitted` that no state file carries, and a
+reader correlating the log with the store would suspect a lost write.
+
+**Refuted or judged, with the reason.** The third probe the lens named a
+finding -- an older row's keyed cancel mark is a pure no-op against the real
+store once the slot has moved on -- is Y2.5 as designed, and it passes on the
+fixed tree with the other eight. The reach observation is in the wave-13
+section and unchanged. The mirror image on the recording road -- a
+`save_recording` that fails leaves the slot with the previous recording, whose
+id the new job then carries and whose kept audio its completion then clears --
+needs a refused store write beside a kept previous recording, and closing it
+means giving the recording roads' "" a third meaning; recorded under Known
+limitations. Not exercised by anyone: the retry's roads on a live provider,
+the tray's Retry against a real menu, a real refused store write.
+
+**The commit and the mutation round.** One commit, `7a4d054`, and this record.
+Tests first, thirteen, all failing on `1a7990e`: the scenario on the real
+store (W fails, A held in flight, Retry, both resolve: A's WAV and state
+survive, the slot reads canceled, the retry's job names W); the retained
+identity on the promote road with the retry's keyed transcribing and
+completion marks; the unknown identity beside the known one on the completed,
+failed and cancel roads; the watchdog abort and a dying stream runtime with
+the store's write succeeding and refused; and the completion-mark test
+extended for the job. Fourteen mutants, all detected: the retry handing its
+job no identity (twice, through the unit test and the scenario), an unknown
+identity still marking, the transcribing mark unkeyed (twice), the promotion,
+the watchdog abort, the stream road and the persist recording no identity, the
+cancel, failure, completion and transcribing marks ignoring the flag, the
+foreground success keeping the identity. The first run reported five BASELINE
+cases: their selectors carried a parametrize id with spaces in it, which `-k`
+cannot express, so they selected nothing -- a selector that selects nothing is
+not a detector, and the harness's unmutated baseline run is what said so; one
+word of the id selects the three cases, and the round was re-run in full. The
+full suite on `7a4d054`, 16 September: 2840 passed, 1 skipped in 164.93 s.

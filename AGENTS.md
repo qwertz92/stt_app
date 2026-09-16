@@ -2167,7 +2167,30 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   being recoverable. The completion mark and the foreground failure mark
   now pass the job's `source_recording_id` (recorded at registration); an
   empty id means unknown and keeps the unconditional write, because the
-  store could never match "". And because the gate submits nothing,
+  store could never match "". **A retry names the recording whose bytes
+  it resubmits** (wave 14): registered from the store's slot, the retry's
+  job took the newest recording's id -- the one
+  `retry_last_transcription`'s own stop had just marked canceled --
+  relabelled it transcribing through the one mark that was still unkeyed,
+  and on completion deleted that recording's audio and state although it
+  never completed under its own name (measured on the real store by the
+  wave-14 concurrency lens). `_last_failed_recording_id` is retained
+  beside the bytes on all three roads that keep audio for Retry -- the
+  failed job's own id when its audio is promoted, and the id
+  `save_recording` handed back (`_last_persisted_recording_id`) when the
+  watchdog abort or a dying stream runtime persists what it keeps;
+  "" when that write failed. `_submit_batch_transcription` and
+  `_register_transcription_job` take it as an explicit
+  `source_recording_id`, the transcribing mark is keyed like its siblings
+  (`_mark_last_recording_transcribing`, beside
+  `_mark_last_recording_failed`; the completion mark takes the job), and
+  a job whose retained identity is "" carries `marks_last_recording=False`
+  and marks nothing on any road: the store never received those bytes,
+  the slot holds someone else's recording, and the unconditional write an
+  empty id means on the recording roads would relabel or delete it. The
+  recording roads keep reading the slot, which is theirs because they
+  persist the statement before they submit (the write that fails there is
+  under Known limitations). And because the gate submits nothing,
   nothing retargeted the active token and A became the live session again
   -- in `history` mode its text was pasted although the user's mode had
   declined exactly that. `_is_foreground_transcription` keeps a job demoted
@@ -5049,3 +5072,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   separates the two; not measured against a live browser). The delay
   bounds that window at 1.5 s where the predecessor had 160 ms, and
   `keep_transcript_in_clipboard` closes it. Recorded.
+- **A recording road's job takes its identity from the store's slot, so
+  a `save_recording` that fails there hands it the previous recording's.**
+  `stop_recording` persists the audio the statement before it submits and
+  `_register_transcription_job` reads the slot, which after a refused
+  write (a full disk, a locked file) still holds the previous recording;
+  the new job then carries that id, and its completion clears a previous
+  recording kept for Retry while its own audio was never saved. The
+  wave-14 unit closed this shape for the retry road, which names the
+  recording whose bytes it resubmits; here it needs a store write that
+  fails (logged as `Failed to persist last recording audio`) beside a
+  kept previous recording. Recorded.
