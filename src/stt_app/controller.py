@@ -5898,9 +5898,10 @@ class DictationController(QtCore.QObject):
         tail unrecoverable.
 
         The offer carries its own action. The insert paths that fail *after*
-        the paste keystroke went out -- five raise sites of
-        `TextMayHaveBeenPastedError` in `text_inserter.py`, four literal and
-        one through the `combined_error` alias -- deliberately
+        the paste keystroke went out -- six raise sites of
+        `TextMayHaveBeenPastedError` in `text_inserter.py`: four literal,
+        one through the `combined_error` alias and one through the
+        `_ClipboardContentionAfterPaste` subclass -- deliberately
         withhold Insert, because the text is most likely in the document
         already; a repaint that read
         the pending text alone upgraded that to an Insert button, and

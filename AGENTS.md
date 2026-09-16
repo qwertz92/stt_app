@@ -1658,10 +1658,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     `LastRecordingStore.mark_completed` no longer falls back to the
     orphaned-audio state, whose `keep_after_success` is False and which
     deleted a recording the state file had asked to keep.
-  - **Ten Qt call sites report the refusal through the presentation they
-    already use** -- the controller's `_paint_status_keeping_offer`, the
-    History dialog's warning box, the Settings History tab's status label,
-    the Benchmark tab's status line, the import and clear boxes of
+  - **Thirteen Qt call sites report the refusal through the presentation
+    they already use** -- the controller's `_paint_status_keeping_offer`
+    (for Edit, and through `show_overlay_error` for the overlay's opacity
+    slider, pin button and Lang menu, whose setters save straight to the
+    store and caught the refusal with a bare `except Exception` that only
+    logged it until wave 11: the session kept the new value, the file the
+    old one, and which was real showed at the next start), the History
+    dialog's warning box, the Settings History tab's status label, the
+    Benchmark tab's status line, the import and clear boxes of
     `history_ui_actions` -- with `str(exc)` verbatim. PySide6 does not
     propagate an exception from a slot invoked from C++: it prints the
     traceback to stderr and returns, and a windowed build has no stderr,
@@ -1751,6 +1756,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   dialog's failure arm keeps the typed value and appends the message to
   the key-storage status line; that line's generic advice no longer says
   "Enable insecure fallback storage" when the checkbox is already on.
+  **A blank keyring answer is nothing stored** (wave 11): `get_password`
+  may answer "" for a credential with an empty blob, and read as a value
+  it was returned by `get_api_key` without a look at the fallback file,
+  counted by `has_api_key`, reported as "keyring", and taken by the guard
+  for a previous key -- the fallback write was refused and the new key
+  stored nowhere, under an error claiming the keyring still held the old
+  one. `_get_keyring_value` answers `None` for it, as for a read that
+  raised, so every reader and the guard treat the two alike.
 - **Update checks**: update discovery uses GitHub Releases directly through
   `update_checker.py`; no custom domain or update server is required. The app
   schedules one asynchronous check after startup and shows a tray notification
@@ -2258,9 +2271,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `OverlayUI.state` and `OverlayUI.detail` -- a result replaces the
   painter's text, an untouched offer matches it. **And the
   offer carries its own action**: the insert paths that fail *after* the
-  paste keystroke went out (five raise sites of `TextMayHaveBeenPastedError`
-  in `text_inserter.py`: four literal and one through the `combined_error`
-  alias, which a grep for the class name does not find) deliberately
+  paste keystroke went out (six raise sites of `TextMayHaveBeenPastedError`
+  in `text_inserter.py`: four literal, one through the `combined_error`
+  alias and one through the `_ClipboardContentionAfterPaste` subclass,
+  neither of which a grep for the class name finds) deliberately
   withhold Insert -- the text is most
   likely in the document already -- and a repaint that read the pending text
   alone upgraded that to an Insert button -- pressing it pasted the
@@ -3256,12 +3270,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   interval -- never let the sender thread run, so chunk 33 was rejected and
   the dictation failed on a socket that had just connected. The flush
   re-checks the generation between chunks, so a retired session stops
-  within one chunk's budget. The bound this leaves: the finalize joins the
-  connect thread for at most `STREAMING_CONNECT_JOIN_TIMEOUT_S` (15 s), so
-  against a sender that stopped draining the stop can run beside a flush
-  still waiting; the stop retires the queue, the next push then fails or
-  the session's reset retires the generation, and the flush ends within
-  5 s of either. The overlay says "Connecting to the speech service. You
+  within one chunk's budget. The finalize joins the connect thread for at
+  most `STREAMING_CONNECT_JOIN_TIMEOUT_S` (15 s), and a thread still
+  running past that -- still connecting, or still handing audio to a
+  sender that stopped draining -- ends the session as a failure (wave 11):
+  `_await_stream_connect` answers False, the worker aborts the stream
+  (which is what unblocks a provider parked in its connect wait) and
+  raises a failure naming the bound, so the recording stays kept as the
+  last recording, the text so far is saved, and the retired thread pushes
+  nothing more (its next generation check refuses, or its next push finds
+  the queue gone, within one chunk's budget). Before that the worker
+  called `stop_stream()` beside the flush: the provider was stopped with
+  part of the recording never handed over, answered with the text it had,
+  and the dictation ended in "Done" with a transcript missing speech
+  recorded before the stop, the only trace a warning in the log; on a
+  handshake still running it ended in "Streaming session is not active",
+  which names nothing the user can act on. The overlay says "Connecting
+  to the speech service. You
   can speak now." until the stream is live, because the microphone
   genuinely is open. Consequence for tests: a stream-start failure now
   arrives through a queued signal, not on the caller's stack.
@@ -3274,7 +3299,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   window, or from a single microphone failure. `_submit_stream_finalize`
   therefore hands the connect thread to the job and
   `_finalize_stream_worker` joins it (bounded by
-  `STREAMING_CONNECT_JOIN_TIMEOUT_S`, off the Qt thread) before stopping;
+  `STREAMING_CONNECT_JOIN_TIMEOUT_S`, off the Qt thread; a bound that runs
+  out ends the session as a failure rather than stopping beside the
+  thread -- the entry above) before stopping;
   the capture-start failure path uses `_teardown_pending_stream_connect` for
   the same reason. Only the abort and capture-failure roads also *retire*
   the handshake there -- bump `_stream_connect_generation` and clear the
@@ -3330,6 +3357,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     listens to would be the defect. The fix did not widen "the flush
     survives a stop" into "the flush survives anything", and a test pins
     that.
+  - **A runtime failure that arrives after the stop is the finalize's as
+    well** (wave 11). The stop does not retire the session's error
+    callback -- the provider keeps it wired until its own `stop_stream()`
+    takes the lock, and before that the worker is still queued or still
+    joining the flush -- so a socket that died in that window passed both
+    gates of `_on_stream_runtime_failed` (the token is the live session's,
+    and `_streaming_recording` stays True until the result is delivered),
+    and `_on_transcription_failed` painted Error, marked the recording
+    failed and reset the session under the worker, whose `stop_stream()`
+    then delivered its transcript as a second, competing success -- Done
+    over Error, both marks on one recording -- or its own failure as a
+    second Error. The slot returns while `_stream_finalize_pending` is set
+    (`stream_runtime_failed_after_stop`, INFO): every provider's
+    `stop_stream()` answers a dead socket with the text it has or, having
+    none, with the failure it recorded, so the worker's terminal signal
+    carries it exactly once.
 - **Remote stream finalizes have their own worker**: `_executor` stays
   `max_workers=1` so two local models never load at once, but a remote finalize
   loads nothing — `stop_stream()` drains a socket. Sharing that queue meant
@@ -4929,3 +4972,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the tree the worker spawned; recorded. A child that survives every arm
   of the kill itself is logged (`benchmark_worker_survived_termination`)
   and left running; recorded.
+- **Two history entries equal in every field are one entry to Edit and
+  Delete.** `TranscriptHistoryEntry` is a dataclass compared by value, and
+  `update_entry` / `delete_entries` find their target with `list.index`,
+  the first equal row -- so an edit of the second of two rows sharing the
+  same second, text, engine, model, mode and empty recording id and audio
+  path lands on the first (the wave-11 boundaries lens, with a probe on
+  the real store). The two rows are indistinguishable to the user as well,
+  so what shows is one of two identical rows changed rather than the
+  other; the app never writes such a pair itself, since every recording
+  carries its own id, and telling them apart would need an id in the
+  schema. Recorded.
+- **The readiness probe cannot see a browser renderer's delay.** For a
+  Chromium or Electron target the focused window is a
+  `Chrome_RenderWidgetHostHWND`, pumped by the browser process's UI thread,
+  and the deferred restore's `WM_NULL` round trip answers for that thread
+  -- not for the renderer whose paste handler asks for the clipboard
+  later. A renderer that reads more than `CLIPBOARD_RESTORE_DELAY_S` after
+  the keystroke while the UI thread already answers can still find the
+  restored content (the wave-11 reach lens, with a fake backend that
+  separates the two; not measured against a live browser). The delay
+  bounds that window at 1.5 s where the predecessor had 160 ms, and
+  `keep_transcript_in_clipboard` closes it. Recorded.

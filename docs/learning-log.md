@@ -6986,7 +6986,7 @@ foreground failure marks carry the job's `source_recording_id` (an empty
 id keeps the unconditional write -- the store could never match ""); and
 `_is_foreground_transcription` keeps a history-demoted job in the
 background, which is the one behaviour decision in this unit: the user's
-mode declined that paste, and `insert` mode is unchanged. Eleven tests in
+mode declined that paste, and `insert` mode is unchanged. Ten tests in
 `tests/test_controller.py`, the gated-recording ones with a transcriber
 held on a worker thread and the real stores. The fake store in
 `tests/conftest.py` had to learn the keyword, or every controller test
@@ -7294,3 +7294,147 @@ failure on the way: the restore's `write_bytes` raised `OSError 22` once on
 Windows and left the mutant in the tree, caught by the `git status` that
 follows every run. The full suite on `467788f`, 16 September: 2804 passed, 1
 skipped in 155.26 s.
+
+### Wave 11 (2026-09-16) - the tenth wave, on the review fixes
+
+**Range.** `45f78a1..d992677`: unit 14 of wave 10 (the stream worker as the
+only decoder) and the thirteen fixes of the 2026-09-12 external review. Four
+Sonnet breakers, one per lens -- boundaries, concurrency, facts, reach; layout
+dropped, because no unit in the range changes a widget's geometry -- each on
+its own export of `d992677`, against 59 written claims, told nothing of what
+was changed or why. Every finding below was reproduced by the lead with the
+breaker's own probe on the real tree before anything changed: the two
+concurrency probes as pytest files against the real controller, the two
+boundaries probes as scripts against the real stores, the reach finding by
+reading the three setters the probe named, the two facts findings with the
+same name diff and grep the breaker used.
+
+**The concurrency lens: two windows in which the finalize was not the one
+reporter.** The F03 fix made the finalize worker the single reporter of a
+handshake or a flush that fails after the stop, and left the sibling road
+open: a *runtime* failure of the live session -- the provider's `on_error`,
+fired by a socket that died -- arriving while the finalize is pending. The
+stop does not retire that callback (the provider clears it only when its own
+`stop_stream()` takes the lock, and before that the worker is still queued or
+still joining the flush), and `_on_stream_runtime_failed` read neither
+`_stream_finalize_pending` nor the job: the token was the live session's and
+`_streaming_recording` still True, so `_on_transcription_failed` painted
+Error, marked the recording failed and ran `_reset_streaming_state` under the
+worker, which then delivered its transcript as a second, competing success
+(measured: Error, then Done, `mark_failed` and `mark_completed` for one
+recording; `test_stray_runtime_failure_race.py`). The slot now returns while a
+finalize is pending, because every provider's `stop_stream()` already answers
+a dead socket with the text it has or, having none, with the failure it
+recorded -- Deepgram and AssemblyAI both end in `if error and not text:
+raise`, the two local runtimes read `result.error` at stop. The second window
+is the join bound: `_await_stream_connect` waits
+`STREAMING_CONNECT_JOIN_TIMEOUT_S` for the connect thread and the worker then
+called `stop_stream()` beside a thread still running. Against a sender that
+stopped draining the flush was still waiting a budget per chunk, the stop
+retired the provider's queue, and the transcript delivered as Done was the
+audio handed over before the bound -- measured with the bound patched to 50 ms
+and the first push held: `chunk1` delivered, chunks 2 and 3 never sent, not
+even after the release, a warning in the log the only trace
+(`test_join_bound_exceeded_race.py`). The F09 entry had recorded that bound as
+accepted, without the word that mattered: silent. `_await_stream_connect` now
+answers whether the thread finished, and the worker aborts the stream when it
+did not -- the abort is also what unblocks a Deepgram handshake parked in its
+connect wait -- and raises a failure naming the bound, so the recording stays
+kept as the last recording, the text so far is saved, and the retired thread
+pushes nothing more. On a handshake still running the same road replaces
+"Streaming session is not active", which named nothing the user could act on.
+
+**The reach lens: three refusals nobody heard, and a probe that cannot see a
+renderer.** The F10 unit guarded ten Qt call sites of the store's refusal and
+missed the three the reach lens found by grepping for `_settings_store.save`
+in the controller: the overlay's opacity slider, its pin button and its Lang
+menu save straight to the store through `set_overlay_opacity_percent`,
+`set_overlay_always_on_top` and `set_language_mode`, each of which caught the
+refusal with a bare `except Exception` and a log line -- so the session kept
+the new value, the file the old one, and the user learned which was real at
+the next start (the probe: a real `SettingsStore` under
+`files_no_read_gets_past`, in-memory opacity 40, on disk 70, overlay states
+unchanged, `logger.exception` called). They report through
+`show_overlay_error` now, "<what> was not saved." ahead of the store's own
+sentence, keeping the in-memory value as every refused save keeps what the
+user chose. The lens's second item is a hypothesis it labelled as one: for a
+Chromium or Electron target the focused window is a
+`Chrome_RenderWidgetHostHWND` pumped by the browser process's UI thread, so
+the deferred restore's `WM_NULL` round trip answers for that thread and not
+for the renderer whose paste handler asks for the clipboard later; with a fake
+backend that separates the two, a renderer reading 150 ms after a probe that
+already answered found the restored content. Nothing in the paste-transaction
+entry claimed otherwise -- there is no Windows API for "the target read it" --
+and it is recorded under Known limitations with the two facts that bound it:
+1.5 s where the predecessor had 160 ms, and `keep_transcript_in_clipboard`
+closes it.
+
+**The boundaries lens: a blank answer, and a twin.**
+`KeyringSecretStore._get_keyring_value` returned `str(value)` for any
+non-`None` answer, and `keyring.get_password` may answer "" for a credential
+with an empty blob. Read as a value, "" was returned by `get_api_key` without
+a look at the fallback file, counted by `has_api_key`, reported as "keyring"
+-- and the F11 guard, whose docstring names `None` and the new key as the two
+answers that proceed, took it for a previous key and refused the fallback
+write: the probe shows `set_api_key` raising "still holds the previous one"
+over a keyring that held nothing, the fallback file empty, `get_api_key`
+answering "". A blank answer is `None` now, at the one reader every path goes
+through, so the readers and the guard cannot disagree. Whether a shipped
+backend answers "" was not measured; the input is legal under the interface's
+own type. The twin is outside the range and recorded rather than fixed:
+`TranscriptHistoryEntry` compares by value and `update_entry` /
+`delete_entries` locate their row with `list.index`, so two rows equal in
+every field -- the same second, text, engine, model, mode and an empty
+recording id and audio path -- are one row to Edit, and the edit of the second
+lands on the first (the probe, on the real store). The rows are equally
+indistinguishable to the user, the app never writes such a pair itself since
+every recording carries its id, and telling them apart would need an id in the
+schema.
+
+**The facts lens: two numbers.** The F05/F06 paragraph above said "Eleven
+tests"; the name diff of `b567b3c` and `aadc075` against their parent adds ten
+`def test_` lines and removes none (the same diff reproduces every other count
+in the review section to the digit). Ten now. And the insert-offer entry said
+"five raise sites of `TextMayHaveBeenPastedError` ... four literal and one
+through the `combined_error` alias": there are six, because
+`_ClipboardContentionAfterPaste` (line 1044, since `d4ccaf3` of 23 August)
+inherits from the class and its raise is as invisible to a grep for the name
+as the alias is -- and the sentence itself came from `ab666db`, the wave-4
+facts corrections of 5 September, thirteen days after the subclass existed.
+The wave's own claim CP.9 had the right sum. AGENTS.md and the painter's
+docstring say six.
+
+**Refuted or judged, with the reason.** The concurrency lens traced and held
+five: a `_reset_streaming_state` racing `_record_stream_connect_failure` (the
+reset's clear is unconditional and lands last in every interleaving), a cancel
+while the flush sits in a timed put (the shipped tests, re-run), two flushes
+of one buffer (the swap under the lock), the daemon restore timer against
+`shutdown()` (both lock orders), and a store read racing a write across two
+store objects (`lock_for_path` is one lock per resolved path). The boundaries
+lens refuted six by probe: the restore delay and max-wait edges
+(`abandoned_busy` exactly at the bound, negative budgets clamped), the
+`cbSize` and fmt-size edges against the real Node decoder (40/39, 22/21, 65535
+accepted as documented), the clipboard's private and GDI ranges and both caps
+at their exact bytes, `block_timeout_s` of `None`, 0, negative and NaN against
+the real Deepgram push, the loader's trichotomy at 0- and 1-byte files, and
+the empty recording id at every call site. The reach lens ran 861 existing
+tests on its export and held the Settings dialog's own Save (it reports
+through the status line), the C05/C06, C03/C04 and C11 claims, a whole paste
+over a bitmap plus a private-range companion (the bitmap and the text back
+byte for byte, the private format left by design), and the extensible WAV
+under a real Node. The facts lens confirmed every constant, log line, message
+text and library fact it could reach and could not settle the paste unit's "31
+failing-first runs", which sources itself to notes outside the export. H-150ms
+was carried and not exercised: its file is a dialog file.
+
+**The commits and the mutation round.** Four commits, one per unit: `4ed5fd6`
+(a runtime failure after the stop is the finalize's to report), `7934c3c` (a
+handshake the stop outlives fails the finalize, never shortens it), `2bba644`
+(the overlay's own controls report a settings save the store refused),
+`070f5cd` (an empty keyring answer is nothing stored), and this record. Eight
+mutants, two to three per fix, all detected: the finalize-pending gate removed
+and the gate widened to every live failure; the timed-out join answering True,
+the abort dropped before the raise, and the abort kept with the stop still
+running; the report painting nothing and one setter left silent; and the blank
+answer read as a value again. The full suite on `070f5cd`, 16 September: 2813
+passed, 1 skipped in 157.87 s.
