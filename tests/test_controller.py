@@ -2950,6 +2950,12 @@ def test_a_coalesced_insert_failure_offers_no_single_entry_to_edit(
     try:
         controller._on_transcription_ready("transcript A.")
         job = controller._register_transcription_job(78, controller._settings, "batch")
+        # The first job of the flush brings its own entry; the joined text is
+        # still not that entry's text.
+        job.history_entry = controller._append_transcript_history(
+            "queued B", job.settings, "batch", track_for_edit=False
+        )
+        assert job.history_entry is not None
 
         claimed = controller._report_background_insertion_failure(
             job, "queued B queued C", job_count=2
@@ -2961,7 +2967,10 @@ def test_a_coalesced_insert_failure_offers_no_single_entry_to_edit(
         assert controller.edit_last_transcript() is False
         assert opened == []
         assert "No saved history entry" in overlay.states[-1][1]
-        assert [entry.text for entry in history_store.load()] == ["transcript A."]
+        assert [entry.text for entry in history_store.load()] == [
+            "transcript A.",
+            "queued B",
+        ]
     finally:
         controller.shutdown()
 
