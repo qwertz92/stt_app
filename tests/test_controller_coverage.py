@@ -9,6 +9,7 @@ import os
 import threading
 import time
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
@@ -2118,6 +2119,107 @@ def test_cancel_current_action_marks_inflight_transcription_as_canceled():
     _ = app
 
 
+def test_cancel_current_action_marks_the_recording_canceled_with_no_job_to_stop():
+    """The token without a job is the one cancel `_request_job_stop` cannot mark."""
+    overlay = FakeOverlay()
+    last_recording_store = FakeLastRecordingStore()
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
+    controller._active_request_token = 7
+    last_recording_store._available = True
+
+    controller.cancel_current_action()
+
+    assert controller._active_request_token is None
+    assert last_recording_store.canceled == ["Transcription canceled by user."]
+    controller.shutdown()
+    _ = app
+
+
+def test_the_queue_rows_x_marks_the_foreground_recording_canceled():
+    """The X on the foreground row marks the store as the cancel hotkey does.
+
+    It did not: the job is background from the cancel on, and a background
+    failure marks nothing, so the store kept "transcribing" for a job that
+    had ended while the hotkey road wrote "canceled" (the wave-13 reach
+    lens).
+    """
+    overlay = FakeOverlay()
+    last_recording_store = FakeLastRecordingStore()
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._active_request_token = 7
+    controller._register_transcription_job(7, settings, "batch")
+    last_recording_store._available = True
+
+    controller.cancel_queued_transcription(7)
+
+    assert controller._jobs[7].aborting is True
+    assert controller._active_request_token is None
+    assert last_recording_store.canceled == ["Transcription canceled by user."]
+    assert last_recording_store.canceled_ids == [None]
+    controller.shutdown()
+    _ = app
+
+
+class _StoreWithIds(FakeLastRecordingStore):
+    """Answers `load()` with the id of the recording it holds now."""
+
+    def __init__(self, recording_id: str):
+        super().__init__()
+        self.recording_id = recording_id
+
+    def load(self):
+        if not self.recording_id:
+            return None
+        return SimpleNamespace(recording_id=self.recording_id)
+
+
+@pytest.mark.parametrize(
+    ("recording_id", "expected_marks", "expected_ids"),
+    [
+        pytest.param("rec-7", ["Transcription canceled by user."], ["rec-7"], id="known id"),
+        pytest.param("", [], [], id="unknown id"),
+    ],
+)
+def test_the_queue_rows_x_on_an_older_row_is_keyed_to_that_jobs_recording(
+    recording_id, expected_marks, expected_ids
+):
+    """An older row's X never relabels the newest recording.
+
+    The mark carries the job's own recording id like the completion and
+    failure marks do, and a job whose id is unknown is marked only while
+    it is the foreground one -- here a newer token owns the session.
+    """
+    overlay = FakeOverlay()
+    last_recording_store = _StoreWithIds(recording_id)
+    controller, app = _make_controller(
+        overlay=overlay,
+        last_recording_store=last_recording_store,
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(7, settings, "batch")
+    assert controller._jobs[7].source_recording_id == recording_id
+    last_recording_store.recording_id = "rec-8"
+    controller._active_request_token = 8
+    controller._register_transcription_job(8, settings, "batch")
+    last_recording_store._available = True
+
+    controller.cancel_queued_transcription(7)
+
+    assert controller._jobs[7].aborting is True
+    assert controller._active_request_token == 8
+    assert last_recording_store.canceled == expected_marks
+    assert last_recording_store.canceled_ids == expected_ids
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
@@ -3941,7 +4043,7 @@ def test_a_cancel_during_the_pending_finalize_keeps_the_handshakes_failure(
         controller,
         app,
         overlay,
-        _recordings,
+        recordings,
         transcriber,
         release_connect,
     ) = _streaming_controller_with_a_blocked_handshake(
@@ -3990,6 +4092,12 @@ def test_a_cancel_during_the_pending_finalize_keeps_the_handshakes_failure(
         assert background[0].endswith(" failed: Invalid API key."), background
         assert transcriber.aborted, "the never-published session was left alone"
         assert not transcriber.stopped, "stop_stream() on a session never published"
+        # The store agrees on both roads: the X marked nothing, and a job
+        # that is background from the cancel on marks nothing when it fails.
+        assert recordings.canceled == ["Transcription canceled by user."], (
+            recordings.canceled,
+            recordings.failed,
+        )
     finally:
         proceed.set()
         release_connect.set()

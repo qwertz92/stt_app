@@ -3086,6 +3086,33 @@ class DictationController(QtCore.QObject):
         ]
         setter(items)
 
+    def _mark_job_recording_canceled(
+        self, job: _TranscriptionJob, *, foreground: bool
+    ) -> None:
+        """Record a job's cancel in the last-recording store, on every road.
+
+        The cancel hotkey marked the recording canceled and the queue row's X
+        did not: the job it stops is background from then on, and a
+        background failure marks nothing, so the store kept "transcribing"
+        for a job that had ended while the hotkey road wrote "canceled" (the
+        wave-13 reach lens; the two roads differed in the state file alone,
+        the recovery prompt reads the status only for "failed"). Keyed by the
+        job's own recording id like the completion and failure marks, so the
+        X on an older row never relabels the newest recording; a job whose id
+        is unknown is marked only while it is the foreground one, which is
+        what the hotkey always did.
+        """
+        expected = job.source_recording_id or None
+        if expected is None and not foreground:
+            return
+        try:
+            self._last_recording_store.mark_canceled(
+                "Transcription canceled by user.",
+                expected_recording_id=expected,
+            )
+        except Exception:
+            self._logger.exception("Failed to mark canceled transcription")
+
     def _request_job_stop(self, request_token: int | None, *, delivery: str) -> None:
         """Request a real stop of an in-flight transcription.
 
@@ -3101,13 +3128,22 @@ class DictationController(QtCore.QObject):
         job = self._jobs.get(request_token)
         if job is None:
             return
+        # Read before the abort flag: a job is foreground while its token is
+        # the live one and no newer recording has started.
+        foreground = (
+            request_token == self._active_request_token
+            and not self._new_recording_active()
+        )
         job.aborting = True
         job.background_delivery = delivery
         if job.insertion_deferred:
+            # A finished transcript waiting to be pasted: its recording
+            # completed, and a cancel mark would make that audio recoverable.
             self._remove_deferred_background_result(request_token)
             job.insertion_deferred = False
             self._finish_transcription_job(request_token)
             return
+        self._mark_job_recording_canceled(job, foreground=foreground)
         if (
             request_token == self._active_request_token
             and job.mode == "streaming"
@@ -6702,12 +6738,13 @@ class DictationController(QtCore.QObject):
                 self._last_transcribe_settings = None
             if not had_job:
                 self._drop_request_audio(request_token)
-            try:
-                self._last_recording_store.mark_canceled(
-                    "Transcription canceled by user."
-                )
-            except Exception:
-                self._logger.exception("Failed to mark canceled transcription")
+                # No job to carry the mark through `_request_job_stop`.
+                try:
+                    self._last_recording_store.mark_canceled(
+                        "Transcription canceled by user."
+                    )
+                except Exception:
+                    self._logger.exception("Failed to mark canceled transcription")
             # Clearing the active transcription may unblock deferred background
             # inserts that were waiting behind it; deliver every completed one now.
             if not self._flush_deferred_background_results(
