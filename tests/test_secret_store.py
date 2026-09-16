@@ -278,6 +278,63 @@ def test_a_refused_write_with_an_empty_keyring_still_reaches_the_fallback(
     assert store.get_api_key_source("groq") == "insecure"
 
 
+def test_an_empty_keyring_answer_is_nothing_stored(tmp_path, monkeypatch):
+    """`get_password` may answer "" for nothing stored, and "" is no key.
+
+    Every reader answered it as a value: `get_api_key` returned "" without
+    looking at the fallback file, `has_api_key` said True and the source
+    read "keyring" -- for a provider whose every request would then fail
+    with a missing key while Settings showed one stored.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = FakeKeyringBackend()
+    backend.set_password("stt-app-test", "openai", "")
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=("stt-app-legacy",),
+    )
+
+    assert store.get_api_key("openai") is None
+    assert store.has_api_key("openai") is False
+    assert store.get_api_key_source("openai") == "none"
+
+    backend.set_password("stt-app-legacy", "groq", "")
+    assert store.get_api_key("groq") is None
+    assert store.get_api_key_source("groq") == "none"
+
+    store.set_insecure_fallback_enabled(True)
+    store._set_insecure_api_key("openai", "sk-fallback")
+    assert store.get_api_key("openai") == "sk-fallback"
+    assert store.get_api_key_source("openai") == "insecure"
+
+
+def test_a_refused_write_over_an_empty_keyring_answer_still_reaches_the_fallback(
+    tmp_path, monkeypatch
+):
+    """The shadow guard read "" as a previous key and refused the save.
+
+    The keyring held nothing that could shadow the fallback copy, yet the
+    new key was written nowhere, and the error claimed the keyring still
+    held the previous one. A blank answer is the `None` case.
+    """
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    backend = SwitchableKeyringBackend()
+    backend.set_password("stt-app-test", "openai", "")
+    backend.write_fails = True
+    store = KeyringSecretStore(
+        keyring_backend=backend,
+        service_name="stt-app-test",
+        legacy_service_names=(),
+    )
+    store.set_insecure_fallback_enabled(True)
+
+    store.set_api_key("openai", "sk-new")
+
+    assert store.get_api_key("openai") == "sk-new"
+    assert store.get_api_key_source("openai") == "insecure"
+
+
 def test_a_keyring_whose_read_also_fails_cannot_shadow_the_fallback(
     tmp_path, monkeypatch
 ):

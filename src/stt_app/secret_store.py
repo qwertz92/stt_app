@@ -158,7 +158,13 @@ class KeyringSecretStore:
             return None
         if value is None:
             return None
-        return str(value)
+        # A backend may answer "" for nothing stored (a credential with an
+        # empty blob), and "" is no key: read as a value it was returned by
+        # `get_api_key` without a look at the fallback file, counted by
+        # `has_api_key`, reported as "keyring" -- and the shadow guard below
+        # took it for a previous key and refused the fallback write, so a new
+        # key was stored nowhere.
+        return str(value) or None
 
     def _refuse_a_fallback_the_keyring_would_shadow(
         self, provider: str, api_key: str, cause: BaseException
@@ -176,9 +182,10 @@ class KeyringSecretStore:
 
         Two answers proceed to the fallback write. `None` means nothing in the
         keyring can shadow the new key -- and `_get_keyring_value` also answers
-        `None` for a read that raised, which is exactly what every other reader
-        does with it, so the fallback copy is the value they will all return.
-        The new key itself means the write landed before the backend raised.
+        `None` for a read that raised and for a blank value, which is exactly
+        what every other reader does with them, so the fallback copy is the
+        value they will all return. The new key itself means the write landed
+        before the backend raised.
 
         Every name `get_api_key` reads is asked, in its order: the legacy
         service names shadow the fallback file exactly as the primary one does,
