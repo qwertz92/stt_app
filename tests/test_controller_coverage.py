@@ -3893,6 +3893,167 @@ def test_a_handshake_the_finalize_outlives_ends_in_a_reported_failure(monkeypatc
     _ = app
 
 
+@pytest.mark.parametrize(
+    "cancel",
+    [
+        pytest.param(
+            lambda controller, token: controller.cancel_current_action(),
+            id="the cancel hotkey",
+        ),
+        pytest.param(
+            lambda controller, token: controller.cancel_queued_transcription(token),
+            id="the queue row's X",
+        ),
+    ],
+)
+@pytest.mark.parametrize(
+    "handshake_fails_first",
+    [False, True],
+    ids=["the cancel lands first", "the handshake fails first"],
+)
+def test_a_cancel_during_the_pending_finalize_keeps_the_handshakes_failure(
+    monkeypatch, cancel, handshake_fails_first
+):
+    """A cancel while the finalize waits for the handshake erased its cause.
+
+    The finalize worker joins the connect thread and then reads the failure
+    that thread recorded. A cancel landing while it waits -- the hotkey, or
+    the queue row's X -- ran `_reset_streaming_state`, which bumped the
+    generation the record was gated on and cleared the record itself: a
+    failure arriving after the cancel was refused, one recorded before it
+    was wiped, and either way the worker found nothing, called
+    `stop_stream()` on a session that was never published and reported
+    "Streaming session is not active" for a handshake that had failed on
+    an invalid key (the wave-12 concurrency lens). The record belongs to
+    the handshake, keyed by its generation, and only the finalize that
+    joined it consumes it.
+    """
+    (
+        controller,
+        app,
+        overlay,
+        _recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, connect_error=TranscriptionError("Invalid API key.")
+    )
+    background: list[str] = []
+    controller.background_transcription_failed.connect(background.append)
+    failed: list[tuple[int, str]] = []
+    controller.transcription_failed.connect(
+        lambda token, text: failed.append((token, text))
+    )
+    joined = threading.Event()
+    proceed = threading.Event()
+    original_await = controller._await_stream_connect
+
+    def _await_then_hold(job):
+        # Behaviour unchanged; the two events only place the cancel before
+        # or after the join returns, so no sleep decides the interleaving.
+        result = original_await(job)
+        joined.set()
+        assert proceed.wait(timeout=10), "the finalize was never released"
+        return result
+
+    monkeypatch.setattr(controller, "_await_stream_connect", _await_then_hold)
+    try:
+        controller.stop_recording()
+        token = controller._active_request_token
+        assert token is not None
+        if handshake_fails_first:
+            release_connect.set()
+            assert joined.wait(timeout=10), "the finalize never joined"
+        cancel(controller, token)
+        assert (overlay.state, overlay.detail) == ("Done", "Transcription canceled.")
+        assert controller._streaming_recording is False
+        if not handshake_fails_first:
+            release_connect.set()
+            assert joined.wait(timeout=10), "the finalize never joined"
+        proceed.set()
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the finalize never finished"
+        )
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        assert failed == [(token, "Invalid API key.")], failed
+        assert len(background) == 1, background
+        assert background[0].endswith(" failed: Invalid API key."), background
+        assert transcriber.aborted, "the never-published session was left alone"
+        assert not transcriber.stopped, "stop_stream() on a session never published"
+    finally:
+        proceed.set()
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_new_dictation_leaves_a_parked_finalizes_handshake_failure_alone(
+    monkeypatch,
+):
+    """The record survives the next session's own handshake and its failure.
+
+    After the cancel the user can dictate again while the first finalize is
+    still parked on its join; the next handshake begins before that worker
+    has read its record, and may fail as well. One record for all handshakes
+    would then hold the newer failure alone, and a begin that cleared every
+    record would leave the first worker nothing -- both roads end in
+    "Streaming session is not active" for the first dictation, whose
+    handshake had failed on the key.
+    """
+    (
+        controller,
+        app,
+        overlay,
+        _recordings,
+        _transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, connect_error=TranscriptionError("Invalid API key.")
+    )
+    failed: list[tuple[int, str]] = []
+    controller.transcription_failed.connect(
+        lambda token, text: failed.append((token, text))
+    )
+    joined = threading.Event()
+    proceed = threading.Event()
+    original_await = controller._await_stream_connect
+
+    def _await_then_hold(job):
+        result = original_await(job)
+        joined.set()
+        assert proceed.wait(timeout=10), "the finalize was never released"
+        return result
+
+    monkeypatch.setattr(controller, "_await_stream_connect", _await_then_hold)
+    try:
+        controller.stop_recording()
+        first_token = controller._active_request_token
+        controller.cancel_current_action()
+        release_connect.set()
+        assert joined.wait(timeout=10), "the finalize never joined"
+        # The first finalize holds its handshake's failure unread. The next
+        # dictation's handshake is released already, so it fails at once and
+        # records a failure of its own.
+        controller.start_recording()
+        assert _pump_until(
+            app,
+            lambda: overlay.state == "Error" and "Invalid API key." in overlay.detail,
+        ), overlay.states
+        proceed.set()
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the first finalize never finished"
+        )
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        assert failed == [(first_token, "Invalid API key.")], failed
+    finally:
+        proceed.set()
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
 def test_a_late_connected_signal_after_a_stop_does_not_repaint_the_overlay(monkeypatch):
     """"Finalizing streaming transcript..." must survive the handshake landing.
 

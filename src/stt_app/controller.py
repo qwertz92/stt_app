@@ -166,8 +166,8 @@ class _TranscriptionJob:
     # The provider handshake thread, when this job finalizes a stream that may
     # still be connecting. The worker joins it before calling `stop_stream()`.
     connect_thread: object | None = None
-    # The generation of that handshake, so the worker can tell whether a
-    # recorded connect failure is this session's.
+    # The generation of that handshake, under which its failure is recorded
+    # for this worker to consume.
     connect_generation: int = 0
     # How a non-foreground (queued/background) result is delivered:
     # "insert" -> save to history and insert into target_handle;
@@ -515,13 +515,16 @@ class DictationController(QtCore.QObject):
         # success arm would paint "Streaming active. Speak now" over
         # "Finalizing streaming transcript...".
         self._stream_finalize_pending = False
-        # `(generation, error text)`, written by the connect thread when the
-        # handshake or its flush fails and read by the finalize worker
-        # after it joined that thread. While a finalize is pending the
+        # Error text by handshake generation, written by the connect thread
+        # when the handshake or its flush fails and consumed by the finalize
+        # worker after it joined that thread. While a finalize is pending the
         # failure is that worker's to report -- once, with the handshake's
         # own cause -- and not the connect signal's; see
-        # `_on_stream_connect_finished`.
-        self._stream_connect_failure: tuple[int, str] | None = None
+        # `_on_stream_connect_finished`. Keyed rather than one slot, and never
+        # cleared with the session: a cancel resets the session while the
+        # worker is still parked in its join, and the next dictation's own
+        # handshake may fail before the worker has read its record.
+        self._stream_connect_failures: dict[int, str] = {}
         self._active_stream_transcriber = None
         self._active_stream_runtime_lease: _TranscriberRuntimeLease | None = None
         self._active_stream_settings: AppSettings | None = None
@@ -1255,7 +1258,15 @@ class DictationController(QtCore.QObject):
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = []
             self._stream_preconnect_dropped = False
-            self._stream_connect_failure = None
+            # A recorded failure lives until the finalize that joined its
+            # handshake reads it; what no registered job can still read is
+            # dropped here, at the one place a handshake begins.
+            still_awaited = {job.connect_generation for job in self._jobs.values()}
+            self._stream_connect_failures = {
+                recorded: cause
+                for recorded, cause in self._stream_connect_failures.items()
+                if recorded in still_awaited
+            }
 
         def _on_runtime_error(error_text: str) -> None:
             # The token is captured, not read when the callback fires: a
@@ -1392,20 +1403,27 @@ class DictationController(QtCore.QObject):
             self._stream_preconnect_chunks = None
 
     def _record_stream_connect_failure(self, generation: int, error_text: str) -> None:
-        """Keep a failed handshake's cause for the finalize that joins it."""
+        """Keep a failed handshake's cause for the finalize that joins it.
+
+        Under the handshake's own generation, and not gated on the live one:
+        a cancel during the pending finalize runs `_reset_streaming_state`,
+        which bumps the generation, while the worker is still parked in its
+        join -- gated, a failure arriving after the cancel was refused, and
+        the reset cleared one recorded before it, so the worker found
+        nothing either way, called `stop_stream()` on a session never
+        published and reported "Streaming session is not active" for a
+        handshake that had failed on an invalid key (the wave-12
+        concurrency lens). The record is the joining finalize's to consume.
+        """
         with self._stream_preconnect_lock:
-            if generation == self._stream_connect_generation:
-                self._stream_connect_failure = (generation, error_text)
+            self._stream_connect_failures[generation] = error_text
 
     def _stream_connect_failure_for(self, job: _TranscriptionJob | None) -> str | None:
-        """The recorded failure of the handshake `job` finalizes, if any."""
+        """Take the recorded failure of the handshake `job` finalizes, if any."""
         if job is None:
             return None
         with self._stream_preconnect_lock:
-            recorded = self._stream_connect_failure
-        if recorded is None or recorded[0] != job.connect_generation:
-            return None
-        return recorded[1]
+            return self._stream_connect_failures.pop(job.connect_generation, None)
 
     def _on_stream_connect_finished(
         self, generation: int, ok: bool, error_text: str
@@ -2469,7 +2487,9 @@ class DictationController(QtCore.QObject):
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = None
             self._stream_preconnect_dropped = False
-            self._stream_connect_failure = None
+            # Not the recorded handshake failures: each belongs to the
+            # finalize that joined its handshake, which may still be parked
+            # in that join while this reset runs from a cancel.
         self._stream_abort_requested = False
         self._stream_insertion_suspended = False
         self._stream_insert_failures = 0
