@@ -1688,7 +1688,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     notification instead -- the `show_overlay_error` entry), the History
     dialog's warning box, the Settings History tab's status label, the
     Benchmark tab's status line, the import and clear boxes of
-    `history_ui_actions` -- with `str(exc)` verbatim. PySide6 does not
+    `history_ui_actions` (its export box caught the refusal already, through
+    the `except Exception` it had) -- with `str(exc)` verbatim. PySide6 does not
     propagate an exception from a slot invoked from C++: it prints the
     traceback to stderr and returns, and a windowed build has no stderr,
     so an unguarded refusal was a button that did nothing, twice in a row.
@@ -3450,9 +3451,18 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   handler.
   Explicit cancel — the overlay per-row ✕, Clear queue, and the Cancel button —
   goes through `_request_job_stop` (delivery `history`): it sets `aborting` (so a
-  not-yet-started worker skips and a cooperative transcriber stops) and cancels
-  the future if it has not started. **Every local engine can now be stopped
-  mid-run**; the remote providers still only skip-if-not-started and otherwise
+  not-yet-started worker skips and a cooperative transcriber stops), cancels
+  the future if it has not started, and marks the job's own recording
+  canceled in the last-recording store (`_mark_job_recording_canceled`, keyed
+  by the job's recording id like the completion and failure marks, so the X
+  on an older row never relabels the newest recording; a job whose id is
+  unknown is marked only while it is the foreground one). Wave 13: the cancel
+  hotkey marked and the queue row's X did not -- the job it stops is
+  background from then on, and a background failure marks nothing -- so the
+  store kept "transcribing" for a job that had ended; the two roads differed
+  in the state file alone, since the recovery prompt reads the status only
+  for "failed". **Every local engine can now be stopped mid-run**; the remote
+  providers still only skip-if-not-started and otherwise
   run to completion with their result kept in history. See "Cancelling a
   running local transcription" below for how each local engine does it.
   Stopping the pending streaming finalize ends that streaming session:
@@ -4323,7 +4333,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   again" and the optional fourth global hotkey `repaste_hotkey` (default
   empty — a global paste combo is riskier than an overlay reveal, so nothing
   is preset). It is blocked while a recording/stream is active so a paste can
-  never interfere with a capture, and it never writes a new history entry.
+  never interfere with a capture, and while a foreground transcription is in
+  flight (wave 13): `_last_transcript` is still the previous dictation then
+  and the job's result owns the overlay, so let through it pasted the older
+  text and painted "Done" with it over "Processing", and a paste that failed
+  there painted "Error" over it through the inserter's own handler. Both
+  refusals reach the tray, since a session owns the overlay. And the
+  no-window refusal reveals the overlay once: `show_overlay_error` reveals on
+  its paint road and must not on its tray road, and a second reveal from
+  `_repaste` brought a "Listening" overlay to the front for an error the tray
+  carried. It never writes a new history entry.
   Save-time validation rejects conflicts with the recording, cancel, and
   overlay hotkeys.
 - **Completion tone (`completion_beep_enabled` + `completion_beep_tone`,

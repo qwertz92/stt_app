@@ -7561,3 +7561,116 @@ judged by the tests named for it. The test asserts the tray road now. Rule for
 the lead: a change that moves a message is followed by a grep of `tests/` for
 that message, and every file the grep names is re-run before the commit. The
 full suite on `27dc9af`, 16 September: 2823 passed, 1 skipped in 178.38 s.
+
+### Wave 13 (2026-09-16) - the twelfth wave, on the wave-12 fixes
+
+**Range.** `b51f4a4..92c5c50`: the two wave-12 fixes, the test commit that
+followed the red suite, and their record. Three Sonnet breakers --
+concurrency, reach, facts -- each on its own export of `92c5c50`, against 16
+written claims (X1.1-X1.6, X2.1-X2.6, D.1-D.4), told nothing of what was
+changed or why. The wave-12 mechanisms held: the concurrency lens drove the
+keyed record through both cancel roads in both orders against the real
+`DeepgramTranscriber` behind a fake socket, raced the prune against the record
+from real threads for 200 rounds, shut the controller down while a finalize
+sat in a real `Thread.join`, and combined the join bound with a cancel, and
+found nothing; the reach lens re-ran the shipped tests and held X2.1-X2.5 by
+probe, including the tray message's title, icon and timeout. Every finding
+below was reproduced by the lead with the breaker's own probe on the real tree
+before anything changed: the reach probes 2 failed of 2 and 1 failed of 2, the
+facts probe 1 failed of 1, the concurrency probes as reported.
+
+**The reach lens: a re-paste during a transcription in flight.** `_repaste`
+refused a recording and a stream and not a foreground transcription in flight:
+with the microphone closed and the result not yet delivered, the tray's
+"Insert transcript again" and the re-paste hotkey passed its guard, pasted the
+previous dictation -- `_last_transcript` has not moved on yet -- and painted
+"Done" with that older text over "Processing" for a job that had not finished;
+a paste that failed there painted "Error" over it through the inserter's own
+handler -- of the three `_insert_text_at_target` calls that leave
+`show_overlay_error=True`, the only one outside a job's own delivery
+(`test_reach_probe1_repaste_clobber.py`, both shapes). The guard now refuses
+while `_active_request_token` is set, through the tray road like the other two
+refusals; refusing rather than pasting quietly was the lead's call, because
+the text the user would get is the previous dictation's and the job's own
+result pastes itself a moment later. The lens's third finding was the two
+cancel roads leaving the last-recording store in different states: the hotkey
+marks the recording canceled and the queue row's X did not, because the job it
+stops is background from then on and a background failure marks nothing, so
+the store kept "transcribing" for a job that had ended. The consequence the
+lens drew -- a recovery prompt at the next start missing its "Last error" line
+-- is wrong: the prompt reads the status only for "failed", so neither road
+showed one, and the difference lived in the state file alone. Closed anyway,
+as a P4 that takes minutes: `_request_job_stop` marks on every road through
+`_mark_job_recording_canceled`, keyed by the job's recording id so the X on an
+older row never relabels the newest recording, and a job whose id is unknown
+is marked only while it is the foreground one, which is what the hotkey always
+did.
+
+**The facts lens: a reveal on the tray road.** `_repaste`'s no-window refusal
+called `_reveal_overlay_result` on the line after `show_overlay_error`, so
+during a session -- where the error went to the tray -- the overlay still came
+to the front showing "Listening" (`probe_F1_reveal_leak.py`, reveal count 2 to
+3 with no paint). The lens read the pre-fix `show_overlay_error` as one
+statement with no reveal; `git show 3e5db5b^` shows the reveal there already,
+so outside a session the refusal had revealed twice since before the range.
+The extra call is gone; the no-window test counts one reveal. With the
+in-flight refusal above the no-window branch is no longer reachable during a
+session at all, and the test drives it outside one. The lens also asked
+whether the "thirteen Qt call sites" enumeration is complete, since
+`run_history_export`'s box reports the refusal too: the thirteen are the ten
+the F10 fix guarded plus the three overlay setters of wave 11, and the export
+box needed no guard because its `except Exception` predates F10 (`git show
+467788f^`); the enumeration says so now. Everything else it counted held: the
+three Wave 11 corrections against `git log -S`, the test counts, the named
+failing test at `3e5db5b` re-run on an export of that commit.
+
+**The concurrency lens: two findings judged, not fixed.** A second
+`cancel_current_action` press while the cancelled finalize is still winding
+down paints "Nothing to cancel." over "Transcription canceled.": the first
+press cleared the active token and hid the aborting row, so from the user's
+side nothing is left to cancel, and the line says so; the worker's result is
+history-only either way. And a streaming finalize queued behind an older
+parked one (every streaming finalize joins the shared worker while an older
+job is undelivered) that is cancelled before its worker starts takes
+`_request_job_stop`'s `future.cancel()` road and emits no
+`transcription_canceled`: the lens read that as the dictation vanishing
+without a trace. It does not vanish -- the road calls
+`_finish_transcription_job`, which is all the signal's slot does besides a
+flush the cancel road runs itself, and that rescues the job's stashed live
+text into history (`streaming_partial_rescued`); the cancel road paints
+"Transcription canceled."; the handshake failure of a job that never ran is
+not reported, and the older parked finalize reports the same cause. Both
+recorded here rather than changed.
+
+**Refuted or judged, with the reason.** X1.1/X1.2 against the real Deepgram
+provider in both orders (one report each, the provider's state back at idle);
+X1.4's prune under 200 real-thread rounds; shutdown inside a real join (0.000
+s, no post-shutdown signal); the join bound with a cancel (one terminal
+report, the F-C2 text after the cancel's line -- unchanged, as X1.6 says). The
+concurrency lens's P9 diagnostic -- the shipped second-dictation test reusing
+its transcriber -- it withdrew itself: the second dictation takes the isolated
+runtime while the first finalize holds the lease, and the cache slot it read
+held the first object. Its P8 -- the capture-failure road's orphaned record
+pruned by a later dictation -- is inconclusive on its side (the probe's second
+start raised through the failing capture it had re-patched away) and the
+record half held. Not exercised by anyone: the abort road's orphan end to end,
+AssemblyAI's SDK live, the overlay's own Insert as its own entry to the
+in-flight refusal (the button exists on no session state), the three setters
+during a live streaming session, `clear_transcription_queue`'s store mark
+beyond the shared code.
+
+**The commits and the mutation round.** Two commits: `8979883` (a re-paste
+during a transcription in flight is refused through the tray; the no-window
+refusal reveals once), `4627127` (every cancel road marks the job's own
+recording canceled), and this record. Tests first: two for the first unit, one
+new and one extended, both seen failing before the fix; four for the second --
+the wave-12 cancel test now reading the store on both roads, the X on the
+foreground row, the X on an older row keyed to its recording or silent for an
+unknown id, the hotkey with no job to stop -- four of their eight cases
+failing before the fix, the other four (the hotkey road, the unknown id, the
+token with no job) pinning what already held. Eight mutants, all detected: the
+in-flight refusal removed, painted instead of the tray road, the second reveal
+restored; the shared stop marking nothing, the key dropped, an unknown id
+marked for a background job, foreground never, the hotkey's no-job mark
+removed. The full suite on `4627127`, 16 September: 2828 passed, 1 skipped in
+160.18 s.
