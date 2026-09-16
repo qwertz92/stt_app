@@ -38,6 +38,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 from stt_app.config import FASTER_WHISPER_MODEL_SIZES, MODEL_REPO_MAP
 from stt_app.persistence import atomic_write_text
+from stt_app.transcriber import local_webgpu_asr
 
 IMPORTABLE_MODEL_REPO_MAP = {
     name: MODEL_REPO_MAP[name] for name in FASTER_WHISPER_MODEL_SIZES
@@ -267,14 +268,16 @@ def compute_fake_hash(source_dir: Path) -> str:
 
 
 def get_default_hf_cache_dir() -> Path:
-    """Return the default HuggingFace Hub cache directory."""
-    hf_home = os.environ.get("HF_HOME", "")
-    if hf_home:
-        return Path(hf_home) / "hub"
-    hf_cache = os.environ.get("HF_HUB_CACHE", "")
-    if hf_cache:
-        return Path(hf_cache)
-    return Path.home() / ".cache" / "huggingface" / "hub"
+    """Return the hub cache directory the app and `huggingface_hub` agree on.
+
+    This is the app's own `default_hf_cache_dir` -- the library's resolution
+    of `HF_HUB_CACHE`, `HUGGINGFACE_HUB_CACHE`, `HF_HOME` and `XDG_CACHE_HOME`.
+    The script used to carry a third copy of the order the app once had
+    (`HF_HOME` before `HF_HUB_CACHE`, `XDG_CACHE_HOME` ignored), so with both
+    variables set a manual import landed in a directory the app never looked
+    in. Called through the module so a test can patch the one function.
+    """
+    return Path(local_webgpu_asr.default_hf_cache_dir())
 
 
 def import_model(

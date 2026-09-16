@@ -50,6 +50,7 @@ from .base import (
     TranscriptionError,
     canceled_download_is_a_cancel,
 )
+from .local_webgpu_asr import default_hf_cache_dir
 
 logger = logging.getLogger(__name__)
 
@@ -118,17 +119,6 @@ class _StreamingSession:
     result: _StreamResult = field(default_factory=_StreamResult)
 
 
-def _default_hf_cache_dir() -> str:
-    """Return the default HuggingFace Hub cache directory."""
-    hf_home = os.environ.get("HF_HOME", "")
-    if hf_home:
-        return os.path.join(hf_home, "hub")
-    hf_cache = os.environ.get("HF_HUB_CACHE", "")
-    if hf_cache:
-        return hf_cache
-    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
-
-
 def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     """Return possible cache directories for a model.
 
@@ -141,7 +131,7 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     search_dirs: list[str] = []
     if model_dir and model_dir.strip():
         search_dirs.append(model_dir.strip())
-    search_dirs.append(_default_hf_cache_dir())
+    search_dirs.append(default_hf_cache_dir())
 
     folder_name = f"models--{repo_id.replace('/', '--')}"
     repo_basename = repo_id.rsplit("/", 1)[-1]
@@ -191,7 +181,7 @@ def download_destination_dir(model_name: str, model_dir: str = "") -> Path | Non
     base_dir = (
         model_dir.strip()
         if model_dir and model_dir.strip()
-        else _default_hf_cache_dir()
+        else default_hf_cache_dir()
     )
     return Path(base_dir) / f"models--{repo_id.replace('/', '--')}"
 
@@ -491,7 +481,7 @@ def _download_faster_whisper_via_modelscope(
     cache_dir = (
         model_dir.strip()
         if model_dir and model_dir.strip()
-        else _default_hf_cache_dir()
+        else default_hf_cache_dir()
     )
     logger.warning(
         "Hugging Face download failed for %s (%s); trying ModelScope mirror.",

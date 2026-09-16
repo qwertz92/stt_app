@@ -677,3 +677,22 @@ def test_an_unresolved_name_with_no_ctranslate2_files_gets_the_runtime_hint(
 
     assert "CTranslate2/faster-whisper models only" in hinted, hinted
     assert "CTranslate2/faster-whisper models only" not in plain, plain
+
+
+def test_the_default_cache_dir_is_the_apps_own_resolution(monkeypatch, tmp_path):
+    """The script asks the app's single `default_hf_cache_dir`.
+
+    It used to carry a third copy of the resolution order the app once had
+    (`HF_HOME` before `HF_HUB_CACHE`, `XDG_CACHE_HOME` ignored), so a manual
+    import could land in a directory the app never looks in -- F13 of the
+    2026-09-12 review one step further out. Patching the app's function has
+    to move the script's answer with it.
+    """
+    from stt_app.transcriber import local_webgpu_asr
+
+    monkeypatch.setattr(
+        local_webgpu_asr, "default_hf_cache_dir", lambda: str(tmp_path / "hub")
+    )
+    module = _load_import_module()
+
+    assert module.get_default_hf_cache_dir() == tmp_path / "hub"

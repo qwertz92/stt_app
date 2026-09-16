@@ -280,7 +280,7 @@ class TestFindCachedModels:
     def test_finds_model_in_hf_cache(self, tmp_path):
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -289,7 +289,7 @@ class TestFindCachedModels:
     def test_finds_model_in_custom_dir(self, tmp_path):
         self._make_hf_cache(tmp_path, "tiny", "Systran/faster-whisper-tiny")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value="/nonexistent",
         ):
             result = find_cached_models(str(tmp_path))
@@ -310,7 +310,7 @@ class TestFindCachedModels:
         (flat_dir / "config.json").write_text("{}")
         (flat_dir / "model.bin").write_bytes(b"\x00")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -318,17 +318,19 @@ class TestFindCachedModels:
 
     def test_returns_empty_when_no_models(self, tmp_path):
         # Both halves: `find_cached_models` hands the ONNX scan `model_dir`
-        # unchanged, and `local_webgpu_asr._model_cache_dirs` then appends its
-        # *own* `_default_hf_cache_dir()`. Patching only the faster-whisper one
-        # left this test relying on the suite's HF_HOME isolation to keep the
-        # real cache out of the result.
+        # unchanged, and `local_webgpu_asr._model_cache_dirs` then appends the
+        # default cache through that module's own attribute. One function now
+        # answers for both modules, but each module holds its own name for it,
+        # so patching one does not patch the other -- and patching only the
+        # faster-whisper one left this test relying on the suite's HF_HOME
+        # isolation to keep the real cache out of the result.
         with (
             patch(
-                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
             patch(
-                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                "stt_app.transcriber.local_webgpu_asr.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
         ):
@@ -343,7 +345,7 @@ class TestFindCachedModels:
         (snapshot_dir / "config.json").write_text("{}")
         # model.bin intentionally missing
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -353,7 +355,7 @@ class TestFindCachedModels:
         self._make_hf_cache(tmp_path, "tiny", "Systran/faster-whisper-tiny")
         self._make_hf_cache(tmp_path, "small", "Systran/faster-whisper-small")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             result = find_cached_models()
@@ -378,7 +380,7 @@ class TestFindCachedModels:
         self._make_hf_cache(hf_dir, "small", "Systran/faster-whisper-small")
         self._make_hf_cache(custom_dir, "tiny", "Systran/faster-whisper-tiny")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(hf_dir),
         ):
             result = find_cached_models(str(custom_dir))
@@ -396,7 +398,7 @@ class TestFindCachedModels:
         custom_dir.mkdir()
         self._make_hf_cache(custom_dir, "tiny", "Systran/faster-whisper-tiny")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path / "nowhere"),
         ):
             reported = set(find_cached_models(str(custom_dir)))
@@ -422,11 +424,11 @@ class TestFindCachedModels:
 
         with (
             patch(
-                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
             patch(
-                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                "stt_app.transcriber.local_webgpu_asr.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
         ):
@@ -446,7 +448,7 @@ class TestEstimateCachedModelBytes:
 
     def test_returns_zero_for_unknown_model(self, tmp_path):
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             assert estimate_cached_model_bytes("unknown") == 0
@@ -454,7 +456,7 @@ class TestEstimateCachedModelBytes:
     def test_estimates_hf_cache_size(self, tmp_path):
         self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             size = estimate_cached_model_bytes("small")
@@ -477,7 +479,7 @@ class TestEstimateCachedModelBytes:
         big_blob.write_bytes(b"\x00" * 10_000)
 
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(hf_dir),
         ):
             size = estimate_cached_model_bytes("small", str(custom_dir))
@@ -509,7 +511,7 @@ class TestEstimateCachedModelBytes:
         )
 
         with patch(
-            "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+            "stt_app.transcriber.local_webgpu_asr.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             size = estimate_cached_model_bytes(model_name)
@@ -542,11 +544,11 @@ class TestEstimateCachedModelBytes:
 
         with (
             patch(
-                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                "stt_app.transcriber.local_webgpu_asr.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
             patch(
-                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
         ):
@@ -577,11 +579,11 @@ class TestEstimateCachedModelBytes:
 
         with (
             patch(
-                "stt_app.transcriber.local_webgpu_asr._default_hf_cache_dir",
+                "stt_app.transcriber.local_webgpu_asr.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
             patch(
-                "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+                "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
                 return_value=str(tmp_path),
             ),
         ):
@@ -603,7 +605,7 @@ class TestEstimateCachedModelBytes:
             pytest.skip("creating symlinks requires privileges on this platform")
 
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             size = estimate_cached_model_bytes("small")
@@ -636,7 +638,7 @@ class TestDeleteCachedModel:
     def test_cached_model_paths_returns_existing_dirs(self, tmp_path):
         model_root = self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             paths = cached_model_paths("small")
@@ -645,7 +647,7 @@ class TestDeleteCachedModel:
     def test_delete_cached_model_removes_directories(self, tmp_path):
         model_root = self._make_hf_cache(tmp_path, "Systran/faster-whisper-small")
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path),
         ):
             removed = delete_cached_model("small")
@@ -774,7 +776,7 @@ class TestDeleteCachedModel:
         locked = blobs / "locked.incomplete"
         locked.write_bytes(b"y" * 10)
         monkeypatch.setattr(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             lambda: str(hub),
         )
         spelled = str(tmp_path / "elsewhere" / ".." / "hub")
@@ -823,7 +825,7 @@ class TestDeleteCachedModel:
         locked = blobs / "locked.incomplete"
         locked.write_bytes(b"y" * 10)
         monkeypatch.setattr(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             lambda: str(hub),
         )
 
@@ -1005,7 +1007,7 @@ class TestDownloadProgressMeasuresTheDestination:
         )
 
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(default_cache),
         ):
             assert estimate_cached_model_bytes("tiny", str(model_dir)) == 0
@@ -1021,7 +1023,7 @@ class TestDownloadProgressMeasuresTheDestination:
         )
 
         with patch(
-            "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+            "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
             return_value=str(tmp_path / "nowhere"),
         ):
             assert estimate_cached_model_bytes("tiny", str(model_dir)) == 2050

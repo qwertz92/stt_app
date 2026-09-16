@@ -7100,3 +7100,36 @@ two dialog files that exercise that line
 (`tests/test_settings_dialog_connection.py`,
 `tests/test_settings_dialog_mode.py`) after correcting its generic advice,
 which told the user to enable a fallback the refusal only happens with.
+
+**F13 -- the Hugging Face cache directory resolved in the wrong order.**
+Group D read the installed `huggingface_hub` 1.8.0 (`constants.py`
+lines 132-157) as the primary source and ran one child interpreter per
+environment combination: the app and the library disagree for "both
+set" (app `<HF_HOME>/hub`, library `<HF_HUB_CACHE>`) and for
+"XDG_CACHE_HOME only" (the app ignores it), and agree otherwise. The
+sharper consequence is the verifier's: with an empty Model Dir the real
+download is the library's resolution and the app's "is it cached" check
+is its own, so the model is never found where it was written and every
+dictation re-enters the download path; the ONNX path is self-consistent
+and the download coordinator keys its lock directory off the same
+helper. The lead's design: one function returning the library's constant,
+imported lazily, both private twins deleted. The implementer (unit
+`small`) hosted it in `local_webgpu_asr`, the module the other already
+imported from, and had `local_faster_whisper` import it at module scope
+so the 29 patch targets in three test files only had to be renamed;
+measured the cost as an A/B over three warm runs (importing
+`local_faster_whisper` alone: 231 -> 248 modules, 0.119-0.134 s ->
+0.130-0.140 s, `huggingface_hub` still not imported by either module);
+wrote the six-case subprocess test first ("both set" and "XDG only"
+failing on the old resolution, measured through a temporary copy of the
+file under the old name, since the new name does not exist on the
+baseline); and found the `conftest.py` docstring claiming the old
+helper "reads these variables at call time", which it corrected with
+the measured reason the isolation still holds. Its negative control put
+the old order back, put a twin back into `local_faster_whisper`, and
+had the coordinator resolve the cache on its own; each was caught, the
+twin by the test asking both modules. It reported a third copy of the
+old order in `scripts/import_model.py` as out of scope; the lead folded
+it into the unit (the script calls the app's function through the
+module, one test patches that function and expects the script's answer
+to move, failing first against the script's old body).

@@ -4192,6 +4192,39 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   delegated to `find_cached_webgpu_models` and deliberately does accept the
   other roots and the legacy layout, because `resolve_cached_webgpu_model_root`
   loads from them.
+- **The default Hugging Face cache directory is the library's own answer,
+  resolved in exactly one place** (F13 of the 2026-09-12 review).
+  `local_webgpu_asr.default_hf_cache_dir()` returns
+  `huggingface_hub.constants.HF_HUB_CACHE` (imported inside the function:
+  the inventory-scan and download worker subprocesses import the module,
+  and the import measured +2 modules and 0.002 s on top of the module's
+  own), and the inventory, `download_destination_dir`, the ModelScope
+  fallback, the download slot's lock identity in
+  `model_download_coordinator` and `scripts/import_model.py` all ask it.
+  Three byte-identical private copies used to read `HF_HOME` before
+  `HF_HUB_CACHE` and ignore `XDG_CACHE_HOME`, while the installed
+  `huggingface_hub` 1.8.0 lets `HF_HUB_CACHE` win outright, then
+  `HUGGINGFACE_HUB_CACHE`, then `HF_HOME` (itself `$XDG_CACHE_HOME/
+  huggingface` or `~/.cache/huggingface`) plus `hub`. With both
+  variables set the faster-whisper download -- `snapshot_download`
+  without `cache_dir` for an empty Model Dir, i.e. the library's own
+  resolution -- landed in `$HF_HUB_CACHE` while
+  `_coordinated_download_if_missing` looked in `$HF_HOME/hub`, so the
+  model was never found and every dictation re-entered the download path;
+  with `XDG_CACHE_HOME` alone the two disagreed the same way. Two
+  properties to keep: `local_faster_whisper` imports the function at
+  module scope, so `stt_app.transcriber.local_faster_whisper.default_hf_cache_dir`
+  stays a patchable module attribute (about 25 tests patch it there and
+  one patches the webgpu module's; patching one does not patch the
+  other), and the answer is the constant the library computes at its
+  first import, so a variable changed afterwards moves neither the app's
+  answer nor the download -- nothing in `src/` writes those variables at
+  runtime, and `tests/conftest.py`'s isolation holds because nothing it
+  imports pulls `huggingface_hub` in before `pytest_configure` has set
+  them (measured: not in `sys.modules` when the first test runs).
+  `tests/test_hf_cache_dir.py` runs one child interpreter per environment
+  combination with an environment built from scratch and asserts the
+  app's answer equals the library's in that child.
 - **A stored benchmark run cannot be opened while one is running, and a
   finished case does not move the reader.** Loading a history entry replaces
   `_current_benchmark_cases`, which is the list `_on_benchmark_case_finished`

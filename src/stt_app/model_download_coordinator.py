@@ -74,9 +74,9 @@ def _cache_lock_resource(model_dir: str) -> str:
     """
     normalized = str(model_dir or "").strip()
     if not normalized:
-        from .transcriber.local_faster_whisper import _default_hf_cache_dir
+        from .transcriber.local_webgpu_asr import default_hf_cache_dir
 
-        normalized = _default_hf_cache_dir()
+        normalized = default_hf_cache_dir()
     return os.path.normcase(os.path.abspath(os.path.normpath(normalized)))
 
 # Poll interval while waiting for the active download to finish. Short enough

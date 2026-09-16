@@ -271,14 +271,36 @@ _JS_RUNTIME_READY: set[tuple[str, str]] = set()
 _JS_RUNTIME_LOCK = threading.Lock()
 
 
-def _default_hf_cache_dir() -> str:
-    hf_home = os.environ.get("HF_HOME", "")
-    if hf_home:
-        return os.path.join(hf_home, "hub")
-    hf_cache = os.environ.get("HF_HUB_CACHE", "")
-    if hf_cache:
-        return hf_cache
-    return os.path.join(os.path.expanduser("~"), ".cache", "huggingface", "hub")
+def default_hf_cache_dir() -> str:
+    """Return the hub cache directory `huggingface_hub` itself downloads into.
+
+    This is the single answer to "where would a model with no Model Dir set
+    be": the inventory, the download destination that progress is measured
+    from, and the download slot's lock identity all ask it. It has to be the
+    library's own resolution, because `snapshot_download` is called without
+    `cache_dir` in that case and the library alone decides where the files go.
+
+    `huggingface_hub` 1.8.0 (`constants.py`) resolves `HF_HUB_CACHE` first,
+    then `HUGGINGFACE_HUB_CACHE`, then `HF_HOME` (which itself defaults to
+    `$XDG_CACHE_HOME/huggingface`, else `~/.cache/huggingface`) plus `hub`,
+    expanding `~` and `$VARIABLES`. The app used to read `HF_HOME` first and
+    ignore `XDG_CACHE_HOME` entirely, so with both variables set it looked in
+    `$HF_HOME/hub` while the download landed in `$HF_HUB_CACHE`: the model was
+    never found where it had been written and every dictation re-entered the
+    download path.
+
+    The import is inside the function because the inventory-scan and download
+    worker subprocesses import this module -- measured at +2 modules and
+    0.002 s on top of this module's own import, so it is cheap, but a module
+    that is imported to answer one question should not carry it.
+
+    The library computes that constant when it is first imported, so a variable
+    changed afterwards does not move it. That is the library's behaviour and
+    therefore the behaviour to match: the download would not move either.
+    """
+    from huggingface_hub import constants  # type: ignore
+
+    return constants.HF_HUB_CACHE
 
 
 def _repo_id_for_model(model_name: str) -> str | None:
@@ -301,7 +323,7 @@ def webgpu_download_destination(model_name: str, model_dir: str = "") -> Path | 
     base_dir = (
         Path(model_dir.strip())
         if model_dir and model_dir.strip()
-        else Path(_default_hf_cache_dir())
+        else Path(default_hf_cache_dir())
     )
     return base_dir / repo_id.rsplit("/", 1)[-1]
 
@@ -324,7 +346,7 @@ def _model_cache_dirs(model_name: str, model_dir: str = "") -> list[Path]:
     search_dirs: list[str] = []
     if model_dir and model_dir.strip():
         search_dirs.append(model_dir.strip())
-    search_dirs.append(_default_hf_cache_dir())
+    search_dirs.append(default_hf_cache_dir())
 
     folder_name = f"models--{repo_id.replace('/', '--')}"
     repo_basename = repo_id.rsplit("/", 1)[-1]

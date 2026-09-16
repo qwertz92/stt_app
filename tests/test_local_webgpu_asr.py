@@ -1415,7 +1415,7 @@ def test_a_model_in_the_default_cache_is_found_with_a_model_dir_set(
     model_dir.mkdir()
     snapshot = _write_required_snapshot(default_cache, PARAKEET_MODEL_SIZE)
     monkeypatch.setattr(
-        local_webgpu_asr, "_default_hf_cache_dir", lambda: str(default_cache)
+        local_webgpu_asr, "default_hf_cache_dir", lambda: str(default_cache)
     )
 
     assert local_webgpu_asr.find_cached_webgpu_models(str(model_dir)) == [

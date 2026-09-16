@@ -577,8 +577,12 @@ def _isolate_the_hugging_face_cache(monkeypatch):
     then passes or fails depending on the machine -- and the same tests are
     what a release build runs on a clean CI image, where the cache is empty.
 
-    `_default_hf_cache_dir` reads these variables at call time, so setting
-    them is enough.
+    `default_hf_cache_dir` answers with `huggingface_hub`'s own
+    `constants.HF_HUB_CACHE`, which the library computes when it is first
+    imported -- after `pytest_configure` has set these variables, which is
+    what makes setting them enough. Nothing imported in this file pulls
+    `huggingface_hub` in (measured: not in `sys.modules` when the first test
+    runs), and collection happens after `pytest_configure` too.
 
     The rest of this fixture is what keeps an empty cache from being worse
     than a shared one. An empty cache is not inert: `_ensure_model`

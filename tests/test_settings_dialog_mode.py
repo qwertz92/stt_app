@@ -4481,7 +4481,7 @@ def test_the_delete_prompt_names_every_folder_it_will_remove(monkeypatch, tmp_pa
         lambda _model_name, _model_dir="": 1,
     )
     monkeypatch.setattr(
-        "stt_app.transcriber.local_faster_whisper._default_hf_cache_dir",
+        "stt_app.transcriber.local_faster_whisper.default_hf_cache_dir",
         lambda: str(shared),
     )
 
