@@ -54,6 +54,14 @@ _STREAM_SERVER_CLOSE_TIMEOUT_S = 2.0
 _STREAM_SOCKET_CLOSE_TIMEOUT_S = 1.0
 
 
+def _audio_queue_full_error() -> TranscriptionError:
+    """The one wording for a rejected chunk, raised from both push paths."""
+    return TranscriptionError(
+        "Deepgram streaming audio queue is full; "
+        "the connection cannot keep up with microphone audio."
+    )
+
+
 class DeepgramTranscriber(ProgressReporter, ITranscriber):
     """Batch transcription using Deepgram's pre-recorded audio REST API.
 
@@ -593,13 +601,31 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             )
         raise TranscriptionError("Deepgram streaming failed to connect (timeout).")
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
-        """Queue a PCM16 chunk for the sender thread without blocking.
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
+        """Queue a PCM16 chunk for the sender thread.
 
         The bounded queue prevents an unavailable socket from consuming memory
         indefinitely. Saturation fails the stream instead of silently dropping
-        audio, preserving transcript integrity and the PortAudio callback's
-        nonblocking contract.
+        audio, preserving transcript integrity.
+
+        `block_timeout_s` is `None` on the PortAudio callback, which keeps the
+        original nonblocking `put_nowait` contract. A number is a caller that
+        may wait -- the controller's preconnect flush, which hands over every
+        block recorded during the handshake at once: 32 chunks is 3.2 s of
+        audio against a buffer that may hold 62.5 s, and the burst was fast
+        enough (about 45 us for 33 pushes) that the sender thread never got
+        scheduled, so the overflow was rejected on a healthy socket. Waiting is
+        what lets the sender drain; the wait is bounded, and running out of it
+        fails the stream exactly as saturation does.
+
+        The wait happens with `_stream_lock` released. `stop_stream` and
+        `abort_stream` take that lock first thing, and the latter is reached
+        from the Qt thread, so holding it across a multi-second wait would
+        freeze the UI. Queueing into a session that is retired in the meantime
+        is harmless: the sender checks the session before sending and the queue
+        is dropped with it.
         """
         payload = bytes(chunk or b"")
         if not payload:
@@ -610,18 +636,32 @@ class DeepgramTranscriber(ProgressReporter, ITranscriber):
             send_queue = self._stream_send_queue
             if send_queue is None:
                 raise TranscriptionError("Streaming session is not active.")
-            try:
-                send_queue.put_nowait(payload)
-            except queue.Full as exc:
-                error = RuntimeError(
-                    "audio queue is full because the WebSocket sender fell behind"
-                )
-                if self._stream_error is None:
-                    self._stream_error = error
-                raise TranscriptionError(
-                    "Deepgram streaming audio queue is full; "
-                    "the connection cannot keep up with microphone audio."
-                ) from exc
+            if block_timeout_s is None:
+                # Unchanged: the state check and the offer stay atomic, so a
+                # stop that has taken the lock cannot have a chunk slip in
+                # behind its drain sentinel.
+                try:
+                    send_queue.put_nowait(payload)
+                except queue.Full as exc:
+                    self._record_audio_queue_full_locked()
+                    raise _audio_queue_full_error() from exc
+                return
+        # `max(0.0, ...)`: `Queue.put` answers a negative timeout with a
+        # `ValueError`, which is not one of the two exception types this
+        # method's callers handle.
+        try:
+            send_queue.put(payload, timeout=max(0.0, float(block_timeout_s)))
+        except queue.Full as exc:
+            with self._stream_lock:
+                self._record_audio_queue_full_locked()
+            raise _audio_queue_full_error() from exc
+
+    def _record_audio_queue_full_locked(self) -> None:
+        """Keep the first reason this stream failed. The caller holds the lock."""
+        if self._stream_error is None:
+            self._stream_error = RuntimeError(
+                "audio queue is full because the WebSocket sender fell behind"
+            )
 
     def _stream_send_worker(
         self,

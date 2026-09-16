@@ -323,6 +323,7 @@ class FakeStreamingTranscriber:
         self.stopped = False
         self.aborted = False
         self.chunks = []
+        self.push_timeouts = []
         self.on_partial = None
         self.on_error = None
         self._stop_raises = stop_raises
@@ -336,7 +337,12 @@ class FakeStreamingTranscriber:
         self.on_partial = on_partial
         self.on_error = on_error
 
-    def push_audio_chunk(self, chunk: bytes):
+    def push_audio_chunk(self, chunk: bytes, *, block_timeout_s: float | None = None):
+        # `block_timeout_s` mirrors `ITranscriber.push_audio_chunk`: the
+        # preconnect flush passes a wait budget, and a fake without the
+        # keyword turns that into a TypeError the controller reports as a
+        # failed flush.
+        self.push_timeouts.append(block_timeout_s)
         if self._push_raises:
             raise self._push_raises
         self.chunks.append(chunk)

@@ -28,6 +28,14 @@ from conftest import (
     make_controller as _make_controller,
 )
 
+# The real Deepgram provider's fake socket, so the preconnect flush can be
+# exercised against the provider's real 32-chunk send-queue bound rather
+# than against a stand-in with no bound at all.
+from test_deepgram_provider import (
+    _FakeABNF,
+    _FakeWebSocketApp,
+)
+
 from stt_app import controller as controller_module
 from stt_app.audio_capture import AudioCaptureError
 from stt_app.config import (
@@ -37,6 +45,7 @@ from stt_app.config import (
     OVERLAY_ERROR_ACTION_INSERT,
     OVERLAY_ERROR_ACTION_NONE,
     RECORDINGS_MAX_COUNT_UNLIMITED,
+    STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S,
 )
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
@@ -3040,7 +3049,11 @@ def test_audio_recorded_while_connecting_is_delivered_in_order(monkeypatch):
             assert release_connect.wait(timeout=30)
 
         transcriber.start_stream = slow_start
-        transcriber.push_audio_chunk = pushed.append
+        # The flush passes a wait budget (`block_timeout_s`), so the
+        # replacement has to accept the keyword the interface declares.
+        transcriber.push_audio_chunk = (
+            lambda chunk, *, block_timeout_s=None: pushed.append(chunk)
+        )
         return transcriber
 
     monkeypatch.setattr("stt_app.controller.create_transcriber", slow_transcriber)
@@ -3185,6 +3198,244 @@ def _streaming_controller_with_a_blocked_handshake(
         controller._on_stream_audio_chunk(bytes([index]) * 8)
     assert transcriber.pushed == [], "audio reached the provider before it connected"
     return controller, app, overlay, recordings, transcriber, release_connect
+
+
+def test_a_six_second_preconnect_buffer_reaches_deepgram_intact(monkeypatch):
+    """Six seconds of buffered speech, at Deepgram's real 32-chunk bound.
+
+    `STREAMING_PRECONNECT_BUFFER_MAX_BYTES` is sized at 62.5 s of audio
+    because Deepgram's handshake may take up to 8 s, but the provider's send
+    queue holds 32 chunks -- 3.2 s. `_flush_preconnect_buffer` handed the
+    buffer over in a bare loop of `put_nowait` calls: measured, 33 pushes
+    complete in about 45 us, roughly a hundredth of CPython's 5 ms thread
+    switch interval, so the sender thread is not slow, it is never scheduled
+    during the burst at all. Chunk 33 was rejected and the whole dictation
+    failed with "the connection cannot keep up with microphone audio" -- on a
+    socket that had just opened successfully, and without the user needing to
+    have said anything, since every 100 ms block is buffered unconditionally.
+
+    The flush runs on the connect worker thread, which is allowed to block, so
+    it now waits for room per chunk instead of bursting.
+    """
+    from stt_app.transcriber.deepgram_provider import DeepgramTranscriber
+
+    _FakeWebSocketApp.instances = []
+    _FakeWebSocketApp.finalize_message = None
+    release_connect = threading.Event()
+    connect_entered = threading.Event()
+    binary_frames: list[int] = []
+
+    class _SlowConnectWebSocket(_FakeWebSocketApp):
+        def run_forever(self):
+            connect_entered.set()
+            assert release_connect.wait(timeout=30), "connect was never released"
+            self.on_open(self)
+
+        def send(self, payload, opcode=None):
+            if opcode == _FakeABNF.OPCODE_BINARY:
+                binary_frames.append(len(payload))
+                return None
+            return _FakeWebSocketApp.send(self, payload, opcode)
+
+    class _SlowConnectModule:
+        ABNF = _FakeABNF
+        WebSocketApp = _SlowConnectWebSocket
+
+    transcriber = DeepgramTranscriber(api_key="key")
+    monkeypatch.setattr(
+        transcriber, "_get_websocket_module", lambda: _SlowConnectModule
+    )
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", engine="deepgram")
+        ),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    # One real 100 ms block at 16 kHz mono 16-bit, the size `AudioCapture`
+    # delivers: 60 of them are 6.0 s, inside Deepgram's own 8 s budget.
+    chunk = bytes(3200)
+    try:
+        controller.start_recording()
+        assert connect_entered.wait(timeout=10), "the handshake never started"
+        for _ in range(60):
+            controller._on_stream_audio_chunk(chunk)
+        with controller._stream_preconnect_lock:
+            buffered = len(controller._stream_preconnect_chunks or [])
+        assert buffered == 60, f"only {buffered} chunks were buffered"
+
+        release_connect.set()
+        connect_thread = controller._stream_connect_thread
+        assert connect_thread is not None
+        connect_thread.join(timeout=30)
+        assert connect_thread.is_alive() is False, "the flush never finished"
+        # The sender is the provider's own thread, so this waits without
+        # pumping Qt -- the capture watchdog must not fire mid-test.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline and len(binary_frames) < 60:
+            time.sleep(0.005)
+
+        assert len(binary_frames) == 60, (
+            f"the socket saw {len(binary_frames)} of 60 buffered chunks"
+        )
+        assert set(binary_frames) == {3200}
+        assert controller._stream_chunk_error_reported is False
+        _pump_until(app, lambda: False, timeout=0.3)
+        assert overlay.state == "Listening", f"{overlay.state}: {overlay.detail}"
+    finally:
+        release_connect.set()
+        controller.shutdown()
+        try:
+            transcriber.abort_stream()
+        except Exception:
+            pass
+    _ = app
+
+
+def test_only_the_preconnect_flush_asks_the_provider_to_wait(monkeypatch):
+    """The wait budget is the flush's, never the PortAudio callback's.
+
+    `_on_stream_audio_chunk` runs on the PortAudio callback thread, which must
+    not block on anything, so it passes no budget and a bounded provider queue
+    keeps failing fast there. `_flush_preconnect_buffer` runs on the connect
+    worker and passes `STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S`. Handing both
+    the budget would put a multi-second wait on the real-time audio thread;
+    handing neither is the defect this fixes -- so the two are pinned apart.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    release_connect = threading.Event()
+    connect_entered = threading.Event()
+    made: list[FakeStreamingTranscriber] = []
+
+    class _BlockedHandshake(FakeStreamingTranscriber):
+        def start_stream(self, on_partial=None, on_error=None):
+            connect_entered.set()
+            assert release_connect.wait(timeout=30)
+            self.started = True
+
+    def _factory(_settings, **_kwargs):
+        transcriber = _BlockedHandshake()
+        made.append(transcriber)
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", _factory)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=FakeOverlay(),
+    )
+    try:
+        controller.start_recording()
+        assert connect_entered.wait(timeout=10), "the handshake never started"
+        transcriber = made[0]
+        controller._on_stream_audio_chunk(b"\x01" * 8)  # buffered, not pushed
+        assert transcriber.push_timeouts == []
+
+        release_connect.set()
+        connect_thread = controller._stream_connect_thread
+        assert connect_thread is not None
+        connect_thread.join(timeout=10)
+        assert transcriber.push_timeouts == [
+            STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S
+        ], "the flush did not hand the provider a wait budget"
+
+        # The session is connected now, so the next block goes straight
+        # through on the callback thread.
+        controller._on_stream_audio_chunk(b"\x02" * 8)
+        assert transcriber.push_timeouts[-1] is None, (
+            "the PortAudio callback was given a wait budget"
+        )
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_cancel_stops_the_flush_between_chunks(monkeypatch):
+    """Waiting means the flush can outlive the session that started it.
+
+    Before the per-chunk wait budget the flush emptied its list in
+    microseconds, so a cancel landing inside it was not worth checking for.
+    Now each chunk may wait seconds, and the transcriber is a shared cached
+    object that a newer session can already own -- so a flush that keeps going
+    spends the whole budget per remaining chunk pushing a cancelled
+    dictation's audio, possibly into somebody else's stream.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    release_connect = threading.Event()
+    connect_entered = threading.Event()
+    first_push = threading.Event()
+    resume_flush = threading.Event()
+    made: list[FakeStreamingTranscriber] = []
+
+    class _PausingOnFirstChunk(FakeStreamingTranscriber):
+        def __init__(self):
+            super().__init__()
+            self.pushed: list[bytes] = []
+
+        def start_stream(self, on_partial=None, on_error=None):
+            connect_entered.set()
+            assert release_connect.wait(timeout=30)
+            self.started = True
+
+        def push_audio_chunk(self, chunk, *, block_timeout_s=None):
+            self.pushed.append(bytes(chunk))
+            if len(self.pushed) == 1:
+                first_push.set()
+                assert resume_flush.wait(timeout=30), "the flush was never resumed"
+
+    def _factory(_settings, **_kwargs):
+        transcriber = _PausingOnFirstChunk()
+        made.append(transcriber)
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", _factory)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=FakeOverlay(),
+    )
+    try:
+        controller.start_recording()
+        assert connect_entered.wait(timeout=10), "the handshake never started"
+        transcriber = made[0]
+        for index in range(1, 6):
+            controller._on_stream_audio_chunk(bytes([index]) * 8)
+
+        release_connect.set()
+        connect_thread = controller._stream_connect_thread
+        assert connect_thread is not None
+        assert first_push.wait(timeout=10), "the flush never started pushing"
+
+        controller.cancel_current_action()  # the cancel hotkey, mid-flush
+        resume_flush.set()
+        connect_thread.join(timeout=10)
+
+        assert connect_thread.is_alive() is False
+        assert transcriber.pushed == [b"\x01" * 8], (
+            f"the flush pushed {len(transcriber.pushed)} chunks past the cancel"
+        )
+    finally:
+        release_connect.set()
+        resume_flush.set()
+        controller.shutdown()
+    _ = app
 
 
 def test_a_stop_during_the_handshake_still_delivers_the_buffered_audio(monkeypatch):

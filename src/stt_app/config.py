@@ -1295,6 +1295,18 @@ STREAMING_NEW_SEGMENT_MIN_SPEECH_S = 0.08
 # 16 kHz mono 16-bit is 32 kB/s, so this ceiling is about 60 s of audio; it only
 # exists so a connection that never completes cannot grow without bound.
 STREAMING_PRECONNECT_BUFFER_MAX_BYTES = 2_000_000
+# How long the preconnect flush waits for room in a provider's own send queue,
+# per chunk. Deepgram's queue holds 32 chunks (3.2 s of audio) against the
+# 62.5 s this buffer may hold, and the flush used to burst through it: measured,
+# 33 `put_nowait` calls complete in about 45 us, roughly a hundredth of
+# CPython's 5 ms thread switch interval, so the sender thread was never
+# scheduled during the burst and chunk 33 was rejected -- failing the dictation
+# on a socket that had just connected. The flush runs on the connect worker
+# thread, not on the PortAudio callback, so it is allowed to wait; the
+# microphone callback keeps its nonblocking path. Five seconds is well past the
+# 3.2 s the queue itself represents, so only a sender that has genuinely
+# stopped draining reaches it.
+STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S = 5.0
 STREAMING_STABLE_WORD_GUARD = 1
 STREAMING_REVISION_WORD_WINDOW = 1
 STREAMING_OVERLAY_MAX_CHARS = 180

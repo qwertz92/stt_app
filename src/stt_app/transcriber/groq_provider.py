@@ -260,7 +260,9 @@ class GroqTranscriber(ProgressReporter, ITranscriber):
             "Use batch mode with Groq, or use local provider for streaming."
         )
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
         raise NotImplementedError("Groq streaming is not yet implemented.")
 
     def stop_stream(self) -> str:

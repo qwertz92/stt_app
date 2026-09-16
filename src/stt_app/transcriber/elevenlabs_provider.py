@@ -329,7 +329,9 @@ class ElevenLabsTranscriber(ProgressReporter, ITranscriber):
             "Use batch mode, or use local/AssemblyAI/Deepgram for streaming."
         )
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
         raise NotImplementedError("ElevenLabs streaming is not implemented yet.")
 
     def stop_stream(self) -> str:

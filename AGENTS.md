@@ -2574,9 +2574,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   generation and the exact client/socket before changing transcript, error, or
   lifecycle state. Starting and retiring are explicit states, so a partially
   connected or bounded-shutdown session cannot overlap a replacement session.
-  Deepgram's sender queue is bounded and `push_audio_chunk` uses only
-  `put_nowait`; saturation fails the stream rather than dropping audio or
-  blocking PortAudio. Normal stop first drains queued binary audio through a
+  Deepgram's sender queue is bounded; on the PortAudio callback
+  `push_audio_chunk` uses only `put_nowait`, so saturation fails the stream
+  rather than dropping audio or blocking the callback, and only a caller
+  that passes `block_timeout_s` -- the controller's preconnect flush, on its
+  own worker thread -- waits for room, with `_stream_lock` released so a
+  stop or abort from the Qt thread is never held behind that wait (F09,
+  2026-09-16). Normal stop first drains queued binary audio through a
   sender barrier, then sends `Finalize`, waits best-effort for the optional
   `from_finalize` response, and sends the documented `CloseStream` command.
   Control sends and all waits are bounded; a failed drain/control path closes
@@ -3186,10 +3190,24 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   recorded meanwhile is buffered (`_stream_preconnect_chunks`, bounded by
   `STREAMING_PRECONNECT_BUFFER_MAX_BYTES` — past that the newest chunks are
   dropped with a warning) and flushed **in order** on that same worker before
-  the completion signal. The overlay says "Connecting to the speech service.
-  You can speak now." until the stream is live, because the microphone
-  genuinely is open. Consequence for tests: a stream-start failure now arrives
-  through a queued signal, not on the caller's stack.
+  the completion signal. Each push of that flush carries
+  `STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S` (5 s) as a wait budget, which a
+  provider without a bounded queue ignores (F09 of the 2026-09-12 review):
+  Deepgram's send queue holds 32 chunks, 3.2 s of audio, against the 62.5 s
+  this buffer may hold, and a burst of nonblocking pushes -- measured, 33
+  `put_nowait` calls in about 45 us, a hundredth of CPython's 5 ms switch
+  interval -- never let the sender thread run, so chunk 33 was rejected and
+  the dictation failed on a socket that had just connected. The flush
+  re-checks the generation between chunks, so a retired session stops
+  within one chunk's budget. The bound this leaves: the finalize joins the
+  connect thread for at most `STREAMING_CONNECT_JOIN_TIMEOUT_S` (15 s), so
+  against a sender that stopped draining the stop can run beside a flush
+  still waiting; the stop retires the queue, the next push then fails or
+  the session's reset retires the generation, and the flush ends within
+  5 s of either. The overlay says "Connecting to the speech service. You
+  can speak now." until the stream is live, because the microphone
+  genuinely is open. Consequence for tests: a stream-start failure now
+  arrives through a queued signal, not on the caller's stack.
 - **Stopping or aborting must retire an in-flight handshake, never race it**:
   `stop_stream()` called while `start_stream()` is still running is not a
   no-op. The provider rejects the stop because the session is not active

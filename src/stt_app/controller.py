@@ -60,6 +60,7 @@ from .config import (
     STREAMING_LIVE_INSERT_RETRY_LIMIT,
     STREAMING_OVERLAY_MAX_CHARS,
     STREAMING_PRECONNECT_BUFFER_MAX_BYTES,
+    STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S,
     STREAMING_REVISION_WORD_WINDOW,
     STREAMING_STABLE_WORD_GUARD,
     TRAY_CANCEL_ACTION_LABEL,
@@ -1310,7 +1311,24 @@ class DictationController(QtCore.QObject):
         return f"Failed to start streaming: {exc}"
 
     def _flush_preconnect_buffer(self, generation: int, transcriber) -> str | None:
-        """Hand buffered audio to the now-ready stream. Returns an error text."""
+        """Hand buffered audio to the now-ready stream. Returns an error text.
+
+        Runs on the connect worker thread, never on the PortAudio callback, so
+        it is allowed to wait -- and it has to. Deepgram's send queue holds 32
+        chunks (3.2 s of audio) while this buffer may hold 62.5 s, and a bare
+        loop of nonblocking pushes emptied it far too fast for the provider's
+        sender thread to be scheduled at all: measured, 33 pushes complete in
+        about 45 us against CPython's 5 ms switch interval, so chunk 33 was
+        rejected and the dictation failed on a socket that had just connected.
+        Each push therefore carries
+        `STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S` as a wait budget, which a
+        provider with no bounded queue simply ignores.
+
+        The generation is re-checked between chunks: waiting means the flush
+        can now outlive the session that started it, and a retired or
+        cancelled session must stop pushing rather than spend a budget per
+        remaining chunk on audio nobody wants.
+        """
         while True:
             with self._stream_preconnect_lock:
                 if generation != self._stream_connect_generation:
@@ -1331,8 +1349,13 @@ class DictationController(QtCore.QObject):
                     break
                 self._stream_preconnect_chunks = []
             for chunk in pending:
+                if generation != self._stream_connect_generation:
+                    return None
                 try:
-                    transcriber.push_audio_chunk(chunk)
+                    transcriber.push_audio_chunk(
+                        chunk,
+                        block_timeout_s=STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S,
+                    )
                 except Exception as exc:
                     self._logger.exception("Failed to flush buffered stream audio")
                     return f"Streaming chunk push failed: {exc}"

@@ -7219,3 +7219,28 @@ emit; the finalize-pending return, then the token-bearing report. Seven tests
 across `test_controller_coverage.py`, `test_controller_queue.py` (whose six
 call sites now pass the live token) and `test_local_nemotron.py`; the five
 files: 484 passed.
+
+**F09 -- the preconnect flush burst through Deepgram's send queue.** The
+implementer measured what the review had reasoned: 33 `put_nowait` calls
+complete in about 45 us, a hundredth of CPython's 5 ms switch interval, so
+during the flush of a handshake's buffered audio the sender thread never ran,
+the 32-chunk queue overflowed at chunk 33, and the dictation failed on a
+socket that had just connected -- 3.2 s of queue against a buffer that may
+hold 62.5 s, i.e. any handshake longer than about three seconds.
+`push_audio_chunk(chunk, *, block_timeout_s=None)` on the base class and all
+nine implementations: `None` keeps the PortAudio callback's nonblocking path,
+a number is a caller on a thread that may wait, and only the flush passes one
+(`STREAMING_PRECONNECT_FLUSH_PUT_TIMEOUT_S`, 5 s per chunk). Deepgram waits
+with `_stream_lock` released, because `abort_stream` takes that lock from the
+Qt thread; the flush re-checks the generation between chunks so a cancelled
+session stops within one budget. Three controller tests (a 6 s buffer at the
+real bound of 32; only the flush asks the provider to wait; a cancel stops the
+flush between chunks) and three Deepgram tests (the wait drains; a drain that
+never comes fails after the budget; the wait does not hold the lock -- the
+last a false pass on the baseline, as the implementer noted, since the
+baseline never waits). The lead corrected one sentence: the patch said whether
+AssemblyAI's SDK bounds its writer queue "could not be established offline",
+but the SDK is installed -- `assemblyai/streaming/v3/client.py` of 0.64.33
+builds an unbounded `queue.Queue()` -- so ignoring the budget there is right,
+and the docstring now says why. The seventeen provider and controller files:
+1072 passed.

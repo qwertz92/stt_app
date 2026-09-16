@@ -858,6 +858,156 @@ class TestDeepgramStreaming:
             _FakeWebSocketApp.binary_send_started = None
             _FakeWebSocketApp.release_binary_send = None
 
+    def test_a_blocking_push_waits_for_the_sender_to_drain(self, monkeypatch):
+        """The preconnect flush may block; the PortAudio callback may not.
+
+        `_flush_preconnect_buffer` runs on the connect worker thread and hands
+        over whatever piled up during the handshake -- up to 62.5 s of audio
+        against a 32-chunk (3.2 s) queue, which it burst through in about
+        45 us, far too fast for the sender thread to be scheduled at all. So
+        the bound is not a pacing problem to be tuned: the flush has to wait
+        for room, which its thread is allowed to do.
+        """
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        monkeypatch.setattr(
+            "stt_app.transcriber.deepgram_provider._STREAM_AUDIO_QUEUE_MAX_CHUNKS",
+            1,
+        )
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        try:
+            t.start_stream()
+            ws = _FakeWebSocketApp.instances[-1]
+            t.push_audio_chunk(b"first")
+            assert send_started.wait(timeout=1.0)
+            t.push_audio_chunk(b"second")  # the queue is full from here on
+
+            pushed: list[object] = []
+
+            def _blocking_push():
+                try:
+                    t.push_audio_chunk(b"third", block_timeout_s=5.0)
+                    pushed.append(True)
+                except BaseException as exc:  # pragma: no cover - failure path
+                    pushed.append(exc)
+
+            pusher = threading.Thread(target=_blocking_push)
+            pusher.start()
+            time.sleep(0.05)
+            assert pushed == [], "the push did not wait for room"
+
+            release_send.set()
+            pusher.join(timeout=5.0)
+
+            assert not pusher.is_alive()
+            assert pushed == [True], f"the blocking push failed: {pushed}"
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline and len(ws.send_calls) < 3:
+                time.sleep(0.01)
+            assert [payload for payload, _opcode in ws.send_calls] == [
+                b"first",
+                b"second",
+                b"third",
+            ]
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+
+    def test_a_blocking_push_still_fails_when_the_drain_never_comes(
+        self, monkeypatch
+    ):
+        """A stalled sender still fails the stream; it only takes longer.
+
+        Waiting forever would hang the connect worker, and with it the
+        finalize that joins it. The timeout turns "the connection cannot keep
+        up" back into the same error saturation raises today.
+        """
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        monkeypatch.setattr(
+            "stt_app.transcriber.deepgram_provider._STREAM_AUDIO_QUEUE_MAX_CHUNKS",
+            1,
+        )
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        try:
+            t.start_stream()
+            t.push_audio_chunk(b"first")
+            assert send_started.wait(timeout=1.0)
+            t.push_audio_chunk(b"second")
+
+            started = time.monotonic()
+            with pytest.raises(TranscriptionError, match="queue is full"):
+                t.push_audio_chunk(b"third", block_timeout_s=0.2)
+            waited = time.monotonic() - started
+            assert waited >= 0.2, f"it gave up after {waited:.3f}s without waiting"
+            assert waited < 3.0, f"it waited {waited:.3f}s, far past the timeout"
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+
+    def test_a_blocking_push_does_not_hold_the_stream_lock(self, monkeypatch):
+        """`abort_stream` must not queue behind a five-second wait for room.
+
+        `push_audio_chunk` reads the session state under `_stream_lock`, and
+        so do `stop_stream` and `abort_stream`. Waiting for queue room inside
+        that hold would freeze every one of them for the whole timeout -- and
+        `_on_stream_runtime_failed` reaches `abort_stream` on the Qt thread,
+        so the freeze would be the UI's.
+        """
+        _FakeWebSocketApp.instances = []
+        _FakeWebSocketApp.finalize_message = None
+        send_started = threading.Event()
+        release_send = threading.Event()
+        _FakeWebSocketApp.binary_send_started = send_started
+        _FakeWebSocketApp.release_binary_send = release_send
+        monkeypatch.setattr(
+            "stt_app.transcriber.deepgram_provider._STREAM_AUDIO_QUEUE_MAX_CHUNKS",
+            1,
+        )
+        t = DeepgramTranscriber(api_key="key")
+        monkeypatch.setattr(t, "_get_websocket_module", lambda: _FakeWebSocketModule)
+
+        try:
+            t.start_stream()
+            t.push_audio_chunk(b"first")
+            assert send_started.wait(timeout=1.0)
+            t.push_audio_chunk(b"second")
+
+            pusher = threading.Thread(
+                target=lambda: t.push_audio_chunk(b"third", block_timeout_s=5.0),
+                daemon=True,
+            )
+            pusher.start()
+            time.sleep(0.05)
+
+            started = time.monotonic()
+            with t._stream_lock:
+                waited = time.monotonic() - started
+            assert waited < 1.0, (
+                f"the stream lock was held for {waited:.3f}s by a blocking push"
+            )
+        finally:
+            release_send.set()
+            t.abort_stream()
+            _FakeWebSocketApp.binary_send_started = None
+            _FakeWebSocketApp.release_binary_send = None
+
     def test_stop_waits_for_audio_sender_before_finalize_and_close(self, monkeypatch):
         _FakeWebSocketApp.instances = []
         _FakeWebSocketApp.finalize_message = json.dumps({"from_finalize": True})

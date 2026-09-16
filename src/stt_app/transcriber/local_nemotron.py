@@ -397,7 +397,11 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
                     self._stream_thread = None
             raise
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
+        # This provider keeps no bounded queue of its own, so there is
+        # nothing for a caller's wait budget to wait for.
         payload = bytes(chunk or b"")
         if not payload:
             return

@@ -217,7 +217,19 @@ class ITranscriber(ABC):
     ) -> None:
         raise NotImplementedError("Streaming is not supported by this engine.")
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
+        """Hand one PCM16 chunk to the live stream.
+
+        `block_timeout_s` is `None` for the PortAudio callback, which must not
+        block: a provider with a bounded queue then fails the stream instead of
+        waiting. A number is the caller saying "I am on a thread that may
+        wait": the controller's preconnect flush passes one, because it hands
+        over seconds of buffered audio at once and a provider queue holding
+        only a few seconds otherwise rejects the overflow. A provider that
+        does not queue with a bound ignores the argument.
+        """
         raise NotImplementedError("Streaming is not supported by this engine.")
 
     def stop_stream(self) -> str:

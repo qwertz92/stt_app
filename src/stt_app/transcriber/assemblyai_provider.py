@@ -687,11 +687,19 @@ class AssemblyAITranscriber(ProgressReporter, ITranscriber):
                 self._format_stream_error(connect_error)
             ) from connect_error
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
         """Queue a raw PCM16 audio chunk for the streaming session.
 
         ``StreamingClient.stream`` only enqueues the chunk for the SDK's
         writer thread, so this is safe to call from the audio callback.
+
+        `block_timeout_s` is accepted and ignored: this app keeps no queue
+        of its own here, and the SDK's writer queue is an unbounded
+        `queue.Queue()` (`assemblyai/streaming/v3/client.py`, SDK
+        0.64.33), so there is nothing to wait for. If a later SDK bounds
+        it, this is where a wait belongs.
         """
         payload = bytes(chunk or b"")
         if not payload:

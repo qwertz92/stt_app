@@ -190,7 +190,9 @@ class OpenAITranscriber(ProgressReporter, ITranscriber):
             "Use batch mode, or use local/AssemblyAI/Deepgram for streaming."
         )
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
         raise NotImplementedError("OpenAI streaming is disabled in this project.")
 
     def stop_stream(self) -> str:

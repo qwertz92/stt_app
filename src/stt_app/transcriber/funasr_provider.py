@@ -734,7 +734,9 @@ class FunAsrTranscriber(ProgressReporter, ITranscriber):
             "or use local/AssemblyAI/Deepgram for streaming."
         )
 
-    def push_audio_chunk(self, chunk: bytes) -> None:
+    def push_audio_chunk(
+        self, chunk: bytes, *, block_timeout_s: float | None = None
+    ) -> None:
         raise NotImplementedError("Fun-ASR streaming is not implemented.")
 
     def stop_stream(self) -> str:
