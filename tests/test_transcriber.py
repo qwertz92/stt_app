@@ -102,6 +102,89 @@ def test_local_transcriber_transcribe_batch_from_bytes():
     assert model.calls[0]["language"] is None
 
 
+def _push_and_decode(transcriber, chunk, timeout=5.0):
+    """Push audio and wait for the worker's own partial to have seen it.
+
+    The stream worker calls `_maybe_emit_partial` after every chunk it
+    appends, so with `stream_partial_interval_s=0` every pushed chunk is
+    decoded once, on the worker. Calling `_maybe_emit_partial()` from the
+    test thread on top of that put two decoders on one session with nothing
+    serializing them: both read the same `new_audio` slice before either
+    advanced `last_partial_size`, so `silent_seconds` counted every quiet
+    chunk twice, and the pause route fired while the real speech was still
+    inside the trailing window -- an invented window appended on trust, once
+    per decode (20 appended windows and 169 words in a forced schedule; 29
+    words once in the full suite, where the test tolerates 12).
+    `last_partial_size` is advanced only at the end of a worker partial
+    that saw the chunk, in every branch of it, so waiting for it to reach
+    the chunk's end is waiting for that partial.
+    """
+    session = transcriber._stream_session
+    target = len(session.pcm_buffer) + len(chunk)
+    transcriber.push_audio_chunk(chunk)
+    deadline = time.monotonic() + timeout
+    while session.result.last_partial_size < target:
+        if session.result.error is not None:
+            return
+        if time.monotonic() > deadline:
+            raise AssertionError("the stream worker never decoded the chunk")
+        time.sleep(0.001)
+
+
+def _sessions_decoded_by_two_threads(records):
+    """The sessions among `(session, thread idents)` pairs that more than one
+    thread ran a partial's body for."""
+    return [session for session, idents in records if len(idents) > 1]
+
+
+@pytest.fixture(autouse=True)
+def _one_decoder_per_stream_session(monkeypatch):
+    """Fail a test whose partial decodes ran on two threads for one session.
+
+    In the app the stream worker is the only caller of `_maybe_emit_partial`,
+    so nothing in it serializes two callers. Seven tests here called it from
+    the test thread as well, and the two decoders raced on the session's
+    bookkeeping (see `_push_and_decode`); the loser of that race grew a
+    transcript the test bounds. The body past `should_emit` is what races,
+    and `_warn_once_if_the_room_is_never_quiet` is the second statement of
+    it, called with the session -- a partial that returned at `should_emit`
+    (the 3600 s interval of `_slow_decode_stream`) touched nothing and is not
+    recorded. The session object itself is the key, not its id: a test that
+    runs two sessions in a row would otherwise merge their worker threads
+    under one reused address.
+    """
+    records: list[tuple[object, set[int]]] = []
+    original = LocalFasterWhisperTranscriber._warn_once_if_the_room_is_never_quiet
+
+    def _record(self, session, quiet_slice):
+        for known, idents in records:
+            if known is session:
+                idents.add(threading.get_ident())
+                break
+        else:
+            records.append((session, {threading.get_ident()}))
+        return original(self, session, quiet_slice)
+
+    monkeypatch.setattr(
+        LocalFasterWhisperTranscriber, "_warn_once_if_the_room_is_never_quiet", _record
+    )
+    yield
+    clashes = _sessions_decoded_by_two_threads(records)
+    assert not clashes, (
+        f"{len(clashes)} streaming session(s) were decoded by two threads; the "
+        "stream worker decodes every pushed chunk on its own, so push through "
+        "`_push_and_decode` instead of calling `_maybe_emit_partial()` beside it"
+    )
+
+
+def test_the_detector_reports_a_session_decoded_by_two_threads():
+    one = object()
+    two = object()
+    records = [(one, {1}), (two, {1, 2})]
+    assert _sessions_decoded_by_two_threads(records) == [two]
+    assert _sessions_decoded_by_two_threads([(one, {7})]) == []
+
+
 class _GeneratorModel:
     """Yields segments lazily so a cancel can stop decoding between segments."""
 
@@ -770,8 +853,7 @@ def test_streaming_partial_callback_receives_the_merged_transcript():
     )
     transcriber.start_stream(on_partial=seen.append)
     for _ in range(2):
-        transcriber.push_audio_chunk(_build_pcm16_chunk(1600))
-        transcriber._maybe_emit_partial()
+        _push_and_decode(transcriber, _build_pcm16_chunk(1600))
     transcriber.stop_stream()
 
     assert seen[-1] == "first window text plus more"
@@ -828,10 +910,8 @@ def test_a_transient_after_a_long_pause_cannot_replace_or_extend_the_transcript(
     quiet_chunks = int(transcriber.stream_partial_window_s * 10) + 20
     for _ in range(3):
         for _ in range(quiet_chunks):
-            transcriber.push_audio_chunk(quiet)
-        transcriber.push_audio_chunk(click)
-        time.sleep(0.05)
-        transcriber._maybe_emit_partial()
+            _push_and_decode(transcriber, quiet)
+        _push_and_decode(transcriber, click)
         assert transcriber._stream_session.result.merged_text == "hello world"
 
     assert transcriber.stop_stream().strip() == "hello world"
@@ -890,11 +970,8 @@ def test_only_real_speech_after_a_pause_extends_the_transcript(
 
     quiet_chunks = int(transcriber.stream_partial_window_s * 10) + 25
     for _ in range(quiet_chunks):
-        transcriber.push_audio_chunk(_ms(100, 20))
-    time.sleep(0.15)
-    transcriber.push_audio_chunk(tail)
-    time.sleep(0.2)
-    transcriber._maybe_emit_partial()
+        _push_and_decode(transcriber, _ms(100, 20))
+    _push_and_decode(transcriber, tail)
 
     merged = transcriber._stream_session.result.merged_text
     transcriber.stop_stream()
@@ -983,11 +1060,8 @@ def test_the_segment_floor_is_wired_into_the_real_stream_worker():
     # pause becomes the floor.
     quiet_chunks = int(transcriber.stream_partial_window_s * 10) + 25
     for _ in range(quiet_chunks):
-        transcriber.push_audio_chunk(_ms(100, 20))
-    time.sleep(0.15)
-    transcriber.push_audio_chunk(_ms(300, 6000))
-    time.sleep(0.2)
-    transcriber._maybe_emit_partial()
+        _push_and_decode(transcriber, _ms(100, 20))
+    _push_and_decode(transcriber, _ms(300, 6000))
 
     assert transcriber._stream_session.result.segment_floor == spoken, (
         "the pause did not close off the earlier text; a later unalignable "
@@ -1036,8 +1110,9 @@ def test_a_noise_floor_above_the_gate_is_reported(
     transcriber.start_stream(on_partial=lambda text: None)
     try:
         for amplitude in amplitudes:
-            transcriber.push_audio_chunk(_ms(100, amplitude))
-            transcriber._maybe_emit_partial()
+            _push_and_decode(transcriber, _ms(100, amplitude))
+            # The warning is timed (`_NOISE_FLOOR_WARN_AFTER_S`), so the
+            # loud stretch has to last.
             time.sleep(0.01)
         warned = transcriber._stream_session.result.noise_floor_warned
     finally:
@@ -1089,18 +1164,13 @@ def test_no_pause_length_can_destroy_the_earlier_dictation(pause_seconds):
     transcriber.start_stream(on_partial=lambda text: None)
     try:
         for _ in range(3):
-            transcriber.push_audio_chunk(_ms(300, 6000))
-            time.sleep(0.08)
-            transcriber._maybe_emit_partial()
+            _push_and_decode(transcriber, _ms(300, 6000))
         before = transcriber._stream_session.result.merged_text
         assert before.startswith("das ist der erste")
 
         for _ in range(int(pause_seconds * 10)):
-            transcriber.push_audio_chunk(_ms(100, 20))
-        time.sleep(0.12)
-        transcriber.push_audio_chunk(_ms(400, 6000))
-        time.sleep(0.2)
-        transcriber._maybe_emit_partial()
+            _push_and_decode(transcriber, _ms(100, 20))
+        _push_and_decode(transcriber, _ms(400, 6000))
 
         merged = transcriber._stream_session.result.merged_text
         assert merged.startswith("das ist der erste"), (
@@ -1120,6 +1190,11 @@ def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
       thread. A tight loop with no yield never lets the worker run, so only
       the three real-speech windows were ever decoded and both assertions
       were tautologies. The decode count is asserted here.
+    - Calling `_maybe_emit_partial()` from this thread beside the worker's
+      own decodes put two decoders on the session (see `_push_and_decode`):
+      once in the full suite the transcript read 29 words, four copies of
+      one invented phrase appended on trust, from a race the test itself
+      had created. Every chunk is now decoded once, on the worker.
     - Giving every hallucinated window a distinct text means no two of them
       can align, so the dangerous path is never entered. Whisper repeats the
       same invented phrase across windows that share 96% of their audio, and
@@ -1160,17 +1235,13 @@ def test_hallucinated_windows_cannot_grow_the_transcript_without_bound():
     transcriber.start_stream(on_partial=lambda text: None)
     try:
         for _ in real_windows:
-            transcriber.push_audio_chunk(_ms(300, 6000))
-            time.sleep(0.06)
-            transcriber._maybe_emit_partial()
+            _push_and_decode(transcriber, _ms(300, 6000))
         real = transcriber._stream_session.result.merged_text
         spoken_decodes = len(decoded)
         assert real.startswith("das ist"), real
 
         for _ in range(120):
-            time.sleep(0.004)
-            transcriber.push_audio_chunk(_ms(100, 20))
-            transcriber._maybe_emit_partial()
+            _push_and_decode(transcriber, _ms(100, 20))
 
         merged = transcriber._stream_session.result.merged_text
         # Count here, not after stop_stream(): the drain calls
