@@ -6634,7 +6634,7 @@ overflow-safe run reader), `69562d5` (the finite best case), `a31d3a6`
 (the cancel drain), `6cf8cbd` (the shutdown delivery), `2c43939` (the dead
 branch), `7a669d6` (the tolerant history readers), `6f904d3` (the export
 status), `6fec8b1` (Tab), `5de7ed2` (the empty run) and this record
-(`182c520`, amended by the commit adding this paragraph). Twenty-three
+(`182c520`, extended by the commit adding this paragraph). Twenty-three
 mutants, at least one per fix, all detected on the first run. Before
 anything was committed the eleven unit scripts and the three docs scripts
 were replayed on a fresh export of `68154f5`, which reproduced the working
@@ -6861,3 +6861,77 @@ test that left it, and by the Canary test patching an immediate thread,
 the facade function and the environment query as the other run-starting
 tests do; the detector's before/after is the proof, since the fix is in a
 test.
+
+**The full suite found a fifth thing, and could not reproduce a sixth.**
+The first full-suite run on the thirteen unit commits (7 September)
+failed two tests, both green in isolation and both green in a rerun of
+the whole suite the same evening.
+`test_hallucinated_windows_cannot_grow_the_transcript_without_bound` read
+29 words -- four copies of one invented phrase appended on trust -- where
+it bounds 12. The mechanism is the test's own: it called
+`_maybe_emit_partial()` from the test thread after every push while the
+stream worker, at a partial interval of zero, decoded every appended chunk
+on its own, and nothing serializes two callers of that method because the
+app has one. Both threads read the same `new_audio` slice before either
+advanced `last_partial_size`, so `silent_seconds` counted every quiet
+chunk twice, reached the 8 s window at 4 s of quiet, and the pause route
+then measured the trailing window with the real speech still inside it and
+appended the invented phrase once per decode. Forced with a barrier inside
+the fake model: 20 appended windows and 169 words against 9 words with the
+worker alone; the same shape as the suite's failure. Seven tests shared
+the pattern (two more drive an idle worker's session from the test thread
+and are safe). Closed as unit 14, tests only: `_push_and_decode` pushes a
+chunk and waits for the worker's partial to have seen it, the seven tests
+push through it, and an autouse detector fails a test whose partial
+decodes ran on two threads for one session -- under six busy-loop
+processes three of three runs of the old tests tripped it, the one idle
+run did not, which is the flake reproduced as a named failure. The other
+failure, `test_settings_dialog_scans_local_models_once_after_local_tab_is_selected`,
+waited 2 s of `QTest.qWait(25)` for a 150 ms single-shot timer that fired
+only in the module fixture's `processEvents()` at teardown (the captured
+log shows the scan there and nothing during the wait). Not reproduced: ten
+runs of the test under the same six busy loops, the suite's rerun and a
+later full run all passed. Recorded as a hypothesis for wave 11 -- a
+`WM_TIMER` starved by other messages, or a restart of the timer by a path
+not found -- rather than changed.
+
+**The record of these runs is partly from memory.** On 16 September the
+session's scratchpad had lost every file written on 7 September (a
+cleanup of the temporary directory; the directories remained, 232 older
+files in deeper trees survived), among them the mutation round's output,
+both suite outputs, the probes and the unit scripts. The numbers of the
+7 September runs above are quoted from the session's own record; the
+mutation round was rerun on 16 September with the two unit-14 mutants
+added, and the commit list, that round and the suite run of 16 September
+are rendered from disk in the paragraph below. The fourteen commits were
+also re-created that day with SSH signatures (the signing setup dates from
+14 September), so their hashes differ from the ones the wave-11 breakers
+would have read on 7 September; their content is byte-identical.
+
+**The commits and the mutation round.** 14 commits, one per unit:
+`9f46ced` (keep the bottom status on one line), `aaae9be` (read the
+environment's text fields like the rest, and no bool as a number),
+`936635b` (a worker error without a message reads as the fallback text),
+`e6fda3c` (write an int a double cannot hold exactly as text), `251dcfd`
+(a history cap that is not a number keeps the default cap), `5f9c80c` (the
+cancel drain reads what is queued before it looks at the clock), `ed41917`
+(shutdown delivers the benchmark's handover and starts nothing else),
+`d5388ec` (the first error the child reports is the one raised, on both
+roads), `2a24525` (log a worker that survives every arm of the kill),
+`81484ed` (mark a finished case on the row the runner announced),
+`5265633` (copy an elided status line as the message it holds), `d9501b0`
+(refresh the history list when a delete or clear finds nothing), `52f8e8d`
+(a benchmark worker may not outlive its test), `672af6f` (the stream
+worker is the only decoder of a streaming session), and this record
+(`a3132c4`, extended by the commit adding this paragraph). 24 mutants, at
+least one per fix, all detected on 16 September (in two invocations: the
+runner died printing its 18th verdict -- a cp1252 stdout refused the
+ellipsis in a test's assertion text -- so the remaining seven ran again on
+their own; the 22 of 7 September were all detected too, per the session's
+record). The full suite on the last unit commit, 16 September: 2681
+passed, 1 skipped in 164.93 s (the two runs of 7 September: 2 failed and
+2678 passed in 238 s, then 2680 passed in 268 s, 1 skipped in each).
+Before anything was committed the unit scripts and the docs scripts were
+replayed on a fresh export of `45f78a1`, which reproduced the working tree
+byte for byte, and this paragraph is rendered by `docs_wave10_log2.py`
+from the repository's log and the run outputs on disk.

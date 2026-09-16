@@ -4244,6 +4244,20 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   run it launched a real benchmark worker child through the facade. The
   test patches an immediate thread, the facade function and the
   environment query now, as the other run-starting tests do.
+- A fifth, `_one_decoder_per_stream_session` in `tests/test_transcriber.py`,
+  fails a test whose partial decodes ran on two threads for one streaming
+  session. In the app the stream worker is the only caller of
+  `_maybe_emit_partial`, so nothing serializes two callers; seven tests
+  called it from the test thread beside the worker's own decode of every
+  pushed chunk, both read the same `new_audio` slice before either advanced
+  `last_partial_size`, `silent_seconds` counted every quiet chunk twice,
+  and the pause route appended an invented window on trust once per decode
+  -- 29 words once in the full suite, where the test bounds 12 (forced with
+  a barrier: 20 appended windows and 169 words against 9 with one decoder).
+  The tests push through `_push_and_decode`, which waits for the worker's
+  partial; the race is timing -- three of three runs of the old tests under
+  CPU load tripped the detector, the one idle run did not -- so the
+  detector names it when it happens and the helper makes it impossible.
 - **Read the suite's count before anything that publishes.** A shell chain
   that commits and pushes after a background suite has *started* publishes
   before the result exists; on 2026-09-04 four green per-file runs and one
