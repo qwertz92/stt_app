@@ -7744,14 +7744,15 @@ reader correlating the log with the store would suspect a lost write.
 **Refuted or judged, with the reason.** The third probe the lens named a
 finding -- an older row's keyed cancel mark is a pure no-op against the real
 store once the slot has moved on -- is Y2.5 as designed, and it passes on the
-fixed tree with the other eight. The reach observation is in the wave-13
-section and unchanged. The mirror image on the recording road -- a
-`save_recording` that fails leaves the slot with the previous recording, whose
-id the new job then carries and whose kept audio its completion then clears --
-needs a refused store write beside a kept previous recording, and closing it
-means giving the recording roads' "" a third meaning; recorded under Known
-limitations. Not exercised by anyone: the retry's roads on a live provider,
-the tray's Retry against a real menu, a real refused store write.
+fixed tree, one of the eight probes that do there (the two asserting the
+defect present fail). The reach observation is in the wave-13 section and
+unchanged. The mirror image on the recording road -- a `save_recording` that
+fails leaves the slot with the previous recording, whose id the new job then
+carries and whose kept audio its completion then clears -- needs a refused
+store write beside a kept previous recording, and closing it means giving the
+recording roads' "" a third meaning; recorded under Known limitations. Not
+exercised by anyone: the retry's roads on a live provider, the tray's Retry
+against a real menu, a real refused store write.
 
 **The commit and the mutation round.** One commit, `7a4d054`, and this record.
 Tests first, thirteen, all failing on `1a7990e`: the scenario on the real
@@ -7766,9 +7767,10 @@ job no identity (twice, through the unit test and the scenario), an unknown
 identity still marking, the transcribing mark unkeyed (twice), the promotion,
 the watchdog abort, the stream road and the persist recording no identity, the
 cancel, failure, completion and transcribing marks ignoring the flag, the
-foreground success keeping the identity. The first run reported five BASELINE
-cases: their selectors carried a parametrize id with spaces in it, which `-k`
-cannot express, so they selected nothing -- a selector that selects nothing is
-not a detector, and the harness's unmutated baseline run is what said so; one
-word of the id selects the three cases, and the round was re-run in full. The
-full suite on `7a4d054`, 16 September: 2840 passed, 1 skipped in 164.93 s.
+foreground success keeping the identity. The first run left five mutants
+uncredited: the four selectors behind them carried a parametrize id with
+spaces in it, which `-k` cannot express, so they selected nothing and the
+harness reported them as BASELINE -- a selector that selects nothing is not a
+detector, and the unmutated baseline run is what said so; one word of the id
+selects the three cases, and the round was re-run in full. The full suite on
+`7a4d054`, 16 September: 2840 passed, 1 skipped in 164.93 s.
