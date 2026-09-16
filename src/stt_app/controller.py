@@ -4371,7 +4371,7 @@ class DictationController(QtCore.QObject):
                 exc_info=True,
             )
 
-    def _await_stream_connect(self, job: _TranscriptionJob | None) -> None:
+    def _await_stream_connect(self, job: _TranscriptionJob | None) -> bool:
         """Wait for an in-flight handshake before stopping the stream.
 
         Runs on the finalize worker, never the Qt thread. Stopping a provider
@@ -4379,19 +4379,32 @@ class DictationController(QtCore.QObject):
         rejected because the session is not active *yet*, and the handshake then
         completes and publishes a socket nobody owns, which blocks every later
         dictation with "Streaming session already active". The wait is bounded
-        so a provider that hangs cannot hang the finalize with it.
+        so a provider that hangs cannot hang the finalize with it, and answers
+        False when the bound ran out with the thread still running -- still
+        connecting, or still handing the buffered audio over. The caller then
+        abandons the session rather than stopping it beside that thread.
         """
         thread = getattr(job, "connect_thread", None) if job is not None else None
         if thread is None or not thread.is_alive():
-            return
+            return True
         self._logger.info("Waiting for the streaming handshake before stopping it.")
         thread.join(timeout=STREAMING_CONNECT_JOIN_TIMEOUT_S)
         if thread.is_alive():
             self._logger.warning(
-                "The streaming handshake did not finish within %.1fs; stopping "
-                "anyway.",
+                "The streaming handshake did not finish within %.1fs; aborting "
+                "the stream.",
                 STREAMING_CONNECT_JOIN_TIMEOUT_S,
             )
+            return False
+        return True
+
+    @staticmethod
+    def _stream_handshake_outlived_the_stop_text() -> str:
+        return (
+            "The speech service was still connecting or still taking the "
+            f"recorded audio {STREAMING_CONNECT_JOIN_TIMEOUT_S:g} s after the "
+            "stop, so the transcript is incomplete."
+        )
 
     def _finalize_stream_worker(
         self,
@@ -4439,7 +4452,24 @@ class DictationController(QtCore.QObject):
             else:
                 if transcriber is None:
                     raise TranscriptionError("Streaming session was not initialized.")
-                self._await_stream_connect(job)
+                if not self._await_stream_connect(job):
+                    # The connect thread outlived the bound: the provider is
+                    # still connecting, or its sender stopped draining and
+                    # the flush is waiting a budget per chunk. Stopping beside
+                    # it used to end the dictation in "Done" with a transcript
+                    # missing the audio the flush had not handed over yet
+                    # (the stop retired the provider's queue, so it never
+                    # was), the only trace a warning in the log; and on a
+                    # handshake still running, in "Streaming session is not
+                    # active", which names nothing the user can act on. The
+                    # session is abandoned as a failure: the abort is what
+                    # unblocks a provider parked in its connect wait, the
+                    # message names the bound, the recording stays kept, and
+                    # the retired thread pushes nothing more.
+                    self._abort_stream_after_failed_connect(transcriber)
+                    raise TranscriptionError(
+                        self._stream_handshake_outlived_the_stop_text()
+                    )
                 connect_failure = self._stream_connect_failure_for(job)
                 if connect_failure is not None:
                     # The handshake this job joined failed, or its flush

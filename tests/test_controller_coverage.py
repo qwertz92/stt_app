@@ -3762,6 +3762,137 @@ def test_a_runtime_failure_during_a_pending_finalize_is_the_finalizes_to_report(
     _ = app
 
 
+def test_a_flush_the_finalize_outlives_ends_in_a_reported_failure(monkeypatch):
+    """Past the join bound the stop used to run beside the flush, silently.
+
+    The finalize joins the connect thread for `STREAMING_CONNECT_JOIN_TIMEOUT_S`
+    and then went on to `stop_stream()` while that thread was still handing
+    over the buffered audio -- so the provider was stopped with part of the
+    recording never sent, answered with the text it had, and the dictation
+    ended in "Done" with a transcript missing speech the user had recorded
+    before the stop, the only trace a warning in the log. A session whose
+    audio the provider did not take within the bound is a failed session:
+    the stream is aborted, the failure names the bound, the recording is
+    kept for Retry, and the retired flush pushes nothing more.
+    """
+    monkeypatch.setattr("stt_app.controller.STREAMING_CONNECT_JOIN_TIMEOUT_S", 0.05)
+    hold_first_push = threading.Event()
+    (
+        controller,
+        app,
+        overlay,
+        recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, hold_first_push=hold_first_push
+    )
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    background: list[str] = []
+    controller.background_transcription_failed.connect(background.append)
+    try:
+        connect_thread = controller._stream_connect_thread
+        release_connect.set()  # the socket opens; the first push then hangs
+        assert _pump_until(app, lambda: len(transcriber.pushed) == 1), (
+            "the flush never started"
+        )
+        controller.stop_recording()
+
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the finalize never finished"
+        )
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        errors = [detail for state, detail in overlay.states if state == "Error"]
+        assert len(errors) == 1, errors
+        assert errors[0].startswith(
+            "The speech service was still connecting or still taking the "
+            "recorded audio 0.05 s after the stop"
+        ), errors[0]
+        assert "incomplete" in errors[0]
+        assert delivered == [], "the short transcript was delivered as Done"
+        assert background == []
+        assert transcriber.aborted is True, "the stalled session was left open"
+        assert len(recordings.failed) == 1 and recordings.failed[0].startswith(
+            "The speech service was still"
+        ), recordings.failed
+        assert recordings.saved and recordings.completed == 0
+        # A finalize failure keeps the recording as the last recording file,
+        # and the guidance names the road to it.
+        assert "Use last recording" in errors[0], errors[0]
+        assert controller._streaming_recording is False
+        assert controller._active_request_token is None
+
+        hold_first_push.set()
+        connect_thread.join(timeout=5)
+        assert not connect_thread.is_alive()
+        assert transcriber.pushed == [b"\x01" * 8], (
+            "the retired flush went on pushing into the aborted session"
+        )
+    finally:
+        release_connect.set()
+        hold_first_push.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_handshake_the_finalize_outlives_ends_in_a_reported_failure(monkeypatch):
+    """The same bound, hit by a handshake that never returned.
+
+    Here `stop_stream()` on the not-yet-published session used to raise
+    "Streaming session is not active", which named nothing the user could
+    act on; and a stop that does not retire the handshake left it to publish
+    the session afterwards. The finalize now aborts it -- which is what
+    unblocks a provider parked in its connect wait -- and reports the bound.
+    """
+    monkeypatch.setattr("stt_app.controller.STREAMING_CONNECT_JOIN_TIMEOUT_S", 0.05)
+    (
+        controller,
+        app,
+        overlay,
+        recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(monkeypatch)
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    try:
+        connect_thread = controller._stream_connect_thread
+        controller.stop_recording()
+
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the finalize never finished"
+        )
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        errors = [detail for state, detail in overlay.states if state == "Error"]
+        assert len(errors) == 1, errors
+        assert errors[0].startswith("The speech service was still connecting"), (
+            errors[0]
+        )
+        assert "not active" not in errors[0]
+        assert delivered == []
+        assert transcriber.aborted is True
+        assert recordings.saved and recordings.completed == 0
+        assert controller._streaming_recording is False
+        assert controller._active_request_token is None
+
+        release_connect.set()  # the handshake returns into a retired session
+        connect_thread.join(timeout=5)
+        assert not connect_thread.is_alive()
+        assert transcriber.pushed == [], "a retired handshake flushed its buffer"
+        assert overlay.state == "Error", overlay.states[-1]
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
 def test_a_late_connected_signal_after_a_stop_does_not_repaint_the_overlay(monkeypatch):
     """"Finalizing streaming transcript..." must survive the handshake landing.
 
