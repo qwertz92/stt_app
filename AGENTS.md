@@ -741,6 +741,25 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and pressing the hotkey again to "start" actually stopped it mid-sentence.
   `show_idle_status` therefore re-checks `_overlay_session_active()` at fire
   time; any new delayed overlay writer must do the same.
+- **`show_overlay_error` never paints over a live session** (wave 12). It
+  had no session guard, and the wave-11 refusal report of the overlay's
+  own controls took that road: the opacity slider and the pin button stay
+  enabled while recording, so a save refused by a locked `settings.json`
+  mid-dictation replaced "Listening" with "Error" while the microphone
+  kept recording underneath, and in batch mode nothing repaints
+  "Listening" before the stop -- the same for "Processing" over a
+  transcription in flight, whose real result then overwrote the Error a
+  moment later (the wave-12 reach lens; the tray's "No transcript
+  available to copy yet." and the re-paste refusals painted over a live
+  session the same way). While `_overlay_session_active()` the error is
+  logged and handed to `busy_overlay_error`, which
+  `main._connect_tray_notifications` shows as a tray notification under
+  the app's name, beside the two reports that already took that road;
+  outside a session the call paints as before, keeping a pending insert
+  offer. `show_overlay_notice` keeps dropping its confirmation during a
+  session -- a success confirmation is not worth a tray balloon, an
+  error is. The wiring lives in its own function so a test pins it by
+  emitting the signals at a fake tray.
 - **Background transcription failures are reported, never silent**: a queued
   job that fails while a newer session owns the overlay emits
   `background_transcription_failed` (tray notification in `main.py`) naming the
@@ -1664,7 +1683,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     slider, pin button and Lang menu, whose setters save straight to the
     store and caught the refusal with a bare `except Exception` that only
     logged it until wave 11: the session kept the new value, the file the
-    old one, and which was real showed at the next start), the History
+    old one, and which was real showed at the next start; while a
+    recording or a transcription owns the overlay the report is a tray
+    notification instead -- the `show_overlay_error` entry), the History
     dialog's warning box, the Settings History tab's status label, the
     Benchmark tab's status line, the import and clear boxes of
     `history_ui_actions` -- with `str(exc)` verbatim. PySide6 does not
@@ -3336,10 +3357,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     service. You can speak now." on a stream long since connected.
   - **A handshake that fails after the stop is reported once, by the
     finalize worker.** The connect thread records the cause in
-    `_stream_connect_failure` (keyed by generation, under
+    `_stream_connect_failures` (by generation, under
     `_stream_preconnect_lock`) before it emits, and the finalize worker --
     which joins that thread first, so the join orders the record ahead of
-    the read -- finds it through `job.connect_generation`, tears the
+    the read -- consumes it through `job.connect_generation`, tears the
     provider down best-effort (`_abort_stream_after_failed_connect`: a
     session whose flush failed is published, and every provider refuses a
     second one) and raises it as the finalize's own failure. The connect
@@ -3350,7 +3371,22 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
     painted over the invalid key, and a second failure mark on the
     recording (measured: two Error paints and two `mark_failed` calls for
     one dictation). A flush that fails after the stop takes the same road
-    with the push failure as the cause.
+    with the push failure as the cause. **The record is the handshake's,
+    not the session's** (wave 12): a cancel during the pending finalize
+    -- the hotkey or the queue row's X -- runs `_reset_streaming_state`
+    while the worker is still parked in its join, and for one round that
+    reset cleared the record and bumped the generation the record was
+    gated on, so a failure arriving after the cancel was refused and one
+    recorded before it was wiped; the worker then found nothing, called
+    `stop_stream()` on a session never published, and the user read
+    "Streaming session is not active" for a handshake that had failed on
+    an invalid key (measured through both cancel roads). The record is
+    written unconditionally under its own generation, consumed only by
+    the finalize that joined that handshake, and pruned at the next
+    handshake's begin to what a registered job can still read -- after
+    the cancel the user may dictate again while the first finalize is
+    still parked, and the next handshake may fail as well, which is why
+    it is a dict and not a slot.
   - **Cancel and the capture-failure road still retire the handshake**
     (`_abort_streaming_session`, `_teardown_pending_stream_connect`): the
     session is being abandoned, and handing its audio to a provider nobody

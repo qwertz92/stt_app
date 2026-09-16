@@ -7399,42 +7399,165 @@ in the review section to the digit). Ten now. And the insert-offer entry said
 through the `combined_error` alias": there are six, because
 `_ClipboardContentionAfterPaste` (line 1044, since `d4ccaf3` of 23 August)
 inherits from the class and its raise is as invisible to a grep for the name
-as the alias is -- and the sentence itself came from `ab666db`, the wave-4
-facts corrections of 5 September, thirteen days after the subclass existed.
-The wave's own claim CP.9 had the right sum. AGENTS.md and the painter's
-docstring say six.
+as the alias is -- and the sentence itself came from `6822434`, the wave-6
+docs commit of 5 September (17:17), which replaced the "four raise sites" of
+`ab666db`, the wave-4 facts corrections of the same day, thirteen days after
+the subclass existed (this paragraph attributed the sentence to `ab666db` for
+one round, on the wave-11 facts breaker's word; the wave-12 facts lens ran
+`git log -S` on it). The wave's own claim CP.9 had the right sum. AGENTS.md
+and the painter's docstring say six.
 
 **Refuted or judged, with the reason.** The concurrency lens traced and held
 five: a `_reset_streaming_state` racing `_record_stream_connect_failure` (the
-reset's clear is unconditional and lands last in every interleaving), a cancel
-while the flush sits in a timed put (the shipped tests, re-run), two flushes
-of one buffer (the swap under the lock), the daemon restore timer against
-`shutdown()` (both lock orders), and a store read racing a write across two
-store objects (`lock_for_path` is one lock per resolved path). The boundaries
-lens refuted six by probe: the restore delay and max-wait edges
-(`abandoned_busy` exactly at the bound, negative budgets clamped), the
-`cbSize` and fmt-size edges against the real Node decoder (40/39, 22/21, 65535
-accepted as documented), the clipboard's private and GDI ranges and both caps
-at their exact bytes, `block_timeout_s` of `None`, 0, negative and NaN against
-the real Deepgram push, the loader's trichotomy at 0- and 1-byte files, and
-the empty recording id at every call site. The reach lens ran 861 existing
-tests on its export and held the Settings dialog's own Save (it reports
-through the status line), the C05/C06, C03/C04 and C11 claims, a whole paste
-over a bitmap plus a private-range companion (the bitmap and the text back
-byte for byte, the private format left by design), and the extensible WAV
-under a real Node. The facts lens confirmed every constant, log line, message
-text and library fact it could reach and could not settle the paste unit's "31
-failing-first runs", which sources itself to notes outside the export. H-150ms
-was carried and not exercised: its file is a dialog file.
+reset's clear is unconditional and lands last in every interleaving -- last
+only while nothing cancels: wave 12 found the cancel's reset landing while the
+worker is still parked in its join, and closed it), a cancel while the flush
+sits in a timed put (the shipped tests, re-run), two flushes of one buffer
+(the swap under the lock), the daemon restore timer against `shutdown()` (both
+lock orders), and a store read racing a write across two store objects
+(`lock_for_path` is one lock per resolved path). The boundaries lens refuted
+six by probe: the restore delay and max-wait edges (`abandoned_busy` exactly
+at the bound, negative budgets clamped), the `cbSize` and fmt-size edges
+against the real Node decoder (40/39, 22/21, 65535 accepted as documented),
+the clipboard's private and GDI ranges and both caps at their exact bytes,
+`block_timeout_s` of `None`, 0, negative and NaN against the real Deepgram
+push, the loader's trichotomy at 0- and 1-byte files, and the empty recording
+id at every call site. The reach lens ran 861 existing tests on its export and
+held the Settings dialog's own Save (it reports through the status line), the
+C05/C06, C03/C04 and C11 claims, a whole paste over a bitmap plus a
+private-range companion (the bitmap and the text back byte for byte, the
+private format left by design), and the extensible WAV under a real Node. The
+facts lens confirmed every constant, log line, message text and library fact
+it could reach and could not settle the paste unit's "31 failing-first runs",
+which sources itself to notes outside the export. H-150ms was carried and not
+exercised: its file is a dialog file.
 
 **The commits and the mutation round.** Four commits, one per unit: `4ed5fd6`
 (a runtime failure after the stop is the finalize's to report), `7934c3c` (a
 handshake the stop outlives fails the finalize, never shortens it), `2bba644`
 (the overlay's own controls report a settings save the store refused),
 `070f5cd` (an empty keyring answer is nothing stored), and this record. Eight
-mutants, two to three per fix, all detected: the finalize-pending gate removed
+mutants, one to three per fix, all detected: the finalize-pending gate removed
 and the gate widened to every live failure; the timed-out join answering True,
 the abort dropped before the raise, and the abort kept with the stop still
 running; the report painting nothing and one setter left silent; and the blank
 answer read as a value again. The full suite on `070f5cd`, 16 September: 2813
 passed, 1 skipped in 157.87 s.
+
+### Wave 12 (2026-09-16) - the eleventh wave, on the wave-11 fixes
+
+**Range.** `d992677..b51f4a4`: the four wave-11 fixes and their record. Three
+Sonnet breakers -- concurrency, reach, facts; boundaries dropped, because the
+range adds no input surface -- each on its own export of `b51f4a4`, against 19
+written claims, told nothing of what was changed or why. Every finding below
+was reproduced by the lead with the breaker's own probe on the real tree
+before anything changed: the concurrency probe as a pytest file against the
+real controller (2 failed, 1 passed), the reach probe likewise (3 failed, 5
+passed), the facts findings with `git log -S` and `git show`.
+
+**The concurrency lens: the record a cancel erased.** The F03 fix made the
+finalize worker the one reporter of a handshake that fails after the stop,
+through a record the connect thread writes and the worker reads after its
+join; wave 11 extended that to runtime failures and to the join bound, and the
+wave-11 concurrency lens had traced `_reset_streaming_state` against
+`_record_stream_connect_failure` and held it, on the reasoning that the
+reset's clear lands last in every interleaving. It lands last only while
+nothing cancels. A cancel during the pending finalize -- the hotkey or the
+queue row's X, both through `_request_job_stop` -- runs that reset while the
+worker is still parked in its join: the reset cleared the record and bumped
+the generation the record was gated on, so a failure arriving after the cancel
+was refused and one recorded before it was wiped, and either way the worker
+found nothing, called `stop_stream()` on a session never published and
+delivered "Streaming session is not active" -- as a background failure, since
+the cancel had cleared the active token: a tray notification and, with no
+session owning the overlay, an Error painted over the clean "Transcription
+canceled." -- for a handshake that had failed on an invalid key
+(`test_cancel_erases_connect_failure.py`, event-driven, both roads; the lens's
+control test shows the sibling road immune, because a `stop_stream()` failure
+lives in the provider's own raise). The record is now keyed by the handshake's
+generation, written unconditionally, consumed only by the finalize that joined
+that handshake, left alone by the reset, and pruned at the next handshake's
+begin to what a registered job can still read -- a dict rather than a slot,
+because after the cancel the user may dictate again while the first finalize
+is still parked and that handshake may fail as well, which one slot answered
+with the newer failure alone. Whether a cancelled finalize's failure should be
+reported at all was not reopened: a cancelled job that fails is reported as a
+background failure by the standing rule, and the cause is what the report is
+for.
+
+**The reach lens: a refusal painted over a live recording.** The wave-11
+report of the overlay's own controls went through `show_overlay_error`, which
+-- unlike `show_idle_status` and `show_overlay_notice` -- had no session
+guard, and the opacity slider and the pin button stay enabled while recording
+(the Lang button is disabled in Listening and Processing, so its road is the
+same and its window closed by the UI). A save refused by a locked
+`settings.json` mid-dictation replaced "Listening" with "Error" while the
+microphone kept recording underneath, and in batch mode nothing repaints
+"Listening" before the stop; over a transcription in flight the same paint
+replaced "Processing" for a job that had not failed, and its result overwrote
+the Error a moment later (`test_reach_probe_wave12.py`: three of eight
+failing, on the real `SettingsStore` under `files_no_read_gets_past`). The
+tray's "No transcript available to copy yet." and the re-paste refusals took
+the same road. `show_overlay_error` now hands an error raised while
+`_overlay_session_active()` to `busy_overlay_error`, shown by
+`main._connect_tray_notifications` as a tray notification under the app's name
+beside the two reports that already took that road; the wiring moved out of
+`run()` so a test pins it by emitting the signals at a fake tray. The lens
+confirmed the rest by probe: a pending insert offer survives the refusal
+report; a runtime failure suppressed during a pending finalize leaves exactly
+one history entry, with the partial rescued and the recording marked failed,
+or one entry and one delivery with text; a handshake the stop outlives fails
+cleanly and the cached transcriber carries a second dictation. Its own first
+version of that last test raised an `IndexError` from an unfaithful double,
+refuted by reading `abort_stream` -- an artifact, recorded as one.
+
+**The facts lens: two sentences of the Wave 11 section.** "Eight mutants, two
+to three per fix" -- the keyring fix has one; one to three now. And the "five
+raise sites" sentence was attributed to `ab666db`, the wave-4 facts
+corrections of 5 September, which said "four raise sites"; it came from
+`6822434`, the wave-6 docs commit of the same day (17:17), verified with `git
+log -S"five raise sites" -- AGENTS.md` and `git show` of both. The lead had
+taken the wave-11 facts breaker's attribution without running that command;
+both sentences are corrected in place above. Everything else held: the four
+fix units against the source, the suite delta of nine tests reconciled to the
+four files, every constant and message character for character, and the
+thirteen review fixes traced.
+
+**Refuted or judged, with the reason.** The concurrency lens held W1 at two
+instants beyond the shipped suite -- the provider's `on_error` while the
+finalize worker is still queued behind another job, and racing the worker's
+own terminal signal -- and well after the session's teardown (a pure no-op);
+W1.4 against the real `DeepgramTranscriber` in three timings (text before the
+death returns it, none raises the recorded error, an error on a still-active
+session raises at the stop; AssemblyAI by source inspection only); W2.5 with a
+fake socket that never opens, including a new dictation started on the same
+cached instance while the retired connect thread is still parked (no refusal,
+no stray repaint); and W2.4 by re-running the shipped tests on its export. The
+reach lens held the pending-offer preservation, the Idle-state paint, the
+one-history-entry rule for both dead-socket shapes and the second dictation
+after an outlived handshake; W4 it traced through
+`settings_dialog_persistence` rather than ran, the dialog files being off
+limits to a breaker. Not exercised by either: the local runtimes' equivalent
+of W1.4, AssemblyAI's SDK live, a natural rather than event-driven occurrence
+of the cancel race, and D.1-D.4 by anyone but the facts lens.
+
+**The commits and the mutation round.** Three commits: `4b8811c` (a cancel
+during the pending finalize keeps the handshake's failure), `3e5db5b` (an
+overlay error raised during a live session goes to the tray), `27dc9af` (the
+re-paste refusal's recording test moved to the tray road), and this record,
+which also corrects the two Wave 11 sentences above and the race that section
+recorded as held. Seven mutants, all detected: the reset clearing the records,
+the record gated on the live generation again, the begin clearing every
+record, one slot for every handshake; the session guard removed, the guard
+dropping the error silently, the tray wiring left out. **The full suite on
+`3e5db5b` was red**, 1 failed, 2822 passed, 1 skipped in 180.74 s:
+`test_repaste_last_transcript_blocked_while_recording` pinned the overlay road
+for "Finish the current recording before inserting the last transcript
+again.", one of the `_repaste` refusals the fix reroutes, and after the fix
+the lead re-ran `test_controller.py`, `test_main_signals.py` and
+`test_controller_queue.py` but not `test_controller_coverage.py`, where that
+test lives; the mutation round could not show it either, since a mutant is
+judged by the tests named for it. The test asserts the tray road now. Rule for
+the lead: a change that moves a message is followed by a grep of `tests/` for
+that message, and every file the grep names is re-run before the commit. The
+full suite on `27dc9af`, 16 September: 2823 passed, 1 skipped in 178.38 s.
