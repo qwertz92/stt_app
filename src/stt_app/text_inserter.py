@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from typing import ClassVar
 
 from .config import (
+    CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES,
+    CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES,
     CLIPBOARD_RESTORE_DELAY_S,
     CLIPBOARD_RESTORE_MAX_WAIT_S,
     CLIPBOARD_SETTLE_S,
@@ -95,8 +97,24 @@ class _ClipboardContentionAfterPaste(
 
 @dataclass(slots=True)
 class ClipboardState:
+    """Everything the clipboard held, so a dictation can put all of it back.
+
+    `has_text` and `text` are the `CF_UNICODETEXT` reading and keep the
+    meaning every reader of this class already relies on -- the "is our
+    transcript still on the clipboard" checks in `TextInserter` compare
+    against `text`.
+
+    `formats` is what the restore actually writes: `(format id, registered
+    name or "", raw bytes)` per format, in the clipboard's own enumeration
+    order. It is empty for an empty clipboard, for a state built by hand, and
+    for one whose capture hit the size caps -- the restore then falls back to
+    writing the text alone, which is what this class did before formats
+    existed.
+    """
+
     has_text: bool
     text: str | None
+    formats: tuple[tuple[int, str, bytes], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +189,40 @@ def _schedule_on_a_daemon_timer(delay_s: float, callback):
     return timer
 
 
+# Standard clipboard formats whose "data" is not memory: a GDI object handle
+# (`CF_BITMAP`, `CF_METAFILEPICT`, `CF_PALETTE`, `CF_ENHMETAFILE`) or content
+# the owning window draws itself (`CF_OWNERDISPLAY` and the three `CF_DSP*`
+# handle formats). Values are fixed by the Win32 API and are written out here
+# rather than read from `win32con`, so the decision does not depend on a
+# module the tests replace.
+_CLIPBOARD_FORMATS_NOT_COPYABLE_AS_BYTES = frozenset(
+    {
+        0x0002,  # CF_BITMAP -- Windows re-synthesizes it from a restored CF_DIB
+        0x0003,  # CF_METAFILEPICT
+        0x0009,  # CF_PALETTE
+        0x000E,  # CF_ENHMETAFILE
+        0x0080,  # CF_OWNERDISPLAY
+        0x0082,  # CF_DSPBITMAP
+        0x0083,  # CF_DSPMETAFILEPICT
+        0x008E,  # CF_DSPENHMETAFILE
+    }
+)
+# CF_PRIVATEFIRST..CF_PRIVATELAST and CF_GDIOBJFIRST..CF_GDIOBJLAST. The
+# application that copied frees these itself -- a private format's memory is
+# its own and a GDIOBJ entry is a GDI handle -- so neither means anything once
+# another process sets it.
+_CLIPBOARD_PRIVATE_FORMAT_RANGES = ((0x0200, 0x02FF), (0x0300, 0x03FF))
+# Registered formats that describe the *live* IDataObject of the application
+# that copied, rather than data. Restoring them would advertise an object that
+# no longer exists. Both were on the user's clipboard when this was measured.
+_CLIPBOARD_FORMAT_NAMES_NOT_RESTORABLE = frozenset(
+    {"DataObject", "Ole Private Data"}
+)
+# The range `RegisterClipboardFormat` hands out; below it a format has no name.
+_FIRST_REGISTERED_CLIPBOARD_FORMAT = 0xC000
+# What `SetClipboardData` requires of the block it is given.
+GMEM_MOVEABLE = 0x0002
+
 _UNAVAILABLE_CLIPBOARD_TEXT = object()
 # "No pending restore handed a previous clipboard state over to this
 # transaction", which `None` cannot express: a backend may legitimately
@@ -183,13 +235,204 @@ class Win32ClipboardBackend:
         self._retry_count = retry_count
         self._retry_sleep_s = retry_sleep_s
         self._user32 = ctypes.WinDLL("user32", use_last_error=True)
+        # The clipboard's data blocks are HGLOBALs, so reading and writing
+        # their bytes goes through kernel32. `use_last_error=True` on both
+        # handles keeps these calls from overwriting the thread's own
+        # `GetLastError`, which `hotkey.Win32HotkeyApi.get_last_error` reads.
+        self._kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
     def capture_clipboard_state(self) -> ClipboardState:
         with self._clipboard_opened():
+            # The whole id list is read in one pass before anything else
+            # touches the clipboard. `EnumClipboardFormats` is resumed from the
+            # id it is given, so interleaving it with the reads below would
+            # depend on what those reads do to the list -- and what
+            # `GetClipboardData` does to it for a format Windows synthesizes
+            # on demand is not something this code should have to know.
+            formats = self._copy_clipboard_formats(
+                self._enumerate_clipboard_formats()
+            )
             if win32clipboard.IsClipboardFormatAvailable(win32con.CF_UNICODETEXT):
                 text = win32clipboard.GetClipboardData(win32con.CF_UNICODETEXT)
-                return ClipboardState(has_text=True, text=str(text))
-            return ClipboardState(has_text=False, text=None)
+                return ClipboardState(
+                    has_text=True, text=str(text), formats=formats
+                )
+            return ClipboardState(has_text=False, text=None, formats=formats)
+
+    def _enumerate_clipboard_formats(self) -> list[int]:
+        """Every format id on the clipboard, in the clipboard's own order.
+
+        `EnumClipboardFormats` continues from the id it is handed and answers
+        0 at the end. The `seen` guard is not decoration: this runs on the Qt
+        main thread, and an id repeating would otherwise loop here forever.
+
+        A failed enumeration returns what it has rather than raising. This
+        call is new on the path of every paste, and the caller's caller turns
+        anything raised out of a capture into a failed insertion -- so a
+        clipboard this app cannot enumerate would cost the user the transcript
+        they are waiting for, where today it costs them the formats beyond the
+        text. Reading the text back is still the gate: it needs the clipboard
+        open just as this does, and it still raises when it fails.
+        """
+        format_ids: list[int] = []
+        seen: set[int] = set()
+        current = 0
+        while True:
+            try:
+                current = int(win32clipboard.EnumClipboardFormats(current) or 0)
+            except Exception:
+                _LOGGER.debug(
+                    "The clipboard's formats could not be enumerated past %s",
+                    current,
+                    exc_info=True,
+                )
+                return format_ids
+            if current == 0 or current in seen:
+                return format_ids
+            seen.add(current)
+            format_ids.append(current)
+
+    def _copy_clipboard_formats(
+        self, format_ids: list[int]
+    ) -> tuple[tuple[int, str, bytes], ...]:
+        """Copy the bytes of every format that can be handed back later.
+
+        Returns `()` when a size cap is hit: a partial clipboard is not
+        better than the text-only restore this app has always done, and the
+        caller keeps `CF_UNICODETEXT` either way.
+        """
+        collected: list[tuple[int, str, bytes]] = []
+        total_bytes = 0
+        unreadable = 0
+        for format_id in format_ids:
+            if self._format_belongs_to_its_owner(format_id):
+                continue
+            name = self._clipboard_format_name(format_id)
+            if name in _CLIPBOARD_FORMAT_NAMES_NOT_RESTORABLE:
+                continue
+            try:
+                handle = self._clipboard_data_handle(format_id)
+                size = self._global_size(handle) if handle else 0
+            except Exception:
+                _LOGGER.debug(
+                    "Clipboard format %s could not be measured",
+                    format_id,
+                    exc_info=True,
+                )
+                unreadable += 1
+                continue
+            if size <= 0:
+                # A NULL handle is a delayed-rendering format whose owner has
+                # exited; a zero-sized block carries nothing to put back.
+                unreadable += 1
+                continue
+            if (
+                size > CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES
+                or total_bytes + size > CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES
+            ):
+                # Read off `GlobalSize` before the copy, so an oversized
+                # format costs neither the memory nor the memcpy. The two
+                # numbers describe everything read up to and including the
+                # format that tripped the cap, and never its content.
+                _LOGGER.warning(
+                    "clipboard_capture_truncated formats=%s bytes=%s",
+                    len(collected) + 1,
+                    total_bytes + size,
+                )
+                return ()
+            try:
+                payload = self._copy_global_bytes(handle, size)
+            except Exception:
+                # A clipboard manager holding the block refuses the lock.
+                _LOGGER.debug(
+                    "Clipboard format %s could not be read",
+                    format_id,
+                    exc_info=True,
+                )
+                unreadable += 1
+                continue
+            collected.append((format_id, name, payload))
+            total_bytes += size
+        if unreadable:
+            _LOGGER.info("clipboard_capture_unreadable formats=%s", unreadable)
+        return tuple(collected)
+
+    @staticmethod
+    def _format_belongs_to_its_owner(format_id: int) -> bool:
+        """Is this a format only the application that copied it can hand on?
+
+        `SetClipboardData` for the GDI and owner-drawn formats takes an object
+        handle rather than memory, and the private and GDIOBJ ranges are freed
+        by the copying application itself -- so none of them survives being
+        copied out and set again by this process. `CF_BITMAP` is no loss:
+        Windows synthesizes it again from a restored `CF_DIB`.
+        """
+        if format_id in _CLIPBOARD_FORMATS_NOT_COPYABLE_AS_BYTES:
+            return True
+        return any(
+            first <= format_id <= last
+            for first, last in _CLIPBOARD_PRIVATE_FORMAT_RANGES
+        )
+
+    @staticmethod
+    def _clipboard_format_name(format_id: int) -> str:
+        """The registered name of `format_id`, or "" for a standard format.
+
+        Only ids from 0xC000 up can have one -- that is the range
+        `RegisterClipboardFormat` hands out -- and pywin32 raises
+        `pywintypes.error` (87, 'GetClipboardFormatName') for every other id,
+        measured against the installed pywin32 build 312. Asking only the ids
+        that can answer keeps an exception off the common path.
+        """
+        if format_id < _FIRST_REGISTERED_CLIPBOARD_FORMAT:
+            return ""
+        try:
+            return str(win32clipboard.GetClipboardFormatName(format_id) or "")
+        except Exception:
+            return ""
+
+    def _clipboard_data_handle(self, format_id: int) -> int:
+        """The HGLOBAL the clipboard holds for `format_id`, or 0.
+
+        `win32clipboard.GetClipboardData` is deliberately not used here: it
+        decodes what it reads -- text formats come back as `str`, `CF_HDROP`
+        as a tuple of paths -- and the restore needs the bytes the clipboard
+        actually holds. The handle stays the clipboard's and is only read.
+        """
+        get_clipboard_data = self._user32.GetClipboardData
+        get_clipboard_data.argtypes = (ctypes.wintypes.UINT,)
+        # Declared, so a handle at or above 0x8000_0000 does not come back
+        # negative from the default 32-bit signed restype.
+        get_clipboard_data.restype = ctypes.c_void_p
+        return int(get_clipboard_data(format_id) or 0)
+
+    def _global_size(self, handle: int) -> int:
+        global_size = self._kernel32.GlobalSize
+        global_size.argtypes = (ctypes.c_void_p,)
+        global_size.restype = ctypes.c_size_t
+        return int(global_size(handle) or 0)
+
+    def _copy_global_bytes(self, handle: int, size: int) -> bytes:
+        """`size` bytes out of the clipboard's own block, into ours."""
+        address = self._global_lock(handle)
+        if address == 0:
+            raise TextInsertionError("GlobalLock failed for a clipboard format.")
+        try:
+            return ctypes.string_at(address, size)
+        finally:
+            self._global_unlock(handle)
+
+    def _global_lock(self, handle: int) -> int:
+        global_lock = self._kernel32.GlobalLock
+        global_lock.argtypes = (ctypes.c_void_p,)
+        global_lock.restype = ctypes.c_void_p
+        return int(global_lock(handle) or 0)
+
+    def _global_unlock(self, handle: int) -> None:
+        global_unlock = self._kernel32.GlobalUnlock
+        global_unlock.argtypes = (ctypes.c_void_p,)
+        global_unlock.restype = ctypes.wintypes.BOOL
+        global_unlock(handle)
 
     def set_clipboard_text(self, text: str) -> ClipboardMarker:
         with self._clipboard_opened():
@@ -232,10 +475,116 @@ class Win32ClipboardBackend:
         return int(getter() or 0) or None
 
     def restore_clipboard_state(self, state: ClipboardState) -> None:
+        """Put back everything `capture_clipboard_state` was able to copy.
+
+        A state with no formats -- an empty clipboard, a capture that hit the
+        size caps, a state built by hand -- restores the text alone, which is
+        what this method did before formats existed. The text is also written
+        separately when `CF_UNICODETEXT` is not among the formats that were
+        set, so this can never put back less text than it used to.
+        """
         with self._clipboard_opened():
             win32clipboard.EmptyClipboard()
-            if state.has_text and state.text is not None:
+            text_restored = self._restore_clipboard_formats(state.formats)
+            if state.has_text and state.text is not None and not text_restored:
                 win32clipboard.SetClipboardText(state.text, win32con.CF_UNICODETEXT)
+
+    def _restore_clipboard_formats(
+        self, formats: tuple[tuple[int, str, bytes], ...]
+    ) -> bool:
+        """Set every captured format; answer whether the text was among them.
+
+        One format that cannot be set must not cost the user the rest of
+        their clipboard, so a refusal is counted and the remaining formats are
+        still written. The caller holds the clipboard open and has emptied it.
+        """
+        failed = 0
+        text_restored = False
+        for format_id, name, payload in formats:
+            target_id = self._restore_target_format_id(format_id, name)
+            if target_id and self._set_clipboard_bytes(target_id, payload):
+                text_restored = text_restored or target_id == win32con.CF_UNICODETEXT
+                continue
+            failed += 1
+        if failed:
+            _LOGGER.warning("clipboard_restore_partial failed=%s", failed)
+        return text_restored
+
+    def _restore_target_format_id(self, format_id: int, name: str) -> int:
+        """Under which id this format has to be set now, or 0 for "cannot".
+
+        A registered format's name atom lives for the whole session, so the
+        captured id is normally still the right one. It is verified rather
+        than assumed because setting data under an id that has come to mean
+        another format would hand that format our bytes; a standard format's
+        id is fixed by the API and needs no check.
+        """
+        if not name:
+            return format_id
+        if self._clipboard_format_name(format_id) == name:
+            return format_id
+        try:
+            return int(win32clipboard.RegisterClipboardFormat(name) or 0)
+        except Exception:
+            _LOGGER.debug(
+                "Clipboard format %r could not be registered again",
+                name,
+                exc_info=True,
+            )
+            return 0
+
+    def _set_clipboard_bytes(self, format_id: int, payload: bytes) -> bool:
+        """Hand one format's bytes to the clipboard in an HGLOBAL of its own.
+
+        `SetClipboardData` takes ownership of the block on success, so the
+        handle is freed here only when the call failed: freeing it afterwards
+        would free memory the clipboard now owns.
+        """
+        handle = self._allocate_global(payload)
+        if handle == 0:
+            return False
+        set_clipboard_data = self._user32.SetClipboardData
+        set_clipboard_data.argtypes = (ctypes.wintypes.UINT, ctypes.c_void_p)
+        set_clipboard_data.restype = ctypes.c_void_p
+        try:
+            written = set_clipboard_data(format_id, handle)
+        except Exception:
+            _LOGGER.debug(
+                "Clipboard format %s could not be set", format_id, exc_info=True
+            )
+            written = None
+        if written:
+            return True
+        self._global_free(handle)
+        return False
+
+    def _allocate_global(self, payload: bytes) -> int:
+        """A moveable block holding `payload`, or 0 when it cannot be made.
+
+        `GMEM_MOVEABLE` is what `SetClipboardData` requires; a block allocated
+        fixed is rejected by it.
+        """
+        global_alloc = self._kernel32.GlobalAlloc
+        global_alloc.argtypes = (ctypes.wintypes.UINT, ctypes.c_size_t)
+        global_alloc.restype = ctypes.c_void_p
+        handle = int(global_alloc(GMEM_MOVEABLE, len(payload)) or 0)
+        if handle == 0:
+            return 0
+        address = self._global_lock(handle)
+        if address == 0:
+            self._global_free(handle)
+            return 0
+        try:
+            ctypes.memmove(address, payload, len(payload))
+        finally:
+            self._global_unlock(handle)
+        return handle
+
+    def _global_free(self, handle: int) -> None:
+        global_free = self._kernel32.GlobalFree
+        global_free.argtypes = (ctypes.c_void_p,)
+        global_free.restype = ctypes.c_void_p
+        global_free(handle)
 
     def get_clipboard_sequence_number(self) -> int | None:
         getter = getattr(self._user32, "GetClipboardSequenceNumber", None)
@@ -612,9 +961,11 @@ class TextInserter:
         # pasted the same words a second time.
         paste_sent = False
         # Whether the clipboard is ours to put back. `restore_clipboard_state`
-        # empties the clipboard and returns only `CF_UNICODETEXT`, so running
-        # it after a *failed* set destroyed an image or a file selection this
-        # app had never touched.
+        # empties the clipboard and writes the captured state over it, and the
+        # capture is not lossless -- a GDI-handle format, a private format or
+        # an oversized clipboard comes back short. Running it after a *failed*
+        # set therefore damaged a clipboard this app had never touched and had
+        # pasted nothing from.
         clipboard_was_set = False
         try:
             try:

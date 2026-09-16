@@ -1040,13 +1040,13 @@ class _UnwritableClipboardBackend(GatedPasteBackend):
 
 
 def test_a_clipboard_this_app_never_set_is_never_restored_over():
-    """`restore_clipboard_state` empties the clipboard and returns text only.
+    """`restore_clipboard_state` empties the clipboard and writes the capture.
 
-    So running it after a *failed* set destroyed whatever was on the clipboard
-    -- an image, a file selection copied in Explorer -- although the app had
-    not touched it and had pasted nothing. The documented "Unicode text only"
-    limitation is the price of a restore that was actually needed; this one
-    was gratuitous.
+    So running it after a *failed* set damaged whatever was on the clipboard
+    although the app had not touched it and had pasted nothing. The capture
+    keeps every copyable format now, but it is still not lossless -- a
+    GDI-handle format, a private format and an oversized clipboard all come
+    back short -- so the gratuitous restore is still a loss.
     """
     backend = _UnwritableClipboardBackend()
     inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
@@ -1958,3 +1958,594 @@ def test_the_inserter_uses_that_scheduler_unless_one_is_injected():
         TextInserter(backend=SequencedGatedBackend())._schedule_fn
         is text_inserter._schedule_on_a_daemon_timer
     )
+
+
+# --- Clipboard capture and restore of every copyable format (F12) ----------
+
+CF_TEXT = 1
+CF_BITMAP = 2
+CF_METAFILEPICT = 3
+CF_DIB = 8
+CF_PALETTE = 9
+CF_UNICODETEXT = 13
+CF_ENHMETAFILE = 14
+CF_HDROP = 15
+CF_LOCALE = 16
+CF_OWNERDISPLAY = 0x80
+CF_DSPBITMAP = 0x82
+CF_DSPMETAFILEPICT = 0x83
+CF_DSPENHMETAFILE = 0x8E
+# What `RegisterClipboardFormat` hands out; the names below are among the nine
+# formats the user's own clipboard carried on 2026-09-16.
+HTML_FORMAT = 0xC09F
+DATA_OBJECT_FORMAT = 0xC004
+OLE_PRIVATE_DATA_FORMAT = 0xC005
+
+
+class _Win32Stub:
+    """One faked Win32 entry point that can carry `argtypes`/`restype`.
+
+    The backend declares both on the function object before every call -- a
+    handle at or above 0x8000_0000 comes back negative from the default
+    32-bit signed restype otherwise -- and neither a bound method nor a lambda
+    can hold an attribute.
+    """
+
+    def __init__(self, fn):
+        self._fn = fn
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        return self._fn(*args)
+
+
+class _FakeClipboard:
+    """A clipboard of `{format_id: bytes}` served through real ctypes memory.
+
+    `GlobalLock` and `GlobalSize` answer with the address and the length of a
+    real `ctypes.create_string_buffer`, so the production copy runs
+    `ctypes.string_at` and `ctypes.memmove` over memory that exists. A stub
+    handing back a Python object instead would hide a wrong length, a wrong
+    pointer, or a missing lock -- the three ways this copy can be wrong.
+
+    One object serves all three handles the backend uses: itself as the
+    `win32clipboard` module, `.user32` for `GetClipboardData` and
+    `SetClipboardData`, and `.kernel32` for the `Global*` family.
+    """
+
+    class Win32Error(Exception):
+        """What pywin32 raises: `pywintypes.error` derives from `Exception`."""
+
+    def __init__(self, contents=(), names=None, text=None):
+        self.order = [int(format_id) for format_id, _payload in contents]
+        self.payloads = {
+            int(format_id): bytes(payload) for format_id, payload in contents
+        }
+        self.names = {int(key): value for key, value in (names or {}).items()}
+        self.text = text
+        self.calls = []
+        # Written by the restore, in the order SetClipboardData was called.
+        self.set_formats = []
+        self.freed = []
+        self.locked = []
+        self.registered = {}
+        # Failure knobs, each keyed by format id.
+        self.null_handles = set()
+        self.zero_sized = set()
+        self.reported_sizes = {}
+        self.lock_refused = set()
+        self.set_failures = set()
+        self._buffers = {}
+        self._allocations = {}
+        self.user32 = SimpleNamespace(
+            GetClipboardData=_Win32Stub(self._get_clipboard_data_handle),
+            SetClipboardData=_Win32Stub(self._set_clipboard_data),
+        )
+        self.kernel32 = SimpleNamespace(
+            GlobalLock=_Win32Stub(self._global_lock),
+            GlobalUnlock=_Win32Stub(self._global_unlock),
+            GlobalSize=_Win32Stub(self._global_size),
+            GlobalAlloc=_Win32Stub(self._global_alloc),
+            GlobalFree=_Win32Stub(self._global_free),
+        )
+
+    # -- the win32clipboard module: the Win32 spelling is the backend's,
+    # so these method names are not PEP 8 and must not be.
+
+    def OpenClipboard(self):
+        self.calls.append("open")
+
+    def CloseClipboard(self):
+        self.calls.append("close")
+
+    def EmptyClipboard(self):
+        self.calls.append("empty")
+        self.order = []
+        self.payloads = {}
+
+    def IsClipboardFormatAvailable(self, format_id):
+        return format_id in self.payloads
+
+    def GetClipboardData(self, format_id):
+        """Only ever asked for CF_UNICODETEXT, and only for the text."""
+        assert format_id == CF_UNICODETEXT, (
+            "the raw bytes must come through ctypes, not through pywin32: "
+            f"GetClipboardData({format_id}) decodes what it reads"
+        )
+        return self.text
+
+    def SetClipboardText(self, text, format_id):
+        self.calls.append(f"set_text:{text}")
+        self.set_formats.append((format_id, str(text).encode("utf-16-le")))
+
+    def EnumClipboardFormats(self, previous):
+        if previous == 0:
+            return self.order[0] if self.order else 0
+        index = self.order.index(previous)
+        return self.order[index + 1] if index + 1 < len(self.order) else 0
+
+    def GetClipboardFormatName(self, format_id):
+        self.calls.append(f"name:{format_id}")
+        if format_id not in self.names:
+            # Measured against the installed pywin32: a standard or unknown id
+            # raises error (87, 'GetClipboardFormatName', ...).
+            raise self.Win32Error("(87, 'GetClipboardFormatName', ...)")
+        return self.names[format_id]
+
+    def RegisterClipboardFormat(self, name):
+        self.calls.append(f"register:{name}")
+        return self.registered.get(name, 0)
+
+    # -- user32 -------------------------------------------------------------
+
+    def _get_clipboard_data_handle(self, format_id):
+        if format_id in self.null_handles:
+            return 0
+        return self._hold(format_id, self.payloads[format_id])
+
+    def _set_clipboard_data(self, format_id, handle):
+        allocated = self._allocations[handle]
+        if format_id in self.set_failures:
+            return 0
+        self.set_formats.append((format_id, bytes(allocated.raw)))
+        return handle
+
+    # -- kernel32 -----------------------------------------------------------
+
+    def _hold(self, format_id, payload):
+        buffer = ctypes.create_string_buffer(payload, max(1, len(payload)))
+        handle = ctypes.addressof(buffer)
+        self._buffers[handle] = (format_id, buffer)
+        return handle
+
+    def _global_size(self, handle):
+        format_id, buffer = self._buffers[handle]
+        if format_id in self.zero_sized:
+            return 0
+        if format_id in self.reported_sizes:
+            # A size the buffer does not have. Copying it would read past the
+            # buffer, which is why _global_lock refuses that format outright.
+            return self.reported_sizes[format_id]
+        return len(buffer)
+
+    def _global_lock(self, handle):
+        if handle in self._allocations:
+            self.locked.append(handle)
+            return ctypes.addressof(self._allocations[handle])
+        format_id, buffer = self._buffers[handle]
+        if format_id in self.lock_refused:
+            raise self.Win32Error("(5, 'GlobalLock', 'Access is denied.')")
+        assert format_id not in self.reported_sizes, (
+            f"format {format_id} was copied before its size was checked "
+            "against the capture cap"
+        )
+        self.locked.append(handle)
+        return ctypes.addressof(buffer)
+
+    def _global_unlock(self, handle):
+        assert handle in self.locked, "GlobalUnlock without a matching lock"
+        self.locked.remove(handle)
+        return 0
+
+    def _global_alloc(self, _flags, size):
+        buffer = ctypes.create_string_buffer(max(1, int(size)))
+        handle = ctypes.addressof(buffer)
+        self._allocations[handle] = buffer
+        return handle
+
+    def _global_free(self, handle):
+        self.freed.append(handle)
+        self._allocations.pop(handle, None)
+        return 0
+
+
+def _backend_on(clipboard, monkeypatch):
+    """A real Win32ClipboardBackend wired to `clipboard` and nothing else."""
+    monkeypatch.setattr(text_inserter, "win32clipboard", clipboard)
+    monkeypatch.setattr(
+        text_inserter, "win32con", SimpleNamespace(CF_UNICODETEXT=CF_UNICODETEXT)
+    )
+    backend = Win32ClipboardBackend()
+    backend._user32 = clipboard.user32
+    backend._kernel32 = clipboard.kernel32
+    return backend
+
+
+_GUTEN_TAG = "Guten Tag".encode("utf-16-le") + b"\x00\x00"
+
+
+def test_capture_keeps_every_copyable_format_with_its_bytes_in_order(monkeypatch):
+    """A dictation must give the clipboard back as it found it.
+
+    Measured on the user's machine on 2026-09-16, a clipboard filled by one
+    ordinary copy carried nine formats; the capture kept CF_UNICODETEXT alone,
+    so the restore left plain text where a screenshot (CF_DIB), a file
+    selection (CF_HDROP) or formatted text (HTML Format) had been.
+    """
+    clipboard = _FakeClipboard(
+        contents=[
+            (CF_UNICODETEXT, _GUTEN_TAG),
+            (CF_TEXT, b"Guten Tag\x00"),
+            (HTML_FORMAT, b"<b>Guten Tag</b>"),
+            (CF_DIB, b"\x28\x00\x00\x00 the screenshot"),
+            (CF_HDROP, b"\x14\x00\x00\x00C:\\report.pdf\x00\x00"),
+            (CF_LOCALE, b"\x07\x04\x00\x00"),
+        ],
+        names={HTML_FORMAT: "HTML Format"},
+        text="Guten Tag",
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+
+    state = backend.capture_clipboard_state()
+
+    assert state.formats == (
+        (CF_UNICODETEXT, "", _GUTEN_TAG),
+        (CF_TEXT, "", b"Guten Tag\x00"),
+        (HTML_FORMAT, "HTML Format", b"<b>Guten Tag</b>"),
+        (CF_DIB, "", b"\x28\x00\x00\x00 the screenshot"),
+        (CF_HDROP, "", b"\x14\x00\x00\x00C:\\report.pdf\x00\x00"),
+        (CF_LOCALE, "", b"\x07\x04\x00\x00"),
+    )
+    assert clipboard.locked == [], "a clipboard format was left locked"
+    assert clipboard.calls[0] == "open" and clipboard.calls[-1] == "close"
+
+
+def test_the_text_only_readers_still_answer_for_a_multi_format_state(monkeypatch):
+    """has_text and text keep their meaning; every existing reader uses them.
+
+    TextInserter._clipboard_still_holds and the "keep transcript in clipboard"
+    path read those two and nothing else.
+    """
+    clipboard = _FakeClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"picture")],
+        text="Guten Tag",
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+
+    state = backend.capture_clipboard_state()
+
+    assert state.has_text is True
+    assert state.text == "Guten Tag"
+    assert len(state.formats) == 2
+    # And a state built the way every earlier caller built one still works.
+    assert text_inserter.ClipboardState(has_text=False, text=None).formats == ()
+
+
+def test_capture_skips_what_cannot_be_copied_as_bytes(monkeypatch):
+    """GDI handles, the private ranges and the OLE bookkeeping formats.
+
+    CF_BITMAP and the metafiles are GDI object handles rather than memory; the
+    private and GDIOBJ ranges belong to the copying application, which frees
+    them itself; DataObject and Ole Private Data describe an IDataObject that
+    will not exist any more when the restore runs. Each of them would be a
+    handle this process cannot hand on, so what is kept is the format carrying
+    the same content as bytes -- CF_DIB beside CF_BITMAP, HTML Format beside
+    DataObject.
+    """
+    clipboard = _FakeClipboard(
+        contents=[
+            (DATA_OBJECT_FORMAT, b"an IDataObject pointer"),
+            (CF_BITMAP, b"a GDI bitmap handle"),
+            (CF_METAFILEPICT, b"a metafile handle"),
+            (CF_PALETTE, b"a palette handle"),
+            (CF_ENHMETAFILE, b"an enhanced metafile handle"),
+            (CF_OWNERDISPLAY, b"owner drawn"),
+            (CF_DSPBITMAP, b"owner drawn bitmap"),
+            (CF_DSPMETAFILEPICT, b"owner drawn metafile"),
+            (CF_DSPENHMETAFILE, b"owner drawn enhanced metafile"),
+            (0x0200, b"the first private format"),
+            (0x02FF, b"the last private format"),
+            (0x0300, b"the first GDIOBJ format"),
+            (0x03FF, b"the last GDIOBJ format"),
+            (OLE_PRIVATE_DATA_FORMAT, b"ole bookkeeping"),
+            (CF_DIB, b"the screenshot"),
+            (HTML_FORMAT, b"<b>bold</b>"),
+        ],
+        names={
+            DATA_OBJECT_FORMAT: "DataObject",
+            OLE_PRIVATE_DATA_FORMAT: "Ole Private Data",
+            HTML_FORMAT: "HTML Format",
+        },
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+
+    state = backend.capture_clipboard_state()
+
+    assert state.formats == (
+        (CF_DIB, "", b"the screenshot"),
+        (HTML_FORMAT, "HTML Format", b"<b>bold</b>"),
+    )
+
+
+def test_restore_empties_the_clipboard_and_sets_every_format_in_order(monkeypatch):
+    clipboard = _FakeClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (HTML_FORMAT, b"<b>bold</b>")],
+        names={HTML_FORMAT: "HTML Format"},
+        text="Guten Tag",
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    clipboard.calls.clear()
+
+    backend.restore_clipboard_state(state)
+
+    assert clipboard.set_formats == [
+        (CF_UNICODETEXT, _GUTEN_TAG),
+        (HTML_FORMAT, b"<b>bold</b>"),
+    ]
+    assert clipboard.calls[0] == "open"
+    assert "empty" in clipboard.calls
+    assert clipboard.calls[-1] == "close"
+    assert clipboard.locked == []
+    assert clipboard.freed == [], (
+        "a block SetClipboardData took ownership of was freed again"
+    )
+
+
+def test_a_format_that_cannot_be_set_is_logged_and_the_others_still_are(
+    monkeypatch, caplog
+):
+    """One refused format must not cost the user the rest of their clipboard."""
+    clipboard = _FakeClipboard(
+        contents=[
+            (CF_UNICODETEXT, _GUTEN_TAG),
+            (CF_DIB, b"the screenshot"),
+            (HTML_FORMAT, b"<b>bold</b>"),
+        ],
+        names={HTML_FORMAT: "HTML Format"},
+        text="Guten Tag",
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    clipboard.set_failures = {CF_DIB}
+
+    with caplog.at_level(logging.WARNING, logger="stt_app.text_inserter"):
+        backend.restore_clipboard_state(state)
+
+    assert [format_id for format_id, _payload in clipboard.set_formats] == [
+        CF_UNICODETEXT,
+        HTML_FORMAT,
+    ]
+    assert _one_log_line(caplog, "clipboard_restore_partial ") == (
+        "clipboard_restore_partial failed=1"
+    )
+    assert len(clipboard.freed) == 1, (
+        f"the refused block was leaked: freed={clipboard.freed}"
+    )
+
+
+def test_a_registered_format_whose_id_no_longer_names_it_is_re_registered(
+    monkeypatch,
+):
+    """The captured id is used while it still names the same format.
+
+    A registered atom lives for the session, so it normally does. Setting data
+    under an id that has come to mean something else would hand a stranger's
+    format our bytes, so the name is what decides.
+    """
+    clipboard = _FakeClipboard(
+        contents=[(HTML_FORMAT, b"<b>bold</b>")],
+        names={HTML_FORMAT: "HTML Format"},
+    )
+    backend = _backend_on(clipboard, monkeypatch)
+    state = backend.capture_clipboard_state()
+    # The atom now names something else, and HTML Format answers elsewhere.
+    clipboard.names[HTML_FORMAT] = "Some Other Format"
+    clipboard.registered["HTML Format"] = 0xC0FF
+
+    backend.restore_clipboard_state(state)
+
+    assert clipboard.set_formats == [(0xC0FF, b"<b>bold</b>")]
+
+
+def test_an_unreadable_format_is_skipped_and_the_rest_captured(monkeypatch, caplog):
+    """A NULL handle, a zero size and a refused lock are all "skip it".
+
+    A delayed-rendering format whose owner has exited answers NULL, and a
+    clipboard manager holding the block can refuse the lock. Losing that one
+    format is the cost; failing the whole capture would fail the paste, which
+    is the transcript the user is waiting for.
+    """
+    clipboard = _FakeClipboard(
+        contents=[
+            (CF_UNICODETEXT, _GUTEN_TAG),
+            (0xC101, b"delayed rendering"),
+            (0xC102, b"held by a clipboard manager"),
+            (0xC103, b"an empty block"),
+            (CF_DIB, b"the screenshot"),
+        ],
+        names={0xC101: "Delayed", 0xC102: "Held", 0xC103: "Empty"},
+        text="Guten Tag",
+    )
+    clipboard.null_handles = {0xC101}
+    clipboard.lock_refused = {0xC102}
+    clipboard.zero_sized = {0xC103}
+    backend = _backend_on(clipboard, monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="stt_app.text_inserter"):
+        state = backend.capture_clipboard_state()
+
+    assert state.formats == (
+        (CF_UNICODETEXT, "", _GUTEN_TAG),
+        (CF_DIB, "", b"the screenshot"),
+    )
+    assert state.text == "Guten Tag"
+    assert _one_log_line(caplog, "clipboard_capture_unreadable ") == (
+        "clipboard_capture_unreadable formats=3"
+    )
+    assert clipboard.locked == []
+
+
+def test_one_oversized_format_truncates_the_capture_to_text_only(monkeypatch, caplog):
+    """The cap is read off GlobalSize before anything is copied.
+
+    A 200 MiB format copied first and rejected afterwards would already have
+    cost the 200 MiB and the memcpy for it, on the Qt main thread.
+    """
+    assert text_inserter.CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES == 128 * 1024 * 1024
+    clipboard = _FakeClipboard(
+        contents=[
+            (CF_UNICODETEXT, _GUTEN_TAG),
+            (CF_DIB, b"a video frame"),
+        ],
+        text="Guten Tag",
+    )
+    # Reported, not allocated: _FakeClipboard._global_lock asserts that a
+    # format with a reported size is never copied.
+    clipboard.reported_sizes = {CF_DIB: 200 * 1024 * 1024}
+    backend = _backend_on(clipboard, monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="stt_app.text_inserter"):
+        state = backend.capture_clipboard_state()
+
+    assert state.formats == ()
+    assert state.has_text is True and state.text == "Guten Tag"
+    assert _one_log_line(caplog, "clipboard_capture_truncated ") == (
+        f"clipboard_capture_truncated formats=2 bytes={200 * 1024 * 1024 + 20}"
+    )
+
+
+def test_the_running_total_cap_truncates_the_capture_to_text_only(monkeypatch, caplog):
+    clipboard = _FakeClipboard(
+        contents=[
+            (CF_UNICODETEXT, _GUTEN_TAG),
+            (CF_DIB, b"first"),
+            (CF_TEXT, b"second"),
+        ],
+        text="Guten Tag",
+    )
+    monkeypatch.setattr(text_inserter, "CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES", 1024)
+    monkeypatch.setattr(text_inserter, "CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES", 24)
+    backend = _backend_on(clipboard, monkeypatch)
+
+    with caplog.at_level(logging.WARNING, logger="stt_app.text_inserter"):
+        state = backend.capture_clipboard_state()
+
+    # 20 bytes of CF_UNICODETEXT plus 5 is already past the 24-byte total.
+    assert state.formats == ()
+    assert state.text == "Guten Tag"
+    assert _one_log_line(caplog, "clipboard_capture_truncated ") == (
+        "clipboard_capture_truncated formats=2 bytes=25"
+    )
+
+
+def test_an_empty_clipboard_restores_an_empty_clipboard(monkeypatch):
+    clipboard = _FakeClipboard()
+    backend = _backend_on(clipboard, monkeypatch)
+
+    state = backend.capture_clipboard_state()
+    backend.restore_clipboard_state(state)
+
+    assert state.has_text is False and state.formats == ()
+    assert clipboard.set_formats == []
+    assert clipboard.calls.count("empty") == 1
+
+
+def test_the_text_is_put_back_even_when_its_format_could_not_be_captured(
+    monkeypatch,
+):
+    """The new path must never restore less text than the old one did.
+
+    CF_UNICODETEXT is readable through pywin32 and unreadable through its
+    handle only in a narrow race, but the promise this class has always made
+    is that the text comes back.
+    """
+    clipboard = _FakeClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"the screenshot")],
+        text="Guten Tag",
+    )
+    clipboard.null_handles = {CF_UNICODETEXT}
+    backend = _backend_on(clipboard, monkeypatch)
+
+    state = backend.capture_clipboard_state()
+    backend.restore_clipboard_state(state)
+
+    assert state.has_text is True
+    assert clipboard.set_formats == [
+        (CF_DIB, b"the screenshot"),
+        (CF_UNICODETEXT, "Guten Tag".encode("utf-16-le")),
+    ]
+
+
+def test_an_enumeration_that_repeats_an_id_ends_instead_of_looping(monkeypatch):
+    """The capture runs on the Qt main thread, so its one loop needs an end.
+
+    `EnumClipboardFormats` terminates by answering 0, and Windows does not
+    repeat an id -- but a `while True` over an external call with no second
+    way out is the shape that froze this app once before (the readiness probe
+    spun 953,446 times against a hung target). The enumerator here answers
+    0x0008, 0x000D, 0x0008, ... for ever; the fake gives up after 50 calls so
+    a missing guard fails this test instead of hanging the suite.
+    """
+    clipboard = _FakeClipboard(
+        contents=[(CF_DIB, b"the screenshot"), (CF_UNICODETEXT, _GUTEN_TAG)],
+        text="Guten Tag",
+    )
+    cycle = iter([CF_DIB, CF_UNICODETEXT] * 25)
+
+    def _never_ending(_previous):
+        return next(cycle)
+
+    clipboard.EnumClipboardFormats = _never_ending
+    backend = _backend_on(clipboard, monkeypatch)
+
+    state = backend.capture_clipboard_state()
+
+    assert state.formats == (
+        (CF_DIB, "", b"the screenshot"),
+        (CF_UNICODETEXT, "", _GUTEN_TAG),
+    )
+
+
+def test_a_failed_enumeration_costs_the_formats_and_not_the_transcript(monkeypatch):
+    """Capture is on the path of every paste, so it must not gain a way to fail.
+
+    `_run_paste_transaction` turns anything raised out of
+    `capture_clipboard_state` into a failed insertion, and before this unit
+    there was no enumeration to fail. A clipboard this app cannot enumerate
+    therefore falls back to what it always did -- the text alone -- instead of
+    costing the user the dictation.
+    """
+    clipboard = _FakeClipboard(
+        contents=[(CF_UNICODETEXT, _GUTEN_TAG), (CF_DIB, b"the screenshot")],
+        text="Guten Tag",
+    )
+
+    def _refused(_previous):
+        raise clipboard.Win32Error("(1418, 'EnumClipboardFormats', ...)")
+
+    clipboard.EnumClipboardFormats = _refused
+    backend = _backend_on(clipboard, monkeypatch)
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=RecordingScheduler()
+    )
+    monkeypatch.setattr(backend, "send_paste_with_mode", lambda *_a, **_k: "wm_paste")
+    monkeypatch.setattr(backend, "get_clipboard_text", lambda: "the transcript")
+    monkeypatch.setattr(backend, "wait_for_modifier_release", lambda: True)
+
+    state = backend.capture_clipboard_state()
+
+    assert state.formats == ()
+    assert state.has_text is True and state.text == "Guten Tag"
+    assert inserter.insert_text("the transcript") is True

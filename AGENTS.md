@@ -293,6 +293,61 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   closes the late-read race completely. There is still no Windows API that
   says "the target read the clipboard"; the deferred restore's content check
   and its budget are what replace the guess.
+- **The clipboard is put back with every format it held, not its text
+  alone** (F12 of the 2026-09-12 review).
+  `Win32ClipboardBackend.capture_clipboard_state` kept `CF_UNICODETEXT`
+  only and `restore_clipboard_state` emptied the clipboard and wrote that
+  text back, so one dictation turned a copied screenshot, a file selection
+  or formatted text into plain text -- measured on the user's own
+  clipboard, which held nine formats (`DataObject`, `CF_UNICODETEXT`,
+  `CF_TEXT`, `HTML Format`, `text/markdown`, an ODT format, `Ole Private
+  Data`, `CF_LOCALE`, `CF_OEMTEXT`) of which one came back.
+  `ClipboardState.formats` carries `(format id, registered name or "",
+  raw bytes)` per format in the clipboard's own enumeration order;
+  `has_text` and `text` keep their meaning, so every "still holds our
+  transcript" check reads as before. The capture, inside the one
+  clipboard open, reads the id list in a single `EnumClipboardFormats`
+  pass before touching anything (a `GetClipboardData` for a format
+  Windows synthesizes on demand may change the list), skips the
+  GDI-handle and owner-drawn standard formats (`CF_BITMAP`,
+  `CF_METAFILEPICT`, `CF_PALETTE`, `CF_ENHMETAFILE`, `CF_OWNERDISPLAY`,
+  the three `CF_DSP*` handle formats), the private ranges
+  `0x0200-0x02FF` and `0x0300-0x03FF`, and `DataObject` / `Ole Private
+  Data` by name (they describe the copying application's live
+  `IDataObject`), and copies everything else through
+  `user32.GetClipboardData` -> `kernel32.GlobalSize` -> `GlobalLock` ->
+  `ctypes.string_at` -> `GlobalUnlock` on the module's own handles --
+  never pywin32, which decodes what it reads (text as `str`, `CF_HDROP`
+  as a tuple of paths). A NULL handle, a zero size or a refused lock
+  skips that format and is counted (`clipboard_capture_unreadable
+  formats=<n>`, INFO); a format over `CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES`
+  (128 MiB) or a total over `CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES` (256 MiB),
+  both read off `GlobalSize` before any copy, abandons the collection and
+  leaves the text-only state (`clipboard_capture_truncated formats=<n>
+  bytes=<total>`, WARNING; the numbers include the format that tripped
+  the cap and never its content). A failed enumeration returns the ids
+  it has rather than raising: the capture is on the path of every
+  dictation and `_run_paste_transaction` turns anything raised out of it
+  into a failed insertion, so the failure costs the formats, not the
+  transcript. The restore, inside the one open, empties the clipboard
+  and sets every captured format in order, each in a fresh
+  `GlobalAlloc(GMEM_MOVEABLE)` block that `SetClipboardData` takes
+  ownership of on success and that is freed only on failure; a
+  registered format's id is checked against its name and re-registered
+  when the id no longer answers to it; a refused format is counted
+  (`clipboard_restore_partial failed=<n>`, WARNING) and the rest are
+  still set; and the text is written separately only when
+  `CF_UNICODETEXT` was not among the formats set, so the restore can
+  never put back less text than the text-only one did. Measured cost on
+  the Qt thread (the capture; the deferred restore's write runs on its
+  timer thread except on the WM_PASTE road): 0.4 ms for a 4 MiB
+  screenshot, 3.2 ms at 32 MiB, 24 ms at the 256 MiB cap. Not measured:
+  a real clipboard -- every test drives the real backend against a fake
+  `win32clipboard`/`user32`/`kernel32` whose blocks are real ctypes
+  buffers, so the copy, the sizes and the lock pairing are real and the
+  Win32 calls are not; the hand check is a screenshot copied, a
+  dictation, Ctrl+V, and a file selection *cut* in Explorer whose
+  `Preferred DropEffect` must come back or the move becomes a copy.
 - **`SMTO_ABORTIFHUNG` is why the readiness probe needs its own sleep**: that
   flag makes `SendMessageTimeoutW` return *immediately* when the target thread
   is already hung, instead of waiting out the timeout it was given. So
@@ -4594,7 +4649,26 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   short word needs spectral features (a real VAD); until then, do not move
   the threshold on synthetic evidence alone.
 - ARM CPUs: not supported (CTranslate2 requires x86 AVX/SSE).
-- Clipboard restore: Unicode text only.
+- **Clipboard restore is not lossless.** Every HGLOBAL format is captured
+  and put back (F12 of the 2026-09-12 review); what still is not: the
+  GDI-handle and owner-drawn formats (`CF_BITMAP` -- no practical loss,
+  Windows synthesizes it again from a restored `CF_DIB` --
+  `CF_METAFILEPICT`, `CF_PALETTE`, `CF_ENHMETAFILE`, `CF_OWNERDISPLAY`,
+  `CF_DSPBITMAP`, `CF_DSPMETAFILEPICT`, `CF_DSPENHMETAFILE`, so a
+  clipboard carrying only a metafile comes back without it); the private
+  ranges `CF_PRIVATEFIRST..CF_PRIVATELAST` and
+  `CF_GDIOBJFIRST..CF_GDIOBJLAST`, which the copying application frees
+  itself; the OLE bookkeeping formats `DataObject` and `Ole Private
+  Data`, so an application that reads the clipboard only through
+  `IDataObject` may see less after a dictation than before (the formats
+  such an object advertises are normally on the clipboard as bytes
+  beside it, and those are restored); a delayed-rendered format whose
+  owner has not rendered it (a NULL handle is skipped -- the restore
+  writes bytes, never a promise); a clipboard over the size caps, which
+  falls back to text only; a single format whose block cannot be read;
+  and the clipboard's owner window, which becomes this app's as before.
+  `CF_DSPTEXT` is restored without the `CF_OWNERDISPLAY` that gives it
+  meaning (harmless: ordinary bytes).
 - The NVIDIA *NeMo* runtime remains intentionally unimplemented. Parakeet itself
   ships through the pure-Python onnx-asr path and Nemotron through ONNX Runtime
   GenAI, so no NeMo/PyTorch stack is needed. See

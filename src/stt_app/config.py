@@ -1415,6 +1415,18 @@ SENDINPUT_RETRY_ATTEMPTS = 3
 SENDINPUT_RETRY_SLEEP_S = 0.02
 CLIPBOARD_SETTLE_S = 0.02
 WM_PASTE_TIMEOUT_MS = 250
+# A dictation overwrites the clipboard and puts it back afterwards, so the
+# capture has to copy every format the clipboard holds -- a screenshot
+# (CF_DIB), a file selection (CF_HDROP), formatted text (HTML Format) --
+# and not just the text. That copy runs on the Qt main thread and is paid
+# once per dictation, so it needs a ceiling: past either of these the
+# capture keeps CF_UNICODETEXT alone and the rest of the clipboard is left
+# as the transcript replaced it. 128 MiB is far above the few megabytes a
+# screenshot costs and far below what would stall the UI; the total is
+# twice that because one clipboard legitimately carries the same picture in
+# several formats (CF_DIB and CF_DIBV5 side by side).
+CLIPBOARD_CAPTURE_MAX_FORMAT_BYTES = 128 * 1024 * 1024
+CLIPBOARD_CAPTURE_MAX_TOTAL_BYTES = 256 * 1024 * 1024
 # How long the transcript stays on the clipboard after a SendInput paste before
 # the previous clipboard is put back. The predecessor was 160 ms *slept on the
 # Qt main thread*, and that thread is what bounded it: streaming inserts run

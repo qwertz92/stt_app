@@ -7133,3 +7133,38 @@ old order in `scripts/import_model.py` as out of scope; the lead folded
 it into the unit (the script calls the app's function through the
 module, one test patches that function and expects the script's answer
 to move, failing first against the script's old body).
+
+**F12 -- the clipboard restore kept the text alone.** Confirmed on the
+user's own clipboard (nine formats, one restored; the paste paragraph
+above). The lead's design (the brief `CLIPBOARD_FORMATS_DESIGN.md` in
+the session's scratchpad, its content in the AGENTS.md entry): every
+HGLOBAL format copied as raw bytes inside the one clipboard open, the
+GDI-handle formats, the private ranges and the OLE bookkeeping formats
+skipped, two size caps, the restore setting every format in order. An
+Opus implementer built it on an export of `f20fdbc` with 13 tests
+written first -- each failing on the untouched tree on the missing
+`formats` attribute, the missing constants, or a restore that set only
+the text -- driving the real backend against a fake
+`win32clipboard`/`user32`/`kernel32` whose blocks are real ctypes
+buffers. Its negative control reverted 21 pieces one at a time and each
+was caught, two only after a test was added for it: the repeated-id
+guard in the enumeration (the fake cycles forever and gives up after 50
+calls, so a missing guard fails instead of hanging the suite) and the
+enumeration's own failure guard. It recorded a methodological trap on
+the way: a mutation that does not parse makes pytest report a collection
+error with no FAILED line, so a control script reads "0 failing" for a
+piece nothing tested. Six deviations, each argued and accepted: a failed
+enumeration is non-fatal (a text-only capture rather than a failed
+paste, on a road that did not exist before); a third log line for the
+counted skips; both new lines at WARNING; the text written separately
+when its format was not set; the caps read as module globals so a test
+can lower them instead of allocating 256 MiB; and the truncation line's
+numbers including the format that tripped the cap. Measured: pywin32
+build 312 raises error 87 from `GetClipboardFormatName` for every id
+below 0xC000, which is why names are asked only from there up; the copy
+cost (0.4 / 3.2 / 11.6 / 24.0 ms for the capture at 4 MiB / 32 MiB /
+128 MiB / 256 MiB, the restore's write at roughly half). Not measured,
+and put to the user as the one hand check before a release: a real
+clipboard. The lead applied the patch on top of the F13 unit, ran the
+six inserter and controller files, and rewrote the known limitation
+from "Unicode text only" to what remains unsupported.
