@@ -205,41 +205,103 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   active model.
 - **Temp files for audio**: `transcribe_batch` writes WAV to temp file because `WhisperModel.transcribe()` is most reliable with file paths.
 - **GUITHREADINFO duplication**: defined in both `text_inserter.py` and `window_focus.py`. Intentional — modules are self-contained.
-- **SendInput restore delay (160ms)**: Empirical value. Some apps
-  (Electron/Chrome) read clipboard asynchronously 50-100ms after Ctrl+V. 160ms
-  prevents stale paste. `TextInserter` serializes app-initiated paste operations
-  and checks the Win32 clipboard sequence/content before paste and before
-  restore; if the user changes the clipboard during that window, leave the
-  user's clipboard untouched and do not fallback-copy the transcript over it.
-- **Paste hardening (2026-07-09)**: two real intermittent-paste races are
-  closed in `text_inserter.py` and must not be reintroduced:
-  - *Held hotkey modifiers*: inserts are often triggered straight from the
-    WM_HOTKEY press (stop, cancel, queue flush), so the user's physical
-    Ctrl/Alt was still down and the injected Ctrl+V reached the target as
-    Ctrl+Alt+V (AltGr+V on German layouts) — silently pasting nothing (the
-    transcript then existed "only in history"). The inserter now waits via
-    `wait_for_modifier_release` (GetAsyncKeyState poll, bounded timeout)
-    before injecting; WM_PASTE mode skips the wait because messages ignore
-    keyboard state.
-  - *Late clipboard read vs. restore*: a busy target (likely under local
-    transcription CPU load) processes the injected Ctrl+V after the fixed
-    restore delay and pastes the restored old clipboard instead of the
-    transcript. The restore is now gated on the target thread answering
-    WM_NULL again (`wait_for_paste_target_ready`); if the target stays
-    unresponsive past the budget the restore is skipped so the eventual paste
-    still reads the transcript. With `keep_transcript_in_clipboard` enabled
-    the restore is skipped entirely, which closes this race completely.
-  There is no Windows API that signals "the target read the clipboard"
-  (delayed rendering is defeated by clipboard history/managers), so the
-  fixed delay after the responsiveness gate remains a heuristic; the gates
-  above shrink the window to practical irrelevance.
+- **A paste is a transaction with a deferred, guarded restore** (2026-09-16,
+  F01/F02/F07 of the external review). `TextInserter._paste_text_with_options`
+  opens the transaction and writes one `paste_transaction id=... mode=<requested>/
+  <actual> target_hwnd=... foreground=... chars=... marker=... outcome=...
+  restore=...` line whatever happens; `_run_paste_transaction` does the work.
+  Four rules, each measured before it was written:
+  - *The restore is not part of the call.* The predecessor slept
+    `SENDINPUT_RESTORE_DELAY_S` (160 ms) on the Qt thread and then restored,
+    and the readiness gate before it (`wait_for_paste_target_ready`, WM_NULL
+    through `SendMessageTimeoutW`) proved nothing about the keystroke: sent
+    messages are retrieved ahead of posted and input messages, so a
+    message-only window whose handler was busy for 300 ms answered WM_NULL
+    at 0.302 s and dispatched a keystroke posted before it only afterwards
+    (`probe_wm_null_order.py`, 2026-09-16). The 160 ms were the only barrier,
+    and the field log shows them lost: a 326-character transcript reported
+    `text_insertion outcome=success` 196 ms after the transcription finished,
+    into an Electron window (its renderer reads the clipboard asynchronously)
+    while a test suite pinned the CPU, and the user pasted the same 326
+    characters by hand 4.5 s later. After a SendInput paste the transaction
+    now returns at the keystroke and hands a `_PendingRestore` to a scheduler
+    (`schedule_fn`, default a daemon `threading.Timer`). After
+    `CLIPBOARD_RESTORE_DELAY_S` (1.5 s) the timer thread runs the readiness
+    probe *outside* `_insert_lock`, then under the lock restores only while
+    the clipboard still holds the transcript (content compared, never the
+    counter alone), reschedules while the target is busy, and gives up at
+    `CLIPBOARD_RESTORE_MAX_WAIT_S` (10 s) leaving the transcript on the
+    clipboard -- a target that slow has not read it yet, and restoring is
+    what turns its late paste into the user's old content. Outcomes are
+    logged as `clipboard_restore id=... outcome=restored|skipped_changed|
+    superseded|superseded_changed|busy_rescheduled|abandoned_busy|failed
+    delay_ms=...`, the failure at WARNING and never raised: the call
+    returned success long before. A new paste during a pending restore takes
+    the record over: while the clipboard still holds the previous transcript
+    the *original* previous state carries over (a streaming dictation pastes
+    every ~350 ms, and capturing afresh would restore a transcript over the
+    user's clipboard at the end), otherwise the user copied something and the
+    transaction captures that. `flush_pending_restore` runs the restore at
+    once (content check kept, readiness wait skipped) and
+    `DictationController.shutdown` calls it first, because exit kills the
+    daemon timer. A scheduler that cannot start a thread leaves the record
+    pending (the next paste or the shutdown flush settles it) rather than
+    reporting a landed paste as a failure, which the streaming retry would
+    have pasted again. Raising the delay was rejected: on the Qt thread a
+    longer sleep froze the UI during a streaming dictation, and any fixed
+    delay only moves the race. The WM_PASTE road is synchronous and
+    unchanged, `SendMessageTimeout` returns after the target read the
+    clipboard, so its post-keystroke contention check and its raising
+    restore failure stay.
+  - *The marker is read inside the write.* `set_clipboard_text` returns a
+    `ClipboardMarker` read between `CloseClipboard` and the return. The
+    caller used to read the counter in a second call, so a foreign write in
+    the gap became "our" number and the change check compared a number with
+    itself -- the transaction pasted the stranger's content and restored over
+    it (measured on the old implementation with a recording backend).
+    `_clipboard_changed_after_set` compares content first whenever it can be
+    read and falls back to the counter only for a backend without text; the
+    price is two clipboard opens per paste that the equal-counter fast path
+    used to skip, each of which can raise the retryable
+    `ClipboardContentionError` under an aggressive clipboard manager. Whether
+    the counter increments on `SetClipboardData` or on `CloseClipboard` is
+    undocumented and unmeasured (the user's clipboard was never text-only
+    when the probe ran, and the probe refuses to write over other formats);
+    "the value right after our close" is true either way.
+  - *The foreground is re-read before the keystroke.* `SendInput` addresses
+    the focus, not `target_hwnd`, and between the controller's own check and
+    the keystroke sit the modifier-release wait (up to 1.5 s) and the settle
+    sleep. The window is snapshotted when the transaction opens, before that
+    wait, and compared immediately before `send_paste_with_mode`; a change
+    raises a retryable `TextInsertionError` with the clipboard restored at
+    once. A foreground that cannot be read (None) is no evidence of a change.
+    WM_PASTE addresses the handle and skips the check.
+  - *Held hotkey modifiers* (2026-07-09): inserts are often triggered
+    straight from the WM_HOTKEY press (stop, cancel, queue flush), so the
+    user's physical Ctrl/Alt was still down and the injected Ctrl+V reached
+    the target as Ctrl+Alt+V (AltGr+V on German layouts), silently pasting
+    nothing (the transcript then existed "only in history").
+    `wait_for_modifier_release` (GetAsyncKeyState poll, bounded timeout) runs
+    before injecting; WM_PASTE skips it because messages ignore keyboard
+    state.
+  Rejected for the restore: delayed rendering / `WM_RENDERFORMAT` as a "the
+  target read it" signal needs an owner window with a message pump and is
+  consumed by clipboard history and clipboard managers; a UI Automation
+  read-back is heavy and per application; and an owner window without a pump
+  blocks every other program's `EmptyClipboard`, so there is none. With
+  `keep_transcript_in_clipboard` the restore is skipped entirely, which
+  closes the late-read race completely. There is still no Windows API that
+  says "the target read the clipboard"; the deferred restore's content check
+  and its budget are what replace the guess.
 - **`SMTO_ABORTIFHUNG` is why the readiness probe needs its own sleep**: that
   flag makes `SendMessageTimeoutW` return *immediately* when the target thread
   is already hung, instead of waiting out the timeout it was given. So
   `wait_for_paste_target_ready`'s loop had no delay in it at all against the
   one case it exists for: measured 953,446 probes inside a single budget
-  window, one core pinned and the Qt thread unavailable for the whole time,
-  from nothing worse than pasting into a frozen application. That was measured
+  window, one core pinned and -- while the probe still ran inside the paste
+  transaction -- the Qt thread unavailable for the whole time, from nothing
+  worse than pasting into a frozen application. The probe has since moved
+  to the deferred restore's timer thread, where a spin still pins a core. That was measured
   with the real Win32 probe against a handle that names no window, which
   returns as fast as `SMTO_ABORTIFHUNG` makes a hung target return; a
   pure-Python stub of the probe spins 33x faster still and could not have
@@ -3015,11 +3077,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the inserter, so a failed paste would otherwise lose it for good: the locked
   prefix can never offer it again. The controller calls
   `StreamingTextState.rollback_commit(previous)` and retries on the next
-  partial. **Two failure paths run *after* the paste keystroke** — the
-  post-paste clipboard-contention check and "text pasted but clipboard restore
-  failed" — and rolling those back pastes the same words twice, up to the
-  retry limit. They therefore raise `TextMayHaveBeenPastedError`, which the
-  retry refuses to act on. **Classification is driven by one `paste_sent`
+  partial. **Two failure paths run *after* the paste keystroke** on the
+  synchronous WM_PASTE road — the post-paste clipboard-contention check
+  and "text pasted but clipboard restore failed" — and rolling those back
+  pastes the same words twice, up to the retry limit. They therefore raise
+  `TextMayHaveBeenPastedError`, which the retry refuses to act on. On the
+  SendInput road the restore is deferred past the call (the paste
+  transaction entry), so a restore that fails there is logged rather than
+  raised: the insert had already returned success. **Classification is driven by one `paste_sent`
   flag, not by picking a class at each raise site** — that approach missed
   the likeliest site of all, a clipboard verification read failing because
   a clipboard manager had the clipboard open. A post-paste failure also

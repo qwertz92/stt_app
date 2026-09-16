@@ -3192,3 +3192,53 @@ def test_an_old_job_failing_does_not_relabel_the_silence_gated_recording(
     assert "model exploded" in facts["overlay"][1]
     # A's own audio is still offered for Retry, through the in-memory copy.
     assert facts["retry_bytes"] == _sine_wav(0.30)
+
+
+class _FlushRecordingInserter(FakeTextInserter):
+    """A text inserter that can be asked to settle its pending clipboard work."""
+
+    def __init__(self):
+        super().__init__()
+        self.flushes = 0
+
+    def flush_pending_restore(self):
+        self.flushes += 1
+
+
+class _RaisingFlushInserter(FakeTextInserter):
+    """The clipboard is held by another program while the app is quitting."""
+
+    def flush_pending_restore(self):
+        raise RuntimeError("the clipboard is open in another program")
+
+
+def test_shutdown_settles_a_pending_clipboard_restore():
+    """The restore after a paste runs on a daemon timer, which exit kills.
+
+    Without this the user's clipboard keeps the last transcript for good --
+    quitting right after a dictation is the ordinary way to end one.
+    """
+    inserter = _FlushRecordingInserter()
+    controller, app = make_controller(text_inserter=inserter)
+
+    controller.shutdown()
+
+    assert inserter.flushes == 1
+    _ = app
+
+
+def test_shutdown_tolerates_an_inserter_that_cannot_flush():
+    """The inserter is injected, and a shutdown may not be stopped by cleanup.
+
+    A test double without the method at all, and a real one whose flush fails
+    because another program holds the clipboard, both have to leave the rest
+    of the shutdown to run.
+    """
+    plain, app = make_controller(text_inserter=FakeTextInserter())
+    plain.shutdown()
+    assert plain._shutdown_started is True
+
+    raising, _app = make_controller(text_inserter=_RaisingFlushInserter())
+    raising.shutdown()
+    assert raising._shutdown_started is True
+    _ = app

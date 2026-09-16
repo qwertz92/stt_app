@@ -1414,8 +1414,27 @@ LEGACY_KEYRING_SERVICE_NAMES = ("tts-app",)
 SENDINPUT_RETRY_ATTEMPTS = 3
 SENDINPUT_RETRY_SLEEP_S = 0.02
 CLIPBOARD_SETTLE_S = 0.02
-SENDINPUT_RESTORE_DELAY_S = 0.16
 WM_PASTE_TIMEOUT_MS = 250
+# How long the transcript stays on the clipboard after a SendInput paste before
+# the previous clipboard is put back. The predecessor was 160 ms *slept on the
+# Qt main thread*, and that thread is what bounded it: streaming inserts run
+# every ~350 ms, so a longer sleep froze the UI while the user was dictating.
+# 160 ms was never enough for the case that loses a transcript. Electron and
+# Chromium targets read the clipboard from their renderer process, seconds late
+# under CPU load: a 326-character transcript reported as pasted 196 ms after
+# the transcription finished delivered the *previous* clipboard content while
+# local transcription pinned the CPU, and the user had to insert it again by
+# hand 4.5 s later. The wait now runs on a throwaway timer thread, so the Qt
+# thread pays nothing for it and the only cost of holding the clipboard longer
+# is that the user's own Ctrl+V within this window pastes the transcript
+# instead of what they copied -- and copying something themselves cancels the
+# restore outright, so the window closes as soon as they need it to.
+CLIPBOARD_RESTORE_DELAY_S = 1.5
+# And how long that deferred restore keeps waiting for a target that still has
+# not answered WM_NULL. Past this the transcript is left on the clipboard for
+# good: a target this slow has demonstrably not read it yet, and restoring is
+# exactly what turns its eventual paste into the user's old content.
+CLIPBOARD_RESTORE_MAX_WAIT_S = 10.0
 # Inserts are often triggered straight from a WM_HOTKEY press, so the user's
 # physical Ctrl/Alt/Shift/Win keys can still be down when Ctrl+V is injected.
 # The target would then see e.g. Ctrl+Alt+V (AltGr+V) instead of a paste, so

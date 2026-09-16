@@ -1,4 +1,6 @@
 import ctypes
+import logging
+import threading
 from types import SimpleNamespace
 
 import pytest
@@ -75,6 +77,8 @@ class SequencedPasteBackend(PasteBackend):
 
     def restore_clipboard_state(self, state):
         self.calls.append("restore")
+        if self.raise_on_restore:
+            raise RuntimeError("restore failed")
         if isinstance(state, dict):
             self.state = dict(state)
         else:
@@ -109,6 +113,15 @@ class SequencedPasteBackend(PasteBackend):
         self.state = {"has_text": True, "text": text}
         self.sequence += 1
 
+    def simulate_silent_overwrite(self, text):
+        """A foreign write whose sequence bump this app never observes.
+
+        The counter is read once per check, so a writer that lands between two
+        reads moves it without the app seeing a difference. Only comparing the
+        content finds this one.
+        """
+        self.state = {"has_text": True, "text": text}
+
     def simulate_sequence_bump(self):
         self.sequence += 1
 
@@ -129,15 +142,134 @@ class GatedPasteBackend(PasteBackend):
         return self.target_ready
 
 
+class SequencedGatedBackend(SequencedPasteBackend):
+    """A clipboard with a sequence counter plus both Win32 gates.
+
+    The combination the deferred restore needs: it has to decide, at restore
+    time, whether the clipboard still holds what this app wrote, and it asks
+    the target whether it has caught up first.
+    """
+
+    def __init__(self, paste_mode="send_input", target_ready=True):
+        super().__init__(paste_mode=paste_mode)
+        self.target_ready = target_ready
+
+    def wait_for_modifier_release(self):
+        self.calls.append("wait_modifiers")
+        return True
+
+    def wait_for_paste_target_ready(self, target_hwnd=None):
+        self.calls.append(f"wait_target:{target_hwnd}")
+        return self.target_ready
+
+
+class ForegroundAwareBackend(SequencedPasteBackend):
+    """A backend that can answer which window is in the foreground.
+
+    `foreground` is a plain attribute so a test can change it from inside the
+    settle sleep -- which is exactly the window the re-validation covers.
+    """
+
+    def __init__(self, foreground=4242):
+        super().__init__(paste_mode="send_input")
+        self.foreground = foreground
+        self.foreground_reads = []
+
+    def get_foreground_window(self):
+        self.foreground_reads.append(self.foreground)
+        return self.foreground
+
+
+class _ScheduledRestore:
+    """One entry of `RecordingScheduler`, standing in for a `threading.Timer`."""
+
+    def __init__(self, delay_s, callback):
+        self.delay_s = delay_s
+        self.callback = callback
+        self.cancelled = False
+        self.fired = False
+
+    def cancel(self):
+        self.cancelled = True
+
+    def run(self):
+        self.fired = True
+        self.callback()
+
+
+class RecordingScheduler:
+    """A `schedule_fn` that records instead of starting a thread.
+
+    Tests drive the clipboard restore by hand with `fire_pending()`, so no
+    timing is involved anywhere in this file.
+    """
+
+    def __init__(self):
+        self.calls = []
+
+    def __call__(self, delay_s, callback):
+        handle = _ScheduledRestore(delay_s, callback)
+        self.calls.append(handle)
+        return handle
+
+    @property
+    def delays(self):
+        return [handle.delay_s for handle in self.calls]
+
+    @property
+    def pending(self):
+        return [h for h in self.calls if not h.cancelled and not h.fired]
+
+    def fire_pending(self):
+        """Run every entry that is neither cancelled nor already fired.
+
+        The pending list is snapshotted first, so an entry a callback
+        reschedules waits for the next `fire_pending()` -- one call is one
+        step of the timer, not a loop to exhaustion.
+        """
+        due = list(self.pending)
+        for handle in due:
+            handle.run()
+        return len(due)
+
+
+class FakeClock:
+    """A monotonic clock the test moves by hand."""
+
+    def __init__(self, start=0.0):
+        self.now = start
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds):
+        self.now += seconds
+
+
 def test_text_inserter_waits_for_modifier_release_before_touching_clipboard():
     backend = GatedPasteBackend()
-    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
 
     assert inserter.insert_text_with_options(
         "hello",
         target_hwnd=123,
         paste_mode="send_input",
     )
+
+    # The readiness probe and the restore have moved behind the scheduler, so
+    # the transaction itself ends at the keystroke. The order within each half
+    # is what this test is about and is unchanged.
+    assert backend.calls == [
+        "wait_modifiers",
+        "capture",
+        "set:hello",
+        "paste:123",
+    ]
+
+    scheduler.fire_pending()
 
     assert backend.calls == [
         "wait_modifiers",
@@ -181,14 +313,24 @@ def test_text_inserter_skips_gates_for_wm_paste_mode():
 
 def test_text_inserter_skips_restore_when_target_stays_unresponsive():
     """An unresponsive target has not read the clipboard yet; restoring would
-    make its late Ctrl+V paste the previous clipboard content."""
-    backend = GatedPasteBackend(target_ready=False)
+    make its late Ctrl+V paste the previous clipboard content.
+
+    The gate itself is unchanged; only where it runs is. It used to hold the
+    Qt main thread for up to PASTE_TARGET_RESPONSIVE_TIMEOUT_S inside the
+    transaction, and now runs on the deferred restore's own thread.
+    """
+    backend = SequencedGatedBackend(target_ready=False)
+    scheduler = RecordingScheduler()
+    clock = FakeClock()
     sleep_calls = []
     inserter = TextInserter(
         backend=backend,
         sleep_fn=sleep_calls.append,
         clipboard_settle_s=0.05,
-        sendinput_restore_delay_s=0.2,
+        restore_delay_s=0.2,
+        restore_max_wait_s=1.0,
+        schedule_fn=scheduler,
+        clock=clock,
     )
 
     assert inserter.insert_text_with_options(
@@ -197,13 +339,22 @@ def test_text_inserter_skips_restore_when_target_stays_unresponsive():
         paste_mode="send_input",
     )
 
+    clock.advance(2.0)  # past the deadline, so the record is not rescheduled
+    scheduler.fire_pending()
+
     assert "restore" not in backend.calls
+    assert backend.state["text"] == "hello", (
+        "the transcript must stay on the clipboard for the target's late read"
+    )
     assert sleep_calls == [0.05]
 
 
 def test_text_inserter_leaves_transcript_when_restore_disabled():
     backend = GatedPasteBackend()
-    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
 
     assert inserter.insert_text_with_options(
         "hello",
@@ -213,16 +364,23 @@ def test_text_inserter_leaves_transcript_when_restore_disabled():
     )
 
     assert "restore" not in backend.calls
-    assert backend.calls[-1] == "wait_target:123"
+    # Nothing is armed either, so no thread and no readiness probe are spent
+    # deciding not to restore.
+    assert scheduler.calls == []
+    assert backend.calls[-1] == "paste:123"
 
 
 def test_text_inserter_saves_and_restores_clipboard():
     backend = LegacyBackend()
-    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
 
     result = inserter.insert_text("hello world")
 
     assert result is True
+    scheduler.fire_pending()
     assert backend.calls == ["capture", "set:hello world", "paste_ctrl_v", "restore"]
     assert backend.state["text"] == "old"
 
@@ -237,14 +395,27 @@ def test_text_inserter_restores_clipboard_when_paste_fails():
     assert backend.calls[-1] == "restore"
 
 
-def test_text_inserter_raises_when_restore_fails_after_paste():
-    backend = LegacyBackend(raise_on_restore=True)
+def test_text_inserter_raises_when_restore_fails_after_a_wm_paste():
+    """The synchronous road is the only one that can still report this.
+
+    `SendMessageTimeout(WM_PASTE)` returns after the target's handler ran, so
+    the restore that follows it is inside the call and its failure has a
+    caller to reach. After a SendInput paste the restore is deferred and the
+    call has long returned success, so that half is logged instead -- see
+    `test_a_restore_that_fails_after_a_sendinput_paste_is_logged_and_not_raised`.
+    """
+    backend = PasteBackend(paste_mode="wm_paste", raise_on_restore=True)
     inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
 
     with pytest.raises(TextInsertionError) as error:
-        inserter.insert_text("hello")
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="wm_paste"
+        )
 
     assert "clipboard restore failed" in str(error.value).lower()
+    assert isinstance(error.value, TextMayHaveBeenPastedError), (
+        "the text is in the document; a retry would paste it twice"
+    )
 
 
 def test_text_inserter_raises_when_paste_and_restore_fail():
@@ -269,13 +440,21 @@ def test_text_inserter_ignores_empty_text():
 
 
 def test_text_inserter_uses_wm_paste_without_restore_delay():
+    """`SendMessageTimeout(WM_PASTE)` returns after the handler ran.
+
+    The target has demonstrably read the clipboard by then, so this road keeps
+    restoring inside the call: there is nothing left to wait for, and deferring
+    it would hold the transcript on the clipboard for no reason.
+    """
     backend = PasteBackend(paste_mode="wm_paste")
+    scheduler = RecordingScheduler()
     sleep_calls = []
     inserter = TextInserter(
         backend=backend,
         sleep_fn=sleep_calls.append,
         clipboard_settle_s=0.05,
-        sendinput_restore_delay_s=0.2,
+        restore_delay_s=0.2,
+        schedule_fn=scheduler,
     )
 
     result = inserter.insert_text_with_options(
@@ -289,16 +468,28 @@ def test_text_inserter_uses_wm_paste_without_restore_delay():
     assert backend.last_target_hwnd == 123
     assert backend.last_requested_mode == "wm_paste"
     assert sleep_calls == [0.05]
+    assert scheduler.calls == [], "the synchronous road armed a deferred restore"
 
 
-def test_text_inserter_waits_before_restore_after_sendinput_paste():
+def test_the_restore_after_a_sendinput_paste_is_deferred_off_the_calling_thread():
+    """Replaces `test_text_inserter_waits_before_restore_after_sendinput_paste`.
+
+    The old shape slept `SENDINPUT_RESTORE_DELAY_S` (160 ms) on the Qt main
+    thread and restored inside the call. Electron/Chromium targets read the
+    clipboard from their renderer process seconds later under CPU load, so
+    160 ms was never enough, and raising it was not available: streaming
+    inserts run every ~350 ms and the sleep froze the UI. The wait is now a
+    scheduled callback and the transaction ends at the keystroke.
+    """
     backend = PasteBackend(paste_mode="send_input")
+    scheduler = RecordingScheduler()
     sleep_calls = []
     inserter = TextInserter(
         backend=backend,
         sleep_fn=sleep_calls.append,
         clipboard_settle_s=0.05,
-        sendinput_restore_delay_s=0.2,
+        restore_delay_s=1.5,
+        schedule_fn=scheduler,
     )
 
     result = inserter.insert_text_with_options(
@@ -308,9 +499,15 @@ def test_text_inserter_waits_before_restore_after_sendinput_paste():
     )
 
     assert result is True
-    assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
+    assert backend.calls == ["capture", "set:hello", "paste:123"]
     assert backend.last_requested_mode == "send_input"
-    assert sleep_calls == [0.05, 0.2]
+    assert sleep_calls == [0.05], (
+        f"the calling thread slept for the restore delay: {sleep_calls}"
+    )
+    assert scheduler.delays == [1.5]
+
+    assert scheduler.fire_pending() == 1
+    assert backend.calls == ["capture", "set:hello", "paste:123", "restore"]
 
 
 def test_text_inserter_aborts_if_clipboard_changes_before_paste():
@@ -326,7 +523,7 @@ def test_text_inserter_aborts_if_clipboard_changes_before_paste():
         backend=backend,
         sleep_fn=sleep,
         clipboard_settle_s=0.05,
-        sendinput_restore_delay_s=0.2,
+        restore_delay_s=0.2,
     )
 
     with pytest.raises(ClipboardContentionError) as error:
@@ -342,49 +539,21 @@ def test_text_inserter_aborts_if_clipboard_changes_before_paste():
 
 
 def test_text_inserter_preserves_user_clipboard_change_during_paste_window():
-    backend = SequencedPasteBackend()
-    sleep_calls = []
+    """Same intent, new road: the paste window is now the deferred restore.
 
-    def sleep(value):
-        sleep_calls.append(value)
-        if len(sleep_calls) == 2:
-            backend.simulate_user_copy("copied while pasting")
-
+    The user's copy used to land during the 160 ms sleep and was caught by the
+    check before the restore. There is no sleep any more, so the window it
+    covered is the 1.5 s the transcript sits on the clipboard -- and the guard
+    that closes it is the content check inside the deferred restore.
+    """
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
     inserter = TextInserter(
         backend=backend,
-        sleep_fn=sleep,
+        sleep_fn=lambda _s: None,
         clipboard_settle_s=0.05,
-        sendinput_restore_delay_s=0.2,
-    )
-
-    with pytest.raises(ClipboardContentionError) as error:
-        inserter.insert_text_with_options(
-            "hello",
-            target_hwnd=123,
-            paste_mode="send_input",
-        )
-
-    assert error.value.allow_clipboard_fallback is False
-    assert backend.calls == ["capture", "set:hello", "paste:123"]
-    assert backend.state["text"] == "copied while pasting"
-
-
-def test_text_inserter_tolerates_sequence_change_when_text_is_unchanged():
-    backend = SequencedPasteBackend()
-    sleep_calls = []
-
-    def sleep(value):
-        sleep_calls.append(value)
-        if len(sleep_calls) == 1:
-            backend.simulate_sequence_bump()
-        if len(sleep_calls) == 2:
-            backend.consume_pending_paste()
-
-    inserter = TextInserter(
-        backend=backend,
-        sleep_fn=sleep,
-        clipboard_settle_s=0.05,
-        sendinput_restore_delay_s=0.2,
+        restore_delay_s=1.5,
+        schedule_fn=scheduler,
     )
 
     assert inserter.insert_text_with_options(
@@ -392,6 +561,48 @@ def test_text_inserter_tolerates_sequence_change_when_text_is_unchanged():
         target_hwnd=123,
         paste_mode="send_input",
     )
+
+    backend.simulate_user_copy("copied while pasting")
+    scheduler.fire_pending()
+
+    assert "restore" not in backend.calls
+    assert backend.state["text"] == "copied while pasting"
+
+
+def test_text_inserter_tolerates_sequence_change_when_text_is_unchanged():
+    """A bumped counter over identical text is not a foreign write.
+
+    Clipboard managers and the app's own write can move the counter without
+    changing what is on the clipboard, and refusing to restore then would
+    leave the transcript in place for good.
+    """
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    sleep_calls = []
+
+    def sleep(value):
+        sleep_calls.append(value)
+        backend.simulate_sequence_bump()
+
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=sleep,
+        clipboard_settle_s=0.05,
+        restore_delay_s=1.5,
+        schedule_fn=scheduler,
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello",
+        target_hwnd=123,
+        paste_mode="send_input",
+    )
+
+    # The target reads the clipboard after the call returned -- which is the
+    # case the deferred restore exists for -- and only then does the restore
+    # run.
+    backend.consume_pending_paste()
+    scheduler.fire_pending()
 
     assert backend.target_text == "hello"
     assert backend.state["text"] == "old"
@@ -480,7 +691,7 @@ class _ClipboardBusyAfterPaste:
 
     def send_paste_with_mode(self, mode, target_hwnd=None):
         self.pasted = True
-        return "send_input"
+        return "wm_paste"
 
     def restore_clipboard_state(self, state):
         pass
@@ -495,13 +706,21 @@ def test_a_failure_after_the_paste_keystroke_is_never_retryable():
     in the target and only the verification read failed, because a clipboard
     manager had the clipboard open -- an ordinary thing to have running.
     Retrying pastes the phrase twice.
+
+    The road is WM_PASTE, because that is where a post-keystroke verification
+    still happens inside the call. After a SendInput paste the same read
+    failure now falls to the deferred restore, which leaves the clipboard
+    alone and logs `outcome=skipped_changed` -- nothing to report to a caller
+    that was told, correctly, that the paste succeeded.
     """
     inserter = TextInserter(
         backend=_ClipboardBusyAfterPaste(), sleep_fn=lambda seconds: None
     )
 
     with pytest.raises(TextInsertionError) as excinfo:
-        inserter.insert_text("hello")
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="wm_paste"
+        )
 
     assert isinstance(excinfo.value, TextMayHaveBeenPastedError), (
         f"{type(excinfo.value).__name__} is retryable, so the streaming "
@@ -600,6 +819,11 @@ def test_the_readiness_wait_sleeps_between_probes_instead_of_spinning():
     against a handle that names no window, on the Qt main thread: 953,446
     probes in 1.994 s at 100% of one core, and a streaming dictation pastes
     every 0.35 s.
+
+    That measurement was taken while this ran inside the transaction; the
+    deferred restore has since moved it onto its own thread, which changes
+    which thread the pinned core is taken from and nothing else. Unbounded is
+    still unbounded.
     """
     backend = _ProbeCountingBackend()
 
@@ -840,23 +1064,43 @@ def test_a_clipboard_this_app_never_set_is_never_restored_over():
     )
 
 
-def test_a_restore_that_fails_after_the_paste_is_never_retryable():
-    """The second of the two after-paste paths, and it was unpinned.
+def test_a_restore_that_fails_after_a_sendinput_paste_is_logged_and_not_raised(
+    caplog,
+):
+    """Replaces `test_a_restore_that_fails_after_the_paste_is_never_retryable`.
 
-    The text is in the document and only the clipboard cleanup failed. Reported
-    as a plain `TextInsertionError` the streaming retry pastes it again, and the
-    overlay offers Insert for a third copy.
+    Its intent -- the text is in the document, so a failed clipboard cleanup
+    must never make the caller retry -- now holds by construction: the restore
+    happens after the call returned success, and there is no caller left to
+    raise to. The failure has to be visible somewhere, so it is a WARNING.
     """
-    backend = GatedPasteBackend()
+    backend = SequencedGatedBackend()
     backend.raise_on_restore = True
-    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
 
-    with pytest.raises(TextMayHaveBeenPastedError) as raised:
+    assert (
         inserter.insert_text_with_options(
             "hello", target_hwnd=123, paste_mode="send_input"
         )
+        is True
+    )
 
-    assert "clipboard restore failed" in str(raised.value)
+    with caplog.at_level(logging.WARNING, logger="stt_app.text_inserter"):
+        scheduler.fire_pending()
+
+    failures = [
+        record
+        for record in caplog.records
+        if record.levelno >= logging.WARNING
+        and "clipboard_restore" in record.getMessage()
+        and "outcome=failed" in record.getMessage()
+    ]
+    assert len(failures) == 1, (
+        f"the failed restore was swallowed: {[r.getMessage() for r in caplog.records]}"
+    )
 
 
 def test_one_delivered_event_is_a_held_ctrl_and_stays_retryable(monkeypatch):
@@ -1021,6 +1265,38 @@ class _FakeWin32Clipboard:
             raise OSError("SetClipboardText failed")
 
 
+class _RecordingWin32Call:
+    """A stand-in for one `user32` function.
+
+    A plain lambda cannot hold the `argtypes`/`restype` attributes the backend
+    assigns before calling, which is why this is a class.
+    """
+
+    def __init__(self, name, calls, result):
+        self._name = name
+        self._calls = calls
+        self._result = result
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *_args):
+        self._calls.append(self._name)
+        return self._result
+
+
+class _FakeUser32:
+    """The module's own `user32` handle, recording into one shared call list."""
+
+    def __init__(self, calls, *, sequence=0, foreground=0):
+        self.calls = calls
+        self.GetClipboardSequenceNumber = _RecordingWin32Call(
+            "sequence", calls, sequence
+        )
+        self.GetForegroundWindow = _RecordingWin32Call(
+            "foreground", calls, foreground
+        )
+
+
 @pytest.mark.parametrize(
     ("label", "empty_raises", "set_raises", "expected"),
     [
@@ -1044,6 +1320,9 @@ def test_the_backend_reports_an_emptied_clipboard_distinctly(
     monkeypatch.setattr(text_inserter, "win32clipboard", fake)
     monkeypatch.setattr(text_inserter, "win32con", SimpleNamespace(CF_UNICODETEXT=13))
     backend = Win32ClipboardBackend()
+    # The successful write reads the clipboard's sequence counter on its way
+    # out; keep that off the real `user32` like every other call here.
+    backend._user32 = _FakeUser32(fake.calls, sequence=7)
 
     if expected is None:
         backend.set_clipboard_text("transcript")
@@ -1056,7 +1335,8 @@ def test_the_backend_reports_an_emptied_clipboard_distinctly(
                 "emptied would restore plain text over an untouched clipboard"
             )
 
-    assert fake.calls[0] == "open" and fake.calls[-1] == "close", (
+    clipboard_calls = [call for call in fake.calls if call != "sequence"]
+    assert fake.calls[0] == "open" and clipboard_calls[-1] == "close", (
         f"{label}: the clipboard was left open: {fake.calls}"
     )
 
@@ -1098,11 +1378,14 @@ def test_a_post_paste_reraise_keeps_the_refusal_to_touch_the_clipboard():
         seen.append(1)
         return len(seen) > 1
 
-    def _readiness_blows_up(target_hwnd):
-        raise OSError("SendMessageTimeoutW failed after the paste went out")
+    def _arming_blows_up(**_kwargs):
+        raise OSError("the restore could not be armed after the paste went out")
 
+    # Arming the deferred restore is what now runs after the keystroke, so it
+    # is the raise site that reaches the classification. (Its own scheduling
+    # failure is caught inside; this forces the surrounding path.)
     inserter._clipboard_changed_after_set = _clipboard_changed
-    inserter._wait_for_paste_target_ready = _readiness_blows_up
+    inserter._arm_deferred_restore = _arming_blows_up
 
     with pytest.raises(TextMayHaveBeenPastedError) as caught:
         inserter.insert_text("der transkribierte satz")
@@ -1148,4 +1431,530 @@ def test_a_clipboard_read_that_fails_is_a_TextInsertionError():
     assert isinstance(caught.value.__cause__, _UnreadableClipboardBackend.Win32Error)
     assert backend.calls == ["capture"], (
         f"it went on to touch the clipboard after the read failed: {backend.calls}"
+    )
+
+
+class _ForeignWriteAfterOurSetBackend(GatedPasteBackend):
+    """A foreign writer lands after our `CloseClipboard`, before any later read.
+
+    `set_clipboard_text` reports the counter it read itself (100). Every read
+    afterwards answers 101 and the clipboard holds someone else's text, which
+    is precisely the state a second, later read cannot distinguish from our
+    own write.
+    """
+
+    def __init__(self):
+        super().__init__(paste_mode="send_input")
+        self.our_sequence = 100
+
+    def set_clipboard_text(self, text):
+        self.calls.append(f"set:{text}")
+        return text_inserter.ClipboardMarker(sequence=self.our_sequence)
+
+    def get_clipboard_sequence_number(self):
+        return self.our_sequence + 1
+
+    def get_clipboard_text(self):
+        return "a colleague's chat message"
+
+
+def test_the_marker_is_the_sequence_number_our_own_write_read(caplog):
+    """The write reports its own number; the caller must not read it again.
+
+    Reading the counter in a second call adopts the number of whatever landed
+    in between, and the "did the clipboard change" check then compares that
+    number against itself and answers "unchanged" -- so the app pastes the
+    foreign content and restores over it.
+    """
+    backend = _ForeignWriteAfterOurSetBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    with (
+        caplog.at_level(logging.INFO, logger="stt_app.text_inserter"),
+        pytest.raises(ClipboardContentionError),
+    ):
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert not any(call.startswith("paste") for call in backend.calls), (
+        f"a stranger's clipboard content was pasted: {backend.calls}"
+    )
+    assert "restore" not in backend.calls
+    assert scheduler.calls == []
+
+    transaction = _one_log_line(caplog, "paste_transaction ")
+    assert "marker=100" in transaction, (
+        f"the foreign writer's sequence number was adopted as ours: {transaction}"
+    )
+
+
+class _MarkerlessForeignWriteBackend(GatedPasteBackend):
+    """The same race seen by a backend that reports no marker at all.
+
+    Both reads of the counter answer the same number -- the foreign write
+    happened before the first of them -- so only comparing the content can
+    tell that the clipboard is no longer ours.
+    """
+
+    def __init__(self):
+        super().__init__(paste_mode="send_input")
+
+    def get_clipboard_sequence_number(self):
+        return 101
+
+    def get_clipboard_text(self):
+        return "a colleague's chat message"
+
+
+def test_an_equal_sequence_number_is_not_proof_that_the_clipboard_is_ours():
+    """The counter is a hint; the content is the evidence.
+
+    An equal sequence number used to end the check with "unchanged" and no
+    content comparison at all, which is what let a foreign write be pasted and
+    then overwritten by the restore.
+    """
+    backend = _MarkerlessForeignWriteBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    with pytest.raises(ClipboardContentionError):
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert not any(call.startswith("paste") for call in backend.calls), (
+        f"a stranger's clipboard content was pasted: {backend.calls}"
+    )
+
+
+def test_a_foreground_change_before_the_keystroke_aborts_the_paste():
+    """Alt+Tab between the transaction start and the keystroke.
+
+    The modifier-release wait alone is up to 1.5 s, and `SendInput` goes to
+    whatever holds the focus when it runs -- `target_hwnd` is not consulted on
+    that road at all. The transcript went into a stranger's window and the app
+    reported success.
+    """
+    backend = ForegroundAwareBackend(foreground=4242)
+    scheduler = RecordingScheduler()
+
+    def sleep(_seconds):
+        backend.foreground = 9999  # the user switched windows
+
+    inserter = TextInserter(backend=backend, sleep_fn=sleep, schedule_fn=scheduler)
+
+    with pytest.raises(TextInsertionError) as raised:
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    assert "foreground window changed" in str(raised.value)
+    assert not isinstance(raised.value, TextMayHaveBeenPastedError), (
+        "nothing was pasted, so the streaming retry must be allowed to try again"
+    )
+    assert raised.value.allow_clipboard_fallback is True
+    assert not any(call.startswith("paste:") for call in backend.calls), (
+        f"the keystroke went out anyway: {backend.calls}"
+    )
+    assert scheduler.calls == []
+    assert backend.calls[-1] == "restore", (
+        "a pre-keystroke failure restores the clipboard inside the call"
+    )
+    assert backend.state["text"] == "old"
+
+
+def test_an_unchanged_foreground_still_pastes():
+    """The other side of the cut: the same transaction with nobody switching."""
+    backend = ForegroundAwareBackend(foreground=4242)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+
+    assert "paste:123" in backend.calls
+    assert backend.foreground_reads == [4242, 4242], (
+        "the foreground is read once at the start and once before the keystroke"
+    )
+
+
+def test_the_wm_paste_road_does_not_re_read_the_foreground():
+    """WM_PASTE addresses a window handle, so the focus is irrelevant to it."""
+    backend = ForegroundAwareBackend(foreground=4242)
+    backend.paste_mode = "wm_paste"
+
+    def sleep(_seconds):
+        backend.foreground = 9999
+
+    inserter = TextInserter(backend=backend, sleep_fn=sleep)
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="wm_paste"
+    )
+
+    assert "paste:123" in backend.calls
+
+
+def test_a_deferred_restore_waits_for_a_busy_target_and_gives_up_at_the_deadline():
+    """A target that has not answered yet has not read the clipboard yet.
+
+    Restoring under it is what turns its late paste into the user's old
+    content, so the record is rescheduled while there is budget left and then
+    abandoned with the transcript still on the clipboard.
+    """
+    backend = SequencedGatedBackend(target_ready=False)
+    scheduler = RecordingScheduler()
+    clock = FakeClock()
+    inserter = TextInserter(
+        backend=backend,
+        sleep_fn=lambda _s: None,
+        restore_delay_s=1.5,
+        restore_max_wait_s=10.0,
+        schedule_fn=scheduler,
+        clock=clock,
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+    assert scheduler.delays == [1.5]
+
+    clock.advance(1.5)
+    assert scheduler.fire_pending() == 1
+    assert scheduler.delays == [1.5, 1.5], "a busy target was not waited for again"
+    assert "restore" not in backend.calls
+
+    clock.advance(10.0)  # past armed_at + restore_max_wait_s
+    assert scheduler.fire_pending() == 1
+    assert scheduler.delays == [1.5, 1.5], "the wait never ended"
+    assert "restore" not in backend.calls
+    assert backend.state["text"] == "hello", (
+        "the transcript must stay on the clipboard for the target's late read"
+    )
+
+
+@pytest.mark.parametrize(
+    ("label", "change_the_clipboard"),
+    [
+        (
+            "the sequence moved and the content differs",
+            lambda backend: backend.simulate_user_copy("something of mine"),
+        ),
+        (
+            "the sequence is unchanged and only the content differs",
+            lambda backend: backend.simulate_silent_overwrite("something of mine"),
+        ),
+    ],
+)
+def test_a_deferred_restore_is_skipped_when_the_clipboard_is_no_longer_ours(
+    label, change_the_clipboard
+):
+    """1.5 s is long enough for the user to copy something of their own.
+
+    Both detections matter: a sequence number that moved is the obvious one,
+    and an unchanged one is the microsecond gap between our `CloseClipboard`
+    and the marker read -- covered only by comparing the content.
+    """
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+
+    change_the_clipboard(backend)
+    scheduler.fire_pending()
+
+    assert "restore" not in backend.calls, f"{label}: {backend.calls}"
+    assert backend.state["text"] == "something of mine", f"{label}"
+
+
+def test_a_second_paste_during_a_pending_restore_keeps_the_users_clipboard():
+    """Capturing afresh would capture our own previous transcript.
+
+    A streaming dictation pastes every ~350 ms, well inside the restore delay,
+    so the second transaction's "previous clipboard" is the first
+    transcript -- and restoring that at the end of the dictation puts a
+    transcript on the user's clipboard instead of what they had copied.
+    """
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    assert inserter.insert_text_with_options(
+        "one", target_hwnd=123, paste_mode="send_input"
+    )
+    assert inserter.insert_text_with_options(
+        "two", target_hwnd=123, paste_mode="send_input"
+    )
+
+    assert scheduler.calls[0].cancelled is True, "the first timer still fires"
+    assert backend.calls.count("capture") == 1, (
+        f"the second paste captured our own transcript: {backend.calls}"
+    )
+
+    assert scheduler.fire_pending() == 1
+    assert backend.state["text"] == "old", (
+        f"the user's clipboard was replaced by a transcript: {backend.state}"
+    )
+
+
+def test_a_second_paste_after_the_user_copied_in_between_captures_the_new_clipboard():
+    """The mirror image: the pending record's state is no longer the user's.
+
+    Once they have copied something themselves, that is what has to come back
+    after the next dictation -- and the older record is dropped rather than
+    restored over it.
+    """
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    assert inserter.insert_text_with_options(
+        "one", target_hwnd=123, paste_mode="send_input"
+    )
+    backend.simulate_user_copy("mine")
+    assert inserter.insert_text_with_options(
+        "two", target_hwnd=123, paste_mode="send_input"
+    )
+
+    assert backend.calls.count("capture") == 2
+    assert scheduler.fire_pending() == 1
+    assert backend.state["text"] == "mine"
+
+
+def test_flush_pending_restore_restores_at_once_without_the_readiness_wait():
+    """The app is quitting and the timer thread is a daemon.
+
+    `target_ready` is False here on purpose: the readiness wait would
+    reschedule instead of restoring, and the scheduled callback would then
+    never run, so the user's clipboard would keep the transcript for good.
+    """
+    backend = SequencedGatedBackend(target_ready=False)
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+    inserter.flush_pending_restore()
+
+    assert backend.state["text"] == "old"
+    assert not any(call.startswith("wait_target") for call in backend.calls), (
+        f"the flush waited for the target anyway: {backend.calls}"
+    )
+    assert scheduler.calls[0].cancelled is True
+    # And it is idempotent: nothing is left to restore a second time.
+    inserter.flush_pending_restore()
+    assert backend.calls.count("restore") == 1
+
+
+def test_flush_pending_restore_leaves_a_clipboard_that_is_no_longer_ours():
+    """The content check is the one guard the flush does keep."""
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    assert inserter.insert_text_with_options(
+        "hello", target_hwnd=123, paste_mode="send_input"
+    )
+    backend.simulate_user_copy("mine")
+    inserter.flush_pending_restore()
+
+    assert "restore" not in backend.calls
+    assert backend.state["text"] == "mine"
+
+
+def test_flush_pending_restore_is_harmless_with_nothing_pending():
+    backend = SequencedGatedBackend()
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    inserter.flush_pending_restore()
+
+    assert backend.calls == []
+
+
+def _log_lines(caplog, prefix):
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "stt_app.text_inserter"
+        and record.getMessage().startswith(prefix)
+    ]
+
+
+def _one_log_line(caplog, prefix):
+    lines = _log_lines(caplog, prefix)
+    assert len(lines) == 1, f"expected exactly one {prefix!r} line, got {lines}"
+    return lines[0]
+
+
+def test_a_successful_transaction_and_its_restore_each_log_one_line(caplog):
+    """One line per transaction and one per restore outcome.
+
+    A paste that goes wrong in the field leaves nothing else behind: the
+    clipboard has moved on, the target window is gone, and the transcript is
+    only in history. And the transcript itself is never part of the line.
+    """
+    transcript = "der transkribierte satz"
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    with caplog.at_level(logging.INFO, logger="stt_app.text_inserter"):
+        assert inserter.insert_text_with_options(
+            transcript, target_hwnd=123, paste_mode="send_input"
+        )
+        scheduler.fire_pending()
+
+    transaction = _one_log_line(caplog, "paste_transaction ")
+    assert "mode=send_input/send_input" in transaction
+    assert "target_hwnd=123" in transaction
+    assert f"chars={len(transcript)}" in transaction
+    assert "outcome=pasted" in transaction
+    assert "restore=deferred" in transaction
+
+    restore = _one_log_line(caplog, "clipboard_restore ")
+    assert "outcome=restored" in restore
+    assert "delay_ms=" in restore
+
+    for line in _log_lines(caplog, ""):
+        assert transcript not in line, f"the transcript was logged: {line}"
+        assert "transkribierte" not in line, f"the transcript was logged: {line}"
+
+
+def test_a_failed_transaction_logs_its_line_too(caplog):
+    """Whatever the outcome is the point: a silent failure explains nothing."""
+    backend = GatedPasteBackend()
+    backend.raise_on_paste = True
+    inserter = TextInserter(backend=backend, sleep_fn=lambda _s: None)
+
+    with (
+        caplog.at_level(logging.INFO, logger="stt_app.text_inserter"),
+        pytest.raises(TextInsertionError),
+    ):
+        inserter.insert_text_with_options(
+            "hello", target_hwnd=123, paste_mode="send_input"
+        )
+
+    transaction = _one_log_line(caplog, "paste_transaction ")
+    assert "outcome=failed:TextInsertionError" in transaction
+    assert "restore=immediate" in transaction
+    assert _log_lines(caplog, "clipboard_restore ") == []
+
+
+def test_a_superseded_restore_says_which_of_the_two_reasons_it_was(caplog):
+    """`superseded` and `superseded_changed` are different events.
+
+    The first carried the user's clipboard over into the new transaction; the
+    second dropped it because the user had copied something themselves. A log
+    that cannot tell them apart cannot explain a clipboard that came back
+    wrong.
+    """
+    backend = SequencedGatedBackend()
+    scheduler = RecordingScheduler()
+    inserter = TextInserter(
+        backend=backend, sleep_fn=lambda _s: None, schedule_fn=scheduler
+    )
+
+    with caplog.at_level(logging.INFO, logger="stt_app.text_inserter"):
+        inserter.insert_text_with_options(
+            "one", target_hwnd=123, paste_mode="send_input"
+        )
+        inserter.insert_text_with_options(
+            "two", target_hwnd=123, paste_mode="send_input"
+        )
+        backend.simulate_user_copy("mine")
+        inserter.insert_text_with_options(
+            "three", target_hwnd=123, paste_mode="send_input"
+        )
+
+    outcomes = [
+        line.split("outcome=")[1].split(" ")[0]
+        for line in _log_lines(caplog, "clipboard_restore ")
+    ]
+    assert outcomes == ["superseded", "superseded_changed"]
+
+
+def test_the_backend_reads_the_sequence_number_after_closing_the_clipboard(
+    monkeypatch,
+):
+    """The marker is read inside the write, and after the close.
+
+    Before the close the counter has not necessarily moved yet -- whether it
+    increments on `SetClipboardData` or on `CloseClipboard` is not documented
+    and the design must not depend on it -- and after returning to the caller
+    a foreign writer can already have moved it.
+    """
+    fake = _FakeWin32Clipboard()
+    monkeypatch.setattr(text_inserter, "win32clipboard", fake)
+    monkeypatch.setattr(text_inserter, "win32con", SimpleNamespace(CF_UNICODETEXT=13))
+    backend = Win32ClipboardBackend()
+    backend._user32 = _FakeUser32(fake.calls, sequence=4711)
+
+    marker = backend.set_clipboard_text("transcript")
+
+    assert fake.calls == ["open", "empty", "set", "close", "sequence"], (
+        f"the counter was not read after CloseClipboard: {fake.calls}"
+    )
+    assert marker == text_inserter.ClipboardMarker(sequence=4711)
+
+
+def test_the_backend_reads_the_foreground_window_through_its_own_user32():
+    """And a NULL foreground means unknown, never window 0."""
+    calls = []
+    backend = Win32ClipboardBackend()
+    backend._user32 = _FakeUser32(calls, foreground=0x4242)
+
+    assert backend.get_foreground_window() == 0x4242
+    assert calls == ["foreground"]
+
+    backend._user32 = _FakeUser32(calls, foreground=0)
+    assert backend.get_foreground_window() is None
+
+
+def test_the_default_scheduler_really_runs_the_callback_on_a_daemon_thread():
+    """Every other test injects a scheduler, so this is the only cover it has.
+
+    A `_schedule_on_a_daemon_timer` that forgot to start its timer would leave
+    every shipped restore pending forever and no other test would notice --
+    the clipboard would keep the transcript after every single dictation.
+    Daemon matters just as much: a non-daemon timer waiting out a hung target
+    would hold the interpreter open at exit.
+    """
+    fired = threading.Event()
+    handle = text_inserter._schedule_on_a_daemon_timer(0.0, fired.set)
+    try:
+        assert fired.wait(timeout=5.0), "the scheduled callback never ran"
+        assert handle.daemon is True, "a pending restore would outlive the app"
+    finally:
+        handle.cancel()
+
+
+def test_the_inserter_uses_that_scheduler_unless_one_is_injected():
+    assert (
+        TextInserter(backend=SequencedGatedBackend())._schedule_fn
+        is text_inserter._schedule_on_a_daemon_timer
     )

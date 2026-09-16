@@ -597,6 +597,11 @@ class DictationController(QtCore.QObject):
         if self._shutdown_started:
             return
         self._shutdown_started = True
+        # Early, and before the slow teardown below: the clipboard restore
+        # after a paste waits on a daemon timer, which exit kills. Without
+        # this the user's clipboard keeps the last transcript for good -- and
+        # quitting right after a dictation is the ordinary way to end one.
+        self._flush_pending_clipboard_restore()
         self._release_all_global_hotkeys()
         self._focus_poll_timer.stop()
         self._cancel_audio_callback_watchdog()
@@ -695,6 +700,22 @@ class DictationController(QtCore.QObject):
                 self._logger.exception(
                     "Failed to shut down the %s executor", name
                 )
+
+    def _flush_pending_clipboard_restore(self) -> None:
+        """Put the user's clipboard back before the process goes away.
+
+        `getattr`, because the inserter is injected and not every double
+        carries the method; guarded, because nothing about a clipboard restore
+        may stop a shutdown that has already started -- the clipboard can be
+        held open by another program at exactly this moment.
+        """
+        flush = getattr(self._text_inserter, "flush_pending_restore", None)
+        if not callable(flush):
+            return
+        try:
+            flush()
+        except Exception:
+            self._logger.exception("Failed to flush the pending clipboard restore")
 
     def _invalidate_transcriber_runtime(self) -> None:
         """Drop the cached runtime, or hand the drop to whoever is using it."""

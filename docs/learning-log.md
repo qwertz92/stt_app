@@ -6991,3 +6991,57 @@ mode declined that paste, and `insert` mode is unchanged. Eleven tests in
 held on a worker thread and the real stores. The fake store in
 `tests/conftest.py` had to learn the keyword, or every controller test
 died with a `TypeError` -- the trap group C named in advance.
+
+**F01/F02/F07 -- the paste transaction.** The review proposed raising the
+160 ms restore delay; the user declined that in advance, and the measurement
+says why it would not have helped. The lead's own probe
+(`probe_wm_null_order.py`: a message-only window on its own thread, its
+handler kept busy for 300 ms by a posted message, a WM_KEYDOWN posted behind
+that, then WM_NULL sent with `SendMessageTimeout`) answered WM_NULL at
+0.302 s and dispatched the keystroke only afterwards -- sent messages are
+retrieved ahead of posted and input messages, so the readiness gate that
+preceded the restore never said anything about the keystroke, and the 160 ms
+sleep was the whole barrier. The field log of the same day has the loss:
+`text_insertion outcome=success chars=326` 196 ms after the transcription
+finished, into an Electron window while pytest pinned the CPU, and the same
+326 characters inserted again by hand 4.5 s later (the user's settings: batch,
+Cohere, `paste_mode auto`, `keep_transcript_in_clipboard` off,
+`immediate_background_insert` on). F02 was confirmed by reading: the counter
+was read in a second call after the write. F07 likewise: nothing re-read the
+foreground between the transaction start and the keystroke, and the modifier
+wait alone is up to 1.5 s. F12 was confirmed on the user's own clipboard,
+which held nine formats (`DataObject`, `CF_UNICODETEXT`, `CF_TEXT`,
+`HTML Format`, `text/markdown`, an ODT format, `Ole Private Data`,
+`CF_LOCALE`, `CF_OEMTEXT`) of which one is restored; it is the next unit. The
+design was the lead's (the brief in the session's scratchpad, its content in
+the AGENTS.md entry): the restore leaves the call and runs on a timer thread
+after 1.5 s, guarded by a content check and a 10 s budget; the marker is read
+inside the write; the foreground is snapshotted before the modifier wait and
+re-read before the keystroke; one log line per transaction and one per
+restore outcome. Rejected on the way: an owner window for delayed rendering
+(a pump-less owner blocks other programs' `EmptyClipboard`, and clipboard
+history renders every format anyway), a UI Automation read-back, and any
+fixed delay on the Qt thread. An Opus implementer built it on an export of
+`4416e1c` with 16 tests written first (31 failing-first runs, one per test,
+tabled in its notes; twenty of them fail only at the new constructor keyword,
+so it probed the four behaviours against the old source directly: the old
+code pasted a stranger's content and restored over it when the counter
+matched, never read the foreground, and slept `[0.02, 0.16]` on the calling
+thread with the restore inside the call). Its own negative control reverted
+each of 14 pieces and every one was caught. Six deviations from the brief,
+each argued in its notes and accepted by the lead: the record carries the
+scheduler handle; the transaction is split into two methods so one `finally`
+can write the log line; a scheduler that cannot start a thread leaves the
+record pending instead of raising; the post-keystroke contention check stays
+on the WM_PASTE road only; `get_foreground_window` declares its `restype` on
+the module's own `user32`; and two extra tests pin the default daemon timer.
+Measured cost: two content reads per paste where the old fast path read the
+counter, i.e. two more clipboard opens, each a chance for a retryable
+contention abort under an aggressive clipboard manager. Not measured, and
+not measurable from here: whether 1.5 s is enough for a loaded Electron
+target (the budget and the content check are the answer to that, not the
+delay), the counter's increment point, and anything behind a real
+`SendInput`. The lead applied the patch on top of the F05/F06 unit with a
+three-way merge (one conflict, both test blocks appended to
+`tests/test_controller.py`), read the transaction against the design, and
+ran the eight inserter and controller test files (554 passed).
