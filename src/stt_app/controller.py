@@ -6682,8 +6682,9 @@ class DictationController(QtCore.QObject):
         self._settings = replace(self._settings, overlay_opacity_percent=clamped)
         try:
             self._settings_store.save(self._settings)
-        except Exception:
+        except Exception as exc:
             self._logger.exception("Failed to persist overlay opacity")
+            self._report_unsaved_overlay_setting("The overlay opacity", exc)
 
     def set_overlay_always_on_top(self, enabled: bool) -> None:
         normalized = bool(enabled)
@@ -6692,8 +6693,23 @@ class DictationController(QtCore.QObject):
         self._settings = replace(self._settings, overlay_always_on_top=normalized)
         try:
             self._settings_store.save(self._settings)
-        except Exception:
+        except Exception as exc:
             self._logger.exception("Failed to persist overlay always-on-top mode")
+            self._report_unsaved_overlay_setting("The overlay pin mode", exc)
+
+    def _report_unsaved_overlay_setting(self, what: str, exc: Exception) -> None:
+        """Say on the overlay that one of its own controls could not save.
+
+        The opacity slider, the pin button and the Lang menu write straight
+        to the store, and the store refuses while its file cannot be read
+        (`persistence.StoreUnavailableError`). Only the log heard that
+        refusal: the session kept the new value, the file kept the old one,
+        and which of the two was real showed at the next start. Reported
+        through the same road as the tray's own errors, keeping a pending
+        insert offer; the in-memory value stays, as every other refused save
+        keeps what the user chose.
+        """
+        self.show_overlay_error(f"{what} was not saved. {exc}")
 
     def _sync_overlay_language_options(self) -> None:
         supported_modes = language_modes_for_selection(
@@ -6723,8 +6739,9 @@ class DictationController(QtCore.QObject):
         self._settings = replace(self._settings, language_mode=normalized)
         try:
             self._settings_store.save(self._settings)
-        except Exception:
+        except Exception as exc:
             self._logger.exception("Failed to persist transcription language")
+            self._report_unsaved_overlay_setting("The language selection", exc)
         self._sync_overlay_language_options()
         # No runtime teardown and no preload: the language is a per-request
         # parameter for every engine and is applied when the next job acquires

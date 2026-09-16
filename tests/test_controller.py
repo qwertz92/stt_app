@@ -39,7 +39,7 @@ from stt_app.config import (
 from stt_app.controller import DictationController
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.persistence import backup_path
-from stt_app.settings_store import AppSettings
+from stt_app.settings_store import AppSettings, SettingsStore
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
 
@@ -3274,5 +3274,55 @@ def test_an_edit_is_refused_on_the_overlay_when_history_cannot_be_read(
         assert "history.json" in detail
         # Nothing was written, so the edit is still there to be made again.
         assert [entry.text for entry in history_store.load()] == ["transcript A."]
+    finally:
+        controller.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("setter", "value", "field", "what"),
+    [
+        ("set_overlay_opacity_percent", 40, "overlay_opacity_percent", "The overlay opacity"),
+        ("set_overlay_always_on_top", False, "overlay_always_on_top", "The overlay pin mode"),
+        ("set_language_mode", "de", "language_mode", "The language selection"),
+    ],
+)
+def test_an_overlay_setting_the_store_refuses_to_save_is_reported_on_the_overlay(
+    tmp_path, files_no_read_gets_past, setter, value, field, what
+):
+    """The opacity slider, the pin button and the Lang menu save straight
+    to the store, and the store refuses while its file cannot be read.
+
+    That refusal was caught by a bare `except Exception` that only logged
+    it: the overlay kept the new value for the session, the file kept the
+    old one, and the user learned which of the two was real at the next
+    start. The three are the eleventh, twelfth and thirteenth Qt call sites
+    of that refusal, and they report it the way the tray's own errors do.
+    """
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(
+        AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            model_size="small",
+            overlay_opacity_percent=70,
+            overlay_always_on_top=True,
+            language_mode="auto",
+        )
+    )
+    overlay = FakeOverlay()
+    controller, _app = make_controller(settings_store=settings_store, overlay=overlay)
+    on_disk_before = settings_store.path.read_text(encoding="utf-8")
+    try:
+        with files_no_read_gets_past(
+            settings_store.path, backup_path(settings_store.path)
+        ):
+            getattr(controller, setter)(value)
+
+        state, detail = overlay.states[-1]
+        assert state == "Error"
+        assert detail.startswith(f"{what} was not saved. "), detail
+        assert "settings.json could not be read" in detail
+        # The session keeps what the user chose; the file keeps what it had.
+        assert getattr(controller.settings, field) == value
+        assert settings_store.path.read_text(encoding="utf-8") == on_disk_before
     finally:
         controller.shutdown()
