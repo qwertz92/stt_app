@@ -3326,3 +3326,114 @@ def test_an_overlay_setting_the_store_refuses_to_save_is_reported_on_the_overlay
         assert settings_store.path.read_text(encoding="utf-8") == on_disk_before
     finally:
         controller.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("setter", "value", "field", "what"),
+    [
+        ("set_overlay_opacity_percent", 40, "overlay_opacity_percent", "The overlay opacity"),
+        ("set_overlay_always_on_top", False, "overlay_always_on_top", "The overlay pin mode"),
+        ("set_language_mode", "de", "language_mode", "The language selection"),
+    ],
+)
+def test_an_overlay_setting_refused_during_a_recording_is_reported_through_the_tray(
+    monkeypatch, tmp_path, files_no_read_gets_past, setter, value, field, what
+):
+    """The refusal report must not paint Error over a live recording.
+
+    The opacity slider and the pin button stay enabled while recording, and
+    the report above went through `show_overlay_error`, which had no session
+    guard: a save refused mid-dictation replaced "Listening" with "Error"
+    while the microphone kept recording underneath, and in batch mode nothing
+    repaints "Listening" before the stop (the wave-12 reach lens). While a
+    session owns the overlay the report is a tray notification.
+    """
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(
+        AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            model_size="small",
+            overlay_opacity_percent=70,
+            overlay_always_on_top=True,
+            language_mode="auto",
+        )
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    overlay = FakeOverlay()
+    controller, _app = make_controller(settings_store=settings_store, overlay=overlay)
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    on_disk_before = settings_store.path.read_text(encoding="utf-8")
+    try:
+        controller.start_recording()
+        assert controller._audio_capture is not None, "the capture never started"
+        assert overlay.state == "Listening", overlay.states
+        painted = list(overlay.states)
+
+        with files_no_read_gets_past(
+            settings_store.path, backup_path(settings_store.path)
+        ):
+            getattr(controller, setter)(value)
+
+        assert overlay.states == painted, overlay.states[len(painted) :]
+        assert controller._audio_capture is not None
+        assert len(tray) == 1, tray
+        assert tray[0].startswith(f"{what} was not saved. "), tray[0]
+        assert "settings.json could not be read" in tray[0]
+        # The session keeps what the user chose; the file keeps what it had.
+        assert getattr(controller.settings, field) == value
+        assert settings_store.path.read_text(encoding="utf-8") == on_disk_before
+    finally:
+        controller.shutdown()
+
+
+def test_an_overlay_error_during_a_transcription_in_flight_goes_to_the_tray(
+    monkeypatch, tmp_path
+):
+    """The tray's copy action with nothing to copy, mid-transcription.
+
+    `_overlay_session_active` also covers a foreground transcription in
+    flight; painted there, the refusal replaced "Processing" for a job that
+    had not failed, and the job's real result overwrote the Error a moment
+    later. Once the session is over the same call paints as before.
+    """
+    settings_store = SettingsStore(tmp_path / "settings.json")
+    settings_store.save(
+        AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            model_size="small",
+            keep_transcript_in_clipboard=False,
+        )
+    )
+    release = threading.Event()
+    entered = threading.Event()
+    _ScriptedCapture.instances = []
+    _ScriptedCapture.queue = [_sine_wav(0.30)]
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _ScriptedCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _HeldTranscriber("transcript.", release, entered),
+    )
+    overlay = FakeOverlay()
+    controller, app = make_controller(settings_store=settings_store, overlay=overlay)
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    try:
+        controller.toggle_recording()
+        controller.toggle_recording()
+        assert entered.wait(timeout=8.0), "the worker never started"
+        assert overlay.state == "Processing", overlay.states
+
+        controller.show_overlay_error("No transcript available to copy yet.")
+
+        assert overlay.state == "Processing", overlay.states
+        assert tray == ["No transcript available to copy yet."]
+
+        release.set()
+        _pump_until(app, lambda: overlay.state == "Done")
+        controller.show_overlay_error("No window to insert into.")
+        assert overlay.states[-1] == ("Error", "No window to insert into.")
+        assert tray == ["No transcript available to copy yet."]
+    finally:
+        release.set()
+        controller.shutdown()

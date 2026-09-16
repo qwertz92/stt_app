@@ -376,6 +376,9 @@ class DictationController(QtCore.QObject):
     # A queued transcription succeeded but its text could not be pasted. Without
     # this the loss was visible only in the log file.
     background_insertion_failed = QtCore.Signal(str)
+    # An error raised while a recording or a transcription owns the overlay:
+    # shown as a tray notification, never painted over the live session.
+    busy_overlay_error = QtCore.Signal(str)
     # Emitted from MMDevice API worker threads; the queued connection marshals
     # the reaction onto the Qt thread.
     audio_devices_changed = QtCore.Signal(str)
@@ -6325,8 +6328,22 @@ class DictationController(QtCore.QObject):
         Through the offer-keeping painter: "No window to insert into" is
         what the overlay's own Insert answers when the user has not clicked
         into a document yet, and painted plainly it hid the button the user
-        was about to press again."""
-        self._paint_status_keeping_offer("Error", str(message))
+        was about to press again.
+
+        Never over a live session. Painted while a recording or a
+        transcription owned the overlay, an unrelated refusal -- the opacity
+        slider's save refused by a locked `settings.json` mid-dictation --
+        replaced "Listening" with "Error" while the microphone kept recording
+        underneath, and in batch mode nothing repaints "Listening" before the
+        stop (the wave-12 reach lens). Such an error goes to the tray, the
+        surface that survives a live session, as a queued job's failure does.
+        """
+        text = str(message)
+        if self._overlay_session_active():
+            self._logger.warning("overlay_error_while_session_active %s", text)
+            self.busy_overlay_error.emit(text)
+            return
+        self._paint_status_keeping_offer("Error", text)
         self._reveal_overlay_result(is_error=True)
 
     def _reveal_overlay_result(self, *, is_error: bool) -> None:
@@ -6726,9 +6743,10 @@ class DictationController(QtCore.QObject):
         (`persistence.StoreUnavailableError`). Only the log heard that
         refusal: the session kept the new value, the file kept the old one,
         and which of the two was real showed at the next start. Reported
-        through the same road as the tray's own errors, keeping a pending
-        insert offer; the in-memory value stays, as every other refused save
-        keeps what the user chose.
+        through the same road as the tray's own errors -- the overlay,
+        keeping a pending insert offer, or the tray while a recording or a
+        transcription owns the overlay (`show_overlay_error`); the in-memory
+        value stays, as every other refused save keeps what the user chose.
         """
         self.show_overlay_error(f"{what} was not saved. {exc}")
 

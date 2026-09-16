@@ -8,6 +8,8 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 import stt_app.main as main_module
 from stt_app.app_icon import app_icon_path, load_app_icon
+from stt_app.config import APP_DISPLAY_NAME
+from stt_app.controller import DictationController
 from stt_app.last_recording_store import LastRecordingStore
 from stt_app.main import (
     _create_tray_icon,
@@ -1119,3 +1121,53 @@ def test_the_overlay_insert_action_reaches_the_failed_text_slot_not_the_tray_re_
     assert controller.repaste_calls == 0
     assert controller.toggle_calls == 1
     assert history_opened == [1]
+
+
+class _NotificationSignals(QtCore.QObject):
+    """The controller's out-of-band report signals and nothing else."""
+
+    background_transcription_failed = QtCore.Signal(str)
+    background_insertion_failed = QtCore.Signal(str)
+    busy_overlay_error = QtCore.Signal(str)
+
+
+class _TrayMessages:
+    def __init__(self):
+        self.messages: list[tuple[str, str]] = []
+
+    def showMessage(self, title, message, icon=None, timeout_ms=None):
+        self.messages.append((title, message))
+
+
+def test_an_error_the_overlay_cannot_show_reaches_the_tray():
+    """An error raised while a session owns the overlay is a tray message.
+
+    `show_overlay_error` hands such an error to `busy_overlay_error` instead
+    of painting over "Listening"; the wiring to the tray is pinned by
+    emitting the signal, beside the two reports that already took this road.
+    """
+    fake_signals = {
+        name
+        for name, value in vars(_NotificationSignals).items()
+        if isinstance(value, QtCore.Signal)
+    }
+    real_signals = {
+        name
+        for name, value in vars(DictationController).items()
+        if isinstance(value, QtCore.Signal)
+    }
+    assert fake_signals <= real_signals, fake_signals - real_signals
+    _app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    tray = _TrayMessages()
+    controller = _NotificationSignals()
+
+    main_module._connect_tray_notifications(tray, controller)
+    controller.busy_overlay_error.emit("The overlay opacity was not saved.")
+    controller.background_transcription_failed.emit("Recording 12:00:00 failed: x")
+    controller.background_insertion_failed.emit("Recording 12:00:00 was not pasted.")
+
+    assert tray.messages == [
+        (APP_DISPLAY_NAME, "The overlay opacity was not saved."),
+        ("Transcription failed", "Recording 12:00:00 failed: x"),
+        ("Transcript not inserted", "Recording 12:00:00 was not pasted."),
+    ]

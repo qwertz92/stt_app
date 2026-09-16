@@ -88,6 +88,54 @@ def _connect_overlay_actions(overlay, controller, open_history_dialog) -> None:
     overlay.language_changed.connect(controller.set_language_mode)
 
 
+def _connect_tray_notifications(tray_icon, controller) -> None:
+    """Wire the controller's out-of-band reports to tray notifications.
+
+    Each is a message the overlay cannot carry: a queued transcription's
+    failure and a queued transcript that was produced but not pasted, both
+    while a live session may own the overlay, and an error raised while a
+    recording or a transcription is in flight -- painted over "Listening"
+    until wave 12, when the opacity slider's save refused by a locked
+    `settings.json` told the user the recording had failed while the
+    microphone kept recording underneath. Its own function so the wiring is
+    pinned by emitting the signals at a fake tray.
+    """
+
+    def _notify_background_failure(message: str) -> None:
+        # The overlay belongs to the live session, so a queued job's failure is
+        # reported here as well; without it the failure was invisible.
+        tray_icon.showMessage(
+            "Transcription failed",
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    def _notify_background_insertion_failure(message: str) -> None:
+        # A queued transcript that was produced but not pasted is just as lost
+        # to the user as a failed transcription; both must be reported.
+        tray_icon.showMessage(
+            "Transcript not inserted",
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    def _notify_busy_overlay_error(message: str) -> None:
+        tray_icon.showMessage(
+            APP_DISPLAY_NAME,
+            message,
+            QtWidgets.QSystemTrayIcon.Warning,
+            10000,
+        )
+
+    controller.background_transcription_failed.connect(_notify_background_failure)
+    controller.background_insertion_failed.connect(
+        _notify_background_insertion_failure
+    )
+    controller.busy_overlay_error.connect(_notify_busy_overlay_error)
+
+
 def run() -> int:
     # SSL: trust OS certificate store (handles corporate proxies like Zscaler)
     # and synchronize env vars so all HTTP libraries use the same CA bundle.
@@ -218,30 +266,7 @@ def run() -> int:
     )
     tray_icon.show()
 
-    def _notify_background_failure(message: str) -> None:
-        # The overlay belongs to the live session, so a queued job's failure is
-        # reported here as well; without it the failure was invisible.
-        tray_icon.showMessage(
-            "Transcription failed",
-            message,
-            QtWidgets.QSystemTrayIcon.Warning,
-            10000,
-        )
-
-    def _notify_background_insertion_failure(message: str) -> None:
-        # A queued transcript that was produced but not pasted is just as lost
-        # to the user as a failed transcription; both must be reported.
-        tray_icon.showMessage(
-            "Transcript not inserted",
-            message,
-            QtWidgets.QSystemTrayIcon.Warning,
-            10000,
-        )
-
-    controller.background_transcription_failed.connect(_notify_background_failure)
-    controller.background_insertion_failed.connect(
-        _notify_background_insertion_failure
-    )
+    _connect_tray_notifications(tray_icon, controller)
     update_checker = _TrayUpdateChecker(
         tray_icon=tray_icon, logger=logger, parent_widget=overlay
     )
