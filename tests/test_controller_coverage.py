@@ -3077,6 +3077,471 @@ def test_audio_recorded_while_connecting_is_delivered_in_order(monkeypatch):
     _ = app
 
 
+def _pump_until(app, predicate, timeout=10.0):
+    """Drive the Qt event loop until `predicate` holds. Returns its value."""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline and not predicate():
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+    return predicate()
+
+
+class _HandshakeRecorder(FakeStreamingTranscriber):
+    """A provider whose handshake blocks and whose transcript is what it got.
+
+    `stop_stream` returning the audio it was handed is what makes "the
+    buffered audio was thrown away" visible as an empty transcript instead of
+    as an assertion about an internal list.
+    """
+
+    def __init__(
+        self,
+        release_connect,
+        connect_entered,
+        release_stop=None,
+        connect_error=None,
+        push_error=None,
+    ):
+        super().__init__()
+        self._release_connect = release_connect
+        self._connect_entered = connect_entered
+        self._release_stop = release_stop
+        self._connect_error = connect_error
+        self._push_error = push_error
+        self.pushed: list[bytes] = []
+
+    def start_stream(self, on_partial=None, on_error=None):
+        self._connect_entered.set()
+        assert self._release_connect.wait(timeout=30), "connect was never released"
+        if self._connect_error is not None:
+            raise self._connect_error
+        self.started = True
+
+    def push_audio_chunk(self, chunk, *, block_timeout_s=None):
+        if self._push_error is not None:
+            raise self._push_error
+        self.pushed.append(bytes(chunk))
+
+    def stop_stream(self):
+        self.stopped = True
+        if not self.started:
+            # What every real provider answers for a session that was
+            # never published: the handshake raised, so there is nothing
+            # to stop. A fake that returned text here would hide the
+            # second report the S2 test below is about.
+            raise TranscriptionError("Streaming session is not active")
+        if self._release_stop is not None:
+            assert self._release_stop.wait(timeout=30), "stop was never released"
+        return " ".join(f"word{chunk[0]}" for chunk in self.pushed)
+
+
+def _streaming_controller_with_a_blocked_handshake(
+    monkeypatch, *, release_stop=None, connect_error=None, push_error=None
+):
+    """One live streaming session whose provider is still connecting."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        # A faster-whisper size explicitly: the default local model is
+        # the batch-only Parakeet, which the controller refuses to stream.
+        model_size="small",
+    )
+    release_connect = threading.Event()
+    connect_entered = threading.Event()
+    made: list[_HandshakeRecorder] = []
+
+    def _factory(_settings, **_kwargs):
+        transcriber = _HandshakeRecorder(
+            release_connect,
+            connect_entered,
+            release_stop=release_stop,
+            connect_error=connect_error,
+            push_error=push_error,
+        )
+        made.append(transcriber)
+        return transcriber
+
+    monkeypatch.setattr("stt_app.controller.create_transcriber", _factory)
+    # Without this the test opens the real microphone: CI runners have no
+    # capture device, and locally it switches the developer's mic on
+    # mid-suite.
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    # The shared fake has no `load`; the controller catches the AttributeError
+    # and logs a traceback for it on every delivery, which would bury the
+    # failure these tests are about in unrelated ERROR output.
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    controller.start_recording()
+    assert connect_entered.wait(timeout=10), "the handshake never started"
+    transcriber = made[0]
+    for index in range(1, 5):
+        controller._on_stream_audio_chunk(bytes([index]) * 8)
+    assert transcriber.pushed == [], "audio reached the provider before it connected"
+    return controller, app, overlay, recordings, transcriber, release_connect
+
+
+def test_a_stop_during_the_handshake_still_delivers_the_buffered_audio(monkeypatch):
+    """The mirror image of the test above: the stop comes first.
+
+    A stop ends a dictation; it does not retire the session that is being
+    finalized. `_submit_stream_finalize` used to conflate the two -- it handed
+    the connect thread to the finalize job and in the same breath bumped
+    `_stream_connect_generation` and set `_stream_preconnect_chunks` to None,
+    so the connect thread's own `_flush_preconnect_buffer` failed its
+    generation check and pushed nothing. The finalize worker then joined that
+    thread and called `stop_stream()` on a provider that had been handed no
+    audio at all. The empty transcript that came back is not an error branch
+    but the silent-success one: "Done / No speech detected", the recording
+    marked completed and, with both retention settings at their default off,
+    deleted. Measured on the real Deepgram provider with a fake socket: 20
+    buffered chunks, 0 binary frames sent.
+    """
+    (
+        controller,
+        app,
+        overlay,
+        recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(monkeypatch)
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    try:
+        controller.stop_recording()  # the hotkey stop, handshake still open
+        release_connect.set()  # the socket opens a moment later
+
+        _pump_until(app, lambda: bool(delivered))
+
+        assert transcriber.pushed == [bytes([index]) * 8 for index in range(1, 5)]
+        assert delivered, "the finalize never delivered a result"
+        assert delivered[0][1] == "word1 word2 word3 word4"
+        # The failure mode is a *success* state, so assert against that exact
+        # wording rather than only against the absence of an error.
+        assert (overlay.state, overlay.detail) != ("Done", "No speech detected.")
+        assert recordings.completed == 1, "a real transcript completes the recording"
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_an_abort_during_the_handshake_still_drops_the_buffered_audio(monkeypatch):
+    """Cancel means the audio goes; only the stop had to change.
+
+    The abort and capture-failure paths retire the generation on purpose: the
+    session is being abandoned, and handing its audio to a provider nobody is
+    listening to would be the defect. This pins that the stop's fix did not
+    widen "the flush survives a stop" into "the flush survives anything".
+    """
+    (
+        controller,
+        app,
+        _overlay,
+        _recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(monkeypatch)
+    try:
+        controller.cancel_current_action()  # the cancel hotkey
+        release_connect.set()
+
+        # The flush runs on the connect thread; wait for that thread to finish
+        # rather than for a timeout to expire.
+        thread = controller._stream_connect_thread
+        if thread is not None:
+            thread.join(timeout=10)
+        _pump_until(app, lambda: False, timeout=0.2)
+
+        assert transcriber.pushed == [], (
+            f"a canceled session pushed {len(transcriber.pushed)} chunks"
+        )
+        assert controller._stream_preconnect_chunks is None
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_handshake_that_fails_after_a_stop_is_reported_once_with_its_cause(
+    monkeypatch,
+):
+    """The stop came first; then the socket answered that the key is invalid.
+
+    With the generation kept across the stop, the connect thread's failure
+    signal passes `_on_stream_connect_finished`'s generation check while the
+    finalize is in flight. Its `not ok` arm routed the failure to
+    `_on_stream_runtime_failed`, which tore the session down and painted the
+    cause -- and the finalize worker, having joined the dead handshake, then
+    called `stop_stream()` on a provider that had never started. That refusal
+    arrived as a second report for the same dictation: a second Error painted
+    over the first, "Streaming session is not active" in place of the cause
+    the user has to fix, and a second failure mark on the recording. One
+    dictation gets one report, and it names the handshake's own error; the
+    finalize worker is the one that delivers it, because the join orders the
+    handshake's outcome ahead of it.
+    """
+    (
+        controller,
+        app,
+        overlay,
+        recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, connect_error=TranscriptionError("Invalid API key.")
+    )
+    background: list[str] = []
+    controller.background_transcription_failed.connect(background.append)
+    try:
+        controller.stop_recording()
+        assert (overlay.state, overlay.detail) == (
+            "Processing",
+            "Finalizing streaming transcript...",
+        )
+        release_connect.set()  # the provider now refuses the handshake
+
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the finalize never finished"
+        )
+        # Whatever a second reporter queued lands within this window.
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        errors = [detail for state, detail in overlay.states if state == "Error"]
+        assert len(errors) == 1, errors
+        assert errors[0].startswith("Invalid API key."), errors[0]
+        assert "not active" not in errors[0]
+        assert overlay.state == "Error"
+        assert background == [], "the finalize was reported as a background job"
+        assert recordings.failed == ["Invalid API key."]
+        # The recording the stop persisted is kept for a retry, never
+        # completed (which, with retention off, would delete it).
+        assert recordings.saved and recordings.completed == 0
+        assert controller._streaming_recording is False
+        assert controller._active_request_token is None
+        assert transcriber.pushed == []
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_flush_that_fails_after_a_stop_is_reported_once_and_ends_the_session(
+    monkeypatch,
+):
+    """The other arm of the same record: the socket opened, the audio did not.
+
+    A push that fails while the buffered audio is handed over is recorded on
+    the connect thread like a handshake that raised, and the finalize worker
+    reports it the same way -- once, naming the push failure. What differs is
+    the provider's state: its session is published by then, and every
+    provider refuses a second one, so the worker tears it down before it
+    reports. Before this the connect signal reported the failure, and the
+    worker's `stop_stream()` on the same session then delivered whatever the
+    provider had heard as a second, competing result for the same dictation.
+    """
+    (
+        controller,
+        app,
+        overlay,
+        recordings,
+        transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, push_error=RuntimeError("socket closed")
+    )
+    background: list[str] = []
+    controller.background_transcription_failed.connect(background.append)
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    try:
+        controller.stop_recording()
+        release_connect.set()  # the socket opens; the first push fails
+
+        assert _pump_until(app, lambda: not controller._jobs), (
+            "the finalize never finished"
+        )
+        _pump_until(app, lambda: False, timeout=0.3)
+
+        errors = [detail for state, detail in overlay.states if state == "Error"]
+        assert len(errors) == 1, errors
+        assert errors[0].startswith("Streaming chunk push failed: socket closed"), (
+            errors[0]
+        )
+        assert delivered == [], "the failed session was also delivered as text"
+        assert background == []
+        assert recordings.failed == ["Streaming chunk push failed: socket closed"]
+        assert recordings.saved and recordings.completed == 0
+        assert transcriber.aborted is True, "the published session was left open"
+        assert controller._streaming_recording is False
+        assert controller._active_request_token is None
+    finally:
+        release_connect.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_late_connected_signal_after_a_stop_does_not_repaint_the_overlay(monkeypatch):
+    """"Finalizing streaming transcript..." must survive the handshake landing.
+
+    Once the generation is no longer retired at stop, the connect thread's
+    completion signal passes `_on_stream_connect_finished`'s generation check,
+    and `_streaming_recording` is still True until the result is delivered --
+    so its success arm would paint "Listening / Streaming active. Speak now,
+    press hotkey to finalize." over the finalizing message, inviting the user
+    to speak into a dictation they had just ended. `_stream_finalize_pending`
+    is what stops it.
+    """
+    release_stop = threading.Event()
+    (
+        controller,
+        app,
+        overlay,
+        _recordings,
+        _transcriber,
+        release_connect,
+    ) = _streaming_controller_with_a_blocked_handshake(
+        monkeypatch, release_stop=release_stop
+    )
+    connect_signals: list[tuple[int, bool, str]] = []
+    # Connected after the controller's own slot, and Qt runs slots in
+    # connection order, so the controller has already handled the signal by
+    # the time this one fires -- no sleep-and-hope.
+    controller.stream_connect_finished.connect(
+        lambda generation, ok, text: connect_signals.append((generation, ok, text))
+    )
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    try:
+        controller.stop_recording()
+        assert (overlay.state, overlay.detail) == (
+            "Processing",
+            "Finalizing streaming transcript...",
+        )
+        release_connect.set()
+
+        assert _pump_until(app, lambda: bool(connect_signals)), (
+            "the handshake never reported back"
+        )
+        assert connect_signals[0][1] is True, "the handshake itself failed"
+        assert (overlay.state, overlay.detail) == (
+            "Processing",
+            "Finalizing streaming transcript...",
+        )
+    finally:
+        release_stop.set()
+        release_connect.set()
+        _pump_until(app, lambda: bool(delivered), timeout=10.0)
+        controller.shutdown()
+    _ = app
+
+
+def test_the_next_dictation_still_reports_its_handshake_as_connected(monkeypatch):
+    """The finalize flag is per session, so it has to be cleared with one.
+
+    `_stream_finalize_pending` mutes `_on_stream_connect_finished`'s
+    "Streaming active. Speak now, press hotkey to finalize." while a finalize
+    is in flight. `_reset_streaming_state` clears it on every path that ends a
+    session; without that clear the *next* dictation's handshake landed with
+    the flag still set, so the overlay kept reading "Connecting to the speech
+    service. You can speak now." -- the line `_start_streaming_recording`
+    paints while the socket is still opening -- on a stream that was long
+    since connected and recording.
+
+    Both handshakes have to be held open for that to be observable: a
+    handshake that has already finished when `_start_streaming_recording`
+    reaches its last statement makes that statement paint the connected line
+    itself, and the slot's contribution becomes invisible.
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    # One gate per handshake. The controller caches the transcriber across
+    # both sessions, so the gates are counted here rather than held per
+    # transcriber object.
+    gates = [threading.Event(), threading.Event()]
+    entered = [threading.Event(), threading.Event()]
+    handshakes = []
+
+    class _TwoSessionRecorder(FakeStreamingTranscriber):
+        def start_stream(self, on_partial=None, on_error=None):
+            index = min(len(handshakes), len(gates) - 1)
+            handshakes.append(index)
+            entered[index].set()
+            assert gates[index].wait(timeout=30), "a handshake was never released"
+            self.started = True
+
+        def push_audio_chunk(self, chunk, *, block_timeout_s=None):
+            pass
+
+        def stop_stream(self):
+            self.stopped = True
+            return "first dictation"
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _TwoSessionRecorder(),
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    connect_signals: list[tuple[int, bool, str]] = []
+    controller.stream_connect_finished.connect(
+        lambda generation, ok, text: connect_signals.append((generation, ok, text))
+    )
+    delivered: list[tuple[int, str]] = []
+    controller.transcription_ready.connect(
+        lambda token, text: delivered.append((token, text))
+    )
+    try:
+        controller.start_recording()
+        assert entered[0].wait(timeout=10), "the first handshake never started"
+        controller.stop_recording()
+        gates[0].set()
+        assert _pump_until(app, lambda: bool(delivered)), "the first dictation hung"
+
+        controller.start_recording()
+        assert entered[1].wait(timeout=10), "the second handshake never started"
+        assert (overlay.state, overlay.detail) == (
+            "Listening",
+            "Connecting to the speech service. You can speak now.",
+        )
+        gates[1].set()
+        assert _pump_until(app, lambda: len(connect_signals) >= 2), (
+            "the second handshake never reported back"
+        )
+        assert connect_signals[1][1] is True, "the second handshake failed"
+        assert (overlay.state, overlay.detail) == (
+            "Listening",
+            "Streaming active. Speak now, press hotkey to finalize.",
+        )
+    finally:
+        for gate in gates:
+            gate.set()
+        controller.shutdown()
+    _ = app
+
+
 def test_a_remote_stream_finalize_does_not_queue_behind_a_local_batch_job():
     """Stopping a remote dictation must not wait for unrelated model work.
 

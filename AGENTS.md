@@ -3201,10 +3201,60 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_finalize_stream_worker` joins it (bounded by
   `STREAMING_CONNECT_JOIN_TIMEOUT_S`, off the Qt thread) before stopping;
   the capture-start failure path uses `_teardown_pending_stream_connect` for
-  the same reason. Both also bump `_stream_connect_generation` and clear the
-  buffer, which is what keeps a late flush out of the next session. A stale
-  flush must **refuse to push without clearing the buffer** — clearing it
-  destroyed the live session's buffer and killed the new dictation.
+  the same reason. Only the abort and capture-failure roads also *retire*
+  the handshake there -- bump `_stream_connect_generation` and clear the
+  buffer -- because those sessions are being abandoned; a normal stop does
+  not (next entry). The bump is what keeps a late flush out of the next
+  session. A stale flush must **refuse to push without clearing the
+  buffer** — clearing it destroyed the live session's buffer and killed
+  the new dictation.
+- **A normal stop hands the handshake to the finalize, and the finalize
+  reports its failure** (2026-09-16, F03 of the external review).
+  `_submit_stream_finalize` used to retire the handshake as well, and that
+  retired the very session being finalized: the connect thread's own
+  `_flush_preconnect_buffer` failed its generation check and pushed
+  nothing, and the finalize worker, which joins that thread before
+  `stop_stream()`, finalized a provider that had been handed no audio.
+  Measured on the real Deepgram provider with a fake socket: 20 buffered
+  chunks, 0 binary frames sent, an empty transcript -- and an empty
+  transcript is the silent-success branch, so the user saw "Done / No
+  speech detected" with the recording marked completed and, with both
+  retention settings at their default off, deleted. The stop now leaves
+  the generation and the buffer alone; `_reset_streaming_state`, which
+  every terminal path runs, retires them. Three consequences, each
+  measured:
+  - **`_stream_finalize_pending`** (set by the submit, cleared by the
+    reset) mutes the connect signal's success arm: with the generation
+    kept, the late `ok=True` signal passes the generation check while
+    `_streaming_recording` is still True, and its "Streaming active. Speak
+    now, press hotkey to finalize." replaced "Finalizing streaming
+    transcript..." on a dictation the user had ended. The flag is per
+    session, so the reset clears it -- left set, the *next* dictation's
+    handshake landed muted and the overlay kept "Connecting to the speech
+    service. You can speak now." on a stream long since connected.
+  - **A handshake that fails after the stop is reported once, by the
+    finalize worker.** The connect thread records the cause in
+    `_stream_connect_failure` (keyed by generation, under
+    `_stream_preconnect_lock`) before it emits, and the finalize worker --
+    which joins that thread first, so the join orders the record ahead of
+    the read -- finds it through `job.connect_generation`, tears the
+    provider down best-effort (`_abort_stream_after_failed_connect`: a
+    session whose flush failed is published, and every provider refuses a
+    second one) and raises it as the finalize's own failure. The connect
+    signal's `not ok` arm returns while the flag is set. Routed to
+    `_on_stream_runtime_failed` as before, it tore the session down under
+    the worker, whose `stop_stream()` on a provider that never started
+    then arrived as a second report: "Streaming session is not active"
+    painted over the invalid key, and a second failure mark on the
+    recording (measured: two Error paints and two `mark_failed` calls for
+    one dictation). A flush that fails after the stop takes the same road
+    with the push failure as the cause.
+  - **Cancel and the capture-failure road still retire the handshake**
+    (`_abort_streaming_session`, `_teardown_pending_stream_connect`): the
+    session is being abandoned, and handing its audio to a provider nobody
+    listens to would be the defect. The fix did not widen "the flush
+    survives a stop" into "the flush survives anything", and a test pins
+    that.
 - **Remote stream finalizes have their own worker**: `_executor` stays
   `max_workers=1` so two local models never load at once, but a remote finalize
   loads nothing — `stop_stream()` drains a socket. Sharing that queue meant

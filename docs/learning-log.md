@@ -7168,3 +7168,31 @@ and put to the user as the one hand check before a release: a real
 clipboard. The lead applied the patch on top of the F13 unit, ran the
 six inserter and controller files, and rewrote the known limitation
 from "Unicode text only" to what remains unsupported.
+
+**F03 -- a stop retired the session it was finalizing**
+(`_submit_stream_finalize`). The Opus implementer reproduced the review's
+claim on the real Deepgram provider with a fake socket: a stop pressed inside
+the handshake bumped the generation and cleared the buffer, the connect
+thread's flush then failed its generation check, and the finalize worker
+joined that thread and stopped a provider that had been handed nothing of the
+20 buffered chunks -- 0 binary frames on the socket, an empty transcript, and
+because an empty transcript is the silent-success branch, "Done / No speech
+detected" with the recording marked completed and deleted at the default
+retention. The fix leaves the generation and the buffer to
+`_reset_streaming_state` and adds `_stream_finalize_pending` so the late
+success signal does not paint "Speak now" over a dictation the user had ended;
+four tests (the stop, the abort that must still drop the buffer, the muted
+repaint, the next dictation's handshake still reporting connected). The lead's
+review checklist asked what a handshake that fails *after* the stop now does,
+since the kept generation lets its failure signal through; the implementer
+left the `not ok` arm unchanged and flagged the question. The lead wrote that
+scenario as a test first, and it failed on the delivered patch with two Error
+paints for one dictation: the connect signal's report of the invalid key, then
+the finalize worker's `stop_stream()` refusal, "Streaming session is not
+active", painted over it with a second `mark_failed`. The fix is one reporter:
+the connect thread records the cause under the lock before it emits, the
+finalize worker reads it after the join (which orders the two) and raises it
+as its own failure after a best-effort abort, and the slot's `not ok` arm
+returns while the flag is set. A second lead test covers the flush-failure arm
+of the same record, where the provider's session is published and is torn down
+before the report. The four controller files: 464 passed.
