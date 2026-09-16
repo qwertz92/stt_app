@@ -23,6 +23,14 @@ const GRANITE_MAX_CHUNK_SECONDS = 30;
 const GRANITE_BOUNDARY_CONTEXT_SECONDS = 5;
 const GRANITE_MIN_ENERGY_WINDOW_SAMPLES = 1600;
 const MAX_WAV_DATA_BYTES = 512 * 1024 * 1024;
+const WAVE_FORMAT_PCM = 1;
+const WAVE_FORMAT_IEEE_FLOAT = 3;
+const WAVE_FORMAT_EXTENSIBLE = 0xfffe;
+// A WAVEFORMATEXTENSIBLE fmt chunk is the 16-byte WAVEFORMATEX, a 2-byte
+// cbSize, and a 22-byte extension (wValidBitsPerSample, dwChannelMask, the
+// 16-byte SubFormat GUID).
+const EXTENSIBLE_FMT_BYTES = 40;
+const EXTENSIBLE_EXTENSION_BYTES = 22;
 const MAX_WAV_FRAMES = 16000 * 60 * 60 * 8;
 const MAX_PROTOCOL_LINE_CHARS = 1024 * 1024;
 
@@ -172,6 +180,31 @@ function decodeFloatSample(buffer, byteOffset, bitsPerSample) {
   throw new Error(`Unsupported float WAV bit depth: ${bitsPerSample}`);
 }
 
+function readExtensibleFormatCode(buffer, fmt) {
+  // Format tag 0xFFFE carries no encoding of its own: the encoding is the
+  // first four bytes of the SubFormat GUID, which hold the format code the tag
+  // would otherwise have. Treating the tag itself as PCM decoded a 32-bit
+  // IEEE-float file as int32 -- 0.001 came back as 0.4571250081062317.
+  if (fmt.size < EXTENSIBLE_FMT_BYTES) {
+    throw new Error(
+      `Invalid WAV file: extensible fmt chunk is ${fmt.size} bytes, ` +
+        `expected at least ${EXTENSIBLE_FMT_BYTES}.`,
+    );
+  }
+  const extensionSize = buffer.readUInt16LE(fmt.offset + 16);
+  if (extensionSize < EXTENSIBLE_EXTENSION_BYTES) {
+    throw new Error(
+      `Invalid WAV file: extensible fmt extension is ${extensionSize} bytes, ` +
+        `expected at least ${EXTENSIBLE_EXTENSION_BYTES}.`,
+    );
+  }
+  const subFormat = buffer.readUInt32LE(fmt.offset + 24);
+  if (subFormat !== WAVE_FORMAT_PCM && subFormat !== WAVE_FORMAT_IEEE_FLOAT) {
+    throw new Error(`Unsupported WAV SubFormat: ${subFormat}. Use PCM or float WAV.`);
+  }
+  return subFormat;
+}
+
 function resampleLinear(audio, sourceRate, targetRate) {
   if (sourceRate === targetRate) {
     return audio;
@@ -243,8 +276,12 @@ export function decodeWavFile(audioPath, targetSampleRate) {
   if (data.size % blockAlign !== 0) {
     throw new Error("Invalid WAV file: data chunk ends with a partial audio frame.");
   }
-  const isPcm = audioFormat === 1 || audioFormat === 65534;
-  const isFloat = audioFormat === 3;
+  const sampleFormat =
+    audioFormat === WAVE_FORMAT_EXTENSIBLE
+      ? readExtensibleFormatCode(buffer, fmt)
+      : audioFormat;
+  const isPcm = sampleFormat === WAVE_FORMAT_PCM;
+  const isFloat = sampleFormat === WAVE_FORMAT_IEEE_FLOAT;
   if (!isPcm && !isFloat) {
     throw new Error(`Unsupported WAV encoding: ${audioFormat}. Use PCM or float WAV.`);
   }

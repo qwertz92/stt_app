@@ -7045,3 +7045,26 @@ delay), the counter's increment point, and anything behind a real
 three-way merge (one conflict, both test blocks appended to
 `tests/test_controller.py`), read the transaction against the design, and
 ran the eight inserter and controller test files (554 passed).
+
+**F08 -- an extensible WAV decoded as integer PCM.** Group D (Sonnet)
+built three files from raw bytes -- classic float, extensible float with
+`KSDATAFORMAT_SUBTYPE_IEEE_FLOAT`, extensible PCM16 -- and imported the
+real `decodeWavFile` into a Node process: classic float exact, extensible
+float `0.001 -> 0.4571250081062317` (largest error 0.503), extensible
+PCM16 exact, because line 246 read `audioFormat === 1 || audioFormat ===
+65534` as PCM and never touched `SubFormat` or `cbSize`. The reach is the
+Import Audio tab and the benchmark, both of which hand a user's file path
+to the runner as it is; the app's own recordings are classic PCM. The
+design was the lead's (fmt >= 40 bytes, cbSize >= 22, the SubFormat's
+first u32 as the format code, everything else rejected in the module's
+existing wording) and an Opus implementer (unit `small`, with F11 and
+F13) wrote the two tests first on the untouched tree: the extensible
+float file off by 0.5029140710830688 against the classic one, and the
+three malformed headers -- a truncated extension, a short `cbSize`, an
+unknown SubFormat -- decoded silently to numbers. Its negative control
+reverted the chunk-size check, the `cbSize` check, the SubFormat
+whitelist and the dispatch itself, and each was caught by its own
+assertion. One thing it deliberately left open, recorded in the AGENTS.md
+entry: `cbSize` is not compared with the chunk's real size, because the
+22 bytes that are read are present either way and Windows accepts such
+files. The fixtures are synthetic; no real recorder's file was decoded.

@@ -3946,6 +3946,29 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   absolute deadlines, and kills a timed-out or protocol-poisoned child before
   reuse. The JS server serializes requests and rejects oversized protocol lines
   and malformed/out-of-bounds WAV layouts before allocation.
+- **An extensible WAV is decoded by its SubFormat, never by its format
+  tag** (F08 of the 2026-09-12 review). `decodeWavFile` in
+  `webgpu_asr_runner.mjs` read format tag 0xFFFE (`WAVE_FORMAT_EXTENSIBLE`)
+  as PCM and never looked at the 22-byte extension, so an extensible
+  32-bit IEEE-float file -- what recorders and editors write for anything
+  past two channels or 16 bits -- decoded as int32 (measured with the real
+  function in a Node process: 0.001 came back as 0.4571250081062317, the
+  largest error 0.503), while extensible PCM16 happened to decode exactly.
+  The app's own recordings are classic PCM; the Import Audio tab and the
+  benchmark hand the user's file to this decoder unvalidated.
+  `readExtensibleFormatCode` requires a 40-byte `fmt` chunk and a `cbSize`
+  of at least 22, reads the SubFormat GUID's first four bytes as the
+  format code (1 PCM, 3 float; the GUID's tail
+  `0000-0010-8000-00AA00389B71` is the same for both) and rejects any
+  other SubFormat, a short chunk or a short `cbSize` in the module's
+  "Invalid WAV file" wording -- before this the reverted SubFormat check
+  reported `Unsupported WAV encoding: 65534`, which names nothing the
+  user can act on. It does not check `cbSize` against the chunk's real
+  size: a `cbSize` of 65535 inside a 40-byte chunk is accepted, because
+  only the first 22 extension bytes are read and they are there, and
+  Windows accepts such files. The test fixtures are built from raw bytes
+  (`wave` cannot write the extensible header) and are synthetic; no file
+  from a real recorder was decoded.
 - **Overlay reveal after a result**: a floating (non-pinned) overlay is a tool
   window (no Alt+Tab) and can hide behind other windows. The controller calls
   `_reveal_overlay_result` after a finished transcription — briefly on success

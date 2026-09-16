@@ -5,6 +5,7 @@ import json
 import queue
 import re
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -1009,6 +1010,192 @@ def test_node_wav_and_protocol_parsers_reject_malformed_bounds(tmp_path):
     assert "exceeds the file bounds" in result["wavError"]
     assert result["command"] == "shutdown"
     assert result["protocolError"] == "Protocol request must be a JSON object."
+
+
+# Data1 of a KSDATAFORMAT_SUBTYPE_* GUID is the format tag; these 12 bytes are
+# the fixed tail every basic audio subtype shares
+# (xxxxxxxx-0000-0010-8000-00AA00389B71).
+_KSDATAFORMAT_GUID_TAIL = struct.pack("<HH", 0x0000, 0x0010) + bytes(
+    (0x80, 0x00, 0x00, 0xAA, 0x00, 0x38, 0x9B, 0x71)
+)
+_WAV_FLOAT_SAMPLES = (0.001, 0.5, -0.5, 0.999, -0.999, 0.0)
+
+
+def _wav_fmt_base(format_tag: int, bits_per_sample: int) -> bytes:
+    """The 16-byte WAVEFORMATEX every fixture starts with (mono, 16 kHz)."""
+    block_align = bits_per_sample // 8
+    return struct.pack(
+        "<HHIIHH",
+        format_tag,
+        1,
+        16_000,
+        16_000 * block_align,
+        block_align,
+        bits_per_sample,
+    )
+
+
+def _wav_bytes(fmt_body: bytes, data_body: bytes) -> bytes:
+    """Wrap one fmt body and one data body into a RIFF/WAVE file."""
+    data_chunk = b"data" + struct.pack("<I", len(data_body)) + data_body
+    if len(data_body) % 2:
+        data_chunk += b"\x00"
+    body = b"WAVE" + b"fmt " + struct.pack("<I", len(fmt_body)) + fmt_body + data_chunk
+    return b"RIFF" + struct.pack("<I", len(body)) + body
+
+
+def _float32_payload() -> bytes:
+    return b"".join(struct.pack("<f", value) for value in _WAV_FLOAT_SAMPLES)
+
+
+def _pcm16_payload() -> tuple[bytes, list[float]]:
+    """int16 samples plus the float values a correct decode must return.
+
+    Every k/32768 with |k| <= 32768 is exact in float32, so comparing against
+    the decoder's `Float32Array` output is an equality, not a tolerance.
+    """
+    values = [
+        max(-32768, min(32767, round(value * 32768))) for value in _WAV_FLOAT_SAMPLES
+    ]
+    payload = b"".join(struct.pack("<h", value) for value in values)
+    return payload, [max(-1.0, value / 32768) for value in values]
+
+
+def _decode_wavs_with_node(directory: Path, names: list[str]) -> dict[str, dict]:
+    """Decode `<name>.wav` for each name with the module's real `decodeWavFile`.
+
+    One Node process for the whole set. Importing the runner through
+    `pathToFileURL` loads no model and reaches no network: the Transformers.js
+    import sits inside `loadRuntimeDependencies`, which this never calls. Each
+    entry answers `{"samples": [...]}` or `{"error": "..."}`.
+    """
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("Node.js is not installed.")
+    runner = (
+        Path(local_webgpu_asr.__file__).resolve().parents[1] / "webgpu_asr_runner.mjs"
+    )
+    script = """
+      import { pathToFileURL } from 'node:url';
+      const runtime = await import(pathToFileURL(process.argv[1]).href);
+      const directory = process.argv[2];
+      const result = {};
+      for (const name of JSON.parse(process.argv[3])) {
+        try {
+          const decoded = runtime.decodeWavFile(directory + '/' + name + '.wav', 16000);
+          result[name] = { samples: Array.from(decoded) };
+        } catch (error) {
+          result[name] = { error: String(error.message) };
+        }
+      }
+      console.log(JSON.stringify(result));
+    """
+    completed = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            script,
+            str(runner),
+            str(directory),
+            json.dumps(names),
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        # A bound against a hang, not a speed claim, for the same reason as the
+        # probe above: 0.05 s on a desktop, and 10 s once ran out on a CI VM.
+        timeout=60,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_an_extensible_wav_is_decoded_by_its_subformat_not_by_its_format_tag(tmp_path):
+    """Format tag 0xFFFE says only "the encoding is in the SubFormat GUID".
+
+    The decoder counted WAVE_FORMAT_EXTENSIBLE as integer PCM and never read
+    the SubFormat, so a 32-bit IEEE-float file -- what several recorders and
+    conversion tools write -- was decoded as int32: 0.001 came back as
+    0.4571250081062317, an error of 0.503 on that sample. The app's own
+    recordings are classic PCM, but the Import Audio tab and the benchmark
+    hand the user's own file to this decoder unchanged.
+    """
+    pcm16_payload, pcm16_expected = _pcm16_payload()
+    fixtures = {
+        "classic_float": _wav_bytes(_wav_fmt_base(3, 32), _float32_payload()),
+        "extensible_float": _wav_bytes(
+            _wav_fmt_base(0xFFFE, 32)
+            + struct.pack("<HHI", 22, 32, 0)
+            + struct.pack("<I", 3)
+            + _KSDATAFORMAT_GUID_TAIL,
+            _float32_payload(),
+        ),
+        "extensible_pcm16": _wav_bytes(
+            _wav_fmt_base(0xFFFE, 16)
+            + struct.pack("<HHI", 22, 16, 0)
+            + struct.pack("<I", 1)
+            + _KSDATAFORMAT_GUID_TAIL,
+            pcm16_payload,
+        ),
+    }
+    for name, payload in fixtures.items():
+        (tmp_path / f"{name}.wav").write_bytes(payload)
+
+    decoded = _decode_wavs_with_node(tmp_path, sorted(fixtures))
+
+    assert "error" not in decoded["extensible_float"], decoded["extensible_float"]
+    classic = decoded["classic_float"]["samples"]
+    assert (
+        max(abs(left - right) for left, right in zip(classic, _WAV_FLOAT_SAMPLES, strict=True))
+        < 1e-6
+    )
+    extensible = decoded["extensible_float"]["samples"]
+    assert max(abs(left - right) for left, right in zip(extensible, classic, strict=True)) < 1e-6
+    assert decoded["extensible_pcm16"]["samples"] == pcm16_expected
+
+
+def test_a_malformed_extensible_wav_header_is_rejected_rather_than_guessed(tmp_path):
+    """Three headers whose real encoding cannot be read, so none is assumed.
+
+    Each of them decoded silently before: the format tag alone said "PCM", the
+    sample width said 32 or 16 bits, and whatever the bytes happened to be was
+    handed to the model as audio.
+    """
+    pcm16_payload, _pcm16_expected = _pcm16_payload()
+    fixtures = {
+        # fmt is 26 bytes: the extension is declared as 22 bytes and only eight
+        # of them are present, so the SubFormat GUID is not in the file at all.
+        "truncated_extension": _wav_bytes(
+            _wav_fmt_base(0xFFFE, 32) + struct.pack("<HHI", 22, 32, 0) + b"\x00\x00",
+            _float32_payload(),
+        ),
+        # A full 40-byte fmt chunk that declares no extension.
+        "short_cb_size": _wav_bytes(
+            _wav_fmt_base(0xFFFE, 32)
+            + struct.pack("<HHI", 0, 32, 0)
+            + struct.pack("<I", 3)
+            + _KSDATAFORMAT_GUID_TAIL,
+            _float32_payload(),
+        ),
+        # KSDATAFORMAT_SUBTYPE_ADPCM: a real subtype this decoder cannot read.
+        "unknown_subformat": _wav_bytes(
+            _wav_fmt_base(0xFFFE, 16)
+            + struct.pack("<HHI", 22, 16, 0)
+            + struct.pack("<I", 2)
+            + _KSDATAFORMAT_GUID_TAIL,
+            pcm16_payload,
+        ),
+    }
+    for name, payload in fixtures.items():
+        (tmp_path / f"{name}.wav").write_bytes(payload)
+
+    decoded = _decode_wavs_with_node(tmp_path, sorted(fixtures))
+
+    assert "extensible fmt chunk" in decoded["truncated_extension"].get("error", "")
+    assert "extensible fmt extension" in decoded["short_cb_size"].get("error", "")
+    assert "Unsupported WAV SubFormat: 2" in decoded["unknown_subformat"].get(
+        "error", ""
+    )
 
 
 def _probe_imports(monkeypatch) -> set[str]:
