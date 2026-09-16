@@ -184,6 +184,10 @@ class _TranscriptionJob:
     # problem. Cleared by whoever delivers real text; written to history
     # by `_finish_transcription_job` if nobody did.
     stashed_partial: str = ""
+    # The history entry a background delivery appended for this job, so a
+    # later takeover of the overlay (a failed queued paste) can move the
+    # Edit target together with the text it shows.
+    history_entry: TranscriptHistoryEntry | None = None
 
 
 class _TranscriberRuntimeLease:
@@ -2700,9 +2704,43 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to append transcript history")
             return None
 
-    def _mark_last_recording_completed(self) -> None:
+    def _set_last_transcript(
+        self,
+        text: str,
+        entry: TranscriptHistoryEntry | None,
+    ) -> None:
+        """Move the overlay's transcript and its Edit target together.
+
+        `_last_transcript` is what Copy and the re-paste act on and
+        `_last_history_entry` is what Edit writes to; a writer that moves one
+        without the other makes Edit offer one dictation's text and save it
+        into another's entry. The foreground result path sets the pair
+        through `_append_transcript_history(track_for_edit=True)`; every
+        other writer that takes the text over goes through here, with `None`
+        when the shown text has no single entry (a coalesced queue paste).
+        """
+        self._last_transcript = text
+        self._last_history_entry = entry
+
+    def _mark_last_recording_completed(
+        self,
+        expected_recording_id: str | None = None,
+    ) -> None:
+        """Complete the last recording only while it is still the job's own.
+
+        A job records the managed recording's id when it is registered. An
+        older job that finishes after a newer recording was stored -- the
+        newer one silence-gated, so nothing retargeted the active token --
+        used to mark that newer recording completed, which with
+        `keep_after_success` off deletes the audio the gate had just
+        promised to keep. An empty id means unknown
+        (`_current_last_recording_id` answers "" for no state) and keeps the
+        unconditional write: the store could never match "".
+        """
         try:
-            self._last_recording_store.mark_completed()
+            self._last_recording_store.mark_completed(
+                expected_recording_id=expected_recording_id or None
+            )
         except Exception:
             self._logger.exception("Failed to finalize last recording state")
 
@@ -2744,10 +2782,18 @@ class DictationController(QtCore.QObject):
             and not self._new_recording_active()
         ):
             return True
+        # A job a newer recording demoted to history-only stays that way even
+        # when the newer recording submits nothing -- silence-gated, no audio,
+        # cancelled -- and so never retargets the active token: pasting it
+        # then is exactly what the user's `history` mode declined.
         return (
             self._active_request_token == request_token
             and not self._new_recording_active()
             and not (job is not None and job.aborting)
+            and not (
+                job is not None
+                and job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_HISTORY
+            )
         )
 
     def _register_transcription_job(
@@ -2810,7 +2856,7 @@ class DictationController(QtCore.QObject):
             job.token,
             len(partial),
         )
-        self._append_transcript_history(
+        entry = self._append_transcript_history(
             partial,
             job.settings,
             "streaming",
@@ -2818,7 +2864,10 @@ class DictationController(QtCore.QObject):
             source_audio_path=job.source_audio_path,
             track_for_edit=False,
         )
-        self._last_transcript = partial
+        # The partial becomes what Copy and the re-paste act on, so its own
+        # entry becomes the Edit target with it; left behind, Edit offered
+        # this text and wrote the edit into the previous dictation's entry.
+        self._set_last_transcript(partial, entry)
 
     def _queue_job_label(
         self,
@@ -4551,6 +4600,7 @@ class DictationController(QtCore.QObject):
         job: _TranscriptionJob | None = None
         if request_token is not None:
             job = self._jobs.get(request_token)
+        job_recording_id = job.source_recording_id if job is not None else None
         session_mode = job.mode if job is not None else self._active_session_mode
         if not text.strip() and session_mode != "streaming":
             self._on_transcription_failed(
@@ -4644,7 +4694,7 @@ class DictationController(QtCore.QObject):
             self._last_transcript = text
 
         if not text.strip():
-            self._mark_last_recording_completed()
+            self._mark_last_recording_completed(job_recording_id)
             self._overlay.set_state("Done", "No speech detected.")
             self._reveal_overlay_result(is_error=False)
             self._last_transcribe_settings = None
@@ -4673,7 +4723,7 @@ class DictationController(QtCore.QObject):
                 target_signature=target_signature,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed()
+                self._mark_last_recording_completed(job_recording_id)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -4686,7 +4736,7 @@ class DictationController(QtCore.QObject):
                 target_signature=target_signature,
             ):
                 self._reveal_overlay_result(is_error=True)
-                self._mark_last_recording_completed()
+                self._mark_last_recording_completed(job_recording_id)
                 self._last_transcribe_settings = None
                 self._reset_streaming_state()
                 return
@@ -4699,7 +4749,7 @@ class DictationController(QtCore.QObject):
         self._reveal_overlay_result(is_error=False)
         if self._settings.keep_transcript_in_clipboard:
             QtGui.QGuiApplication.clipboard().setText(text)
-        self._mark_last_recording_completed()
+        self._mark_last_recording_completed(job_recording_id)
         self._last_transcribe_settings = None
         self._reset_streaming_state()
 
@@ -4721,7 +4771,7 @@ class DictationController(QtCore.QObject):
             # The stash stays set, so `_finish_transcription_job` writes it.
             return True
         job.stashed_partial = ""
-        self._append_transcript_history(
+        job.history_entry = self._append_transcript_history(
             text,
             job.settings,
             job.mode,
@@ -4925,7 +4975,12 @@ class DictationController(QtCore.QObject):
         # Nothing newer is on screen, so this transcript becomes what the
         # overlay shows — and therefore what Copy and Insert act on.
         transcript = text.strip()
-        self._last_transcript = transcript
+        # The Edit target moves with the text: one queued transcript brings
+        # its own entry, a coalesced paste of several has no single entry
+        # and Edit refuses rather than writing onto an older dictation's.
+        self._set_last_transcript(
+            transcript, job.history_entry if job_count == 1 else None
+        )
         self._insert_action_text = transcript
         self._insert_offer_may_have_pasted = may_have_pasted
         detail = f"{message}\n\n{transcript}" if transcript else message
@@ -5102,6 +5157,7 @@ class DictationController(QtCore.QObject):
         request_token: int | None = None,
     ) -> None:
         preserved_audio = bool(self._last_failed_wav_bytes)
+        job: _TranscriptionJob | None = None
         if request_token is not None:
             job = self._jobs.get(request_token)
             if not self._is_foreground_transcription(request_token, job):
@@ -5211,7 +5267,14 @@ class DictationController(QtCore.QObject):
         # pending behind a capture that was just removed.
         self._flush_deferred_background_results()
         try:
-            self._last_recording_store.mark_failed(error_text)
+            # Guarded like the completion mark: an older job failing after a
+            # newer recording was stored must not relabel that recording.
+            self._last_recording_store.mark_failed(
+                error_text,
+                expected_recording_id=(
+                    (job.source_recording_id or None) if job is not None else None
+                ),
+            )
         except Exception:
             self._logger.exception("Failed to persist last recording failure state")
         self._overlay.set_state(
@@ -6003,19 +6066,23 @@ class DictationController(QtCore.QObject):
                 "Error", "No transcript available to edit."
             )
             return False
-
-        from .transcript_edit_dialog import TranscriptEditDialog
-
-        next_text = TranscriptEditDialog.get_text(parent, current_text)
-        if next_text is None or next_text == current_text:
-            return False
-
+        # The entry is read beside the text it belongs to, before the dialog:
+        # `get_text` runs a modal `exec()`, a nested Qt loop that keeps
+        # delivering transcription results, and each one moves both fields.
+        # Read afterwards, the entry was the newer dictation's, and the edit
+        # of the text the dialog had offered was written onto it.
         entry = self._last_history_entry
         if entry is None:
             self._paint_status_keeping_offer(
                 "Error",
                 "No saved history entry is available for this transcript.",
             )
+            return False
+
+        from .transcript_edit_dialog import TranscriptEditDialog
+
+        next_text = TranscriptEditDialog.get_text(parent, current_text)
+        if next_text is None or next_text == current_text:
             return False
 
         updated = self._history_store.update_entry_text(entry, next_text)
@@ -6026,8 +6093,17 @@ class DictationController(QtCore.QObject):
             )
             return False
 
-        self._last_history_entry = replace(entry, text=next_text.strip())
-        self._last_transcript = next_text.strip()
+        edited_text = next_text.strip()
+        if self._last_history_entry is not entry:
+            # A result delivered while the dialog was open owns the overlay
+            # and the Copy/Edit pair now; the edit is saved in history and
+            # must neither repaint that result nor take the pair back.
+            self._logger.info(
+                "transcript_edit_saved_behind_newer_result chars=%d",
+                len(edited_text),
+            )
+            return True
+        self._set_last_transcript(edited_text, replace(entry, text=edited_text))
         # Not a session result: the overlay Edit button's confirmation
         # (there is no tray Edit action), painted plainly, hid a pending
         # offer exactly as the refusals above did.

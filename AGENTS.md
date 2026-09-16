@@ -1885,15 +1885,56 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   last recording captures immutable bytes plus `recording_id` before submitting
   work to the controller's serialized inference lane. Completion/failure state
   uses compare-and-set transitions, so an old import cannot clear or relabel a
-  newer recording. Background/import history entries never replace the
-  foreground transcript's Edit target. VAD auto-stop crosses from the audio
-  worker through a Qt signal before touching controller/UI state.
+  newer recording. A background or import result delivered while the
+  foreground transcript stays on screen never replaces its Edit target
+  (the Copy/Edit pair entry below says what does). VAD auto-stop crosses
+  from the audio worker through a Qt signal before touching controller/UI
+  state.
   The snapshot cannot observe a half-written file either: `save_recording` and
   `snapshot_managed_recording` take the same `lock_for_path` lock, and the
   write is atomic, so a snapshot taken while dictation overwrites the managed
   recording either predates the new one entirely or sees all of it. Both
   properties are pinned by tests -- the interleaving one in
   `tests/test_store_concurrency.py`.
+- **The Copy/Edit pair moves together, the Edit target is read before the
+  modal, and every last-recording mark carries the job's own id** (F05 and
+  F06 of the 2026-09-12 external review). `_last_transcript` is what Copy
+  and the re-paste act on and `_last_history_entry` is what Edit writes
+  to. `edit_last_transcript` read the text before
+  `TranscriptEditDialog.get_text` and the entry after it -- and that call
+  is a modal `exec()`, a nested Qt loop that keeps delivering transcription
+  results, each of which moves both fields (the recording hotkey reaches
+  the controller through a native event filter, so a whole dictation fits
+  inside the dialog). Measured: a result B delivered while A's edit was
+  open put A's edited text into B's entry and left A's untouched. The entry
+  is now read beside the text, the edit is applied to that entry, and when
+  the pair has moved on by the time the dialog closes the edit stays in
+  history without repainting the newer result or taking the pair back
+  (`transcript_edit_saved_behind_newer_result`). Two writers moved the text
+  alone -- `_save_stashed_streaming_partial` and the overlay takeover in
+  `_report_background_insertion_failure` -- and after either, Edit offered
+  the shown text and wrote the edit into the previous dictation's entry.
+  Both go through `_set_last_transcript(text, entry)`; the job keeps the
+  entry its background delivery appended (`_TranscriptionJob.history_entry`),
+  and a coalesced paste of several queued transcripts has no single entry,
+  so Edit refuses ("No saved history entry") rather than guessing. The
+  identity half: `_mark_last_recording_completed` called
+  `LastRecordingStore.mark_completed()` without `expected_recording_id`,
+  while `_persist_last_recording_audio` runs before the silence gate. An
+  older job A finishing after a newer, silence-gated recording B therefore
+  completed B -- and with `keep_after_success` off that deletes B's audio,
+  backup and state (measured: `has_recoverable_recording()` False,
+  `selectable_path()` None), the recording the gate had just promised to
+  keep; with `save_last_wav` on, B was stamped `completed` and stopped
+  being recoverable. The completion mark and the foreground failure mark
+  now pass the job's `source_recording_id` (recorded at registration); an
+  empty id means unknown and keeps the unconditional write, because the
+  store could never match "". And because the gate submits nothing,
+  nothing retargeted the active token and A became the live session again
+  -- in `history` mode its text was pasted although the user's mode had
+  declined exactly that. `_is_foreground_transcription` keeps a job demoted
+  to history-only in the background; `insert` mode still delivers the older
+  result as before, into the job's own captured window.
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),

@@ -1,5 +1,11 @@
 import concurrent.futures
+import io
 import logging
+import math
+import struct
+import threading
+import time
+import wave
 from dataclasses import replace
 from pathlib import Path
 
@@ -22,6 +28,8 @@ from PySide6 import QtGui, QtWidgets
 
 import stt_app.controller as controller_module
 from stt_app.config import (
+    CONCURRENT_TRANSCRIPTION_MODE_HISTORY,
+    CONCURRENT_TRANSCRIPTION_MODE_INSERT,
     DEFAULT_ENGINE,
     DEFAULT_HOTKEY,
     FALLBACK_HOTKEY,
@@ -29,6 +37,7 @@ from stt_app.config import (
     VALID_ENGINES,
 )
 from stt_app.controller import DictationController
+from stt_app.last_recording_store import LastRecordingStore
 from stt_app.settings_store import AppSettings
 from stt_app.text_inserter import TextInsertionError
 from stt_app.transcript_history import TranscriptHistoryStore
@@ -2810,3 +2819,367 @@ def test_note_foreground_window_is_forwarded_and_never_raises(label, helper_kind
     expected = 0 if helper_kind == "absent" else 1
     assert len(calls) == expected, label
     _ = app
+
+
+# ---------------------------------------------------------------------------
+# The Edit target and the last-recording identity (2026-09-12 review, F05/F06)
+# ---------------------------------------------------------------------------
+
+
+def _patch_edit_dialog(monkeypatch, get_text):
+    monkeypatch.setattr(
+        "stt_app.transcript_edit_dialog.TranscriptEditDialog.get_text",
+        staticmethod(get_text),
+    )
+
+
+def test_an_edit_saved_while_a_newer_result_arrived_lands_on_the_offered_entry(
+    monkeypatch, tmp_path
+):
+    """`get_text` runs a modal `exec()`, i.e. a nested Qt loop, and the
+    transcription-ready signal is a queued connection, so a result that
+    finishes during the edit is delivered inside the dialog."""
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    overlay = FakeOverlay()
+    controller, _app = make_controller(history_store=history_store, overlay=overlay)
+    offered = []
+
+    def get_text(parent, text):
+        offered.append(text)
+        controller._on_transcription_ready("transcript B.")
+        return "Edited transcript A"
+
+    _patch_edit_dialog(monkeypatch, get_text)
+    try:
+        controller._on_transcription_ready("transcript A.")
+
+        assert controller.edit_last_transcript() is True
+
+        assert offered == ["transcript A."]
+        assert [entry.text for entry in history_store.load()] == [
+            "Edited transcript A",
+            "transcript B.",
+        ]
+        # B owns the overlay now: the edit neither repaints it nor takes the
+        # Copy/Edit pair back to A.
+        assert controller._last_transcript == "transcript B."
+        assert controller._last_history_entry.text == "transcript B."
+        assert overlay.states[-1] == ("Done", "transcript B.")
+    finally:
+        controller.shutdown()
+
+
+def test_a_missing_edit_target_is_refused_before_the_dialog_opens(monkeypatch):
+    overlay = FakeOverlay()
+    controller, _app = make_controller(overlay=overlay)
+    opened = []
+    _patch_edit_dialog(monkeypatch, lambda parent, text: opened.append(text) or "x")
+    try:
+        controller._last_transcript = "orphan transcript"
+        controller._last_history_entry = None
+
+        assert controller.edit_last_transcript() is False
+
+        assert opened == []
+        assert "No saved history entry" in overlay.states[-1][1]
+    finally:
+        controller.shutdown()
+
+
+def test_a_rescued_streaming_partial_moves_the_edit_target_with_the_text(
+    monkeypatch, tmp_path
+):
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    controller, _app = make_controller(history_store=history_store)
+    _patch_edit_dialog(monkeypatch, lambda parent, text: "edited partial")
+    try:
+        controller._on_transcription_ready("transcript A.")
+        job = controller._register_transcription_job(5, controller._settings, "streaming")
+        job.stashed_partial = "rescued partial"
+        controller._finish_transcription_job(5)
+
+        assert controller._last_transcript == "rescued partial"
+        assert controller._last_history_entry.text == "rescued partial"
+
+        assert controller.edit_last_transcript() is True
+        assert [entry.text for entry in history_store.load()] == [
+            "transcript A.",
+            "edited partial",
+        ]
+    finally:
+        controller.shutdown()
+
+
+def test_a_failed_queued_insert_moves_the_edit_target_with_the_transcript(
+    monkeypatch, tmp_path
+):
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    inserter = FakeTextInserter()
+    controller, _app = make_controller(
+        history_store=history_store, text_inserter=inserter
+    )
+    _patch_edit_dialog(monkeypatch, lambda parent, text: "Edited queued transcript B")
+    try:
+        controller._on_transcription_ready("transcript A.")
+        inserter.should_fail = True
+        job = controller._register_transcription_job(77, controller._settings, "batch")
+        controller._handle_background_transcription_ready(job, "queued transcript B.")
+
+        assert controller._last_transcript == "queued transcript B."
+        assert controller._last_history_entry.text == "queued transcript B."
+
+        inserter.should_fail = False
+        assert controller.edit_last_transcript() is True
+        assert [entry.text for entry in history_store.load()] == [
+            "transcript A.",
+            "Edited queued transcript B",
+        ]
+    finally:
+        controller.shutdown()
+
+
+def test_a_coalesced_insert_failure_offers_no_single_entry_to_edit(
+    monkeypatch, tmp_path
+):
+    """One paste of several queued transcripts has no one history entry."""
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    overlay = FakeOverlay()
+    controller, _app = make_controller(history_store=history_store, overlay=overlay)
+    opened = []
+    _patch_edit_dialog(monkeypatch, lambda parent, text: opened.append(text) or "x")
+    try:
+        controller._on_transcription_ready("transcript A.")
+        job = controller._register_transcription_job(78, controller._settings, "batch")
+
+        claimed = controller._report_background_insertion_failure(
+            job, "queued B queued C", job_count=2
+        )
+
+        assert claimed is True
+        assert controller._last_transcript == "queued B queued C"
+        assert controller._last_history_entry is None
+        assert controller.edit_last_transcript() is False
+        assert opened == []
+        assert "No saved history entry" in overlay.states[-1][1]
+        assert [entry.text for entry in history_store.load()] == ["transcript A."]
+    finally:
+        controller.shutdown()
+
+
+def test_the_completion_mark_carries_the_job_recording_id_or_none():
+    """An empty id means "unknown" and must not be handed to the store as a
+    compare-and-set value the store can never match."""
+    store = FakeLastRecordingStore()
+    controller, _app = make_controller(last_recording_store=store)
+    try:
+        controller._mark_last_recording_completed("rec-a")
+        controller._mark_last_recording_completed("")
+        controller._mark_last_recording_completed(None)
+        assert store.completed_ids == ["rec-a", None, None]
+    finally:
+        controller.shutdown()
+
+
+def test_a_foreground_failure_marks_the_jobs_own_recording_failed():
+    store = FakeLastRecordingStore()
+    controller, _app = make_controller(last_recording_store=store)
+    try:
+        job = controller._register_transcription_job(9, controller._settings, "batch")
+        job.source_recording_id = "rec-a"
+        controller._active_request_token = 9
+
+        controller._on_transcription_failed("model exploded", request_token=9)
+
+        assert store.failed == ["model exploded"]
+        assert store.failed_ids == ["rec-a"]
+    finally:
+        controller.shutdown()
+
+
+def _sine_wav(level: float, seconds: float = 0.5, rate: int = 16000) -> bytes:
+    frames = int(rate * seconds)
+    amplitude = int(level * 32767)
+    pcm = b"".join(
+        struct.pack("<h", int(amplitude * math.sin(2 * math.pi * 440 * i / rate)))
+        for i in range(frames)
+    )
+    buffer = io.BytesIO()
+    with wave.open(buffer, "wb") as handle:
+        handle.setnchannels(1)
+        handle.setsampwidth(2)
+        handle.setframerate(rate)
+        handle.writeframes(pcm)
+    return buffer.getvalue()
+
+
+class _ScriptedCapture(FakeCapture):
+    """Hands out one prepared WAV per recording, in order."""
+
+    queue: list[bytes] = []
+
+    def stop(self):
+        self.stopped = True
+        return _ScriptedCapture.queue.pop(0)
+
+
+class _HeldTranscriber:
+    """Blocks inside `transcribe_batch` until released."""
+
+    def __init__(self, text, release, entered, error=None):
+        self._text = text
+        self._release = release
+        self._entered = entered
+        self._error = error
+
+    def transcribe_batch(self, _audio_source):
+        self._entered.set()
+        self._release.wait(timeout=8.0)
+        if self._error is not None:
+            raise RuntimeError(self._error)
+        return self._text
+
+    def set_cancel_check(self, _check):
+        return None
+
+    def set_language_mode(self, _mode):
+        return None
+
+    def set_progress_callback(self, _callback):
+        return None
+
+    def close(self):
+        return None
+
+
+def _pump_until(app, predicate, timeout_s=8.0):
+    deadline = time.monotonic() + timeout_s
+    while not predicate() and time.monotonic() < deadline:
+        app.processEvents()
+        time.sleep(0.005)
+    app.processEvents()
+    assert predicate(), "the worker's result never reached the controller"
+
+
+def _an_old_job_finishing_after_a_gated_recording(
+    monkeypatch, tmp_path, *, mode, error=None
+):
+    """Recording A transcribes slowly; recording B is stored and silence-gated
+    while A runs; then A finishes (or fails). Returns what is left."""
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    recordings = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    release = threading.Event()
+    entered = threading.Event()
+    _ScriptedCapture.instances = []
+    _ScriptedCapture.queue = [_sine_wav(0.30), _sine_wav(0.0002)]
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _ScriptedCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _HeldTranscriber(
+            "transcript A.", release, entered, error
+        ),
+    )
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        keep_transcript_in_clipboard=False,
+        concurrent_transcription_mode=mode,
+    )
+    assert settings.silence_gate_enabled is True
+    assert settings.save_last_wav is False
+    overlay = FakeOverlay()
+    inserter = FakeTextInserter()
+    controller, app = make_controller(
+        settings_store=FakeSettingsStore(settings),
+        history_store=history_store,
+        last_recording_store=recordings,
+        overlay=overlay,
+        text_inserter=inserter,
+    )
+    facts = {}
+    try:
+        controller.toggle_recording()
+        controller.toggle_recording()
+        assert entered.wait(timeout=8.0), "A's worker never started"
+        token_a = controller._active_request_token
+        state_a = recordings.load()
+
+        controller.toggle_recording()
+        controller.toggle_recording()
+        state_b = recordings.load()
+        assert state_b.recording_id != state_a.recording_id
+        assert state_b.status == "canceled"
+        assert recordings.audio_path.is_file()
+
+        release.set()
+        _pump_until(app, lambda: token_a not in controller._jobs)
+
+        facts["state_b"] = state_b
+        facts["state_after"] = recordings.load()
+        facts["audio_after"] = recordings.audio_path.is_file()
+        facts["recoverable_after"] = recordings.has_recoverable_recording()
+        facts["selectable_after"] = recordings.selectable_path()
+        facts["last_transcript"] = controller._last_transcript
+        facts["inserted"] = [call[0] for call in inserter.calls]
+        facts["history"] = [entry.text for entry in history_store.load()]
+        facts["overlay"] = overlay.states[-1]
+        facts["retry_bytes"] = controller._last_failed_wav_bytes
+    finally:
+        release.set()
+        controller.shutdown()
+    return facts
+
+
+def _assert_b_is_still_the_recoverable_recording(facts, recordings_audio_path):
+    # Byte-identical to the state the gate left: id, status, its own detail.
+    assert facts["state_after"] == facts["state_b"]
+    assert facts["state_after"].status == "canceled"
+    assert facts["audio_after"] is True
+    assert facts["recoverable_after"] is True
+    assert facts["selectable_after"] == recordings_audio_path
+
+
+def test_an_old_job_completing_does_not_clear_the_silence_gated_recording(
+    monkeypatch, tmp_path
+):
+    facts = _an_old_job_finishing_after_a_gated_recording(
+        monkeypatch, tmp_path, mode=CONCURRENT_TRANSCRIPTION_MODE_INSERT
+    )
+    _assert_b_is_still_the_recoverable_recording(facts, tmp_path / "last_recording.wav")
+    # In insert mode the older result is still delivered as before.
+    assert facts["last_transcript"] == "transcript A."
+    assert facts["inserted"] == ["transcript A."]
+    assert facts["history"] == ["transcript A."]
+
+
+def test_a_job_demoted_to_history_stays_history_only_after_a_gated_recording(
+    monkeypatch, tmp_path
+):
+    """The silence gate submits nothing for B, so nothing retargets the active
+    token; A must still not come back as the live session and paste."""
+    facts = _an_old_job_finishing_after_a_gated_recording(
+        monkeypatch, tmp_path, mode=CONCURRENT_TRANSCRIPTION_MODE_HISTORY
+    )
+    _assert_b_is_still_the_recoverable_recording(facts, tmp_path / "last_recording.wav")
+    assert facts["inserted"] == []
+    assert facts["history"] == ["transcript A."]
+    assert facts["last_transcript"] == ""
+    assert facts["overlay"][0] == "Done"
+    assert facts["overlay"][1].startswith("No speech detected")
+
+
+def test_an_old_job_failing_does_not_relabel_the_silence_gated_recording(
+    monkeypatch, tmp_path
+):
+    facts = _an_old_job_finishing_after_a_gated_recording(
+        monkeypatch,
+        tmp_path,
+        mode=CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+        error="model exploded",
+    )
+    _assert_b_is_still_the_recoverable_recording(facts, tmp_path / "last_recording.wav")
+    assert facts["overlay"][0] == "Error"
+    assert "model exploded" in facts["overlay"][1]
+    # A's own audio is still offered for Retry, through the in-memory copy.
+    assert facts["retry_bytes"] == _sine_wav(0.30)

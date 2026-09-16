@@ -6935,3 +6935,59 @@ Before anything was committed the unit scripts and the docs scripts were
 replayed on a fresh export of `45f78a1`, which reproduced the working tree
 byte for byte, and this paragraph is rendered by `docs_wave10_log2.py`
 from the repository's log and the run outputs on disk.
+
+### The 2026-09-12 external review (2026-09-16) - thirteen findings from another agent
+
+**What it was.** A code review written by another agent (GPT-6 Astra)
+against `45f78a1`, handed over as `2026-09-12-code_review.md` (the user's
+file, kept out of the repository). Thirteen findings, F01-F13, each with a
+proposed fix. Every one was treated as a hypothesis: three read-only
+verifiers (groups B, C, D) and the lead (group A) reproduced them against
+an export of `672af6f` with probes of their own before anything was
+changed, and each verifier ran its probes on the export tree only. All
+thirteen reproduced. Two came back sharper than written: F09, because the
+Deepgram sender queue saturates at the 33rd buffered chunk with a
+zero-cost sender -- 33 pushes finish in 45 us, a hundredth of the 5 ms GIL
+switch interval, so the sender thread is never scheduled -- not on a send
+timing; and F13, because with both `HF_HOME` and `HF_HUB_CACHE` set the
+faster-whisper download (the library's own resolution, no `cache_dir`
+passed for an empty Model Dir) and the app's "is it cached" check resolve
+to two different directories, so the model is never found and every
+dictation re-enters the download path. The units below are in commit
+order; the paste rework (F01/F02/F07) has its own paragraph.
+
+**F05/F06 -- the Edit target and the last-recording identity.** Group C
+(Opus) drove the real controller through `make_controller` with the real
+history and last-recording stores. F05: `edit_last_transcript` read
+`_last_transcript` before the modal `TranscriptEditDialog.get_text` and
+`_last_history_entry` after it, and `update_entry` locates the row by
+value -- so a result B delivered inside the dialog's nested loop (a queued
+signal emitted from a worker thread while a real `QEventLoop` spun, as the
+probe did) put A's edited text into B's entry and left A's alone; the
+recording hotkey is a native event filter, so a whole dictation fits
+inside the dialog. The probe also found a second writer that moved the
+text without the entry, `_report_background_insertion_failure`, beside the
+one the review named (`_save_stashed_streaming_partial`); after either,
+Edit offered the shown text and wrote the edit into the previous
+dictation's entry, and the overlay's Insert button then paints a plain
+Done that re-enables Edit. F06: `_mark_last_recording_completed` called
+`mark_completed()` with no `expected_recording_id` while
+`_persist_last_recording_audio` runs before the silence gate, so an older
+batch job A finishing after a silence-gated recording B cleared B (16044
+bytes of audio, the backup and the state file gone, `has_recoverable_recording()`
+False); with `save_last_wav` on, B was stamped `completed` instead. And
+because the gate submits nothing, A was the active token again and came
+back as the live session -- in `history` mode its text was pasted. The
+fixes: the entry is read before the dialog and the edit applied to it, a
+pair that moved on keeps the newer result on screen; both takeover writers
+go through `_set_last_transcript`, the job keeps its background delivery's
+entry, and a coalesced paste offers no entry to edit; the completion and
+foreground failure marks carry the job's `source_recording_id` (an empty
+id keeps the unconditional write -- the store could never match ""); and
+`_is_foreground_transcription` keeps a history-demoted job in the
+background, which is the one behaviour decision in this unit: the user's
+mode declined that paste, and `insert` mode is unchanged. Eleven tests in
+`tests/test_controller.py`, the gated-recording ones with a transcriber
+held on a worker thread and the real stores. The fake store in
+`tests/conftest.py` had to learn the keyword, or every controller test
+died with a `TypeError` -- the trap group C named in advance.

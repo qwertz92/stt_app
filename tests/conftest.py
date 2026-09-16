@@ -390,8 +390,11 @@ class FakeLastRecordingStore:
         self.saved: list[tuple[bytes, bool]] = []
         self.transcribing: list[tuple[str, str, str]] = []
         self.failed: list[str] = []
+        self.failed_ids: list[str | None] = []
         self.canceled: list[str] = []
+        self.canceled_ids: list[str | None] = []
         self.completed = 0
+        self.completed_ids: list[str | None] = []
         self._available = False
 
     def save_recording(self, wav_bytes: bytes, *, keep_after_success: bool):
@@ -402,16 +405,19 @@ class FakeLastRecordingStore:
     def mark_transcribing(self, *, engine: str, model: str, mode: str) -> None:
         self.transcribing.append((engine, model, mode))
 
-    def mark_failed(self, error: str) -> None:
+    def mark_failed(self, error: str, *, expected_recording_id=None) -> None:
         self.failed.append(str(error))
+        self.failed_ids.append(expected_recording_id)
         self._available = True
 
-    def mark_canceled(self, detail: str = "") -> None:
+    def mark_canceled(self, detail: str = "", *, expected_recording_id=None) -> None:
         self.canceled.append(str(detail))
+        self.canceled_ids.append(expected_recording_id)
         self._available = True
 
-    def mark_completed(self) -> None:
+    def mark_completed(self, *, expected_recording_id=None) -> None:
         self.completed += 1
+        self.completed_ids.append(expected_recording_id)
         self._available = False
 
     def selectable_path(self, archived_recordings_dir=None):
