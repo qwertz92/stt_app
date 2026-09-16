@@ -7196,3 +7196,26 @@ as its own failure after a best-effort abort, and the slot's `not ok` arm
 returns while the flag is set. A second lead test covers the flush-failure arm
 of the same record, where the provider's session is published and is torn down
 before the report. The four controller files: 464 passed.
+
+**F04 -- a retired session's error tore down the live one.**
+`stream_runtime_failed` carried only the text, so `_on_stream_runtime_failed`
+could ask nothing but "is anything live", which an ordinary batch recording
+answers yes to; the implementer measured the real Nemotron worker firing
+`on_error` for an aborted run and the controller stopping the microphone of
+the batch recording started since. Two parts, delivered together: the signal
+carries the session's token (a closure per handshake, and a
+`_stream_session_token` cleared by every session end and distinct from the
+connect token a detached aborter still reads), the slot drops a stale token
+ahead of the activity test it keeps; and the Nemotron `except` arm skips
+`on_error` after an abort, as its two normal exits already did. The
+implementer's third find on the way: the flag that silences the audio callback
+after a failed handshake was written with no generation check while the buffer
+drop beside it had one, so a cancelled session's late failure made the next
+dictation deaf (`_retire_failed_stream_connect`, one guarded write). The
+lead's part: the patch conflicted with the S2 fix at the connect thread's
+`except` arm and at the connect signal's `not ok` arm, and both were resolved
+by keeping both sides -- the guarded retire, then the recorded cause, then the
+emit; the finalize-pending return, then the token-bearing report. Seven tests
+across `test_controller_coverage.py`, `test_controller_queue.py` (whose six
+call sites now pass the live token) and `test_local_nemotron.py`; the five
+files: 484 passed.

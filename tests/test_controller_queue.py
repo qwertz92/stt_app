@@ -1125,7 +1125,9 @@ def test_stream_runtime_failure_flushes_deferred_background_insert(
     controller._on_transcription_ready("transcript A", request_token=token_a)
     assert controller._deferred_background_results
 
-    controller._on_stream_runtime_failed("stream died")
+    controller._on_stream_runtime_failed(
+        controller._stream_session_token, "stream died"
+    )
 
     assert controller._audio_capture is None
     assert controller._deferred_background_results == []
@@ -1150,7 +1152,9 @@ def test_stream_runtime_failure_keeps_the_partial_transcript(monkeypatch, tmp_pa
     controller.start_recording()
     controller._stream_text_state.live_text = "half a sentence already spoken"
 
-    controller._on_stream_runtime_failed("stream died")
+    controller._on_stream_runtime_failed(
+        controller._stream_session_token, "stream died"
+    )
 
     assert [e.text for e in history.load()] == ["half a sentence already spoken"]
     assert controller._last_transcript == "half a sentence already spoken"
@@ -1182,7 +1186,9 @@ def test_stream_runtime_failure_always_tears_down_the_capture(monkeypatch, tmp_p
         target_signature=None,
     )
 
-    controller._on_stream_runtime_failed("stream died")
+    controller._on_stream_runtime_failed(
+        controller._stream_session_token, "stream died"
+    )
 
     assert controller._audio_capture is None
     assert capture.stopped is True
@@ -1695,7 +1701,9 @@ def test_a_dying_runtime_stashes_the_partial_for_a_finalize_that_delivers_nothin
     job = _streaming_session_with_a_pending_finalize(controller)
     controller._stream_text_state.live_text = "ein ganzer satz den ich diktiert habe"
 
-    controller._on_stream_runtime_failed("stream died")
+    controller._on_stream_runtime_failed(
+        controller._stream_session_token, "stream died"
+    )
 
     assert job.stashed_partial == "ein ganzer satz den ich diktiert habe", (
         "the partial was dropped instead of handed to the pending finalize"
@@ -1731,7 +1739,9 @@ def test_a_dying_runtime_leaves_a_pending_finalize_its_committed_text(
     controller._stream_text_state.live_text = "das ist ein laengerer"
     controller._stream_text_state.committed_text = "das ist ein laengerer"
 
-    controller._on_stream_runtime_failed("stream died")
+    controller._on_stream_runtime_failed(
+        controller._stream_session_token, "stream died"
+    )
 
     assert controller._active_session_mode == "streaming", (
         "the pending finalize will now be delivered as a batch result"
@@ -1766,7 +1776,9 @@ def test_a_dying_runtime_with_no_finalize_still_resets_the_session(
     controller._stream_text_state.live_text = "halber satz"
     controller._stream_text_state.committed_text = "halber satz"
 
-    controller._on_stream_runtime_failed("stream died")
+    controller._on_stream_runtime_failed(
+        controller._stream_session_token, "stream died"
+    )
 
     assert [e.text for e in history.load()] == ["halber satz"]
     assert controller._active_session_mode == "batch"

@@ -4287,6 +4287,318 @@ def test_a_stale_abort_does_not_tear_down_a_newer_session():
     _ = app
 
 
+def test_a_retired_handshakes_failure_does_not_silence_the_live_session(monkeypatch):
+    """A cancelled session's failed handshake used to make the next one deaf.
+
+    `_begin_stream_connect`'s `except BaseException` arm sets
+    `_stream_chunk_error_reported` so the PortAudio callback stops pushing
+    into a transcriber whose `start_stream` just raised -- otherwise the user
+    is shown "Streaming chunk push failed: session is not active" instead of
+    the real cause, such as an invalid API key. That write had no generation
+    check, while the two statements after it (dropping the buffer, and the
+    completion signal's handler) both have one. So: session A's handshake is
+    slow, the user cancels and starts session B, A's handshake then fails, and
+    the flag it sets belongs to B -- which drops every further audio chunk in
+    `_on_stream_audio_chunk` and, because only `_start_streaming_recording`
+    ever clears the flag, stays deaf for the whole dictation and delivers the
+    one chunk it managed as a successful "Done".
+    """
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+    )
+    gates = [threading.Event(), threading.Event()]
+    entered = [threading.Event(), threading.Event()]
+    handshakes: list[int] = []
+    pushed: list[bytes] = []
+
+    class _FailingThenWorking(FakeStreamingTranscriber):
+        def start_stream(self, on_partial=None, on_error=None):
+            index = min(len(handshakes), len(gates) - 1)
+            handshakes.append(index)
+            entered[index].set()
+            assert gates[index].wait(timeout=30), "a handshake was never released"
+            if index == 0:
+                raise TranscriptionError("invalid API key")
+            self.started = True
+
+        def push_audio_chunk(self, chunk, *, block_timeout_s=None):
+            pushed.append(bytes(chunk))
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _FailingThenWorking(),
+    )
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    try:
+        controller.start_recording()
+        assert entered[0].wait(timeout=10), "the first handshake never started"
+        thread_a = controller._stream_connect_thread
+        assert thread_a is not None
+        controller.cancel_current_action()  # the cancel hotkey, A still connecting
+
+        # B starts and connects while A is still blocked inside start_stream.
+        gates[1].set()
+        controller.start_recording()
+        assert entered[1].wait(timeout=10), "the second handshake never started"
+        thread_b = controller._stream_connect_thread
+        assert thread_b is not None and thread_b is not thread_a
+        thread_b.join(timeout=10)
+        controller._on_stream_audio_chunk(b"\x01" * 8)
+        assert pushed == [b"\x01" * 8], "the live session was not connected"
+
+        # Only now does A's handshake fail. Joining its thread is what makes
+        # the ordering a fact rather than a sleep: the flag write happens
+        # before `_connect` returns.
+        gates[0].set()
+        thread_a.join(timeout=10)
+        assert thread_a.is_alive() is False
+
+        assert controller._stream_chunk_error_reported is False, (
+            "a retired handshake's failure silenced the live session"
+        )
+        for index in range(2, 6):
+            controller._on_stream_audio_chunk(bytes([index]) * 8)
+        assert len(pushed) == 5, f"the live session recorded only {len(pushed)} chunks"
+    finally:
+        for gate in gates:
+            gate.set()
+        controller.shutdown()
+    _ = app
+
+
+def test_a_stale_runtime_failure_leaves_a_live_batch_recording_alone(monkeypatch):
+    """A cancelled stream's error must not tear down an unrelated recording.
+
+    `_on_stream_runtime_failed` asked only whether *anything* was live --
+    `_audio_capture is not None or _active_stream_transcriber is not None or
+    _streaming_recording` -- and an ordinary batch recording satisfies the
+    first disjunct. A provider that fires `on_error` after its session was
+    cancelled therefore stopped the microphone of the recording the user had
+    started since and replaced Listening with Error. The real Nemotron worker
+    did exactly that for an aborted run.
+    """
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+        ),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    try:
+        controller.start_recording()
+        retired_token = controller._stream_session_token
+        assert retired_token is not None
+        controller.cancel_current_action()
+
+        # An ordinary batch recording, started after the cancel.
+        controller._settings = replace(controller._settings, mode="batch")
+        controller.start_recording()
+        capture = controller._audio_capture
+        assert capture is not None
+        assert overlay.state == "Listening"
+
+        controller._on_stream_runtime_failed(
+            retired_token, "Nemotron streaming failed: session was torn down"
+        )
+
+        assert controller._audio_capture is capture, (
+            "a cancelled stream's error stopped a live batch recording"
+        )
+        assert capture.stopped is False
+        assert overlay.state == "Listening"
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_an_abandoned_handshakes_error_cannot_reach_a_later_recording(monkeypatch):
+    """The arm that builds the capture returns without resetting the session.
+
+    `_start_streaming_recording`'s `except Exception` arm around
+    `_build_audio_capture` calls `_teardown_pending_stream_connect` and
+    returns -- it never runs `_reset_streaming_state`, so that helper is the
+    only place the abandoned session's identity can be retired. Left set, the
+    handshake it abandoned still matched when its provider fired `on_error`,
+    and the activity test then found the batch recording the user had started
+    since and tore it down.
+    """
+
+    class _ExplodingCapture:
+        def __init__(self, *args, **kwargs):
+            raise RuntimeError("the capture could not be constructed")
+
+    captures: list[object] = [_ExplodingCapture]
+    monkeypatch.setattr(
+        "stt_app.controller.AudioCapture",
+        lambda *args, **kwargs: captures[0](*args, **kwargs),
+    )
+    registered: list[object] = []
+
+    class _CallbackKeeper(FakeStreamingTranscriber):
+        def start_stream(self, on_partial=None, on_error=None):
+            self.started = True
+            registered.append(on_error)
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _CallbackKeeper(),
+    )
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+        ),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    try:
+        controller.start_recording()
+        assert overlay.state == "Error", "the capture failure was not reported"
+        assert _pump_until(app, lambda: bool(registered)), (
+            "the handshake never registered an error callback"
+        )
+        abandoned_on_error = registered[0]
+
+        # The microphone works again; an ordinary batch recording is started.
+        captures[0] = FakeCapture
+        controller._settings = replace(controller._settings, mode="batch")
+        controller.start_recording()
+        capture = controller._audio_capture
+        assert capture is not None
+        assert overlay.state == "Listening"
+
+        abandoned_on_error("the abandoned socket died")
+        _pump_until(app, lambda: controller._audio_capture is None, timeout=1.0)
+
+        assert controller._audio_capture is capture, (
+            "an abandoned handshake's error stopped a live batch recording"
+        )
+        assert overlay.state == "Listening"
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_the_live_sessions_runtime_failure_still_tears_the_stream_down(monkeypatch):
+    """The negative control: an identified, live failure behaves as before."""
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: FakeStreamingTranscriber(),
+    )
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+        ),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    try:
+        controller.start_recording()
+        capture = controller._audio_capture
+        assert capture is not None
+
+        controller._on_stream_runtime_failed(
+            controller._stream_session_token, "the socket died"
+        )
+
+        assert controller._audio_capture is None
+        assert capture.stopped is True
+        assert controller._streaming_recording is False
+        assert overlay.state == "Error"
+        assert "the socket died" in overlay.detail
+    finally:
+        controller.shutdown()
+    _ = app
+
+
+def test_a_providers_error_callback_carries_the_session_it_was_registered_for(
+    monkeypatch,
+):
+    """The token has to come from the handshake, not from whatever is live.
+
+    Reading the live token when the callback fires is the same defect one
+    level down: a provider whose session was retired would still be answered
+    with the current session's identity. `_begin_stream_connect` therefore
+    hands each `start_stream` an `on_error` closure carrying that handshake's
+    own token.
+    """
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    registered: list[object] = []
+
+    class _CallbackKeeper(FakeStreamingTranscriber):
+        def start_stream(self, on_partial=None, on_error=None):
+            self.started = True
+            self.on_partial = on_partial
+            self.on_error = on_error
+            registered.append(on_error)
+
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: _CallbackKeeper(),
+    )
+    overlay = FakeOverlay()
+    recordings = FakeLastRecordingStore()
+    recordings.load = lambda: None
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(
+            AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+        ),
+        overlay=overlay,
+        last_recording_store=recordings,
+    )
+    emitted: list[tuple[object, str]] = []
+    controller.stream_runtime_failed.connect(
+        lambda token, text: emitted.append((token, text))
+    )
+    try:
+        controller.start_recording()
+        _pump_until(app, lambda: bool(registered))
+        assert registered, "start_stream was never given an error callback"
+        session_a_on_error = registered[0]
+        token_a = controller._stream_session_token
+
+        controller.cancel_current_action()
+        controller.start_recording()
+        _pump_until(app, lambda: len(registered) >= 2)
+        token_b = controller._stream_session_token
+        assert token_b is not token_a, "the second handshake reused the token"
+
+        # A's provider fires late, after B owns the controller.
+        session_a_on_error("A died")
+        _pump_until(app, lambda: bool(emitted))
+
+        assert emitted == [(token_a, "A died")], (
+            "the late callback was attributed to the live session"
+        )
+    finally:
+        controller.shutdown()
+    _ = app
+
+
 def test_an_empty_streaming_result_keeps_the_previous_transcript():
     """A dictation that produced nothing must not erase the one before it.
 

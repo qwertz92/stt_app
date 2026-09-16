@@ -3820,6 +3820,43 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and a remote socket stays open and billed until restart. All three arms of
   `_start_streaming_recording` do this now, teardown before release and unable
   to raise past it.
+- **A streaming runtime failure names the session it belongs to, and one
+  from a retired session is ignored** (2026-09-16, F04 of the external
+  review). `stream_runtime_failed` carries `(token, text)`: every
+  `start_stream` gets an `on_error` closure holding its own handshake's
+  `connect_token`, `_stream_session_token` is that same object for the
+  live session -- set by `_begin_stream_connect`, cleared by every path
+  that ends a session (`_reset_streaming_state`,
+  `_teardown_pending_stream_connect`) -- and `_on_stream_runtime_failed`
+  drops a token that is not the live one before its activity test. That
+  test (`_audio_capture is not None or ...`) cannot tell whose failure it
+  is: an ordinary batch recording satisfies the first disjunct, so a
+  provider that fired `on_error` after its session was cancelled stopped
+  the microphone of the recording the user had started since and painted
+  Error over Listening; the real Nemotron worker produced exactly that
+  callback for an aborted run. Three details:
+  - **The token is captured by the closure, not read when the callback
+    fires**, or a retired provider would be answered with the current
+    session's identity -- the same defect one level down.
+  - **`_stream_connect_token` and `_stream_session_token` are one object
+    under two names with different lifetimes**: the first answers "has a
+    newer handshake replaced mine", which a detached aborter still asks
+    after its session was torn down, so only `_begin_stream_connect`
+    writes it; the second answers "is the session that produced this
+    event still the live one", so every session end clears it.
+  - **Retiring a failed handshake is one guarded write**
+    (`_retire_failed_stream_connect`): `_stream_chunk_error_reported` used
+    to be set with no generation check while the buffer drop beside it
+    had one, so session A's late handshake failure set the flag for
+    session B, which then dropped every audio chunk for the whole
+    dictation and delivered the one chunk it had as a successful "Done".
+  The activity test is kept behind the identity test, not replaced by it:
+  the token is set before the capture exists, and the arm that handles a
+  failing `_build_audio_capture` returns without a reset, so a token can
+  be current while no session runs. And **Nemotron's stream worker does
+  not call `on_error` for a run that was aborted** -- its two normal exits
+  already returned silently for one, the `except` arm did not; the failure
+  stays on `run.result.error` for whoever still holds the run.
 - **A swallowed streaming partial callback is logged once per session.**
   That callback is what puts live text on screen and into the document, so
   a bare `pass` made a dead live-insertion path indistinguishable from a

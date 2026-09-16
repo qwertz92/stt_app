@@ -362,7 +362,10 @@ class DictationController(QtCore.QObject):
     transcription_canceled = QtCore.Signal(int)
     transcription_progress = QtCore.Signal(int, str)
     transcription_partial = QtCore.Signal(str)
-    stream_runtime_failed = QtCore.Signal(str)
+    # connect token, error text -- the token identifies the streaming session
+    # the failure belongs to, so a provider that calls back after its session
+    # was cancelled cannot be mistaken for the live one.
+    stream_runtime_failed = QtCore.Signal(object, str)
     # generation, ok, error text -- a remote handshake finished off-thread
     stream_connect_finished = QtCore.Signal(int, bool, str)
     stream_abort_requested = QtCore.Signal(str, bool)
@@ -500,6 +503,9 @@ class DictationController(QtCore.QObject):
         self._stream_connect_generation = 0
         self._stream_connect_thread: threading.Thread | None = None
         self._stream_connect_token: object | None = None
+        # The live streaming session's identity; see `_begin_stream_connect`
+        # for why this is not the same field as the connect token.
+        self._stream_session_token: object | None = None
         # True between `_submit_stream_finalize` and the reset that ends the
         # session. The stop no longer retires the handshake (the buffered
         # audio still has to reach the provider), so a handshake that lands
@@ -1234,26 +1240,37 @@ class DictationController(QtCore.QObject):
         # session is starting and is a shared cached object either way.
         connect_token = object()
         self._stream_connect_token = connect_token
+        # The same object under a second name, because the two answer
+        # different questions and therefore need different lifetimes.
+        # `_stream_connect_token` answers "has a NEWER HANDSHAKE replaced
+        # mine", which a detached aborter still has to be able to ask after
+        # its session was torn down, so nothing but `_begin_stream_connect`
+        # may write it. `_stream_session_token` answers "is the session that
+        # produced this event still the live one", so every path that ends a
+        # session clears it -- otherwise a cancelled session's token still
+        # matched, and its provider's late `on_error` tore down whatever the
+        # user had started since.
+        self._stream_session_token = connect_token
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = []
             self._stream_preconnect_dropped = False
             self._stream_connect_failure = None
 
+        def _on_runtime_error(error_text: str) -> None:
+            # The token is captured, not read when the callback fires: a
+            # provider whose session was cancelled still owns this closure and
+            # must be answered with the identity of the session it was
+            # registered for, never with whatever is live by then.
+            self._emit_stream_runtime_failure(connect_token, error_text)
+
         def _connect() -> None:
             try:
                 transcriber.start_stream(
                     on_partial=self._emit_stream_partial,
-                    on_error=self._emit_stream_runtime_failure,
+                    on_error=_on_runtime_error,
                 )
             except BaseException as exc:
-                # Stop the audio callback before dropping the buffer.
-                # Otherwise it falls through to push_audio_chunk on a
-                # transcriber whose start_stream just raised, and *that*
-                # error reaches the user first -- "Streaming chunk push
-                # failed: session is not active" instead of the real cause,
-                # such as an invalid API key.
-                self._stream_chunk_error_reported = True
-                self._discard_preconnect_buffer(generation)
+                self._retire_failed_stream_connect(generation)
                 error_text = self._stream_connect_error_text(exc)
                 # Recorded before the emit: a finalize worker joining this
                 # thread reads it right after the join returns.
@@ -1326,10 +1343,30 @@ class DictationController(QtCore.QObject):
             )
         return None
 
-    def _discard_preconnect_buffer(self, generation: int) -> None:
+    def _retire_failed_stream_connect(self, generation: int) -> None:
+        """Silence the audio callback and drop the buffer of ONE handshake.
+
+        Both writes belong to the handshake whose `start_stream` raised, so
+        both are guarded by its generation and made under one hold of the
+        lock. `_stream_chunk_error_reported` used to be written with no
+        generation check at all, while the buffer drop beside it and the
+        completion signal's handler both had one: a session the user had
+        already cancelled therefore set the flag for the session that replaced
+        it, and since only `_start_streaming_recording` ever clears the flag,
+        that session dropped every audio chunk from then on and still
+        delivered its one recorded chunk as a successful "Done".
+
+        The flag comes first for the same reason it always did: otherwise the
+        callback falls through to `push_audio_chunk` on a transcriber whose
+        `start_stream` just raised, and "Streaming chunk push failed: session
+        is not active" reaches the user instead of the real cause, such as an
+        invalid API key.
+        """
         with self._stream_preconnect_lock:
-            if generation == self._stream_connect_generation:
-                self._stream_preconnect_chunks = None
+            if generation != self._stream_connect_generation:
+                return
+            self._stream_chunk_error_reported = True
+            self._stream_preconnect_chunks = None
 
     def _record_stream_connect_failure(self, generation: int, error_text: str) -> None:
         """Keep a failed handshake's cause for the finalize that joins it."""
@@ -1367,7 +1404,12 @@ class DictationController(QtCore.QObject):
                     "stream_connect_failed_after_stop: the finalize reports it"
                 )
                 return
-            self._on_stream_runtime_failed(error_text or "Streaming failed to start.")
+            # The generation check above already established that this is the
+            # live session, so the live session token is this handshake's own.
+            self._on_stream_runtime_failed(
+                self._stream_session_token,
+                error_text or "Streaming failed to start.",
+            )
             return
         if not self._streaming_recording or self._stream_abort_requested:
             return
@@ -1593,6 +1635,11 @@ class DictationController(QtCore.QObject):
         thread = self._stream_connect_thread
         self._stream_connect_thread = None
         self._stream_connect_generation += 1
+        # Abandoning the handshake abandons the session, so its identity stops
+        # matching here too. `_stream_connect_token` is deliberately NOT
+        # cleared: the detached aborter below reads it to tell a newer
+        # handshake from its own.
+        self._stream_session_token = None
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = None
 
@@ -2393,6 +2440,9 @@ class DictationController(QtCore.QObject):
         # buffered audio still reaches the provider before `stop_stream()`.
         self._stream_connect_generation += 1
         self._stream_finalize_pending = False
+        # The session is over, so its identity stops matching: a provider that
+        # fires `on_error` from here on is answering for a session nobody owns.
+        self._stream_session_token = None
         with self._stream_preconnect_lock:
             self._stream_preconnect_chunks = None
             self._stream_preconnect_dropped = False
@@ -4415,9 +4465,10 @@ class DictationController(QtCore.QObject):
     def _emit_stream_partial(self, text: str) -> None:
         self.transcription_partial.emit(text)
 
-    def _emit_stream_runtime_failure(self, error_text: str) -> None:
+    def _emit_stream_runtime_failure(self, token: object, error_text: str) -> None:
+        """Report a streaming runtime failure of the session `token` names."""
         message = str(error_text or "Streaming failed.").strip()
-        self.stream_runtime_failed.emit(message or "Streaming failed.")
+        self.stream_runtime_failed.emit(token, message or "Streaming failed.")
 
     def _pending_streaming_job(self) -> _TranscriptionJob | None:
         """The streaming finalize still in flight, if there is one.
@@ -4528,7 +4579,12 @@ class DictationController(QtCore.QObject):
             self._stream_chunk_error_reported = True
             self._stream_abort_requested = True
             self._logger.exception("Failed to push streaming audio chunk")
-            self._emit_stream_runtime_failure(f"Streaming chunk push failed: {exc}")
+            # This push went into `_active_stream_transcriber`, i.e. into the
+            # session that is live right now, so the live session token is
+            # its own.
+            self._emit_stream_runtime_failure(
+                self._stream_session_token, f"Streaming chunk push failed: {exc}"
+            )
 
     @staticmethod
     def _transcriber_identity(settings: AppSettings) -> _TranscriberIdentity:
@@ -5488,9 +5544,32 @@ class DictationController(QtCore.QObject):
             display_text = f"...{display_text}".strip()
         self._overlay.set_state("Listening", f"Live: {display_text}")
 
-    @QtCore.Slot(str)
-    def _on_stream_runtime_failed(self, error_text: str) -> None:
+    @QtCore.Slot(object, str)
+    def _on_stream_runtime_failed(self, token: object, error_text: str) -> None:
+        """Handle a streaming runtime failure of the session `token` names.
+
+        The token is checked before anything else, because the activity test
+        below cannot tell whose failure this is: it is satisfied by *any* live
+        capture, so a provider that fired `on_error` after its session was
+        cancelled tore down the ordinary batch recording the user had started
+        since -- the microphone stopped and the overlay went from Listening to
+        Error. The real Nemotron worker produced exactly that callback for an
+        aborted run.
+
+        The activity test is kept behind the identity test rather than
+        replaced by it. `_stream_session_token` is set by
+        `_begin_stream_connect`, i.e. before the capture exists, and the arm
+        that handles a failing `_build_audio_capture` returns without
+        `_reset_streaming_state` -- so a token can be current while no session
+        is running, and that is the case the activity test still answers.
+        """
         if self._shutdown_started:
+            return
+        if token is not self._stream_session_token:
+            self._logger.info(
+                "Ignoring a streaming runtime failure from a retired session: %s",
+                error_text,
+            )
             return
         if not (
             self._audio_capture is not None

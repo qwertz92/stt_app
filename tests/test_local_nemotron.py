@@ -286,6 +286,78 @@ def test_retired_stream_worker_cannot_consume_or_publish_into_next_session(
     assert second_partials == ["hello"]
 
 
+def test_an_aborted_run_whose_inference_raises_does_not_report_an_error(
+    monkeypatch,
+    tmp_path,
+):
+    """An aborted run's failure is logged, not reported as a session error.
+
+    The worker's two normal exits already check `run.abort_requested` (a
+    `return` before the queue read and another before the flush), because a
+    caller that aborted has torn its own session down and no longer owns the
+    callback. The `except` arm was the one exit that did not, so a run aborted
+    while `_process_stream_pcm` was inside native inference called
+    `run.on_error` on the way out. In the controller that error carries no
+    session identity, so it reached `_on_stream_runtime_failed`, whose guard
+    only asks whether *anything* is live -- and an ordinary batch recording
+    started after the cancel satisfies it and is torn down.
+    """
+    transcriber = _transcriber(monkeypatch, tmp_path, _FakeRuntime())
+    entered = threading.Event()
+    release = threading.Event()
+    errors: list[str] = []
+
+    def exploding_process(session, payload, run):
+        entered.set()
+        assert release.wait(timeout=2)
+        raise RuntimeError("ORT session was terminated")
+
+    monkeypatch.setattr(transcriber, "_process_stream_pcm", exploding_process)
+    monkeypatch.setattr(local_nemotron, "STREAMING_ABORT_JOIN_TIMEOUT_S", 0.01)
+
+    transcriber.start_stream(on_error=errors.append)
+    with transcriber._stream_lock:
+        worker_thread = transcriber._stream_thread
+        run = transcriber._stream_run
+    assert worker_thread is not None
+    transcriber.push_audio_chunk(b"\x01\x00" * 8_960)
+    assert entered.wait(timeout=1)
+
+    transcriber.abort_stream()
+    assert run.abort_requested.is_set()
+    release.set()
+    worker_thread.join(timeout=2)
+
+    assert worker_thread.is_alive() is False
+    assert errors == [], f"an aborted run reported {errors}"
+    # The failure is still recorded on the run itself, so nothing is hidden
+    # from a caller that still holds it.
+    assert isinstance(run.result.error, RuntimeError)
+
+
+def test_a_failing_run_that_was_not_aborted_still_reports_its_error(
+    monkeypatch,
+    tmp_path,
+):
+    """The negative control for the test above: only an abort is silent."""
+    transcriber = _transcriber(monkeypatch, tmp_path, _FakeRuntime())
+    errors: list[str] = []
+
+    def exploding_process(session, payload, run):
+        raise RuntimeError("ORT session was terminated")
+
+    monkeypatch.setattr(transcriber, "_process_stream_pcm", exploding_process)
+
+    transcriber.start_stream(on_error=errors.append)
+    with transcriber._stream_lock:
+        worker_thread = transcriber._stream_thread
+    transcriber.push_audio_chunk(b"\x01\x00" * 8_960)
+    assert worker_thread is not None
+    worker_thread.join(timeout=2)
+
+    assert errors == ["Nemotron streaming failed: ORT session was terminated"]
+
+
 def test_close_defers_runtime_teardown_until_retired_worker_exits(
     monkeypatch,
     tmp_path,

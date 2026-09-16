@@ -485,7 +485,17 @@ class LocalNemotronTranscriber(ProgressReporter, ITranscriber):
         except Exception as exc:
             run.result.error = exc
             callback = run.on_error
-            if callback is not None:
+            if run.abort_requested.is_set():
+                # The two exits above already return silently for an aborted
+                # run; this arm was the one that did not. A caller that
+                # aborted has torn its own session down and no longer owns the
+                # callback, and in the controller that late error carried no
+                # session identity -- it was read as the live session's and
+                # tore down whatever recording the user had started since.
+                # The failure stays on `run.result.error` for anyone still
+                # holding the run.
+                logger.info("Nemotron streaming worker failed after an abort: %s", exc)
+            elif callback is not None:
                 try:
                     callback(f"Nemotron streaming failed: {exc}")
                 except Exception:
