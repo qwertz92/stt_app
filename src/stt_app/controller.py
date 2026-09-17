@@ -2985,13 +2985,22 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to mark last recording as transcribing")
 
     def _mark_last_recording_failed(
-        self, job: _TranscriptionJob | None, error_text: str
+        self,
+        job: _TranscriptionJob | None,
+        error_text: str,
+        *,
+        session_recording_id: str = "",
     ) -> None:
         """Guarded like the completion mark: an older job failing after a
-        newer recording was stored must not relabel that recording."""
+        newer recording was stored must not relabel that recording. No
+        job is the live stream's own session, keyed by the id its persist
+        handed back ("" for a store answering none keeps the unconditional
+        write)."""
         if job is not None and not job.marks_last_recording:
             return
-        expected = job.source_recording_id if job is not None else None
+        expected = (
+            job.source_recording_id if job is not None else session_recording_id
+        )
         try:
             self._last_recording_store.mark_failed(
                 error_text,
@@ -3613,13 +3622,22 @@ class DictationController(QtCore.QObject):
             if isinstance(runtime_lease, _TranscriberRuntimeLease):
                 runtime_lease.release()
 
-    def _retry_guidance(self, *, has_retry_audio: bool | None = None) -> str:
+    def _retry_guidance(
+        self, *, has_retry_audio: bool | None = None, owns_last_recording: bool = True
+    ) -> str:
+        """The sentences after an error: Retry for `has_retry_audio`, and the
+        last recording file only while it is the caller's own
+        (`owns_last_recording`): a session that persisted nothing, or whose
+        write was refused, named the previous recording as itself.
+        """
         retry_available = (
             bool(self._last_failed_wav_bytes)
             if has_retry_audio is None
             else bool(has_retry_audio)
         )
-        last_recording_available = self._selectable_last_recording_path() is not None
+        last_recording_available = (
+            owns_last_recording and self._selectable_last_recording_path() is not None
+        )
         if retry_available:
             parts = [
                 "Captured audio is preserved in memory.",
@@ -4768,12 +4786,11 @@ class DictationController(QtCore.QObject):
             self._persist_last_recording_audio(wav_bytes)
         return wav_bytes, source_audio_path
 
-    def _teardown_active_stream_runtime(
-        self, *, preserve_audio: bool
-    ) -> tuple[bytes, str]:
-        wav_bytes, source_audio_path = self._stop_active_capture(
-            persist_audio=preserve_audio
-        )
+    def _teardown_active_stream_runtime(self) -> tuple[bytes, str]:
+        """Stop the live stream's capture and abort its transcriber. The
+        caller persists the audio handed back: it is the one that has to
+        know whether that write happened."""
+        wav_bytes, source_audio_path = self._stop_active_capture(persist_audio=False)
 
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
@@ -5575,7 +5592,12 @@ class DictationController(QtCore.QObject):
         # additionally show it on the overlay when no live session owns it.
         self.background_transcription_failed.emit(message)
         if not self._overlay_session_active():
-            self._overlay.set_state("Error", message)
+            # Retry is right only for the failure's own promoted audio.
+            self._overlay.set_state(
+                "Error",
+                message,
+                error_action=None if retry_available else OVERLAY_ERROR_ACTION_NONE,
+            )
             self._reveal_overlay_result(is_error=True)
 
     def _on_transcription_failed(
@@ -5584,7 +5606,12 @@ class DictationController(QtCore.QObject):
         *,
         request_token: int | None = None,
     ) -> None:
-        preserved_audio = bool(self._last_failed_wav_bytes)
+        # Whether this failure's own audio is in the retry slot, which is
+        # what the Error's Retry button and its guidance are about. It
+        # started as "the slot holds something", which for a failure with
+        # no audio of its own described, and offered a Retry of, an older
+        # failure (the wave-16 reach lens).
+        preserved_audio = False
         job: _TranscriptionJob | None = None
         if request_token is not None:
             job = self._jobs.get(request_token)
@@ -5628,6 +5655,9 @@ class DictationController(QtCore.QObject):
         # where the store's slot is the previous recording's, which the
         # history entry below then named as its audio.
         session_recording_id = job.source_recording_id if job is not None else ""
+        # Whether the store's last recording is this session's: the job's
+        # own answer, and for the live stream's death the persist below.
+        owns_last_recording = job is not None and job.marks_last_recording
         self._finish_transcription_job(request_token)
         self._focus_poll_timer.stop()
         runtime_stream_failed = (
@@ -5672,12 +5702,14 @@ class DictationController(QtCore.QObject):
                     or pending_finalize.stashed_partial
                 )
             wav_bytes, partial_source_audio_path = (
-                self._teardown_active_stream_runtime(preserve_audio=True)
+                self._teardown_active_stream_runtime()
             )
             if wav_bytes:
                 self._last_failed_wav_bytes = bytes(wav_bytes)
-                # Persisted by the teardown just above; "" when that write
-                # failed, and a retry of these bytes then marks nothing.
+                # "" when this write failed, and a retry of these bytes then
+                # marks nothing; the store then holds the previous recording,
+                # which this session does not own.
+                owns_last_recording = self._persist_last_recording_audio(wav_bytes)
                 self._last_failed_recording_id = self._last_persisted_recording_id
                 session_recording_id = self._last_persisted_recording_id
                 preserved_audio = True
@@ -5707,12 +5739,33 @@ class DictationController(QtCore.QObject):
         # stream/capture teardown above so a deferred result is not left
         # pending behind a capture that was just removed.
         self._flush_deferred_background_results()
-        self._mark_last_recording_failed(job, error_text)
+        if job is not None:
+            self._mark_last_recording_failed(job, error_text)
+        elif owns_last_recording:
+            # The live session's own recording, written by the persist above
+            # and keyed by the id it handed back. A session that persisted
+            # nothing -- no audio, a refused write -- owns no recording in
+            # the store, and the unconditional mark relabelled the previous
+            # one.
+            self._mark_last_recording_failed(
+                None,
+                error_text,
+                session_recording_id=self._last_persisted_recording_id,
+            )
+        guidance = self._retry_guidance(
+            has_retry_audio=preserved_audio,
+            owns_last_recording=owns_last_recording,
+        )
         self._overlay.set_state(
             "Error",
-            f"{error_text} {self._retry_guidance(has_retry_audio=preserved_audio)}"
-            f"{kept_detail}",
+            f"{error_text} {guidance}{kept_detail}",
             copy_text=partial_transcript or None,
+            # `None` is the Retry button, which transcribes the slot: with no
+            # audio of its own this failure leaves the slot to an older
+            # failure, and the button transcribed that recording under an
+            # Error about this one (the wave-16 reach lens). The tray's
+            # "Retry transcription" keeps reaching the slot.
+            error_action=None if preserved_audio else OVERLAY_ERROR_ACTION_NONE,
         )
         self._reveal_overlay_result(is_error=True)
 
@@ -6002,12 +6055,19 @@ class DictationController(QtCore.QObject):
                 source_audio_path=source_audio_path,
             )
             self._last_transcript = partial_transcript
+            # Both paints: the abort never writes the retry slot, so the Retry
+            # button (`error_action` None) transcribed whatever older failure
+            # the slot held, or answered "No failed transcription to retry";
+            # the aborted session's own audio is the last recording file.
             self._overlay.set_state(
                 "Error",
                 f"{reason} Partial transcript (saved to history): {partial_transcript}",
+                error_action=OVERLAY_ERROR_ACTION_NONE,
             )
         else:
-            self._overlay.set_state("Error", reason)
+            self._overlay.set_state(
+                "Error", reason, error_action=OVERLAY_ERROR_ACTION_NONE
+            )
         self._reveal_overlay_result(is_error=True)
         # Aborting this session removed the capture that was blocking any
         # deferred background inserts; deliver every completed one now — even if

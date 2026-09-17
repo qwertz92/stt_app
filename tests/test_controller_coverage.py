@@ -2787,6 +2787,181 @@ def test_a_dying_streams_partial_names_the_recording_its_persist_wrote(
     _ = app
 
 
+def test_a_finalize_failure_without_audio_of_its_own_offers_no_retry(monkeypatch):
+    """`error_action=None` is the Retry button, and Retry transcribes the
+    slot. A failure with no audio of its own leaves the slot to the older
+    failure it holds, so the button transcribed that recording under an
+    Error about this one, while the text beside it described this one
+    (the wave-16 reach lens). The guidance names no last recording file
+    either: this session persisted none, and the file is the older
+    recording's."""
+    store = _StoreThatAssignsIds("rec-previous")
+    store._available = True
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(stop_raises=RuntimeError("stream died"))
+
+    def _hold_an_older_failure(controller):
+        controller._last_failed_wav_bytes = b"older failure"
+        controller._last_failed_recording_id = "rec-older"
+
+    controller, app = _stop_a_streaming_session(
+        monkeypatch,
+        store,
+        transcriber,
+        overlay,
+        capture_cls=_EmptyCapture,
+        before_stop=_hold_an_older_failure,
+    )
+    assert _pump_until(app, lambda: overlay.state == "Error"), overlay.states
+
+    assert overlay.state_kwargs[-1].get("error_action") == OVERLAY_ERROR_ACTION_NONE
+    assert "You can start a new recording and try again." in overlay.detail
+    assert "last recording file" not in overlay.detail
+    assert "use Retry" not in overlay.detail
+    assert controller._last_failed_wav_bytes == b"older failure"
+    assert controller._last_failed_recording_id == "rec-older"
+    controller.shutdown()
+    _ = app
+
+
+def test_a_stream_that_died_before_its_capture_produced_audio_offers_no_retry(
+    monkeypatch,
+):
+    """The road with no job at all: the runtime dies during the recording
+    and the teardown finds no bytes. The Error read "Captured audio is
+    preserved in memory ... use Retry" for the older failure in the slot,
+    offered its button, and marked the previous recording failed."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    store = _StoreThatAssignsIds("rec-previous")
+    store._available = True
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(push_raises=RuntimeError("push failed"))
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _EmptyCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        overlay=overlay,
+    )
+    controller.start_recording()
+    controller._last_failed_wav_bytes = b"older failure"
+    controller._last_failed_recording_id = "rec-older"
+
+    FakeCapture.instances[-1].chunk_callback(b"data")
+
+    assert transcriber.aborted is True
+    assert overlay.state == "Error"
+    assert overlay.state_kwargs[-1].get("error_action") == OVERLAY_ERROR_ACTION_NONE
+    assert "You can start a new recording and try again." in overlay.detail
+    assert "use Retry" not in overlay.detail
+    assert store.failed_ids == []
+    assert controller._last_failed_wav_bytes == b"older failure"
+    assert controller._last_failed_recording_id == "rec-older"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_a_stream_runtime_failure_marks_the_recording_its_persist_wrote(
+    monkeypatch, persisted
+):
+    """With bytes, the road keeps offering Retry for them, keys the failed
+    mark by the id its persist handed back, and marks nothing when that
+    write failed -- the unconditional mark relabelled the previous
+    recording."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    store._available = True
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(push_raises=RuntimeError("push failed"))
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        overlay=overlay,
+    )
+    controller.start_recording()
+
+    FakeCapture.instances[-1].chunk_callback(b"data")
+
+    assert overlay.state == "Error"
+    assert overlay.state_kwargs[-1].get("error_action") is None
+    assert "use Retry" in overlay.detail
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    if persisted:
+        assert store.failed_ids == ["saved-1"]
+        assert "last recording file" in overlay.detail
+    else:
+        assert store.failed_ids == []
+        assert "last recording file" not in overlay.detail
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("with_partial", [True, False], ids=["partial", "no partial"])
+def test_an_aborted_stream_offers_no_retry(monkeypatch, with_partial):
+    """The abort road never writes the slot, so its Retry button transcribed
+    whatever older failure the slot held, or answered "No failed
+    transcription to retry"; the aborted session's own audio is reached
+    through History -> Use last recording, as its text says nothing else."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings), overlay=overlay
+    )
+    controller.start_recording()
+    if with_partial:
+        FakeCapture.instances[-1].chunk_callback(b"data")
+    controller._last_failed_wav_bytes = b"older failure"
+    controller._last_failed_recording_id = "rec-older"
+
+    controller.cancel_current_action()
+
+    assert overlay.state == "Error"
+    assert overlay.detail.startswith("Streaming canceled.")
+    assert ("Partial transcript" in overlay.detail) is with_partial
+    assert overlay.state_kwargs[-1].get("error_action") == OVERLAY_ERROR_ACTION_NONE
+    assert controller._last_failed_wav_bytes == b"older failure"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("retry_available", [True, False], ids=["kept", "not kept"])
+def test_a_background_failure_shown_on_an_idle_overlay_offers_retry_only_for_its_audio(
+    retry_available,
+):
+    """The report paints the overlay when no session owns it; its Retry is
+    right only when the failure's own audio was promoted."""
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay)
+    job = controller._register_transcription_job(
+        3, AppSettings(hotkey=FALLBACK_HOTKEY), "batch"
+    )
+
+    controller._report_background_failure(job, "boom", retry_available)
+
+    assert overlay.state == "Error"
+    assert ("use Retry" in overlay.detail) is retry_available
+    assert overlay.state_kwargs[-1].get("error_action") == (
+        None if retry_available else OVERLAY_ERROR_ACTION_NONE
+    )
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
