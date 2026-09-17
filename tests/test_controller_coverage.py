@@ -2506,6 +2506,26 @@ def test_the_streaming_finalize_keeps_its_sessions_audio_for_retry(monkeypatch):
 
 
 
+def test_the_streaming_finalize_marks_transcribing_keyed_by_its_jobs_recording(
+    monkeypatch,
+):
+    """The finalize's transcribing mark carries the job's own recording id
+    like every other mark; it was the one mark still written unkeyed."""
+    store = _StoreThatAssignsIds("rec-previous")
+    overlay = FakeOverlay()
+    controller, app = _stop_a_streaming_session(
+        monkeypatch, store, FakeStreamingTranscriber(), overlay
+    )
+
+    assert store.transcribing_ids == ["saved-1"]
+
+    assert _pump_until(app, lambda: overlay.state == "Done"), overlay.states
+    assert store.completed_ids == ["saved-1"]
+    controller.shutdown()
+    _ = app
+
+
+
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
     inserter = FakeTextInserter()

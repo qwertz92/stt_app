@@ -3530,14 +3530,7 @@ class DictationController(QtCore.QObject):
             self._selected_model_name(settings),
             job.source_recording_id or "n/a",
         )
-        try:
-            self._last_recording_store.mark_transcribing(
-                engine=settings.engine,
-                model=self._selected_model_name(settings),
-                mode=settings.mode,
-            )
-        except Exception:
-            self._logger.exception("Failed to mark streaming recording as transcribing")
+        self._mark_last_recording_transcribing(job, settings)
         try:
             job.future = self._stream_finalize_executor_for(
                 settings,
