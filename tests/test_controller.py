@@ -3787,3 +3787,86 @@ def test_w15_a_queued_failures_audio_survives_the_next_dictations_success(
         release_x.set()
         controller.shutdown()
     _ = app
+
+
+class _StoreWhoseSaveRaisesOnce(LastRecordingStore):
+    """The real store refusing one write, as a full disk or a locked file
+    does: what it holds stays as it was."""
+
+    def __init__(self, *args, refuse: bytes, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._refuse = bytes(refuse)
+        self.refused = 0
+
+    def save_recording(self, wav_bytes, *, keep_after_success):
+        if bytes(wav_bytes) == self._refuse and not self.refused:
+            self.refused += 1
+            raise OSError("disk full")
+        return super().save_recording(wav_bytes, keep_after_success=keep_after_success)
+
+
+def test_w16_a_retry_after_a_refused_save_spares_the_recording_the_store_holds(
+    monkeypatch, tmp_path
+):
+    """A streaming stop whose `save_recording` raises leaves the store holding
+    the previous recording. The finalize took that recording's id from the
+    slot, its failure kept the session's audio under it, and the retry's
+    success then completed -- with `save_last_wav` off, deleted -- a
+    recording the user never asked about (the wave-16 concurrency lens)."""
+    audio_path = tmp_path / "last_recording.wav"
+    store = _StoreWhoseSaveRaisesOnce(
+        audio_path=audio_path,
+        state_path=tmp_path / "last_recording.json",
+        refuse=b"RIFF",
+    )
+    previous = store.save_recording(b"previous recording", keep_after_success=False)
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY,
+        mode="streaming",
+        model_size="small",
+        keep_transcript_in_clipboard=False,
+    )
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    transcriber = FakeStreamingTranscriber(stop_raises=RuntimeError("finalize failed"))
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    overlay = FakeOverlay()
+    controller, app = make_controller(
+        settings_store=FakeSettingsStore(settings),
+        history_store=history_store,
+        last_recording_store=store,
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+    )
+    try:
+        controller.start_recording()
+        FakeCapture.instances[-1].chunk_callback(b"data")
+        controller.toggle_recording()
+        _pump_until(app, lambda: overlay.state == "Error")
+
+        assert store.refused == 1
+        state = store.load()
+        assert state is not None and state.recording_id == previous.recording_id
+        assert state.status == "captured", "the finalize relabelled it"
+        assert controller._last_failed_wav_bytes == b"RIFF"
+        assert controller._last_failed_recording_id == ""
+
+        assert controller.retry_last_transcription() is True
+        _pump_until(app, lambda: overlay.state == "Done")
+
+        state = store.load()
+        assert state is not None and state.recording_id == previous.recording_id
+        assert state.status == "captured"
+        assert audio_path.read_bytes() == b"previous recording"
+        # The rescued partial and the retry's transcript, neither naming
+        # the previous recording as its audio.
+        assert [(e.text, e.source_recording_id) for e in history_store.load()] == [
+            ("stream", ""),
+            ("batch", ""),
+        ]
+    finally:
+        controller.shutdown()
+    _ = app

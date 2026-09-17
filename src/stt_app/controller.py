@@ -2196,8 +2196,17 @@ class DictationController(QtCore.QObject):
                 else:
                     self._overlay.set_state("Error", detail)
                 return
-            self._persist_last_recording_audio(wav_bytes)
+            persisted = self._persist_last_recording_audio(wav_bytes)
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
+            # The job's recording is the one this persist wrote. Registered
+            # from the store's slot, a job whose write was refused -- a full
+            # disk, a locked file -- carried the previous recording's id:
+            # the finalize marked that recording transcribing, and its
+            # retry's success completed, with `save_last_wav` off deleted,
+            # a recording the user never asked about (the wave-16
+            # concurrency lens, on the real store). "" says the store never
+            # received these bytes, and such a job marks nothing.
+            source_recording_id = None if persisted else ""
 
             if self._streaming_recording:
                 self._focus_poll_timer.stop()
@@ -2212,7 +2221,9 @@ class DictationController(QtCore.QObject):
                     "Processing", "Finalizing streaming transcript..."
                 )
                 self._submit_stream_finalize(
-                    source_audio_path=source_audio_path, wav_bytes=wav_bytes
+                    source_audio_path=source_audio_path,
+                    wav_bytes=wav_bytes,
+                    source_recording_id=source_recording_id,
                 )
                 return
 
@@ -2245,6 +2256,7 @@ class DictationController(QtCore.QObject):
                 wav_bytes,
                 settings_snapshot,
                 source_audio_path=source_audio_path,
+                source_recording_id=source_recording_id,
             )
         finally:
             pending_toggles = self._pending_toggle_after_stop_count
@@ -3104,9 +3116,11 @@ class DictationController(QtCore.QObject):
 
         The job's recording is the store's slot (`source_recording_id` None):
         the recording roads persist their audio the statement before they
-        submit, so the slot is theirs. A retry names the recording whose
-        bytes it resubmits instead, and "" there means the store never
-        received them -- such a job marks nothing.
+        submit, so the slot is theirs -- and they pass "" when that write
+        did not happen, because the slot is then the previous recording's.
+        A retry names the recording whose bytes it resubmits instead. ""
+        either way means the store never received these bytes, and such a
+        job marks nothing.
         """
         marks_last_recording = True
         if source_recording_id is None:
@@ -3491,7 +3505,11 @@ class DictationController(QtCore.QObject):
         return self._stream_finalize_executor
 
     def _submit_stream_finalize(
-        self, *, source_audio_path: str = "", wav_bytes: bytes = b""
+        self,
+        *,
+        source_audio_path: str = "",
+        wav_bytes: bytes = b"",
+        source_recording_id: str | None = None,
     ) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
@@ -3506,6 +3524,7 @@ class DictationController(QtCore.QObject):
             settings,
             "streaming",
             source_audio_path=source_audio_path,
+            source_recording_id=source_recording_id,
         )
         job.runtime_transcriber = transcriber
         job.runtime_lease = runtime_lease
@@ -5603,6 +5622,12 @@ class DictationController(QtCore.QObject):
             # (wave 15; `_retire_retry_audio_delivered_by`).
             preserved_audio = self._promote_request_audio_for_retry(request_token, job)
 
+        # The recording this session owns in the store: the job's own, and
+        # for the live stream's death the id its teardown's persist hands
+        # back below -- "" when nothing was persisted or the write failed,
+        # where the store's slot is the previous recording's, which the
+        # history entry below then named as its audio.
+        session_recording_id = job.source_recording_id if job is not None else ""
         self._finish_transcription_job(request_token)
         self._focus_poll_timer.stop()
         runtime_stream_failed = (
@@ -5654,6 +5679,7 @@ class DictationController(QtCore.QObject):
                 # Persisted by the teardown just above; "" when that write
                 # failed, and a retry of these bytes then marks nothing.
                 self._last_failed_recording_id = self._last_persisted_recording_id
+                session_recording_id = self._last_persisted_recording_id
                 preserved_audio = True
         self._streaming_recording = False
         self._active_stream_transcriber = None
@@ -5672,6 +5698,7 @@ class DictationController(QtCore.QObject):
                 partial_transcript,
                 partial_settings,
                 "streaming",
+                source_recording_id=session_recording_id,
                 source_audio_path=partial_source_audio_path,
             )
             self._last_transcript = partial_transcript
@@ -5923,10 +5950,23 @@ class DictationController(QtCore.QObject):
         source_audio_path = ""
         if capture is not None:
             source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
-        if preserve_audio and wav_bytes:
-            self._persist_last_recording_audio(wav_bytes)
+        # The recording this session owns in the store: the one this persist
+        # writes, keyed by the id it hands back; "" when nothing is persisted
+        # or the write failed, where the slot is the previous recording's --
+        # which the unkeyed mark relabelled canceled and the history entry
+        # below named as its audio.
+        session_recording_id = ""
+        persisted = (
+            preserve_audio
+            and bool(wav_bytes)
+            and self._persist_last_recording_audio(wav_bytes)
+        )
+        if persisted:
+            session_recording_id = self._last_persisted_recording_id
             try:
-                self._last_recording_store.mark_canceled(reason)
+                self._last_recording_store.mark_canceled(
+                    reason, expected_recording_id=session_recording_id or None
+                )
             except Exception:
                 self._logger.exception("Failed to persist aborted streaming recording")
 
@@ -5958,6 +5998,7 @@ class DictationController(QtCore.QObject):
                 partial_transcript,
                 partial_settings,
                 "streaming",
+                source_recording_id=session_recording_id,
                 source_audio_path=source_audio_path,
             )
             self._last_transcript = partial_transcript

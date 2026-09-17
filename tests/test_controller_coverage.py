@@ -2528,12 +2528,29 @@ def test_a_foreground_failure_without_audio_leaves_the_promoted_failure_retryabl
     _ = app
 
 
-def _stop_a_streaming_session(monkeypatch, store, transcriber, overlay):
+class _EmptyCapture(FakeCapture):
+    """A capture whose stop hands back no audio: a stream that died
+    before it produced any."""
+
+    def stop(self):
+        self.stopped = True
+        return b""
+
+
+def _stop_a_streaming_session(
+    monkeypatch,
+    store,
+    transcriber,
+    overlay,
+    *,
+    capture_cls=FakeCapture,
+    before_stop=None,
+):
     settings = AppSettings(
         hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small"
     )
     FakeCapture.instances = []
-    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr("stt_app.controller.AudioCapture", capture_cls)
     monkeypatch.setattr(
         "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
     )
@@ -2544,6 +2561,8 @@ def _stop_a_streaming_session(monkeypatch, store, transcriber, overlay):
     )
     controller.start_recording()
     FakeCapture.instances[-1].chunk_callback(b"data")
+    if before_stop is not None:
+        before_stop(controller)
     controller.toggle_recording()
     return controller, app
 
@@ -2589,6 +2608,183 @@ def test_the_streaming_finalize_marks_transcribing_keyed_by_its_jobs_recording(
     controller.shutdown()
     _ = app
 
+
+
+def test_a_finalize_whose_persist_failed_marks_nothing_and_its_retry_spares_the_slot(
+    monkeypatch,
+):
+    """A recording road whose `save_recording` raised hands its job no
+    identity rather than the store's slot, which still holds the previous
+    recording: the job marks nothing, its failure is kept for Retry under
+    "", and the retry's success completes -- with `save_last_wav` off,
+    deletes -- nothing. Registered from the slot, the finalize marked the
+    previous recording transcribing and its Retry deleted it (the wave-16
+    concurrency lens, on the real store)."""
+    store = _StoreThatAssignsIds("rec-previous", save_raises=True)
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(stop_raises=RuntimeError("boom"))
+    controller, app = _stop_a_streaming_session(
+        monkeypatch, store, transcriber, overlay
+    )
+    finalize = controller._jobs[controller._active_request_token]
+    assert finalize.source_recording_id == ""
+    assert finalize.marks_last_recording is False
+    assert store.transcribing_ids == []
+    assert _pump_until(app, lambda: overlay.state == "Error"), overlay.states
+
+    assert store.failed_ids == []
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    assert controller._last_failed_recording_id == ""
+
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+    assert controller._jobs[retry_token].marks_last_recording is False
+    controller._on_transcription_ready("retried", request_token=retry_token)
+
+    assert store.completed_ids == []
+    assert store.recording_id == "rec-previous"
+    assert controller._last_failed_wav_bytes == b""
+    controller.shutdown()
+    _ = app
+
+
+def test_a_batch_stop_whose_persist_failed_hands_its_job_no_identity(
+    monkeypatch, tmp_path
+):
+    """The batch road, same rule: the job marks nothing, its history entry
+    names no recording, and the previous recording survives its success."""
+    store = _StoreThatAssignsIds("rec-previous", save_raises=True)
+    history = TranscriptHistoryStore(tmp_path / "history.json")
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(AppSettings(hotkey=FALLBACK_HOTKEY)),
+        last_recording_store=store,
+        history_store=history,
+    )
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    controller.start_recording()
+    controller.stop_recording()
+
+    token = controller._active_request_token
+    job = controller._jobs[token]
+    assert job.source_recording_id == ""
+    assert job.marks_last_recording is False
+    assert store.transcribing_ids == []
+
+    controller._on_transcription_ready("done", request_token=token)
+
+    assert store.completed_ids == []
+    assert store.recording_id == "rec-previous"
+    assert [entry.source_recording_id for entry in history.load()] == [""]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_finalize_with_no_audio_of_its_own_marks_nothing(monkeypatch):
+    """A streaming capture that produced no bytes persisted nothing, so the
+    store's slot is the previous recording's: registered from it, the
+    finalize marked that recording transcribing and then failed."""
+    store = _StoreThatAssignsIds("rec-previous")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(stop_raises=RuntimeError("stream died"))
+    controller, app = _stop_a_streaming_session(
+        monkeypatch, store, transcriber, overlay, capture_cls=_EmptyCapture
+    )
+    finalize = controller._jobs[controller._active_request_token]
+    assert store.saves == 0
+    assert finalize.source_recording_id == ""
+    assert finalize.marks_last_recording is False
+    assert store.transcribing_ids == []
+    assert _pump_until(app, lambda: overlay.state == "Error"), overlay.states
+
+    assert store.failed_ids == []
+    assert store.recording_id == "rec-previous"
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_an_aborted_streams_partial_names_the_recording_its_persist_wrote(
+    monkeypatch, persisted, tmp_path
+):
+    """The abort's history entry and its canceled mark name the recording the
+    abort's own persist wrote, and none when that write failed. Read from
+    the store's slot, both named the previous recording -- whose audio the
+    entry's Retranscribe would then have transcribed."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    history = TranscriptHistoryStore(tmp_path / "history.json")
+    transcriber = FakeStreamingTranscriber()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        history_store=history,
+    )
+    controller.start_recording()
+    FakeCapture.instances[-1].chunk_callback(b"data")
+
+    controller.cancel_current_action()
+
+    expected_id = "saved-1" if persisted else ""
+    assert [entry.source_recording_id for entry in history.load()] == [expected_id]
+    assert store.canceled_ids == ([expected_id] if persisted else [])
+    controller.shutdown()
+    _ = app
+
+
+class _DiesAfterAPartial(FakeStreamingTranscriber):
+    """Delivers one partial, then dies on the next chunk."""
+
+    def push_audio_chunk(self, chunk: bytes, *, block_timeout_s: float | None = None):
+        if self.chunks:
+            raise RuntimeError("socket died")
+        super().push_audio_chunk(chunk, block_timeout_s=block_timeout_s)
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_a_dying_streams_partial_names_the_recording_its_persist_wrote(
+    monkeypatch, persisted, tmp_path
+):
+    """The same for the partial a dying stream runtime rescues."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small")
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    history = TranscriptHistoryStore(tmp_path / "history.json")
+    transcriber = _DiesAfterAPartial()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **_kw: transcriber
+    )
+    overlay = FakeOverlay()
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        history_store=history,
+        overlay=overlay,
+    )
+    controller.start_recording()
+    FakeCapture.instances[-1].chunk_callback(b"first")
+    FakeCapture.instances[-1].chunk_callback(b"second")
+
+    assert overlay.state == "Error"
+    assert [entry.source_recording_id for entry in history.load()] == [
+        "saved-1" if persisted else ""
+    ]
+    controller.shutdown()
+    _ = app
 
 
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
