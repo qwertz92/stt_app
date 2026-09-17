@@ -2211,7 +2211,9 @@ class DictationController(QtCore.QObject):
                 self._overlay.set_state(
                     "Processing", "Finalizing streaming transcript..."
                 )
-                self._submit_stream_finalize(source_audio_path=source_audio_path)
+                self._submit_stream_finalize(
+                    source_audio_path=source_audio_path, wav_bytes=wav_bytes
+                )
                 return
 
             if not wav_bytes:
@@ -3005,6 +3007,31 @@ class DictationController(QtCore.QObject):
     def _drop_request_audio(self, request_token: int) -> None:
         self._request_audio_by_token.pop(request_token, None)
 
+    def _retire_retry_audio_delivered_by(self, request_token: int) -> None:
+        """Drop a delivered job's request audio, and retire the retry slot
+        only when that audio is the slot's own.
+
+        The slot -- `_last_failed_wav_bytes` beside
+        `_last_failed_recording_id` -- holds the most recent failure kept
+        for Retry, and every foreground success used to empty it. A queued
+        dictation that fails while the next one is already recorded is
+        promoted there and reported with "The audio was kept -- use Retry
+        to try again"; the next one's success then discarded those bytes,
+        their only copy, because the store keeps one managed file and the
+        newer recording's save had already replaced the older one's
+        (measured on the real store; the wave-15 concurrency lens). A
+        success retires the failure it resolves -- the retry of the slot's
+        own bytes -- and any other recording's success leaves the slot
+        alone.
+        """
+        payload = self._request_audio_by_token.pop(request_token, None)
+        if payload is None:
+            return
+        wav_bytes, _settings = payload
+        if self._last_failed_wav_bytes and wav_bytes == self._last_failed_wav_bytes:
+            self._last_failed_wav_bytes = b""
+            self._last_failed_recording_id = ""
+
     # -- Transcription queue --------------------------------------------------
 
     def _new_recording_active(self) -> bool:
@@ -3449,7 +3476,9 @@ class DictationController(QtCore.QObject):
             return self._executor
         return self._stream_finalize_executor
 
-    def _submit_stream_finalize(self, *, source_audio_path: str = "") -> None:
+    def _submit_stream_finalize(
+        self, *, source_audio_path: str = "", wav_bytes: bytes = b""
+    ) -> None:
         request_token = self._next_request_token()
         self._active_request_token = request_token
         settings = self._active_stream_settings or replace(self._settings)
@@ -3466,6 +3495,13 @@ class DictationController(QtCore.QObject):
         )
         job.runtime_transcriber = transcriber
         job.runtime_lease = runtime_lease
+        if wav_bytes:
+            # The session's audio, kept for Retry exactly as a batch job's
+            # is: a finalize that fails promotes it under the job's own id.
+            # With nothing registered the Error offered a Retry that
+            # answered "No failed transcription to retry" while the slot
+            # was emptied underneath (wave 15).
+            self._store_request_audio(request_token, wav_bytes, settings)
         # Hand the in-flight handshake to the worker so it can wait for it
         # before stopping the stream.
         #
@@ -4989,9 +5025,7 @@ class DictationController(QtCore.QObject):
                     self._finish_transcription_job(request_token)
                 return
             self._active_request_token = None
-            self._drop_request_audio(request_token)
-            self._last_failed_wav_bytes = b""
-            self._last_failed_recording_id = ""
+            self._retire_retry_audio_delivered_by(request_token)
 
         self._finish_transcription_job(request_token)
         # A foreground result is about to claim the overlay. A deferred insert
@@ -5556,10 +5590,11 @@ class DictationController(QtCore.QObject):
                 self._flush_deferred_background_results()
                 return
             self._active_request_token = None
+            # A failure whose audio was retained replaces the slot; one with
+            # no bytes of its own leaves the previous failure retryable.
+            # Clearing it here discarded a queued dictation's only copy
+            # (wave 15; `_retire_retry_audio_delivered_by`).
             preserved_audio = self._promote_request_audio_for_retry(request_token, job)
-            if not preserved_audio:
-                self._last_failed_wav_bytes = b""
-                self._last_failed_recording_id = ""
 
         self._finish_transcription_job(request_token)
         self._focus_poll_timer.stop()

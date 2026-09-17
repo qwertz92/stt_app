@@ -3652,3 +3652,138 @@ def test_c_a_retry_of_an_older_failure_never_touches_a_newer_recording_in_the_st
         release.set()
         controller.shutdown()
     _ = app
+
+
+class _ScriptedStepTranscriber:
+    """Each `transcribe_batch` call runs the next `(entered, release, outcome)`
+    step: it sets `entered`, waits for `release`, then raises the outcome if
+    it is an exception and returns it otherwise. `set_cancel_check` is a
+    no-op, as every remote provider's is."""
+
+    def __init__(self, steps):
+        self._steps = list(steps)
+        self.calls = 0
+
+    def transcribe_batch(self, _audio_source):
+        entered, release, outcome = self._steps[self.calls]
+        self.calls += 1
+        entered.set()
+        assert release.wait(timeout=8.0), "the step was never released"
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+    def set_cancel_check(self, _check):
+        return None
+
+    def set_language_mode(self, _mode):
+        return None
+
+    def set_progress_callback(self, _callback):
+        return None
+
+    def close(self):
+        return None
+
+
+def _released() -> threading.Event:
+    event = threading.Event()
+    event.set()
+    return event
+
+
+def test_w15_a_queued_failures_audio_survives_the_next_dictations_success(
+    monkeypatch, tmp_path
+):
+    """Q fails in the background while X, recorded meanwhile, is queued
+    behind it; X succeeds. Q's bytes are then the only copy of Q -- the
+    store keeps one managed file, X's save replaced Q's, and X's completion
+    cleared X's own -- and the tray had promised "use Retry to try again".
+    Measured before the fix: `_last_failed_wav_bytes == b""` after X's
+    success and Retry answering "No failed transcription to retry"."""
+    history_store = TranscriptHistoryStore(tmp_path / "history.json")
+    recordings = LastRecordingStore(
+        audio_path=tmp_path / "last_recording.wav",
+        state_path=tmp_path / "last_recording.json",
+    )
+    settings_store = FakeSettingsStore(
+        AppSettings(
+            hotkey=FALLBACK_HOTKEY,
+            model_size="small",
+            keep_transcript_in_clipboard=False,
+            concurrent_transcription_mode=CONCURRENT_TRANSCRIPTION_MODE_INSERT,
+        )
+    )
+    entered_q, release_q = threading.Event(), threading.Event()
+    entered_x, release_x = threading.Event(), threading.Event()
+    transcriber = _ScriptedStepTranscriber(
+        [
+            (entered_q, release_q, RuntimeError("Q failed")),
+            (entered_x, release_x, "X succeeded."),
+            (threading.Event(), _released(), "retry of Q succeeded."),
+        ]
+    )
+    q_wav, x_wav = _sine_wav(0.30), _sine_wav(0.25)
+    _ScriptedCapture.instances = []
+    _ScriptedCapture.queue = [q_wav, x_wav]
+    monkeypatch.setattr("stt_app.controller.AudioCapture", _ScriptedCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber",
+        lambda _settings, **_kwargs: transcriber,
+    )
+    overlay = FakeOverlay()
+    controller, app = make_controller(
+        settings_store=settings_store,
+        history_store=history_store,
+        last_recording_store=recordings,
+        overlay=overlay,
+        text_inserter=FakeTextInserter(),
+    )
+    reports: list[str] = []
+    controller.background_transcription_failed.connect(reports.append)
+    managed = tmp_path / "last_recording.wav"
+    try:
+        controller.toggle_recording()
+        controller.toggle_recording()
+        assert entered_q.wait(timeout=8.0), "Q never started"
+        q_state = recordings.load()
+        assert q_state is not None and q_state.status == "transcribing"
+        q_id = q_state.recording_id
+        assert managed.read_bytes() == q_wav
+
+        controller.toggle_recording()
+        controller.toggle_recording()
+        x_state = recordings.load()
+        assert x_state is not None and x_state.recording_id != q_id
+        assert managed.read_bytes() == x_wav, "X's save replaced Q's file"
+
+        release_q.set()
+        _pump_until(app, lambda: controller._last_failed_recording_id == q_id)
+        assert controller._last_failed_wav_bytes == q_wav
+        assert len(reports) == 1 and "use Retry" in reports[0], reports
+
+        assert entered_x.wait(timeout=8.0), "X never started"
+        release_x.set()
+        _pump_until(app, lambda: overlay.state == "Done")
+        assert [e.text for e in history_store.load()] == ["X succeeded."]
+        assert recordings.load() is None and not managed.exists()
+
+        assert controller._last_failed_wav_bytes == q_wav, (
+            "X's success discarded Q's only copy"
+        )
+        assert controller._last_failed_recording_id == q_id
+        assert controller.retry_last_transcription() is True
+        assert controller._jobs[controller._active_request_token].source_recording_id == q_id
+        _pump_until(
+            app,
+            lambda: [e.text for e in history_store.load()]
+            == ["X succeeded.", "retry of Q succeeded."],
+        )
+        assert overlay.states[-1] == ("Done", "retry of Q succeeded.")
+        assert controller._last_failed_wav_bytes == b""
+        assert transcriber.calls == 3
+    finally:
+        release_q.set()
+        release_x.set()
+        controller.shutdown()
+    _ = app

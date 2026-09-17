@@ -2385,6 +2385,127 @@ def test_a_stream_runtime_failure_retains_the_sessions_own_id(
     _ = app
 
 
+def test_a_different_recordings_success_leaves_the_promoted_failure_retryable():
+    """The retry slot is retired by the recording it holds, never by another
+    recording's success. A queued dictation Q that fails while the next one,
+    X, is already recorded is promoted there and reported with "The audio
+    was kept -- use Retry to try again"; X's success then emptied the slot,
+    and those bytes were Q's only copy, the managed file being X's by then
+    (measured on the real store, the wave-15 concurrency lens)."""
+    store = _StoreWithIds("rec-Q")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    captured = []
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda token, wav, _snapshot, job=None: captured.append((token, wav))
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._store_request_audio(3, b"wav-Q", settings)
+    store.recording_id = "rec-X"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._store_request_audio(4, b"wav-X", settings)
+    controller._active_request_token = 4
+    reports: list[str] = []
+    controller.background_transcription_failed.connect(reports.append)
+
+    controller._on_transcription_failed("Q failed", request_token=3)
+
+    assert controller._last_failed_wav_bytes == b"wav-Q"
+    assert controller._last_failed_recording_id == "rec-Q"
+    assert len(reports) == 1 and "use Retry" in reports[0], reports
+
+    controller._on_transcription_ready("X done", request_token=4)
+
+    assert store.completed_ids == ["rec-X"]
+    assert controller._last_failed_wav_bytes == b"wav-Q", (
+        "X's success discarded Q's only copy"
+    )
+    assert controller._last_failed_recording_id == "rec-Q"
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+    assert captured == [(retry_token, b"wav-Q")]
+    assert controller._jobs[retry_token].source_recording_id == "rec-Q"
+
+    # The retry of the slot's own bytes is what retires it.
+    controller._on_transcription_ready("Q retried", request_token=retry_token)
+
+    assert store.completed_ids == ["rec-X", "rec-Q"]
+    assert controller._last_failed_wav_bytes == b""
+    assert controller._last_failed_recording_id == ""
+    controller.shutdown()
+    _ = app
+
+
+def test_a_foreground_failure_without_audio_leaves_the_promoted_failure_retryable():
+    """A failure with no bytes of its own to offer has nothing to replace the
+    slot with, and clearing it discarded the previous failure's only copy."""
+    store = _StoreWithIds("rec-Q")
+    overlay = FakeOverlay()
+    controller, app = _make_controller(overlay=overlay, last_recording_store=store)
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._store_request_audio(3, b"wav-Q", settings)
+    store.recording_id = "rec-X"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._active_request_token = 4
+
+    controller._on_transcription_failed("Q failed", request_token=3)
+    assert controller._last_failed_wav_bytes == b"wav-Q"
+
+    controller._on_transcription_failed("X failed", request_token=4)
+
+    assert store.failed_ids == ["rec-X"]
+    assert overlay.state == "Error"
+    assert controller._last_failed_wav_bytes == b"wav-Q"
+    assert controller._last_failed_recording_id == "rec-Q"
+    controller.shutdown()
+    _ = app
+
+
+def _stop_a_streaming_session(monkeypatch, store, transcriber, overlay):
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY, mode="streaming", model_size="small"
+    )
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.create_transcriber", lambda _s, **kw: transcriber
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        overlay=overlay,
+    )
+    controller.start_recording()
+    FakeCapture.instances[-1].chunk_callback(b"data")
+    controller.toggle_recording()
+    return controller, app
+
+
+def test_the_streaming_finalize_keeps_its_sessions_audio_for_retry(monkeypatch):
+    """A finalize that fails keeps the session's audio for Retry like a batch
+    failure does, keyed by the id its stop's persist handed back. It used to
+    register no audio, so the Error offered a Retry that answered "No failed
+    transcription to retry" while the slot was emptied underneath."""
+    store = _StoreThatAssignsIds("rec-previous")
+    overlay = FakeOverlay()
+    transcriber = FakeStreamingTranscriber(stop_raises=RuntimeError("boom"))
+    controller, app = _stop_a_streaming_session(
+        monkeypatch, store, transcriber, overlay
+    )
+    assert _pump_until(app, lambda: overlay.state == "Error"), overlay.states
+
+    assert transcriber.stopped is True
+    assert store.failed_ids == ["saved-1"]
+    assert controller._last_failed_wav_bytes == b"RIFF"
+    assert controller._last_failed_recording_id == "saved-1"
+    assert "use Retry" in overlay.detail, overlay.detail
+    controller.shutdown()
+    _ = app
+
+
+
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
@@ -4254,7 +4375,11 @@ def test_a_cancel_during_the_pending_finalize_keeps_the_handshakes_failure(
 
         assert failed == [(token, "Invalid API key.")], failed
         assert len(background) == 1, background
-        assert background[0].endswith(" failed: Invalid API key."), background
+        # The finalize registers its session's audio (wave 15), so the
+        # canceled job's failure keeps it for Retry and says so.
+        assert background[0].endswith(
+            " failed: Invalid API key. The audio was kept — use Retry to try again."
+        ), background
         assert transcriber.aborted, "the never-published session was left alone"
         assert not transcriber.stopped, "stop_stream() on a session never published"
         # The store agrees on both roads: the X marked nothing, and a job
