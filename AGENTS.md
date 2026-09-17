@@ -2220,11 +2220,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   its capture produced audio; the Retry on that Error then transcribes
   what the slot holds, which is what the tray's "Retry transcription"
   label means, while the guidance text describes the failure on screen.
-  And the finalize's
-  transcribing mark goes through `_mark_last_recording_transcribing` like
-  the batch submit's, keyed by the job's id: it was the one mark still
-  written unkeyed, one statement after the persist that wrote the id it
-  marks, so nothing observable changed (the lens's hypothesis).
+  And the finalize's transcribing mark goes through
+  `_mark_last_recording_transcribing` like the batch submit's, keyed by
+  the job's id: it was the one mark still written unkeyed, one statement
+  after the persist that wrote the id it marks, so nothing observable
+  changed (the lens's hypothesis).
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),
