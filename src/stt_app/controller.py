@@ -3007,9 +3007,12 @@ class DictationController(QtCore.QObject):
     def _drop_request_audio(self, request_token: int) -> None:
         self._request_audio_by_token.pop(request_token, None)
 
-    def _retire_retry_audio_delivered_by(self, request_token: int) -> None:
+    def _retire_retry_audio_delivered_by(
+        self, request_token: int, job: _TranscriptionJob | None
+    ) -> None:
         """Drop a delivered job's request audio, and retire the retry slot
-        only when that audio is the slot's own.
+        only when that audio is the slot's own: the same bytes under the
+        same recording id.
 
         The slot -- `_last_failed_wav_bytes` beside
         `_last_failed_recording_id` -- holds the most recent failure kept
@@ -3023,14 +3026,25 @@ class DictationController(QtCore.QObject):
         success retires the failure it resolves -- the retry of the slot's
         own bytes -- and any other recording's success leaves the slot
         alone.
+
+        Its own is the id as well: the retry carries the slot's id (""
+        included, for bytes the store never received), and bytes alone
+        stood in for it, so byte-identical audio from a different
+        recording retired the slot (the wave-16 reach and concurrency
+        lenses). What the id cannot separate is two recordings the store
+        never received carrying the same bytes: "" beside "".
         """
         payload = self._request_audio_by_token.pop(request_token, None)
         if payload is None:
             return
         wav_bytes, _settings = payload
-        if self._last_failed_wav_bytes and wav_bytes == self._last_failed_wav_bytes:
-            self._last_failed_wav_bytes = b""
-            self._last_failed_recording_id = ""
+        if not self._last_failed_wav_bytes or wav_bytes != self._last_failed_wav_bytes:
+            return
+        delivered_id = job.source_recording_id if job is not None else ""
+        if delivered_id != self._last_failed_recording_id:
+            return
+        self._last_failed_wav_bytes = b""
+        self._last_failed_recording_id = ""
 
     # -- Transcription queue --------------------------------------------------
 
@@ -5018,7 +5032,7 @@ class DictationController(QtCore.QObject):
                     self._finish_transcription_job(request_token)
                 return
             self._active_request_token = None
-            self._retire_retry_audio_delivered_by(request_token)
+            self._retire_retry_audio_delivered_by(request_token, job)
 
         self._finish_transcription_job(request_token)
         # A foreground result is about to claim the overlay. A deferred insert

@@ -2437,6 +2437,71 @@ def test_a_different_recordings_success_leaves_the_promoted_failure_retryable():
     _ = app
 
 
+def test_a_byte_identical_recordings_success_leaves_the_promoted_failure_retryable():
+    """Two recordings with the same bytes are two recordings. The slot is
+    retired by the recording it holds -- the retry names it by the id kept
+    beside the bytes -- and content equality alone stood in for that
+    identity, so byte-identical audio from a different recording retired
+    it (the wave-16 reach and concurrency lenses, each with a probe on the
+    real store)."""
+    store = _StoreWithIds("rec-Q")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    captured = []
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda token, wav, _snapshot, job=None: captured.append((token, wav))
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._store_request_audio(3, b"same wav", settings)
+    store.recording_id = "rec-X"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._store_request_audio(4, b"same wav", settings)
+    controller._active_request_token = 4
+
+    controller._on_transcription_failed("Q failed", request_token=3)
+    assert controller._last_failed_recording_id == "rec-Q"
+
+    controller._on_transcription_ready("X done", request_token=4)
+
+    assert store.completed_ids == ["rec-X"]
+    assert controller._last_failed_wav_bytes == b"same wav", (
+        "X's success discarded Q's only copy on content equality alone"
+    )
+    assert controller._last_failed_recording_id == "rec-Q"
+
+    assert controller.retry_last_transcription() is True
+    retry_token = controller._active_request_token
+    assert captured == [(retry_token, b"same wav")]
+    controller._on_transcription_ready("Q retried", request_token=retry_token)
+
+    assert store.completed_ids == ["rec-X", "rec-Q"]
+    assert controller._last_failed_wav_bytes == b""
+    assert controller._last_failed_recording_id == ""
+    controller.shutdown()
+    _ = app
+
+
+def test_a_retry_of_an_unknown_identity_still_retires_the_slot():
+    """"" is an identity as well: a retry of bytes the store never received
+    carries it, and its success retires the slot as a known id's does."""
+    controller, app = _make_controller(last_recording_store=_StoreWithIds("rec-A"))
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    controller._last_failed_wav_bytes = b"retained"
+    controller._last_failed_recording_id = ""
+
+    assert controller.retry_last_transcription() is True
+    token = controller._active_request_token
+    controller._on_transcription_ready("retried", request_token=token)
+
+    assert controller._last_failed_wav_bytes == b""
+    controller.shutdown()
+    _ = app
+
+
 def test_a_foreground_failure_without_audio_leaves_the_promoted_failure_retryable():
     """A failure with no bytes of its own to offer has nothing to replace the
     slot with, and clearing it discarded the previous failure's only copy."""
