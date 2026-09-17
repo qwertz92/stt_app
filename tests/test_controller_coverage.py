@@ -3027,6 +3027,49 @@ def test_a_background_failure_shown_on_an_idle_overlay_offers_retry_only_for_its
 
 
 @pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_a_silence_gated_recording_names_the_recording_its_persist_wrote(
+    monkeypatch, persisted
+):
+    """The silence gate's canceled mark is keyed by the id its persist handed
+    back and skipped when that write failed, and its text says the recording
+    is kept only then. Unkeyed, the mark relabelled the previous recording --
+    one still transcribing -- canceled with the gate's text, and the text
+    called audio the store never received kept (the wave-17 reach lens, on
+    the real store)."""
+    settings = AppSettings(
+        hotkey=FALLBACK_HOTKEY, mode="batch", silence_gate_enabled=True
+    )
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    monkeypatch.setattr(
+        "stt_app.controller.measure_peak_windowed_rms", lambda _wav: 0.0001
+    )
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        overlay=overlay,
+    )
+    controller.start_recording()
+
+    controller.stop_recording()
+
+    assert overlay.state == "Done"
+    assert overlay.detail.startswith("No speech detected")
+    assert store.transcribing_ids == []
+    if persisted:
+        assert store.canceled_ids == ["saved-1"]
+        assert "the recording is kept" in overlay.detail
+    else:
+        assert store.canceled_ids == []
+        assert "the recording is kept" not in overlay.detail
+        assert "could not be kept as the last recording" in overlay.detail
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
 def test_a_canceled_batch_recording_names_the_recording_its_persist_wrote(
     monkeypatch, persisted
 ):

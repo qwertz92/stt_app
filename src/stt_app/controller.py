@@ -2253,7 +2253,7 @@ class DictationController(QtCore.QObject):
                 self._active_batch_settings = None
                 return
 
-            if self._silence_gate_blocks(wav_bytes):
+            if self._silence_gate_blocks(wav_bytes, persisted=persisted):
                 self._active_batch_settings = None
                 return
 
@@ -2285,7 +2285,7 @@ class DictationController(QtCore.QObject):
                 )
                 QtCore.QTimer.singleShot(0, self.start_recording)
 
-    def _silence_gate_blocks(self, wav_bytes: bytes) -> bool:
+    def _silence_gate_blocks(self, wav_bytes: bytes, *, persisted: bool) -> bool:
         """Skip transcription when the recording never rises above silence.
 
         Speech models hallucinate words from pure silence, so an opt-in gate
@@ -2293,7 +2293,12 @@ class DictationController(QtCore.QObject):
         user-tunable threshold (kept low so whispering still passes). The
         measured level is always logged so the threshold is easy to tune, and
         a gated recording stays available as the last recording for a manual
-        retry via History -> Use last recording.
+        retry via History -> Use last recording -- when `persisted` says the
+        stop road's write happened. The canceled mark is keyed by the id that
+        write handed back and skipped otherwise: the slot then holds the
+        previous recording, which the unkeyed mark relabelled canceled with
+        this gate's text, and the text called audio the store never received
+        kept (the wave-17 reach lens, on the real store).
         """
         enabled = bool(getattr(self._settings, "silence_gate_enabled", False))
         try:
@@ -2323,18 +2328,27 @@ class DictationController(QtCore.QObject):
         )
         if not enabled or peak_level >= threshold:
             return False
-        try:
-            self._last_recording_store.mark_canceled(
-                "Recording skipped by the silence gate."
-            )
-        except Exception:
-            self._logger.exception("Failed to mark silence-gated recording")
+        if persisted:
+            try:
+                self._last_recording_store.mark_canceled(
+                    "Recording skipped by the silence gate.",
+                    expected_recording_id=self._last_persisted_recording_id
+                    or None,
+                )
+            except Exception:
+                self._logger.exception("Failed to mark silence-gated recording")
+        kept = (
+            "the recording is kept"
+            if persisted
+            else "the recording could not be kept as the last recording (see "
+            "the log)"
+        )
         self._overlay.set_state(
             "Done",
             (
                 f"No speech detected (loudest 100 ms {peak_level:.4f}, gate "
-                f"{threshold:.4f}). Nothing was transcribed; the recording is "
-                "kept. If this was speech, lower the silence gate in "
+                f"{threshold:.4f}). Nothing was transcribed; {kept}. If this "
+                "was speech, lower the silence gate in "
                 "Settings -> Audio & Recording."
             ),
         )
