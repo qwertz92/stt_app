@@ -2546,6 +2546,26 @@ def test_a_retry_of_an_unknown_identity_still_retires_the_slot():
     _ = app
 
 
+def test_two_unknown_identities_are_told_apart_by_their_bytes():
+    """Two recordings the store never received share the identity "": the
+    bytes are what separates them, so a success under "" retires the slot
+    only when it carries the slot's own bytes."""
+    controller, app = _make_controller(last_recording_store=_StoreWithIds("rec-A"))
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._last_failed_wav_bytes = b"wav-Q"
+    controller._last_failed_recording_id = ""
+    controller._register_transcription_job(4, settings, "batch", source_recording_id="")
+    controller._store_request_audio(4, b"wav-X", settings)
+    controller._active_request_token = 4
+
+    controller._on_transcription_ready("X done", request_token=4)
+
+    assert controller._last_failed_wav_bytes == b"wav-Q"
+    assert controller._last_failed_recording_id == ""
+    controller.shutdown()
+    _ = app
+
+
 def test_a_foreground_failure_without_audio_leaves_the_promoted_failure_retryable():
     """A failure with no bytes of its own to offer has nothing to replace the
     slot with, and clearing it discarded the previous failure's only copy."""
