@@ -1869,7 +1869,7 @@ class DictationController(QtCore.QObject):
         # would then submit those late bytes for transcription and show an Error
         # at the same time. Preserve any late bytes for Retry, but never submit
         # them automatically from the timeout path.
-        wav_bytes, _ = self._stop_active_capture(persist_audio=False)
+        wav_bytes, _ = self._stop_active_capture()
         if wav_bytes:
             # Late bytes replace the slot; none leave the older failure it
             # holds retryable, as the dying stream's road does. Written
@@ -4782,8 +4782,13 @@ class DictationController(QtCore.QObject):
             or self._stream_text_state.last_partial_text
         )
 
-    def _stop_active_capture(self, *, persist_audio: bool) -> tuple[bytes, str]:
-        """Stop the active capture and return its audio plus the retained path."""
+    def _stop_active_capture(self) -> tuple[bytes, str]:
+        """Stop the active capture and return its audio plus the retained path.
+
+        The caller persists the audio: it is the one that has to know
+        whether that write happened, because the store's slot is the
+        previous recording's when it did not.
+        """
         capture = self._audio_capture
         self._audio_capture = None
         self._cancel_audio_callback_watchdog(capture)
@@ -4797,15 +4802,13 @@ class DictationController(QtCore.QObject):
             self._logger.exception("Failed to stop active audio capture")
 
         source_audio_path = self._save_recording_artifacts(capture, wav_bytes)
-        if persist_audio and wav_bytes:
-            self._persist_last_recording_audio(wav_bytes)
         return wav_bytes, source_audio_path
 
     def _teardown_active_stream_runtime(self) -> tuple[bytes, str]:
         """Stop the live stream's capture and abort its transcriber. The
         caller persists the audio handed back: it is the one that has to
         know whether that write happened."""
-        wav_bytes, source_audio_path = self._stop_active_capture(persist_audio=False)
+        wav_bytes, source_audio_path = self._stop_active_capture()
 
         transcriber = self._active_stream_transcriber
         self._active_stream_transcriber = None
@@ -6951,25 +6954,32 @@ class DictationController(QtCore.QObject):
             # worth the most -- a long one that no longer fits in memory -- and
             # the very next log line then reported `audio_bytes=0`, which is
             # what an instant cancel looks like.
-            wav_bytes, _source_audio_path = self._stop_active_capture(
-                persist_audio=True
-            )
+            wav_bytes, _source_audio_path = self._stop_active_capture()
             self._logger.info(
                 "recording_canceled_before_transcription audio_bytes=%d",
                 len(wav_bytes),
             )
-            if wav_bytes:
+            # The recording this cancel owns in the store is the one its
+            # persist writes, keyed by the id handed back. A refused write
+            # leaves the slot to the previous recording, which the unkeyed
+            # mark relabelled canceled and the text called "this recording".
+            persisted = bool(wav_bytes) and self._persist_last_recording_audio(
+                wav_bytes
+            )
+            if persisted:
                 try:
                     self._last_recording_store.mark_canceled(
-                        "Recording canceled before transcription."
+                        "Recording canceled before transcription.",
+                        expected_recording_id=self._last_persisted_recording_id
+                        or None,
                     )
                 except Exception:
                     self._logger.exception("Failed to mark canceled recording")
             self._active_batch_settings = None
-            self._overlay.set_state(
-                "Done",
-                f"Recording canceled. {self._retry_guidance(has_retry_audio=False)}",
+            guidance = self._retry_guidance(
+                has_retry_audio=False, owns_last_recording=persisted
             )
+            self._overlay.set_state("Done", f"Recording canceled. {guidance}")
             self._reset_streaming_state()
             # Canceling this recording removed the capture that was blocking any
             # deferred background inserts. Deliver every completed one now — even

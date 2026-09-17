@@ -3026,6 +3026,43 @@ def test_a_background_failure_shown_on_an_idle_overlay_offers_retry_only_for_its
     _ = app
 
 
+@pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
+def test_a_canceled_batch_recording_names_the_recording_its_persist_wrote(
+    monkeypatch, persisted
+):
+    """The cancel's canceled mark is keyed by the id its persist handed back
+    and skipped when that write failed, and its text calls the last
+    recording file "this recording" only then. Unkeyed, the mark relabelled
+    the previous recording canceled, and the text named it as this one."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    store = _StoreThatAssignsIds("rec-previous", save_raises=not persisted)
+    store._available = True
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        overlay=overlay,
+    )
+    controller.start_recording()
+
+    controller.cancel_current_action()
+
+    assert overlay.state == "Done"
+    assert overlay.detail.startswith("Recording canceled.")
+    if persisted:
+        assert store.canceled_ids == ["saved-1"]
+        assert "This recording is still available as the last recording file" in (
+            overlay.detail
+        )
+    else:
+        assert store.canceled_ids == []
+        assert "You can start a new recording and try again." in overlay.detail
+    controller.shutdown()
+    _ = app
+
+
 def test_cancel_current_action_keeps_completed_transcript_in_history(tmp_path):
     overlay = FakeOverlay()
     inserter = FakeTextInserter()
