@@ -6606,6 +6606,23 @@ class DictationController(QtCore.QObject):
                 "Error", "No failed transcription to retry."
             )
             return False
+        if (
+            self._recording_start_in_progress
+            or self._recording_stop_in_progress
+            or self._audio_capture is not None
+        ):
+            # A retry stops the running transcription and paints
+            # "Processing"; from the tray while the microphone was open it
+            # did both over a live recording (wave 15). Deliberately not
+            # `_streaming_recording`: a pending finalize keeps that flag
+            # with the microphone closed, and it is a transcription in
+            # flight, which the retry stops by design. The refusal reaches
+            # the tray, since the recording owns the overlay.
+            self.show_overlay_error(
+                "Finish the current recording before retrying the last failed "
+                "transcription."
+            )
+            return False
         settings = replace(self._settings)
         # Stop any still-running transcription before retrying; if it finishes
         # anyway it is kept in history rather than discarded.

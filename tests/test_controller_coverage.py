@@ -3249,6 +3249,86 @@ def test_repaste_last_transcript_blocked_while_recording():
     _ = app
 
 
+def _controller_with_a_retryable_failure_and_a_job_in_flight(overlay):
+    store = _StoreWithIds("rec-W")
+    controller, app = _make_controller(overlay=overlay, last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    submitted: list[int] = []
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda token, _wav, _snapshot, job=None: submitted.append(token)
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(5, settings, "batch")
+    controller._active_request_token = 5
+    controller._last_failed_wav_bytes = b"wav-W"
+    controller._last_failed_recording_id = "rec-W"
+    return controller, app, store, submitted
+
+
+@pytest.mark.parametrize(
+    "microphone", ["capture open", "start in progress", "stop in progress"]
+)
+def test_retry_last_transcription_blocked_while_the_microphone_is_open(microphone):
+    """A retry stops the running transcription and paints "Processing"; from
+    the tray while the microphone was open it did both over a live recording
+    (wave 15): "Listening" was replaced although the capture kept running,
+    and the transcription the recording was about to queue behind was
+    stopped. The refusal reaches the tray, as the re-paste's does."""
+    overlay = FakeOverlay()
+    controller, app, store, submitted = (
+        _controller_with_a_retryable_failure_and_a_job_in_flight(overlay)
+    )
+    if microphone == "capture open":
+        controller._audio_capture = FakeCapture()
+    elif microphone == "start in progress":
+        controller._recording_start_in_progress = True
+    else:
+        controller._recording_stop_in_progress = True
+    tray: list[str] = []
+    controller.busy_overlay_error.connect(tray.append)
+    painted = list(overlay.states)
+
+    assert controller.retry_last_transcription() is False
+
+    assert overlay.states == painted, overlay.states[len(painted) :]
+    assert submitted == []
+    assert controller._jobs[5].aborting is False
+    assert controller._active_request_token == 5
+    assert store.transcribing_ids == []
+    assert controller._last_failed_wav_bytes == b"wav-W"
+    assert tray == [
+        "Finish the current recording before retrying the last failed "
+        "transcription."
+    ]
+    controller._recording_start_in_progress = False
+    controller._recording_stop_in_progress = False
+    controller.shutdown()
+    _ = app
+
+
+def test_retry_last_transcription_stops_a_transcription_in_flight_when_the_microphone_is_closed():
+    """The guard is the microphone's, not the transcription's: with the
+    microphone closed a retry still stops the job in flight (kept in
+    history if it finishes anyway) and submits the failed bytes."""
+    overlay = FakeOverlay()
+    controller, app, store, submitted = (
+        _controller_with_a_retryable_failure_and_a_job_in_flight(overlay)
+    )
+
+    assert controller.retry_last_transcription() is True
+
+    assert controller._jobs[5].aborting is True
+    retry_token = controller._active_request_token
+    assert retry_token != 5 and submitted == [retry_token]
+    assert store.transcribing_ids == ["rec-W"]
+    assert overlay.states[-1] == (
+        "Processing",
+        "Retrying transcription with current settings...",
+    )
+    controller.shutdown()
+    _ = app
+
+
 # ---------------------------------------------------------------------------
 # Completion tone
 # ---------------------------------------------------------------------------
