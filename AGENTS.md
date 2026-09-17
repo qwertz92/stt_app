@@ -2196,6 +2196,35 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   declined exactly that. `_is_foreground_transcription` keeps a job demoted
   to history-only in the background; `insert` mode still delivers the older
   result as before, into the job's own captured window.
+  **The retry slot is retired only by its own recording** (wave 15).
+  `_last_failed_wav_bytes` beside `_last_failed_recording_id` holds the
+  most recent failure kept for Retry, and every foreground success used to
+  empty it. A queued dictation Q that fails while the next one, X, is
+  already recorded is promoted there and reported with "The audio was kept
+  -- use Retry to try again"; X's success then discarded those bytes, and
+  they were Q's only copy: `save_recording` keeps one managed file, X's
+  save had replaced Q's, and X's completion cleared X's own (measured on
+  the real store; the wave-15 concurrency lens found the shape from the
+  other side, a background failure landing during a retry).
+  `_retire_retry_audio_delivered_by` drops the delivered job's request
+  audio and retires the slot only when those bytes are the slot's own --
+  the retry of the failure it holds -- and a foreground failure with no
+  bytes of its own leaves the previous failure retryable as well. So the
+  streaming finalize registers its session's audio
+  (`_submit_stream_finalize(wav_bytes=...)`): a finalize that fails
+  promotes it under the job's own id as a batch failure does, where before
+  its Error offered a Retry that answered "No failed transcription to
+  retry" while the slot was emptied underneath, and a canceled finalize
+  whose handshake failed now reports the audio as kept. A foreground
+  failure with no bytes of its own is now only a stream that died before
+  its capture produced audio; the Retry on that Error then transcribes
+  what the slot holds, which is what the tray's "Retry transcription"
+  label means, while the guidance text describes the failure on screen.
+  And the finalize's
+  transcribing mark goes through `_mark_last_recording_transcribing` like
+  the batch submit's, keyed by the job's id: it was the one mark still
+  written unkeyed, one statement after the persist that wrote the id it
+  marks, so nothing observable changed (the lens's hypothesis).
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),
@@ -4366,6 +4395,15 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   its paint road and must not on its tray road, and a second reveal from
   `_repaste` brought a "Listening" overlay to the front for an error the tray
   carried. It never writes a new history entry.
+  **Retry has the same microphone guard** (wave 15):
+  `retry_last_transcription` stops the running transcription and paints
+  "Processing", and from the tray while a recording was active it did both
+  over the live session -- "Listening" replaced with the capture still
+  running, and the transcription the recording was about to queue behind
+  stopped (the wave-15 reach lens's open item). It refuses during a
+  recording start, stop or open capture, through the tray; a pending
+  streaming finalize is a transcription in flight, which it stops by
+  design, so `_streaming_recording` is not in the guard.
   Save-time validation rejects conflicts with the recording, cancel, and
   overlay hotkeys.
 - **Completion tone (`completion_beep_enabled` + `completion_beep_tone`,
@@ -5083,3 +5121,21 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   recording whose bytes it resubmits; here it needs a store write that
   fails (logged as `Failed to persist last recording audio`) beside a
   kept previous recording. Recorded.
+- **The retry slot holds one failure, and a background failure landing
+  during a retry replaces it.** `_last_failed_wav_bytes` is the most recent
+  failure with audio: a queued job Q failing while a retry of W is in
+  flight promotes Q's bytes over W's, and a second Retry press then stops
+  the retry of W -- its recording stays in the store, marked canceled, so
+  the recovery prompt and Import still reach it -- and transcribes Q under
+  Q's id (the wave-15 concurrency lens, on the real store and executor).
+  W's retry succeeding leaves Q retryable since wave 15; holding both
+  would need a queue of failures where the tray's "Retry transcription"
+  names one. Recorded.
+- **Two Retry presses on one failure can write two history entries.** The
+  second press stops the first retry, which a remote provider runs to
+  completion regardless; its transcript is then kept in history as every
+  finished transcription is, and the second retry's beside it, both with
+  the recording's id (the wave-15 concurrency lens). The rule that a
+  finished transcription is never discarded is the one this keeps; a
+  local engine's cooperative cancel ends the first retry instead.
+  Recorded.

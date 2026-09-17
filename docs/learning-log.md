@@ -7774,3 +7774,97 @@ harness reported them as BASELINE -- a selector that selects nothing is not a
 detector, and the unmutated baseline run is what said so; one word of the id
 selects the three cases, and the round was re-run in full. The full suite on
 `7a4d054`, 16 September: 2840 passed, 1 skipped in 164.93 s.
+
+### Wave 15 (2026-09-17) - the fourteenth wave, on the wave-14 fixes
+
+**Range.** `1a7990e..dfc0848`: the wave-14 fix and its record. Three Sonnet
+breakers -- reach, concurrency, facts -- each on its own export of `dfc0848`,
+against 12 written claims (Z1.1-Z1.8, D.1-D.4), told nothing of what was
+changed or why. The round was interrupted: the weekly usage limit ended the
+reach and concurrency breakers after 24 and 22 minutes, and the lead's session
+with them. Both were resumed the next day through their own transcripts (a
+message to the agent id), told only that nothing had moved under them, and
+finished from where they had stopped -- a resumed breaker keeps its reasoning
+and its probes, a re-briefed one starts without either. The facts lens
+verified every number, hash and quoted identifier of the Wave 14 section and
+the two AGENTS.md changes against the files, the commits and the probe
+outputs, reproduced the thirteen tests failing on a hybrid tree (the code of
+`1a7990e`, the tests of `dfc0848`) and passing on `dfc0848`, the fourteen
+mutants and the two-of-ten split of the wave-14 concurrency probe, refuted two
+hypotheses of its own -- "the third finding-named probe" reads as the
+remaining one of three, and "the thirteenth wave" for Wave 14 is this log's
+counting since Wave 3 -- and found nothing to correct. The reach lens drove Z1
+from both Retry entry points (one zero-argument call, wired directly in `main`
+for the tray action and the overlay button) through every state the store can
+be in when Retry is pressed: 19 probe runs against the real
+`LastRecordingStore`, one of them the wave-14 defect reproduced on an export
+of `1a7990e` (A's slot relabelled transcribing and then deleted with its
+audio), no failure on `dfc0848`, two informational items (the retry slot is
+one slot, not a per-recording history; one cached transcriber serves batch and
+streaming calls alike, by design), and one state it named as not exercised:
+Retry pressed with the microphone open.
+
+**The concurrency lens: the retry slot is last-writer-wins.** Two findings on
+the real controller, store and single-worker executor, both older than the
+range. First, a queued job Q failing in the background while a retry of W is
+in flight overwrites `_last_failed_wav_bytes` and `_last_failed_recording_id`
+with Q's, so a second Retry press stops the retry of W and transcribes Q under
+Q's id -- the store stays right throughout, since every mark is keyed. Second,
+two Retry presses on one failure write two history entries when the provider
+runs the stopped first retry to completion. Its hypothesis: the streaming
+finalize's transcribing mark was still written unkeyed. The lead reproduced
+both findings with the lens's own probe on the real tree (5 passed) and, from
+the first one's shape, asked the question the lens had not: what does a
+*different* recording's foreground success do to a promoted failure? Measured
+with a probe on the real store (`probe_slot_cleared_by_other_success.py`): Q
+fails in the background while X, recorded meanwhile, is queued behind it; the
+tray reports "The audio was kept -- use Retry to try again"; X succeeds;
+`_last_failed_wav_bytes` is empty, the managed WAV is X's and gone with X's
+completion -- Q's audio existed nowhere. The clear dates from the queue's
+restoration (`bba580a`, June); the default concurrent mode is `insert`, and a
+queued dictation failing while the next one succeeds is Parakeet's empty
+transcript on a short clip. P2.
+
+**The fixes (`2f9b7c5`, `3d85feb`, `be96d13`).** The retry slot is retired
+only by its own recording: `_retire_retry_audio_delivered_by` drops the
+delivered job's request audio and empties the slot only when those bytes are
+the slot's own, and a foreground failure with no bytes of its own leaves the
+previous failure retryable. For that to be coherent the streaming finalize
+registers its session's audio, so a finalize that fails keeps it for Retry
+under the job's own id as a batch failure does -- before, its Error offered a
+Retry that answered "No failed transcription to retry" while the slot was
+emptied underneath. `retry_last_transcription` refuses while the microphone is
+open, through the tray, as the re-paste has since wave 13; a pending finalize
+keeps `_streaming_recording` with the microphone closed and is a transcription
+in flight, which the retry stops by design, so that flag is left out of the
+guard. And the finalize's transcribing mark goes through the keyed helper; its
+inline copy and log line are gone. Tests: two fake-store tests, the finalize
+case and the microphone states in `test_controller_coverage.py`, a real-store
+scenario in `test_controller.py` that fails on `dfc0848` exactly as the probe
+did, and a positive control that a retry with the microphone closed still
+stops the transcription in flight.
+
+**Refuted or judged, with the reason.** The first finding as the lens reported
+it -- the swap on a second Retry press -- is recorded under Known limitations,
+not fixed: the slot holds one failure, W's recording stays in the store as
+canceled, and holding both would need a queue of failures where the tray's
+action names one. The second finding is the rule that a finished transcription
+is never discarded, applied to a retry the user superseded; a local engine's
+cooperative cancel ends the first retry instead. Recorded. The reach lens's
+two informational items are the design. Retry during a pending finalize stays
+allowed.
+
+**The commits and the mutation round.** Three commits, one per unit, and this
+record. Twelve mutants over them (`SP/wave15/lead/mutate_wave15.txt`) -- the
+success arm clearing for any recording (caught twice, by the fake-store test
+and the real-store scenario), the retry's own success no longer retiring the
+slot, the id surviving the retirement, the failure arm clearing again, the
+finalize registering no audio and the stop road handing it none, the guard
+gone, the guard over-reaching to a transcription in flight, the refusal
+painting over the live session or answering True, and the finalize's mark
+unkeyed again -- all detected. One shipped assertion moved: the wave-12 test
+of a cancel during a pending finalize with a failed handshake pinned the tray
+report ending in "failed: Invalid API key."; the finalize now registers its
+audio, the report says it was kept, and the test says why. The three
+controller files after each unit: 501, 475 and 510 passed. The full suite on
+`be96d13`, 17 September: 2849 passed, 1 skipped in 171.57s.
