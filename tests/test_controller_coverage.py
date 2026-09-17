@@ -2354,6 +2354,50 @@ def test_the_watchdog_abort_retains_the_stalled_recordings_own_id(
     _ = app
 
 
+@pytest.mark.parametrize("late_bytes", [b"late audio", b""], ids=["late bytes", "none"])
+def test_the_watchdog_abort_keeps_an_older_failure_when_nothing_arrived_late(
+    monkeypatch, late_bytes
+):
+    """The slot is written only for late bytes: a timeout with none emptied
+    an older failure's only copy. And the Error offers Retry only when the
+    slot holds this recording's bytes; otherwise the button transcribed the
+    older failure under an Error about this recording. The failed mark is
+    keyed by the id the persist handed back, like every other mark."""
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, mode="batch")
+    store = _StoreThatAssignsIds("rec-previous")
+    overlay = FakeOverlay()
+    FakeCapture.instances = []
+    monkeypatch.setattr("stt_app.controller.AudioCapture", FakeCapture)
+    controller, app = _make_controller(
+        settings_store=FakeSettingsStore(settings),
+        last_recording_store=store,
+        overlay=overlay,
+    )
+    controller.start_recording()
+    controller._last_failed_wav_bytes = b"older failure"
+    controller._last_failed_recording_id = "rec-older"
+    FakeCapture.instances[-1]._wav_bytes = late_bytes
+
+    controller._on_audio_callback_watchdog_timeout()
+
+    assert overlay.state == "Error"
+    if late_bytes:
+        assert controller._last_failed_wav_bytes == b"late audio"
+        assert controller._last_failed_recording_id == "saved-1"
+        assert store.failed_ids == ["saved-1"]
+        assert overlay.state_kwargs[-1].get("error_action") is None
+    else:
+        assert controller._last_failed_wav_bytes == b"older failure"
+        assert controller._last_failed_recording_id == "rec-older"
+        assert store.saves == 0
+        assert store.failed_ids == []
+        assert overlay.state_kwargs[-1].get("error_action") == (
+            OVERLAY_ERROR_ACTION_NONE
+        )
+    controller.shutdown()
+    _ = app
+
+
 @pytest.mark.parametrize("persisted", [True, False], ids=["persisted", "write failed"])
 def test_a_stream_runtime_failure_retains_the_sessions_own_id(
     monkeypatch, persisted

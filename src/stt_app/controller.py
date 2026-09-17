@@ -1870,16 +1870,31 @@ class DictationController(QtCore.QObject):
         # at the same time. Preserve any late bytes for Retry, but never submit
         # them automatically from the timeout path.
         wav_bytes, _ = self._stop_active_capture(persist_audio=False)
-        self._last_failed_wav_bytes = bytes(wav_bytes)
-        self._last_failed_recording_id = ""
-        if wav_bytes and self._persist_last_recording_audio(wav_bytes):
-            self._last_failed_recording_id = self._last_persisted_recording_id
-            try:
-                self._last_recording_store.mark_failed(detail)
-            except Exception:
-                self._logger.exception("Failed to mark stalled recording")
+        if wav_bytes:
+            # Late bytes replace the slot; none leave the older failure it
+            # holds retryable, as the dying stream's road does. Written
+            # unconditionally, a timeout with no late bytes emptied that
+            # failure's only copy.
+            self._last_failed_wav_bytes = bytes(wav_bytes)
+            self._last_failed_recording_id = ""
+            if self._persist_last_recording_audio(wav_bytes):
+                self._last_failed_recording_id = self._last_persisted_recording_id
+                try:
+                    self._last_recording_store.mark_failed(
+                        detail,
+                        expected_recording_id=self._last_persisted_recording_id
+                        or None,
+                    )
+                except Exception:
+                    self._logger.exception("Failed to mark stalled recording")
         self._reset_streaming_state()
-        self._overlay.set_state("Error", detail)
+        self._overlay.set_state(
+            "Error",
+            detail,
+            # Retry transcribes the slot: the late bytes when there were any,
+            # an older failure otherwise, under an Error about this recording.
+            error_action=None if wav_bytes else OVERLAY_ERROR_ACTION_NONE,
+        )
         self._reveal_overlay_result(is_error=True)
         self._flush_deferred_background_results()
         if warm_stream:
