@@ -694,8 +694,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   Qt timer verifies that PortAudio actually delivered a callback. A timeout is
   an abort, never a normal stop/transcription: a callback can race just after
   the timeout check, so any late bytes are retained for Retry but are not
-  submitted automatically while an Error is shown. Snapshot warm-stream and
-  callback-count diagnostics before `capture.stop()` mutates them.
+  submitted automatically while an Error is shown. Only late bytes write
+  the retry slot, persisted and marked failed under the id the persist
+  handed back: a timeout with none used to empty an older failure's only
+  copy, and that Error offers no Retry, because the button would have
+  transcribed the older recording under an Error about this one (wave
+  16). Snapshot warm-stream and callback-count diagnostics before
+  `capture.stop()` mutates them.
 - **Silence gate (`silence_gate_enabled` + `silence_gate_threshold`, default
   on/0.004)**: batch recordings whose loudest 100 ms window stays below the
   threshold skip transcription entirely (speech models hallucinate words from
@@ -819,7 +824,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   state passes `error_action=OVERLAY_ERROR_ACTION_INSERT` and offers Insert
   (`insert_again_requested` → `controller.repaste_last_transcript`) instead.
   Before this, the Error state after a failed paste offered a Retry that could
-  only answer "No failed transcription to retry".
+  only answer "No failed transcription to retry". And an Error whose
+  failure kept no audio of its own -- a finalize or a stream that died
+  without persisting, an aborted stream, the watchdog's timeout with no
+  late bytes, a background failure reported on an idle overlay with its
+  audio not kept -- passes `OVERLAY_ERROR_ACTION_NONE` and shows no
+  button: a Retry there transcribed the previous failure's audio under an
+  Error about this one (wave 16). The tray's "Retry transcription" still
+  names the slot.
 - **The header's two button groups are kept equally wide, and that is what
   centres the status text**: the header is
   `[Record][Pinned] <state label> [Clear][Copy]`, and the label is its only
@@ -2189,8 +2201,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   the slot holds someone else's recording, and the unconditional write an
   empty id means on the recording roads would relabel or delete it. The
   recording roads keep reading the slot, which is theirs because they
-  persist the statement before they submit (the write that fails there is
-  under Known limitations). And because the gate submits nothing,
+  persist the statement before they submit, and pass "" when that write
+  did not happen (wave 16). And because the gate submits nothing,
   nothing retargeted the active token and A became the live session again
   -- in `history` mode its text was pasted although the user's mode had
   declined exactly that. `_is_foreground_transcription` keeps a job demoted
@@ -2216,15 +2228,68 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   its Error offered a Retry that answered "No failed transcription to
   retry" while the slot was emptied underneath, and a canceled finalize
   whose handshake failed now reports the audio as kept. A foreground
-  failure with no bytes of its own is now only a stream that died before
-  its capture produced audio; the Retry on that Error then transcribes
-  what the slot holds, which is what the tray's "Retry transcription"
-  label means, while the guidance text describes the failure on screen.
+  failure with no bytes of its own is now a stream that died before its
+  capture produced audio, or the finalize of one; its Error offers no
+  Retry since wave 16 (the next entry), while the tray's "Retry
+  transcription" still names the slot. (This entry said for one round
+  that the button transcribes what the slot holds, which is what the
+  tray's label means; the button is the Error's own.)
   And the finalize's transcribing mark goes through
   `_mark_last_recording_transcribing` like the batch submit's, keyed by
   the job's id: it was the one mark still written unkeyed, one statement
   after the persist that wrote the id it marks, so nothing observable
   changed (the lens's hypothesis).
+  **A road whose persist did not write hands its job no identity, and an
+  Error with no retry audio of its own offers no Retry** (wave 16). Three
+  shapes on the roads the wave-15 fixes touched. First, the retire
+  compares the id as well as the bytes: two recordings with byte-identical
+  audio -- a fixed test phrase, a silent room -- cross-retired, X's
+  success emptying Q's promoted failure although the slot was Q's, so
+  `_retire_retry_audio_delivered_by` retires the slot only when the
+  delivered job's bytes *and* its `source_recording_id` are the slot's
+  own. What that cannot tell apart is two recordings the store never
+  received -- "" beside "" -- with identical bytes (Known limitations).
+  Second, the recording roads persist the statement before they submit
+  and read the slot for their job's identity, and a persist that failed
+  (a full disk, a locked file) left the slot to the previous recording:
+  the batch stop and the finalize then carried that id, and their job's
+  completion deleted a recording kept for Retry that was never theirs
+  (the wave-16 concurrency lens, on the real store; the wave-14 entry
+  above had recorded it under Known limitations). The stop road passes
+  `source_recording_id=""` when its persist did not write --
+  `_submit_stream_finalize(source_recording_id=)` forwards it, and a
+  streaming capture that produced no bytes persisted nothing as well --
+  and "" already means "the store never received these bytes": such a
+  job marks nothing and its history entry names no recording. The same
+  class one level out, found by the lead's real-store test for that
+  unit: the failure arm's and the abort road's partial writers named the
+  slot's recording and the abort's canceled mark was unkeyed. Both
+  writers pass the id their own persist handed back (the failure arm
+  persists a dying stream's audio itself; `_teardown_active_stream_runtime()`
+  hands the bytes back and takes no `preserve_audio`), the abort's mark
+  is keyed by it and skipped when the write failed, and the no-job failed
+  mark is keyed the same way (`_mark_last_recording_failed(...,
+  session_recording_id=)`). Third, the Retry button. The wave-15 rule "a
+  foreground failure with no bytes of its own leaves the previous failure
+  retryable" left the button on that Error, and pressing it transcribed
+  the previous failure's audio under an Error about this one (the wave-16
+  reach lens): `_on_transcription_failed` starts from `preserved_audio =
+  False`, promotes only the job's own audio or the dying stream's bytes,
+  and paints `error_action=OVERLAY_ERROR_ACTION_NONE` otherwise; the
+  aborted stream's Error, the background report on an idle overlay whose
+  audio was not kept, and the watchdog abort with no late bytes offer no
+  button either, and `_retry_guidance(owns_last_recording=)` calls the
+  last recording file "this recording" only when the caller's own persist
+  wrote it. Two more roads found while reading those: the watchdog abort
+  wrote the slot unconditionally and emptied an older failure's only copy
+  on the common timeout with no late bytes -- it writes the slot for late
+  bytes alone, persisted and marked failed under the id the persist handed
+  back -- and `cancel_current_action`'s batch branch, the last unkeyed
+  mark, persists its audio itself, keys its canceled mark by that id,
+  skips it when the write failed, and says "this recording" only then;
+  `_stop_active_capture` lost its `persist_audio` parameter with it. The
+  tray's "Retry transcription" always reaches the slot; the overlay's
+  button is the Error's own.
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),
@@ -5110,17 +5175,6 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   separates the two; not measured against a live browser). The delay
   bounds that window at 1.5 s where the predecessor had 160 ms, and
   `keep_transcript_in_clipboard` closes it. Recorded.
-- **A recording road's job takes its identity from the store's slot, so
-  a `save_recording` that fails there hands it the previous recording's.**
-  `stop_recording` persists the audio the statement before it submits and
-  `_register_transcription_job` reads the slot, which after a refused
-  write (a full disk, a locked file) still holds the previous recording;
-  the new job then carries that id, and its completion clears a previous
-  recording kept for Retry while its own audio was never saved. The
-  wave-14 unit closed this shape for the retry road, which names the
-  recording whose bytes it resubmits; here it needs a store write that
-  fails (logged as `Failed to persist last recording audio`) beside a
-  kept previous recording. Recorded.
 - **The retry slot holds one failure, and a background failure landing
   during a retry replaces it.** `_last_failed_wav_bytes` is the most recent
   failure with audio: a queued job Q failing while a retry of W is in
@@ -5139,3 +5193,10 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   finished transcription is never discarded is the one this keeps; a
   local engine's cooperative cancel ends the first retry instead.
   Recorded.
+- **Two recordings the store never received are told apart by their bytes
+  alone.** A job whose `source_recording_id` is "" -- its persist was
+  refused -- carries no identity, so the retire of the retry slot compares
+  "" with "" and falls back to the bytes: two such recordings with
+  identical audio cross-retire, as every pair did before wave 16. It needs
+  two refused store writes in one session and byte-identical recordings;
+  recorded.

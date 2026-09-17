@@ -7868,3 +7868,117 @@ report ending in "failed: Invalid API key."; the finalize now registers its
 audio, the report says it was kept, and the test says why. The three
 controller files after each unit: 501, 475 and 510 passed. The full suite on
 `be96d13`, 17 September: 2849 passed, 1 skipped in 171.57s.
+
+### Wave 16 (2026-09-18) - the fifteenth wave, on the wave-15 fixes
+
+**Range.** `dfc0848..05845a4`: the three wave-15 fixes and their record. Three
+Sonnet breakers -- facts, reach, concurrency -- each on its own export of
+`05845a4`, against 13 written claims (W1.1-W1.6, W2.1-W2.3, W3.1, D.1-D.3),
+told nothing of what was changed or why. The facts lens verified the Wave 15
+section and the two AGENTS.md changes against the files, the commits and the
+probe outputs, reproduced the first wave-15 mutant and the eight tests failing
+on a hybrid tree, regenerated the docs from the lead's script
+byte-identically, refuted its one hypothesis from the commit chronology, and
+found one thing it could not verify from any file: the "24 and 22 minutes" the
+Wave 15 section gives for the two interrupted breakers, which is the user's
+report and stands as that. Nothing to correct. The reach lens drove the Retry
+button and the tray action through seven probes against the real store
+(r1-r7): five confirm W2.1-W2.3 and W3.1 -- the refusal with a real batch
+capture open, the retry allowed during a pending finalize, the empty-slot
+refusal first, a finalize mark that raises logged with the finalize
+proceeding, the mark skipped for `marks_last_recording=False` -- and r2 found
+the Retry button on an Error whose failure kept no audio of its own. The
+concurrency lens ran five probes on the real store and executor: two broken --
+two recordings with identical bytes cross-retiring the slot, and a refused
+persist leaving the previous recording's id on the new job, whose retry then
+deleted that recording -- and three that held (the W1.4 sequence in both
+delivery orders, and two retries in a row).
+
+**The reproduction, and what the first run measured.** The lead runs every
+probe against the real tree before a finding counts -- and the first run did
+not: a probe file under a lens's export (`SP/wave16/<lens>/tree`) resolves
+`stt_app` from the export, because `pyproject.toml`'s `pythonpath = ["src"]`
+is relative to pytest's rootdir and the rootdir was the export's own
+`pyproject.toml`. For `05845a4` the export equalled the clean tree, so the
+findings stood; the run after the fixes then reported the two failures
+unchanged, and the traceback paths said why. Run from the repository with `-c
+pyproject.toml --rootdir=.`, `PYTHONPATH` naming the real `src` and `tests`,
+and a probe beside them that prints and asserts `stt_app.__file__` under
+`Projects\stt_app\src`, the two broken probes fail on exactly the assertions
+the fixes turn around (`slot_bytes_empty=False`: Q's failure is still
+retryable after X's success; `last_failed_recording_id=''`: the job after a
+refused persist carries no identity), r2 reads `error_action -> 'none'`, and
+the eleven others pass. Recorded because a green probe on the wrong tree is
+the shape that passes a review.
+
+**Judged, with the reason.** F1, the identical-bytes retire, is P4 -- two
+byte-identical recordings in one session -- and was fixed on the spot, because
+the fix is the id check the wave-14 entry already implied. F2 is P2: a refused
+persist is a full disk or a locked file, both real, and the consequence is a
+deleted recording. The wave-14 entry had recorded it under Known limitations
+as blocked on "the unconditional write an empty id means"; that blocker
+dissolved when wave 14 made an explicit "" mean "the store never received
+these bytes", so the recording roads only had to say so. r2 is P3 and revises
+a wave-15 sentence: "the Retry on that Error then transcribes what the slot
+holds, which is what the tray's label means" described the overlay's button as
+the tray's action; the button is the Error's own, and a button that
+transcribes another recording under this Error is wrong however the tray is
+labelled. The wave-15 entry is corrected in place and says so. The facts
+lens's hypothesis, the reach lens's five confirmations and the concurrency
+lens's three passing probes are recorded above; nothing else was refuted.
+
+**The fixes (`6d7ae3c`, `c9a9f65`, `b0dae7f`, `0a0b447`, `4791dee`) and what
+the real store added.** The retire requires the id and the bytes (`6d7ae3c`;
+`ab35dce` pins the bytes half, which no fake-store test reached after the id
+check landed). The stop road passes `source_recording_id=""` when its persist
+did not write and `_submit_stream_finalize` forwards it (`c9a9f65`); the
+lead's real-store test for that unit then failed on a second shape of the same
+class -- the finalize's failure wrote its partial to history under the
+previous recording's id, because the failure arm's and the abort road's
+partial writers read the slot and the abort's canceled mark was unkeyed -- so
+the same commit gives both writers the id their own persist handed back, the
+failure arm persisting a dying stream's audio itself and
+`_teardown_active_stream_runtime()` handing the bytes back without its
+`preserve_audio` parameter. An Error whose failure kept no audio of its own
+offers no Retry (`b0dae7f`): `preserved_audio` starts False, the abort road,
+the background report on an idle overlay and the no-job road paint
+`OVERLAY_ERROR_ACTION_NONE` for it, the no-job failed mark is keyed by the
+session's own id and skipped when its persist failed, and
+`_retry_guidance(owns_last_recording=)` stops calling a foreign recording
+"this recording". Found while reading those roads: the watchdog abort wrote
+the slot unconditionally and emptied an older failure's only copy on the
+common timeout with no late bytes (`0a0b447`), and `cancel_current_action`'s
+batch branch marked the slot canceled unkeyed and called the last recording
+file "this recording" whatever its persist did (`4791dee`), which took
+`_stop_active_capture`'s `persist_audio` parameter with it. Tests: fifteen
+fake-store tests in `test_controller_coverage.py` and a real-store scenario in
+`test_controller.py` whose retry after a refused save leaves the previous
+recording's state and audio alone.
+
+**The commits and the mutation round.** Six commits, one per unit plus the
+bytes test, and this record. Twenty-two mutants over the first four units
+(`SP/wave16/lead/mutate_wave16.txt`) and three over the fifth
+(`mutate_wave16b.txt`) -- the retire ignoring the id, refusing an unknown
+identity or ignoring the bytes; the stop road reading the slot after a refused
+write, on the batch road, the finalize and the real store; the finalize
+dropping the identity it was handed; the failure arm's and the abort's partial
+entries reading the slot; the abort's mark unkeyed; `preserved_audio` starting
+from the slot; the failure arm always or never offering Retry; owns ignoring
+the job's flag; the no-job mark unconditional; the guidance ignoring owns; the
+abort and the background report painting the default action; the watchdog
+writing the slot unconditionally, painting the default action or marking
+unkeyed; the dying stream owning the store whatever its persist did; the
+cancel's mark unkeyed, the cancel ignoring whether its persist wrote and its
+text owning the last recording regardless -- all detected. The five controller
+files after each unit: 517, 525, 564, 566 and 569 passed. The full suite on
+`4791dee`, 18 September: 2872 passed, 1 skipped in 166.05s.
+
+**What remains unverified.** The real overlay widget for the Retry-button
+half: every test and probe reads `error_action` off a fake overlay, and nobody
+pressed the button on the real one. A real refused store write: the fake
+raises `OSError("disk full")` and the real-store scenario makes
+`save_recording` raise once; a disk that is full or a file a scanner holds was
+not measured. Real providers behind a dying stream: the failure arm was driven
+with the fake streaming transcriber. And the residual of F1 -- two recordings
+the store never received, with identical bytes -- is recorded under Known
+limitations rather than closed.
