@@ -341,13 +341,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   never put back less text than the text-only one did. Measured cost on
   the Qt thread (the capture; the deferred restore's write runs on its
   timer thread except on the WM_PASTE road): 0.4 ms for a 4 MiB
-  screenshot, 3.2 ms at 32 MiB, 24 ms at the 256 MiB cap. Not measured:
-  a real clipboard -- every test drives the real backend against a fake
-  `win32clipboard`/`user32`/`kernel32` whose blocks are real ctypes
-  buffers, so the copy, the sizes and the lock pairing are real and the
-  Win32 calls are not; the hand check is a screenshot copied, a
-  dictation, Ctrl+V, and a file selection *cut* in Explorer whose
-  `Preferred DropEffect` must come back or the move becomes a copy.
+  screenshot, 3.2 ms at 32 MiB, 24 ms at the 256 MiB cap. Every test
+  drives the real backend against a fake `win32clipboard`/`user32`/
+  `kernel32` whose blocks are real ctypes buffers, so the copy, the sizes
+  and the lock pairing are real and the Win32 calls are not. **Measured on
+  the real clipboard on 2026-09-18** with a scratch probe: text, `HTML
+  Format`, `CF_DIB`, `CF_HDROP` and `Preferred DropEffect`, written
+  independently through pywin32, came back byte-identical after capture ->
+  transcript -> restore, Windows synthesized `CF_BITMAP` again, and
+  Explorer's own paste still MOVED a cut file and COPIED a copied one
+  afterwards. Not measured: a real screenshot tool's or Office's clipboard.
 - **`SMTO_ABORTIFHUNG` is why the readiness probe needs its own sleep**: that
   flag makes `SendMessageTimeoutW` return *immediately* when the target thread
   is already hung, instead of waiting out the timeout it was given. So
@@ -1734,8 +1737,14 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `tests/test_store_backup_recovery.py` drives all six stores through the
   shared `files_no_read_gets_past` fixture (`Path.open` raising
   `PermissionError` for the named files; `exists()` is a `stat` and is
-  deliberately not patched). A real antivirus, backup or sync lock was not
-  measured.
+  deliberately not patched). **Measured with a real lock on 2026-09-18**:
+  `CreateFileW` with share mode 0 -- the way an antivirus scan or a backup
+  tool holds a file -- on the transcript history, `settings.json` and the
+  last-recording state, 23 checks: the second open really fails, reads
+  answer the in-memory default, every write raises
+  `StoreUnavailableError`, nothing is moved aside or added, and every byte
+  is unchanged once the lock is gone. Not measured: a named antivirus
+  product.
 - **Deleting a store's primary means deleting its backup, in that order.**
   The recovery above is exactly what makes a half-deletion permanent:
   `LastRecordingStore.clear()` unlinked the state file and left the `.bak`,

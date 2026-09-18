@@ -8422,3 +8422,146 @@ probes are what cover that. The breakers' report files were refused by the
 harness again, so their reports exist as their final messages, saved by the
 lead under `SP/wave19/lead/reports/`; a facts lens that finds no report there
 is reading a later day.
+
+## Release preparation for v0.9.0 (2026-09-18)
+
+The adversarial loop ended with wave 19. What follows is the work between that
+round and the tag: closing the two gates that would have stopped the release,
+and measuring on the real operating system what the review fixes had only been
+shown against fakes. It matters more than usual, for a reason found on the way:
+the owner's daily instance was a source-tree process started on 2026-09-16 from
+`45f78a1` -- its log still writes the old `text_insertion outcome=...` line and
+no `paste_transaction` -- so none of the review fixes F01-F13 and none of waves
+11-19 had run in daily use before this release.
+
+**The npm advisories are closed, and "no patch exists" was stale.** Both open
+advisories (sharp < 0.35.4, GHSA-rgj7-g3m4-5g8c; adm-zip 0.5.9-0.6.0,
+GHSA-vwc7-r8mq-g2x9, reached through `onnxruntime-node`) are fixed by
+Transformers.js 4.3.0 (published 2026-09-16), which declares `sharp ^0.35.4` and
+`onnxruntime-node 1.30.0` itself; both `overrides` in `package.json` are gone
+(`76cae50`). `npm install --package-lock-only` kept the vulnerable adm-zip
+0.6.0 because the existing lock entry still satisfied `^0.6.0`;
+`npm audit fix --package-lock-only` moved it to 0.6.1. Measured before the
+bump through the app's own transcriber against a throwaway install: Cohere,
+Granite 4.1 2B and Granite 4.0 1B on `webgpu` and `cpu`, a German and an
+English clip each -- twelve transcripts byte-identical to 4.2.0's, every
+requested device reached without a fallback. The audit step is a gate of the
+release workflow too, so the open advisories would have stopped the build.
+The owner's standing preference is recorded in AGENTS.md and in his global
+instruction file: the newest release with the fewest known vulnerabilities as
+long as it runs.
+
+**The release gate ran in an environment only a release ever exercised, and
+it had rotted twice.** The first dry run for v0.9.0 (`workflow_dispatch`, run
+35378290905 on `76cae50`) failed in "Run the release test suite": 7 failed,
+2855 passed, 23 skipped under `QT_QPA_PLATFORM=offscreen`, while `quality.yml`
+was green on the same commit on the real desktop (2884 passed, 1 skipped). The
+seven are layout tests added since 2026-08-23 without the `pixel_exact`
+marker; all seven fail the same way locally under offscreen in three seconds
+(a 1088 px need where the real font gives 611, a button measuring 90 px where
+the shipped size is 58). v0.8.0's log (run 30862693087) shows the same class
+one release earlier, and corrects what the workflow comment said about it: not
+"failed on an artifact" alone -- two tests failed under offscreen, then the
+suite printed nothing past 96% from 23:36:18 until GitHub cancelled the job at
+05:34:12, six hours after it started. The log cannot say which test hung.
+`1ffd2eb`: the release test step is now the same command as `quality.yml`'s
+with no `QT_QPA_PLATFORM`; the seven tests carry the marker for headless runs
+(3 passed, 7 skipped under offscreen afterwards; the real-desktop suite still
+counts 2884 passed, 1 skipped, so they still run where they mean something);
+`faulthandler_timeout = 600` makes a future hang name its test. Second dry
+run 35380486308 on `1ffd2eb`: every step green -- 2884 passed, 1 skipped in
+302.49 s on the runner's desktop, `found 0 vulnerabilities`, the PyInstaller
+bundle, the Inno Setup installer (compiled in 171 s), its checksum and a
+540 MB artifact. It is the first complete build of this workflow since
+v0.7.1 on 2026-07-21.
+
+**The repository is protected against force-push and deletion of `main`.**
+Ruleset 23672739 (`deletion`, `non_fast_forward` on the default branch, no
+bypass actors). Read back before and after: the repository is public, its
+only collaborator is the owner, and before this there was neither a ruleset
+nor branch protection. A stranger can read, fork and open a pull request; only
+the owner can push, merge, change settings or delete the repository. Actions'
+default token is read-only and workflows from first-time contributors need
+approval.
+
+**Real-desktop measurements of the review fixes** (scratch probes, 2026-09-18;
+each ran under a throwaway `APPDATA`, captured the owner's clipboard first and
+put it back, and waited for the owner to be idle -- he had been for 436 s):
+
+- *Clipboard formats (F12).* Text, `HTML Format`, `CF_DIB`, `CF_HDROP` and
+  `Preferred DropEffect` written independently through pywin32, then the real
+  `Win32ClipboardBackend` capture -> transcript -> restore: all five
+  byte-identical on an independent read, `CF_BITMAP` synthesized again by
+  Windows. Explorer's own paste (Shell COM `InvokeVerb("paste")`) still MOVES a
+  cut file and COPIES a copied one after the app's round trip -- the hand check
+  AGENTS.md asked for, done by the machine.
+- *The paste transaction (F01/F02/F07).* Into a real top-level `EDIT` window on
+  a GUI thread with a message pump: the `WM_PASTE` road pasted exactly once and
+  restored text and HTML immediately (`paste_transaction id=1 ...
+  outcome=pasted restore=immediate`); the `SendInput` road landed exactly once
+  16 ms after the call, the clipboard still held the transcript right after it,
+  and the deferred restore ran as logged (`clipboard_restore id=2
+  outcome=restored delay_ms=1500`). With the foreground moved to a second
+  window inside the settle sleep the transaction raised "The foreground window
+  changed before the paste keystroke; nothing was pasted.", neither window
+  received text and the clipboard came back.
+- *Unreadable store files (F10), with real locks.* `CreateFileW` with share
+  mode 0 -- what an antivirus scan or a backup tool does -- on the transcript
+  history, `settings.json` and the last-recording state, 23 checks, all as
+  designed: a second open really fails (`PermissionError`), `load()` answers
+  the empty default in memory, `add_entry`, `clear`, `export_to_file`, `save`
+  and `mark_completed` raise `StoreUnavailableError` with the user-facing
+  text, a previous export survives, nothing is moved aside or added while
+  locked, every byte is unchanged after the lock is gone, and with only the
+  primary locked the backup's entries are answered while writes stay refused.
+  The repository's tests patch `Path.open`; this is the first run against the
+  operating system's own refusal.
+- *Real providers, with the keys in the Windows credential manager* (read by
+  the app's own `KeyringSecretStore`, never printed): AssemblyAI batch 8.02 s
+  for a 13.4 s German clip, 5.0 s for the English one in auto mode, 4.39 s for
+  a real 7.3 s recording; Groq 1.61 / 0.91 / 0.68 s; AssemblyAI
+  Universal-3.5 Pro streaming at real-time pace: connect 0.75 / 0.43 s, first
+  partial after 1.71 / 1.39 s, 13 / 7 partials, `stop_stream` 0.46 / 1.08 s
+  against its 8 s budget, no stream error; and a quit during the batch poll
+  ended the wait 0.47 s after `request_transcription_shutdown()`, naming the
+  transcript id and its last status. The probe's own `close()` on the
+  AssemblyAI transcriber failed because that class has none -- the controller
+  guards with `hasattr` (`_close_cached_transcriber`), so that was the probe's
+  defect.
+- *The frozen bundle.* No bundle had been built since v0.7.1 (v0.8.0 never
+  got that far), so two releases of new dependencies had never run frozen.
+  Built locally with the repository's spec into a scratch folder (866 MB) and
+  run under a throwaway `APPDATA` with `HF_HUB_OFFLINE=1`: the scan worker
+  lists the 12 cached models in 0.44 s; the benchmark worker transcribes the
+  German clip correctly with one model per runtime -- Parakeet through onnx-asr
+  and its package data (RTF 0.049), `tiny` through CTranslate2 (0.028),
+  Nemotron through ORT GenAI on CPU (0.223, with the documented DirectML
+  fallback note), Cohere through the bundled Node runtime on WebGPU (0.144);
+  the GUI starts, preloads Parakeet in 2 s and reports the three hotkeys as
+  held by another program with Windows' error 1409 named, which is the
+  wave-era `get_last_error` fix seen working frozen (the owner's instance held
+  them). With the clean Transformers.js 4.3.0 install swapped into the bundle,
+  so that it matches what CI builds, Cohere, Granite 4.1 2B and Granite 4.0 1B
+  transcribe on `webgpu` and `cpu` without an error or a fallback. One-run
+  RTFs on a busy machine; they show the path works, not how fast it is.
+
+**The external review file is closed.** `2026-09-12-code_review.md`, the
+owner's untracked copy of the external review, was read again in full: all
+thirteen findings map to fix commits (F01/F02/F07 `f20fdbc`, F03 `b556b08`,
+F04 `86cd4ae`, F05/F06 `b567b3c`, F08 `47bc304`, F09 `fb28f4c`, F10 `467788f`
+and `2bba644`, F11 `a11ddab`, F12 `c52ea82`, F13 `7640563`), and its two
+recommendations -- real Windows integration tests and a diagnostic mode -- are
+what the probes above are a first version of. The file went to the Recycle
+Bin.
+
+**What remains unverified, and what would settle it.** The installer itself
+and an upgrade over an installed v0.7.1 (a machine on which installing is
+acceptable); Authenticode, because no signing identity exists, so the in-app
+update will download and verify the checksum but refuse to launch the
+installer by design (its dialog then offers the download folder and the
+release page); a Chromium or Electron target's late clipboard read (the
+Known limitation stands; an instrumented browser target); the Azure model-name
+casing and MAI-Transcribe-2 (an Azure Speech key and endpoint, none is
+stored); the Parakeet failure reported from the corporate machine, never
+reproduced here (that machine's `%APPDATA%\stt_app\logs\dictation.log` after
+one failing dictation on this release).
