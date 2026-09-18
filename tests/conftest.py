@@ -758,6 +758,38 @@ def _no_benchmark_worker_outlives_its_test():
     )
 
 
+@pytest.fixture(autouse=True)
+def _no_keyboard_modifier_outlives_its_test():
+    """`QTest.keyClick(widget, key, ControlModifier)` on a widget that has no
+    native window leaves `QGuiApplication.keyboardModifiers()` at Ctrl for the
+    rest of the process (measured on PySide6 6.11.1: NoModifier before, Ctrl
+    after one click, still Ctrl after the widget is deleted, NoModifier again
+    only after a later modifier-free key event). Item views read that state
+    for a programmatic `selectRow`, so under a leaked Ctrl it *toggles*: the
+    History dialog selects its first row on open, `selectRow(0)` then
+    deselected it, and two tests of `test_history_dialog.py` failed whenever
+    `test_settings_dialog_general_ux.py` ran before them. The full suite runs
+    the files alphabetically and therefore never showed it.
+
+    Cleared rather than asserted: on a real desktop the person at the keyboard
+    can put a genuine Ctrl into Qt's state while a test window has the focus,
+    and a test must not fail for that.
+    """
+    yield
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        return
+    if QtGui.QGuiApplication.keyboardModifiers() == QtCore.Qt.NoModifier:
+        return
+    from PySide6 import QtTest
+
+    # Any modifier-free key event resets the state; a throwaway widget keeps
+    # it away from whatever the test left on screen.
+    sink = QtWidgets.QWidget()
+    QtTest.QTest.keyRelease(sink, QtCore.Qt.Key_Control, QtCore.Qt.NoModifier)
+    sink.deleteLater()
+
+
 @pytest.fixture
 def files_no_read_gets_past():
     """Make named files raise `PermissionError` when they are opened.
