@@ -2222,10 +2222,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and marks nothing on any road: the store never received those bytes,
   the slot holds someone else's recording, and the unconditional write an
   empty id means on the recording roads would relabel or delete it. The
-  recording roads keep reading the slot, which is theirs because they
-  persist the statement before they submit, and pass "" when that write
-  did not happen (wave 16). And because the gate submits nothing,
-  nothing retargeted the active token and A became the live session again
+  recording roads pass the id their persist handed back, "" when that
+  write did not happen (wave 16), and no longer re-read the slot for it
+  (wave 18, the last paragraph of the next entry). And because the gate
+  submits nothing, nothing retargeted the active token and A became the
+  live session again
   -- in `history` mode its text was pasted although the user's mode had
   declined exactly that. `_is_foreground_transcription` keeps a job demoted
   to history-only in the background; `insert` mode still delivers the older
@@ -2272,8 +2273,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   own. What that cannot tell apart is two recordings the store never
   received -- "" beside "" -- with identical bytes (Known limitations).
   Second, the recording roads persist the statement before they submit
-  and read the slot for their job's identity, and a persist that failed
-  (a full disk, a locked file) left the slot to the previous recording:
+  and read the slot for their job's identity (read it until wave 18, the
+  last paragraph below), and a persist that failed (a full disk, a
+  locked file) left the slot to the previous recording:
   the batch stop and the finalize then carried that id, and their job's
   completion deleted a recording kept for Retry that was never theirs
   (the wave-16 concurrency lens, on the real store; the wave-14 entry
@@ -2314,6 +2316,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   `_stop_active_capture` lost its `persist_audio` parameter with it. The
   tray's "Retry transcription" always reaches the slot; the overlay's
   button is the Error's own.
+  **And the job is named by the id its persist handed back, never by a
+  re-read of the slot** (wave 18). The stop road passed `None` for a
+  persisted recording and `_register_transcription_job` read the slot
+  again for the id -- the state the persist had just returned -- and a
+  read refused in between, a scanner holding the freshly written state
+  file, answered "" while the job kept `marks_last_recording`: its
+  completion and failure then wrote unkeyed, and demoted behind a newer
+  recording they deleted that recording's audio and state with
+  `save_last_wav` off or relabelled it, and the recovery prompt never
+  offered it (the wave-18 reach lens, on the real store; reachable since
+  wave 17 gave the background roads their marks). `stop_recording`
+  passes `_last_persisted_recording_id` when its persist wrote and ""
+  otherwise, `_submit_stream_finalize` forwards it, and
+  `marks_last_recording` is derived from the resolved id on the `None`
+  road as well, so a job that cannot name its recording marks nothing;
+  no production road passes `None` any more. The wave-14 rule "an empty
+  id keeps the unconditional write" is gone with it, and only a mark
+  with no job at all still writes unkeyed. `FakeLastRecordingStore`
+  hands back an id per save and answers `load()`, as the real store
+  does; it answered neither, so every fake-store job registered from
+  the slot had marked unkeyed since the marks were keyed in wave 14,
+  and four tests pinned that incidentally.
 - **History export/import/clear parity**: the standalone History dialog and the
   Settings History tab share the same export, import (including the overflow
   choice between "import only free slots" and "import all and set unlimited"),

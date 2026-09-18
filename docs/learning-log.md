@@ -8118,3 +8118,162 @@ demoted to the background that returns nothing takes the early return before
 the mark, so its status stays "transcribing" while `_finish_transcription_job`
 writes its stash -- the safe side, since the audio is kept; recorded in the
 AGENTS.md entry.
+
+### Wave 18 (2026-09-18) - the seventeenth wave, on the wave-17 fixes
+
+**Range.** `5a3bed0..bab0935`: the two wave-17 fixes and their record. Three
+Sonnet breakers -- reach, concurrency, facts -- each on its own export of
+`bab0935`, against 14 written claims (W6.1-W6.3, W7.1-W7.5, D.1-D.3,
+`SP/wave18/CLAIMS.md`), told nothing of what was changed or why. The reach
+lens drove W6 and W7 through the public entry points against the real
+`LastRecordingStore` and `TranscriptHistoryStore` on a temp directory, at
+`bab0935` and at `5a3bed0` (`SP/wave18/reach/out/`): W6.1's own scenario fixed
+(a store refusing the gated recording's write leaves the transcribing one
+untouched at `bab0935`, relabels it canceled at `5a3bed0`), W6.3 as claimed,
+the W7.1/W7.2 matrix on the correctly keyed road 11 of 11 -- known id with
+`keep_after_success` both ways, "" marks nothing, an aborting job keeps the
+cancel's mark and still reaches history, a refused history write marks nothing
+-- and the five wave-17 tests plus four pre-existing `test_controller.py`
+tests outcome-identical at both revisions. W7.4 it verified by reading only.
+Its finding: F1, a `load()` that raises at registration.
+`_register_transcription_job(..., source_recording_id=None)` -- what
+`stop_recording` passed for every persisted recording -- resolved the id
+through `_current_last_recording_id()`, which answers "" for any exception
+from `load()`, and `marks_last_recording` stayed `True` on that road; the
+job's later background completion or failure then wrote
+`expected_recording_id=None`, unkeyed, against whatever recording occupied the
+slot by then. On the real store with `keep_after_success` off the unrelated,
+still-transcribing recording N lost its audio and state (`n_after=None`, the
+file gone, `has_recoverable_recording()` False, `selectable_path()` None: the
+recovery prompt at the next start never offers N), with it on N read
+`completed`, and on the failure road N read `failed` with the other job's
+error text. At `5a3bed0` the same probe leaves N untouched, because no
+background road marked anything there: the clobbering is reachable since
+`69f5151`, through two functions outside its diff. It refuted one hypothesis
+of its own (a silence-gate persist answering no id cannot reach a different
+recording within one synchronous `stop_recording`) and named what it did not
+run: real races, `cancel_queued_transcription`, `retry_last_transcription` and
+`shutdown` as the first entry point, three-deep queues, W7.4 at runtime. The
+facts lens (D.1-D.3) reproduced every number, hash and identifier of the Wave
+17 section and the four AGENTS.md edits from a file -- the 20 claims, 8 of 8
+and 22 + 3 mutants with clean harness files, the 78 concurrency checks as
+20+10+13+10+13+12, the reach lens's 9 passed and 1 failed 8 passed, the suite
+line, U5's removal of `persist_audio` from the real history behind F2, every
+quoted identifier in `controller.py` and the tests, all three commits signed
+-- and regenerated both docs of `bab0935` byte for byte from a sandboxed copy
+of `docs_wave17.py` against an export of `69f5151`, with a negative control
+diverging at the substituted word; nine hypotheses refuted. Its one finding,
+F-1: "the five controller files" collect 576 tests over the seven
+`test_controller_*.py` files at `bab0935`, not the 578 the section reports,
+and no retained file records which five were run.
+
+**The reproduction.** The reach lens's probes assert that they import their
+own export; a copy with that check relaxed, run beside `test_where.py` from
+the repository with `-c pyproject.toml --rootdir=.`, reproduced F1 on the real
+tree on all four of its roads (`SP/wave18/lead/out/reach_f1_real.txt`:
+`marks_last_recording=True` for an id of "", N's state `None` and its audio
+gone on the success road, `completed` with the audio kept under
+`keep_after_success`, `failed` with the foreign error on the failure road, the
+recovery prompt's `has_recoverable` from True to False). F-1 reproduced as a
+wording defect, not a counting one: the five files are `test_controller.py`,
+`test_controller_coverage.py`, `test_controller_background_insert_failure.py`,
+`test_controller_queue.py` and `test_main_signals.py` -- four controller files
+and the tray-signal file, the set every wave since 14 ran as "the named files"
+-- and `--collect-only` over exactly those answers 578 at `bab0935`, the
+number the section gives; the two files the lens added
+(`test_controller_hotkey_collision.py`, `test_controller_import_lease.py`) and
+the one it lacked account for the difference. The section's phrase named the
+set wrongly, and the lens was right that no artifact named it.
+
+**Judged, with the reason.** F1 is P3 in frequency and a data-loss shape in
+kind: it needs `last_recording.json` unreadable for the instant between its
+write and the job's registration -- a scanner or a sync client holding a file
+just written, the class the F10 review entry treats as real -- and then a
+recording demoted behind a newer one; what is lost is the on-disk copy of a
+recording still in flight, whose bytes the retry slot still holds in memory,
+so Retry works and the recovery prompt at the next start does not. Fixed on
+the spot, since the persist already hands the id back and the re-read was the
+only thing between the two. The foreground road had the same degradation
+before wave 17 (an unkeyed completion after the silence gate or the watchdog
+abort of a newer recording, under the same refused read); the fix closes both.
+F-1 is P4, a docs wording, corrected in this section and not in the Wave 17
+one. Nine facts hypotheses and one reach hypothesis are refuted with the
+lenses' own reasons, recorded in `SP/wave18/lead/reports/`.
+
+**The fix (`39c9655`).** `stop_recording` passes
+`self._last_persisted_recording_id` when its persist wrote and "" otherwise,
+and `_submit_stream_finalize` forwards it; `_register_transcription_job` still
+resolves `None` from the slot but derives `marks_last_recording` from the
+resolved id on that road too, so a job that cannot name its recording marks
+nothing, and no production road passes `None` any more. The wave-14 rule "an
+empty id keeps the unconditional write" is gone: only a mark with no job at
+all is unconditional now. Tests: the stop road with a store that hands back an
+id and refuses every read of the slot (the job carries `saved-1` and its
+transcribing mark is keyed by it; red at `'' == 'saved-1'` before the fix),
+and a job registered from an unreadable or empty slot marking nothing on both
+roads (red at `True is False`). What the fix moved in the tests:
+`FakeLastRecordingStore` had no `load()` and its save returned nothing, so
+every fake-store job registered from the slot had carried "" with the
+unconditional write since wave 14 -- the fake now hands back an id per save
+and answers `load()`, `_StoreWithIds` keeps the id the test set through a
+save, and four tests that registered a job from an empty slot and pinned the
+unconditional mark incidentally (the foreground row's X, the cancel hotkey's
+mark, the finalize's settings snapshot, the completion mark's id-or-none test)
+save a recording first or name the id; the last one now pins that an empty id
+marks nothing. After the fix the reach lens's four hazard probes fail on their
+own "marks_last_recording stays True" assertions and the other ten pass
+unchanged (`reach_probes_after_fix_real.txt`: 4 failed, 10 passed).
+
+**The commits and the mutation round.** `39c9655` closes F1, signed. Three
+mutants (`SP/wave18/lead/mutate_wave18.txt`): the stop road registering from
+the slot again, a job from an unreadable slot keeping its marks, the slot road
+resolving nothing -- 3 of 3 detected. The wave-17 harness re-run at `39c9655`:
+8 of 8 (`mutate_wave17_head.txt`). The five named files after U8: 581 passed.
+The full suite on `39c9655`, 18 September: 2884 passed, 1 skipped in 187.68s.
+
+**The concurrency lens.** Four probes on the real store, the real
+single-worker executor and threads of its own
+(`SP/wave18/concurrency/probes/`, outputs beside them), no finding. probe1 (31
+of 33; the two fails are its own H1): a demoted job's own completion clears
+its audio with `save_last_wav` off and its failure keeps it with the setting
+on while its id still matches the slot, the job then sits deferred and the
+deferred flush pastes it without touching the store again; a chain Z, A, B,
+each demoting the previous while it holds the sole worker, Z's and A's marks
+no-ops against the newer slots, B's foreground completion clearing it, all
+three transcripts in history, no job leaked. probe2 (19 of 20; the fail is its
+H2): a background failure landing during a retry of an older failure -- Retry
+stops A, marks it canceled keyed by A's id and resubmits W under W's id; A's
+failure marks nothing (`aborting`) and promotes its bytes into the retry slot
+regardless (the wave-15 Known limitation, reproduced unchanged), R's
+completion is a no-op against the clobbered slot, A stays retryable, R's
+transcript is in history under W's id. probe3 (29 of 29): a cancel racing the
+late result of the job it cancels on the three cancel roads, real threads -- a
+completed job sitting deferred and canceled by the row's X is popped without
+its "completed" being overwritten, the cancel hotkey's late success and the
+row X's late failure leave "canceled" in the store while the transcript still
+reaches history and nothing is pasted, a job canceled before its worker
+started never runs. probe4 (128 of 128): 42 synthetic dictations of seven
+outcomes through the public API with `_jobs`, `_request_audio_by_token` and
+`_deferred_background_results` asserted empty after every one. Its three
+hypotheses were its own harness: `_should_defer_background_insertion` defers
+behind an in-flight foreground token as well as behind an open capture (H1),
+`FakeCapture` yields the same four bytes for every recording so a
+bytes-changed check cannot pass (H2), and one executor cannot complete jobs
+out of order (H3). Two observations to keep, recorded as P4:
+`FakeLastRecordingStore` accepts every mark unconditionally, so a mutant that
+only a real rejection would catch is caught by no fake-store test, and five of
+the eight wave-17 mutants' tests bypass the worker and the executor and call
+the private handlers directly -- the real-store tests of `test_controller.py`
+and these probes are what cover that. Not exercised: the remote finalize's own
+executor racing the batch worker against one slot, the reverse order of
+probe2, W6.2, W6.3, W7.4.
+
+**What remains unverified.** A real refused read of the state file, still (the
+probes raise from `load()`); the foreground half of the class -- an unkeyed
+completion under a refused read clearing a silence-gated or watchdog-aborted
+newer recording -- is closed by the same line and tested by the stop-road test
+alone; W7.4 at runtime, as in wave 17; the concurrency lens's own list above.
+The breakers' report files were refused by the harness again, so their reports
+exist as their final messages, saved by the lead under
+`SP/wave18/lead/reports/`; a facts lens that finds no report there is reading
+a later day.
