@@ -1337,8 +1337,14 @@ class _BenchmarkMixin:
             "CPU. Nemotron has no WebGPU provider, so every GPU target means "
             "DirectML for it and duplicate targets are measured once."
         )
+        # Names what the other runtimes do instead of pointing at a setting:
+        # the note used to say faster-whisper uses "the standard Device
+        # setting", and the app has no such setting -- the benchmark always
+        # passes device="auto" to CTranslate2, and onnx-asr is CPU only.
         webgpu_device_note = QtWidgets.QLabel(
-            "ONNX target selection. Faster-whisper models ignore this and use the standard Device setting."
+            "Applies to Cohere, Granite and Nemotron. Whisper models pick their "
+            "device themselves (CUDA if present, otherwise CPU); Parakeet and "
+            "Canary always run on the CPU."
         )
         webgpu_device_note.setWordWrap(True)
         self._style_note_label(webgpu_device_note)
