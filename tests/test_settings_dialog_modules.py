@@ -8,19 +8,27 @@ once the facade is imported in-process the cycle is masked.
 
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
-_MIXIN_MODULES = [
-    "stt_app.settings_dialog_helpers",
-    "stt_app.settings_dialog_general",
-    "stt_app.settings_dialog_local",
-    "stt_app.settings_dialog_benchmark",
-    "stt_app.settings_dialog_remote",
-    "stt_app.settings_dialog_history",
-    "stt_app.settings_dialog_import",
-    "stt_app.settings_dialog_persistence",
-]
+import stt_app
+
+# Read off the package directory, not written out: the hand-kept list went
+# stale twice -- it never gained `settings_dialog_audio`, and then not
+# `settings_dialog_hotkeys` either -- and a mixin missing from it is simply not
+# checked, which no run can show.
+_MIXIN_MODULES = sorted(
+    f"stt_app.{path.stem}"
+    for path in Path(stt_app.__file__).parent.glob("settings_dialog_*.py")
+)
+
+
+def test_the_mixin_list_found_the_modules():
+    # A glob that matches nothing parametrizes nothing and passes.
+    assert "stt_app.settings_dialog_helpers" in _MIXIN_MODULES
+    assert "stt_app.settings_dialog_hotkeys" in _MIXIN_MODULES
+    assert len(_MIXIN_MODULES) >= 10
 
 
 @pytest.mark.parametrize("module", _MIXIN_MODULES)
@@ -29,6 +37,8 @@ def test_mixin_module_imports_cold(module):
         [sys.executable, "-c", f"import {module}"],
         capture_output=True,
         text=True,
+        # A bound against a hang, not a speed claim.
+        timeout=120,
     )
     assert result.returncode == 0, result.stderr
 
