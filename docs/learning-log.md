@@ -7982,3 +7982,139 @@ not measured. Real providers behind a dying stream: the failure arm was driven
 with the fake streaming transcriber. And the residual of F1 -- two recordings
 the store never received, with identical bytes -- is recorded under Known
 limitations rather than closed.
+
+### Wave 17 (2026-09-18) - the sixteenth wave, on the wave-16 fixes
+
+**Range.** `05845a4..5a3bed0`: the five wave-16 fixes, the bytes test and
+their record. Three Sonnet breakers -- reach, concurrency, facts -- each on
+its own export of `5a3bed0`, against 20 written claims (W1.1-W1.3, W2.1-W2.6,
+W3.1-W3.5, W4.1, W5.1-W5.2, D.1-D.3), told nothing of what was changed or why,
+and briefed on the rootdir pitfall of wave 16. The facts lens reproduced every
+number, hash and quoted identifier of the Wave 16 section and the AGENTS.md
+changes from a file, regenerated the two docs byte for byte from a copy of the
+lead's script against an export of `4791dee` (with a negative control that
+diverged at the substituted word), and refuted its one hypothesis: "the run
+after the fixes then reported the two failures unchanged" reads as a literal
+count where `probes_after_fix.txt` says `1 failed, 11 passed`; the two are the
+two defects, each reported by its own probe's polarity -- r1 fails on the
+unfixed tree, probe1 and probe2 pass while printing the bug -- which is what
+that sentence means. The reach lens drove the roads through the public entry
+points against the real store with an unrelated recording in it (r1-r5): r2-r5
+confirm W2.1, W2.3, W2.4, W3.1, W3.2 and W4.1 -- a `""` job's failure offers
+Retry for its own bytes and names no last recording file although one is
+selectable, the watchdog's mark matches by id and leaves the unrelated
+recording untouched, the dying stream after a partial marks its own id or
+nothing, the cancel of an older `""` row touches nothing -- and r1 found the
+silence gate's canceled mark unkeyed. It refuted five hypotheses of its own,
+named the roads it did not re-probe on a real store (the cancel's batch
+branch, the abort road) and did not demonstrate a permanent, as opposed to
+transient, relabelling. The concurrency lens ran six probes on the real store,
+the real executor and threads of its own (78 checks, all passed): B's refused
+persist beside A mid-flight (W2.1: the store keeps A, B's failure marks
+nothing, B's bytes go to the slot keyed by `""`, the managed file on disk is
+still A's); two `""` jobs with identical bytes cross-retire and with different
+bytes are told apart, `_request_audio_by_token` bounded across eight
+fail-and-retry cycles (W1.2); a late `on_error` during a pending finalize
+resolves nothing, paints nothing and leaves the store alone (W2.4); the
+watchdog with and without late bytes, the bytes delivered by a separate thread
+racing the handler (W4.1); a cancel racing a background release, and a
+background failure beside a foreground success on the shared worker; and
+identical bytes under two real ids, the exact pre-fix case of wave 16
+constructed rather than found (W1.1). It broke none of W1-W5, refuted five
+hypotheses of its own -- the finalize-pending guard holds, the watchdog's
+check-then-act has no observable consequence, the request-audio map does not
+leak, the cancel race, identical bytes with distinct ids -- and reported two
+findings beside the claims: F1, `_handle_background_transcription_ready` never
+marks the store, so a success demoted by a newer recording leaves
+"transcribing" behind (confirmed on the real store, pre-existing, tangential
+to the claims; by reading, the background failure arm marks nothing either),
+and F2, the wave-16 mutation harness's m17 names a call U5 removed (tooling).
+
+**The reproduction.** The lens's probe asserts that it imported its own export
+(`"wave17" in stt_app.__file__`), so against the real tree it failed at that
+assertion, not at the behaviour. A copy with the check relaxed, run beside
+`test_where.py` from the repository with `-c pyproject.toml --rootdir=.`,
+reproduced R1 on the real tree: recording A transcribing, recording B's
+`save_recording` raising, B quiet enough for the gate -- A's state file read
+`canceled` with the gate's text and the overlay said "the recording is kept"
+about audio the store never received (9 passed; the probe asserts the defect).
+After the fix A is untouched, the text says the recording could not be kept,
+and the probe fails on its own "is kept" assertion (1 failed, 8 passed). F1 on
+the real tree with the fake store: two jobs registered, the older delivered
+while the newer owns the token -- `completed_ids` empty after its success and
+`failed_ids` empty after its failure, the two new tests red at exactly those
+asserts before the fix.
+
+**Judged, with the reason.** R1 is P3: it needs a refused store write while
+another recording is transcribing and a recording quiet enough for the gate;
+the relabelling is transient in the common case, because A's own completion
+re-marks under A's id, which still matches, and the false "kept" is what the
+user reads. It is byte-identical on `05845a4`, so pre-existing rather than a
+wave-16 regression -- and the wave-16 entry's "the last unkeyed mark" for the
+cancel road was wrong, corrected in place. Fixed on the spot, since the fix is
+the wave-16 pattern one road further. The facts lens's H1 and the reach lens's
+H1-H5 are refuted with the reasons above. F1 is P3: the state file says
+"transcribing" for a job that ended and, with `save_last_wav` off, keeps audio
+the setting said to delete; the transcript is in history and a failure's audio
+is in the retry slot, so nothing is lost. Fixed on the spot: the marks were
+left out while they were unkeyed, and they have been keyed since wave 14. F2
+is confirmed as tooling: `mutate_wave16.py`'s m17 named
+`_stop_active_capture(persist_audio=False)`, which U5 removed, so at HEAD the
+harness would refuse that mutant (`old` must occur exactly once); the wave-16
+record was taken on `ab35dce`, where it applied. Patched to the U5 shape and
+re-run at HEAD (below).
+
+**The fixes (`e4351fa`, `69f5151`).** `_silence_gate_blocks(wav_bytes,
+persisted=)` takes the stop road's persist result, keys its canceled mark by
+`_last_persisted_recording_id`, skips it when that write did not happen, and
+says the recording could not be kept as the last recording then. Test: the
+gate with a persist that writes and with one that is refused, in
+`test_controller_coverage.py`. `_handle_background_transcription_ready`
+completes the job's recording after its history write and the background arm
+of `_on_transcription_failed` marks it failed, both keyed. Two roads keep
+their mark: a canceled job's late result or failure leaves the cancel's mark,
+and a success whose history write was refused is not completed. The first
+shape marked unconditionally, and the wave-14 real-store retry test caught
+what that did: the retry's stop had marked A canceled, A's provider finished
+anyway, and the completion keyed by A's own id deleted A's audio and state
+with `save_last_wav` off -- the recording the cancel had kept reachable for
+Import. A fix making a reachable state unreachable, closed before it was
+committed; each guard has a test and a mutant. Tests: both roads with a known
+identity and with none, both roads after the queue row's X, the refused
+history write; the wave-15 no-audio failure test now sees the older failure's
+own mark, which it pinned as absent.
+
+**The commits and the mutation round.** `e4351fa` closes R1 and `69f5151`
+closes F1, both signed. Three mutants over the gate
+(`SP/wave17/lead/mutate_wave17.txt`) -- the mark unkeyed again, the mark
+issued whatever the persist did, the text saying kept regardless -- and five
+over the background roads -- each mark removed, the cancel guard dropped on
+either road, the history guard dropped -- all detected: 8 of 8. The wave-16
+harness, its m17 patched to the U5 shape, re-run at `69f5151`: 22 of 22
+(`SP/wave16/lead/mutate_wave16_head.txt`) and the batch-cancel three 3 of 3,
+so the wave-16 record holds at HEAD, which F2 asked. The five controller files
+after U6: 571 passed; after U7: 578. The full suite on `69f5151`, 18
+September: 2881 passed, 1 skipped in 175.17s.
+
+**Corrections to the Wave 16 section.** Its unverified paragraph says nobody
+pressed the Retry button on the real overlay; the widget's half is pinned by
+`test_the_no_action_error_state_shows_neither_retry_nor_insert` in
+`tests/test_overlay_ui.py` (`OVERLAY_ERROR_ACTION_NONE` hides Retry and
+Insert, `None` shows Retry), so what stays unverified is the
+controller-to-widget wiring end to end, not the widget. And "the two failures
+unchanged" means the two defects, as the facts paragraph says.
+
+**What remains unverified.** A real refused store write, still; the cancel's
+batch branch and the abort road against a real store with an unrelated
+recording present (the fake-store tests cover them); a permanent relabelling
+through the old gate, which needs A's job never to re-mark. The concurrency
+lens did not exercise W2.2, W2.4's plain branch with a refused persist, W2.5,
+W3.2's wording, W3.3, W3.4's overlay-paint branch, W5.1, W5.2 or repeated
+cancels; the fake-store tests cover those. U7 on the real store: the
+completion deleting the audio with `save_last_wav` off is read from
+`mark_completed`, and the real store is driven only by the wave-14 retry test,
+on the canceled road. And one road of the class stays: a streaming finalize
+demoted to the background that returns nothing takes the early return before
+the mark, so its status stays "transcribing" while `_finish_transcription_job`
+writes its stash -- the safe side, since the audio is kept; recorded in the
+AGENTS.md entry.

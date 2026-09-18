@@ -712,7 +712,13 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   with room to spare (measured: -40 dBFS whisper → 0.0071 vs. 0.0040 gate,
   while room tone at -54 dBFS is blocked). Every batch stop logs
   `recording_peak_level` for tuning, and gated audio stays available as the
-  last recording. Unmeasurable audio returns `None` and must never be gated —
+  last recording -- when the stop road's persist wrote it: the gate's
+  canceled mark is keyed by the id that write handed back and skipped when
+  the write failed, and its text then says the recording could not be kept,
+  where before the unkeyed mark relabelled the previous recording -- one
+  still transcribing -- canceled with the gate's text and the text called it
+  kept (the wave-17 reach lens, on the real store). Unmeasurable audio
+  returns `None` and must never be gated —
   undecodable bytes are a failure to surface, not silence. Schema 22 turns the
   gate on once for older settings files: every file written before the default
   flip carries "off", so a stored "off" could not be told apart from a
@@ -771,7 +777,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   recording and whether its audio was kept for Retry, and additionally shows
   the error on the overlay when no live session owns it. Delivering a success
   but dropping a failure made a lost recording indistinguishable from one that
-  was never transcribed.
+  was never transcribed. **And a queued job's end marks its own recording**
+  (wave 17): the background success completes it and the background failure
+  marks it failed, through the keyed helpers, so the state file no longer
+  says "transcribing" for a transcript already in history and the recovery
+  prompt sees the failure; with `save_last_wav` off the completion deletes
+  the audio, as the foreground's does. The marks were left out while they
+  were unkeyed, and they have been keyed since wave 14 (the wave-17
+  concurrency lens, on the real store). Two roads keep their mark: a
+  canceled job's late result or failure leaves the cancel's mark -- the
+  user's decision, and the audio it keeps reachable for Import (the
+  wave-14 real-store retry test caught the first, unconditional shape of
+  the mark deleting exactly that) -- and a success whose history write was
+  refused is not completed, because that audio is then the transcript's
+  only copy. A demoted streaming finalize that returns nothing still marks
+  nothing: it takes the early return before the mark, `_finish_transcription_job`
+  writes its stash, and the status stays "transcribing" with the audio
+  kept; recorded.
 - **Overlay window resizes go through `_resize_window`**: `QWidget.resize`
   clamps to the widget's *current* minimum size, and that minimum is only
   recomputed when the layout is activated (normally deferred to the next event
@@ -2284,9 +2306,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   wrote the slot unconditionally and emptied an older failure's only copy
   on the common timeout with no late bytes -- it writes the slot for late
   bytes alone, persisted and marked failed under the id the persist handed
-  back -- and `cancel_current_action`'s batch branch, the last unkeyed
-  mark, persists its audio itself, keys its canceled mark by that id,
-  skips it when the write failed, and says "this recording" only then;
+  back -- and `cancel_current_action`'s batch branch persists its audio
+  itself, keys its canceled mark by that id, skips it when the write
+  failed, and says "this recording" only then (this entry called that
+  mark the last unkeyed one for one round; the silence gate's was the
+  other, closed in wave 17);
   `_stop_active_capture` lost its `persist_audio` parameter with it. The
   tray's "Retry transcription" always reaches the slot; the overlay's
   button is the Error's own.
@@ -3575,10 +3599,11 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   on an older row never relabels the newest recording; a job whose id is
   unknown is marked only while it is the foreground one). Wave 13: the cancel
   hotkey marked and the queue row's X did not -- the job it stops is
-  background from then on, and a background failure marks nothing -- so the
-  store kept "transcribing" for a job that had ended; the two roads differed
-  in the state file alone, since the recovery prompt reads the status only
-  for "failed". **Every local engine can now be stopped mid-run**; the remote
+  background from then on, and a background failure marked nothing until
+  wave 17 -- so the store kept "transcribing" for a job that had ended; the
+  two roads differed in the state file alone, since the recovery prompt
+  reads the status only for "failed". **Every local engine can now be
+  stopped mid-run**; the remote
   providers still only skip-if-not-started and otherwise
   run to completion with their result kept in history. See "Cancelling a
   running local transcription" below for how each local engine does it.
