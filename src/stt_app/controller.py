@@ -5256,6 +5256,18 @@ class DictationController(QtCore.QObject):
             source_audio_path=job.source_audio_path,
             track_for_edit=False,
         )
+        # The job's own recording is done with, as on the foreground road:
+        # keyed by its id, so a newer recording in the slot is left alone,
+        # and skipped for bytes the store never received. Unmarked, the
+        # state file said "transcribing" for a transcript already in
+        # history, and with `save_last_wav` off the audio stayed on disk
+        # (the wave-17 concurrency lens, on the real store). Two exceptions:
+        # a canceled job's late result keeps the cancel's mark -- the user's
+        # decision, and the audio it keeps reachable for Import -- and a
+        # transcript the history write refused is kept as audio, since with
+        # `save_last_wav` off the completion mark deletes the only copy left.
+        if job.history_entry is not None and not job.aborting:
+            self._mark_last_recording_completed(job)
         if (
             job.background_delivery == CONCURRENT_TRANSCRIPTION_MODE_INSERT
             and job.mode != "streaming"
@@ -5656,6 +5668,13 @@ class DictationController(QtCore.QObject):
                 retry_available = self._promote_request_audio_for_retry(
                     request_token, job
                 )
+                # Keyed like the foreground's mark. The recovery prompt at
+                # the next start reads "failed", and an unmarked queued
+                # failure left "transcribing" behind and was never offered.
+                # A canceled job's failure keeps the cancel's mark: the user
+                # ended it, and the prompt must not offer it back.
+                if job is not None and not job.aborting:
+                    self._mark_last_recording_failed(job, error_text)
                 self._report_background_failure(job, error_text, retry_available)
                 # The same guarded clear both sibling terminal handlers do.
                 # This one did not, and a job is non-foreground while it is

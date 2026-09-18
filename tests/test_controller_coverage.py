@@ -2481,6 +2481,136 @@ def test_a_different_recordings_success_leaves_the_promoted_failure_retryable():
     _ = app
 
 
+@pytest.mark.parametrize("known", [True, False], ids=["known id", "unknown id"])
+def test_a_background_success_completes_its_own_recording(known):
+    """A queued transcription delivered while a newer session is active marks
+    its recording completed, keyed by its own id as the foreground delivery
+    does, and marks nothing for bytes the store never received. It marked
+    nothing at all, so the store said "transcribing" for a transcript already
+    in history, and with `save_last_wav` off its audio stayed on disk (the
+    wave-17 concurrency lens, on the real store)."""
+    store = _StoreWithIds("rec-A")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(
+        3, settings, "batch", source_recording_id=None if known else ""
+    )
+    store.recording_id = "rec-B"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._active_request_token = 4
+
+    controller._on_transcription_ready("A done", request_token=3)
+
+    assert store.completed_ids == (["rec-A"] if known else [])
+    assert store.failed_ids == []
+    controller.shutdown()
+    _ = app
+
+
+@pytest.mark.parametrize("known", [True, False], ids=["known id", "unknown id"])
+def test_a_background_failure_marks_its_own_recording_failed(known):
+    """The failure half of the same rule: keyed like the foreground's mark,
+    so the recovery prompt at the next start, which reads "failed", offers
+    the recording; unmarked, it stayed "transcribing" and was never
+    offered."""
+    store = _StoreWithIds("rec-A")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(
+        3, settings, "batch", source_recording_id=None if known else ""
+    )
+    controller._store_request_audio(3, b"wav A", settings)
+    store.recording_id = "rec-B"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._active_request_token = 4
+
+    controller._on_transcription_failed("A failed", request_token=3)
+
+    assert store.failed_ids == (["rec-A"] if known else [])
+    assert store.completed_ids == []
+    assert controller._last_failed_wav_bytes == b"wav A"
+    controller.shutdown()
+    _ = app
+
+
+class _HistoryStoreThatRefuses:
+    """A history write that raises -- a locked file, a full disk."""
+
+    def add_entry(self, _entry, _limit):
+        raise OSError("disk full")
+
+    def recent_entries(self, _max_items):
+        return []
+
+
+@pytest.mark.parametrize("road", ["success", "failure"])
+def test_a_canceled_jobs_late_end_keeps_the_cancels_mark(road):
+    """The queue row's X marked the job's recording canceled; the result a
+    remote provider delivers anyway is kept in history, and the store keeps
+    the user's mark: a completion would delete the audio that mark keeps
+    reachable for Import (`save_last_wav` off), and a failure would have the
+    recovery prompt offer a recording the user had ended."""
+    store = _StoreWithIds("rec-A")
+    controller, app = _make_controller(last_recording_store=store)
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    controller._store_request_audio(3, b"wav A", settings)
+    store.recording_id = "rec-B"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._active_request_token = 4
+    controller._request_job_stop(3, delivery="history")
+    assert store.canceled_ids == ["rec-A"]
+
+    if road == "success":
+        controller._on_transcription_ready("A done", request_token=3)
+    else:
+        controller._on_transcription_failed("A failed", request_token=3)
+
+    assert store.completed_ids == []
+    assert store.failed_ids == []
+    assert store.canceled_ids == ["rec-A"]
+    controller.shutdown()
+    _ = app
+
+
+def test_a_background_success_whose_history_write_failed_keeps_its_audio():
+    """With `save_last_wav` off the completion mark deletes the recording, and
+    after a refused history write that audio is the transcript's only copy:
+    the mark is skipped, and the refusal is logged where it happened."""
+    store = _StoreWithIds("rec-A")
+    controller, app = _make_controller(
+        last_recording_store=store, history_store=_HistoryStoreThatRefuses()
+    )
+    controller._executor = ImmediateExecutor()
+    controller._transcribe_worker = (  # type: ignore[method-assign]
+        lambda *_args, **_kwargs: None
+    )
+    settings = AppSettings(hotkey=FALLBACK_HOTKEY, model_size="small")
+    controller._register_transcription_job(3, settings, "batch")
+    store.recording_id = "rec-B"
+    controller._register_transcription_job(4, settings, "batch")
+    controller._active_request_token = 4
+
+    controller._on_transcription_ready("A done", request_token=3)
+
+    assert store.completed_ids == []
+    assert store.failed_ids == []
+    controller.shutdown()
+    _ = app
+
+
 def test_a_byte_identical_recordings_success_leaves_the_promoted_failure_retryable():
     """Two recordings with the same bytes are two recordings. The slot is
     retired by the recording it holds -- the retry names it by the id kept
@@ -2568,7 +2698,9 @@ def test_two_unknown_identities_are_told_apart_by_their_bytes():
 
 def test_a_foreground_failure_without_audio_leaves_the_promoted_failure_retryable():
     """A failure with no bytes of its own to offer has nothing to replace the
-    slot with, and clearing it discarded the previous failure's only copy."""
+    slot with, and clearing it discarded the previous failure's only copy.
+    Q's background failure marks Q by its own id since wave 17; the fake
+    records both marks."""
     store = _StoreWithIds("rec-Q")
     overlay = FakeOverlay()
     controller, app = _make_controller(overlay=overlay, last_recording_store=store)
@@ -2584,7 +2716,7 @@ def test_a_foreground_failure_without_audio_leaves_the_promoted_failure_retryabl
 
     controller._on_transcription_failed("X failed", request_token=4)
 
-    assert store.failed_ids == ["rec-X"]
+    assert store.failed_ids == ["rec-Q", "rec-X"]
     assert overlay.state == "Error"
     assert controller._last_failed_wav_bytes == b"wav-Q"
     assert controller._last_failed_recording_id == "rec-Q"
