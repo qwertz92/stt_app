@@ -4979,6 +4979,28 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   that exercises the bundle and installer steps. Such a run is what caught the
   seven unmarked tests before v0.9.0 was tagged; v0.8.0 had none and its tag
   is still without a release.
+- **Four `scripts/release_check_*.py` scripts measure what the suite can only
+  fake**, and they are run before a release, not by pytest or CI: they need
+  the real clipboard and keyboard focus, real share-mode-0 file locks, the
+  user's provider keys and paid quota, and a built PyInstaller bundle.
+  `release_check_file_locks.py` (23 checks, F10), `release_check_clipboard_paste.py`
+  (19 checks: the five-format round trip, Explorer's cut and copy through
+  Shell COM, WM_PASTE and SendInput into a real EDIT window, the deferred
+  restore, the foreground guard; F01/F02/F07/F12),
+  `release_check_providers.py` (AssemblyAI batch and realtime, Groq batch, a
+  quit during the AssemblyAI poll) and `release_check_frozen_bundle.py` (scan
+  worker, one model per local runtime through the benchmark worker, the GUI
+  for 40 s). Shared plumbing is `scripts/_release_check_common.py`. Contract:
+  one `OK`/`FAIL`/`SKIP` line per check, exit 0/1/2 where 2 means "this machine
+  cannot run it" and must never read as a failure of the code; a throwaway
+  `APPDATA` set before the first `stt_app` import with `HF_HUB_OFFLINE=1`; no
+  path of the machine they were written on; API keys read by
+  `KeyringSecretStore` only and never printed or written to a report; the
+  user's clipboard captured first, restored in a `finally` and compared at
+  the end, with format ids and sizes in the report and never content. All
+  four passed on 2026-09-18 on HomeBase (23/23, 19/19, 7/7, 11/11). The
+  commands and what each needs are in `docs/windows-distribution.md`. They do
+  not cover running the installer or an upgrade over an installed version.
 - Two autouse fixtures in `tests/conftest.py` make desktop side effects
   impossible: `_forbid_handing_paths_to_the_desktop_shell` blocks
   `QProcess.startDetached` and `QDesktopServices.openUrl`, and
@@ -5019,6 +5041,23 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   partial; the race is timing -- three of three runs of the old tests under
   CPU load tripped the detector, the one idle run did not -- so the
   detector names it when it happens and the helper makes it impossible.
+- A sixth, `_no_keyboard_modifier_outlives_its_test`, clears a keyboard
+  modifier a test leaves set in Qt. `QTest.keyClick(widget, key,
+  ControlModifier)` on a widget without a native window leaves
+  `QGuiApplication.keyboardModifiers()` at Ctrl for the rest of the process
+  (measured on PySide6 6.11.1: still Ctrl after the widget is deleted,
+  NoModifier again only after a later modifier-free key event), and item
+  views read that state for a programmatic `selectRow`, which then
+  *toggles*: the History dialog selects its first row on open, so
+  `selectRow(0)` deselected it and two `test_history_dialog.py` tests failed
+  whenever `test_settings_dialog_general_ux.py` ran before them. The suite
+  runs files alphabetically and never showed it; any other file order did.
+  It clears rather than asserts, because on a real desktop the person at the
+  keyboard can put a genuine Ctrl into Qt's state while a test window has
+  the focus. Related tooling trap: `pytest --collect-only -q` prints no test
+  ids here, because `addopts = "-q"` makes it `-qq`; use
+  `-o addopts="" --collect-only -q` -- a bisect loop over an empty id list
+  ran zero tests and looked like "no single test reproduces it".
 - **Read the suite's count before anything that publishes.** A shell chain
   that commits and pushes after a background suite has *started* publishes
   before the result exists; on 2026-09-04 four green per-file runs and one

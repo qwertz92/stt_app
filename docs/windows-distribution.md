@@ -126,6 +126,40 @@ Output:
 - `release\stt_app-win-x64.zip`
 - `release\installer\stt_app-win-x64-setup.exe`
 
+### Before a release: check what no test double can stand in for
+
+The test suite drives fakes of the clipboard, of file locks, of the provider
+SDKs and of the packaged executable. Four scripts run the same code against
+the real thing. Each prints one `OK` / `FAIL` / `SKIP` line per check and a
+`SUMMARY` line, exits 0 (all ran and passed), 1 (a check failed) or 2 (this
+machine cannot run it), works in a throwaway `APPDATA` so the real
+`%APPDATA%\stt_app` is unreachable, and writes its evidence to `--report`.
+
+| Script | What it proves on the real machine | Needs | Time |
+| ------ | ---------------------------------- | ----- | ---- |
+| `scripts\release_check_file_locks.py` | A settings, history or last-recording file held open by another program (share mode 0) is reported and never overwritten; nothing is moved aside; everything is back after the lock ends | Windows | ~1 s |
+| `scripts\release_check_clipboard_paste.py` | Text, HTML, an image, a file list and Explorer's cut/copy marker survive a dictation byte for byte, and Explorer still moves a cut file; the transcript lands exactly once on the WM_PASTE and the SendInput road; the deferred restore; a foreground change refuses the paste | Windows, pywin32. Two parts take the keyboard focus for a few seconds; the script waits for 12 s of idle first, `--skip-focus` leaves them out | ~25 s |
+| `scripts\release_check_providers.py --clip de.wav:de --clip en.wav:en` | AssemblyAI batch and realtime and Groq batch answer with a transcript through the keys stored in the Windows credential manager, and a quit during the AssemblyAI poll ends the wait. A provider without a stored key is skipped. Keys are never printed or written to the report | Network, stored keys, real speech recordings (16 kHz mono PCM16 for the realtime case). Uses paid quota: about one request per clip per provider | ~1 min per clip |
+| `scripts\release_check_frozen_bundle.py --exe ...\stt_app.exe --clip de.wav` | The PyInstaller bundle's scan worker finds the cached models, its benchmark worker transcribes with one model per local runtime (onnx-asr, faster-whisper, ORT GenAI, Node/Transformers.js), and the GUI stays up for 40 s without an error in its own log. `--node-models` adds all three Node models on WebGPU and CPU | A built `onedir` bundle, the models in the local cache (nothing is downloaded), a real speech recording | ~70 s, ~1 min more with `--node-models` |
+
+```powershell
+.venv\Scripts\python.exe scripts\release_check_file_locks.py
+.venv\Scripts\python.exe scripts\release_check_clipboard_paste.py
+.venv\Scripts\python.exe scripts\release_check_providers.py --clip C:\clips\de_sample.wav:de
+.venv\Scripts\python.exe scripts\release_check_frozen_bundle.py --exe release\stt_app-win-x64\stt_app.exe --clip C:\clips\de_sample.wav --language de
+```
+
+The repository's own `samples/benchmark_sample.wav` is synthetic sine tones,
+so the two checks that transcribe need a recording of real speech.
+
+Then start the release workflow by hand once (`gh workflow run
+windows-release.yml`): it runs the identical gate the tag will run and uploads
+the installer and ZIP as a three-day artifact, so a red gate costs a dry run
+instead of a published tag.
+
+What these four do **not** cover, and nothing automated does: running the
+installer, and installing over an older installed version.
+
 ### Phase 2: Publish official GitHub Releases from tags
 
 When you want a public or durable release from `main`, use the guarded release
