@@ -11,6 +11,7 @@ from .config import (
     DEFAULT_DISPLAY_TIMEZONE,
     DEFAULT_HISTORY_MAX_ITEMS,
     HISTORY_MAX_ITEMS_MAX,
+    VALID_DISPLAY_TIMEZONES,
 )
 from .dialog_style import make_label_selectable
 from .history_audio import resolve_history_audio_path, reveal_path_in_file_manager
@@ -22,7 +23,12 @@ from .history_ui_actions import (
     run_history_export,
     run_history_import,
 )
-from .settings_dialog_helpers import _WheelPassthroughSpinBox
+from .settings_dialog_helpers import (
+    _HISTORY_TIMEZONE_LABELS,
+    ElidingLabel,
+    _WheelPassthroughComboBox,
+    _WheelPassthroughSpinBox,
+)
 from .transcript_edit_dialog import TranscriptEditDialog
 from .transcript_history import (
     HistoryStorageSignature,
@@ -33,6 +39,10 @@ from .transcript_history import (
     recent_entries_change_plan,
 )
 from .ui_feedback import restore_vertical_scrollbar, set_button_feedback_state
+
+# Space between the two labelled controls of the History tab's top row, so
+# "History Size" and "Time Zone" read as two settings rather than one.
+_HISTORY_CONTROL_GROUP_GAP_PX = 12
 
 
 class _HistoryTabMixin:
@@ -62,15 +72,45 @@ class _HistoryTabMixin:
         self.history_max_spin.valueChanged.connect(
             lambda _value: self._refresh_history_list()
         )
-        self.history_count_label = QtWidgets.QLabel("")
+        # Elided, not a plain label: its text grows with the entry count and
+        # the limit, and a plain label's full width is its minimum width, so
+        # beside the two controls it pushed this row past the dialog's
+        # minimum width (measured: 689 px against a 585 px viewport).
+        self.history_count_label = ElidingLabel("")
         self.history_count_label.setStyleSheet("color: #555;")
+        self.history_count_label.setAlignment(
+            QtCore.Qt.AlignRight | QtCore.Qt.AlignVCenter
+        )
+
+        # Lives here rather than on a general tab: it changes nothing but how
+        # this list (and the History window) prints its timestamps, so the
+        # effect is visible in the same view as the control.
+        self.history_timezone_combo = _WheelPassthroughComboBox()
+        for value in VALID_DISPLAY_TIMEZONES:
+            self.history_timezone_combo.addItem(
+                _HISTORY_TIMEZONE_LABELS.get(value, value.upper()),
+                value,
+            )
+        self.history_timezone_combo.setToolTip(
+            "Transcript history is stored in UTC. This only changes how times "
+            "are shown in Settings and the History window."
+        )
+        # Connected after the items exist: the first addItem moves the index
+        # from -1 to 0, and the list this refreshes is built further down.
+        self.history_timezone_combo.currentIndexChanged.connect(
+            lambda _index: self._refresh_history_list(force=True)
+        )
 
         history_controls = QtWidgets.QHBoxLayout()
         self._configure_button_row(history_controls)
         history_controls.addWidget(QtWidgets.QLabel("History Size"))
         history_controls.addWidget(self.history_max_spin)
-        history_controls.addStretch(1)
-        history_controls.addWidget(self.history_count_label)
+        history_controls.addSpacing(_HISTORY_CONTROL_GROUP_GAP_PX)
+        history_controls.addWidget(QtWidgets.QLabel("Time Zone"))
+        history_controls.addWidget(self.history_timezone_combo)
+        # The count takes the leftover space itself (stretch 1) and is
+        # right-aligned; beside an addStretch its Ignored width gets nothing.
+        history_controls.addWidget(self.history_count_label, 1)
         layout.addLayout(history_controls)
 
         history_box = QtWidgets.QGroupBox("Transcript History")

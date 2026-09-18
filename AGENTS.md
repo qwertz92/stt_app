@@ -86,7 +86,8 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 | `overlay_ui.py` | Always-on-top frameless overlay with state colors, controls, opacity slider, transcription queue panel |
 | `settings_dialog.py` | Facade: composes the `SettingsDialog` from tab mixins and keeps dialog lifecycle/shared-UI code; re-exports the module API |
 | `settings_dialog_helpers.py` | Shared settings-dialog widgets, constants, and pure helpers (hotkey conversion, benchmark labels) |
-| `settings_dialog_general.py` | General tab: hotkeys, display, engine/model/language/mode selection, and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
+| `settings_dialog_general.py` | General tab: engine/model/language/mode selection and text-insertion mixin (owns `model_combo` for local models and `remote_model_combo` for remote models, unified in one stacked "Model" row) |
+| `settings_dialog_hotkeys.py` | Hotkeys & Display tab: the four global hotkeys, overlay corner, and tray middle-click toggle mixin (split from the General tab) |
 | `settings_dialog_audio.py` | Audio & Recording tab: microphone picker, warm stream, VAD, silence gate, start/completion tones, and recordings retention mixin (split from the General tab) |
 | `settings_dialog_local.py` | Local tab: local-model management mixin (inventory, scan, download queue, delete only; model selection lives on the General tab) |
 | `settings_dialog_benchmark.py` | Benchmark tab (history + results + live status) plus the pop-out Run Benchmark window (model selection, options, run controls) mixin |
@@ -159,13 +160,27 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
 - **General tab hosts daily-use settings; capture setup lives on Audio &&
   Recording**: the General tab kept growing until it needed its own scroll
   marathon, so the set-and-forget capture groups ("Audio && Voice Detection"
-  and "Recordings") moved to a dedicated Audio && Recording tab directly
-  after General (`settings_dialog_audio.py`). General keeps Hotkeys, Display,
-  Engine && Mode, and Text Insertion — what actually changes during daily
-  dictation. Widget attribute names are unchanged, so persistence and the
-  controller are unaffected; `_build_audio_tab` must run after
-  `_build_general_tab` because it applies the shared label column across both
-  tabs.
+  and "Recordings") moved to a dedicated Audio && Recording tab
+  (`settings_dialog_audio.py`). That split was not enough: with Hotkeys,
+  Display, Engine && Mode and Text Insertion, General still needed 1342 px
+  and scrolled by 283 px on a 1392 px screen (measured 2026-09-18; it was the
+  only tab that scrolled, and a smaller screen scrolls by more). Hotkeys and
+  Display therefore moved to a Hotkeys && Display tab
+  directly after General (`settings_dialog_hotkeys.py`), which leaves General
+  at 781 px: Engine && Mode and Text Insertion, what actually changes during
+  daily dictation. "History Time" left the Display group for the History
+  tab's top row ("Time Zone"), because it changes nothing but how that list
+  prints its timestamps; the entry count beside it became an `ElidingLabel`,
+  since as a plain label its full text width put the row at 689 px against
+  the 585 px viewport the dialog's 611 px minimum width leaves (measured:
+  560 px content minimum and no horizontal scrollbar after). Widget
+  attribute names are unchanged, so persistence and the controller are
+  unaffected. Build order:
+  `_build_general_tab`, `_build_hotkeys_tab`, `_build_audio_tab` -- the last
+  one applies the shared label column across all three form tabs
+  (`_general_forms`, `_hotkeys_forms` and its own two). An eighth tab takes
+  the tab bar from 660 to 797 px of the 840 px the default dialog width
+  gives it at 9 pt; a ninth would not fit without scroll arrows.
 - **`recordings_max_count` 0 means unlimited**: the retention cap was 500 with
   no way to keep everything, so the decision was the app's rather than the
   user's. 0 now prunes nothing (`RECORDINGS_MAX_COUNT_UNLIMITED`), the ceiling
@@ -967,8 +982,9 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   render it taller than its field or clipped at the bottom. Action rows keep
   explicit spacing rather than relying on platform defaults. Settings tab selection must
   not change tab font weight or measured tab width; use color/border changes for
-  the selected state. General and Audio && Recording form sections share one
-  measured label column (applied by `_build_audio_tab` after both tabs exist)
+  the selected state. General, Hotkeys && Display and Audio && Recording form
+  sections share one measured label column (applied by `_build_audio_tab`
+  after all three tabs exist)
   so fields align across group boxes and when switching between the two tabs. Pressing Save with no effective setting or
   API-key changes must not emit `settings_changed`; otherwise the controller can
   reload or preload local models unnecessarily. The Benchmark tab hosts the

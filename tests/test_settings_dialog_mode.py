@@ -1526,7 +1526,7 @@ def test_settings_tab_widths_stay_stable_when_selection_changes():
     _ = app
 
 
-def test_general_and_audio_tabs_share_label_column_width():
+def test_the_three_form_tabs_share_label_column_width():
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     dialog = SettingsDialog(
         settings_store=_FakeSettingsStore(AppSettings()),
@@ -1537,10 +1537,11 @@ def test_general_and_audio_tabs_share_label_column_width():
     app.processEvents()
 
     general_tab = dialog.tabs.widget(0)
-    audio_tab = dialog.tabs.widget(1)
+    hotkeys_tab = dialog.tabs.widget(1)
+    audio_tab = dialog.tabs.widget(2)
     labels_by_text = {
         label.text(): label
-        for tab in (general_tab, audio_tab)
+        for tab in (general_tab, hotkeys_tab, audio_tab)
         for label in tab.findChildren(QtWidgets.QLabel)
     }
     labels = [

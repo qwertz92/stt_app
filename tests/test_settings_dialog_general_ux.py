@@ -10,7 +10,10 @@ from stt_app.config import (
 )
 from stt_app.dialog_style import make_label_selectable
 from stt_app.settings_dialog import SettingsDialog
-from stt_app.settings_dialog_helpers import ElidingLabel
+from stt_app.settings_dialog_helpers import (
+    _DEFAULT_SETTINGS_DIALOG_SIZE,
+    ElidingLabel,
+)
 from stt_app.settings_store import AppSettings, SettingsStore
 
 
@@ -260,15 +263,20 @@ def test_audio_and_recording_tab_hosts_capture_settings(
 ) -> None:
     """The capture setup moved off General into its own tab.
 
-    General keeps what changes during daily dictation (hotkeys, display,
-    engine/model, insertion); microphone, VAD, tones, and recordings live on
-    the Audio & Recording tab directly after General.
+    General keeps what changes during daily dictation (engine/model,
+    insertion); microphone, VAD, tones, and recordings live on the Audio &
+    Recording tab, after General and Hotkeys & Display.
     """
     titles = [dialog.tabs.tabText(index) for index in range(dialog.tabs.count())]
-    assert titles[:3] == ["General", "Audio && Recording", "Local"]
+    assert titles[:4] == [
+        "General",
+        "Hotkeys && Display",
+        "Audio && Recording",
+        "Local",
+    ]
 
     general_tab = dialog.tabs.widget(0)
-    audio_tab = dialog.tabs.widget(1)
+    audio_tab = dialog.tabs.widget(2)
     for widget in (
         dialog.microphone_combo,
         dialog.vad_checkbox,
@@ -282,14 +290,75 @@ def test_audio_and_recording_tab_hosts_capture_settings(
         assert audio_tab.isAncestorOf(widget)
         assert not general_tab.isAncestorOf(widget)
     for widget in (
-        dialog.hotkey_edit,
-        dialog.show_overlay_hotkey_edit,
-        dialog.repaste_hotkey_edit,
-        dialog.tray_middle_click_checkbox,
         dialog.engine_combo,
+        dialog.model_selector_stack,
+        dialog.language_combo,
+        dialog.mode_combo,
         dialog.paste_mode_combo,
     ):
         assert general_tab.isAncestorOf(widget)
+
+
+def test_hotkeys_and_display_tab_hosts_the_set_once_controls(
+    dialog: SettingsDialog,
+) -> None:
+    """Hotkeys, overlay corner and the tray toggle left General for their own
+    tab, and the history time zone sits on the History tab whose list it
+    formats. The attribute names are what persistence reads, so they stay.
+    """
+    general_tab = dialog.tabs.widget(0)
+    hotkeys_tab = dialog.tabs.widget(1)
+    assert dialog.tabs.tabText(1) == "Hotkeys && Display"
+    for widget in (
+        dialog.hotkey_edit,
+        dialog.cancel_hotkey_edit,
+        dialog.show_overlay_hotkey_edit,
+        dialog.repaste_hotkey_edit,
+        dialog.overlay_corner_combo,
+        dialog.tray_middle_click_checkbox,
+    ):
+        assert hotkeys_tab.isAncestorOf(widget)
+        assert not general_tab.isAncestorOf(widget)
+
+    assert dialog._history_tab.isAncestorOf(dialog.history_timezone_combo)
+    assert not hotkeys_tab.isAncestorOf(dialog.history_timezone_combo)
+
+
+def test_general_tab_fits_the_default_dialog_height_without_scrolling(
+    dialog: SettingsDialog,
+) -> None:
+    """General held four groups and needed 1342 px, so on a 1392 px screen it
+    scrolled by 283 px (measured; a smaller screen scrolls by more) -- and it
+    is the tab the dialog opens on. With Hotkeys and Display on their own
+    tab it needs 781 px at the 9 pt font.
+
+    Measured against the design height rather than this screen's: the dialog
+    grows to the screen it is on, and a test that read the live viewport
+    would pass on a tall monitor whatever the tab held.
+    """
+    app = QtWidgets.QApplication.instance()
+    assert app is not None
+    dialog.show()
+    _switch_to_tab(dialog, "General")
+    for _ in range(5):
+        app.processEvents()
+
+    general_tab = dialog.tabs.widget(0)
+    needed = general_tab.widget().minimumSizeHint().height()
+    # Everything of the dialog that is not the scroll viewport: tab bar,
+    # margins, the engine line and the button row.
+    chrome = dialog.height() - general_tab.viewport().height()
+    design_height = _DEFAULT_SETTINGS_DIALOG_SIZE.height()
+
+    point_size = app.font().pointSizeF()
+    if point_size != 9.0:
+        # Windows' "Text size" raises the application font without the DPI,
+        # and the form grows with it; the budget is a 9 pt number.
+        pytest.skip(
+            f"the height budget was measured at 9 pt; this session runs at "
+            f"{point_size} pt and General needs {needed} px plus {chrome} px"
+        )
+    assert needed + chrome <= design_height, (needed, chrome, design_height)
 
 
 def test_recordings_retention_offers_unlimited_at_zero(

@@ -36,8 +36,9 @@ class _AudioTabMixin:
     def _build_audio_tab(self) -> None:
         """Build the Audio & Recording tab.
 
-        Must run after ``_build_general_tab``: it applies the shared form
-        label column across both tabs so fields stay aligned when switching.
+        Must run after ``_build_general_tab`` and ``_build_hotkeys_tab``: it
+        applies the shared form label column across all three tabs so fields
+        stay aligned when switching.
         """
         tab, content = self._create_scroll_tab()
         layout = QtWidgets.QVBoxLayout(content)
@@ -319,10 +320,16 @@ class _AudioTabMixin:
         layout.addStretch(1)
         self.tabs.addTab(tab, "Audio && Recording")
 
-        # One measured label column across General and this tab keeps fields
-        # aligned when switching between the two related tabs.
+        # One measured label column across General, Hotkeys & Display and
+        # this tab keeps fields aligned when switching between the three
+        # form tabs.
         self._apply_shared_form_label_width(
-            (*self._general_forms, audio_form, recordings_form)
+            (
+                *self._general_forms,
+                *self._hotkeys_forms,
+                audio_form,
+                recordings_form,
+            )
         )
 
     def _populate_microphone_combo(self, selected_name: str) -> None:

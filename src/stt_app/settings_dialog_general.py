@@ -22,13 +22,11 @@ from .config import (
     LOCAL_WEBGPU_DEVICE_POLICIES,
     LOCAL_WEBGPU_MODEL_SIZES,
     PARAKEET_MODEL_SIZE,
-    VALID_DISPLAY_TIMEZONES,
     VALID_ENGINES,
     VALID_INSERT_TARGETS,
     VALID_LANGUAGE_MODES,
     VALID_MODEL_SIZES,
     VALID_MODES,
-    VALID_OVERLAY_CORNERS,
     VALID_PASTE_MODES,
     language_modes_for_selection,
     supports_streaming,
@@ -36,10 +34,8 @@ from .config import (
 from .settings_dialog_helpers import (
     _CONCURRENT_MODE_UI_CHOICES,
     _ENGINE_LABELS,
-    _HISTORY_TIMEZONE_LABELS,
     _INSERT_TARGET_LABELS,
     _MODE_LABELS,
-    _OVERLAY_CORNER_LABELS,
     _PASTE_MODE_LABELS,
     _REMOTE_MODEL_CHOICES,
     _REMOTE_MODEL_DEFAULTS,
@@ -107,126 +103,6 @@ class _GeneralTabMixin:
         layout = QtWidgets.QVBoxLayout(content)
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(6)
-
-        # --- Hotkeys section ---
-        hotkey_box, hotkey_form = self._general_form_box("Hotkeys")
-
-        self.hotkey_edit = QtWidgets.QKeySequenceEdit()
-        self.hotkey_edit.setMaximumSequenceLength(1)
-        if hasattr(self.hotkey_edit, "setClearButtonEnabled"):
-            self.hotkey_edit.setClearButtonEnabled(True)
-        hotkey_hint = QtWidgets.QLabel(
-            "Click the hotkey field and press the combination to record it."
-        )
-        self._style_field_hint_label(hotkey_hint)
-        hotkey_form.addRow("Hotkey", self._field_with_hint(self.hotkey_edit, hotkey_hint))
-
-        self.cancel_hotkey_edit = QtWidgets.QKeySequenceEdit()
-        self.cancel_hotkey_edit.setMaximumSequenceLength(1)
-        if hasattr(self.cancel_hotkey_edit, "setClearButtonEnabled"):
-            self.cancel_hotkey_edit.setClearButtonEnabled(True)
-        cancel_hotkey_hint = QtWidgets.QLabel(
-            "Cancel hotkey stops current recording/transcription (must differ from main hotkey)."
-        )
-        self._style_field_hint_label(cancel_hotkey_hint)
-        hotkey_form.addRow(
-            "Cancel Hotkey",
-            self._field_with_hint(self.cancel_hotkey_edit, cancel_hotkey_hint),
-        )
-
-        self.show_overlay_hotkey_edit = QtWidgets.QKeySequenceEdit()
-        self.show_overlay_hotkey_edit.setMaximumSequenceLength(1)
-        if hasattr(self.show_overlay_hotkey_edit, "setClearButtonEnabled"):
-            self.show_overlay_hotkey_edit.setClearButtonEnabled(True)
-        show_overlay_hotkey_hint = QtWidgets.QLabel(
-            "Brings the overlay to the front to check the last transcript, "
-            "like the tray's Show overlay. Clear the field to disable."
-        )
-        show_overlay_hotkey_hint.setWordWrap(True)
-        self._style_field_hint_label(show_overlay_hotkey_hint)
-        hotkey_form.addRow(
-            "Overlay Hotkey",
-            self._field_with_hint(
-                self.show_overlay_hotkey_edit,
-                show_overlay_hotkey_hint,
-            ),
-        )
-
-        self.repaste_hotkey_edit = QtWidgets.QKeySequenceEdit()
-        self.repaste_hotkey_edit.setMaximumSequenceLength(1)
-        if hasattr(self.repaste_hotkey_edit, "setClearButtonEnabled"):
-            self.repaste_hotkey_edit.setClearButtonEnabled(True)
-        repaste_hotkey_hint = QtWidgets.QLabel(
-            "Optional: pastes the last transcript again into the currently "
-            "focused window (also in the tray menu). Leave empty to disable."
-        )
-        repaste_hotkey_hint.setWordWrap(True)
-        self._style_field_hint_label(repaste_hotkey_hint)
-        hotkey_form.addRow(
-            "Re-paste Hotkey",
-            self._field_with_hint(self.repaste_hotkey_edit, repaste_hotkey_hint),
-        )
-        layout.addWidget(hotkey_box)
-
-        # --- Display section ---
-        display_box, display_form = self._general_form_box("Display")
-
-        self.history_timezone_combo = _WheelPassthroughComboBox()
-        for value in VALID_DISPLAY_TIMEZONES:
-            self.history_timezone_combo.addItem(
-                _HISTORY_TIMEZONE_LABELS.get(value, value.upper()),
-                value,
-            )
-        self.history_timezone_combo.setToolTip(
-            "How stored UTC history timestamps are displayed in the app."
-        )
-        self.history_timezone_combo.currentIndexChanged.connect(
-            lambda _index: self._refresh_history_list(force=True)
-        )
-        history_timezone_hint = QtWidgets.QLabel(
-            "Transcript history is stored in UTC. This only changes how times "
-            "are shown in Settings and the History window."
-        )
-        history_timezone_hint.setWordWrap(True)
-        self._style_field_hint_label(history_timezone_hint)
-        display_form.addRow(
-            "History Time",
-            self._field_with_hint(
-                self.history_timezone_combo,
-                history_timezone_hint,
-            ),
-        )
-
-        self.overlay_corner_combo = _WheelPassthroughComboBox()
-        for value in VALID_OVERLAY_CORNERS:
-            self.overlay_corner_combo.addItem(
-                _OVERLAY_CORNER_LABELS.get(value, value), value
-            )
-        overlay_corner_hint = QtWidgets.QLabel(
-            "Choose where the always-on-top recording overlay appears."
-        )
-        self._style_field_hint_label(overlay_corner_hint)
-        display_form.addRow(
-            "Overlay Corner",
-            self._field_with_hint(self.overlay_corner_combo, overlay_corner_hint),
-        )
-
-        self.tray_middle_click_checkbox = QtWidgets.QCheckBox(
-            "Middle-click the tray icon to start/stop dictation"
-        )
-        tray_middle_click_hint = QtWidgets.QLabel(
-            "Works like the recording hotkey. Double-click still opens Settings."
-        )
-        tray_middle_click_hint.setWordWrap(True)
-        self._style_field_hint_label(tray_middle_click_hint)
-        display_form.addRow(
-            "",
-            self._field_with_hint(
-                self.tray_middle_click_checkbox,
-                tray_middle_click_hint,
-            ),
-        )
-        layout.addWidget(display_box)
 
         # --- Engine / Mode section ---
         engine_box, engine_form = self._general_form_box("Engine && Mode")
@@ -491,14 +367,9 @@ class _GeneralTabMixin:
         )
         layout.addWidget(paste_box)
 
-        # The shared label column spanning General and Audio & Recording is
-        # applied by _build_audio_tab once both tabs exist.
-        self._general_forms = (
-            hotkey_form,
-            display_form,
-            engine_form,
-            paste_form,
-        )
+        # The shared label column spanning General, Hotkeys & Display and
+        # Audio & Recording is applied by _build_audio_tab once all exist.
+        self._general_forms = (engine_form, paste_form)
         layout.addStretch(1)
         self.tabs.addTab(tab, "General")
 

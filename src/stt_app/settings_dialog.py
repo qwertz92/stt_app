@@ -76,6 +76,7 @@ from .settings_dialog_helpers import (
     configure_button_row,
 )
 from .settings_dialog_history import _HistoryTabMixin
+from .settings_dialog_hotkeys import _HotkeysTabMixin
 from .settings_dialog_import import _ImportTabMixin
 from .settings_dialog_local import _LocalModelsMixin
 from .settings_dialog_persistence import _PersistenceMixin
@@ -124,6 +125,7 @@ __all__ = [
 
 class SettingsDialog(
     _GeneralTabMixin,
+    _HotkeysTabMixin,
     _AudioTabMixin,
     _LocalModelsMixin,
     _BenchmarkMixin,
@@ -408,6 +410,7 @@ class SettingsDialog(
             """
         )
         self._build_general_tab()
+        self._build_hotkeys_tab()
         self._build_audio_tab()
         self._build_local_tab()
         self._build_remote_tab()
