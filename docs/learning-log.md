@@ -8565,3 +8565,104 @@ casing and MAI-Transcribe-2 (an Azure Speech key and endpoint, none is
 stored); the Parakeet failure reported from the corporate machine, never
 reproduced here (that machine's `%APPDATA%\stt_app\logs\dictation.log` after
 one failing dictation on this release).
+
+## After v0.9.0: a benchmark decides what `auto` starts with (2026-09-18)
+
+**What it is.** The owner asked for the ONNX device choice to follow the
+hardware: on some machines the GPU is quicker, on others the CPU, and a user
+who does not know which should not have to read a benchmark table and pin a
+device by hand. A finished in-app benchmark that measured a Cohere, Granite or
+Nemotron model on at least two devices now stores, per model, the device
+`auto` starts with (`AppSettings.onnx_auto_preferred_devices`); a pinned
+device always wins. The rules are in `AGENTS.md`; this section records how it
+was built and checked.
+
+**How it was built.** The lead designed it (the preference inside
+`AppSettings` rather than in a store of its own, because `reload_settings`
+compares the identities of two settings snapshots; the field carried through
+the dialog's save path; the Node runner's optional `--prefer`), wrote a
+specification, and handed the implementation to a subagent on a larger model
+that performed no git operations. The lead then read every source diff, and
+changed four things before committing: the status sentence said "Auto now
+starts with WebGPU" for a run that had kept WebGPU first; the note called the
+first device "confirmed as the fastest" although it also stands when another
+one was quicker by less than the band; a comment cited "about 2%" run-to-run
+noise with no source; and one runner assertion assumed Windows.
+
+**The noise figure is measured.** The owner's real `benchmark_history.json`
+(read from a copy) holds six runs with 31 cases of two or more runs each:
+the runs of one case differ by a median of 4.1%, the 90th percentile is 26%
+and the maximum 36% -- always a first run carrying the warm-up (WebGPU shader
+compilation: 0.112 against 0.080 on the next run; the CPU's first run is
+slower too, 0.566 against 0.439). The Run Benchmark window defaults to one
+run, so a comparison is normally cold against cold. 10% is a design value
+above the median, not an optimum.
+
+**Negative control.** Nineteen single-change mutations -- the carried field
+stamped to `{}`, either dialog snapshot not updated, `settings_changed` not
+emitted, the identity slot dropped for either runtime, the factory not
+passing the device to either runtime, `--prefer` never reaching the command
+line, `resolveDevice` ignoring it, the 10% threshold dropped, an unknown
+device surviving normalisation, a pinned policy honouring the preference, a
+canceled run or a shutting-down dialog writing, the note never reading the
+measurement, a measured CPU still reported as a fallback in either of two
+places, the kept-order sentence announcing a change, the reader ignoring the
+pinned policy -- each failed at least one test. Files were restored byte for
+byte after each.
+
+**Real end-to-end checks** (sandboxed `APPDATA`, `HF_HUB_OFFLINE=1`, the
+owner's cached models and one of his recordings, Ryzen 5 7600X + Arc A750):
+- The transcriber built by the factory started its real Node child, and the
+  command line the OS reports for that child ends in `--prefer cpu` for a
+  stored CPU (runtime device `cpu`, status "ONNX runtime active on CPU (the
+  fastest device for this model in your benchmark).", no warning) and is
+  byte-identical to the unmeasured one for a stored WebGPU and for a pinned
+  WebGPU with a stored CPU. The same 44 s recording gave 491 characters in all
+  four cases; 9.9 s cold on WebGPU, 21.1 s on the CPU.
+- A real "GPU + CPU comparison" run through the settings dialog (never shown)
+  and the real out-of-process worker measured Granite 4.0 1B at 0.097 on
+  WebGPU against 0.441 on the CPU: `{"granite-4.0-1b-speech": "webgpu"}`
+  reached the sandbox `settings.json`, `settings_changed` fired once, and the
+  status line read "Auto keeps WebGPU first ...". A Cohere run that started
+  from a stored CPU measured 0.115 against 0.180 and read "Auto now starts
+  with WebGPU for cohere-transcribe-03-2026."
+- Applied to the recorded 2026-08-25 run, the rule keeps WebGPU for all three
+  pipeline models (1.6x, 4.2x and 4.6x quicker than the CPU), so on the
+  development machine the feature changes nothing about daily dictation.
+
+**The review** (two breakers with different lenses, one round, then one
+reviewer over the fixes) found no defect in persistence, the controller's
+reload decision, the damaged-file handling or the runner's argument parsing,
+and three things that were fixed:
+- *The incumbent was the default device, not the device `auto` starts with
+  today.* Run 1 moved `auto` to DirectML by 15%; run 2 measured DirectML 5%
+  ahead, inside the band, and the rule moved `auto` back to WebGPU -- the
+  device that run's own numbers called slower -- with a model reload, and the
+  run after it could move it forth again. The stored device is the incumbent
+  now when the run measured it. Reproduced through the dialog before the fix.
+- *"Your last benchmark" was false.* The map is merged across runs, so an
+  entry can be older than the last run. The notes say "your benchmark".
+- *A comparison on a machine whose GPU targets fail was a silent no-op.* One
+  error case and one CPU case is no comparison, nothing is stored, and the
+  note that had asked for exactly that run said nothing. The status line now
+  reads "Auto's device order for <model> is unchanged: only CPU could be
+  measured." Storing the CPU on that evidence was rejected: a GPU that failed
+  once would pin the CPU until the next benchmark.
+Recorded rather than changed: runs are never combined (a run that could not
+measure the stored device replaces it from its own numbers), and there is no
+button to forget a measurement.
+
+The reviewer over those fixes (`10fd05b`) could not break them: its sequence
+probes through the real dialog and store -- thirty runs with two devices kept
+within 9% of each other, the exact 10% boundary in both directions, stored
+values in the wrong case, of the wrong type or naming a device the model's
+chain cannot reach -- wrote exactly once and never moved the device back. It
+found two leftovers of the rewording, a "last benchmark" in a factory comment
+and a test docstring and one over-long line in `docs/models.md`; both were
+corrected without another round, which ended the loop after one round and one
+follow-up with no P1 or P2 open.
+
+**Lesson.** A threshold that protects "the default" is not the same as one
+that protects "what happens today". The first version's tests all started
+from an empty map, where the two are the same thing; the defect needed a
+second run, and it took a reviewer thinking in sequences to ask for one.

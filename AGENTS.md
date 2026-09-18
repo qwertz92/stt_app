@@ -3183,6 +3183,112 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   and note text — hiding it for faster-whisper or a remote engine would shift
   every field below it, which a test pins by asserting the Language row's
   y-position is identical across all four cases.
+- **`auto` starts with the device a benchmark measured as fastest
+  (`onnx_auto_preferred_devices`, no schema bump)** (2026-09-18). Which device
+  is quicker depends on the machine, and until now the only way to act on a
+  benchmark was to read its table and pin a device by hand. A finished in-app
+  run that measured a Cohere, Granite or Nemotron model on at least two
+  devices now stores, per model, the device `auto` should try first.
+  `settings_store.preferred_onnx_device(settings)` is the single reader; the
+  factory, the controller's runtime identity and the note under the picker all
+  go through it. Rules to keep intact:
+  - **The preference lives inside `AppSettings`, not in a store of its own.**
+    `reload_settings` compares `_transcriber_identity(previous)` with
+    `_transcriber_identity(current)`, so a value read from a separate store
+    inside the identity could never invalidate the loaded runtime; and the
+    factory, the job snapshots, the isolated runtimes, the Import tab and the
+    retranscribe dialog already receive `settings`. The dict is never mutated
+    in place -- `dataclasses.replace` shares the reference across snapshots.
+  - **No schema bump.** An absent key is an empty map, and
+    `normalize_onnx_auto_preferred_devices` keeps an entry only when its key
+    is in `DEVICE_AWARE_LOCAL_MODELS` and its value in
+    `ONNX_MEASURABLE_DEVICES`. An older build drops the key on its next save,
+    which costs the measurement and nothing else.
+  - **The save path carries the field, it does not construct it.**
+    `_construct_settings_from_widgets` names every `AppSettings` field, and a
+    field without a widget left at its default differs from
+    `_populated_settings`, counts as an edit in `_dialog_edits_over_stored`
+    and erased the measurement on every Save -- including the write the
+    benchmark had made while the dialog was open. It is carried from
+    `_populated_settings`, like `schema_version`. Any future field without a
+    widget has this shape.
+  - **The benchmark path writes the store first, then both dialog snapshots,
+    then emits `settings_changed` -- for every write, also one that reorders
+    nothing.** The controller's own setters (overlay opacity, pin, language)
+    save their whole snapshot, so a controller that never reloaded would write
+    the map back as it was before the run. Only a run that ran to its end
+    decides (`completed` / `completed_with_errors`); a canceled or failed run
+    does not, and neither does a dialog that is shutting down. An unchanged
+    map writes nothing and emits nothing.
+  - **The winner rule is conservative** (`measured_fastest_devices`): cases
+    with no error, with runs, a finite positive mean RTF and a resolved device
+    the model's own chain contains (`onnx_auto_device_order`); fewer than two
+    devices is no comparison; another device replaces the incumbent only when
+    it was at least `MEASURED_DEVICE_MIN_GAIN` (10%) faster. **The incumbent
+    is the device `auto` starts with today**: the stored one when this run
+    measured it, else the first measured device of the default order. Judged
+    against the default alone (the first version, found by the review), a run
+    that measured the stored device 5% ahead -- still ahead, inside the band
+    -- moved `auto` back to the device its own numbers called slower,
+    reloaded the model for it, and the next run could move it forth again. A
+    stored device the run did not measure defends nothing. An error case
+    stores the *requested* target and a successful one the *resolved* runtime
+    device, which is why only successful cases count. The mean RTF is used
+    because it is the number the results table shows. Measured on the six
+    benchmark runs recorded on the development machine: the runs of one case
+    differ by a median of 4% (31 cases, up to 36% where the first run carried
+    the warm-up), so 10% is a design value above that noise, not an optimum.
+  - **An identity slot of its own, and only when it says something.**
+    `effective_preferred_device` answers "" for a pinned policy, for a device
+    the chain cannot reach and for one that already leads it, so
+    `_TranscriberIdentity.onnx_preferred_device` moves -- and the model
+    reloads -- only when the selected model's first device really changes. On
+    the development machine the usual outcome is WebGPU measured and WebGPU
+    kept: the map gains an entry, the note says so, nothing reloads, and the
+    run's status line says "keeps WebGPU first" rather than "now starts with"
+    (`auto_first_onnx_device` before and after the write decides which).
+  - **The Node runner keeps the policy string `auto` and takes the device as
+    an optional `--prefer`**, sent only when non-empty, so the command line
+    without a measurement is byte-identical to the one every earlier build
+    sent. A running app re-reads `webgpu_asr_runner.mjs` whenever it starts a
+    child, so the file must keep accepting a caller that sends no `--prefer`.
+    `resolveDevice(requested, preferred, platform)` rotates a known device to
+    the front for `auto` only and ignores an unknown one;
+    `transcribeWithFallback` is unchanged. Nemotron gets the same rotation
+    through `nemotron_provider_order(policy, preferred)`. The benchmark itself
+    never applies the preference: its `auto` target measures the default
+    order.
+  - **A measured CPU is not a fallback.** `runtime_status_text` says "ONNX
+    runtime active on CPU (the fastest device for this model in your
+    benchmark)." and `_set_runtime_status` clears `runtime_warning`, where the
+    fallback sentence would claim a GPU attempt that never happened;
+    `_should_restart_after_cpu_fallback` stays False because no fallback error
+    was reported.
+  - **A comparison that measured one device says so**
+    (`uncomparable_device_models`). On a machine whose GPU targets all fail,
+    the run the note asks for ends with one error case and one CPU case;
+    nothing is stored, rightly, and the status line reads "Auto's device order
+    for <model> is unchanged: only CPU could be measured." -- for the selected
+    model only, and only when the run tried that model on more than one
+    target. Storing "cpu" on that evidence was rejected: a GPU that failed
+    once (a driver not back after a resume) would pin the CPU until the next
+    benchmark, under a status line calling it "the fastest device".
+  - **The notes say "your benchmark", never "your last benchmark"**: the map
+    is merged across runs, so an entry can be older than the last run, which
+    may have measured other models only.
+  - **The notes stopped restating the order.** The runtime note beside the
+    model combo said "Auto tries WebGPU, then DirectML, then falls back to
+    CPU", which a measurement makes false; the ONNX Device row owns the order
+    now, in its two reserved lines with the whole sentence in the tooltip.
+  Verified with the real thing in a sandboxed `APPDATA` (2026-09-18, Ryzen 5
+  7600X + Arc A750): the OS-reported child command line carries `--prefer cpu`
+  for a stored CPU and is unchanged for a stored WebGPU or a pinned policy; a
+  real "GPU + CPU comparison" run measured Granite 4.0 1B at 0.097 (WebGPU)
+  against 0.441 (CPU) and kept WebGPU, and a Cohere run that started from a
+  stored CPU measured 0.115 against 0.180 and moved `auto` back to WebGPU.
+  Applied to the recorded 2026-08-25 run, the rule keeps WebGPU for all three
+  pipeline models. Not measured: Nemotron on DirectML (the installed ORT GenAI
+  build is CPU-only) and a machine on which the CPU wins.
 - **Streaming availability**: `config.supports_streaming()` is the shared
   source of truth for UI and controller checks. Cohere/Granite ONNX/WebGPU
   models are batch-only; Nemotron is true streaming. A local model selection
@@ -5395,3 +5501,16 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   640 px budget the pin's test bounds the need with -- a change to a
   function that was wrong three times, so recorded (P3, about an hour
   with its tests) rather than slipped in.
+- **A benchmark's device decision is per run, and there is no button to
+  forget one.** `measured_fastest_devices` reads one finished run; runs are
+  never combined. A run that could not measure the stored device (it errored
+  that time) decides among the devices it did measure and replaces the entry,
+  and a run that measured fewer than two devices for a model leaves that
+  model's entry as it was -- so a machine whose GPU targets all fail never
+  stores anything and `auto` keeps its default order there. An entry is
+  removed by running the comparison again, by pinning a device (which always
+  wins), or by deleting `onnx_auto_preferred_devices` from
+  `%APPDATA%\stt_app\settings.json` with the app closed. Windows' driver and
+  the app's runtimes change between a measurement and the day it is used; a
+  stale entry costs speed, never correctness, because the rest of the chain
+  is still tried after the preferred device. Recorded (2026-09-19).
