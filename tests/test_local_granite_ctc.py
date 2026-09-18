@@ -358,6 +358,22 @@ def test_a_48_khz_wav_is_resampled_to_the_rate_the_graph_was_trained_on(
     assert fake.features[0].shape == (1, 50, FEATURE_SIZE)
 
 
+def test_a_wav_declaring_no_sample_rate_is_a_transcription_error(
+    tmp_path, monkeypatch
+):
+    """This runtime resamples, so a header rate of 0 was a `ZeroDivisionError`
+    out of `transcribe_batch` -- a raw exception where the controller expects
+    a `TranscriptionError` it can show and keep the recording for."""
+    transcriber, fake = _transcriber(tmp_path, monkeypatch)
+    payload = bytearray(_wav_bytes(_speech_pcm(0.5)))
+    payload[24:28] = (0).to_bytes(4, "little")
+
+    with pytest.raises(TranscriptionError, match="sample rate"):
+        transcriber.transcribe_batch(bytes(payload))
+
+    assert fake.features == []
+
+
 def test_a_stereo_wav_is_downmixed_to_mono(tmp_path, monkeypatch):
     transcriber, fake = _transcriber(tmp_path, monkeypatch)
     mono = _speech_pcm(1.0)

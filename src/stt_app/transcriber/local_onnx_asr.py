@@ -204,6 +204,13 @@ def _read_wav_float32(source: str | Path | io.BytesIO) -> tuple[np.ndarray, int]
         raise TranscriptionError(
             "Only 16-bit PCM WAV audio is supported by this local model."
         )
+    if sample_rate <= 0:
+        # `wave` checks the channel count and the sample width and not this,
+        # so a damaged header got as far as a resampler dividing by it.
+        raise TranscriptionError(
+            "Could not read WAV audio: the file declares a sample rate of "
+            f"{sample_rate} Hz."
+        )
     waveform = _pcm_bytes_to_float32(frames)
     if channels > 1:
         # Average to mono; the models are single-channel.

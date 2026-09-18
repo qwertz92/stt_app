@@ -206,6 +206,26 @@ def test_malformed_wav_surfaces_a_transcription_error(tmp_path):
         transcriber.transcribe_batch(b"RIFF" + b"\x00" * 20)
 
 
+def test_a_wav_header_declaring_no_sample_rate_is_refused(tmp_path):
+    """`wave` validates the channel count and the sample width and not the
+    rate, so a damaged header reached the model as `sample_rate=0` -- and the
+    Granite CTC runtime, which resamples, divided by it."""
+    payload = bytearray(_wav_bytes(np.zeros(1600, dtype=np.int16) + 100))
+    # The rate of the 44-byte header `wave` writes sits at offset 24.
+    assert payload[24:28] == (16000).to_bytes(4, "little")
+    payload[24:28] = (0).to_bytes(4, "little")
+    transcriber, fake = _transcriber_with_fake_model(PARAKEET_MODEL_SIZE)
+
+    with pytest.raises(TranscriptionError, match="sample rate"):
+        transcriber.transcribe_batch(bytes(payload))
+    path = tmp_path / "no-rate.wav"
+    path.write_bytes(bytes(payload))
+    with pytest.raises(TranscriptionError, match="sample rate"):
+        transcriber.transcribe_batch(str(path))
+
+    assert fake.calls == []
+
+
 def test_dropping_an_unsupported_language_is_logged(caplog):
     """A wrong language makes Canary translate, so the substitution must be
     diagnosable rather than silent."""
