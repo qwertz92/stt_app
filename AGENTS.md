@@ -181,6 +181,12 @@ Exception: `stt-dictation-spec.md` (legacy bilingual).
   (`_general_forms`, `_hotkeys_forms` and its own two). An eighth tab takes
   the tab bar from 660 to 797 px of the 840 px the default dialog width
   gives it at 9 pt; a ninth would not fit without scroll arrows.
+- **An Audio-tab value that is only read while its checkbox is on is
+  disabled while it is off** (VAD threshold, start tone, completion tone):
+  `toggled` is connected to `setEnabled` and the state is synced once at
+  build time, because populating an unchecked box with `setChecked(False)`
+  emits nothing. **The silence-gate threshold is deliberately not linked**:
+  streaming reads it for its pause handling even with the gate switched off.
 - **`recordings_max_count` 0 means unlimited**: the retention cap was 500 with
   no way to keep everything, so the decision was the app's rather than the
   user's. 0 now prunes nothing (`RECORDINGS_MAX_COUNT_UNLIMITED`), the ceiling

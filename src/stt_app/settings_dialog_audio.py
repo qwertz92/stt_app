@@ -230,6 +230,17 @@ class _AudioTabMixin:
                 _START_BEEP_TONE_LABELS.get(value, value), value
             )
         audio_form.addRow("Completion Tone", self.completion_beep_tone_combo)
+        # A value that is only read while its checkbox is on is greyed out
+        # while it is off; enabled state never moves a row. The silence-gate
+        # threshold is deliberately not linked: streaming reads it for its
+        # pause handling even with the gate switched off.
+        for checkbox, dependent in (
+            (self.vad_checkbox, self.vad_threshold_spin),
+            (self.start_beep_checkbox, self.start_beep_tone_combo),
+            (self.completion_beep_checkbox, self.completion_beep_tone_combo),
+        ):
+            checkbox.toggled.connect(dependent.setEnabled)
+            dependent.setEnabled(checkbox.isChecked())
         layout.addWidget(audio_box)
 
         # --- Recordings section ---

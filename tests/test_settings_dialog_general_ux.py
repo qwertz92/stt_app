@@ -361,6 +361,59 @@ def test_general_tab_fits_the_default_dialog_height_without_scrolling(
     assert needed + chrome <= design_height, (needed, chrome, design_height)
 
 
+def test_audio_values_are_greyed_out_while_their_checkbox_is_off(
+    dialog: SettingsDialog,
+) -> None:
+    """A threshold or tone that is only read while its checkbox is on says so
+    by being disabled while it is off -- including right after the dialog was
+    populated, where an unchanged `setChecked(False)` emits no `toggled`."""
+    links = (
+        (dialog.vad_checkbox, dialog.vad_threshold_spin),
+        (dialog.start_beep_checkbox, dialog.start_beep_tone_combo),
+        (dialog.completion_beep_checkbox, dialog.completion_beep_tone_combo),
+    )
+    # The fixture's default settings have all three switched off.
+    for checkbox, dependent in links:
+        assert checkbox.isChecked() is False
+        assert dependent.isEnabled() is False
+
+    for checkbox, dependent in links:
+        checkbox.setChecked(True)
+        assert dependent.isEnabled() is True
+        checkbox.setChecked(False)
+        assert dependent.isEnabled() is False
+
+    # Streaming reads the silence-gate threshold for its pause handling even
+    # with the gate off, so that value must stay editable.
+    dialog.silence_gate_checkbox.setChecked(False)
+    assert dialog.silence_gate_threshold_spin.isEnabled() is True
+
+
+def test_populating_enabled_audio_checkboxes_enables_their_values(
+    monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setenv("APPDATA", str(tmp_path))
+    app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+    settings_dialog = SettingsDialog(
+        settings_store=_SettingsStore(
+            AppSettings(
+                vad_enabled=True,
+                start_beep_enabled=True,
+                completion_beep_enabled=True,
+            )
+        ),
+        secret_store=_SecretStore(),
+        app_logger=_Logger(),
+    )
+    try:
+        assert settings_dialog.vad_threshold_spin.isEnabled() is True
+        assert settings_dialog.start_beep_tone_combo.isEnabled() is True
+        assert settings_dialog.completion_beep_tone_combo.isEnabled() is True
+    finally:
+        settings_dialog.close()
+        app.processEvents()
+
+
 def test_recordings_retention_offers_unlimited_at_zero(
     dialog: SettingsDialog,
 ) -> None:
