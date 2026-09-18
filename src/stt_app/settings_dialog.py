@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from PySide6 import QtCore, QtGui, QtWidgets
 
+from . import __version__
 from .app_icon import load_app_icon
 from .benchmark_environment import BenchmarkEnvironment
 from .benchmark_history import (
@@ -329,7 +330,10 @@ class SettingsDialog(
         self._initial_dialog_size_applied = False
         self._shutdown_started = False
 
-        self.setWindowTitle("Dictation Settings")
+        # The installed version is otherwise visible only inside the update
+        # dialog; the title costs no layout space and is what a user reads
+        # off when reporting a problem.
+        self.setWindowTitle(f"Dictation Settings - stt_app {__version__}")
         self.setWindowIcon(load_app_icon())
         self.setModal(False)
         self.setWindowFlag(QtCore.Qt.Window, True)
