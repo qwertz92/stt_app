@@ -148,6 +148,14 @@ def existing_file(raw: str) -> Path:
     return path
 
 
+def existing_directory(raw: str) -> Path:
+    """An `argparse` type for a folder that has to be there already."""
+    path = Path(raw).expanduser()
+    if not path.is_dir():
+        raise argparse.ArgumentTypeError(f"no such folder: {path}")
+    return path
+
+
 class Checks:
     """One printed line per check, and the exit code made out of the counts.
 

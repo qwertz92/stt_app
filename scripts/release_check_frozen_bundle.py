@@ -6,7 +6,8 @@ Against `stt_app.exe` from a `onedir` build, in this order:
   1. the frozen inventory-scan worker lists the cached local models,
   2. the frozen benchmark worker transcribes one clip with one model per
      local runtime that is cached (onnx-asr, faster-whisper, ONNX Runtime
-     GenAI, Node/ONNX), and every case has to produce text,
+     GenAI, Node/ONNX, the Granite CTC graph), and every case has to produce
+     text,
   3. with `--node-models`, the same worker runs all three Node.js models on
      webgpu and on cpu, which is the pass that exercises the bundled Node
      runtime and Transformers.js on both devices,
@@ -50,6 +51,9 @@ COMMAND LINE
         --language de --report out.json
     ... --no-gui          leave the GUI pass out
     ... --node-models     add the Node.js models on webgpu and cpu
+    ... --model-dir PATH  scan and load from this Model Dir instead of the
+                          Hugging Face cache (the Granite CTC graph is English
+                          only, so pair it with an English clip)
 """
 
 from __future__ import annotations
@@ -77,6 +81,8 @@ PREFERRED = (
     "small",  # faster-whisper / CTranslate2
     "nemotron-3.5-asr-streaming-0.6b-int4",  # ONNX Runtime GenAI
     "cohere-transcribe-03-2026",  # Node.js and Transformers.js from the bundle
+    # The app's own numpy features, the CPU ONNX Runtime and `tokenizers`.
+    "granite-speech-5.0-470m-turboctc",
 )
 WHISPER_SIZES = ("tiny", "base", "small")
 NODE_MODELS = (
@@ -92,7 +98,7 @@ GUI_SECONDS = 40
 
 
 def benchmark_options(
-    clip: Path, models: list[str], language: str
+    clip: Path, models: list[str], language: str, model_dir: str = ""
 ) -> dict[str, object]:
     """The worker's option dict.
 
@@ -111,7 +117,7 @@ def benchmark_options(
         "vad_filter": False,
         "warmup": False,
         "threads": 0,
-        "model_dir": "",
+        "model_dir": model_dir,
     }
 
 
@@ -221,12 +227,17 @@ def run_benchmark_pass(
     }
 
 
-def scan_pass(checks: common.Checks, exe: Path, sandbox: Path) -> list[str]:
+def scan_pass(
+    checks: common.Checks, exe: Path, sandbox: Path, model_dir: str = ""
+) -> list[str]:
     scan_out = sandbox / "scan.json"
+    command = [str(exe), "--local-model-scan-worker", "--output", str(scan_out)]
+    if model_dir:
+        command += ["--model-dir", model_dir]
     started = time.perf_counter()
     try:
         completed = common.run_child(
-            [str(exe), "--local-model-scan-worker", "--output", str(scan_out)],
+            command,
             env=common.child_environment(sandbox),
             timeout_s=SCAN_TIMEOUT_S,
         )
@@ -369,6 +380,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="Language of the clip (default: auto, which means 'detect it').",
     )
     parser.add_argument(
+        "--model-dir",
+        default=None,
+        type=common.existing_directory,
+        metavar="PATH",
+        help=(
+            "A Model Dir to scan and load from, as the app's setting of that "
+            "name. Default: the Hugging Face cache. It is only read."
+        ),
+    )
+    parser.add_argument(
         "--no-gui",
         action="store_true",
         help="Leave out the pass that starts the frozen GUI for 40 seconds.",
@@ -393,8 +414,10 @@ def main() -> int:
     checks.details["clip"] = str(args.clip)
     checks.details["sandbox"] = str(sandbox)
     sys.stdout.write(f"sandbox: {sandbox}\n")
+    model_dir = str(args.model_dir) if args.model_dir is not None else ""
+    checks.details["model_dir"] = model_dir
 
-    cached = scan_pass(checks, args.exe, sandbox)
+    cached = scan_pass(checks, args.exe, sandbox, model_dir)
 
     whisper = next((name for name in WHISPER_SIZES if name in cached), None)
     models = [
@@ -413,7 +436,7 @@ def main() -> int:
             "benchmark",
             args.exe,
             sandbox,
-            benchmark_options(args.clip, models, args.language),
+            benchmark_options(args.clip, models, args.language, model_dir),
         )
 
     if args.node_models:
@@ -424,7 +447,9 @@ def main() -> int:
                 "no Node.js model is cached on this machine",
             )
         else:
-            options = benchmark_options(args.clip, node_models, args.language)
+            options = benchmark_options(
+                args.clip, node_models, args.language, model_dir
+            )
             options["webgpu_devices"] = list(NODE_DEVICES)
             checks.details["node"] = run_benchmark_pass(
                 checks, "node", args.exe, sandbox, options
